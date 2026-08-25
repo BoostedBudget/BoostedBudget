@@ -73,6 +73,7 @@ func TestNoTransactionReadForgetsTheTombstoneFilter(t *testing.T) {
 	root := repoInternalRoot(t)
 
 	var offenders []string
+	var filesScanned, refsSeen int
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -92,6 +93,7 @@ func TestNoTransactionReadForgetsTheTombstoneFilter(t *testing.T) {
 			return parseErr
 		}
 		rel, _ := filepath.Rel(root, path)
+		filesScanned++
 
 		// A query is often assembled from several adjacent literals — `A` + helper + `B`, or a
 		// fmt.Sprintf whose format string and fragments are separate literals. Checking each
@@ -121,6 +123,7 @@ func TestNoTransactionReadForgetsTheTombstoneFilter(t *testing.T) {
 				return true
 			})
 			sql := strings.Join(sqlParts, "\n")
+			refsSeen += tombstoneRefsSeen(sql, transactionTombstoneTables, tombstoneDeleteRef)
 
 			bad := tombstoneReadOffenders(sql, transactionTombstoneTables, tombstoneDeleteRef)
 			bad = append(bad, tombstoneWriteOffenders(sql, transactionTombstoneTables)...)
@@ -142,13 +145,18 @@ func TestNoTransactionReadForgetsTheTombstoneFilter(t *testing.T) {
 		t.Fatalf("walking internal/: %v", err)
 	}
 
+	requireTombstoneCorpus(t, "TestNoTransactionReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 300, 60, 362, 83)
+
 	if len(offenders) > 0 {
 		t.Fatalf(
 			"%d read reference(s) to `transactions` carry no tombstone predicate OF THEIR OWN (#1569).\n"+
 				"Add `AND <that reference's alias>.deleted_at IS NULL` — another table's predicate in\n"+
 				"the same statement does NOT count — or, if the predicate is genuinely supplied\n"+
 				"elsewhere, an SQL comment naming THIS reference inside the literal:\n"+
-				"  -- tombstone-exempt(<table>[ <alias>]): <why>\n%s",
+				"  -- tombstone-exempt(<table>[ <alias>]): <why>            (excuses a READ reference)\n"+
+				"  -- tombstone-exempt(write:<table>[ <alias>]): <why>      (excuses an UPDATE/DELETE\n"+
+				"     TARGET; the two key spaces are separate, and an offender reported as\n"+
+				"     `write:...` is only excused by the `write:` form)\n%s",
 			len(offenders), strings.Join(offenders, "\n  "))
 	}
 }

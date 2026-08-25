@@ -591,7 +591,7 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 		    -- teaches a stored row its pending twin; a NULL arrival (every ordinary modification of
 		    -- a transaction that is not a settlement) must not erase what we already know.
 		    pending_transaction_id_blind_idx = COALESCE($18, pending_transaction_id_blind_idx),
-		    -- tombstone-exempt(custom_categories, transactions): HISTORICAL name resolution (#1569 Task 9),
+		    -- tombstone-exempt(custom_categories, write:transactions): HISTORICAL name resolution (#1569 Task 9),
 		    -- and the UPDATE target is unfiltered because liveness is the sync path's concern, not this
 		    -- statement's: a tombstoned transaction Plaid still reports must keep a correct name
 		    -- (#1569 T8 write-target audit). This recomputes the
@@ -1541,7 +1541,7 @@ func (r *transactionRepository) UpdateTags(ctx context.Context, id string, userI
 	}
 
 	query := `
-		-- tombstone-exempt(transactions): liveness is the SERVICE layer's gate, exactly as for
+		-- tombstone-exempt(write:transactions): liveness is the SERVICE layer's gate, exactly as for
 		-- UpdateCategory below (#1569 T8 write-target audit). Narrowing the write predicate would
 		-- change WHICH ROWS ARE AFFECTED, which is a behaviour change, and would make this statement
 		-- disagree with the annotation capture that mirrors it.
@@ -1581,7 +1581,7 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 		    category_override_date = $6,
 		    reviewed = true,
 		    reviewed_at = $6,
-		    -- tombstone-exempt(custom_categories, transactions t): name resolution for the category being
+		    -- tombstone-exempt(custom_categories, write:transactions t): name resolution for the category being
 		    -- assigned (#1569 Task 9); the UPDATE target is unfiltered because liveness is the service
 		    -- layer's gate and narrowing it would change which rows the write affects (#1569 T8).
 		    -- Liveness is enforced at the service layer, which validates the id through
@@ -1595,7 +1595,7 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 		        ELSE t.pfc_primary
 		    END,
 		    updated_at = $7
-		-- tombstone-exempt(transactions prior, transactions t): the prior alias is the PRE-IMAGE of the row this statement is already
+		-- tombstone-exempt(transactions prior, write:transactions t): the prior alias is the PRE-IMAGE of the row this statement is already
 		-- updating (prior.id = t.id), not an independent read. Adding prior.deleted_at IS NULL here
 		-- would not filter a read -- it would narrow WHICH ROWS THE UPDATE AFFECTS, a behaviour
 		-- change well outside #1579's "record the prior value", and it would make the capture
@@ -1648,7 +1648,7 @@ func (r *transactionRepository) SetReviewed(ctx context.Context, userID string, 
 		WITH updated AS (
 		UPDATE transactions t
 		SET reviewed = $1, reviewed_at = $2, updated_at = NOW()
-		-- tombstone-exempt(transactions prior, transactions t): the prior alias is the PRE-IMAGE of the row this statement is already
+		-- tombstone-exempt(transactions prior, write:transactions t): the prior alias is the PRE-IMAGE of the row this statement is already
 		-- updating (prior.id = t.id), not an independent read. Adding prior.deleted_at IS NULL here
 		-- would not filter a read -- it would narrow WHICH ROWS THE UPDATE AFFECTS, a behaviour
 		-- change well outside #1579's "record the prior value", and it would make the capture
@@ -1720,7 +1720,7 @@ func (r *transactionRepository) BulkUpdateCategory(ctx context.Context, userID s
 		    category_override_date      = $6,
 		    reviewed                    = true,
 		    reviewed_at                 = $6,
-		    -- tombstone-exempt(custom_categories, transactions t): same as UpdateCategory above (#1569 Task 9)
+		    -- tombstone-exempt(custom_categories, write:transactions t): same as UpdateCategory above (#1569 Task 9)
 		    -- — and the UPDATE target is unfiltered for the same reason (#1569 T8). Liveness is the
 		    -- service layer's gate (transaction_service.BulkUpdateTransactionCategory validates
 		    -- through the tombstone-filtered GetByID); this subquery only resolves the name.
@@ -1731,7 +1731,7 @@ func (r *transactionRepository) BulkUpdateCategory(ctx context.Context, userID s
 		        ELSE t.pfc_primary
 		    END,
 		    updated_at = $7
-		-- tombstone-exempt(transactions prior, transactions t): the prior alias is the PRE-IMAGE of the row this statement is already
+		-- tombstone-exempt(transactions prior, write:transactions t): the prior alias is the PRE-IMAGE of the row this statement is already
 		-- updating (prior.id = t.id), not an independent read. Adding prior.deleted_at IS NULL here
 		-- would not filter a read -- it would narrow WHICH ROWS THE UPDATE AFFECTS, a behaviour
 		-- change well outside #1579's "record the prior value", and it would make the capture
@@ -2318,7 +2318,7 @@ func (r *transactionRepository) UpdateEffectiveCategoryNameByCustomCategoryID(ct
 	query := `
 		UPDATE transactions
 		SET effective_category_name = (
-			-- tombstone-exempt(custom_categories, transactions): HISTORICAL name resolution (#1569 Task 9),
+			-- tombstone-exempt(custom_categories, write:transactions): HISTORICAL name resolution (#1569 Task 9),
 			-- with the UPDATE target unfiltered so a tombstoned transaction keeps a correct name rather
 			-- than a NULL one (#1569 T8 write-target audit). A rename job that
 			-- lands after the category was deleted must still write the name, not NULL. The

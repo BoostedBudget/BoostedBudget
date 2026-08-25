@@ -1661,7 +1661,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// AFTER this transaction commits (never inside it — a cache bump is not part of the erasure and
 	// must not be able to roll it back or delay it).
 	rows, err := tx.Query(ctx, `
-		-- tombstone-exempt(transactions): GDPR ERASURE (#1569 T8 write-target audit). A tombstoned
+		-- tombstone-exempt(write:transactions): GDPR ERASURE (#1569 T8 write-target audit). A tombstoned
 		-- transaction still holds an FK to the category about to be hard-deleted, so skipping it
 		-- would trip fk_transactions_custom_category_override and abort the erasure.
 		UPDATE transactions
@@ -1742,7 +1742,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		return false, nil, fmt.Errorf("DeleteUserCascade: clear dangling accounts.user_account_id references: %w", err)
 	}
 	if _, err = tx.Exec(ctx, `
-		-- tombstone-exempt(transactions): GDPR ERASURE, same reason as the override clear above --
+		-- tombstone-exempt(write:transactions): GDPR ERASURE, same reason as the override clear above --
 		-- a tombstoned row's dangling user_account_id would abort the cascade (#1569 T8).
 		UPDATE transactions SET user_account_id = NULL
 		WHERE user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $1)

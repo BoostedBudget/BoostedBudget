@@ -282,7 +282,7 @@ func (r *customCategoryRepository) Update(ctx context.Context, category *domain.
 	}
 
 	query := `
-		-- tombstone-exempt(custom_categories): liveness is the SERVICE layer's gate (#1569 T8
+		-- tombstone-exempt(write:custom_categories): liveness is the SERVICE layer's gate (#1569 T8
 		-- write-target audit). CustomCategoryService.UpdateCategory (custom_category_service.go:166)
 		-- resolves the id through the
 		-- tombstone-filtered GetByID before calling this, so a tombstoned category cannot reach it.

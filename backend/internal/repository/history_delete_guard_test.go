@@ -225,7 +225,18 @@ func TestNoUnallowlistedHistoryDelete(t *testing.T) {
 			"#1569 decided that financial history is retained unless the user explicitly asks for it "+
 			"to go. If this delete IS that explicit request, add it to allowedHistoryDeletes with the "+
 			"reason. If it is not, tombstone instead (UPDATE ... SET deleted_at = now()) or narrow the "+
-			"predicate:\n    %s", len(unallowlisted), strings.Join(unallowlisted, "\n    "))
+			"predicate.\n"+
+			"⚠ FOLLOW-THROUGH ON THE TOMBSTONE REMEDY, or you trade this failure for another one. "+
+			"For a table one of the tombstone read-guards audits (transactions, savings_goals, "+
+			"boosts, budgets, budget_categories, custom_categories) the tombstoning UPDATE is itself "+
+			"a write target with no `deleted_at IS NULL` of its own — and it MUST NOT have one, since "+
+			"adding it would change which rows the write affects. Taken literally this remedy clears "+
+			"G2 and turns TestNoTransactionReadForgetsTheTombstoneFilter red. Carry the write-scoped "+
+			"exemption with it:\n"+
+			"    -- tombstone-exempt(write:<table>): tombstoning IS the write; narrowing it here "+
+			"would change WHICH ROWS the statement affects\n"+
+			"See transaction_repository.go's UpdateTags for the shape.\n    %s",
+			len(unallowlisted), strings.Join(unallowlisted, "\n    "))
 	}
 	if len(stale) > 0 {
 		t.Errorf("%d allowlisted history delete(s) no longer exist (#1569).\n"+

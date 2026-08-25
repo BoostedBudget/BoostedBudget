@@ -60,6 +60,7 @@ func TestNoCustomCategoryReadForgetsTheTombstoneFilter(t *testing.T) {
 		`(?is)\bDELETE\s+FROM\s+(` + strings.Join(customCategoryTombstoneTables, "|") + `)\b`)
 
 	var offenders []string
+	var filesScanned, refsSeen int
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -79,6 +80,7 @@ func TestNoCustomCategoryReadForgetsTheTombstoneFilter(t *testing.T) {
 			return parseErr
 		}
 		rel, _ := filepath.Rel(root, path)
+		filesScanned++
 
 		ast.Inspect(file, func(n ast.Node) bool {
 			switch n.(type) {
@@ -101,6 +103,7 @@ func TestNoCustomCategoryReadForgetsTheTombstoneFilter(t *testing.T) {
 				return true
 			})
 			sql := strings.Join(sqlParts, "\n")
+			refsSeen += tombstoneRefsSeen(sql, customCategoryTombstoneTables, deleteRef)
 
 			bad := tombstoneReadOffenders(sql, customCategoryTombstoneTables, deleteRef)
 			bad = append(bad, tombstoneWriteOffenders(sql, customCategoryTombstoneTables)...)
@@ -121,6 +124,8 @@ func TestNoCustomCategoryReadForgetsTheTombstoneFilter(t *testing.T) {
 		t.Fatalf("walking internal/: %v", err)
 	}
 
+	requireTombstoneCorpus(t, "TestNoCustomCategoryReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 300, 20, 362, 28)
+
 	if len(offenders) > 0 {
 		t.Fatalf(
 			"%d read reference(s) to %v carry no tombstone predicate OF THEIR OWN (#1569).\n"+
@@ -128,7 +133,10 @@ func TestNoCustomCategoryReadForgetsTheTombstoneFilter(t *testing.T) {
 				"the same statement does NOT count -- or, if the read must deliberately see\n"+
 				"tombstoned categories (historical name resolution, history filters), an SQL comment\n"+
 				"an SQL comment naming THIS reference inside the literal:\n"+
-				"  -- tombstone-exempt(custom_categories[ <alias>]): <why>\n%s",
+				"  -- tombstone-exempt(custom_categories[ <alias>]): <why>            (excuses a READ reference)\n"+
+				"  -- tombstone-exempt(write:custom_categories[ <alias>]): <why>      (excuses an UPDATE/DELETE\n"+
+				"     TARGET; the two key spaces are separate, and an offender reported as\n"+
+				"     `write:...` is only excused by the `write:` form)\n%s",
 			len(offenders), customCategoryTombstoneTables, strings.Join(offenders, "\n  "))
 	}
 }
