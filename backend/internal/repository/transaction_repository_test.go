@@ -100,11 +100,12 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with multiple value sets (32 fields per transaction * 2 transactions = 64 args)
+	// Expect batch INSERT with multiple value sets (33 fields per transaction * 2 transactions = 66 args)
 	// Issue #171: user_account_id; Issue #1123: effective_category_name; Issue #1163: merchant_id
 	// Issue #1203: category override columns (4) + category_source + reviewed + reviewed_at
 	// Issue #1213: RETURNING id, (xmax::text::bigint = 0) AS inserted
-	args := make([]interface{}, 64)
+	// Issue #1578: pending_transaction_id_blind_idx
+	args := make([]interface{}, 66)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -145,7 +146,8 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 		Pending:               false,
 	}
 
-	// Expect UPDATE query (17 args: merchant_id added at $6, shifts all subsequent params)
+	// Expect UPDATE query (18 args: merchant_id added at $6, shifts all subsequent params;
+	// #1578 appended pending_transaction_id_blind_idx at $18)
 	mock.ExpectExec("UPDATE transactions SET").
 		WithArgs(
 			transaction.Amount,
@@ -165,6 +167,7 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 			pgxmock.AnyArg(), // updated_at
 			transaction.ID,
 			transaction.UserID, // $17: user_id scope
+			pgxmock.AnyArg(),   // $18: pending_transaction_id_blind_idx (#1578)
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
@@ -2242,7 +2245,7 @@ func TestTransactionRepository_CreateBatch_WithUserAccountID(t *testing.T) {
 
 	// Expect batch INSERT (32 fields per transaction; Issue #1203 added override columns + review state)
 	// Issue #1213: RETURNING id, (xmax::text::bigint = 0) AS inserted
-	args := make([]interface{}, 32)
+	args := make([]interface{}, 33) // #1578: pending_transaction_id_blind_idx is the 33rd
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -2288,7 +2291,7 @@ func TestTransactionRepository_CreateBatch_DOUpdateBehavior(t *testing.T) {
 	}
 
 	// Build arguments for 32 fields per transaction (Issue #1203 added override columns + review state)
-	args := make([]interface{}, 32)
+	args := make([]interface{}, 33) // #1578: pending_transaction_id_blind_idx is the 33rd
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -2343,7 +2346,7 @@ func TestTransactionRepository_CreateBatch_PersistsOverrideAndReview(t *testing.
 
 	// The INSERT must include the new override + review columns.
 	// Issue #1213: RETURNING id, (xmax::text::bigint = 0) AS inserted
-	args := make([]interface{}, 32)
+	args := make([]interface{}, 33) // #1578: pending_transaction_id_blind_idx is the 33rd
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -2408,7 +2411,7 @@ func TestTransactionRepository_CreateBatch_ReturnsInsertedIDs(t *testing.T) {
 		AddRow(freshID, true).
 		AddRow(conflictExistingID, false)
 
-	args := make([]interface{}, 64) // 32 fields * 2 rows
+	args := make([]interface{}, 66) // 33 fields * 2 rows (#1578 added pending_transaction_id_blind_idx)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}

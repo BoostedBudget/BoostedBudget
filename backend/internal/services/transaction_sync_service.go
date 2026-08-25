@@ -1300,59 +1300,53 @@ func (s *transactionSyncService) detectAndUpsertProposedContributions(ctx contex
 
 // processRemovedTransactions TOMBSTONES the transactions Plaid reports as removed. Issue #1569.
 //
-// ⚠ WHAT THIS STILL DOES NOT DO: MOVE THE USER'S WORK OFF A SETTLED PENDING. #1569 task 20 (T10a),
-// investigated and NOT implemented; the finding is recorded here so the next attempt starts from it
-// rather than from the census entry, which proposes a worse design.
+// ⚠ WHAT THIS ALSO DOES, since #1578 (task 4): IT MOVES THE USER'S WORK OFF A SETTLED PENDING.
+// The paragraph that used to stand here described the defect as investigated and NOT implemented.
+// It is implemented now, and the implementation lives one layer down --
+// TransactionRepository.TombstoneByExternalID, whose doc comment carries the full design. This
+// function is unchanged; the move is folded into the statement it already issues.
 //
-// THE DEFECT, which is live and routine. When a pending transaction posts, Plaid removes the
-// pending one and adds a NEW transaction with a different transaction_id. This function tombstones
-// the pending row, and task 7 established that a settled pending must render NOWHERE
+// THE DEFECT IT CLOSES, which was live and routine. When a pending transaction posts, Plaid removes
+// the pending one and adds a NEW transaction with a different transaction_id. This function
+// tombstones the pending row, and task 7 established that a settled pending must render NOWHERE
 // (deleted_reason = provider_removed_pending; see isSettledPending in
 // apps/web/src/features/transactions/types.ts, and
 // TestTombstone_SettledPendingIsNeverSurfaced_Integration). So the user's category override, notes,
-// tags and `reviewed` state are RETAINED on a row nothing will ever show them on, and the posted
-// twin arrives blank. Every time anybody categorises a pending charge.
+// tags and `reviewed` state were RETAINED on a row nothing will ever show them on, and the posted
+// twin arrived blank. Every time anybody categorised a pending charge.
 //
-// ⚠ THE CENSUS PROPOSED FUZZY MATCHING ON (account_id, amount, date±window, merchant). DO NOT.
-// Plaid supplies the link exactly: Transaction.PendingTransactionId (confirmed present in the
-// pinned SDK, plaid-go v23.0.0, plaid/model_transaction.go:47) is set on the POSTED transaction and
-// holds the transaction_id of the pending one it replaced.
+// ⚠ THE CENSUS PROPOSED FUZZY MATCHING ON (account_id, amount, date±window, merchant). DO NOT, and
+// the implementation does not. Plaid supplies the link exactly: Transaction.PendingTransactionId
+// (pinned SDK plaid-go v23.0.0, plaid/model_transaction.go:47) is set on the POSTED transaction and
+// holds the transaction_id of the pending one it replaced. A heuristic would risk attaching one
+// transaction's category to a different transaction, which is worse than the bug it fixes; the
+// provider's own pointer cannot.
 //
-// No Go code in this repository reads it. ⚠ Stating that checkably is harder than it looks, and the
-// first version of this comment got it wrong by claiming a grep "matches only a stale test binary":
-// the loose `/usr/bin/grep -rn PendingTransactionId backend/` also matches THIS COMMENT, and the
-// snake_case spelling additionally matches domain/transaction.go:54 and migration 000156 — neither
-// of which is a reader. Any grep for the name necessarily hits the prose describing it.
-//
-// So the check names its own expected output:
-//     git ls-files '*.go' | xargs /usr/bin/grep -ln 'GetPendingTransactionId\|\.PendingTransactionId'
-// returns EXACTLY ONE file — this one, on the line above. A second file in that list means someone
-// has started using it and this paragraph is out of date.
-//
-// A heuristic would risk attaching one transaction's category to a different transaction, which is
-// worse than the bug it fixes; the provider's own pointer cannot.
-//
-// WHAT AN IMPLEMENTATION NEEDS:
-//   1. a migration adding transactions.pending_transaction_id_blind_idx (blind index only — the
-//      value is never read back, only matched, so the plaintext need not be stored at all);
-//   2. the Plaid -> domain mapper and CreateBatch/Update to populate it (CreateBatch is a 32-field
-//      multi-row INSERT; this makes it 33, and the field must NOT appear in the ON CONFLICT SET
-//      clause's preserve list by accident);
-//   3. the annotation move inside TombstoneByExternalID's own transaction, so it happens AS PART OF
-//      the tombstoning rather than before or after it — task 7's rule is that the settled row must
-//      not be resurrected, and a two-statement version can crash between them and leave the
-//      annotations on both rows, i.e. double-categorised;
-//   4. a refusal to overwrite: if the posted twin already carries the user's own annotations, they
-//      win. The move fills a blank row, it does not merge.
+// WHERE THE PIECES ARE, so the next reader does not have to search:
+//   1. migration 000168 adds transactions.pending_transaction_id_blind_idx (blind index only -- the
+//      value is never read back, only matched, so no plaintext and no ciphertext is stored);
+//   2. services/plaid_mapper.go MapPlaidTransactionBase populates
+//      domain.Transaction.PendingTransactionID, and BOTH repository write paths derive the blind
+//      index from it -- CreateBatch for `added`, Update for `modified`. Both accept it via COALESCE
+//      so a row can LEARN a pointer that arrives later and a pointer-less re-delivery cannot erase
+//      one; omitting the column from CreateBatch's ON CONFLICT SET clause, which an earlier draft of
+//      this note recommended, would have made the first of those impossible;
+//   3. the annotation move is a data-modifying CTE inside TombstoneByExternalID's single statement,
+//      so it is atomic with the tombstoning with no transaction to introduce and no window in which
+//      a crash could leave the annotations on both rows, i.e. double-categorised;
+//   4. the refusal to overwrite the note asked for is implemented as two predicates: a MANUAL
+//      category already on the twin wins over the pending row's, and tags move only onto a twin that
+//      has none. A twin categorised by a RULE does NOT block the move -- rules run in place before
+//      the twin is ever inserted, so a blank-row-only gate would have refused in the common case.
 //
 // ORDERING IS ALREADY IN THIS FUNCTION'S FAVOUR and does not need a second hook for the common
 // case: processTransactions aggregates EVERY page into result.Added/Modified/Removed before storing
 // anything, then runs step 6/7 (added, modified) before step 8 (this function), and only advances
-// the cursor after all of it. So for any removal+addition Plaid delivers together — which is how a
-// settlement is delivered — the posted twin is already in the database when this runs.
+// the cursor after all of it. So for any removal+addition Plaid delivers together -- which is how a
+// settlement is delivered -- the posted twin is already in the database when this runs.
 //
-// RESIDUAL if it is built that way: a removal delivered in one sync whose posted twin arrives in a
-// LATER one would leave the annotations on the tombstone. Closing that needs the mirror hook in the
+// RESIDUAL, unchanged and still open: a removal delivered in one sync whose posted twin arrives in a
+// LATER one leaves the annotations on the tombstone. Closing that needs the mirror hook in the
 // storage path (on inserting a posted transaction with a pending_transaction_id, look for an
 // already-tombstoned pending row and pull its annotations forward). Whether that case can occur is
 // NOT established here; it is a question about Plaid's delivery semantics, not about this code.
