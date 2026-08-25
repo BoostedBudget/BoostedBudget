@@ -477,6 +477,92 @@ func TestCategoryTombstone_ChildrenReparentedToTopLevel_Integration(t *testing.T
 		`SELECT COUNT(*) FROM custom_categories WHERE id = $1 AND deleted_at IS NOT NULL`, f.childID))
 }
 
+// A TOMBSTONED child's recorded parent is HISTORY, and the reparent must not rewrite it.
+//
+// #1569 T8 fix round 2. The reparent used to be unfiltered, waved through the write-target rule by
+// an exemption whose stated reason was FABRICATED: it claimed "the parent is being deleted in this
+// same transaction" and that a filter "would break the delete". DeleteWithReassignment never
+// deletes the parent — step 1 TOMBSTONES it — so fk_custom_categories_parent_id (live definition:
+// ON DELETE RESTRICT) is never at risk, and nothing was being protected.
+//
+// What the exemption actually waved through is the mutation the write rule exists to surface. The
+// step-3 ruling above justifies reparenting by "every tree read would then render a node whose
+// parent is invisible" — an argument about a LIVE child, which is rendered. A TOMBSTONED child is
+// rendered by no tree read at all, so the justification does not reach it, and rewriting its
+// recorded parent_id destroys the one fact about it worth keeping: what it was filed under when
+// the user deleted it.
+//
+// Order matters and is the whole test: delete the CHILD first, then the parent.
+func TestCategoryTombstone_TombstonedChildKeepsItsRecordedParent_Integration(t *testing.T) {
+	f := seedCategoryTombstoneFixture(t)
+	ctx := context.Background()
+
+	require.NoError(t, f.catRepo.DeleteWithReassignment(ctx, f.userID, f.childID, f.auditRepo))
+	require.Equal(t, 1, f.count(t, ctx,
+		`SELECT COUNT(*) FROM custom_categories WHERE id = $1 AND deleted_at IS NOT NULL AND parent_id = $2`,
+		f.childID, f.coffeeID),
+		"the fixture must hold a TOMBSTONED child still recording its parent, or this test cannot "+
+			"observe the interaction it exists for")
+
+	require.NoError(t, f.catRepo.DeleteWithReassignment(ctx, f.userID, f.coffeeID, f.auditRepo))
+
+	var parentID *string
+	require.NoError(t, f.tx.QueryRow(ctx,
+		`SELECT parent_id FROM custom_categories WHERE id = $1`, f.childID).Scan(&parentID))
+	require.NotNil(t, parentID,
+		"the reparent rewrote a TOMBSTONED child's parent_id to NULL. That row is history: it "+
+			"records what the child was filed under when the user deleted it, and no tree read "+
+			"renders it, so nothing is gained by clearing it and the recorded parent is lost.")
+	assert.Equal(t, f.coffeeID, *parentID)
+}
+
+// The companion risk, and the reason the change above needs a second test rather than one.
+//
+// fk_custom_categories_parent_id is ON DELETE RESTRICT (verified against the live schema). Leaving
+// a tombstoned child pointing at a tombstoned parent creates a self-referencing pair that did not
+// exist before this change, and GDPR erasure deletes both in one cascade from `users`. If RESTRICT
+// fired there, the retention improvement would have bought a right-to-be-forgotten failure — the
+// one trade this branch may never make.
+func TestCategoryTombstone_GDPRErasureDestroysASelfReferencingTombstonedPair_Integration(t *testing.T) {
+	f := seedCategoryTombstoneFixture(t)
+	ctx := context.Background()
+
+	require.NoError(t, f.catRepo.DeleteWithReassignment(ctx, f.userID, f.childID, f.auditRepo))
+	require.NoError(t, f.catRepo.DeleteWithReassignment(ctx, f.userID, f.coffeeID, f.auditRepo))
+	require.Equal(t, 1, f.count(t, ctx,
+		`SELECT COUNT(*) FROM custom_categories c
+		 WHERE c.id = $1 AND c.deleted_at IS NOT NULL
+		   AND c.parent_id IN (SELECT id FROM custom_categories WHERE id = $2 AND deleted_at IS NOT NULL)`,
+		f.childID, f.coffeeID),
+		"the fixture must hold a tombstoned child pointing at a TOMBSTONED parent — the exact "+
+			"shape RESTRICT could refuse — or this test proves nothing")
+
+	profileRepo := NewProfileRepository(f.tx, newTestFieldEncryptor(t))
+
+	_, err := f.tx.Exec(ctx, `UPDATE linked_items SET plaid_removed_at = NOW() WHERE user_id = $1`, f.userID)
+	require.NoError(t, err)
+
+	var requestedAt time.Time
+	require.NoError(t, f.tx.QueryRow(ctx, `
+		UPDATE users
+		SET deletion_requested_at = NOW() - INTERVAL '31 days',
+		    deletion_scheduled_at = NOW() - INTERVAL '1 day'
+		WHERE id = $1
+		RETURNING deletion_requested_at
+	`, f.userID).Scan(&requestedAt))
+
+	deleted, _, err := profileRepo.DeleteUserCascade(ctx, f.userID, &requestedAt)
+	require.NoError(t, err,
+		"fk_custom_categories_parent_id is ON DELETE RESTRICT, and a tombstoned child pointing at "+
+			"a tombstoned parent is a shape this branch newly creates. If erasure now fails, the "+
+			"retained parent_id has to go — a right-to-be-forgotten failure is not a trade this "+
+			"branch may make.")
+	require.True(t, deleted, "the cascade reported a skip; every assertion below would be vacuous")
+
+	assert.Zero(t, f.count(t, ctx,
+		`SELECT COUNT(*) FROM custom_categories WHERE user_id = $1`, f.userID))
+}
+
 // The step-4 reparent is `WHERE parent_id = $1 AND user_id = $2`. The user_id predicate is
 // defence-in-depth, not a fix: parent_id can never cross users in the first place, because
 // enforce_custom_category_two_levels (migration 000078) rejects it BEFORE INSERT OR UPDATE OF
