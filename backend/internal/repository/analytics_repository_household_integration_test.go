@@ -452,6 +452,74 @@ func TestAnalyticsRepository_GetSpendingByCategory_Household_JointAccountCounted
 	assert.Equal(t, 1, results[0].TransactionCount)
 }
 
+// TestAnalyticsRepository_GetSpendingByCategory_Household_JointAccountWithClosedGrantCountedOnce
+// pins the joint-account dedup for the case where the LOSING copy's grant is CLOSED.
+//
+// #1569 T3 (#1582) skips the per-transaction NOT EXISTS whenever a fingerprint is held by only
+// ONE user_account — a provably-vacuous subquery in that case. That skip is only an identity if
+// "held by one user_account" is computed over EVERY grant in household_grants, closed ones
+// included. An implementation that decided contestedness from the OPEN grants alone would see
+// the owner's revoked copy as absent, declare the fingerprint uncontested for the member's copy,
+// skip the tiebreak, and count the joint account TWICE ($120 instead of $60) — precisely the
+// silent money inflation the EXISTS shape exists to make unrepresentable.
+//
+// Owner shared first and is therefore the winner, so the correct answer is the owner's $60.
+func TestAnalyticsRepository_GetSpendingByCategory_Household_JointAccountWithClosedGrantCountedOnce(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+
+	ownerAcct := setupHouseholdMemberAccount(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	now := time.Now().UTC()
+	txnDate := now.AddDate(0, 0, -5)
+	fingerprint := "joint-closed-fp-" + hh
+
+	// Owner's copy: shared 2 months ago, revoked YESTERDAY — closed, but still covering txnDate.
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+	revokeHouseholdShareAt(t, pool, hh, owner, ownerAcct.UserAccountID, now.AddDate(0, 0, -1))
+
+	// Member's copy of the SAME physical account: shared 1 month ago, still open.
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, now.AddDate(0, -1, 0))
+
+	// Fixture assertion: exactly one CLOSED and one OPEN grant on this fingerprint, held by
+	// two DIFFERENT user_accounts. Without this the test could pass while proving nothing.
+	var open, closed int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT COUNT(*) FILTER (WHERE revoked_at IS NULL),
+		       COUNT(*) FILTER (WHERE revoked_at IS NOT NULL)
+		FROM household_account_shares
+		WHERE household_id = $1 AND physical_account_blind_idx = $2
+	`, hh, fingerprint).Scan(&open, &closed))
+	require.Equal(t, 1, open, "fixture must leave exactly one OPEN grant on the joint fingerprint")
+	require.Equal(t, 1, closed, "fixture must leave exactly one CLOSED grant on the joint fingerprint")
+
+	insertHouseholdTransaction(t, pool, owner, ownerAcct.AccountID, ownerAcct.LinkedItemID, 60, txnDate, "FOOD_AND_DRINK")
+	insertHouseholdTransaction(t, pool, member, memberAcct.AccountID, memberAcct.LinkedItemID, 60, txnDate, "FOOD_AND_DRINK")
+
+	filters := domain.SpendingFilters{
+		StartDate: now.AddDate(0, -3, 0),
+		EndDate:   now,
+		HouseholdScope: &domain.HouseholdScope{
+			HouseholdID:   hh,
+			MemberUserIDs: []string{owner, member},
+		},
+	}
+
+	results, err := repo.GetSpendingByCategory(ctx, owner, filters)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.InDelta(t, 60, results[0].Total, 0.01,
+		"a joint account whose winning copy's grant is CLOSED must still be counted once: $60, never $120")
+	assert.Equal(t, 1, results[0].TransactionCount,
+		"a joint account whose winning copy's grant is CLOSED must not double the transaction count")
+}
+
 func TestAnalyticsRepository_GetSpendingByCategory_Household_CustomCategoryNamespaceSafeToRequester(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
