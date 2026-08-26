@@ -65,13 +65,11 @@ func (s *stubHoldingSnapshotRepo) GetByAccountDateRange(context.Context, string,
 	panic("HoldingHistoryService must not use the UNSCOPED account read")
 }
 
-func f64p(v float64) *float64 { return &v }
-
 func TestHoldingHistoryService_NoAsOf_PicksTheMostRecentRetainedDay(t *testing.T) {
 	repo := &stubHoldingSnapshotRepo{
 		// Newest first, as the repository contract promises.
 		dates:     []string{"2026-08-20", "2026-08-19", "2026-07-01"},
-		positions: []domain.HoldingSnapshotView{{SecurityID: "sec-1", AsOfDate: "2026-08-20", Quantity: 3, InstitutionValue: f64p(300)}},
+		positions: []domain.HoldingSnapshotView{{SecurityID: "sec-1", AsOfDate: "2026-08-20", Quantity: 3, InstitutionValue: ptr64(300)}},
 	}
 	svc := NewHoldingHistoryService(repo)
 
@@ -164,9 +162,9 @@ func TestHoldingHistoryService_TotalValue_SumsTheValuesItDoesHave(t *testing.T) 
 	repo := &stubHoldingSnapshotRepo{
 		dates: []string{"2026-08-20"},
 		positions: []domain.HoldingSnapshotView{
-			{SecurityID: "sec-1", InstitutionValue: f64p(1200.50)},
+			{SecurityID: "sec-1", InstitutionValue: ptr64(1200.50)},
 			{SecurityID: "sec-2"},
-			{SecurityID: "sec-3", InstitutionValue: f64p(99.50)},
+			{SecurityID: "sec-3", InstitutionValue: ptr64(99.50)},
 		},
 	}
 	svc := NewHoldingHistoryService(repo)

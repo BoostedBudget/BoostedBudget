@@ -8,8 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func fp(v float64) *float64 { return &v }
-
 func TestHoldingSnapshotView_ComputeGainLoss(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -18,14 +16,14 @@ func TestHoldingSnapshotView_ComputeGainLoss(t *testing.T) {
 		wantGain    *float64
 		wantGainPct *float64
 	}{
-		{"gain", fp(5000), fp(4000), fp(1000), fp(25)},
-		{"loss", fp(3000), fp(4000), fp(-1000), fp(-25)},
-		{"no value at all is not a gain of zero", nil, fp(4000), nil, nil},
-		{"no cost basis at all is not a gain of zero", fp(5000), nil, nil, nil},
+		{"gain", float64Ptr(5000), float64Ptr(4000), float64Ptr(1000), float64Ptr(25)},
+		{"loss", float64Ptr(3000), float64Ptr(4000), float64Ptr(-1000), float64Ptr(-25)},
+		{"no value at all is not a gain of zero", nil, float64Ptr(4000), nil, nil},
+		{"no cost basis at all is not a gain of zero", float64Ptr(5000), nil, nil, nil},
 		// A zero cost basis is a real thing (a granted position). The absolute gain is knowable;
 		// the percentage is a division by zero and must stay nil rather than become +Inf, which
 		// would render as "Infinity%" beside the user's money.
-		{"zero cost basis yields an amount but no percentage", fp(5000), fp(0), fp(5000), nil},
+		{"zero cost basis yields an amount but no percentage", float64Ptr(5000), float64Ptr(0), float64Ptr(5000), nil},
 	}
 
 	for _, tc := range tests {

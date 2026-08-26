@@ -1680,7 +1680,7 @@ func TestMethodCitationRelation_RangesAndAliases(t *testing.T) {
 	//  6 }
 	//  7 (blank)
 	//  8 func Other() {
-	//  9 	_ = cacheScopeFor("u", nil)
+	//  9 	_ = ScopeFor("u", nil)
 	// 10 }
 	src := "package sample\n\n// Doc comment for Target.\nfunc Target() {\n\t_ = 1\n}\n\n" +
 		"func Other() {\n\t_ = ScopeFor(\"u\", nil)\n}\n"
