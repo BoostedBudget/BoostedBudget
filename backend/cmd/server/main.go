@@ -2258,6 +2258,16 @@ func main() {
 		operations.RegisterHoldingHistoryRoutes(humaAPI, humaHoldingHistoryHandler)
 		appLogger.Info("Retained holdings history route registered")
 
+		// Register retained per-account balance history route (Issue #1569).
+		// Same shape and the same reason as the holdings history above: its own service over its
+		// own repository read, wired away from every current-state balance caller so none can
+		// reach it and none of its figures can be mistaken for a live balance.
+		humaAccountBalanceHistoryHandler := operations.NewAccountBalanceHistoryHandler(
+			services.NewAccountBalanceHistoryService(repository.NewBalanceSnapshotRepository(db)),
+		)
+		operations.RegisterAccountBalanceHistoryRoutes(humaAPI, humaAccountBalanceHistoryHandler)
+		appLogger.Info("Retained account balance history route registered")
+
 		// Register MCP recipe routes (Issue #1087: MCP server)
 		humaRecipeRepo := repository.NewRecipeRepository(db)
 		humaRecipeService := services.NewRecipeService(humaRecipeRepo)

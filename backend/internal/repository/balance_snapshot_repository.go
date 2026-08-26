@@ -88,6 +88,22 @@ type BalanceSnapshotRepository interface {
 	// GetLatestByAccountID retrieves the most recent balance snapshot for a specific account.
 	// Used for deduplication checking (5-minute window) before creating new snapshots.
 	GetLatestByAccountID(ctx context.Context, accountID string) (*domain.BalanceSnapshot, error)
+
+	// GetAccountBalanceHistory returns ONE account's retained day-by-day balances, oldest day
+	// first — the reader privacy policy §8.2a's "balance history ... so you can still view it"
+	// clause needs, and which did not exist before Issue #1569 (this round).
+	//
+	// ⚠ HISTORICAL UNIVERSE. It deliberately renders NO currentStateAccountLeg and no
+	// status = 'active' predicate. Those exist to keep a terminal account OUT of a current-state
+	// answer; applying one here would return nothing for exactly the closed accounts this method
+	// exists to serve. It does not join `accounts` at all.
+	//
+	// ⚠ Tenancy is in SQL, on the one statement: user_id AND account_id. An account belonging to
+	// somebody else has no history from this user's seat and returns the same empty series as an
+	// account with none, so no existence is disclosed either way.
+	//
+	// start/end are inclusive UTC calendar-day bounds; either may be nil for "unbounded".
+	GetAccountBalanceHistory(ctx context.Context, userID, accountID string, start, end *time.Time) ([]domain.AccountBalanceHistoryPoint, error)
 }
 
 // balanceSnapshotRepository implements BalanceSnapshotRepository using PostgreSQL
@@ -455,6 +471,65 @@ func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context
 	}
 
 	return history, nil
+}
+
+// ── Per-account retained balance history (#1569) ──────────────────────────────────────────────
+
+// getAccountBalanceHistorySQL — $1 = user_id, $2 = account_id, $3 = start day or NULL,
+// $4 = end day or NULL.
+//
+// ONE point per UTC day. balance_snapshots deliberately carries no per-day uniqueness key (see
+// Create's doc comment), so a busy day holds several rows; DISTINCT ON collapses them with the
+// SAME tie-break GetAggregatedHistory's second stage uses — freshest snapshot_at, then id — so the
+// per-account series and the aggregated dashboard series can never disagree about which row is a
+// day's answer.
+//
+// The day is derived as (snapshot_at AT TIME ZONE 'UTC')::date, matching
+// idx_balance_snapshots_date_trunc and every other daily read in this file. A bare ::date cast
+// would follow the session TimeZone and silently re-bucket rows around midnight.
+//
+// The bounds are written as `$3::date IS NULL OR ...` so one statement serves the bounded and the
+// unbounded case; passing a typed nil *time.Time binds SQL NULL.
+const getAccountBalanceHistorySQL = `
+	SELECT DISTINCT ON ((bs.snapshot_at AT TIME ZONE 'UTC')::date)
+	       (bs.snapshot_at AT TIME ZONE 'UTC')::date AS as_of_date,
+	       bs.current_balance,
+	       bs.available_balance,
+	       bs.currency_code
+	FROM balance_snapshots bs
+	WHERE bs.user_id = $1::uuid
+	  AND bs.account_id = $2::uuid
+	  AND ($3::date IS NULL OR (bs.snapshot_at AT TIME ZONE 'UTC')::date >= $3::date)
+	  AND ($4::date IS NULL OR (bs.snapshot_at AT TIME ZONE 'UTC')::date <= $4::date)
+	ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date ASC, bs.snapshot_at DESC, bs.id DESC
+`
+
+func (r *balanceSnapshotRepository) GetAccountBalanceHistory(
+	ctx context.Context, userID, accountID string, start, end *time.Time,
+) ([]domain.AccountBalanceHistoryPoint, error) {
+	rows, err := r.db.Query(ctx, getAccountBalanceHistorySQL, userID, accountID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []domain.AccountBalanceHistoryPoint{}
+	for rows.Next() {
+		var day time.Time
+		p := domain.AccountBalanceHistoryPoint{}
+		if err := rows.Scan(&day, &p.CurrentBalance, &p.AvailableBalance, &p.CurrencyCode); err != nil {
+			return nil, err
+		}
+		// Formatted at the edge of the database, once. A DATE comes back from pgx as a
+		// UTC-located midnight; anything downstream that re-locates it can shift the day, and
+		// which day this was is the entire meaning of the figure beside it.
+		p.Date = day.Format("2006-01-02")
+		out = append(out, p)
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	return out, nil
 }
 
 // GetLatestByAccountID retrieves the most recent balance snapshot for a specific account
