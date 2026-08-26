@@ -225,6 +225,46 @@ describe('PrivacyPolicy', () => {
     expect(screen.getByText(/is retained/i)).toBeInTheDocument()
   })
 
+  // ⚠ THE ASSERTION ABOVE IS NOT ENOUGH, and this is why it is not the only one.
+  //
+  // /is retained/i passed for the whole life of the defect #1569 closed. §8.2a names THREE kinds of
+  // history and then makes a viewability claim about all three — "so you can still view it under
+  // 'Closed accounts'" — and the holdings third of that sentence was simply false: holding_snapshots
+  // was written by every sync and read by nothing, so a closed brokerage's positions were reachable
+  // from no endpoint and no screen. The generic matcher could not see it, because the word
+  // "retained" was still on the page.
+  //
+  // Each clause below is now pinned separately, and each names the surface that makes it true:
+  //   - transactions   → the transactions list, filtered by account (#1569 T12)
+  //   - balance        → AccountSummaryHeader's last-known balance pair (#1591)
+  //   - holdings       → ClosedAccountHoldingsHistory in HoldingsTable.tsx, over
+  //                      GET /api/v1/investments/holdings/history (#1569, this round)
+  //
+  // If any of those readers is removed, DELETE THE MATCHING CLAUSE FROM THE POLICY FIRST. A promise
+  // in a privacy policy is the one place a stale claim is not merely untidy.
+  it('promises exactly the three kinds of history the product can actually show back (Section 8.2a)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+
+    const clause = screen.getByText(/transaction, balance, and holdings history/i)
+    expect(clause).toBeInTheDocument()
+
+    const section = clause.textContent ?? ''
+    expect(section).toMatch(/is retained/i)
+    expect(section).toMatch(/not erased/i)
+    // The viewability half — the part that was false. "We kept it" and "you can see it" are
+    // different promises, and §8.2a makes both.
+    expect(section).toMatch(/you can still view it/i)
+    expect(section).toMatch(/closed accounts/i)
+  })
+
+  // The policy must not promise a restore. Nothing anywhere sets deleted_at = NULL, and the one
+  // account un-removal that exists is scoped to a provider-absent cause the user never invokes.
+  it('does not tell the user a removed linked account can be restored (Section 8.2a)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    const section = screen.getByText(/transaction, balance, and holdings history/i).textContent ?? ''
+    expect(section).not.toMatch(/restore|undelete|recover/i)
+  })
+
   it('renders household member deletion cross-reference (Section 8.5)', () => {
     renderWithRouter(<PrivacyPolicy />)
     expect(screen.getByText(/removed household members/i)).toBeInTheDocument()

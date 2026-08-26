@@ -27,6 +27,9 @@ export const ANALYTICS_EVENTS = {
   ACCOUNT_PURGED: 'account_purged',
   ACCOUNT_DETAIL_VIEWED: 'account_detail_viewed',
   ACCOUNT_INVESTMENT_ACTIVITY_CLICKED: 'account_investment_activity_clicked',
+  // #1569: the retained holdings history of a CLOSED account. Fired when the user switches which
+  // recorded day they are looking at — the only interaction the surface has.
+  ACCOUNT_HOLDINGS_HISTORY_DATE_CHANGED: 'account_holdings_history_date_changed',
 
   // Transactions
   TRANSACTIONS_VIEWED: 'transactions_viewed',
