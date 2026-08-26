@@ -77,6 +77,18 @@ func TestAccountRepository_LastKnownBalance_Integration(t *testing.T) {
 		closedNoHistory   = "closed-no-history"
 		closedZero        = "closed-zero-balance"
 		stillActive       = "still-active"
+		// #1591 fix round: a snapshot written AFTER the terminal transition. Nothing serialises the
+		// two writes — transactionSyncService reads the account list, the user disconnects, and the
+		// sync's snapshot pass then writes a row dated after the closure. The caption says "before
+		// it closed"; the figure would be from after.
+		closedThenSnapshotted = "closed-then-snapshotted"
+		// The same race on an account with no earlier snapshot at all: the ONLY row on record is
+		// post-closure, so there is nothing legitimate to show and both columns must stay NULL.
+		closedOnlyAfter = "closed-only-after"
+		// The boundary itself: a snapshot stamped in the SAME instant as the transition. Without
+		// this case `<` and `<=` are indistinguishable and the bound could tighten by a tick
+		// unnoticed.
+		closedAtTheInstant = "closed-at-the-instant"
 	)
 	// IDs are assigned HERE rather than read back from the slice afterwards: CreateBatch encrypts
 	// `Name` in place (encryptAccountPIIFields mutates the element), so the post-call slice keys on
@@ -85,8 +97,11 @@ func TestAccountRepository_LastKnownBalance_Integration(t *testing.T) {
 	byName := map[string]string{
 		closedWithHistory: uuid.New().String(),
 		closedNoHistory:   uuid.New().String(),
-		closedZero:        uuid.New().String(),
-		stillActive:       uuid.New().String(),
+		closedZero:            uuid.New().String(),
+		stillActive:           uuid.New().String(),
+		closedThenSnapshotted: uuid.New().String(),
+		closedOnlyAfter:       uuid.New().String(),
+		closedAtTheInstant:    uuid.New().String(),
 	}
 	accounts := []domain.Account{
 		{ID: byName[closedWithHistory], UserID: userID.String(), LinkedItemID: linkedItemID.String(), UserAccountID: &uaID,
@@ -101,6 +116,15 @@ func TestAccountRepository_LastKnownBalance_Integration(t *testing.T) {
 		{ID: byName[stillActive], UserID: userID.String(), LinkedItemID: linkedItemID.String(), UserAccountID: &uaID,
 			PlaidAccountID: prefix + "-4", Name: stillActive, Type: "depository",
 			CurrentBalance: f(777.00), AvailableBalance: f(777.00), CurrencyCode: "USD"},
+		{ID: byName[closedThenSnapshotted], UserID: userID.String(), LinkedItemID: linkedItemID.String(), UserAccountID: &uaID,
+			PlaidAccountID: prefix + "-5", Name: closedThenSnapshotted, Type: "depository",
+			CurrentBalance: f(2000.00), AvailableBalance: f(2000.00), CurrencyCode: "USD"},
+		{ID: byName[closedOnlyAfter], UserID: userID.String(), LinkedItemID: linkedItemID.String(), UserAccountID: &uaID,
+			PlaidAccountID: prefix + "-6", Name: closedOnlyAfter, Type: "depository",
+			CurrentBalance: f(1500.00), AvailableBalance: f(1500.00), CurrencyCode: "USD"},
+		{ID: byName[closedAtTheInstant], UserID: userID.String(), LinkedItemID: linkedItemID.String(), UserAccountID: &uaID,
+			PlaidAccountID: prefix + "-7", Name: closedAtTheInstant, Type: "depository",
+			CurrentBalance: f(3333.33), AvailableBalance: f(3333.33), CurrencyCode: "USD"},
 	}
 	require.NoError(t, repo.CreateBatch(ctx, userID.String(), accounts))
 
@@ -127,12 +151,35 @@ func TestAccountRepository_LastKnownBalance_Integration(t *testing.T) {
 	// The ACTIVE account has history too — so "active accounts carry no last-known balance" is
 	// proved by the status predicate, not by an absent fixture.
 	snap(byName[stillActive], f(555.55), now.AddDate(0, 0, -2))
-	// closedNoHistory gets nothing, deliberately.
+	// The last balance anyone confirmed while the account was still live.
+	snap(byName[closedThenSnapshotted], f(2000.00), now.AddDate(0, 0, -10))
+	// closedNoHistory and closedOnlyAfter get nothing before closure, deliberately.
 
-	// Close three of the four through the production transition.
-	for _, name := range []string{closedWithHistory, closedNoHistory, closedZero} {
+	// Close five of the six through the production transition, which stamps removed_at and fires
+	// the account_status_history trigger — the interval the lateral now reads its bound from.
+	for _, name := range []string{closedWithHistory, closedNoHistory, closedZero, closedThenSnapshotted, closedOnlyAfter, closedAtTheInstant} {
 		require.NoError(t, repo.UpdateStatus(ctx, byName[name], userID.String(), domain.AccountStatusRemoved, nil))
 	}
+
+	// ── THE RACE, after the fact. An in-flight sync holding a stale account list writes a snapshot
+	// for an account that has since been disconnected. Postgres accepts it; nothing in the write
+	// path knows the account closed a moment ago. These rows are real and must be retained (#1569)
+	// — they simply are not "the last known balance BEFORE it closed".
+	// Dated ONE MILLISECOND after the recorded transition, read back from the interval the trigger
+	// actually wrote. A hand-picked "an hour from now" would prove only that a far-future row is
+	// excluded; the boundary is where a `<` / `<=` slip or a missing bound would hide.
+	closedAt := func(accountID string) time.Time {
+		t.Helper()
+		var at time.Time
+		require.NoError(t, tx.QueryRow(ctx, `
+			SELECT valid_from FROM account_status_history
+			WHERE account_id = $1 AND valid_to IS NULL`, accountID).Scan(&at))
+		return at
+	}
+	snap(byName[closedThenSnapshotted], f(8888.88), closedAt(byName[closedThenSnapshotted]).Add(time.Millisecond))
+	snap(byName[closedOnlyAfter], f(7777.77), closedAt(byName[closedOnlyAfter]).Add(time.Millisecond))
+	// Exactly ON the boundary: kept, per Decision 4's `<=`.
+	snap(byName[closedAtTheInstant], f(3333.33), closedAt(byName[closedAtTheInstant]))
 
 	get := func(t *testing.T, opts AccountFilterOptions) map[string]domain.Account {
 		t.Helper()
@@ -143,7 +190,7 @@ func TestAccountRepository_LastKnownBalance_Integration(t *testing.T) {
 		for _, a := range rows {
 			out[a.Name] = a
 		}
-		require.Len(t, out, 4, "fixture: all four accounts must come back, or the assertions below are vacuous")
+		require.Len(t, out, 7, "fixture: all seven accounts must come back, or the assertions below are vacuous")
 		return out
 	}
 
@@ -153,7 +200,7 @@ func TestAccountRepository_LastKnownBalance_Integration(t *testing.T) {
 		// ── Precondition: the CURRENT-side ruling still holds. Without this the whole test could
 		// pass against a build that quietly reintroduced accounts.current_balance for closed rows,
 		// which is the exact regression #1569 task 21 forbids.
-		for _, name := range []string{closedWithHistory, closedNoHistory, closedZero} {
+		for _, name := range []string{closedWithHistory, closedNoHistory, closedZero, closedThenSnapshotted, closedOnlyAfter, closedAtTheInstant} {
 			require.Nil(t, got[name].CurrentBalance, "%s: a closed account still carries NO current balance", name)
 		}
 		require.NotNil(t, got[stillActive].CurrentBalance, "fixture: the active account must still have one")
@@ -183,6 +230,34 @@ func TestAccountRepository_LastKnownBalance_Integration(t *testing.T) {
 		d := got[stillActive]
 		assert.Nil(t, d.LastKnownBalance, "an ACTIVE account has a current balance and must carry no last-known one")
 		assert.Nil(t, d.LastKnownBalanceAt)
+
+		// ── Case 5: a snapshot written AFTER the terminal transition is not a last-known balance.
+		// "Last known balance … as of <date>" claims a figure from before the account closed. The
+		// newest row on this account is dated an hour into the future of the closure, written by a
+		// sync that had not noticed yet. Taking it would print a post-closure number under a
+		// pre-closure caption — the exact unlabelled-blend defect the whole #1591 ruling exists to
+		// refuse. The row itself is RETAINED (#1569); it is simply not the answer to this question.
+		e := got[closedThenSnapshotted]
+		require.NotNil(t, e.LastKnownBalance, "the pre-closure snapshot is still on record and must be shown")
+		assert.InDelta(t, 2000.00, *e.LastKnownBalance, 0.001,
+			"must be the newest snapshot taken BEFORE closure (2000.00 at -10d), not the post-closure 8888.88")
+		require.NotNil(t, e.LastKnownBalanceAt)
+		assert.WithinDuration(t, now.AddDate(0, 0, -10), *e.LastKnownBalanceAt, time.Minute)
+
+		// ── Case 6: only a post-closure snapshot exists → BOTH absent, via Decision 3's existing
+		// both-or-neither NULL path. Not a new empty state, and emphatically not the 7777.77.
+		g := got[closedOnlyAfter]
+		assert.Nil(t, g.LastKnownBalance,
+			"a snapshot dated after the closure is not a last-known balance; both columns stay NULL")
+		assert.Nil(t, g.LastKnownBalanceAt)
+
+		// ── Case 7: a snapshot stamped in the SAME instant as the transition is kept. The interval
+		// is half-open, but a measurement simultaneous with the closure is a measurement of the
+		// account as it closed. This is the only case that can tell `<=` from `<`.
+		h := got[closedAtTheInstant]
+		require.NotNil(t, h.LastKnownBalance, "a snapshot AT the transition instant is a pre-closure fact")
+		assert.InDelta(t, 3333.33, *h.LastKnownBalance, 0.001)
+		require.NotNil(t, h.LastKnownBalanceAt)
 	})
 
 	t.Run("not opted in", func(t *testing.T) {

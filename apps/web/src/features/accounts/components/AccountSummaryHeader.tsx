@@ -67,6 +67,14 @@ export interface AccountSummaryHeaderProps {
    * account with no snapshot on record renders no row at all — which is how "we never recorded
    * one" stays distinguishable from a recorded `0`, itself a fact about an account that was
    * emptied before it closed.
+   *
+   * ⚠ "BEFORE IT CLOSED" IS ENFORCED, NOT ASSUMED. Snapshot writes and status transitions are not
+   * serialised — a sync holding a stale account list can write a snapshot dated after the user
+   * disconnected — so the backend bounds the lateral by the terminal transition recorded in
+   * `account_status_history` (Decision 4 on `lastKnownBalanceLateral`,
+   * backend/internal/repository/account_liveness_sql.go). An account whose ONLY snapshot is
+   * post-closure therefore arrives here as both-NULL and falls into the no-row case above; it does
+   * not need, and must not get, an empty state of its own.
    */
   lastKnownBalance?: number | null
   /** See `lastKnownBalance` — the two are one fact and are rendered together or not at all. */
