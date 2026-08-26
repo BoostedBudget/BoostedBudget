@@ -93,16 +93,28 @@ func accountLiveOnDateSQL(accountExpr, dateExpr string) string {
 //	account's current status, so a disconnected brokerage's last confirmed position is RETAINED
 //	and answerable by a query that can say when it was true.
 //
-//	⚠ AS OF TASK 12 THAT QUERY HAS NO CALLER. GetByAccountDateRange has zero non-test callers on
-//	both tables, and neither repository is referenced anywhere in internal/services or
-//	internal/huma — only main.go's wiring and the worker that WRITES the rows. This universe is
-//	currently written and never read. Do not describe it as something a user can reach; it is a
-//	table with rows in it and no way out.
+//	⚠ UPDATED #1569 R6B/C1 — the "no caller" claim below is now FALSE and was already half-false
+//	when it was written; both halves are corrected here rather than deleted, because the shape of
+//	the mistake (declaring a universe unreachable without checking for readers this round added or
+//	already had) is the thing worth a reader seeing.
 //
-//	The current-state ruling above does NOT depend on that. It stands on its own ground: an
-//	unlabelled stale position would inflate net worth permanently, whether or not a history
-//	surface exists. What the missing surface costs is the CONSOLATION — "hidden here, visible
-//	there" is not yet true, only "hidden here, retained there".
+//	holding_snapshots now HAS a user-facing historical reader: HoldingHistoryService
+//	(internal/services/holding_history_service.go), reached through
+//	GET /api/v1/investments/holdings/history, via HoldingSnapshotRepository.
+//	ListHistoryDatesForAccount and .GetHistoryForAccountOnDate — NOT through GetByAccountDateRange,
+//	which still has zero non-test callers and remains exactly the unreached primitive the original
+//	claim described.
+//
+//	It also already had a second, pre-existing consumer when this comment first shipped:
+//	portfolio_snapshot_repair.go reads holding_snapshots directly in raw SQL (see its JOIN and
+//	EXISTS clauses) to repair a day's recorded portfolio_snapshots aggregate. That repair path
+//	predates this branch's holdings-history endpoint, so "written and never read" was already
+//	inaccurate about the TABLE, even though it was accurate about the specific
+//	GetByAccountDateRange query being described.
+//
+//	The current-state ruling above does NOT depend on either correction. It stands on its own
+//	ground: an unlabelled stale position would inflate net worth permanently, whether or not a
+//	history surface exists.
 //
 // The one query T12 moved across the line is investmentAnalyticsRepository.IncomeSummary: it
 // aggregates investment_transactions over a closed date range — an event question — but was

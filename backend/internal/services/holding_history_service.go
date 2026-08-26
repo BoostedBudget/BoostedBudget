@@ -33,8 +33,11 @@ type HoldingHistoryService interface {
 	// different facts, and collapsing them would put a false claim in front of the user on the one
 	// surface that exists to stop making false claims.
 	//
-	// An account with no retained history at all is NOT an error — it is a brokerage that was
-	// removed before this branch started capturing, and the caller says so in words.
+	// An account with no retained history at all is NOT an error. #1569 R6B/C2: the cause is not
+	// established here and must not be asserted — the account may simply have held nothing over
+	// its lifetime, or capture coverage may be missing for other reasons entirely. The caller
+	// renders the fact (no retained history for this account) in neutral words, without inventing
+	// a reason.
 	GetAccountHoldingsHistory(ctx context.Context, userID, accountID, asOf string) (*domain.HoldingSnapshotHistory, error)
 }
 
