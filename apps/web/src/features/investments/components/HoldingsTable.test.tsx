@@ -693,6 +693,10 @@ describe('HoldingsTable', () => {
 
       expect(text).toMatch(/no day-by-day positions were recorded/i)
       expect(text).toMatch(/nothing was deleted/i)
+      // #1569 R6C: both strings above predate the C3 fix and pass against either copy. Pin the
+      // causal claim C3 removed OUT — a regression that reintroduces it must fail here even though
+      // it would still satisfy the two assertions above.
+      expect(text).not.toMatch(/stopped syncing/i)
     })
 
     it('tells the user the history is kept rather than erased', () => {
