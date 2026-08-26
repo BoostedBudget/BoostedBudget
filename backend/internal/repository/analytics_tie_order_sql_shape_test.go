@@ -22,13 +22,16 @@ package repository
 
 import (
 	"context"
-	"os"
+	"go/parser"
+	"go/token"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/pashagolub/pgxmock/v4"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -165,12 +168,106 @@ func TestSpendingReads_OrderByCarriesTheDocumentedTiebreaker(t *testing.T) {
 	}
 }
 
-// orderByTotalRe finds every ORDER BY in analytics_repository.go that sorts on `total`.
-var orderByTotalRe = regexp.MustCompile(`(?m)^\s*ORDER BY .*\btotal DESC\b.*$`)
+// ── The forward-looking guard ────────────────────────────────────────────────────────────────────
+//
+// #1569 round 5 (Codex F5): this guard used to match a single LINE of source text
+// (`^\s*ORDER BY .*total DESC.*$`). A seventh read written as
+//
+//	ORDER BY
+//	  total DESC
+//
+// was invisible to it, so it found exactly the six reads that already existed and PASSED — it could
+// not see the next instance, which is the only instance it exists for. It now folds the file's SQL
+// string expressions through the package's shared folder (sql_literal_folding_test.go: a `+`
+// concatenation is joined into one string, an operand it cannot evaluate becomes a word-character-
+// free placeholder) and squashes whitespace before matching, so neither a line break nor `+`
+// assembly hides a clause any more.
+//
+// ⚠ Stated scope boundary, so the limit is honest rather than silent. The guard sees SQL that is
+// literal in analytics_repository.go, including across `+`. It does NOT see:
+//   - a clause assembled across separate statements (`query += "ORDER BY total"` then
+//     `query += " DESC"`), because those two literals never meet in one expression;
+//   - a clause whose ORDER BY text arrives from a variable, a call, or a `fmt.Sprintf` verb — the
+//     folder renders those as its placeholder, which deliberately does NOT read as `total DESC`;
+//   - a read in any other file.
+//
+// Those shapes are reachable only by writing an ORDER BY in a way no read in this file uses. A read
+// that ever needs one must instead be pinned by name in
+// TestSpendingReads_OrderByCarriesTheDocumentedTiebreaker above, which observes the executed SQL
+// and has no such blind spot.
+
+// orderByClauseTerminators end an ORDER BY clause at paren depth zero.
+var orderByClauseTerminators = []string{"LIMIT ", "OFFSET ", "UNION ", "FETCH ", "ORDER BY "}
+
+// orderByClauses returns every ORDER BY clause in one folded query, whitespace-squashed, stopping
+// at the trailing LIMIT/OFFSET/UNION or at the close of an enclosing subquery.
+func orderByClauses(sql string) []string {
+	s := squashWS(sql)
+	const kw = "ORDER BY "
+	var out []string
+	for i := 0; ; {
+		j := strings.Index(s[i:], kw)
+		if j < 0 {
+			return out
+		}
+		start := i + j + len(kw)
+		end, depth := len(s), 0
+	scan:
+		for k := start; k < len(s); k++ {
+			switch s[k] {
+			case '(':
+				depth++
+				continue
+			case ')':
+				if depth == 0 {
+					end = k
+					break scan
+				}
+				depth--
+				continue
+			}
+			if depth != 0 || (k != start && s[k-1] != ' ') {
+				continue
+			}
+			for _, term := range orderByClauseTerminators {
+				if strings.HasPrefix(s[k:], term) {
+					end = k
+					break scan
+				}
+			}
+		}
+		out = append(out, strings.TrimSpace(s[start:end]))
+		i = start
+	}
+}
+
+// orderByTotalRe recognises a folded ORDER BY clause that sorts on `total`.
+var orderByTotalRe = regexp.MustCompile(`\btotal DESC\b`)
 
 // tiebreakerLegRe matches the tiebreaker legs #1585 sanctioned: alphabetical by the read's name
 // column, and (merchant only) the grouped merchant key that follows it.
 var tiebreakerLegRe = regexp.MustCompile(`\b(category_display|merchant_name)\s+ASC\b`)
+
+// spendingOrderByTotalClauses folds analytics_repository.go and returns every ORDER BY clause in it
+// that sorts on `total`, each prefixed with the source line the query starts on.
+func spendingOrderByTotalClauses(t *testing.T) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "analytics_repository.go", nil, 0)
+	require.NoError(t, err, "parse analytics_repository.go")
+
+	var found []string
+	for _, expr := range sqlStringExprs(file) {
+		for _, clause := range orderByClauses(expr.SQL) {
+			if orderByTotalRe.MatchString(clause) {
+				found = append(found,
+					"analytics_repository.go:"+strconv.Itoa(fset.Position(expr.Pos).Line)+
+						"  ORDER BY "+clause)
+			}
+		}
+	}
+	return found
+}
 
 // TestNoSpendingReadOrdersByTotalWithoutATiebreaker is the forward-looking guard. The six reads
 // #1585 fixed are pinned by name above; this one fires on the SEVENTH — a new spending read that
@@ -178,20 +275,22 @@ var tiebreakerLegRe = regexp.MustCompile(`\b(category_display|merchant_name)\s+A
 //
 // It reads the source rather than the executed SQL because a read nobody has written a test for is
 // precisely the one that needs catching, and such a read issues no SQL for a matcher to capture.
+//
+// Both assertions are `assert`, not `require`: a newly added untiebreakered read trips the
+// inventory count AND the tiebreaker check, and seeing both messages is how the reader tells
+// "somebody added a read" apart from "somebody changed one".
 func TestNoSpendingReadOrdersByTotalWithoutATiebreaker(t *testing.T) {
-	src, err := os.ReadFile("analytics_repository.go")
-	require.NoError(t, err, "read analytics_repository.go")
+	found := spendingOrderByTotalClauses(t)
 
-	found := orderByTotalRe.FindAllString(string(src), -1)
-	require.Len(t, found, 6,
+	assert.Len(t, found, 6,
 		"expected the six spending reads #1585 fixed; if a read was added or removed, extend "+
 			"TestSpendingReads_OrderByCarriesTheDocumentedTiebreaker to name it explicitly. Found:\n%s",
 		strings.Join(found, "\n"))
 
-	for _, line := range found {
-		require.Regexp(t, tiebreakerLegRe, line,
+	for _, clause := range found {
+		assert.Regexp(t, tiebreakerLegRe, clause,
 			"an ORDER BY on `total` with no tiebreaker returns equal-total rows in plan-dependent "+
 				"order (#1585). Add the alphabetical leg — and, for a merchant-shaped read, the "+
-				"grouped merchant key after it. Offending clause: %s", squashWS(line))
+				"grouped merchant key after it. Offending clause: %s", clause)
 	}
 }
