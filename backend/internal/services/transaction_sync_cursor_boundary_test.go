@@ -477,3 +477,163 @@ func TestSyncTransactions_RemovedAlreadyTombstoned_AdvancesCursor(t *testing.T) 
 
 	mockPlaidService.AssertExpectations(t)
 }
+
+// TestSyncTransactions_UnmappableAddedRowIsSkippedAndTheCursorStillAdvances_Integration pins
+// residual (1) of the #1570 STORAGE-BEFORE-CURSOR CONTRACT — as a DECISION, not as a defect.
+//
+// ⚠ READ THIS BEFORE "FIXING" WHAT IT ASSERTS. A review reported this shape as data loss: an added
+// transaction Plaid names against a plaid_account_id with no accounts row is Warn'd and skipped,
+// processAddedTransactions returns nil, the cursor advances past it, and /transactions/sync will
+// never re-deliver it. The MECHANISM is real and is asserted below exactly as described. The
+// BEHAVIOUR is deliberate, and transaction_sync_service.go's residual enumeration is where the
+// reasoning lives:
+//
+//   - All four residual skips "fail toward RETAINING (an un-imported row, or a stored row left
+//     unchanged) rather than destroying, which is the safe side of #1569's governing principle".
+//     A row that was never imported is not a row that was destroyed; nothing the user can see loses
+//     data.
+//   - The cursor-advance-past-a-loss shape WAS closed where it destroyed something: residual (4) in
+//     that comment, processRemovedTransactions, used to Warn-and-continue on a real
+//     DeleteByExternalID failure and now returns an error. The asymmetry is the decision.
+//   - Aborting instead is not free and is not obviously better. Case 4 of the enumeration states
+//     the general reason: "re-delivery cannot fix a payload, so aborting would wedge this item's
+//     sync permanently." The same applies to an account Plaid names that this item has no row for
+//     at all — every subsequent sync would re-fetch the same page, hit the same unmappable row and
+//     abort again, so ONE unimportable transaction would stop the item's sync forever, including
+//     for every mappable transaction behind it.
+//
+// So the gap this closes is not the behaviour; it is that nothing pinned the CHOICE. Making the
+// skip an error return, or holding the cursor back, is a behaviour change that must be argued
+// against the reasoning above — and it now fails here rather than passing silently.
+//
+// ⚠ NOTE THE NARROWING. buildAccountMaps loads ALL statuses (GetByLinkedItemIDIncludingRetained),
+// so this fires only when Plaid names a plaid_account_id with NO accounts row for this
+// linked_item_id — not merely a removed or retained one. The mappable sibling in the same page is
+// what proves the skip is per-row rather than per-page.
+func TestSyncTransactions_UnmappableAddedRowIsSkippedAndTheCursorStillAdvances(t *testing.T) {
+	ctx := context.Background()
+
+	mockPlaidService := new(MockPlaidService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewTransactionSyncService(
+		nil, mockLinkedItemRepo, mockTransactionRepo, mockAccountRepo,
+		nil, nil, mockPlaidService, nil, nil, nil, nil, nil, nil,
+	)
+
+	startCursor := "cursor-0"
+	linkedItem := &domain.LinkedItem{
+		ID:          "linked-item-unmappable",
+		UserID:      "user-unmappable",
+		ItemID:      "plaid-item-unmappable",
+		AccessToken: "access-token",
+		Cursor:      &startCursor,
+	}
+
+	page := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{
+			{TransactionId: "txn-mappable", AccountId: "plaid-acc-1", Amount: 12.00, Date: "2024-03-01", Name: "Mappable"},
+			{TransactionId: "txn-ghost", AccountId: "plaid-acc-ghost", Amount: 34.00, Date: "2024-03-02", Name: "Ghost account"},
+		},
+		Modified: []plaid.Transaction{},
+		Removed:  []plaid.RemovedTransaction{},
+	}
+	page.SetNextCursor("cursor-1")
+	page.SetHasMore(false)
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", startCursor, 0).Return(page, nil).Once()
+
+	// plaid-acc-ghost has NO accounts row at all — the only shape that still reaches the skip.
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-unmappable").
+		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-unmappable"}}, nil)
+
+	mockTransactionRepo.On("CreateBatch", mock.Anything, mock.Anything).
+		Return(map[string]bool{"txn-mappable": true}, nil)
+	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	_, err := service.SyncTransactions(ctx, linkedItem)
+	require.NoError(t, err,
+		"CHOSEN: an unimportable row does not fail the sync. Aborting would wedge this item "+
+			"permanently, because re-delivery cannot conjure the missing accounts row.")
+
+	stored := storedExternalIDs(mockTransactionRepo)
+	assert.Equal(t, 1, stored["txn-mappable"],
+		"the mappable sibling in the same page is stored — the skip is per-row, not per-page")
+	assert.Zero(t, stored["txn-ghost"],
+		"CHOSEN: the unmappable row is never imported. There is no account to insert it under, "+
+			"and inventing one would be worse than not having the row.")
+
+	assert.Equal(t, []string{"cursor-1"}, persistedCursors(mockLinkedItemRepo),
+		"CHOSEN, and this is the half that looks like a defect: the cursor advances PAST the "+
+			"skipped row, so Plaid will not re-deliver it. That is accepted because the failure "+
+			"direction is RETAINING (a row never imported) rather than destroying — the safe side "+
+			"of #1569's governing principle — and because holding the cursor back would re-fetch "+
+			"and re-skip the same row forever. If you are changing this, argue it against the "+
+			"residual enumeration in transaction_sync_service.go, not against this assertion.")
+
+	mockPlaidService.AssertExpectations(t)
+}
+
+// TestSyncTransactions_PageWhereEveryAddedRowIsSkipped_StillAdvancesTheCursor pins residual (2) of
+// the same enumeration: when the skip took EVERY row in the page, processAddedTransactions returns
+// nil early without calling CreateBatch at all, and the cursor still advances.
+//
+// It is a separate test because it is a separate code path (the `len(transactions) == 0` early
+// return, not the per-row `continue`) and because it is the shape where "the cursor advanced and
+// nothing at all was stored" is true without qualification — the one a reader is most likely to
+// mistake for a bug. Same decision, same reasoning, stated once above.
+func TestSyncTransactions_PageWhereEveryAddedRowIsSkipped_StillAdvancesTheCursor(t *testing.T) {
+	ctx := context.Background()
+
+	mockPlaidService := new(MockPlaidService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewTransactionSyncService(
+		nil, mockLinkedItemRepo, mockTransactionRepo, mockAccountRepo,
+		nil, nil, mockPlaidService, nil, nil, nil, nil, nil, nil,
+	)
+
+	startCursor := "cursor-0"
+	linkedItem := &domain.LinkedItem{
+		ID:          "linked-item-allskipped",
+		UserID:      "user-allskipped",
+		ItemID:      "plaid-item-allskipped",
+		AccessToken: "access-token",
+		Cursor:      &startCursor,
+	}
+
+	page := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{
+			{TransactionId: "txn-ghost-1", AccountId: "plaid-acc-ghost", Amount: 12.00, Date: "2024-03-01", Name: "Ghost 1"},
+			{TransactionId: "txn-ghost-2", AccountId: "plaid-acc-ghost", Amount: 34.00, Date: "2024-03-02", Name: "Ghost 2"},
+		},
+		Modified: []plaid.Transaction{},
+		Removed:  []plaid.RemovedTransaction{},
+	}
+	page.SetNextCursor("cursor-1")
+	page.SetHasMore(false)
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", startCursor, 0).Return(page, nil).Once()
+
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-allskipped").
+		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-allskipped"}}, nil)
+
+	// Registered so a call would be recorded rather than panicking — the assertion below is that
+	// it never happens, and a mock that panics would fail for the wrong reason.
+	mockTransactionRepo.On("CreateBatch", mock.Anything, mock.Anything).
+		Return(map[string]bool{}, nil).Maybe()
+	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	_, err := service.SyncTransactions(ctx, linkedItem)
+	require.NoError(t, err, "CHOSEN: a page of entirely unimportable rows is not a sync failure")
+
+	assert.Empty(t, storedExternalIDs(mockTransactionRepo),
+		"CHOSEN: the early return means CreateBatch is not called at all — nothing is imported")
+	assert.Equal(t, []string{"cursor-1"}, persistedCursors(mockLinkedItemRepo),
+		"CHOSEN: the cursor advances past a page that stored nothing. Retaining-by-omission, not "+
+			"destruction; see the sibling test above and the residual enumeration it cites.")
+
+	mockPlaidService.AssertExpectations(t)
+}
