@@ -681,16 +681,25 @@ var (
 	//     service wired, which is production today. Remedy: wire it. Reported for the whole withheld
 	//     population, because this cause dominates every per-user one.
 	//   * notice_impossible_window_passed — the clock has run out and a service IS wired. Wiring it
-	//     was still not enough: the two notice queries require retention_expires_at > NOW(), so no
-	//     existing query can even SELECT these users to notify them. This is the backlog that
-	//     accrued before the gate existed, and draining it needs a selection path that does not yet
-	//     exist (see monitorRetentionDeletionsWithheld's TODO).
+	//     is still not enough: the two notice queries require retention_expires_at > NOW(), so
+	//     neither of them can ever select these users to notify them. This is the backlog the gate
+	//     accumulates, and draining it needs a deliberate product decision (send late against a
+	//     re-armed clock, waive the notice, or notify out of band) that has not been taken.
+	//     ⚠ SINCE ISSUE #1584 THESE ACCOUNTS ARE SELECTABLE — that half of the problem is closed.
+	//     profileRepository.GetRetentionDeletionsWithheldPage enumerates them, published at
+	//     GET /api/v1/admin/retention/withheld. This gauge still reports HOW MANY, and it is still
+	//     the thing to alert on; the endpoint is how a human finds out WHICH. An earlier version of
+	//     this comment said draining "needs a selection path that does not yet exist" — that is no
+	//     longer true, and what remains missing is only the decision about what to do to them.
 	//
-	// ⚠ A FOURTH REASON IS REAL BUT NOT REPORTED: a withheld user with no address on file. It is
-	// folded into whichever label above applies, because no SQL predicate can single it out
+	// ⚠ A FOURTH REASON IS REAL BUT NOT REPORTED *HERE*: a withheld user with no address on file. It
+	// is folded into whichever label above applies, because no SQL predicate can single it out
 	// (users.email is ciphertext; EncryptString("") is still "ENC$"+ct) and the one column that
 	// could, email_blind_idx, carries a UNIQUE index that caps the population at one row
-	// database-wide. canSendRetentionNotice is where that state is actually seen, post-decryption.
+	// database-wide. canSendRetentionNotice is where that state is actually seen, post-decryption —
+	// and, since #1584, so is the has_email_on_file field of the admin listing above, which decrypts
+	// per row instead of predicating and is therefore subject to neither obstacle. None of that
+	// makes a label viable here; it means the diagnosis lives on the enumeration, not on the metric.
 	//
 	// ⚠ ALERT ON THE SUM OF THE TWO notice_impossible_* REASONS BEING SUSTAINED ABOVE ZERO, never
 	// on the total: notice_pending is the healthy state. Alert on absence too — see below. The rules
@@ -865,7 +874,9 @@ var (
 // see an addressless row; email_blind_idx could, but its UNIQUE index caps that population at one
 // row database-wide. The state is real and is checked post-decryption in canSendRetentionNotice —
 // it is simply folded into whichever reason below applies rather than given a label that would
-// report at most 1.
+// report at most 1. Issue #1584 did NOT change that and did not add a label: it added a per-row
+// has_email_on_file to the withheld-account admin listing, which reports the same state without a
+// predicate and without a metric series.
 const (
 	// RetentionWithheldNoticePending is the HEALTHY state: the retention clock is still running, so
 	// GetUsersNeedingRetention30dNotice / its 7d sibling can still select this user. Never alert.

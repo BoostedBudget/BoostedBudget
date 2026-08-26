@@ -190,6 +190,13 @@ func TestRetentionNoticeGate_Integration_ClaimRefusesUnwarnedUser(t *testing.T) 
 // re-tested through the real path, because email_blind_idx (the one column that could discriminate)
 // carries a UNIQUE index, capping that population at one row database-wide. See
 // CountRetentionDeletionsWithheld's doc comment.
+//
+// ⚠ THE REASON IS NOW TESTED, JUST NOT HERE. Issue #1584's
+// TestRetentionWithheldEnumeration_Integration_ReportsAnAddresslessAccountTheCountCannotSee builds
+// the addressless user through CreateUserTx — so the column holds real EncryptString("") ciphertext
+// — and asserts it on the ENUMERATING read, which decrypts per row and can therefore see what this
+// counting query provably cannot. Nothing above is weakened by that: this method still has no way
+// to separate the reason, and must not grow one.
 func TestRetentionNoticeGate_Integration_WithholdingCountsSeparatePendingFromImpossible(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)

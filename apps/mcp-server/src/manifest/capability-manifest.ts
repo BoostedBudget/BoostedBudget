@@ -293,6 +293,11 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excluded('getAdminDeadLetterJobArgs', REASON_ADMIN),
   excluded('getAdminPaymentFailures', REASON_ADMIN),
   excluded('listAdminPlaidOrphanedItems', REASON_ADMIN),
+  // #1584: the enumerating read over accounts the #1569 T1 pre-deletion-notice gate is holding
+  // indefinitely. Excluded under the blanket admin policy — and note it is a READ, so exclusion
+  // costs the agent nothing an agent could act on: the surface exists so a human operator can
+  // choose a remedy that does not exist yet.
+  excluded('listAdminRetentionWithheld', REASON_ADMIN),
   excludedWrite('recordAdminPlaidOrphanedItemOperatorResolution', REASON_ADMIN),
   excluded('getSystemHealth', REASON_ADMIN),
   excluded('listAdminUsers', REASON_ADMIN),

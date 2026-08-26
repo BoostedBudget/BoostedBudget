@@ -39,6 +39,10 @@
  * public page's sentence stays arithmetically true. destructiveWriteOperations fell 9 → 4
  * because deleteBudget/deleteBudgetCategory/deleteCategory/deleteSavingsGoal now tombstone
  * rather than destroy, and deleteSavingsGoalContribution left the allowed set entirely.
+ * ⚠ NOW 204 total / 67 excluded: Issue #1584 added listAdminRetentionWithheld, the enumerating
+ * admin read over accounts the #1569 T1 pre-deletion-notice gate is holding indefinitely. Excluded
+ * under the blanket admin policy, so allowed/read/write/destructive are all unchanged — the public
+ * /mcp page's "what can the AI do" numbers are unaffected, which is the point of the exclusion.
  */
 
 import { describe, expect, it } from 'bun:test'
@@ -98,11 +102,11 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
   it('documents the known baseline values (informational — the drift check above is authoritative)', () => {
     const fresh = computeCapabilitySummary(readSpecIndex())
 
-    expect(fresh.totalOperations).toBe(203)
+    expect(fresh.totalOperations).toBe(204)
     expect(fresh.allowedOperations).toBe(137)
     expect(fresh.readOperations).toBe(92)
     expect(fresh.writeOperations).toBe(45)
-    expect(fresh.excludedOperations).toBe(66)
+    expect(fresh.excludedOperations).toBe(67)
     expect(fresh.destructiveWriteOperations).toBe(4)
     expect(fresh.allowedOperations).toBe(fresh.readOperations + fresh.writeOperations)
     expect(fresh.totalOperations).toBe(fresh.allowedOperations + fresh.excludedOperations)
