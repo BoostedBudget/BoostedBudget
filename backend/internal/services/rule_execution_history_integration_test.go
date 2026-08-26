@@ -282,6 +282,90 @@ func TestRuleExecutionHistory_ConflictKeepsTheFirstSnapshot_Integration(t *testi
 		f.ruleID, txn.ID), "unique_rule_transaction permits exactly one row for the pair")
 }
 
+// TestRuleExecutionHistory_SnapshotSurvivesARenameOfThePersistedRule_Integration pins the
+// survives-a-rename property AT THE SQL LEVEL, which nothing did.
+//
+// ⚠ WHAT WAS AND WAS NOT ALREADY COVERED, because the distinction is the whole reason this test
+// exists. rule_name and definition_snapshot are captured inside ApplyRulesToBatch and that capture
+// is asserted in Go (SyncPathWritesTheTrail above). audit_trail_orphan_integration_test.go DOES
+// `SELECT rule_name, definition_snapshot` back out of Postgres — but its fixture INSERTs into
+// rule_execution_history by hand, so what it pins is FK/orphan behaviour over a row production
+// never wrote. Neither one mutates the PERSISTED categorization_rules row and re-reads what the
+// production writer stored. This does: the trail is written through
+// ApplyRulesToBatch -> CreateBatch -> EmitBatchSideEffects, and only then is the live rule renamed
+// and re-pointed.
+//
+// ⚠ THE TWO HALVES ARE NOT EQUALLY STRONG, and saying so is the point.
+//
+//   - The raw `SELECT rule_name, definition_snapshot` is a POST-CONDITION. Postgres does not
+//     recompute a stored column, so it holds for any writer that put bytes there. What it does buy
+//     is narrow and real: it proves the trail's copy is STORED rather than derived, so a later
+//     change making either column a view, a generated column or a join result fails here.
+//   - The GetByUserID assertion is the DISCRIMINATING half. The obvious future "improvement" to
+//     visibleRuleExecutions is to LEFT JOIN categorization_rules and show the rule's CURRENT name
+//     (`COALESCE(r.name, h.rule_name)`) so the history reads more nicely. That is exactly the drift
+//     rule_name exists to prevent, and it is caught here and nowhere else — verified by applying it
+//     to ruleExecutionColumns and watching this test, and only this test, go red.
+func TestRuleExecutionHistory_SnapshotSurvivesARenameOfThePersistedRule_Integration(t *testing.T) {
+	f := seedRuleHistoryFixture(t)
+	ctx := context.Background()
+
+	txn := f.newTransaction("Blue Bottle Coffee")
+	f.runSyncPath(t, []domain.Transaction{txn})
+
+	// The rename happens on the PERSISTED row, through an UPDATE, after the trail was written —
+	// which is what a user renaming and re-targeting a rule in the UI does to it.
+	tag, err := f.tx.Exec(ctx, `
+		UPDATE categorization_rules
+		SET name = 'Coffee is Entertainment', target_pfc_primary = 'ENTERTAINMENT'
+		WHERE id = $1 AND user_id = $2
+	`, f.ruleID, f.userID)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, tag.RowsAffected(), "the rename must have landed, or the test proves nothing")
+
+	var liveName string
+	require.NoError(t, f.tx.QueryRow(ctx,
+		`SELECT name FROM categorization_rules WHERE id = $1`, f.ruleID).Scan(&liveName))
+	require.Equal(t, "Coffee is Entertainment", liveName,
+		"guard against a vacuous pass: the live rule really is renamed at this point")
+
+	// Half 1 — the stored bytes, read back out of Postgres.
+	var storedName string
+	var storedSnapshot []byte
+	require.NoError(t, f.tx.QueryRow(ctx, `
+		SELECT rule_name, definition_snapshot FROM rule_execution_history
+		WHERE rule_id = $1 AND transaction_id = $2
+	`, f.ruleID, txn.ID).Scan(&storedName, &storedSnapshot))
+
+	assert.Equal(t, "Coffee is Food", storedName,
+		"the trail records the rule AS IT WAS when it ran; the rename must not reach backwards")
+
+	var snap map[string]any
+	require.NoError(t, json.Unmarshal(storedSnapshot, &snap))
+	assert.Equal(t, "FOOD_AND_DRINK", snap["target_pfc_primary"],
+		"the snapshot is the definition at execution time, not the definition now")
+
+	// Half 2 — the production READ, which is the one a join could break.
+	rows, _, err := repository.NewRuleExecutionHistoryRepository(f.tx).
+		GetByUserID(ctx, f.userID, 20, 0)
+	require.NoError(t, err)
+
+	var found *domain.RuleExecution
+	for _, r := range rows {
+		if r.RuleID != nil && *r.RuleID == f.ruleID {
+			found = r
+		}
+	}
+	require.NotNil(t, found, "the renamed rule's execution must still be in the user's history")
+	require.NotNil(t, found.RuleName)
+	assert.Equal(t, "Coffee is Food", *found.RuleName,
+		"the read must serve the trail's own copy, never the live rule's current name")
+
+	var readSnap map[string]any
+	require.NoError(t, json.Unmarshal(found.DefinitionSnapshot, &readSnap))
+	assert.Equal(t, "FOOD_AND_DRINK", readSnap["target_pfc_primary"])
+}
+
 // TestRuleExecutionHistory_DeletedRuleStillReadable_Integration is why the read is keyed on
 // user_id. Deleting a rule in the UI is a HARD delete and the FK is ON DELETE SET NULL, so a read
 // keyed on rule_id would make the executions of every deleted rule invisible — retention that reads

@@ -324,6 +324,75 @@ func TestAnnotationHistory_ReviewChangeIsRecordedAndAttributedToTheReviewSource_
 	assert.Equal(t, *row.Prior.CategoryOverrideKind, *row.New.CategoryOverrideKind)
 }
 
+// TestAnnotationHistory_BulkReviewRecordsOneRowPerTransaction_Integration is the MULTI-ID half of
+// the review path, which nothing covered.
+//
+// ⚠ NARROWER THAN IT SOUNDS, and the narrowing is the point. A multi-id SetReviewed call already
+// exists at services/transaction_service_test.go:1142 — but it is MOCK-BASED, so what it proves is
+// that the service forwards the slice to the repository. Every INTEGRATION call in this file
+// passes a ONE-ELEMENT slice, which the capture CTE cannot get wrong: with a single id there is
+// exactly one candidate prior tuple, so a broken `prior.id = t.id` join is indistinguishable from
+// a correct one. The untested property is that a BULK review records one annotation-history row
+// PER TRANSACTION, each carrying ITS OWN prior value — the same claim
+// TestAnnotationHistory_BulkCategoryRecordsOneRowPerTransaction_Integration makes about the
+// category statement, aimed at the review statement instead. This does not re-prove the
+// forwarding.
+//
+// The two transactions are deliberately in DIFFERENT prior states, because two rows with the same
+// prior would pass under a cross join. Dropping `AND prior.id = t.id` from SetReviewed's WHERE
+// makes this test red on its own assertions (validated); with one id in the slice it stays green.
+//
+// ⚠ a is reviewed=true and is being set reviewed=true, which is NOT a no-op: SetReviewed writes
+// `reviewed_at = now` unconditionally, so the March timestamp genuinely moves and the change is
+// recorded. That is the same column-wise ruling
+// TestAnnotationHistory_ATrueNoOpRecordsNothing_Integration states from the other side.
+func TestAnnotationHistory_BulkReviewRecordsOneRowPerTransaction_Integration(t *testing.T) {
+	f := seedAnnotationHistoryFixture(t)
+	ctx := context.Background()
+
+	reviewedInMarch := f.seedTransaction(t, f.userID, "Blue Bottle Coffee", true)
+	neverReviewed := f.seedTransaction(t, f.userID, "Peets Coffee", false)
+
+	n, err := f.svc.SetReviewed(ctx, f.userID, []string{reviewedInMarch.ID, neverReviewed.ID}, true)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, n)
+
+	rows, total := f.history(t)
+	require.Equal(t, 2, total,
+		"one row per transaction — not one collapsed row, and not the cross product of the self-join")
+
+	byTxn := map[string]*domain.TransactionAnnotationChange{}
+	for _, r := range rows {
+		byTxn[r.TransactionID] = r
+		assert.Equal(t, domain.TransactionAnnotationChangeReview, r.ChangeSource,
+			"a review write is filed as a review, never as a recategorisation")
+	}
+	require.Len(t, byTxn, 2, "the two rows must name two DIFFERENT transactions")
+	require.Contains(t, byTxn, reviewedInMarch.ID)
+	require.Contains(t, byTxn, neverReviewed.ID)
+
+	// Each row's prior is ITS OWN transaction's, not the other's and not a merge of the two.
+	marchRow := byTxn[reviewedInMarch.ID]
+	assert.True(t, marchRow.Prior.Reviewed)
+	require.NotNil(t, marchRow.Prior.ReviewedAt,
+		"the March timestamp this bulk write clobbers is exactly what the trail exists to keep")
+	assert.WithinDuration(t, marchReview, *marchRow.Prior.ReviewedAt, time.Second)
+
+	neverRow := byTxn[neverReviewed.ID]
+	assert.False(t, neverRow.Prior.Reviewed)
+	assert.Nil(t, neverRow.Prior.ReviewedAt,
+		"this one was never reviewed, and its row must not inherit the other's March timestamp")
+
+	// Both moved to the same new state, which is what makes the differing PRIORS the only thing
+	// distinguishing the rows.
+	for id, row := range byTxn {
+		assert.True(t, row.New.Reviewed, "both transactions are reviewed now (%s)", id)
+		require.NotNil(t, row.New.ReviewedAt, "and both carry a fresh reviewed_at (%s)", id)
+		assert.True(t, row.New.ReviewedAt.After(marchReview),
+			"reviewed_at moved forward, which is the unrecoverable fact being recorded (%s)", id)
+	}
+}
+
 // TestAnnotationHistory_ATrueNoOpRecordsNothing_Integration pins the no-op ruling. Un-reviewing an
 // already-unreviewed transaction changes nothing at all — reviewed stays false, reviewed_at stays
 // NULL — and an append-only trail that grows on writes that changed nothing is noise that makes the
