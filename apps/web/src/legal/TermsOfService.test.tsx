@@ -13,6 +13,28 @@ import { TermsOfService } from './TermsOfService'
 const renderWithRouter = (component: React.ReactElement) =>
   render(<MemoryRouter>{component}</MemoryRouter>)
 
+/**
+ * The text of one top-level section: the content between the <h2> matching `heading` and the next
+ * <h2>, whitespace-collapsed.
+ *
+ * Anchoring matters here rather than querying the whole ~600-line document: words like "delete",
+ * "6 months" and "retention period" appear in a dozen other sections, so a document-wide matcher
+ * would prove nothing about the clause under test.
+ */
+function sectionText(heading: RegExp): string {
+  const h2 = Array.from(document.querySelectorAll('h2')).find((h) =>
+    heading.test(h.textContent ?? '')
+  )
+  expect(h2).toBeDefined()
+  let text = ''
+  let node: Element | null = h2!.nextElementSibling
+  while (node && node.tagName !== 'H2') {
+    text += ' ' + (node.textContent ?? '')
+    node = node.nextElementSibling
+  }
+  return text.replace(/\s+/g, ' ').trim()
+}
+
 describe('TermsOfService', () => {
   it('renders "Terms of Service" heading', () => {
     renderWithRouter(<TermsOfService />)
@@ -159,17 +181,7 @@ describe('TermsOfService', () => {
   // sections, so a document-wide matcher would prove nothing about this clause.
   it('does not promise a post-retention deletion the retention sweep cannot perform (Section 7)', () => {
     renderWithRouter(<TermsOfService />)
-    const h2 = Array.from(document.querySelectorAll('h2')).find((h) =>
-      /trial expiration and read-only access/i.test(h.textContent ?? '')
-    )
-    expect(h2).toBeDefined()
-    let text = ''
-    let node: Element | null = h2!.nextElementSibling
-    while (node && node.tagName !== 'H2') {
-      text += ' ' + (node.textContent ?? '')
-      node = node.nextElementSibling
-    }
-    text = text.replace(/\s+/g, ' ').trim()
+    const text = sectionText(/trial expiration and read-only access/i)
 
     // The superseded sentence, pinned in full.
     expect(text).not.toMatch(
@@ -189,17 +201,7 @@ describe('TermsOfService', () => {
   // window" without reconciling the sentence above it, which still said "for up to 6 months".
   it('states six months as a floor, not a cap, in the cancellation clause (Section 7)', () => {
     renderWithRouter(<TermsOfService />)
-    const h2 = Array.from(document.querySelectorAll('h2')).find((h) =>
-      /trial expiration and read-only access/i.test(h.textContent ?? '')
-    )
-    expect(h2).toBeDefined()
-    let text = ''
-    let node: Element | null = h2!.nextElementSibling
-    while (node && node.tagName !== 'H2') {
-      text += ' ' + (node.textContent ?? '')
-      node = node.nextElementSibling
-    }
-    text = text.replace(/\s+/g, ' ').trim()
+    const text = sectionText(/trial expiration and read-only access/i)
 
     expect(text).not.toMatch(/account data for up to ?6 months after cancellation/i)
     expect(text).toMatch(/account data for at least ?6 months after cancellation/i)
