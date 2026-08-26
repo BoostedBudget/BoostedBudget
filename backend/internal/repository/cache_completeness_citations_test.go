@@ -834,82 +834,20 @@ func extractMethodCitationPairs(text string) []methodCitationPair {
 	return pairs
 }
 
-// methodCitationKindAliases teaches the guard the ONE class of citation that is semantically
-// correct while being literally absent from the cited file: prose that names the KIND a call
-// RESOLVES TO rather than the constructor written at the line.
-//
-// The measured instance, and the reason this table exists rather than a blanket exemption:
-// `ScopeUser` (`internal/services/analytics_service_cached.go:239-241`) appears three times, and
-// `ScopeUser` occurs ZERO times in that 248-line file. The cited lines are GetBudgetVsActual's
-// wrapper calling `cache.ScopeFor(userID, nil)` — and `ScopeFor(userID, nil)` returns
-// `Scope{Kind: ScopeUser, ID: userID}` (`internal/cache/consumer.go:19-23`). The prose is RIGHT: it
-// names the resulting scope kind, which is what a reader auditing cache scoping cares about, and
-// the line range is right too.
-//
-// TWO WAYS TO GET THIS WRONG, and both were on the table. Relaxing the prose to name the
-// constructor puts `ScopeFor(userID, nil)` — parenthesised — where the extractor expects a bare
-// backticked identifier, so the pair stops being collected and coverage silently DROPS. Demanding
-// the identifier literally makes the guard fire on correct prose, and this branch has the recorded
-// lesson that a guard which fires on legitimate code gets disabled by the next engineer, plus six
-// guards that shipped unable to fail. So: neither. The alias is narrow and it still BITES — if the
-// wrapper moves, `ScopeFor(` is no longer near the cited range and the guard fires exactly as it
-// would for any other drift. What the alias buys is that the guard checks the LINE, not the
-// vocabulary.
-//
-// ⚠ EVERY ENTRY HERE IS A CLAIM THAT MUST BE RE-DERIVED, NOT INHERITED. It says "this identifier
-// is produced by that expression". Nothing checks that. Before adding one, read the constructor and
-// confirm the mapping; before trusting one, do it again — two allowlist reasons shipped false on
-// this branch already (#1569). Do NOT add an entry to silence a citation you have not read.
-var methodCitationKindAliases = map[string][]string{
-	// cache.ScopeFor(userID, nil) -> Scope{Kind: ScopeUser}; ScopeFor(userID, hh) -> ScopeHousehold.
-	"ScopeUser":      {"ScopeFor("},
-	"ScopeHousehold": {"ScopeFor("},
-}
-
-// reScopeForCall matches a ScopeFor(<first arg>, <second arg>) call and captures the second
-// argument, which is the ONLY thing that decides which Scope.Kind the call resolves to
-// (cache.ScopeFor, internal/cache/consumer.go:19-23): a literal `nil` second argument produces
-// ScopeUser, anything else produces ScopeHousehold. Re-derived for #1569 R6B/B1 — see the
-// scopeForCallKind doc comment for why the alias table above cannot tell the two kinds apart on
-// its own.
-var reScopeForCall = regexp.MustCompile(`ScopeFor\(\s*[^,()]+,\s*([^)]+)\)`)
-
-// scopeForCallKind returns the Scope.Kind identifier ("ScopeUser" or "ScopeHousehold") that the
-// nearest ScopeFor(...) call within window lines of [lo, hi] in path resolves to, or "" when no
-// such call is found there.
-//
-// WHY THIS EXISTS (#1569 R6B/B1). methodCitationKindAliases maps BOTH ScopeUser and ScopeHousehold
-// to the same literal text, "ScopeFor(" — the alias only proves a ScopeFor call is nearby, not
-// which kind it is. Without this check, a citation naming ScopeHousehold is satisfied by a call
-// site that actually resolves to ScopeUser (ScopeFor(x, nil)), because identifierNearRange's plain
-// substring search cannot see the argument that decides the kind. This is deliberately kept
-// separate from identifierNearRange (which stays a general, alias-agnostic substring search used by
-// every other citation) rather than teaching it argument-parsing it does not need for any other case.
-func scopeForCallKind(path string, lo, hi, window int) string {
-	b, err := readSourceWithCommentsBlanked(path)
-	if err != nil {
-		return ""
-	}
-	lines := strings.Split(string(b), "\n")
-	lo, hi = lo-1-window, hi-1+window
-	if lo < 0 {
-		lo = 0
-	}
-	if hi >= len(lines) {
-		hi = len(lines) - 1
-	}
-	if lo > hi {
-		return ""
-	}
-	m := reScopeForCall.FindStringSubmatch(strings.Join(lines[lo:hi+1], "\n"))
-	if m == nil {
-		return ""
-	}
-	if strings.TrimSpace(m[1]) == "nil" {
-		return "ScopeUser"
-	}
-	return "ScopeHousehold"
-}
+// An alias table used to live here (#1569 R6B/B1): it let a citation name the Scope.Kind a
+// `cache.ScopeFor` call RESOLVES TO ("ScopeUser"/"ScopeHousehold") rather than the constructor
+// written at the cited line, on the theory that "a ScopeFor call is nearby" plus an argument-aware
+// regex could tell the two kinds apart. It was REMOVED in #1569 R6C: the review proved by execution
+// that `ScopeFor`'s second argument is a nilable `*domain.HouseholdScope`, so no regex over source
+// text can decide which kind a given call resolves to — a gofmt-wrapped nil, a named nil variable,
+// and a nested first-position call each defeated a different version of the attempted parser, and
+// one of those false negatives left a genuine wrong-kind citation accepted. A guard that can be
+// argued past by reformatting the call it inspects is not a guard. The fix moved to the citations
+// themselves: the four real call sites now name the constructor, `ScopeFor`, directly, so the
+// existing identifierNearRange fallback below — a plain substring search, no argument parsing —
+// checks the LINE with no inference required. See
+// internal/repository/cache_completeness_repo_test.go's BudgetRepository.Update/.CreateCategory/
+// .UpdateCategorySpentAmount/.CreateWithCategories entries for the corrected citations.
 
 // methodCitationProblem is the guard's whole relation for ONE pair, given a resolved on-disk path.
 // It returns ("", false) when the pair is not checkable at all, and otherwise (problem, true) with
@@ -963,22 +901,6 @@ func methodCitationProblem(resolved, method string, lo, hi int) (string, bool) {
 	// a fallback where containment is impossible it is exactly right, and it caught four stale refs
 	// that the silent skip had been swallowing.
 	if identifierNearRange(resolved, method, lo, hi, 3) {
-		return "", true
-	}
-	for _, alias := range methodCitationKindAliases[method] {
-		if !identifierNearRange(resolved, alias, lo, hi, 3) {
-			continue
-		}
-		// The ScopeUser/ScopeHousehold alias is argument-aware: matching the literal
-		// "ScopeFor(" text only proves A ScopeFor call is nearby, not which kind it resolves to.
-		// Confirm the second argument actually produces the kind this citation claims before
-		// accepting the match — see scopeForCallKind.
-		if method == "ScopeUser" || method == "ScopeHousehold" {
-			if got := scopeForCallKind(resolved, lo, hi, 3); got == "" || got == method {
-				return "", true
-			}
-			continue
-		}
 		return "", true
 	}
 	return citedSpan(lo, hi) + " is cited for " + method +
@@ -1052,15 +974,34 @@ func TestMethodCitationsPointInsideTheirMethod(t *testing.T) {
 
 // readSourceWithCommentsBlanked reads a .go file and returns its bytes with every comment's text
 // overwritten with spaces (newlines inside block comments are preserved so line numbers in the
-// result still line up with the original file). Falls back to the raw bytes if the file cannot be
-// tokenized (e.g. a syntax error mid-edit) — a fallback search over uncommented raw text is the
-// pre-existing, more permissive behaviour, not a new failure mode.
+// result still line up with the original file). Falls back to the raw bytes when the file has no
+// tokens at all — an empty file, or one containing only whitespace.
+//
+// ⚠ CORRECTED #1569 R6C. The doc comment here used to say this falls back "if the file cannot be
+// tokenized (e.g. a syntax error mid-edit)". That is not what `go/scanner` does: it is a LEXER, not
+// a parser, and it has no notion of "cannot be tokenized" — run on badly-broken source (an unclosed
+// brace, a dangling operator, whatever mid-edit produces) it still emits a token stream, just one an
+// `ast.Parse` would reject. `!sawToken` cannot fire on that kind of brokenness; the only way to reach
+// it is a file with literally zero tokens. Even a comment-only file still emits COMMENT tokens under
+// ScanComments, so in practice `!sawToken` fires only on a genuinely empty or whitespace-only file.
 //
 // WHY THIS EXISTS (#1569 R6B/B2). identifierNearRange is the fallback relation for a citation whose
 // named method the file does not DECLARE — it used to run over raw source, so a citation for a
 // method the file merely MENTIONS IN A COMMENT (e.g. a doc comment cross-referencing another type's
 // method by name) satisfied the same check as a real call site. Blanking comments first means the
 // fallback can only be satisfied by identifiers that appear in actual code.
+//
+// ⚠ CORRECTED #1569 R6C — that last sentence overclaims. "Actual code" here does NOT exclude string
+// literals: this guard's own corpus cites SQL table/column names that live nowhere but inside raw
+// string literals (e.g. `subscription_entitlements` at entitlement_repository.go:114, inside a
+// backtick SQL string, is a real, load-bearing citation with no non-string occurrence anywhere in
+// the file). Blanking `token.STRING` alongside comments was tried and reverted for exactly that
+// reason — it turned that citation and others like it into false positives on the real corpus, which
+// is worse than the hole it would have closed. So the fallback is satisfied by any identifier
+// occurrence outside a COMMENT specifically — including one that appears only inside a string
+// literal, such as `s := "CommentOnlyThing"`. That is narrower than "actual code" suggests but wider
+// than "declared or called"; a reader relying on this fallback for precision should know a string
+// literal counts.
 func readSourceWithCommentsBlanked(path string) ([]byte, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -1089,7 +1030,7 @@ func readSourceWithCommentsBlanked(path string) ([]byte, error) {
 		}
 	}
 	if !sawToken {
-		return src, nil // unparseable: fall back to raw text rather than reporting an empty file
+		return src, nil // genuinely empty/whitespace-only file: nothing to blank
 	}
 	return out, nil
 }
@@ -1790,9 +1731,15 @@ func TestMethodCitationRelation_RangesAndAliases(t *testing.T) {
 	// 10 }
 	// 11 (blank)
 	// 12 // CommentOnlyThing is mentioned here but never declared or called anywhere in this file.
+	// 13 (blank)
+	// 14 func StringOnly() {
+	// 15 	s := "StringLiteralOnlyThing"
+	// 16 	_ = s
+	// 17 }
 	src := "package sample\n\n// Doc comment for Target.\nfunc Target() {\n\t_ = 1\n}\n\n" +
 		"func Other() {\n\t_ = ScopeFor(\"u\", nil)\n}\n\n" +
-		"// CommentOnlyThing is mentioned here but never declared or called anywhere in this file.\n"
+		"// CommentOnlyThing is mentioned here but never declared or called anywhere in this file.\n\n" +
+		"func StringOnly() {\n\ts := \"StringLiteralOnlyThing\"\n\t_ = s\n}\n"
 	path := filepath.Join(t.TempDir(), "sample.go")
 	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
@@ -1820,27 +1767,35 @@ func TestMethodCitationRelation_RangesAndAliases(t *testing.T) {
 		{"single line outside the body", "Target", 9, 9, true, true,
 			"likewise for the old relation's failing case"},
 
-		// The alias class. `ScopeUser` occurs nowhere in the fixture, exactly as it occurs nowhere in
-		// analytics_service_cached.go, and the cited range holds the ScopeFor call it resolves to.
-		{"alias identifier absent but its constructor is in range", "ScopeUser", 8, 10, true, false,
-			"prose naming the resulting scope KIND is semantically correct and must not be flagged"},
-		{"alias identifier absent and its constructor is far away", "ScopeUser", 1, 2, true, true,
-			"the alias must still BITE: if the call moves out of the cited range the citation is stale"},
+		// #1569 R6C: the alias class (naming the Scope.Kind a `ScopeFor` call resolves to, e.g.
+		// citing `ScopeUser` over a `ScopeFor(userID, nil)` line) was REMOVED, not fixed. The
+		// review proved by execution that the second argument to ScopeFor is a nilable pointer, so
+		// no static text rule can tell ScopeUser from ScopeHousehold from the source alone — every
+		// variant tried (bare identifier text, a second-arg regex, gofmt-wrapped calls, a named nil
+		// variable, a nested first-position call) either accepted the wrong kind or silently stopped
+		// checking. The fix is at the citation, not the guard: the four real citations that used to
+		// name the resolved kind now name the constructor, `ScopeFor`, directly — see
+		// internal/repository/cache_completeness_repo_test.go's BudgetRepository entries. That
+		// leaves nothing here for the alias class to test; only the plain fallback below remains.
 		{"non-alias identifier absent entirely", "NoSuchThing", 1, 2, true, true,
-			"the fallback proximity relation is unchanged for everything outside the alias table"},
-
-		// #1569 R6B/B1: the fixture's only ScopeFor call is ScopeFor("u", nil), which resolves to
-		// ScopeUser. A citation naming ScopeHousehold against that exact same range must be a
-		// violation — the alias table cannot let "a ScopeFor call is nearby" stand in for "the
-		// call this citation claims is nearby".
-		{"alias names the WRONG scope kind for the nearby ScopeFor call", "ScopeHousehold", 8, 10, true, true,
-			"ScopeFor(\"u\", nil) resolves to ScopeUser, not ScopeHousehold — the alias must not paper over that"},
+			"the fallback proximity relation is unchanged for everything outside any alias table"},
 
 		// #1569 R6B/B2: the fallback must search CODE, not comments — a citation naming a method
 		// the file does not contain must not pass just because a nearby comment happens to mention
 		// the same name in prose.
 		{"non-alias identifier appears only inside a comment", "CommentOnlyThing", 12, 12, true, true,
 			"a comment merely mentioning the name is not evidence the file contains the code"},
+
+		// #1569 R6C/item 6: readSourceWithCommentsBlanked's doc comment used to claim the fallback
+		// "can only be satisfied by identifiers that appear in actual code", which reads as
+		// excluding string literals. It does not: this guard's own corpus relies on citations that
+		// name a SQL table/column identifier findable ONLY inside a backtick string (e.g.
+		// `subscription_entitlements` at entitlement_repository.go:114). Blanking string literals
+		// to make the doc comment literally true was tried and reverted because it turned that real
+		// citation into a false positive. So this case pins the CHOSEN behaviour — a string literal
+		// counts — not the rejected one.
+		{"identifier that appears only inside a string literal still counts", "StringLiteralOnlyThing", 15, 15, true, false,
+			"the doc comment now says a string literal satisfies the fallback; this is the corpus reason why"},
 	}
 
 	for _, tc := range cases {
@@ -1892,7 +1847,7 @@ func TestMethodCitationExtraction_CollectsRangesInBothOrders(t *testing.T) {
 // pair is a violation" is trivially true of an extraction that collects no range pairs — the exact
 // fail-open the widening was fixing.
 func TestMethodCitationRangesInTheCorpusAreClean(t *testing.T) {
-	ranges, violations, scopeUser := 0, []string{}, 0
+	ranges, violations := 0, []string{}
 	for _, g := range citedGuardFiles() {
 		b, err := os.ReadFile(g.path)
 		if err != nil {
@@ -1911,25 +1866,20 @@ func TestMethodCitationRangesInTheCorpusAreClean(t *testing.T) {
 				continue
 			}
 			ranges++
-			if p.method == "ScopeUser" || p.method == "ScopeHousehold" {
-				scopeUser++
-			}
 			if problem != "" {
 				violations = append(violations, p.path+":"+problem)
 			}
 		}
 	}
 
-	// Measured 2026-08-26 by raising this floor until it printed: 15 checkable range pairs, 3 of
-	// them the ScopeUser class. Both are floors, not equalities — citations get added.
+	// Measured 2026-08-26 (#1569 R6C, after the ScopeUser/ScopeHousehold alias class was removed
+	// and the four citations that relied on it were re-pointed at `ScopeFor` directly): 12
+	// checkable range pairs. This is a floor, not an equality — citations get added. There is no
+	// separate alias-class floor any more: those four citations are now ordinary `ScopeFor`
+	// range pairs, checked by the same relation as everything else in this loop.
 	if ranges < 12 {
 		t.Fatalf("only %d checkable RANGE pairs — the range extraction has regressed, and this "+
 			"test's pass would be vacuous", ranges)
-	}
-	if scopeUser < 3 {
-		t.Fatalf("only %d ScopeUser/ScopeHousehold range pairs — the alias class this test exists "+
-			"to protect is no longer in the corpus, so the alias table should be re-derived or "+
-			"deleted rather than left as dead configuration", scopeUser)
 	}
 	if len(violations) > 0 {
 		sort.Strings(violations)
