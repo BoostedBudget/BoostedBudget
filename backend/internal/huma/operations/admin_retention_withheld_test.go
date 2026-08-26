@@ -141,7 +141,7 @@ func TestListAdminRetentionWithheld_FullPageYieldsAFollowableCursor(t *testing.T
 	assert.Equal(t, "2026-02-01T00:00:00Z", out.Body.NextCursor.ExpiresAt)
 
 	// And the cursor a client sends back is the cursor the repository receives.
-	back, err := h.ListAdminRetentionWithheld(context.Background(), &ListAdminRetentionWithheldInput{
+	_, err = h.ListAdminRetentionWithheld(context.Background(), &ListAdminRetentionWithheldInput{
 		Limit:           2,
 		CursorExpiresAt: out.Body.NextCursor.ExpiresAt,
 		CursorUserID:    out.Body.NextCursor.UserID,
@@ -151,7 +151,6 @@ func TestListAdminRetentionWithheld_FullPageYieldsAFollowableCursor(t *testing.T
 	assert.Equal(t, "u2", reader.gotCursor.UserID)
 	assert.True(t, reader.gotCursor.ExpiresAt.Equal(newer))
 	assert.Equal(t, 2, reader.gotLimit)
-	_ = back
 }
 
 // TestListAdminRetentionWithheld_RefusesHalfACursor. A keyset position is the PAIR; half of one is
