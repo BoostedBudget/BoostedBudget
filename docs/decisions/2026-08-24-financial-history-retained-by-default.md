@@ -81,17 +81,46 @@ they did.** The strong form holds for the three purges only:
 *Method:* the audit column is `/usr/bin/grep -n "LogInTx" backend/internal/repository/{account,linked_item,savings_goal,savings_contribution}_repository.go`
 — three `*.history_purged` calls, none in `savings_contribution_repository.go`. The precondition
 column is reading each method body; `DeleteContribution`
-(`savings_contribution_repository.go:654-671`) and `DeleteManagedForTransaction` (`:721-728`) are
+(`savings_contribution_repository.go:749-766`) and `DeleteManagedForTransaction` (`:828-839`) are
 each a single bare `db.Exec` with no surrounding transaction.
 
 The two contribution deletes are recorded here as a **known deviation**, not as satisfying the
 list. `DeleteContribution` destroys exactly the one row the user is looking at and just asked to
-remove. `DeleteManagedForTransaction` deletes only rows with `managed_by_reconciliation = true` —
-derived, regenerable rows the reconciler owns, which are not a record of anything the user did; a
-user-entered contribution does not match the predicate. Note also that its predicate is
-`WHERE transaction_id = $1 AND managed_by_reconciliation = true`, with **no user scoping** — safe
-only because `transaction_id` is already user-scoped by its caller. **Copy the purges, not these
-two**, when adding a sixth member.
+remove — though its predicate keys on `c.id` alone, so a row the *reconciler* created is reachable
+by it too (see the allowlist entry, which no longer claims the row is one the user entered).
+
+⚠ **`DeleteManagedForTransaction` is NOT justified by the rows being derived and regenerable, and
+this document argued that it was until 2026-08-26.** The retracted reason — *"derived, regenerable
+rows the reconciler owns, which are not a record of anything the user did; a user-entered
+contribution does not match the predicate"* — is false in the way four other reasons on this branch
+were false: true of most rows the predicate matches, asserted of all of them.
+`UpsertFromTransaction` INSERTs `status='confirmed'` with `managed_by_reconciliation = true`
+(`savings_contribution_repository.go:312-315`, reached from
+`transferCorrelationService.createBoostMatchContribution` with `source='boost_match'`), and its
+`ON CONFLICT DO UPDATE` (`:316-320`) promotes a proposed row to confirmed **without clearing the
+flag** — it rewrites `status`, `amount`, `source` and `updated_at`, and nothing else. Such a
+row *is* a record of the user's money moving, and it is not regenerable once the boost that matched
+it is gone. The retraction is recorded at
+`backend/internal/repository/history_delete_guard_test.go`, on the allowlist entry itself; this
+section now agrees with it.
+
+What actually justifies the delete is the **LIVE-goal scope** the predicate carries:
+
+```sql
+WHERE c.savings_goal_id = g.id
+  AND c.transaction_id = $1
+  AND c.managed_by_reconciliation = true
+  AND g.deleted_at IS NULL
+```
+
+A live contributions-basis goal recomputes progress from these rows, so a row derived from a
+transaction the bank has withdrawn would keep counting money that is no longer there — phantom
+progress. A **tombstoned** goal recomputes nothing; its rows are only a ledger, and
+`g.deleted_at IS NULL` excludes them (regression:
+`TestDeleteManagedForTransaction_DeletedGoalLedgerSurvives_Integration`). Hand-logged rows
+(`managed_by_reconciliation = false`) never matched and still do not. Note also that the predicate
+carries **no user scoping** — safe only because `transaction_id` is already user-scoped by its
+caller. **Copy the purges, not these two**, when adding a sixth member.
 
 ### 2. Side-effect destruction — forbidden; tombstone instead
 
@@ -111,7 +140,7 @@ does **not** qualify and is permanently out of scope for #1569: a tombstone whos
 collected is a delayed version of the defect this issue exists to fix.
 
 ⚠ **THE SWEEP DOES NOT CURRENTLY RUN, AND THAT CHANGES THIS DECISION'S STANDING.** #1569 T1 added
-`retentionNoticesDeliveredPredicate` (`backend/internal/repository/profile_repository.go:2474-2477`):
+`retentionNoticesDeliveredPredicate` (`backend/internal/repository/profile_repository.go:2547-2550`):
 a retention hard-delete is neither a candidate nor a claim unless **both** promised pre-deletion
 notices have been recorded. `cmd/server/main.go` passes no `EmailService` to
 `RetentionCleanupCheckWorker` in any environment, so `canSendRetentionNotice` returns false, the
@@ -298,14 +327,15 @@ every time the present did.
 ### 3. A Plaid sync cannot delete a transaction, and cannot act on an unproven absence
 
 A `removed` transaction is tombstoned (`000156`, `TombstoneByExternalID`,
-`transaction_repository.go:580`), keeping the user's category overrides and notes. A partial
+`transaction_repository.go:823`), keeping the user's category overrides and notes. A partial
 holdings or liabilities response cannot overwrite a complete one, and an unprovable response cannot
 certify an absence.
 
 ⚠ **This is narrower than "Plaid cannot delete anything", which is what the heading said and which
 is false.** A sync still hard-deletes `holdings` (`holding_repository.go:151`),
 `credit_liabilities` and `credit_liability_aprs` (`credit_liability_repository.go:67,75`),
-`mortgage_liabilities` (`:141`) and `student_loan_liabilities` (`:198`) on every run, by design —
+`mortgage_liabilities` (`mortgage_liability_repository.go:141`) and `student_loan_liabilities`
+(`student_loan_liability_repository.go:198`) on every run, by design —
 see Decision 10 for why those are live state rather than history, and what carries their past
 instead. *Method:* `/usr/bin/grep -rn "DELETE FROM" backend/internal/repository/*liability*.go
 backend/internal/repository/holding_repository.go` over non-test Go.
@@ -448,9 +478,9 @@ the user can change their mind.
 **The one exception, and it is a real decision.** `accounts` is soft-removed with a recorded CAUSE,
 and the cause decides reversibility:
 
-- `MarkRemovedByProvider` (`account_repository.go:1626-1628`) stamps
+- `MarkRemovedByProvider` (`account_repository.go:1679-1681`) stamps
   `removed_reason = 'provider_absent'` — the bank stopped reporting the account.
-- `UpdateStatus` (`:1616-1621`) stamps `removed_reason = 'user_disconnect'` — the user pressed the
+- `UpdateStatus` (`:1669-1674`) stamps `removed_reason = 'user_disconnect'` — the user pressed the
   button. Both delegate to `updateStatusWithRemovalReason`, which stamps a reason **only** on a
   transition to `removed` and writes NULL otherwise, so migration `000154`'s
   `accounts_removed_reason_valid` CHECK is satisfied by construction.
@@ -563,8 +593,8 @@ omits `available_balance` for several account types — so every existing nil ch
 right thing.
 
 **Why it cannot over-apply.** One choke point, `accountBalanceProjection`
-(`repository/account_liveness_sql.go:160`), is used by all **ten** account-shaped SELECTs
-(`account_repository.go:559, 622, 690, 810, 887, 1132, 1184, 1443, 1506, 1555`; *method:*
+(`repository/account_liveness_sql.go:192`), is used by all **ten** account-shaped SELECTs
+(`account_repository.go:582, 645, 713, 833, 910, 1165, 1217, 1490, 1559, 1608`; *method:*
 `/usr/bin/grep -rn "accountBalanceProjection(" internal --include="*.go"` over non-test files). Its
 `CASE` keys on `status = 'active'`, and `accounts_valid_status` is exactly
 `CHECK (status IN ('active', 'replaced', 'expired', 'removed'))` (migration

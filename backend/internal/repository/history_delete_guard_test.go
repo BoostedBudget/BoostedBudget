@@ -82,11 +82,19 @@ var allowedHistoryDeletes = map[string]string{
 	"repository/linked_item_repository.go#PurgeLinkedItem|balance_snapshots": "explicit institution purge, same reason as PurgeAccount",
 	"repository/linked_item_repository.go#PurgeLinkedItem|savings_goals":     "explicit institution purge, tombstoned goals only: same scope and same reason as PurgeAccount's entry above",
 
-	// The savings-goal purge. Distinct from DeleteGoal, which tombstones (#1569 task 8).
-	"repository/savings_goal_repository.go#PurgeGoal|savings_goals": "explicit goal purge; the ordinary DeleteGoal path tombstones instead",
+	// The savings-goal purge. Distinct from the repository's `Delete`
+	// (savings_goal_repository.go:405), which TOMBSTONES (#1569 task 8). ⚠ `DeleteGoal` is the
+	// SERVICE verb (services/savings_goal_service.go:499); there is no repository method by that
+	// name, and this reason used to claim there was.
+	"repository/savings_goal_repository.go#PurgeGoal|savings_goals": "explicit goal purge; the ordinary Delete path on this repository (service verb: DeleteGoal) tombstones instead",
 
 	// Contributions.
-	"repository/savings_contribution_repository.go#DeleteContribution|savings_goal_contributions":          "the user deleting one contribution they entered — the narrowest possible explicit request",
+	// ⚠ RE-DERIVED (#1569 T7.5). This reason used to say "one contribution THEY ENTERED", which is
+	// the same true-of-most-rows-asserted-of-all error the ⚠ paragraph above retracts for the sibling
+	// entry. The predicate (savings_contribution_repository.go:749-766) keys on `c.id` alone — no
+	// `source` leg, no `managed_by_reconciliation` leg — so a row the RECONCILER created is reachable
+	// by it too. "One contribution" and "explicit request" survive; "they entered" does not.
+	"repository/savings_contribution_repository.go#DeleteContribution|savings_goal_contributions":          "the user deleting one named contribution on a live goal of theirs — the narrowest possible explicit request. NOT necessarily a row they entered: the predicate keys on c.id alone, so a reconciler-created row is reachable by it",
 	// ⚠ RE-DERIVED in the #1569 whole-branch review (C1). The reason this entry USED to carry —
 	// "derived, regenerable, and not a record of anything the user did" — was FALSE, and false in
 	// the same way as four other reasons on this branch: true of MOST rows the predicate matches,

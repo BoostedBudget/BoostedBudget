@@ -134,9 +134,12 @@ Before writing anything that removes a row, classify it:
 - **Explicit destruction** — the user asked for *this data*, in words, in the confirm dialog. Allowed.
   Anything NEW here needs its own endpoint/method distinct from the retaining one, an audit row in
   the SAME transaction, a precondition refusing live data, and an entry in `allowedHistoryDeletes`.
-  ⚠ Only the three purges (`PurgeAccount`, `PurgeLinkedItem`, `PurgeGoal`) meet all four today;
-  `DeleteContribution` / `DeleteManagedForTransaction` have no audit row and no live-data
-  precondition (known deviation, see ADR § Classification Test). **Copy the purges.**
+  ⚠ Only the three purges (`PurgeAccount`, `PurgeLinkedItem`, `PurgeGoal`) meet all four today.
+  `DeleteContribution` meets 2/4 — own endpoint and an allowlist entry, but no audit row and no
+  live-data precondition. `DeleteManagedForTransaction` meets **1/4**: the allowlist entry only. It
+  has no audit row, no live-data precondition, and **no endpoint at all** — its sole production
+  caller is `transaction_sync_service.go:1520`, inside Plaid `removed`-array handling (known
+  deviation, see ADR § Classification Test). **Copy the purges.**
 - **Side-effect destruction** — the delete is a consequence of something else they asked for
   (disconnect, cancel, downgrade, sync). **Forbidden.** Tombstone instead (`deleted_at`, or
   `removed_at` for accounts) and teach every read to filter it.
