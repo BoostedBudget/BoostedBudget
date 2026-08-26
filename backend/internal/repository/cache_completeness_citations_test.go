@@ -769,40 +769,185 @@ func TestExactCitationsAreInRange(t *testing.T) {
 // method name (a bare SQL predicate, say) are not covered here — TestExactCitationsAreInRange bounds
 // those, and one off-by-one predicate ref that survived both checks was found by hand this round, so
 // neither guard should be read as making prose trustworthy.
-func TestMethodCitationsPointInsideTheirMethod(t *testing.T) {
-	// BOTH orders. The original regex required method-then-file, and the entire "#1537 cluster A"
-	// family — every entry that traces a caller chain — writes file-then-method:
-	//     `services/account_service.go:554` (`LinkAccounts`)
-	// so 10 of those pairs were invisible. Measured after accepting both orders: the newly-visible
-	// pairs had drifted 14-75 lines. A guard whose coverage depends on which side of the parenthesis
-	// the reader put the method name is not measuring the prose, it is measuring the punctuation.
+// methodCitationPair is one extracted `Method` <-> `file.go:NNN` (or `file.go:NNN-MMM`) pairing.
+// hi == lo for a single-line citation.
+type methodCitationPair struct {
+	method, path string
+	lo, hi       int
+}
+
+// extractMethodCitationPairs pulls every method/line pairing out of one guard file's raw text.
+//
+// BOTH ORDERS. The original regex required method-then-file, and the entire "#1537 cluster A"
+// family — every entry that traces a caller chain — writes file-then-method:
+//
+//	`services/account_service.go:554` (`LinkAccounts`)
+//
+// so 10 of those pairs were invisible. Measured after accepting both orders: the newly-visible
+// pairs had drifted 14-75 lines. A guard whose coverage depends on which side of the parenthesis
+// the reader put the method name is not measuring the prose, it is measuring the punctuation.
+//
+// RANGES TOO (#1569 round 6). Both regexes used to end at `:(\d+)` followed by a REQUIRED closing
+// backtick, so a range citation — the form written as file dot go colon 1766 dash 1802 — could not
+// match either of them and the pair was never collected at all. That was not a small gap: the
+// corpus held 64 range citations, and collecting them took the guard's checkable count from 33 to
+// 57. The entry in
+// cache_completeness_repo_test.go that reports this hole found it the hard way — a range citation
+// naming GetBudgetVsActual while spanning an unrelated row-scan loop sailed past the guard that
+// caught the two BARE citations of the same method in the same sentence. Coverage that depends on
+// whether the author wrote one line number or two is punctuation-measuring again.
+func extractMethodCitationPairs(text string) []methodCitationPair {
 	goPath := "((?:[a-z0-9_]+/)*[a-z0-9_]+\\.go)"
 	ident := "[A-Za-z_][A-Za-z0-9_]*"
 	patterns := []*regexp.Regexp{
-		// `Type.Method` (`file.go:NNN`)
-		regexp.MustCompile("`(?:" + ident + "\\.)?(" + ident + ")`[,;]?\\s*\\(?`" + goPath + ":(\\d+)`"),
-		// `file.go:NNN` (`Method`) / (`Type.Method`)
-		regexp.MustCompile("`" + goPath + ":(\\d+)`[,;]?\\s*\\(`(?:" + ident + "\\.)?(" + ident + ")`"),
+		// `Type.Method` (`file.go:NNN`) / (`file.go:NNN-MMM`)
+		regexp.MustCompile("`(?:" + ident + "\\.)?(" + ident + ")`[,;]?\\s*\\(?`" + goPath + ":(\\d+)(?:-(\\d+))?`"),
+		// `file.go:NNN` (`Method`) / `file.go:NNN-MMM` (`Type.Method`)
+		regexp.MustCompile("`" + goPath + ":(\\d+)(?:-(\\d+))?`[,;]?\\s*\\(`(?:" + ident + "\\.)?(" + ident + ")`"),
 	}
-	// order[i] tells which capture group holds the method for patterns[i].
-	methodGroup := []int{1, 3}
+	// group[i] tells which capture group holds each field for patterns[i].
+	methodGroup := []int{1, 4}
 	pathGroup := []int{2, 1}
-	lineGroup := []int{3, 2}
+	loGroup := []int{3, 2}
+	hiGroup := []int{4, 3}
 
-	type pair struct {
-		method, path, line string
+	var pairs []methodCitationPair
+	for i, re := range patterns {
+		for _, m := range re.FindAllStringSubmatch(text, -1) {
+			lo, err := strconv.Atoi(m[loGroup[i]])
+			if err != nil {
+				continue
+			}
+			hi := lo
+			if m[hiGroup[i]] != "" {
+				if h, e := strconv.Atoi(m[hiGroup[i]]); e == nil {
+					hi = h
+				}
+			}
+			if hi < lo {
+				lo, hi = hi, lo // a reversed range is still a claim about that interval
+			}
+			pairs = append(pairs, methodCitationPair{m[methodGroup[i]], m[pathGroup[i]], lo, hi})
+		}
 	}
-	var pairs []pair
+	return pairs
+}
+
+// methodCitationKindAliases teaches the guard the ONE class of citation that is semantically
+// correct while being literally absent from the cited file: prose that names the KIND a call
+// RESOLVES TO rather than the constructor written at the line.
+//
+// The measured instance, and the reason this table exists rather than a blanket exemption:
+// `ScopeUser` (`internal/services/analytics_service_cached.go:239-241`) appears three times, and
+// `ScopeUser` occurs ZERO times in that 248-line file. The cited lines are GetBudgetVsActual's
+// wrapper calling `cache.ScopeFor(userID, nil)` — and `ScopeFor(userID, nil)` returns
+// `Scope{Kind: ScopeUser, ID: userID}` (`internal/cache/consumer.go:19-23`). The prose is RIGHT: it
+// names the resulting scope kind, which is what a reader auditing cache scoping cares about, and
+// the line range is right too.
+//
+// TWO WAYS TO GET THIS WRONG, and both were on the table. Relaxing the prose to name the
+// constructor puts `ScopeFor(userID, nil)` — parenthesised — where the extractor expects a bare
+// backticked identifier, so the pair stops being collected and coverage silently DROPS. Demanding
+// the identifier literally makes the guard fire on correct prose, and this branch has the recorded
+// lesson that a guard which fires on legitimate code gets disabled by the next engineer, plus six
+// guards that shipped unable to fail. So: neither. The alias is narrow and it still BITES — if the
+// wrapper moves, `ScopeFor(` is no longer near the cited range and the guard fires exactly as it
+// would for any other drift. What the alias buys is that the guard checks the LINE, not the
+// vocabulary.
+//
+// ⚠ EVERY ENTRY HERE IS A CLAIM THAT MUST BE RE-DERIVED, NOT INHERITED. It says "this identifier
+// is produced by that expression". Nothing checks that. Before adding one, read the constructor and
+// confirm the mapping; before trusting one, do it again — two allowlist reasons shipped false on
+// this branch already (#1569). Do NOT add an entry to silence a citation you have not read.
+var methodCitationKindAliases = map[string][]string{
+	// cache.ScopeFor(userID, nil) -> Scope{Kind: ScopeUser}; ScopeFor(userID, hh) -> ScopeHousehold.
+	"ScopeUser":      {"ScopeFor("},
+	"ScopeHousehold": {"ScopeFor("},
+}
+
+// methodCitationProblem is the guard's whole relation for ONE pair, given a resolved on-disk path.
+// It returns ("", false) when the pair is not checkable at all, and otherwise (problem, true) with
+// problem empty when the citation is sound.
+//
+// WHY OVERLAP AND NOT CONTAINMENT-OF-BOTH-ENDS. A range citation names a REGION of interest — the
+// method's body, its query literal, the paragraph the reader should look at. Requiring both ends
+// inside the function would fire on the very common and correct habit of starting a range at the
+// doc comment or ending it one line past the closing brace, which is drift-free noise. Requiring
+// neither end would check nothing. Interval overlap is the relation that says what the guard means:
+// the cited region and the method must share at least one line, or the citation is attributing a
+// region to a function that region does not touch.
+//
+// WHY CONTAINMENT AND NOT PROXIMITY, for the single-line case. Proximity ("the identifier must
+// appear within +/-8 lines") was measured before adoption: 10 of 17 pairs would have failed, and
+// every one was a FALSE positive, because these citations deliberately point at a CALL SITE inside
+// the named function rather than at its declaration. The citations were better than the checker.
+func methodCitationProblem(resolved, method string, lo, hi int) (string, bool) {
+	fset := token.NewFileSet()
+	file, parseErr := parser.ParseFile(fset, resolved, nil, 0)
+	if parseErr != nil {
+		return "", false // not our business to police unparseable files
+	}
+	for _, d := range file.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != method || fn.Body == nil {
+			continue
+		}
+		fnLo, fnHi := fset.Position(fn.Pos()).Line, fset.Position(fn.End()).Line
+		if hi < fnLo || lo > fnHi {
+			return citedSpan(lo, hi) + " is cited for " + method + ", but " + method +
+				"'s body spans " + strconv.Itoa(fnLo) + "-" + strconv.Itoa(fnHi) +
+				" — the cited lines do not overlap the function they are attributed to", true
+		}
+		return "", true
+	}
+
+	// A SILENT SKIP here was the guard's second blind spot: when the named method was absent from
+	// the cited file, the loop simply fell through, so "`Foo`, see `bar.go:12`" passed whether or
+	// not bar.go contained any trace of Foo.
+	//
+	// It is NOT, however, an error outright, and the briefing that asked for that was wrong:
+	// measured over all pairs, absence fires on the most common legitimate idiom in this file —
+	// citing a method at its CALL SITE in another file (`budgetService.UpdateCategory`
+	// (`budget_service.go:672`) is `s.budgetRepo.UpdateCategory(...)`, and budget_service.go
+	// naturally declares no such function). Five of the nine absences were of that kind.
+	//
+	// So absence falls back to the weaker relation that IS available: the identifier must appear
+	// within a few lines of the cited region. Proximity was rejected as the PRIMARY relation for
+	// good reason (see above — it punishes call-site citations by demanding the declaration), but as
+	// a fallback where containment is impossible it is exactly right, and it caught four stale refs
+	// that the silent skip had been swallowing.
+	for _, want := range append([]string{method}, methodCitationKindAliases[method]...) {
+		if identifierNearRange(resolved, want, lo, hi, 3) {
+			return "", true
+		}
+	}
+	return citedSpan(lo, hi) + " is cited for " + method +
+		", which the file neither declares nor mentions within 3 lines of that ref — " +
+		"the citation names nothing a reader can find", true
+}
+
+func citedSpan(lo, hi int) string {
+	if hi == lo {
+		return strconv.Itoa(lo)
+	}
+	return strconv.Itoa(lo) + "-" + strconv.Itoa(hi)
+}
+
+// TestMethodCitationsPointInsideTheirMethod applies methodCitationProblem to the real corpus.
+//
+// Coverage is modest by construction: it needs `Type.Method` adjacent to the citation. It costs
+// nothing and grows as more citations adopt that form. Line refs with no method name (a bare SQL
+// predicate, say) are not covered here — TestExactCitationsAreInRange bounds those, and one
+// off-by-one predicate ref that survived both checks was found by hand, so neither guard should be
+// read as making prose trustworthy.
+func TestMethodCitationsPointInsideTheirMethod(t *testing.T) {
+	var pairs []methodCitationPair
 	for _, g := range citedGuardFiles() {
 		b, err := os.ReadFile(g.path)
 		if err != nil {
 			t.Fatalf("read %s: %v", g.path, err)
 		}
-		for i, re := range patterns {
-			for _, m := range re.FindAllStringSubmatch(string(b), -1) {
-				pairs = append(pairs, pair{m[methodGroup[i]], m[pathGroup[i]], m[lineGroup[i]]})
-			}
-		}
+		pairs = append(pairs, extractMethodCitationPairs(string(b))...)
 	}
 
 	var violations []string
@@ -812,65 +957,30 @@ func TestMethodCitationsPointInsideTheirMethod(t *testing.T) {
 		if resolved == "" || !strings.HasSuffix(resolved, ".go") {
 			continue // path shorthand is TestDispositionCitationsResolve's business
 		}
-		line, convErr := strconv.Atoi(p.line)
-		if convErr != nil {
+		problem, ok := methodCitationProblem(resolved, p.method, p.lo, p.hi)
+		if !ok {
 			continue
 		}
-
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, resolved, nil, 0)
-		if parseErr != nil {
-			continue // not our business to police unparseable files
-		}
-		found := false
-		for _, d := range file.Decls {
-			fn, ok := d.(*ast.FuncDecl)
-			if !ok || fn.Name.Name != p.method || fn.Body == nil {
-				continue
-			}
-			found = true
-			lo, hi := fset.Position(fn.Pos()).Line, fset.Position(fn.End()).Line
-			checked++
-			if line < lo || line > hi {
-				violations = append(violations, p.path+":"+p.line+" is cited for "+p.method+
-					", but "+p.method+"'s body spans "+strconv.Itoa(lo)+"-"+strconv.Itoa(hi)+
-					" — the line has drifted out of the function it is attributed to")
-			}
-			break
-		}
-		// A SILENT SKIP here was the guard's second blind spot: when the named method was absent from
-		// the cited file, the loop simply fell through, so "`Foo`, see `bar.go:12`" passed whether or
-		// not bar.go contained any trace of Foo.
-		//
-		// It is NOT, however, an error outright, and the briefing that asked for that was wrong:
-		// measured over all pairs, absence fires on the most common legitimate idiom in this file —
-		// citing a method at its CALL SITE in another file (`budgetService.UpdateCategory`
-		// (`budget_service.go:672`) is `s.budgetRepo.UpdateCategory(...)`, and budget_service.go
-		// naturally declares no such function). Five of the nine absences were of that kind.
-		//
-		// So absence falls back to the weaker relation that IS available: the identifier must appear
-		// within a few lines of the cited one. Proximity was rejected as the PRIMARY relation for good
-		// reason (see the note above — it punishes call-site citations by demanding the declaration),
-		// but as a fallback where containment is impossible it is exactly right, and it caught four
-		// stale refs that the silent skip had been swallowing.
-		if !found {
-			checked++
-			if !identifierNearLine(resolved, p.method, line, 3) {
-				violations = append(violations, p.path+":"+p.line+" is cited for "+p.method+
-					", which the file neither declares nor mentions within 3 lines of that ref — "+
-					"the citation names nothing a reader can find")
-			}
+		checked++
+		if problem != "" {
+			violations = append(violations, p.path+":"+problem)
 		}
 	}
 
 	// FLOOR RATIONALE (#1537 round 10). Floors were 15/20/8 against measured counts of 34/117/20 —
-	// the bare-ref floor was 17% of reality, so the scanner could have silently lost four fifths of its
-	// coverage and still reported success. That is the same fail-open shape these guards exist to catch.
-	// Now ~75% of measured, which trips on a scanner regression while leaving room to legitimately
-	// remove citations. Counts were obtained by raising each floor until the Fatalf printed the real
-	// number; re-measure that way rather than trusting these comments.
-	if checked < 25 {
-		t.Fatalf("only %d method citations were containment-checkable — the extraction is broken, "+
+	// the bare-ref floor was 17% of reality, so the scanner could have silently lost four fifths of
+	// its coverage and still reported success. That is the same fail-open shape these guards exist
+	// to catch. Now ~75% of measured, which trips on a scanner regression while leaving room to
+	// legitimately remove citations. Counts were obtained by raising each floor until the Fatalf
+	// printed the real number; re-measure that way rather than trusting these comments.
+	//
+	// ⚠ RAISED FROM 25 TO 43 WITH THE RANGE WIDENING (#1569 round 6), measured the same way — by
+	// raising the floor until the Fatalf printed the real number, both before and after. Ranges took
+	// the checkable count from 33 to 57. The old floor of 25 was 76% of 33 and would have been
+	// cleared by 33, i.e. by the range half of the extraction dying completely; 43 is ~75% of 57 and
+	// is not. A floor that a REGRESSION still clears is not a floor.
+	if checked < 43 {
+		t.Fatalf("only %d method citations were checkable — the extraction is broken, "+
 			"and a pass would be meaningless", checked)
 	}
 	if len(violations) > 0 {
@@ -880,16 +990,16 @@ func TestMethodCitationsPointInsideTheirMethod(t *testing.T) {
 	}
 }
 
-// identifierNearLine reports whether ident appears within window lines either side of line in path.
-// Used only as the fallback relation for a cited name the file does not declare (a call-site or
-// table-name citation).
-func identifierNearLine(path, ident string, line, window int) bool {
+// identifierNearRange reports whether ident appears within window lines either side of the cited
+// interval [lo, hi] in path. Used only as the fallback relation for a cited name the file does not
+// declare (a call-site or table-name citation).
+func identifierNearRange(path, ident string, lo, hi, window int) bool {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return true // unreadable file is TestDispositionCitationsResolve's business, not ours
 	}
 	lines := strings.Split(string(b), "\n")
-	lo, hi := line-1-window, line-1+window
+	lo, hi = lo-1-window, hi-1+window
 	if lo < 0 {
 		lo = 0
 	}
@@ -1549,5 +1659,160 @@ func TestCitedSQLFragmentsAreNearTheirCitedLine(t *testing.T) {
 			"An in-range line number pointing at unrelated code reads as evidence and is not. "+
 			"Re-anchor the number to the line that actually holds the quoted text.",
 			len(stale), strings.Join(stale, "\n  - "))
+	}
+}
+
+// TestMethodCitationRelation_RangesAndAliases is the widened guard's own falsification.
+//
+// A guard that has never been shown to fail is a comment. This branch shipped six of those, so the
+// range widening (#1569 round 6) is pinned from BOTH sides here: every case below is a citation the
+// guard must reject, or one it must accept, constructed against a real parsed Go file rather than
+// asserted about in prose. The corpus half — that no REAL range citation is a false positive — is
+// TestMethodCitationRangesInTheCorpusAreClean below; a synthetic pass proves nothing about the
+// prose the guard actually polices.
+func TestMethodCitationRelation_RangesAndAliases(t *testing.T) {
+	// Line numbers are what this test is about, so the fixture is written with them counted.
+	//  1 package sample
+	//  2 (blank)
+	//  3 // Doc comment for Target.
+	//  4 func Target() {
+	//  5 	_ = 1
+	//  6 }
+	//  7 (blank)
+	//  8 func Other() {
+	//  9 	_ = cacheScopeFor("u", nil)
+	// 10 }
+	src := "package sample\n\n// Doc comment for Target.\nfunc Target() {\n\t_ = 1\n}\n\n" +
+		"func Other() {\n\t_ = ScopeFor(\"u\", nil)\n}\n"
+	path := filepath.Join(t.TempDir(), "sample.go")
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	cases := []struct {
+		name          string
+		method        string
+		lo, hi        int
+		wantCheckable bool
+		wantViolation bool
+		whyItMatters  string
+	}{
+		{"range entirely before the function", "Target", 1, 2, true, true,
+			"a range that stops short of the declaration is the exact drift the widening exists to catch"},
+		{"range entirely after the function", "Target", 8, 10, true, true,
+			"the GetBudgetVsActual range that started this — it named a method and spanned an unrelated body"},
+		{"range starting in the doc comment", "Target", 3, 5, true, false,
+			"citing from the doc comment down into the body is the common, correct habit; overlap must accept it"},
+		{"range ending one line past the closing brace", "Target", 5, 7, true, false,
+			"an off-by-one at the tail is noise, not drift — requiring both ends inside would fire on it"},
+		{"range exactly the body", "Target", 4, 6, true, false, "the unambiguous correct case"},
+		{"single line inside the body", "Target", 5, 5, true, false,
+			"the pre-widening behaviour must be unchanged: hi == lo is the old relation"},
+		{"single line outside the body", "Target", 9, 9, true, true,
+			"likewise for the old relation's failing case"},
+
+		// The alias class. `ScopeUser` occurs nowhere in the fixture, exactly as it occurs nowhere in
+		// analytics_service_cached.go, and the cited range holds the ScopeFor call it resolves to.
+		{"alias identifier absent but its constructor is in range", "ScopeUser", 8, 10, true, false,
+			"prose naming the resulting scope KIND is semantically correct and must not be flagged"},
+		{"alias identifier absent and its constructor is far away", "ScopeUser", 1, 2, true, true,
+			"the alias must still BITE: if the call moves out of the cited range the citation is stale"},
+		{"non-alias identifier absent entirely", "NoSuchThing", 1, 2, true, true,
+			"the fallback proximity relation is unchanged for everything outside the alias table"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			problem, ok := methodCitationProblem(path, tc.method, tc.lo, tc.hi)
+			if ok != tc.wantCheckable {
+				t.Fatalf("checkable = %v, want %v — %s", ok, tc.wantCheckable, tc.whyItMatters)
+			}
+			if got := problem != ""; got != tc.wantViolation {
+				t.Errorf("violation = %v (%q), want %v — %s", got, problem, tc.wantViolation, tc.whyItMatters)
+			}
+		})
+	}
+}
+
+// TestMethodCitationExtraction_CollectsRangesInBothOrders pins the half of the widening that is
+// pure extraction. It is separate from the relation test because the failure it guards against is
+// silent: before #1569 round 6 both regexes required a closing backtick immediately after the line
+// digits, so a range citation produced NO pair at all — the guard reported success having looked at
+// nothing. A relation that is right about pairs it never sees is worth nothing.
+func TestMethodCitationExtraction_CollectsRangesInBothOrders(t *testing.T) {
+	text := "prose `svc.DoThing` (`internal/services/a_service.go:10-20`) more prose, " +
+		"and `internal/repository/b_repository.go:30-40` (`Repo.DoOther`), " +
+		"and a single `Plain` (`c.go:7`)."
+
+	got := extractMethodCitationPairs(text)
+	want := []methodCitationPair{
+		{"DoThing", "internal/services/a_service.go", 10, 20},
+		{"Plain", "c.go", 7, 7},
+		{"DoOther", "internal/repository/b_repository.go", 30, 40},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("extracted %d pairs, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("pair %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// TestMethodCitationRangesInTheCorpusAreClean is the false-positive half, measured against the REAL
+// prose rather than a fixture.
+//
+// The risk the widening carries is not that it under-fires; it is that it fires on legitimate
+// citations, because this branch has the recorded lesson that a guard which fires on correct code
+// gets disabled by the next engineer. So this asserts the specific thing that could go wrong: every
+// RANGE-form pair in the corpus is accepted. It also pins a non-zero range count, because "no range
+// pair is a violation" is trivially true of an extraction that collects no range pairs — the exact
+// fail-open the widening was fixing.
+func TestMethodCitationRangesInTheCorpusAreClean(t *testing.T) {
+	ranges, violations, scopeUser := 0, []string{}, 0
+	for _, g := range citedGuardFiles() {
+		b, err := os.ReadFile(g.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", g.path, err)
+		}
+		for _, p := range extractMethodCitationPairs(string(b)) {
+			if p.hi == p.lo {
+				continue
+			}
+			resolved := resolveCitedFileForRange(p.path)
+			if resolved == "" || !strings.HasSuffix(resolved, ".go") {
+				continue
+			}
+			problem, ok := methodCitationProblem(resolved, p.method, p.lo, p.hi)
+			if !ok {
+				continue
+			}
+			ranges++
+			if p.method == "ScopeUser" || p.method == "ScopeHousehold" {
+				scopeUser++
+			}
+			if problem != "" {
+				violations = append(violations, p.path+":"+problem)
+			}
+		}
+	}
+
+	// Measured 2026-08-26 by raising this floor until it printed: 15 checkable range pairs, 3 of
+	// them the ScopeUser class. Both are floors, not equalities — citations get added.
+	if ranges < 12 {
+		t.Fatalf("only %d checkable RANGE pairs — the range extraction has regressed, and this "+
+			"test's pass would be vacuous", ranges)
+	}
+	if scopeUser < 3 {
+		t.Fatalf("only %d ScopeUser/ScopeHousehold range pairs — the alias class this test exists "+
+			"to protect is no longer in the corpus, so the alias table should be re-derived or "+
+			"deleted rather than left as dead configuration", scopeUser)
+	}
+	if len(violations) > 0 {
+		sort.Strings(violations)
+		t.Errorf("%d REAL range citation(s) were rejected. Before relaxing the guard, check each "+
+			"one is genuinely wrong — a false positive here is how a guard gets disabled:\n  - %s",
+			len(violations), strings.Join(violations, "\n  - "))
 	}
 }
