@@ -17,6 +17,7 @@ package services
 
 import (
 	"context"
+	"slices"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -66,7 +67,7 @@ func (s *holdingHistoryService) GetAccountHoldingsHistory(ctx context.Context, u
 	// dates is newest-first, so dates[0] is "the latest" without a second query or a sort here.
 	day := dates[0]
 	if asOf != "" {
-		if !containsDate(dates, asOf) {
+		if !slices.Contains(dates, asOf) {
 			return nil, domain.ErrHoldingHistoryDateNotRetained
 		}
 		day = asOf
@@ -83,15 +84,6 @@ func (s *holdingHistoryService) GetAccountHoldingsHistory(ctx context.Context, u
 	}
 	out.TotalValue = sumInstitutionValue(out.Positions)
 	return out, nil
-}
-
-func containsDate(dates []string, want string) bool {
-	for _, d := range dates {
-		if d == want {
-			return true
-		}
-	}
-	return false
 }
 
 // sumInstitutionValue pre-computes the day's total so no consumer — the UI, or an AI assistant
