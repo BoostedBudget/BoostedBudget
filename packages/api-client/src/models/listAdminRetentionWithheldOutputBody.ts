@@ -38,6 +38,7 @@ export interface ListAdminRetentionWithheldOutputBody {
   readonly $schema?: string;
   /** @nullable */
   accounts: AdminRetentionWithheldAccount[] | null;
+  /** The instant this response was calculated, assigned after both queries returned — not the instant either query observed. days_withheld is derived from it. Both the count and the returned page were read at or before this instant, by a gap that is not bounded, so they may disagree by any number of rows. */
   as_of: string;
   limit: number;
   next_cursor?: AdminRetentionWithheldCursor;

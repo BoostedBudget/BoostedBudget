@@ -18,6 +18,21 @@ import (
 // withheldSpec builds the SAME route table `make generate-openapi` reads
 // (operations.RegisterAllRoutesForSpec — a route wired only in cmd/server/main.go produces a
 // zero-byte spec diff) and returns the registry plus the withheld listing's operation.
+// withheldSpec returns the spec huma GENERATES IN-PROCESS from RegisterAllRoutesForSpec. It does
+// NOT read api/openapi.yaml, and nothing in this file does.
+//
+// ⚠ That is a real distinction and this comment used to blur it. What is asserted below is the
+// contract the CODE produces; what a client is generated from is the committed artifact. They are
+// the same object only because CI makes them so: .github/workflows/test.yml's `openapi-validate`
+// job runs scripts/generate-openapi/main.go (the same RegisterAllRoutesForSpec walk) and then
+// `git diff --exit-code api/openapi.yaml`, and `typescript-client-validate` runs `npx orval`
+// followed by `git diff --exit-code packages/api-client/src`. So a runtime-schema assertion here
+// transfers to the shipped artifacts, but it transfers THROUGH those jobs and proves nothing about
+// a stale artifact on its own.
+//
+// No drift check is duplicated here on purpose — the two jobs above already are one. Where an
+// assertion is about the SHAPE of what was actually published rather than about handler behaviour,
+// read the artifact directly instead: committedSpec() in transfer_suggestion_contract_test.go.
 func withheldSpec(t *testing.T) (huma.Registry, *huma.Operation) {
 	t.Helper()
 	_, api := humatest.New(t, huma.DefaultConfig("BoostedBudget API", "1.0.0"))
@@ -41,7 +56,7 @@ func validateWithheldBody(t *testing.T, registry huma.Registry, body any) []erro
 	require.NoError(t, json.Unmarshal(raw, &decoded))
 
 	schema := registry.Map()["ListAdminRetentionWithheldOutputBody"]
-	require.NotNil(t, schema, "the response body schema must be registered, or there is nothing for a client to generate from")
+	require.NotNil(t, schema, "the response body schema must be registered in the generated spec, or `make generate-openapi` writes an artifact with nothing for a client to generate from")
 
 	res := &huma.ValidateResult{}
 	huma.Validate(registry, schema, huma.NewPathBuffer([]byte(""), 0), huma.ModeReadFromServer, decoded, res)
@@ -226,5 +241,32 @@ func TestListAdminRetentionWithheld_CountAndPageAreEventuallyConsistent(t *testi
 	require.Len(t, out.Body.Accounts, 1,
 		"a row that entered the population after the count must still be listed — dropping it to satisfy the total would hide a genuinely stuck account")
 	assert.NotEmpty(t, out.Body.AsOf,
-		"as_of is what makes the skew interpretable: it is the instant the two reads bracket")
+		"as_of is what makes the skew interpretable: it is the instant the RESPONSE was calculated, after both reads returned — not an interval they bracket, and not a bound on how far they can disagree")
+}
+
+func TestListAdminRetentionWithheld_DescriptionDoesNotBoundTheSkewAtOneRow(t *testing.T) {
+	_, op := withheldSpec(t)
+	desc := strings.ToLower(op.Description)
+
+	assert.NotContains(t, desc, "by a row",
+		"'disagree with the page by a row' states a MAXIMUM the implementation does not provide: the count and the page are two independent statements on a pooled connection, and any number of rows can enter or leave the population between them. An operator who reads a bound of one row will treat a larger gap as corruption.")
+	assert.Contains(t, desc, "by any number of rows")
+}
+
+func TestListAdminRetentionWithheld_AsOfIsDescribedAsWhenItIsTaken(t *testing.T) {
+	schemas := committedSpec(t)
+	body, ok := schemas["ListAdminRetentionWithheldOutputBody"].(map[string]any)
+	require.True(t, ok, "the response body schema must be in the committed spec, or clients are generated from nothing")
+	props, _ := body["properties"].(map[string]any)
+	asOf, ok := props["as_of"].(map[string]any)
+	require.True(t, ok, "as_of must still be published — it is the only thing that makes the count/page skew interpretable")
+
+	desc, _ := asOf["description"].(string)
+	require.NotEmpty(t, desc,
+		"as_of ships to clients with no description at all, so the one field that explains the skew explains nothing")
+	lower := strings.ToLower(desc)
+	assert.Contains(t, lower, "after",
+		"asOf is assigned AFTER both repository queries return, so it is the instant the RESPONSE was calculated, not an instant either read observed and not an interval they bracket. Say which it is.")
+	assert.NotContains(t, lower, "bracket",
+		"the two reads do not bracket as_of — both happened strictly before it")
 }
