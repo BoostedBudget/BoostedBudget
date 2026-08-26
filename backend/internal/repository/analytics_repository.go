@@ -616,8 +616,22 @@ func buildPlaceholders(count, startIndex int) []string {
 // EVERY number below, because ratios only travel if their conditions do: Apple M4, 10 cores,
 // 16 GiB, macOS 15.3.1, load avg ~4.3; Postgres 17.11 in Docker on localhost:5434 (NOT the
 // Homebrew PG15 on 5432); database `t3bench_r5` = `pg_dump -s` of the current migrated schema plus
-// testdata/t3bench_seed.sql unmodified; best-of-7 via psql `\timing`, plans confirmed with
-// EXPLAIN (ANALYZE, BUFFERS); measured 2026-08-26 at commit 3d21e077.
+// testdata/t3bench_seed.sql unmodified; measured 2026-08-26 at commit 3d21e077.
+//
+// ⚠ The protocol is recorded PER MEASUREMENT, not as one blanket claim. This paragraph used to
+// end "best-of-7 via psql `\timing`" and scope that over EVERY number below it -- but the
+// merchant-leg paragraph further down is best of 5, and so is the Go harness that produced it, so
+// the blanket claim was false and it had already propagated into the project ledger and the plan
+// before it was caught (#1569 round 5, Codex F6). Instrument and run count now travel with the
+// block they describe:
+//
+//	TABLE BELOW -- psql `\timing`, best of 7, hand-run; plans confirmed with
+//	EXPLAIN (ANALYZE, BUFFERS). Four of its six rows are hand-written query variants that exist
+//	nowhere in Go, so TestT3Bench cannot reproduce them: the count is as recorded by the person
+//	who ran them and is not re-derivable from the harness.
+//
+//	MERCHANT-LEG PARAGRAPH (after the table) -- the Go harness TestT3Bench
+//	(t3bench_capture_test.go), whose `iters = 5`: best of 5, as it says there.
 //
 //	pre-#1569 (DISTINCT ON + JOIN)   22.7ms   1.00x   Gather, 2 workers
 //	HEAD                            136.2ms   6.00x   no Gather (CTE Scan x2)
@@ -661,9 +675,13 @@ func buildPlaceholders(count, startIndex int) []string {
 // tie. A target met only when the planner happens to flip parallel is not an SLA, so this is
 // recorded as unmet rather than claimed. #1582 is NOT closed by this branch.
 //
-// One thing that is NOT a factor: #1585's third ORDER BY leg on the merchant reads. With it,
-// 169.0ms best of 5; with only two legs, 170.3ms best of 5. It sorts at most a few hundred
-// post-aggregation groups and does not move any ceiling here.
+// One thing that is NOT a factor: #1585's third ORDER BY leg on the merchant reads. Measured with
+// the Go harness TestT3Bench (t3bench_capture_test.go), which runs `iters = 5` -- so this pair is
+// best of 5, NOT the table's best of 7: with the leg, 169.0ms; with only two legs, 170.3ms. It
+// sorts at most a few hundred post-aggregation groups and does not move any ceiling here.
+// Re-derived 2026-08-26 on the same box and the same `t3bench_r5`: SpendingByMerchant best 166.8ms
+// of 5 (mean 170.8ms), which matches the with-the-leg figure to within run-to-run noise and
+// confirms that this pair came from the harness at n=5 rather than from the table's psql protocol.
 //
 // Pinned by TestAnalyticsRepository_GetSpendingByCategory_Household_DepartedMemberSharedPeriodRetained.
 func householdGrantsCTE() string {
