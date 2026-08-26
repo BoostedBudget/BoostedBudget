@@ -40,7 +40,7 @@ export interface ListAdminRetentionWithheldOutputBody {
   accounts: AdminRetentionWithheldAccount[] | null;
   as_of: string;
   limit: number;
-  next_cursor: AdminRetentionWithheldCursor;
+  next_cursor?: AdminRetentionWithheldCursor;
   notice_pending: number;
   withheld_total: number;
 }
