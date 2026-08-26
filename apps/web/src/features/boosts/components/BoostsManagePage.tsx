@@ -32,6 +32,7 @@ import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
 import { STORAGE_KEY_LIST_VIEW } from '../boostConstants'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
+import { BoostAutomationHistoryPanel } from './BoostAutomationHistoryPanel'
 import { BoostCard } from './BoostCard'
 import { BoostTable, type SortColumn } from './BoostTable'
 import { useBoostFilters } from '../hooks/useBoostFilters'
@@ -262,6 +263,12 @@ export function BoostsManagePage({ showTypeSegment = false, boostTypeFilter }: B
             </ReadOnlyGuard>
           }
         />
+        {/*
+          Issue #1569: deliberately rendered in the EMPTY branch too. "Every boost I had is
+          deleted" is exactly the state in which the retained execution history is the only thing
+          left to look at, and it is the state this early return produces.
+        */}
+        <BoostAutomationHistoryPanel />
       </div>
     )
   }
@@ -339,13 +346,25 @@ export function BoostsManagePage({ showTypeSegment = false, boostTypeFilter }: B
       </div>
 
       {/* Delete Confirmation Dialog — Issue #960 */}
+      <BoostAutomationHistoryPanel />
+
+      {/*
+        Issue #1569: `boostsRepository.Delete` tombstones the boost (`deleted_at = NOW()`) and
+        touches no execution row, so the runs are kept. This dialog used to be silent about that.
+        It can now name where they are read, because BoostAutomationHistoryPanel — rendered just
+        above — actually reaches them; naming a surface that did not exist would have replaced one
+        false claim with another.
+
+        "This action cannot be undone" stays: it is separately TRUE. Nothing in this system sets
+        `deleted_at = NULL`, so retained is not recoverable and the copy promises no restore.
+      */}
       <ConfirmationDialog
         open={deleteConfirm !== null}
         onOpenChange={(open) => !open && handleDeleteCancel()}
         onConfirm={handleDeleteConfirm}
         title="Delete Boost"
         description={deleteConfirm ? (
-          <>Are you sure you want to delete &ldquo;<span data-ph-mask>{deleteConfirm.name}</span>&rdquo;? This action cannot be undone.</>
+          <>Are you sure you want to delete &ldquo;<span data-ph-mask>{deleteConfirm.name}</span>&rdquo;? It stops running and leaves your list, but nothing is thrown away &mdash; every run it already made is kept, and you can still read them under &ldquo;Automation history&rdquo; below. This action cannot be undone.</>
         ) : ''}
         variant="destructive"
         loading={deleteMutation.isPending}

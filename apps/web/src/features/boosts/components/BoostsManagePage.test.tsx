@@ -22,6 +22,8 @@ import {
   mockDeleteBoostMutate,
   mockTestBoostMutate,
   mockRefetchBoosts,
+  mockUseGetUserBoostExecutions,
+  mockRefetchUserBoostExecutions,
 } from '@/test/mocks/boosts-api'
 import { getGetBoostsQueryKey } from '@boostedbudget/api-client/endpoints/boosts/boosts'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
@@ -112,7 +114,17 @@ describe('BoostsManagePage', () => {
     mockUseGetUserProfile.mockClear()
     mockUseGetSubscriptionTiers.mockClear()
     mockTrackEvent.mockClear()
+    mockUseGetUserBoostExecutions.mockClear()
     localStorage.clear()
+
+    // #1569 T7.3: default to "nothing has ever run", which renders no history panel at all, so
+    // the pre-existing expectations on this page are untouched.
+    mockUseGetUserBoostExecutions.mockReturnValue({
+      data: { executions: [], total: 0, limit: 20, offset: 0 },
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchUserBoostExecutions,
+    } as ReturnType<typeof mockUseGetUserBoostExecutions>)
 
     // Configure boosts mock
     mockUseGetBoosts.mockReturnValue({
@@ -397,6 +409,94 @@ describe('BoostsManagePage', () => {
     })
   })
 
+  /**
+   * Issue #1569 Task 7.3 — the two halves of the same lie, on one page.
+   *
+   * (1) Deleting a boost tombstones it and KEEPS every execution, but nothing in the app could
+   *     reach those executions: the per-boost read 404s once the boost is tombstoned. The
+   *     account-wide panel is the surface that reaches them.
+   * (2) The delete dialog said only "This action cannot be undone" and was silent about what
+   *     survives. Now that the panel exists, the dialog can truthfully point at it.
+   *
+   * The negative assertions matter: restoring the silent copy, or over-correcting into a promise
+   * of recovery (nothing in this system sets `deleted_at = NULL`), must both fail here.
+   */
+  describe('Retained automation history (Issue #1569)', () => {
+    function withExecutions() {
+      mockUseGetUserBoostExecutions.mockReturnValue({
+        data: {
+          executions: [
+            {
+              id: 'exec-1',
+              boost_id: 'boost-gone',
+              boost_name: 'Retired sweep rule',
+              user_id: 'user-1',
+              status: 'completed',
+              started_at: '2024-02-01T10:00:00Z',
+              execution_duration_ms: 900,
+              retry_count: 0,
+              max_retries: 3,
+              trigger_context: { type: 'schedule' },
+            },
+          ],
+          total: 1,
+          limit: 20,
+          offset: 0,
+        },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchUserBoostExecutions,
+      } as ReturnType<typeof mockUseGetUserBoostExecutions>)
+    }
+
+    it('reaches the executions of a boost the user deleted', async () => {
+      withExecutions()
+      renderWithProviders(<BoostsManagePage />)
+
+      const toggle = await screen.findByRole('button', { name: /automation history/i })
+      fireEvent.click(toggle)
+
+      expect(await screen.findByText('Retired sweep rule')).toBeInTheDocument()
+      expect(screen.getByText(/^Deleted boost$/)).toBeInTheDocument()
+    })
+
+    it('still offers that history when every boost has been deleted', async () => {
+      withExecutions()
+      mockUseGetBoosts.mockReturnValue({
+        data: [],
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchBoosts,
+      })
+      renderWithProviders(<BoostsManagePage />)
+
+      // The empty-state branch returns early; the panel has to survive it, because "all my
+      // boosts are deleted" is precisely when the retained history matters most.
+      expect(await screen.findByRole('button', { name: /automation history/i })).toBeInTheDocument()
+    })
+
+    it('delete dialog says the run history is kept, without promising recovery', async () => {
+      withExecutions()
+      renderWithProviders(<BoostsManagePage />)
+
+      await waitFor(() => {
+        expect(screen.getAllByRole('button', { name: /delete/i }).length).toBeGreaterThan(0)
+      })
+      fireEvent.click(screen.getAllByRole('button', { name: /delete/i })[0])
+
+      const dialog = await screen.findByRole('alertdialog')
+      const text = dialog.textContent ?? ''
+
+      expect(text).toMatch(/nothing is thrown away/i)
+      expect(text).toMatch(/automation history/i)
+      expect(text).toMatch(/cannot be undone/i)
+
+      expect(text).not.toMatch(/permanently deleted/i)
+      expect(text).not.toMatch(/erased|destroyed|wiped/i)
+      expect(text).not.toMatch(/restore|recover|undelete/i)
+    })
+  })
+
   it('should have accessible page heading', async () => {
     renderWithProviders(<BoostsManagePage />)
 
@@ -656,8 +756,12 @@ describe('BoostsManagePage', () => {
       await waitFor(() => {
         expect(screen.getByRole('group', { name: /boost type filter/i })).toBeInTheDocument()
       })
-      const lastCallParams = mockUseGetBoosts.mock.calls.at(-1)?.[0]
-      expect(lastCallParams).toEqual({ boost_type: ['transfer_suggestion', 'savings_goal'] })
+      // #1569 T7.3: BoostAutomationHistoryPanel also calls useGetBoosts, deliberately UNFILTERED
+      // (it needs every live boost id to decide which executions came from a deleted boost, and
+      // borrowing this page's narrowed list would mislabel live boosts of other types). So
+      // "the last call" is no longer this page's call — assert over all of them.
+      const allParams = (mockUseGetBoosts.mock.calls as unknown[][]).map((c) => c[0])
+      expect(allParams).toContainEqual({ boost_type: ['transfer_suggestion', 'savings_goal'] })
     })
 
     it('calls useGetBoosts without boost_type when All rules is selected', async () => {
@@ -670,8 +774,12 @@ describe('BoostsManagePage', () => {
       fireEvent.click(screen.getByRole('button', { name: /all boosts/i }))
 
       await waitFor(() => {
-        const lastCallParams = mockUseGetBoosts.mock.calls.at(-1)?.[0]
-        expect(lastCallParams).toBeUndefined()
+        // Every call — this page's and the history panel's — must now be unfiltered. Checking
+        // only the LAST call would be satisfied by the panel alone and would stop watching this
+        // page (see the sibling test above).
+        const allParams = (mockUseGetBoosts.mock.calls as unknown[][]).map((c) => c[0])
+        expect(allParams.length).toBeGreaterThan(0)
+        expect(allParams.every((p) => p === undefined)).toBe(true)
       })
     })
 
