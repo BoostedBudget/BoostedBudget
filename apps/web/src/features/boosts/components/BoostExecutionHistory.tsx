@@ -2,18 +2,21 @@
  * BoostExecutionHistory Component
  * Issue #39: Boost Builder UI
  *
- * Displays the execution history for an automation boost.
+ * Displays the execution history for ONE automation boost.
  * Shows execution time, status, duration, and trigger type.
+ *
+ * ⚠ Issue #1569: this surface CANNOT reach an execution whose boost has been deleted. It reads
+ * GET /boosts/{id}/executions, whose handler calls GetBoostByID first, and that excludes
+ * tombstoned rows — so a deleted boost 404s here even though every one of its executions is
+ * retained. The account-wide BoostAutomationHistoryPanel is the surface that reaches them.
+ *
+ * The table itself lives in BoostExecutionTable so the two surfaces render rows identically.
  */
 
 import { Loader2, AlertCircle, History } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
-import type { BadgeProps } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useGetBoostExecutions } from '@boostedbudget/api-client/endpoints/boosts/boosts'
-import type { BoostExecution } from '@boostedbudget/api-client/models'
-import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
-import type { ColumnDef } from '@/shared/components/DataTable'
+import { BoostExecutionTable } from './BoostExecutionTable'
 
 export interface BoostExecutionHistoryProps {
   /** Boost ID to fetch executions for */
@@ -28,30 +31,6 @@ export interface BoostExecutionHistoryProps {
   className?: string
 }
 
-const EXECUTION_COLUMN_IDS = ['time', 'status', 'duration', 'trigger', 'details']
-
-function formatDateTime(dateStr: string): string {
-  const date = new Date(dateStr)
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-function formatDuration(ms: number | undefined): string {
-  if (ms === undefined) return '-'
-  const seconds = ms / 1000
-  return `${seconds.toFixed(1)}s`
-}
-
-function getTriggerType(context: unknown): string {
-  if (!context || typeof context !== 'object') return 'unknown'
-  const ctx = context as Record<string, unknown>
-  return (ctx.type as string) || 'unknown'
-}
 export function BoostExecutionHistory({
   boostId,
   limit,
@@ -59,8 +38,6 @@ export function BoostExecutionHistory({
   onPageChange,
   className = '',
 }: BoostExecutionHistoryProps) {
-  const { sizing, onSizingChange } = useTablePreferences('boost-executions-history', EXECUTION_COLUMN_IDS)
-
   const params = limit ? { limit, offset } : undefined
   const { data, isLoading, error, refetch } = useGetBoostExecutions(
     boostId,
@@ -72,20 +49,13 @@ export function BoostExecutionHistory({
   const total = (data as { total?: number } | undefined)?.total ?? executions.length
   const currentPage = limit ? Math.floor(offset / limit) : 0
   const totalPages = limit ? Math.ceil(total / limit) : 1
-  const showPagination = limit && total > limit
-
-  const STATUS_BADGE: Record<string, BadgeProps['variant']> = {
-    completed: 'success',
-    failed: 'destructive',
-    running: 'info',
-    pending: 'secondary',
-  }
+  const showPagination = Boolean(limit && total > limit)
 
   if (isLoading) {
     return (
       <div className={`bg-background border border-border rounded-lg overflow-hidden ${className}`.trim()}>
         <div className="flex flex-col items-center justify-center py-12 px-8 text-center gap-4">
-          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+          <Loader2 className="w-8 h-8 motion-safe:animate-spin motion-reduce:animate-none text-primary" />
           <p>Loading execution history...</p>
         </div>
       </div>
@@ -125,101 +95,23 @@ export function BoostExecutionHistory({
     )
   }
 
-  const columns: ColumnDef<BoostExecution>[] = [
-    {
-      id: 'time',
-      header: 'Time',
-      resizable: true,
-      defaultSize: 180,
-      minSize: 140,
-      maxSize: 220,
-      render: (execution) => formatDateTime(execution.started_at),
-    },
-    {
-      id: 'status',
-      header: 'Status',
-      defaultSize: 110,
-      minSize: 90,
-      maxSize: 140,
-      render: (execution) => (
-        <Badge
-          variant={STATUS_BADGE[execution.status] ?? 'secondary'}
-          className={`status-${execution.status}`}
-        >
-          {execution.status}
-        </Badge>
-      ),
-    },
-    {
-      id: 'duration',
-      header: 'Duration',
-      defaultSize: 110,
-      minSize: 80,
-      maxSize: 140,
-      render: (execution) => formatDuration(execution.execution_duration_ms),
-    },
-    {
-      id: 'trigger',
-      header: 'Trigger',
-      resizable: true,
-      defaultSize: 200,
-      minSize: 140,
-      render: (execution) => (
-        <span className="capitalize">{getTriggerType(execution.trigger_context)}</span>
-      ),
-    },
-    {
-      id: 'details',
-      header: 'Details',
-      resizable: true,
-      defaultSize: 320,
-      minSize: 200,
-      render: (execution) => (
-        <span className="max-w-[200px] block">
-          {execution.status === 'failed' && execution.error_message && (
-            <span className="text-destructive text-xs">{execution.error_message}</span>
-          )}
-          {execution.status === 'completed' && (
-            <span className="text-success text-xs">Completed successfully</span>
-          )}
-          {execution.status === 'running' && (
-            <span className="text-info text-xs">In progress...</span>
-          )}
-          {execution.status === 'pending' && (
-            <span className="text-muted-foreground text-xs">Waiting to start</span>
-          )}
-        </span>
-      ),
-    },
-  ]
-
   return (
     <div className={`bg-background border border-border rounded-lg overflow-hidden ${className}`.trim()}>
       <h3 className="m-0 px-6 py-4 text-base font-semibold text-foreground border-b border-border">Execution History</h3>
 
-      <DataTable<BoostExecution>
-        data={executions}
-        columns={columns}
-        rowKey={(e) => e.id}
+      <BoostExecutionTable
+        executions={executions}
         tableId="boost-executions-history"
-        sort={null}
-        onSortChange={() => {}}
-        filters={{}}
-        onFiltersChange={() => {}}
-        columnSizing={sizing}
-        onColumnSizingChange={onSizingChange}
+        pagination={
+          showPagination
+            ? {
+                currentPage: currentPage + 1,
+                totalPages,
+                onPageChange: (p) => onPageChange?.(p - 1),
+              }
+            : undefined
+        }
       />
-
-      {showPagination && (
-        <div className="p-4 border-t border-border">
-          <TablePagination
-            currentPage={currentPage + 1}
-            totalPages={totalPages}
-            hasMore={currentPage < totalPages - 1}
-            onPageChange={(p) => onPageChange?.(p - 1)}
-          />
-        </div>
-      )}
     </div>
   )
 }
