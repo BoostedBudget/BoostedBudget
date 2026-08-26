@@ -191,10 +191,20 @@ it.
   ⚠ Some cascades are the ONLY GDPR-erasure route for their table (`budget_categories`,
   `budget_period_events`, `savings_goal_contributions` have no `user_id` FK) — read the reason
   before "fixing" one to RESTRICT, or you strand the rows forever.
-  ⚠ **No guard checks that an allowlist reason is TRUE.** Neither key carries a predicate, so an
-  entry keeps its blessing when the SQL under it widens. Two reasons shipped false in #1569.
-  Re-derive before relying on one.
+  ⚠ **No guard checks that an allowlist reason is TRUE.** A reason is prose; nothing compares it to
+  the SQL. Two reasons shipped false in #1569 and two more were retracted in T7.5. Re-derive before
+  relying on one. (G1's cascade key still carries no predicate; G2's now does — see below.)
 - `TestNoUnallowlistedHistoryDelete` (G2) — a hard `DELETE FROM` a history table in Go.
+  `TestEveryAllowlistedHistoryDeleteStillCarriesItsPredicate` is its second half: each entry names
+  the SQL fragments it blesses, so dropping `AND deleted_at IS NOT NULL` from a purge no longer
+  keeps the blessing. Fragments are matched on comment-stripped, whitespace-collapsed SQL, and must
+  spell out polarity (`IS NULL` vs `IS NOT NULL`).
+- `TestNoUnallowlistedMigrationHistoryDelete` / `TestNoUnallowlistedShellHistoryDelete` (G4) — the
+  paths G2's Go-only AST scan cannot see. An UP migration or a `backend/scripts` shell script that
+  hard-deletes history needs an allowlist entry; a DOWN migration only has to carry a `WHERE`,
+  because deleting what its own up migration inserted is a legitimate reversal. It does NOT check
+  that the predicate is correct, and `apps/web/scripts/seed-e2e-data.sql` is deliberately outside
+  its universe.
 - `TestNoConfigReadForgetsTheTombstoneFilter` / `TestNoTransactionReadForgetsTheTombstoneFilter` —
   a read that forgets `deleted_at IS NULL` (per reference, alias-qualified).
 - `TestHistoryRetentionRoundTrip_*` (G3) — disconnect / re-link / purge, against real Postgres.
