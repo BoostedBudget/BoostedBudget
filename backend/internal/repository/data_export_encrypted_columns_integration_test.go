@@ -219,6 +219,18 @@ func seedEncryptedColumnsThroughProductionWritePaths(
 	return fx
 }
 
+// userTypedEnvelopeCollision is a string a user is entitled to type, paste or import that the
+// structural envelope check cannot tell from a real one: "ENC$" followed by well-formed standard
+// base64 of 40 bytes — comfortably over the 12-byte nonce + 16-byte tag floor isCiphertextEnvelope
+// requires. Only the GCM tag can discriminate, so this value reaches the decryptor and fails
+// authentication, which is exactly the path #1587's fix round exists to keep non-fatal.
+//
+// One definition, two tests: the dedicated collision test below, and the whole-document sweep,
+// which plants it beside every real ciphertext so both directions are proved in one run.
+func userTypedEnvelopeCollision() string {
+	return "ENC$" + base64.StdEncoding.EncodeToString([]byte("this is forty bytes of ordinary user text"[:40]))
+}
+
 // ciphertextInExport returns "section.column" for every exported value still wearing the at-rest
 // envelope. Walking the whole document is the point: a per-column assertion finds only the columns
 // its author remembered, and the columns nobody remembered are the ones that shipped broken.
@@ -282,7 +294,7 @@ func TestExportUserData_Integration_EncryptedColumnsAreReadable(t *testing.T) {
 	// of the sweep are therefore proved by one run: it must tolerate this value (a heuristic
 	// collision is not a leak) and it must still report every genuinely encrypted column if the
 	// decrypt step were dropped.
-	collision := "ENC$" + base64.StdEncoding.EncodeToString([]byte("this is forty bytes of ordinary user text"[:40]))
+	collision := userTypedEnvelopeCollision()
 	_, err := pool.Exec(ctx, "UPDATE transactions SET name = $2 WHERE user_id = $1", fx.userID, collision)
 	require.NoError(t, err)
 
@@ -383,9 +395,9 @@ func TestExportUserData_Integration_UserTypedEnvelopeCollisionSurvives(t *testin
 	enc := realFieldEncryptor(t)
 	fx := seedEncryptedColumnsThroughProductionWritePaths(t, pool, enc)
 
-	// 40 bytes ≥ the 12-byte nonce + 16-byte tag floor, encoded as standard base64: structurally
-	// indistinguishable from a real envelope, and authenticating under no key this app holds.
-	typed := "ENC$" + base64.StdEncoding.EncodeToString([]byte("this is forty bytes of ordinary user text"[:40]))
+	// Structurally indistinguishable from a real envelope, and authenticating under no key this
+	// app holds — see userTypedEnvelopeCollision.
+	typed := userTypedEnvelopeCollision()
 	require.True(t, strings.HasPrefix(typed, "ENC$"))
 
 	_, err := pool.Exec(ctx,
