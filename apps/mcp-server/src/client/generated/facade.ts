@@ -25,6 +25,10 @@ export function createApiClient(mutator: FetchMutator) {
       updateAccount(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: `/api/v1/accounts/${id}`, method: 'PATCH', data, signal })
       },
+      /** GET /api/v1/accounts/{id}/balance-history */
+      getAccountBalanceHistory(id: string, params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/accounts/${id}/balance-history`, method: 'GET', params, signal })
+      },
     } as const,
     analytics: {
       /** GET /api/v1/analytics/average-monthly-spend */

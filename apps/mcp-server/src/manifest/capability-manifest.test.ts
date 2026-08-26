@@ -360,8 +360,12 @@ describe('completeness', () => {
     //   per-resource read scoped to one account and one day, which is why it is not excluded the
     //   way the whole-account GDPR export is; see its entry for the reasoning and the condition
     //   under which that reasoning stops holding).
+    // +1 from Issue #1569: getAccountBalanceHistory (read, invocable — the BALANCE twin of the
+    //   entry above. balance_snapshots was written by every sync and had no per-account reader at
+    //   all: GetLatestByAccountID returned ONE last-known figure and getBalanceHistory has never
+    //   taken an account id. Same per-resource shape, same reasoning, same expiry condition.)
     const { ALL_OPERATION_IDS } = await import('./capability-manifest')
-    expect(ALL_OPERATION_IDS.length).toBe(205)
+    expect(ALL_OPERATION_IDS.length).toBe(206)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified

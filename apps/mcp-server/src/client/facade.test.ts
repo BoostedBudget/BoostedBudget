@@ -111,6 +111,8 @@ describe('createApiClient', () => {
     //                and deleteSavingsGoalContribution excluded — it hard-deletes a savings
     //                ledger row, so the facade must no longer be able to reach it. purgeSavingsGoal
     //                is also newly classified but excluded, so it adds no facade method.
-    expect(count).toBe(138)
+    // +1 from #1569: getAccountBalanceHistory (read) — the reader for balance_snapshots, which
+    //                was written by every sync and had no per-account reader at all.
+    expect(count).toBe(139)
   })
 })
