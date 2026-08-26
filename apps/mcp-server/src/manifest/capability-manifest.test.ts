@@ -317,7 +317,7 @@ describe('helper functions', () => {
 // ── Completeness: every known operationId is classified ───────────────────
 
 describe('completeness', () => {
-  it('covers all 203 known operationIds (no unknown ops in the spec)', async () => {
+  it('covers all 204 known operationIds (no unknown ops in the spec)', async () => {
     // We import the full list to ensure no ops are silently absent
     // +8 from Issue #138: getHoldings, getPortfolioSummary, getPortfolioHistory,
     //   getInvestmentTransactions, getPortfolioAllocationBreakdown, getTopMovers,
@@ -352,8 +352,11 @@ describe('completeness', () => {
     // +3 from Issue #1569 Task 16: purgeSavingsGoal (destructive, excluded), getDeletedSavingsGoals
     //   and getUserBoostExecutions (read). All three were already in api/openapi.yaml but in NO
     //   manifest entry — check:manifest and the spec-index build were both failing at that HEAD.
+    // +1 from Issue #1584: listAdminRetentionWithheld (excluded — blanket admin policy; it is a
+    //   READ, so the exclusion costs an agent nothing it could act on — the surface exists so a
+    //   human operator can pick a remedy for the withheld backlog that does not exist yet).
     const { ALL_OPERATION_IDS } = await import('./capability-manifest')
-    expect(ALL_OPERATION_IDS.length).toBe(203)
+    expect(ALL_OPERATION_IDS.length).toBe(204)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified

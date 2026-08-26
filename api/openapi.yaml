@@ -492,6 +492,48 @@ components:
         - reverted_tier
         - reverted_status
       type: object
+    AdminRetentionWithheldAccount:
+      additionalProperties: false
+      properties:
+        days_withheld:
+          format: int64
+          type: integer
+        has_email_on_file:
+          type: boolean
+        notice_30d_sent_at:
+          type:
+            - string
+            - "null"
+        notice_7d_sent_at:
+          type:
+            - string
+            - "null"
+        retention_expires_at:
+          type: string
+        subscription_status:
+          type: string
+        user_id:
+          type: string
+      required:
+        - user_id
+        - subscription_status
+        - retention_expires_at
+        - days_withheld
+        - notice_30d_sent_at
+        - notice_7d_sent_at
+        - has_email_on_file
+      type: object
+    AdminRetentionWithheldCursor:
+      additionalProperties: false
+      properties:
+        cursor_expires_at:
+          type: string
+        cursor_user_id:
+          type: string
+      required:
+        - cursor_expires_at
+        - cursor_user_id
+      type: object
     AdminSubscriptionDetailOutputBody:
       additionalProperties: false
       properties:
@@ -3978,6 +4020,43 @@ components:
         - link_token
         - expiration
         - request_id
+      type: object
+    ListAdminRetentionWithheldOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ListAdminRetentionWithheldOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        accounts:
+          items:
+            $ref: "#/components/schemas/AdminRetentionWithheldAccount"
+          type:
+            - array
+            - "null"
+        as_of:
+          type: string
+        limit:
+          format: int64
+          type: integer
+        next_cursor:
+          $ref: "#/components/schemas/AdminRetentionWithheldCursor"
+        notice_pending:
+          format: int64
+          type: integer
+        withheld_total:
+          format: int64
+          type: integer
+      required:
+        - accounts
+        - withheld_total
+        - notice_pending
+        - next_cursor
+        - limit
+        - as_of
       type: object
     ListPlaidOrphanedItemsOutputBody:
       additionalProperties: false
@@ -8601,6 +8680,55 @@ paths:
       security:
         - clerk: []
       summary: Attest that an orphaned Plaid Item was removed by hand (admin)
+      tags:
+        - Admin
+  /api/v1/admin/retention/withheld:
+    get:
+      description: "Returns cancelled accounts whose data-retention window has expired but which the pre-deletion-notice gate is refusing to hard-delete, because at least one of the 30-day and 7-day notices promised by the privacy policy was never recorded. These accounts are in a TERMINAL state: the notice queries only select users whose retention clock has not yet run out, so no existing path can send the missing notice, and the deletion sweep will hold them indefinitely. This is a read-only view — it sends nothing, extends no retention clock and waives no notice; choosing between those remedies is an open decision and will land as its own endpoint. has_email_on_file is reported per account because it is the one withholding reason the retention_deletions_withheld metric cannot separate. No email address is returned. Keyset-paginated: pass next_cursor's two fields back as cursor_expires_at and cursor_user_id. Requires admin role."
+      operationId: listAdminRetentionWithheld
+      parameters:
+        - description: Number of accounts to return
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 50
+            description: Number of accounts to return
+            format: int64
+            maximum: 500
+            minimum: 1
+            type: integer
+        - description: "Keyset cursor: retention_expires_at of the last account on the previous page (RFC3339). Must be sent together with cursor_user_id."
+          explode: false
+          in: query
+          name: cursor_expires_at
+          schema:
+            description: "Keyset cursor: retention_expires_at of the last account on the previous page (RFC3339). Must be sent together with cursor_user_id."
+            type: string
+        - description: "Keyset cursor: user_id of the last account on the previous page. Must be sent together with cursor_expires_at."
+          explode: false
+          in: query
+          name: cursor_user_id
+          schema:
+            description: "Keyset cursor: user_id of the last account on the previous page. Must be sent together with cursor_expires_at."
+            format: uuid
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListAdminRetentionWithheldOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List accounts withheld from retention deletion (admin)
       tags:
         - Admin
   /api/v1/admin/subscription/grant-trial:

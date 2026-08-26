@@ -2384,7 +2384,11 @@ func main() {
 			WithPaddleWebhookRepo(paddleWebhookRepo).
 			WithJobQueue(jobQueue).
 			WithDeadLetterService(deadLetterService).
-			WithPlaidOrphanedItemRepo(plaidOrphanedItemRepo)
+			WithPlaidOrphanedItemRepo(plaidOrphanedItemRepo).
+			// Issue #1584: the enumerating read over accounts the #1569 T1 pre-deletion-notice gate
+			// is holding indefinitely. Without this the endpoint registers and answers 503 — the
+			// same shape the other optional admin dependencies use.
+			WithRetentionWithheldReader(profileRepo)
 		operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
 		appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)", "plaid_configured", plaidService != nil)
 

@@ -359,6 +359,38 @@
       ]
     },
     {
+      "operationId": "listAdminRetentionWithheld",
+      "method": "GET",
+      "path": "/api/v1/admin/retention/withheld",
+      "summary": "List accounts withheld from retention deletion (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Returns cancelled accounts whose data-retention window has expired but which the pre-deletion-notice gate is refusing to hard-delete, because at least one of the 30-day and 7-day notices promised by the privacy policy was never recorded. These accounts are in a TERMINAL state: the notice queries only select users whose retention clock has not yet run out, so no existing path can send the missing notice, and the deletion sweep will hold them indefinitely. This is a read-only view — it sends nothing, extends no retention clock and waives no notice; choosing between those remedies is an open decision and will land as its own endpoint. has_email_on_file is reported per account because it is the one withholding reason the retention_deletions_withheld metric cannot separate. No email address is returned. Keyset-paginated: pass next_cursor's two fields back as cursor_expires_at and cursor_user_id. Requires admin role.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Number of accounts to return",
+          "type": "integer"
+        },
+        {
+          "name": "cursor_expires_at",
+          "in": "query",
+          "description": "Keyset cursor: retention_expires_at of the last account on the previous page (RFC3339). Must be sent together with cursor_user_id.",
+          "type": "string"
+        },
+        {
+          "name": "cursor_user_id",
+          "in": "query",
+          "description": "Keyset cursor: user_id of the last account on the previous page. Must be sent together with cursor_expires_at.",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "operationId": "grantTrial",
       "method": "POST",
       "path": "/api/v1/admin/subscription/grant-trial",

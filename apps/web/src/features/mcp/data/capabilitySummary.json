@@ -1,9 +1,9 @@
 {
-  "totalOperations": 203,
+  "totalOperations": 204,
   "allowedOperations": 137,
   "readOperations": 92,
   "writeOperations": 45,
-  "excludedOperations": 66,
+  "excludedOperations": 67,
   "destructiveWriteOperations": 4,
   "publicBoundaries": [
     {
