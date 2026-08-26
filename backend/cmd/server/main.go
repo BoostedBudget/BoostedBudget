@@ -2249,6 +2249,15 @@ func main() {
 		operations.RegisterInvestmentRoutes(humaAPI, humaInvestmentHandler)
 		appLogger.Info("Investment routes registered")
 
+		// Register retained holdings history route (Issue #1569).
+		// Its own service and its own repository read: this is the HISTORICAL universe, and it is
+		// wired separately from investmentService so no current-state caller can reach it.
+		humaHoldingHistoryHandler := operations.NewHoldingHistoryHandler(
+			services.NewHoldingHistoryService(repository.NewHoldingSnapshotRepository(db)),
+		)
+		operations.RegisterHoldingHistoryRoutes(humaAPI, humaHoldingHistoryHandler)
+		appLogger.Info("Retained holdings history route registered")
+
 		// Register MCP recipe routes (Issue #1087: MCP server)
 		humaRecipeRepo := repository.NewRecipeRepository(db)
 		humaRecipeService := services.NewRecipeService(humaRecipeRepo)

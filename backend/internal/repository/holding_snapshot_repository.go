@@ -209,6 +209,21 @@ type HoldingSnapshotRepository interface {
 	// reconstruction primitive, and an absent row is a fact worth showing. Independent of the
 	// account's CURRENT status, so a disconnected brokerage's history stays queryable.
 	GetByAccountDateRange(ctx context.Context, accountID string, start, end time.Time) ([]domain.HoldingSnapshot, error)
+
+	// ListHistoryDatesForAccount returns every UTC day on which this account has at least one
+	// PRESENT retained position, newest first. Tenancy-scoped in SQL by userID, exactly like the
+	// live holdings read — GetByAccountDateRange above takes no user_id and predates any caller,
+	// and nothing user-facing may be built on an unscoped read.
+	//
+	// Deliberately independent of the account's CURRENT status: a closed brokerage is the whole
+	// reason this exists (privacy policy 8.2a), so a liveness filter here would re-create the very
+	// hole it closes.
+	ListHistoryDatesForAccount(ctx context.Context, userID, accountID string) ([]string, error)
+
+	// GetHistoryForAccountOnDate returns the account's PRESENT positions on one UTC day, joined
+	// with security metadata. Present-only: an absent row records that the position STOPPED being
+	// held, and rendering it as a holding would state a sold position as an owned one.
+	GetHistoryForAccountOnDate(ctx context.Context, userID, accountID, asOf string) ([]domain.HoldingSnapshotView, error)
 }
 
 type holdingSnapshotRepository struct {
@@ -302,4 +317,100 @@ func (r *holdingSnapshotRepository) queryHoldingSnapshots(ctx context.Context, q
 		return nil, rows.Err()
 	}
 	return out, nil
+}
+
+// ── The read side (#1569): a closed account's retained positions ──────────────────────────────
+//
+// Both reads below are the HISTORICAL universe. They intentionally do NOT render
+// currentStateAccountLeg / accountLiveOnDateSQL: the account whose history this answers for is
+// typically terminal, and every liveness predicate in this package exists to keep such an account
+// OUT of a current-state answer. Applying one here would return nothing for exactly the accounts
+// the endpoint exists to serve.
+//
+// What they do carry is user_id, in SQL, on every statement.
+
+// listHistoryDatesForAccountSQL — $1 = user_id, $2 = account_id.
+//
+// DISTINCT over an indexed (account_id, as_of_date) prefix. Unbounded by design and bounded in
+// practice by elapsed days rather than sync frequency (one row per security per day, by the
+// unique index), and the caller renders it as a day picker.
+const listHistoryDatesForAccountSQL = `
+	SELECT DISTINCT hs.as_of_date
+	FROM holding_snapshots hs
+	WHERE hs.user_id = $1::uuid
+	  AND hs.account_id = $2::uuid
+	  AND hs.present
+	ORDER BY hs.as_of_date DESC
+`
+
+func (r *holdingSnapshotRepository) ListHistoryDatesForAccount(ctx context.Context, userID, accountID string) ([]string, error) {
+	rows, err := r.db.Query(ctx, listHistoryDatesForAccountSQL, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []string{}
+	for rows.Next() {
+		var d time.Time
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		// Formatted at the edge of the database, once. A DATE comes back from pgx as a UTC-located
+		// midnight; anything downstream that re-locates it can shift the day, and which day this
+		// was is the entire content of the value.
+		out = append(out, d.Format("2006-01-02"))
+	}
+	return out, rows.Err()
+}
+
+// getHistoryForAccountOnDateSQL — $1 = user_id, $2 = account_id, $3 = as_of_date.
+//
+// LEFT JOIN securities, matching the live holdings read (GetByUserIDWithSecurities). ⚠ It is a
+// LEFT join for CONSISTENCY, not for reachability: security_id is NOT NULL under a VALIDATED FK to
+// securities with ON DELETE RESTRICT (migration 000160), so the matching row provably exists and
+// INNER would return the same rows today. A mutant swapping it to INNER was checked and found to
+// change nothing, which is why no test pins it — do not add one that pretends otherwise. What can
+// still be NULL is the metadata itself: securities.ticker_symbol and securities.type, which is why
+// those land in pointer fields.
+//
+// close_price is deliberately NOT selected. It is today's prior close, and there is no field on
+// HoldingSnapshotView for it to reach — see the type's doc comment.
+const getHistoryForAccountOnDateSQL = `
+	SELECT
+		hs.security_id, hs.as_of_date,
+		hs.quantity, hs.cost_basis, hs.institution_value, hs.institution_price,
+		sec.ticker_symbol, sec.name, sec.type
+	FROM holding_snapshots hs
+	LEFT JOIN securities sec ON sec.id = hs.security_id
+	WHERE hs.user_id = $1::uuid
+	  AND hs.account_id = $2::uuid
+	  AND hs.as_of_date = $3::date
+	  AND hs.present
+	ORDER BY sec.type NULLS LAST, hs.institution_value DESC NULLS LAST, hs.security_id
+`
+
+func (r *holdingSnapshotRepository) GetHistoryForAccountOnDate(ctx context.Context, userID, accountID, asOf string) ([]domain.HoldingSnapshotView, error) {
+	rows, err := r.db.Query(ctx, getHistoryForAccountOnDateSQL, userID, accountID, asOf)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []domain.HoldingSnapshotView{}
+	for rows.Next() {
+		v := domain.HoldingSnapshotView{}
+		var day time.Time
+		if err := rows.Scan(
+			&v.SecurityID, &day,
+			&v.Quantity, &v.CostBasis, &v.InstitutionValue, &v.InstitutionPrice,
+			&v.TickerSymbol, &v.SecurityName, &v.SecurityType,
+		); err != nil {
+			return nil, err
+		}
+		v.AsOfDate = day.Format("2006-01-02")
+		v.ComputeGainLoss()
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }

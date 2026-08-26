@@ -313,6 +313,17 @@ func (m *mockHoldingSnapshotRepo) GetByAccountDateRange(ctx context.Context, acc
 	panic("not implemented")
 }
 
+// #1569: the READ side of holding_snapshots. This worker is a WRITER and must never reach either
+// of these, so they panic rather than returning a plausible empty result — a silent nil would let
+// a future edit route a read through the daily job and still pass.
+func (m *mockHoldingSnapshotRepo) ListHistoryDatesForAccount(ctx context.Context, userID, accountID string) ([]string, error) {
+	panic("the portfolio snapshot worker must not read holdings history")
+}
+
+func (m *mockHoldingSnapshotRepo) GetHistoryForAccountOnDate(ctx context.Context, userID, accountID, asOf string) ([]domain.HoldingSnapshotView, error) {
+	panic("the portfolio snapshot worker must not read holdings history")
+}
+
 // This worker is the ONLY writer of portfolio_snapshots on a day with no Plaid sync — it upserts
 // an aggregate for every user with holdings whether or not anything synced. holding_snapshots is
 // otherwise written only by a sync, so without this call the two tables disagree about which days
