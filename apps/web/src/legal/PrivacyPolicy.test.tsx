@@ -5,6 +5,8 @@
  * Issue #858: Legal pages for Paddle domain verification
  */
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
@@ -37,32 +39,54 @@ function subsectionText(heading: RegExp): string {
 }
 
 /**
+ * The path to the reviewed golden the Go side pins the thirteen deletion phrases in.
+ *
+ * ⚠ This file is a GIT-TRACKED SOURCE, not a build product, and it is not written by anything
+ * that runs in this suite. See backend/internal/queue/jobs/retention_notice_golden_test.go.
+ */
+const RETENTION_NOTICE_GOLDEN = join(
+  import.meta.dir,
+  '../../../../backend/internal/queue/jobs/testdata/retention_notice.golden'
+)
+
+/**
  * The thirteen items `retentionDeletionItems`
  * (backend/internal/queue/jobs/retention_cleanup_check.go) enumerates in the 30-day and 7-day
- * pre-deletion notice emails, quoted verbatim.
+ * pre-deletion notice emails, READ OUT OF THE GO-SIDE GOLDEN rather than re-declared here.
  *
- * ⚠ Verbatim ON PURPOSE (#1592). The defect this fixes is that the policy and the email
- * described the SAME deletion in different words and different scope — the policy named three
- * categories where the email named thirteen. A paraphrase here would re-open exactly that gap
- * one wording change later. There is no mechanical link across the Go/TS boundary; this list is
- * the closest thing to one, and it is why the phrases in PrivacyPolicy.tsx § 8.4 must be edited
- * in the same change as the Go source, never independently.
+ * ⚠ WHY IT READS A FILE INSTEAD OF HOLDING A LITERAL (#1581/#1592, round 5). This array used to be
+ * a hand-copied duplicate of the Go slice. That copy made the Go golden fail on a Go change and
+ * made NOTHING fail on the TS side, so the two drifted the moment the golden was promoted — the
+ * exact "two copies, one truth, nothing watching" shape the comment here used to describe as
+ * unavoidable ("There is no mechanical link across the Go/TS boundary"). There is one, and this is
+ * it: the golden is checked in, is regenerated only by a reviewed `mv`, and already carries every
+ * phrase verbatim. Change a phrase in Go, promote the golden, and THIS test fails until
+ * PrivacyPolicy.tsx § 8.4 is edited too. That round-trip was executed before this was committed.
+ *
+ * ⚠ IT IS A LINK, NOT A SECOND RENDERER. Nothing here reproduces the Go notice format: it takes
+ * the `phrase: ` lines out of the golden's item→tables mapping and stops. That mapping's exact
+ * `tables: …\nphrase: …` shape is itself pinned Go-side by
+ * TestReviewedGoldenActuallyPinsWhatItClaims, so the format this parse depends on cannot be
+ * dropped from the golden without the Go suite failing first.
  */
-const RETENTION_DELETION_ITEMS = [
-  'your bank connections and every account on them, including accounts you have already closed or disconnected, and the record of when each one was connected, disconnected or closed',
-  'your day-by-day balance history for every account',
-  'your transactions, together with every category, note, tag and merchant name you set on them, and the record of those edits',
-  'your investment holdings and their day-by-day snapshots, every buy and sell recorded against them, and your portfolio value history',
-  'your credit card, mortgage and student loan records, including their statements and APR schedules',
-  'your budgets, their categories, their period history and every rollover',
-  'your savings goals and every contribution you logged against them by hand',
-  'your boosts and the record of every boost that ran',
-  'your automation rules, the record of every rule that ran, and your transfer suggestions',
-  'your membership of a household, its invitations, its sharing consents, and the accounts shared into it (and the household itself, if you are its only member)',
-  'your subscription, billing and payment records, and your referrals',
-  'your profile and sign-in identities, notifications, dashboard layout, privacy settings and saved automation recipes',
-  'the internal job and activity records tied to your account — deleted, or stripped of their contents and disconnected from you where we are required to keep a record',
-]
+function retentionDeletionPhrases(): string[] {
+  const golden = readFileSync(RETENTION_NOTICE_GOLDEN, 'utf-8')
+
+  // Only the mapping section. Every phrase ALSO appears as a bullet in the two notice bodies
+  // below the `### BEGIN` markers, and parsing those would double the list for no extra pinning.
+  const mapping = golden.split('### BEGIN')[0]
+  const phrases = Array.from(mapping.matchAll(/^phrase: (.+)$/gm)).map((m) => m[1].trim())
+
+  // ⚠ A parse that silently yields [] would turn the § 8.4 enumeration assertion into a vacuous
+  // for-loop over nothing — the failure mode this whole change exists to prevent, reintroduced one
+  // level up. The count is asserted, not just non-emptiness: dropping an item from the Go slice
+  // must fail HERE rather than quietly shrinking what § 8.4 is checked against.
+  expect(phrases.length).toBe(13)
+  for (const phrase of phrases) {
+    expect(phrase.length).toBeGreaterThan(20)
+  }
+  return phrases
+}
 
 describe('PrivacyPolicy', () => {
   it('renders "Privacy Policy" heading', () => {
@@ -97,7 +121,7 @@ describe('PrivacyPolicy', () => {
   it('enumerates, item by item, everything the post-retention deletion destroys (Section 8.4)', () => {
     renderWithRouter(<PrivacyPolicy />)
     const text = subsectionText(/8\.4/)
-    for (const item of RETENTION_DELETION_ITEMS) {
+    for (const item of retentionDeletionPhrases()) {
       expect(text).toContain(item)
     }
   })
