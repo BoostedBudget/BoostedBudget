@@ -100,6 +100,39 @@
       ]
     },
     {
+      "operationId": "getAccountBalanceHistory",
+      "method": "GET",
+      "path": "/api/v1/accounts/{id}/balance-history",
+      "summary": "Get an account's retained balance history",
+      "tags": [
+        "Accounts"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns one account's retained day-by-day balances, oldest day first, with the UTC day each balance was true on (Issue #1569). Removing a linked bank account or disconnecting a bank connection retains its balance history rather than erasing it, and this is the only endpoint that reads it back per account: getBalanceHistory answers an aggregated CURRENT-STATE question, takes account_types rather than an account id, and deliberately excludes closed accounts. An account with nothing retained returns an empty series rather than 404. ⚠ These are HISTORICAL figures. Each is inseparable from its date and none of them is what the account holds now — a closed account has no current balance at all.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Account whose retained balance history to read.",
+          "type": "string"
+        },
+        {
+          "name": "start_date",
+          "in": "query",
+          "description": "Inclusive UTC calendar day (YYYY-MM-DD) to read from. Omit for the earliest day retained.",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "description": "Inclusive UTC calendar day (YYYY-MM-DD) to read to. Omit for the most recent day retained.",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "operationId": "disconnectAccount",
       "method": "POST",
       "path": "/api/v1/accounts/{id}/disconnect",

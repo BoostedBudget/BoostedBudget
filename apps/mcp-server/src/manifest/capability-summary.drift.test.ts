@@ -102,9 +102,12 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
   it('documents the known baseline values (informational — the drift check above is authoritative)', () => {
     const fresh = computeCapabilitySummary(readSpecIndex())
 
-    expect(fresh.totalOperations).toBe(205)
-    expect(fresh.allowedOperations).toBe(138)
-    expect(fresh.readOperations).toBe(93)
+    // +1 across totals/allowed/read from Issue #1569: getAccountBalanceHistory, the per-account
+    // retained balance history reader (read, invocable). write/excluded/destructive are unchanged
+    // — it mutates nothing and destroys nothing.
+    expect(fresh.totalOperations).toBe(206)
+    expect(fresh.allowedOperations).toBe(139)
+    expect(fresh.readOperations).toBe(94)
     expect(fresh.writeOperations).toBe(45)
     expect(fresh.excludedOperations).toBe(67)
     expect(fresh.destructiveWriteOperations).toBe(4)

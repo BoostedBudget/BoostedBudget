@@ -261,6 +261,20 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // shipped false on this branch by being asserted of every case a predicate matched.)
   read('getAccountHoldingsHistory'), // one closed account's retained positions on one past UTC day
 
+  // getAccountBalanceHistory — GET /api/v1/accounts/{id}/balance-history. Issue #1569, this round.
+  // The BALANCE twin of the entry above, and classified for the same reasons, which are re-derived
+  // here rather than inherited: it is non-mutating, so `read`.
+  //
+  // NOT `excluded`. The bar for exclusion on this branch is bulk egress — the GDPR export is
+  // excluded because ONE call returns everything the user has. This is the opposite shape: the
+  // account id is a PATH parameter, so a caller must already know which account it is asking about
+  // and gets one account's day-by-day balances. Unbounded in days, bounded to one account.
+  //
+  // ⚠ SCOPED TO WHAT THE OPERATION DOES TODAY, on purpose. If the account id ever becomes optional,
+  // or a whole-user mode is added, the per-resource justification stops being true and this entry
+  // must be re-derived — it does not carry over.
+  read('getAccountBalanceHistory'), // one closed account's retained day-by-day balances
+
   // ── Analytics (all read) ────────────────────────────────────────────────
   read('getCashFlowHistory'),
   read('getCashFlowSummary'),

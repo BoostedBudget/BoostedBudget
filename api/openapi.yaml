@@ -178,6 +178,49 @@ components:
         - name
         - balance
       type: object
+    AccountBalanceHistory:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AccountBalanceHistory.json
+          format: uri
+          readOnly: true
+          type: string
+        account_id:
+          type: string
+        first_date:
+          type: string
+        last_date:
+          type: string
+        points:
+          items:
+            $ref: "#/components/schemas/AccountBalanceHistoryPoint"
+          type:
+            - array
+            - "null"
+      required:
+        - account_id
+        - points
+      type: object
+    AccountBalanceHistoryPoint:
+      additionalProperties: false
+      properties:
+        available_balance:
+          format: double
+          type: number
+        currency_code:
+          type: string
+        current_balance:
+          format: double
+          type: number
+        date:
+          type: string
+      required:
+        - date
+        - currency_code
+      type: object
     AccountGainLoss:
       additionalProperties: false
       properties:
@@ -8267,6 +8310,50 @@ paths:
       security:
         - clerk: []
       summary: Update account
+      tags:
+        - Accounts
+  /api/v1/accounts/{id}/balance-history:
+    get:
+      description: "Returns one account's retained day-by-day balances, oldest day first, with the UTC day each balance was true on (Issue #1569). Removing a linked bank account or disconnecting a bank connection retains its balance history rather than erasing it, and this is the only endpoint that reads it back per account: getBalanceHistory answers an aggregated CURRENT-STATE question, takes account_types rather than an account id, and deliberately excludes closed accounts. An account with nothing retained returns an empty series rather than 404. ⚠ These are HISTORICAL figures. Each is inseparable from its date and none of them is what the account holds now — a closed account has no current balance at all."
+      operationId: getAccountBalanceHistory
+      parameters:
+        - description: Account whose retained balance history to read.
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Account whose retained balance history to read.
+            type: string
+        - description: Inclusive UTC calendar day (YYYY-MM-DD) to read from. Omit for the earliest day retained.
+          explode: false
+          in: query
+          name: start_date
+          schema:
+            description: Inclusive UTC calendar day (YYYY-MM-DD) to read from. Omit for the earliest day retained.
+            type: string
+        - description: Inclusive UTC calendar day (YYYY-MM-DD) to read to. Omit for the most recent day retained.
+          explode: false
+          in: query
+          name: end_date
+          schema:
+            description: Inclusive UTC calendar day (YYYY-MM-DD) to read to. Omit for the most recent day retained.
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountBalanceHistory"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get an account's retained balance history
       tags:
         - Accounts
   /api/v1/accounts/{id}/disconnect:

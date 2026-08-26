@@ -50,7 +50,9 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  AccountBalanceHistory,
   ErrorModel,
+  GetAccountBalanceHistoryParams,
   GetAccountsOutputBody,
   GetAccountsParams,
   ReorderAccountsOutputBody,
@@ -398,6 +400,107 @@ export const useUpdateAccount = <TError = ErrorType<ErrorModel>,
       return useMutation(getUpdateAccountMutationOptions(options), queryClient);
     }
     /**
+ * Returns one account's retained day-by-day balances, oldest day first, with the UTC day each balance was true on (Issue #1569). Removing a linked bank account or disconnecting a bank connection retains its balance history rather than erasing it, and this is the only endpoint that reads it back per account: getBalanceHistory answers an aggregated CURRENT-STATE question, takes account_types rather than an account id, and deliberately excludes closed accounts. An account with nothing retained returns an empty series rather than 404. ⚠ These are HISTORICAL figures. Each is inseparable from its date and none of them is what the account holds now — a closed account has no current balance at all.
+ * @summary Get an account's retained balance history
+ */
+export const getAccountBalanceHistory = (
+    id: string,
+    params?: GetAccountBalanceHistoryParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<AccountBalanceHistory>(
+      {url: `/api/v1/accounts/${id}/balance-history`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetAccountBalanceHistoryQueryKey = (id: string,
+    params?: GetAccountBalanceHistoryParams,) => {
+    return [
+    `/api/v1/accounts/${id}/balance-history`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetAccountBalanceHistoryQueryOptions = <TData = Awaited<ReturnType<typeof getAccountBalanceHistory>>, TError = ErrorType<ErrorModel>>(id: string,
+    params?: GetAccountBalanceHistoryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAccountBalanceHistory>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetAccountBalanceHistoryQueryKey(id,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getAccountBalanceHistory>>> = ({ signal }) => getAccountBalanceHistory(id,params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getAccountBalanceHistory>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetAccountBalanceHistoryQueryResult = NonNullable<Awaited<ReturnType<typeof getAccountBalanceHistory>>>
+export type GetAccountBalanceHistoryQueryError = ErrorType<ErrorModel>
+
+
+export function useGetAccountBalanceHistory<TData = Awaited<ReturnType<typeof getAccountBalanceHistory>>, TError = ErrorType<ErrorModel>>(
+ id: string,
+    params: undefined |  GetAccountBalanceHistoryParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAccountBalanceHistory>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAccountBalanceHistory>>,
+          TError,
+          Awaited<ReturnType<typeof getAccountBalanceHistory>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetAccountBalanceHistory<TData = Awaited<ReturnType<typeof getAccountBalanceHistory>>, TError = ErrorType<ErrorModel>>(
+ id: string,
+    params?: GetAccountBalanceHistoryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAccountBalanceHistory>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAccountBalanceHistory>>,
+          TError,
+          Awaited<ReturnType<typeof getAccountBalanceHistory>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetAccountBalanceHistory<TData = Awaited<ReturnType<typeof getAccountBalanceHistory>>, TError = ErrorType<ErrorModel>>(
+ id: string,
+    params?: GetAccountBalanceHistoryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAccountBalanceHistory>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get an account's retained balance history
+ */
+
+export function useGetAccountBalanceHistory<TData = Awaited<ReturnType<typeof getAccountBalanceHistory>>, TError = ErrorType<ErrorModel>>(
+ id: string,
+    params?: GetAccountBalanceHistoryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAccountBalanceHistory>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetAccountBalanceHistoryQueryOptions(id,params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
  * Stops a single account from syncing and retains its financial history. Does not destroy any data — use DELETE to permanently purge an account and its history.
  * @summary Disconnect account
  */
