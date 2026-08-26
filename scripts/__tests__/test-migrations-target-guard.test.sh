@@ -33,6 +33,14 @@
 # `guardprobe_*` database created in setup_probe_cluster and dropped in the EXIT trap.
 set -euo pipefail
 
+# PROSE-ASSERTION AUDIT (#1569 task 7.1). The repeated "Refusing to run" checks, plus "does not
+# match", "boostedbudget-db.internal", and "unknown argument", are kept verbatim. Decision:
+# CONTRACT — "Refusing to run" is the guard's entire purpose statement (scripts/test-migrations.sh
+# log_error calls); a reader who greps CI output for that exact phrase must keep finding it. The
+# hostname and flag-name checks are literal identifiers, not descriptive prose about what a
+# number/scope means, so there's no "honest correction" risk of the typecheck-gate kind. Left
+# unchanged.
+
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/test-migrations.sh"
 PASS=0

@@ -47,6 +47,15 @@
 # Run: bash scripts/__tests__/check-e2e-seed-fails-loudly.test.sh
 set -uo pipefail
 
+# PROSE-ASSERTION AUDIT (#1569 task 7.1). "Seed script FAILED", "ON CONFLICT specification",
+# "seeded successfully", "ON_ERROR_STOP=1", "Could not determine Clerk user ID" are kept verbatim.
+# Decision: CONTRACT — each is a fixed literal substring lifted directly from the source it
+# guards (e2e-postgres.sh's own echo text, or Postgres's own ON CONFLICT error / seed-e2e-data.sql's
+# own RAISE NOTICE), so there is no separate "wording" to get honestly wrong; the assertion and
+# the source text are the same string by construction. None of these assert a description of what
+# a number or scope means (the typecheck-gate defect); they assert that a literal message fired.
+# Left unchanged.
+
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SEED_LIB="$ROOT/apps/web/scripts/e2e-postgres.sh"
 RUNNER="$ROOT/apps/web/scripts/run-e2e-with-ports.sh"
