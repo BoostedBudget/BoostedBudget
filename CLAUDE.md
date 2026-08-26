@@ -17,6 +17,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make dev                    # Docker-compose up
 make test-fast              # Backend+frontend tests, NO e2e (~2min)
 make test-all               # ALL tests including e2e (~4min)
+make test-scripts           # The 13 shell guard suites in scripts/__tests__/ and
+                             # apps/web/scripts/__tests__/ — separate CI steps, NOT covered by
+                             # test-fast/test-all/bun run test. Fails on the first red. Docker/
+                             # Postgres-dependent suites skip with a visible warning if unavailable
+                             # locally (CI always has them and runs unconditionally). #1569 task 7.1:
+                             # this target existed but every local gate stayed green while CI's
+                             # shell-guard steps were red — run this before trusting a green local run.
 
 # Backend (from /backend)
 go test ./... -v            # All tests
