@@ -28,10 +28,17 @@ type HoldingHistoryService interface {
 	// GetAccountHoldingsHistory returns the account's retained positions for one UTC day.
 	//
 	// asOf is a YYYY-MM-DD UTC calendar day, or "" for the most recent retained day. Passing a day
-	// with no retained positions returns domain.ErrHoldingHistoryDateNotRetained rather than an
+	// we RETAINED NOTHING for returns domain.ErrHoldingHistoryDateNotRetained rather than an
 	// empty set: "we kept nothing for that day" and "the account held nothing that day" are
 	// different facts, and collapsing them would put a false claim in front of the user on the one
 	// surface that exists to stop making false claims.
+	//
+	// ⚠ THE SECOND FACT NOW HAS ITS OWN ANSWER (#1569 T7.8), and this is where the two part. A day
+	// on which the account was observed holding NOTHING — a confirmed-complete liquidation, whose
+	// whole row set is retained and marked absent — is a day the repository lists and answers with
+	// zero positions. It comes back here as a DATED, empty day: AsOfDate set, Positions empty,
+	// TotalValue nil. It is neither refused nor turned into the no-history response below, because
+	// both of those would deny a day we kept. Only the never-retained day is refused.
 	//
 	// An account with no retained history at all is NOT an error. #1569 R6B/C2: the cause is not
 	// established here and must not be asserted — the account may simply have held nothing over
@@ -68,6 +75,11 @@ func (s *holdingHistoryService) GetAccountHoldingsHistory(ctx context.Context, u
 	// that into the bare 200-empty-body case would make "give me 2026-01-01" succeed silently
 	// for an account with zero history while an identical request against an account that DOES
 	// have other retained days 404s, which is the inconsistency this branch exists to remove.
+	//
+	// dates comes from ListHistoryDatesForAccount, which counts RETAINED ROWS rather than present
+	// positions — so membership here is exactly "we kept something for that day", which is exactly
+	// what this refusal claims. A listing filtered on `present` would make this branch refuse a
+	// fully-liquidated day we did retain.
 	if asOf != "" {
 		if !slices.Contains(dates, asOf) {
 			return nil, domain.ErrHoldingHistoryDateNotRetained

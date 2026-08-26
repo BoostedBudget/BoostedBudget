@@ -211,9 +211,17 @@ type HoldingSnapshotRepository interface {
 	GetByAccountDateRange(ctx context.Context, accountID string, start, end time.Time) ([]domain.HoldingSnapshot, error)
 
 	// ListHistoryDatesForAccount returns every UTC day on which this account has at least one
-	// PRESENT retained position, newest first. Tenancy-scoped in SQL by userID, exactly like the
-	// live holdings read — GetByAccountDateRange above takes no user_id and predates any caller,
-	// and nothing user-facing may be built on an unscoped read.
+	// RETAINED row, newest first — present or absent. Tenancy-scoped in SQL by userID, exactly
+	// like the live holdings read — GetByAccountDateRange above takes no user_id and predates any
+	// caller, and nothing user-facing may be built on an unscoped read.
+	//
+	// ⚠ RETAINED ROWS, NOT PRESENT ONES, AND THAT IS THE POINT (#1569 T7.8). A day whose every
+	// row is absent is a confirmed-complete liquidation: we looked, and the account held nothing.
+	// That is a TRUE OBSERVATION we kept, and it is a different fact from "we kept nothing for
+	// that day". Filtering this listing on `present` collapsed the two and made the surface tell
+	// the user their retained day did not exist — the defect #1569 is named for, inside the
+	// surface built to fix it. The day is offered; GetHistoryForAccountOnDate below then answers
+	// it with zero positions, and the caller says "held nothing on D" rather than "nothing kept".
 	//
 	// Deliberately independent of the account's CURRENT status: a closed brokerage is the whole
 	// reason this exists (privacy policy 8.2a), so a liveness filter here would re-create the very
@@ -223,6 +231,11 @@ type HoldingSnapshotRepository interface {
 	// GetHistoryForAccountOnDate returns the account's PRESENT positions on one UTC day, joined
 	// with security metadata. Present-only: an absent row records that the position STOPPED being
 	// held, and rendering it as a holding would state a sold position as an owned one.
+	//
+	// ⚠ ASYMMETRIC WITH ListHistoryDatesForAccount ABOVE, ON PURPOSE. That one counts retained
+	// rows so a fully-liquidated day is still offered; this one counts present rows so that day
+	// renders EMPTY. Empty here therefore means "the account held nothing on this day", never
+	// "this day was not kept" — the caller must not turn it back into a not-kept claim.
 	GetHistoryForAccountOnDate(ctx context.Context, userID, accountID, asOf string) ([]domain.HoldingSnapshotView, error)
 }
 
@@ -334,12 +347,16 @@ func (r *holdingSnapshotRepository) queryHoldingSnapshots(ctx context.Context, q
 // DISTINCT over an indexed (account_id, as_of_date) prefix. Unbounded by design and bounded in
 // practice by elapsed days rather than sync frequency (one row per security per day, by the
 // unique index), and the caller renders it as a day picker.
+//
+// ⚠ NO `AND hs.present` HERE, deliberately — see the interface doc. A day exists in this listing
+// because a ROW was retained for it, not because a position was still held on it. Adding the
+// filter back deletes a fully-liquidated day from the picker and makes the product deny retained
+// data (pinned by TestHoldingHistoryRead_FullyLiquidatedDay_StaysInTheDateListingAndRendersEmpty).
 const listHistoryDatesForAccountSQL = `
 	SELECT DISTINCT hs.as_of_date
 	FROM holding_snapshots hs
 	WHERE hs.user_id = $1::uuid
 	  AND hs.account_id = $2::uuid
-	  AND hs.present
 	ORDER BY hs.as_of_date DESC
 `
 

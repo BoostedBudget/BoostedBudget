@@ -357,3 +357,65 @@ func TestHoldingHistoryRead_SecondAccountOfSameUser_DoesNotBleedIn(t *testing.T)
 	require.Len(t, positionsB, 1)
 	assert.Equal(t, secB.String(), positionsB[0].SecurityID)
 }
+
+// ── A day on which the account held NOTHING is a day we kept ──────────────────────────────────
+//
+// The fully-liquidated day. An account whose only position is sold has that day's WHOLE row set
+// marked present = false and nothing inserted (see markHoldingSnapshotsAbsentForAccountSQL) — the
+// rows are retained, exactly as #1569 requires. Until this test the date listing filtered on
+// `present`, so the retained day disappeared from available_dates and every surface above it said
+// no day-by-day positions were recorded for the account. That is a false statement about data we
+// still hold, on the surface built to stop making false statements about retained data.
+//
+// The two reads are deliberately ASYMMETRIC and this test pins both halves:
+//   - the DATE listing counts retained ROWS, because "we observed you on day D" is what a day in
+//     the picker means;
+//   - the POSITION read still counts only PRESENT rows, because an absent row records a position
+//     that STOPPED being held and rendering it would state a sold position as an owned one.
+//
+// So the day is offered and it renders empty — "on D this account held nothing" — which is a
+// different fact from "we kept nothing for D" (that one is still the service's 404).
+func TestHoldingHistoryRead_FullyLiquidatedDay_StaysInTheDateListingAndRendersEmpty(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, linkedItemID, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-read-liquidated")
+
+	holdingRepo := NewHoldingRepository(tx)
+	require.NoError(t, holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
+		UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(),
+		Quantity: 10, CostBasis: f64(4000), InstitutionValue: f64(5000), InstitutionPrice: f64(500),
+	}}))
+
+	// The one holding is sold, confirmed complete: Plaid returned the account with no positions.
+	require.NoError(t, holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{}))
+
+	// Nothing was destroyed by the liquidation — the row is still there, marked absent.
+	var retained, present int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT count(*), count(*) FILTER (WHERE present) FROM holding_snapshots WHERE account_id = $1`,
+		accountID).Scan(&retained, &present))
+	require.Equal(t, 1, retained, "the liquidated day's row must be RETAINED")
+	require.Equal(t, 0, present, "and every one of its rows must be absent — that is the case under test")
+
+	// The bank connection then goes away, which is when the user meets this surface.
+	accountRepo := NewAccountRepository(tx, newTestFieldEncryptor(t))
+	require.NoError(t, accountRepo.MarkRemovedByLinkedItemID(ctx, linkedItemID.String(), domain.RemovalReasonUserDisconnect))
+
+	snapRepo := NewHoldingSnapshotRepository(tx)
+	day := todayUTC(ctx, t, tx).Format("2006-01-02")
+
+	dates, err := snapRepo.ListHistoryDatesForAccount(ctx, userID.String(), accountID.String())
+	require.NoError(t, err)
+	require.Len(t, dates, 1, "the retained day must be offered — the user is otherwise told it does not exist")
+	assert.Equal(t, day, dates[0])
+
+	positions, err := snapRepo.GetHistoryForAccountOnDate(ctx, userID.String(), accountID.String(), day)
+	require.NoError(t, err)
+	assert.Empty(t, positions, "an absent row is not a position and must never render as one")
+	assert.NotNil(t, positions, "an empty result is a slice, never nil")
+}
