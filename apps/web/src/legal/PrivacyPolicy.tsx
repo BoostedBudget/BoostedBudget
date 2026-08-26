@@ -296,10 +296,12 @@ export function PrivacyPolicy() {
             the account deletion described in Section 8.2 above, which deletes your entire
             BoostedBudget account. When you remove a linked bank account or disconnect a bank
             connection, that account's transaction, balance, and holdings history <strong>is
-            retained</strong> — it is not erased — so you can still view it under "Closed
-            accounts" on your Accounts page. It is excluded from your active balances and
-            reports going forward. If you want that history erased as well, you must delete your
-            entire BoostedBudget account per Section 8.2.
+            retained</strong> — it is not erased — so you can still view it. Open the account
+            from "Closed accounts" on your Accounts page to see its retained day-by-day balances
+            and, for an investment account, its retained holdings; its transactions stay in your
+            Transactions list, where you can filter by that account. The account is excluded from
+            your active balances and reports going forward. If you want that history erased as
+            well, you must delete your entire BoostedBudget account per Section 8.2.
           </p>
 
           <h3>8.3 Backup Retention</h3>

@@ -30,6 +30,13 @@ export const ANALYTICS_EVENTS = {
   // #1569: the retained holdings history of a CLOSED account. Fired when the user switches which
   // recorded day they are looking at — the only interaction the surface has.
   ACCOUNT_HOLDINGS_HISTORY_DATE_CHANGED: 'account_holdings_history_date_changed',
+  // Issue #1569: a user opened the day-by-day balances retained under a CLOSED account. A VIEW
+  // event, not a change-only one, and that distinction is the whole point: the thesis of #1569 is
+  // what the user can SEE, so the measurement that has to exist is the one answering "did anyone
+  // actually go and look at the money we kept?". A date/range-changed event only ever counts the
+  // people who already got there. Carries account_type — a fixed discriminator, never free text
+  // and never an amount — so the rate can be read per kind of closed account.
+  ACCOUNT_BALANCE_HISTORY_VIEWED: 'account_balance_history_viewed',
 
   // Transactions
   TRANSACTIONS_VIEWED: 'transactions_viewed',
@@ -49,6 +56,12 @@ export const ANALYTICS_EVENTS = {
   BOOST_CREATED: 'boost_created',
   BOOST_EDITED: 'boost_edited',
   BOOST_DELETED: 'boost_deleted',
+  // Issue #1569 T7.3: a user opened the account-wide automation history — the only surface that
+  // can reach an execution whose boost has been deleted or purged. A VIEW event, because the
+  // thesis of #1569 is what the user can SEE: this is the measurement that answers "did anyone
+  // actually go and look at the history we kept?". Carries `has_deleted_boost_rows`, a boolean
+  // computed over the page on screen — a fixed discriminator, never a name, id or amount.
+  BOOST_EXECUTION_HISTORY_VIEWED: 'boost_execution_history_viewed',
 
   // Auto-categorization
   AUTO_CATEGORIZATION_VIEWED: 'auto_categorization_viewed',
