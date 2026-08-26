@@ -32,6 +32,7 @@ package repository_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -43,9 +44,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
 // encryptedFixture records the plaintext each production write path was handed, so the assertions
@@ -219,14 +222,28 @@ func seedEncryptedColumnsThroughProductionWritePaths(
 // ciphertextInExport returns "section.column" for every exported value still wearing the at-rest
 // envelope. Walking the whole document is the point: a per-column assertion finds only the columns
 // its author remembered, and the columns nobody remembered are the ones that shipped broken.
-func ciphertextInExport(export *domain.DataExport) []string {
+//
+// `userTyped` lists values the FIXTURE itself wrote as user text — a string the user is entitled to
+// type that happens to look like an envelope. They are matched by exact value, not by column, so
+// the exemption cannot widen: real ciphertext in the same column is still reported, and a build
+// that stopped decrypting is still caught by every genuinely encrypted column in the document.
+func ciphertextInExport(export *domain.DataExport, userTyped ...string) []string {
+	typed := make(map[string]struct{}, len(userTyped))
+	for _, v := range userTyped {
+		typed[v] = struct{}{}
+	}
 	var found []string
 	for section, rows := range export.Sections {
 		for _, row := range rows {
 			for column, value := range row {
-				if text, ok := value.(string); ok && strings.HasPrefix(text, "ENC$") {
-					found = append(found, section+"."+column)
+				text, ok := value.(string)
+				if !ok || !strings.HasPrefix(text, "ENC$") {
+					continue
 				}
+				if _, expected := typed[text]; expected {
+					continue
+				}
+				found = append(found, section+"."+column)
 			}
 		}
 	}
@@ -261,11 +278,19 @@ func TestExportUserData_Integration_EncryptedColumnsAreReadable(t *testing.T) {
 			"the fixture wrote plaintext into %s, so this test would prove nothing", what)
 	}
 
+	// A colliding user string lives in the SAME document as every real ciphertext. Both directions
+	// of the sweep are therefore proved by one run: it must tolerate this value (a heuristic
+	// collision is not a leak) and it must still report every genuinely encrypted column if the
+	// decrypt step were dropped.
+	collision := "ENC$" + base64.StdEncoding.EncodeToString([]byte("this is forty bytes of ordinary user text"[:40]))
+	_, err := pool.Exec(ctx, "UPDATE transactions SET name = $2 WHERE user_id = $1", fx.userID, collision)
+	require.NoError(t, err)
+
 	repo := repository.NewDataExportRepository(pool, enc)
 	export, err := repo.ExportUserData(ctx, fx.userID)
 	require.NoError(t, err)
 
-	leaks := ciphertextInExport(export)
+	leaks := ciphertextInExport(export, collision)
 	assert.Empty(t, leaks,
 		"%d exported column(s) hand the user this application's at-rest ciphertext instead of "+
 			"their own data (#1587). An export of \"ENC$…\" is unusable to the data subject and "+
@@ -330,4 +355,85 @@ func TestExportUserData_Integration_UserTypedEnvelopeMarkerSurvives(t *testing.T
 	require.NotEmpty(t, export.Sections["transactions"])
 	assert.Equal(t, typed, fmt.Sprint(export.Sections["transactions"][0]["name"]),
 		"the user's own text must come back exactly as they typed it")
+}
+
+// TestExportUserData_Integration_UserTypedEnvelopeCollisionSurvives.
+//
+// The test above exercises the EASY end of the property: "ENC$ rent, not a ciphertext" is not valid
+// base64 and is far too short, so the structural check rejects it before decryption is attempted.
+// That check is a HEURISTIC, and a heuristic has a collision set. `ENC$` followed by well-formed
+// standard base64 decoding to at least nonce+tag bytes is a string a user can type, paste or
+// import — a note, a merchant name, a description copied out of some other system's export — and
+// for such a value the structural check says "envelope", AES-GCM authentication says "not mine",
+// and #1587's original code turned that disagreement into a 500 for the WHOLE export. One
+// unlucky string in one row and the data subject cannot exercise Article 20 at all.
+//
+// The discriminator that cannot collide is the GCM tag itself: only the holder of this
+// application's key can produce a value that authenticates under it. So authentication — not the
+// prefix, not the base64 shape — decides, and a value that fails it is by construction not
+// something this application encrypted, and is exported exactly as the user typed it.
+//
+// ⚠ The fallback is NOT unconditional, and TestExportUserData_Integration_EncryptedColumnsAreReadable
+// is why: if the key were wrong or rotated, EVERY envelope would fail authentication and
+// pass-through would hand the user a document of unreadable ciphertext, silently — the round-4
+// defect, restored. See exportKeyHealthError.
+func TestExportUserData_Integration_UserTypedEnvelopeCollisionSurvives(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	enc := realFieldEncryptor(t)
+	fx := seedEncryptedColumnsThroughProductionWritePaths(t, pool, enc)
+
+	// 40 bytes ≥ the 12-byte nonce + 16-byte tag floor, encoded as standard base64: structurally
+	// indistinguishable from a real envelope, and authenticating under no key this app holds.
+	typed := "ENC$" + base64.StdEncoding.EncodeToString([]byte("this is forty bytes of ordinary user text"[:40]))
+	require.True(t, strings.HasPrefix(typed, "ENC$"))
+
+	_, err := pool.Exec(ctx,
+		"UPDATE transactions SET name = $2 WHERE user_id = $1", fx.userID, typed)
+	require.NoError(t, err)
+
+	repo := repository.NewDataExportRepository(pool, enc)
+	export, err := repo.ExportUserData(ctx, fx.userID)
+	require.NoError(t, err,
+		"a user-typed string that merely LOOKS like an envelope must not fail the whole export")
+	require.NotEmpty(t, export.Sections["transactions"])
+	assert.Equal(t, typed, fmt.Sprint(export.Sections["transactions"][0]["name"]),
+		"the user's own text must come back exactly as they typed it")
+
+	// And the genuinely encrypted columns in the same document are still decrypted — the fallback
+	// must not have been reached by disabling decryption.
+	require.NotEmpty(t, export.Sections["users"])
+	assert.NotContains(t, fmt.Sprint(export.Sections["users"][0]["email"]), "ENC$",
+		"real ciphertext in the same export must still be decrypted")
+}
+
+// TestExportUserData_Integration_WrongKeyStillFailsLoudly.
+//
+// The collision fallback above must not become "shrug at every authentication failure". If the
+// encryption key is wrong or has been rotated out from under the data, EVERY envelope in the
+// document fails to authenticate, and passing them all through would ship the round-4 defect back:
+// a document of unreadable "ENC$…" strings handed over as if it were the user's own data, with a
+// 200 on it. Nothing decrypting anywhere in a whole export is not an unlucky string; it is a broken
+// key, and it is refused.
+//
+// This is the mutant test for exportKeyHealthError: delete the call in ExportUserData and this
+// test is the one that goes red.
+func TestExportUserData_Integration_WrongKeyStillFailsLoudly(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	enc := realFieldEncryptor(t)
+	fx := seedEncryptedColumnsThroughProductionWritePaths(t, pool, enc)
+
+	svc, err := services.NewEncryptionService(&config.Config{
+		EncryptionKey: "abcdefghijklmnopqrstuvwxyz012345",
+	})
+	require.NoError(t, err)
+	wrongKey, err := appcrypto.NewFieldEncryptor(svc, []byte("abcdefghijklmnopqrstuvwxyz012345"))
+	require.NoError(t, err)
+
+	repo := repository.NewDataExportRepository(pool, wrongKey)
+	_, err = repo.ExportUserData(ctx, fx.userID)
+	require.Error(t, err, "an export in which NOTHING decrypts must not be handed to the user")
+	assert.Contains(t, err.Error(), "none succeeded",
+		"the failure must name the key-health rule, not a single column: %v", err)
 }

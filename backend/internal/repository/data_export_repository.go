@@ -462,8 +462,9 @@ func (r *dataExportRepository) ExportUserData(ctx context.Context, userID string
 		export.ExcludedTables[tbl] = reason
 	}
 
+	tally := &envelopeTally{}
 	for _, tbl := range DataExportTables {
-		section, err := r.exportTable(ctx, tbl, userID)
+		section, err := r.exportTable(ctx, tbl, userID, tally)
 		if err != nil {
 			return nil, err
 		}
@@ -471,10 +472,16 @@ func (r *dataExportRepository) ExportUserData(ctx context.Context, userID string
 		export.RowCount += len(section)
 	}
 
+	if err := tally.exportKeyHealthError(); err != nil {
+		return nil, err
+	}
+
 	return export, nil
 }
 
-func (r *dataExportRepository) exportTable(ctx context.Context, tbl DataExportTable, userID string) ([]map[string]any, error) {
+func (r *dataExportRepository) exportTable(
+	ctx context.Context, tbl DataExportTable, userID string, tally *envelopeTally,
+) ([]map[string]any, error) {
 	rows, err := r.db.Query(ctx, DataExportRowQuery(tbl), userID)
 	if err != nil {
 		return nil, fmt.Errorf("ExportUserData: query %s: %w", tbl.Table, err)
@@ -515,9 +522,7 @@ func (r *dataExportRepository) exportTable(ctx context.Context, tbl DataExportTa
 			}
 		}
 
-		if err := r.decryptEveryEnvelope(row, tbl.Table); err != nil {
-			return nil, err
-		}
+		r.decryptEveryEnvelope(row, tbl.Table, tally)
 
 		out = append(out, row)
 	}
@@ -545,12 +550,15 @@ func (r *dataExportRepository) exportTable(ctx context.Context, tbl DataExportTa
 // this VALUE wearing the envelope this application puts on ciphertext" — which no migration, no new
 // repository and no forgotten review can get wrong.
 //
+// ⚠ A VALUE THAT WILL NOT AUTHENTICATE IS NOT OURS. It is exported verbatim rather than failing the
+// request; only a document in which NOTHING decrypted is treated as a broken key. See envelopeTally.
+//
 // ⚠ THE EXCLUSIONS RUN FIRST, IN THE CALLER, AND THE ORDER IS LOAD-BEARING. access_token_encrypted
 // is a live Plaid bearer credential that is also ENC$-enveloped; it is deleted from the row before
 // this function ever sees it, so "decrypt everything encrypted" never means "hand out the token".
 // A future withheld ciphertext column must be withheld the same way — by exclusion, not by being
 // left off a decrypt list, because there is no longer a decrypt list to be left off.
-func (r *dataExportRepository) decryptEveryEnvelope(row map[string]any, table string) error {
+func (r *dataExportRepository) decryptEveryEnvelope(row map[string]any, table string, tally *envelopeTally) {
 	for column, value := range row {
 		text, ok := value.(string)
 		if !ok || !isCiphertextEnvelope(text) {
@@ -558,25 +566,76 @@ func (r *dataExportRepository) decryptEveryEnvelope(row map[string]any, table st
 		}
 		plain, err := r.enc.DecryptString(text)
 		if err != nil {
-			// A value wearing this application's own envelope that will not decrypt is a corrupt
-			// export, not a request failure to shrug at: returning "ENC$..." to the user is exactly
-			// the defect this function exists to prevent, and doing it silently is worse.
-			return fmt.Errorf("ExportUserData: decrypt %s.%s: %w", table, column, err)
+			// NOT this application's ciphertext — see isCiphertextEnvelope. Export it verbatim and
+			// record the miss; the document-level rule in exportKeyHealthError decides whether the
+			// misses add up to a broken key rather than an unlucky string.
+			tally.miss(table, column, err)
+			continue
 		}
+		tally.hit()
 		row[column] = plain
 	}
-	return nil
 }
 
-// isCiphertextEnvelope reports whether a value is one this application encrypted, as opposed to a
-// user-typed string that merely begins with the marker.
+// envelopeTally records how the whole document's envelope-shaped strings resolved.
 //
-// The discriminator is structural rather than a name list: FieldEncryptor.EncryptString emits
+// ⚠ WHY THIS IS DOCUMENT-LEVEL AND NOT PER-VALUE, which is the entire #1587 fix-round argument.
+// Per value, an authentication failure is genuinely ambiguous: it is either a user string that
+// collided with the heuristic, or this application's own ciphertext under a key that no longer
+// opens it. Failing loudly on both (the first draft) hands a user a 500 for their whole Article 20
+// request because they once typed "ENC$" in front of something base64-shaped. Passing through
+// silently on both restores the round-4 defect — a document full of unreadable "ENC$…" strings,
+// shipped as if it were the user's data, with nothing anywhere saying so.
+//
+// Across a WHOLE export the two stop being ambiguous. A wrong or rotated key fails EVERY envelope,
+// including users.email, which profile_repository encrypts for every account this application has
+// ever created; a colliding user string fails while its neighbours succeed. So: at least one
+// success anywhere in the document proves the key opens this user's data, and the failures beside
+// it are strings the user typed. Zero successes with at least one failure is the key alarm, and it
+// is still loud.
+type envelopeTally struct {
+	decrypted int
+	failed    int
+	firstErr  error
+	firstAt   string
+}
+
+func (t *envelopeTally) hit() { t.decrypted++ }
+
+func (t *envelopeTally) miss(table, column string, err error) {
+	t.failed++
+	if t.firstErr == nil {
+		t.firstErr, t.firstAt = err, table+"."+column
+	}
+}
+
+// exportKeyHealthError reports the one case in which an authentication failure cannot be read as a
+// user-typed string: nothing in the entire document decrypted. See envelopeTally.
+func (t *envelopeTally) exportKeyHealthError() error {
+	if t.failed == 0 || t.decrypted > 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"ExportUserData: %d enveloped value(s) failed authentication and none succeeded, "+
+			"refusing to hand the user ciphertext as if it were their data (first %s): %w",
+		t.failed, t.firstAt, t.firstErr)
+}
+
+// isCiphertextEnvelope reports whether a value is SHAPED like one this application encrypted, as
+// opposed to a user-typed string that merely begins with the marker.
+//
+// The test is structural rather than a name list: FieldEncryptor.EncryptString emits
 // "ENC$" + base64.StdEncoding(nonce ‖ ciphertext ‖ GCM tag), so a genuine envelope always decodes
 // as standard base64 to at least nonce+tag bytes. A note reading "ENC$ reminder to self" does not,
-// and is exported verbatim as the user wrote it instead of failing their whole export. Without this
-// check, decrypt-by-prefix would turn any free-text column into a denial of service against its own
-// owner's Article 20 request.
+// and never reaches the decryptor at all.
+//
+// ⚠ IT IS A CHEAP PRE-FILTER, NOT THE DISCRIMINATOR, and #1587's fix round is the reason the
+// distinction is spelled out. Every predicate available here is one a user can satisfy by typing:
+// "ENC$" is four characters, and base64 of 28+ bytes is a string anyone can paste out of another
+// system's export. The only property a user CANNOT forge is the GCM tag, because producing one
+// requires this application's key — so authentication decides, in decryptEveryEnvelope, and a value
+// that fails it is by construction not ours and is exported exactly as the user wrote it. Tightening
+// the shape test further would only shrink the collision set; it can never empty it.
 func isCiphertextEnvelope(value string) bool {
 	if !appcrypto.IsEncrypted(value) {
 		return false
