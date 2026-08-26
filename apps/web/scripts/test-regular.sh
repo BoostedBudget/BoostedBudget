@@ -41,6 +41,9 @@ EXCLUDE_PATTERNS=(
     "src/features/budgets/hooks/useBudgetFilters.test.ts"
     "src/features/budgets/hooks/useBudgets.test.tsx"
     "src/features/savings/hooks/useSavingsGoals.test.tsx"
+    # #1569 Codex finding 4: drives the REAL generated savings-goals hooks against a real
+    # QueryClient, so the savings-goals-api mock.module preload must NOT be loaded for it.
+    "src/features/savings/hooks/useSavingsGoalsDeletedCache.test.tsx"
     "src/features/budgets/hooks/useBudgetDetail.test.tsx"
     "src/features/budgets/hooks/useAvailableCategories.test.tsx"
     "src/features/transactions/hooks/useInfiniteTransactions.test.tsx"

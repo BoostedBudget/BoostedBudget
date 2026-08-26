@@ -162,6 +162,15 @@ export function SavingsPage() {
           promise false for them, and left POST /savings-goals/{id}/purge with no reachable
           caller. The panel self-hides on an empty listing, so a genuine first-run page is
           unchanged.
+
+          ⚠ Mounting the panel here is only half of it, and the missing half was invisible for a
+          round: this branch MOUNTS <DeletedGoalsPanel> for the first time, so what it shows is
+          whatever the deleted-goals query already holds. main.tsx sets a global five-minute
+          staleTime, and deleteGoal() used to refetch only the LIVE goals — so the panel's first
+          mount read a cached, empty listing, self-hid, and the disclosure above was false again
+          by a different route. useSavingsGoals.deleteGoal now invalidates
+          getGetDeletedSavingsGoalsQueryKey() as well; useSavingsGoalsDeletedCache.test.tsx pins
+          that against a real QueryClient with a primed stale cache.
         */}
         <DeletedGoalsPanel onPurged={() => void refetch()} />
         <CreateSavingsGoalDialog

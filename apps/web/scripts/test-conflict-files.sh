@@ -18,7 +18,7 @@ for arg in "$@"; do
     esac
 done
 
-echo "Running process-isolated test groups (A, B, C, D, E)..."
+echo "Running process-isolated test groups (A, B, C, D, E, F)..."
 cd /tmp
 
 run_group() {
@@ -138,6 +138,25 @@ for f in \
     GROUP_D_PRELOAD_ARGS+=(--preload "$f")
 done
 
+# Group F: the deleted-goals CACHE regression (#1569, Codex finding 4). It must run in a process
+# where src/test/mocks/savings-goals-api.ts has NEVER been loaded: that mock replaces
+# useGetSavingsGoals / useGetDeletedSavingsGoals, and a mocked hook has no cache, so the very
+# defect the test exists to catch would be unobservable. It cannot join Group D for exactly that
+# reason — Group D preloads savings-goals-api.ts.
+GROUP_F_FILES=(
+    "$FRONTEND_DIR/src/features/savings/hooks/useSavingsGoalsDeletedCache.test.tsx"
+)
+GROUP_F_PRELOAD_ARGS=()
+for f in \
+    "$FRONTEND_DIR/src/test/happydom.ts" \
+    "$FRONTEND_DIR/src/test/testing-library.ts" \
+    "$FRONTEND_DIR/src/test/mocks/clerk.tsx" \
+    "$FRONTEND_DIR/src/test/mocks/posthog.ts" \
+    "$FRONTEND_DIR/src/test/mocks/track-event.ts" \
+    "$FRONTEND_DIR/src/test/mocks/sonner.ts"; do
+    GROUP_F_PRELOAD_ARGS+=(--preload "$f")
+done
+
 # Group E: MerchantsTab — uses inline mock.module('@/shared/components/DataTable'), which is
 # process-global in bun:test. Must run isolated so the DataTable stub doesn't pollute
 # TransactionTable.test.tsx and other real-DataTable consumers. See feedback_bun_test_mock_module_global.md.
@@ -161,5 +180,6 @@ run_group B "Registry/context" "${GROUP_B_PRELOAD_ARGS[@]}" "${GROUP_B_FILES[@]}
 run_group C "Inline mocks" "${GROUP_C_PRELOAD_ARGS[@]}" "${GROUP_C_FILES[@]}"
 run_group D "Real hooks" "${GROUP_D_PRELOAD_ARGS[@]}" "${GROUP_D_FILES[@]}"
 run_group E "MerchantsTab inline DataTable mock" "${GROUP_E_PRELOAD_ARGS[@]}" "${GROUP_E_FILES[@]}"
+run_group F "Real savings-goals hooks + real query cache" "${GROUP_F_PRELOAD_ARGS[@]}" "${GROUP_F_FILES[@]}"
 
 echo "Process-isolated test groups completed!"
