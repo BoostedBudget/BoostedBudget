@@ -1148,10 +1148,16 @@ func (r *accountRepository) PurgeAccount(ctx context.Context, accountID, userID 
 // accountService.UpdateAccount fetches through it and PlaidHandler.UpdateAccount assigns the
 // account straight into the PATCH /api/v1/accounts/{id} response body. domain.Account's fields are
 // `json:",omitempty"`, and apps/web/src/features/accounts/utils.ts's getAccountClosedDate
-// reads `removed_at ?? replaced_at ?? updated_at` — so omitting replaced_at did not merely hide a
-// column, it made the client fall through to updated_at and label a REPLACED account's frozen
-// balance with the timestamp of the edit that had just been made. Any read whose rows reach that
-// helper must carry all three; "no Go consumer" is not the test.
+// reads `removed_at ?? replaced_at ?? expired_at ?? updated_at` — so omitting replaced_at did not
+// merely hide a column, it made the client fall through to updated_at and label a REPLACED
+// account's frozen balance with the timestamp of the edit that had just been made. Any read whose
+// rows reach that helper must carry all FOUR; "no Go consumer" is not the test.
+//
+// ⚠ `expired_at` joined the list in #1569 round 6 (G-F), and it was the SAME defect one status
+// along: 'expired' had no dedicated column at all until migration 000155 on this branch, so it
+// always fell through to updated_at — and this read is the one PATCH /api/v1/accounts/{id}
+// returns verbatim, meaning the rename request itself was where the wrong date first appeared.
+// Pinned by TestAccountRepository_ExpiredAtSurvivesACosmeticWrite_Integration.
 func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userID string) (*domain.Account, error) {
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
@@ -1159,7 +1165,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id, status, removed_at, replaced_at, replaced_by_id,
+		       user_account_id, status, removed_at, replaced_at, expired_at, replaced_by_id,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -1173,7 +1179,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 		&account.DisplayOrder, &account.IsHidden,
 		&account.UserAccountID, &account.Status, &account.RemovedAt,
-		&account.ReplacedAt, &account.ReplacedByID,
+		&account.ReplacedAt, &account.ExpiredAt, &account.ReplacedByID,
 		&account.CreatedAt, &account.UpdatedAt,
 	)
 
@@ -1484,7 +1490,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status` + lastKnownProjection + `
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + lastKnownJoin + `
@@ -1515,7 +1521,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 			&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
 			&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 			&account.DisplayOrder, &account.IsHidden,
-			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID, &account.RemovedAt,
+			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID, &account.RemovedAt, &account.ExpiredAt,
 			&account.CreatedAt, &account.UpdatedAt, &institutionNameRaw, &linkedItemStatusRaw,
 		}
 		// Appended in the same `if` shape as the projection so the scan list and the select list

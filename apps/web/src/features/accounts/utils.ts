@@ -25,15 +25,28 @@ import type { Account } from './types'
  * Precedence mirrors which timestamp the backend actually stamps for each status:
  * - 'removed':  `removed_at`  (accountRepository.MarkRemovedByLinkedItemID / UpdateStatus)
  * - 'replaced': `replaced_at` (accountRepository.UpdateStatus)
- * - 'expired':  no dedicated column exists — ExpireAccountsByFingerprint touches only
- *   `updated_at`, so that is the best available proxy for when the account stopped being live.
+ * - 'expired':  `expired_at`  (accountRepository.ExpireAccountsByFingerprint)
  *
- * All three columns are carried over the wire; `account_repository.go`'s `GetByIDAndUser` comment
- * exists specifically to stop one being dropped from a projection.
+ * ⚠ THE `expired_at` LEG IS A BUGFIX, not tidiness (#1569 round 6, G-F). This helper used to say
+ * "'expired': no dedicated column exists" and fall through to `updated_at`. That comment was true
+ * when written and became false with migration 000155, which added `accounts.expired_at` on this
+ * same branch — and the fallthrough it justified was user-visible: `updated_at` is bumped with NO
+ * status predicate by `accountRepository.Update` (nickname / emoji / colour / hide) and
+ * `UpdateDisplayOrders` (drag-reorder), so RENAMING OR REORDERING a closed account moved its
+ * rendered "Closed on {date}" forward to today, on the one surface whose stated thesis is that
+ * history is retained. Migration 000155's `accounts_expired_at_consistency` CHECK makes the column
+ * non-NULL for every 'expired' row, backfill included, so the leg is total rather than
+ * best-effort.
+ *
+ * `updated_at` survives only as a last resort, for a row from a projection that does not carry the
+ * dedicated column. All four columns are carried by the two reads whose rows reach this helper
+ * (`GetByIDAndUser`, `GetAccountsWithInstitutionFiltered`); `account_repository.go`'s
+ * `GetByIDAndUser` comment exists specifically to stop one being dropped from a projection, and
+ * `TestAccountRepository_ExpiredAtSurvivesACosmeticWrite_Integration` pins the pair end to end.
  */
 export function getAccountClosedDate(account: Account): string | undefined {
   if (!isInactive(account)) return undefined
-  return account.removed_at ?? account.replaced_at ?? account.updated_at
+  return account.removed_at ?? account.replaced_at ?? account.expired_at ?? account.updated_at
 }
 
 /**
