@@ -227,7 +227,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_AllAccountTypes(t *testi
 		    WHERE bs.user_id = $1
 		      AND bs.snapshot_at >= $2
 		      AND bs.snapshot_at <= $3
-		      
+
 		),
 		deduped AS (
 		    SELECT DISTINCT ON (snapshot_date, chain_key)
@@ -452,7 +452,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_MultipleSnapshotsPerDay(
 		    WHERE bs.user_id = $1
 		      AND bs.snapshot_at >= $2
 		      AND bs.snapshot_at <= $3
-		      
+
 		),
 		deduped AS (
 		    SELECT DISTINCT ON (snapshot_date, chain_key)
@@ -508,7 +508,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_TimezoneConsistency(t *t
 		    WHERE bs.user_id = $1
 		      AND bs.snapshot_at >= $2
 		      AND bs.snapshot_at <= $3
-		      
+
 		),
 		deduped AS (
 		    SELECT DISTINCT ON (snapshot_date, chain_key)
@@ -616,7 +616,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_NoDoubleCountOnRelinkDay
 		    WHERE bs.user_id = $1
 		      AND bs.snapshot_at >= $2
 		      AND bs.snapshot_at <= $3
-		      
+
 		),
 		deduped AS (
 		    SELECT DISTINCT ON (snapshot_date, chain_key)
@@ -671,7 +671,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_LegacyNullUserAccountID(
 		    WHERE bs.user_id = $1
 		      AND bs.snapshot_at >= $2
 		      AND bs.snapshot_at <= $3
-		      
+
 		),
 		deduped AS (
 		    SELECT DISTINCT ON (snapshot_date, chain_key)
@@ -729,7 +729,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_PopulatesByType(t *testi
 		    WHERE bs.user_id = $1
 		      AND bs.snapshot_at >= $2
 		      AND bs.snapshot_at <= $3
-		      
+
 		),
 		deduped AS (
 		    SELECT DISTINCT ON (snapshot_date, chain_key)
@@ -845,7 +845,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_OrphanSnapshot(t *testin
 		    WHERE bs.user_id = $1
 		      AND bs.snapshot_at >= $2
 		      AND bs.snapshot_at <= $3
-		      
+
 		),
 		deduped AS (
 		    SELECT DISTINCT ON (snapshot_date, chain_key)
