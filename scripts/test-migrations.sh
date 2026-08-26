@@ -148,6 +148,43 @@ PG_DUMP="${PG_DUMP:-pg_dump}"
 # DISPOSABLE_DB_PATTERN=.` in a profile disarms the guard for every future run from that shell.
 DISPOSABLE_DB_PATTERN='^(test|freshcheck|[A-Za-z0-9]+_test|test_[A-Za-z0-9_]+|[A-Za-z0-9_]*scratch[A-Za-z0-9_]*|[A-Za-z0-9_]+_ci)$'
 
+# ⚠ A NAME IS NOT EVIDENCE OF SAFETY (#1569, Codex finding 1). The pattern above admits
+# `production_test`, `foo_ci` and `test_backup`, and until this comment existed the script checked
+# NOTHING else — not the host, not the cluster, not the contents. A reachable production database
+# with one of those names passed the guard and proceeded to DROP SCHEMA public CASCADE. Two further
+# gates close that, and BOTH apply even under --yes-destroy, because the failure being guarded
+# against is a developer who is confident and wrong:
+#
+#   HOST (pre-connect, DISPOSABLE_DB_HOST_PATTERN below). A database worth protecting is almost
+#   never on this machine's loopback. Refusing every non-local host removes the entire remote class
+#   — Fly, RDS, a staging proxy, a tunnelled port on a named host — before a socket is opened.
+#
+#   CLUSTER (post-connect, assert_target_cluster_is_disposable below). Loopback is not enough:
+#   `docker-compose` publishes the dev database on loopback too, and Codex's exploit URL was
+#   127.0.0.1. So the database itself must positively declare that it is a throwaway migration
+#   target. It declares that by carrying DISPOSABLE_DB_MARKER as its COMMENT ON DATABASE. That
+#   marker is stamped automatically the first time the suite sees a database with NO user tables at
+#   all — an empty database is provably not anybody's production data, which is why that is the one
+#   condition under which the suite is willing to stamp on the user's behalf. Anything else refuses
+#   and prints the exact statement to run.
+#
+# Why a database comment rather than a file or an env var: it lives WITH the database it describes,
+# survives DROP SCHEMA (it is stored in pg_shdescription, not in the schema), cannot be exported
+# once into a shell profile and forgotten, and cannot travel with a copied DATABASE_URL to a
+# different cluster.
+
+# ⚠ NOT overridable from the environment, for the same reason DISPOSABLE_DB_PATTERN is not.
+# ⚠ No empty alternation branch here: an EMPTY host (a local unix socket, local by construction)
+# is accepted by an explicit -z test in assert_host_is_local, because `^(|localhost|...)$` is not
+# a compilable ERE in every shell that might run this — it fails with "empty (sub)expression",
+# which under `[[ =~ ]]` returns non-zero and would have made the gate refuse EVERY host,
+# 127.0.0.1 included. Observed while writing this; the test suite caught it.
+DISPOSABLE_DB_HOST_PATTERN='^(localhost|localhost\.localdomain|127\.[0-9]+\.[0-9]+\.[0-9]+|::1|\[::1\]|host\.docker\.internal|postgres|db)$'
+
+# The self-declaration a database must carry to be a legal target. Matched as a substring so a
+# team can keep their own explanatory text in the same comment.
+DISPOSABLE_DB_MARKER='boostedbudget:disposable-migration-test-target'
+
 # Exit status used for every guard refusal. Distinct from 1 (a normal failure, including the
 # connectivity preflight) so the test suite can tell "refused this target" apart from "could not
 # reach it" — the two are indistinguishable by message alone when the target is unreachable.
@@ -163,6 +200,44 @@ database_name_from_url() {
     url="${url%%\?*}"
     url="${url##*/}"
     printf '%s' "$url"
+}
+
+# Extracts the host from a libpq URL, without the port or the userinfo.
+# `postgres://u:p@127.0.0.1:5434/freshcheck?sslmode=disable` -> `127.0.0.1`
+# `postgres://u@[::1]:5432/test`                             -> `[::1]`
+# `postgres:///freshcheck`                                   -> `` (local unix socket)
+database_host_from_url() {
+    local url="$1" hostport
+    url="${url#*://}"     # strip scheme
+    url="${url%%\?*}"     # strip query
+    url="${url%%/*}"      # strip path -> [userinfo@]host[:port]
+    hostport="${url##*@}" # strip userinfo
+    case "$hostport" in
+        \[*\]*) printf '%s' "${hostport%%\]*}]" ;;
+        *)      printf '%s' "${hostport%%:*}" ;;
+    esac
+}
+
+# Pre-connect. Unconditional: --yes-destroy cannot unlock a remote host, because the flag only
+# proves the developer knows which NAME they typed, not which machine it lives on.
+assert_host_is_local() {
+    local host
+    host="$(database_host_from_url "$DATABASE_URL")"
+
+    # Empty host = a local unix socket (postgres:///freshcheck). Local by construction.
+    if [ -z "$host" ] || [[ "$host" =~ $DISPOSABLE_DB_HOST_PATTERN ]]; then
+        return 0
+    fi
+
+    log_error "Refusing to run: '$host' is not a local host."
+    log_error "  DATABASE_URL=$DATABASE_URL"
+    log_error ""
+    log_error "This suite runs 'DROP SCHEMA public CASCADE' and 'migrate down -all'. It will only"
+    log_error "do that against a database on this machine's loopback (or a local unix socket)."
+    log_error "A remote host — Fly, RDS, a staging proxy, a tunnel to a named host — is refused"
+    log_error "outright, and --yes-destroy does NOT unlock it: naming the database you meant proves"
+    log_error "nothing about which server it is on."
+    exit $GUARD_REFUSED_EXIT
 }
 
 assert_target_is_disposable() {
@@ -206,6 +281,58 @@ assert_target_is_disposable() {
     exit $GUARD_REFUSED_EXIT
 }
 
+# Post-connect. Unconditional, --yes-destroy included. See the DISPOSABLE_DB_MARKER commentary
+# above for why the database has to declare itself rather than be recognised by name or host.
+#
+# ⚠ Ordering: this runs immediately after the connectivity check in main() and BEFORE the pg_dump
+# version preflight, so a wrong target is refused at the earliest moment a connection makes the
+# question answerable — and well before clean_database().
+assert_target_cluster_is_disposable() {
+    local db comment user_tables
+    db="$(database_name_from_url "$DATABASE_URL")"
+
+    comment=$(psql "$DATABASE_URL" -tAc \
+        "SELECT coalesce(shobj_description(oid, 'pg_database'), '') FROM pg_database WHERE datname = current_database()" 2>/dev/null || true)
+    if [[ "$comment" == *"$DISPOSABLE_DB_MARKER"* ]]; then
+        log_info "Target cluster accepted: '$db' is stamped as a disposable migration-test target."
+        return 0
+    fi
+
+    # No stamp. The ONE condition under which this suite stamps on the user's behalf is a database
+    # with no user tables at all: an empty database cannot be anybody's data.
+    user_tables=$(psql "$DATABASE_URL" -tAc \
+        "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r','p') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_toast'" 2>/dev/null || true)
+    user_tables="${user_tables//[[:space:]]/}"
+
+    if [ "$user_tables" = "0" ]; then
+        # Best-effort. If the caller does not own the database the stamp fails, and that is fine:
+        # the emptiness that justified this run is re-derived on every subsequent run anyway.
+        if psql "$DATABASE_URL" -c "COMMENT ON DATABASE \"$db\" IS '$DISPOSABLE_DB_MARKER'" > /dev/null 2>&1; then
+            log_info "Target cluster accepted: '$db' was empty; stamped it as a disposable migration-test target."
+        else
+            log_warning "Target cluster accepted: '$db' is empty, but it could not be stamped (not the owner?). It will be re-checked for emptiness every run."
+        fi
+        return 0
+    fi
+
+    log_error "Refusing to run: '$db' is a live database, not a disposable migration target."
+    log_error "  DATABASE_URL=$DATABASE_URL"
+    log_error "  It holds $user_tables user table(s) and carries no disposability marker."
+    log_error ""
+    log_error "Its NAME passed the disposable-name check, but a name is not evidence: 'production_test',"
+    log_error "'foo_ci' and 'test_backup' all pass that pattern, and this suite would have run"
+    log_error "'DROP SCHEMA public CASCADE' against any of them. So the database itself has to say so."
+    log_error ""
+    log_error "Either point at a fresh database (an EMPTY one is stamped automatically):"
+    log_error "  createdb ${db}_scratch"
+    log_error ""
+    log_error "or, if you are certain this database is throwaway, stamp it yourself:"
+    log_error "  psql \"\$DATABASE_URL\" -c \"COMMENT ON DATABASE \\\"$db\\\" IS '$DISPOSABLE_DB_MARKER'\""
+    log_error ""
+    log_error "⚠ --yes-destroy does NOT skip this check."
+    exit $GUARD_REFUSED_EXIT
+}
+
 parse_args() {
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -225,8 +352,16 @@ parse_args() {
                 echo "Usage: DATABASE_URL=... $0 [--yes-destroy <dbname>]"
                 echo ""
                 echo "Runs the migration test suites against DATABASE_URL. The suite DROPS and"
-                echo "rebuilds that database, so a target whose name is not recognisably disposable"
-                echo "requires --yes-destroy naming that exact database."
+                echo "rebuilds that database, so the target must clear THREE independent checks:"
+                echo ""
+                echo "  1. HOST      — must be local (loopback or a unix socket). Not unlockable."
+                echo "  2. NAME      — must look disposable, or pass --yes-destroy <that exact name>."
+                echo "  3. CLUSTER   — the database must carry the disposability marker as its"
+                echo "                 COMMENT ON DATABASE. A database with NO user tables is"
+                echo "                 stamped automatically; anything else is refused with the"
+                echo "                 exact statement to run. Not unlockable by --yes-destroy."
+                echo ""
+                echo "Checks 1 and 3 apply even with --yes-destroy: a name is not evidence of safety."
                 exit 0
                 ;;
             *)
@@ -1342,6 +1477,7 @@ main() {
     # matters twice over: a developer who pointed at the wrong database gets a refusal instead of a
     # connection, and the guard's own test suite can point at an unreachable host and still tell a
     # refusal (exit 3) apart from a failure to connect (exit 1).
+    assert_host_is_local
     assert_target_is_disposable
 
     # Check prerequisites
@@ -1365,6 +1501,11 @@ main() {
         log_error "Cannot connect to database: $DATABASE_URL"
         exit 1
     fi
+
+    # The connection is open; now make the database prove it is a disposable target. Deliberately
+    # BEFORE the pg_dump preflight below — a wrong target should be refused at the first moment the
+    # question can be answered, not after two more prerequisite checks.
+    assert_target_cluster_is_disposable
 
     # pg_dump must be at least the server's major version — it REFUSES to dump a newer server.
     # Checked here, up front, because the failure is otherwise invisible: pg_dump writes its error to
