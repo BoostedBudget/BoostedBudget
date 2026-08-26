@@ -116,7 +116,9 @@ func TestTransferSuggestionFile_NoRequiredPointerToStructField(t *testing.T) {
 
 // requiredPointerToObjectOffenders walks file's struct types and reports every exported field that
 // is a pointer to a type schemas publishes as an OBJECT and that huma will keep in `required`: a
-// tagged field with no `omitempty`, OR a field with no json tag at all.
+// tagged field with none of `omitempty`, `omitzero`, or an explicit `required:"false"` override, OR
+// an untagged field with no `required:"false"` override either (an untagged field cannot carry
+// omitempty/omitzero at all, so the struct tag is its only way out).
 //
 // #1569 R6B/B3: the untagged branch is not a hedge — an exported, untagged field is NOT exempt from
 // this check. huma (like encoding/json) falls back to the literal Go field name as the property
@@ -124,6 +126,15 @@ func TestTransferSuggestionFile_NoRequiredPointerToStructField(t *testing.T) {
 // an untagged exported pointer-to-object field is unconditionally required in the generated schema.
 // The guard used to skip every untagged field before ever reaching this logic (`if f.Tag == nil {
 // continue }`), which is exactly the shape this branch now catches.
+//
+// #1569 R6C/item 8: this branch only checked the json tag for `omitempty`, but huma's own
+// required-field logic (SchemaFromType, huma/v2@v2.39.1 schema.go:895-921) honours THREE ways to
+// make a field optional, checked in this order: `omitempty` in the json tag, `omitzero` in the json
+// tag, and — evaluated LAST, so it wins even over neither of the first two — an explicit
+// `required:"false"` struct tag (and, symmetrically, `required:"true"` FORCES a field required even
+// with omitempty/omitzero present). A field tagged only `json:"x,omitzero"` was a false positive
+// here; a field tagged `json:"x,omitempty" required:"true"` was a false negative. Both are now
+// checked, in the same order and with the same override precedence as huma itself.
 func requiredPointerToObjectOffenders(fset *token.FileSet, file *ast.File, schemas map[string]any) []string {
 	var offenders []string
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -153,22 +164,30 @@ func requiredPointerToObjectOffenders(fset *token.FileSet, file *ast.File, schem
 			}
 
 			var jsonName string
-			omitEmpty := false
+			optional := false
 			if f.Tag == nil {
 				if len(f.Names) == 0 || !f.Names[0].IsExported() {
 					continue // embedded or unexported: a different shape this check does not name
 				}
 				jsonName = f.Names[0].Name
 			} else {
-				tag := reflect.StructTag(strings.Trim(f.Tag.Value, "`")).Get("json")
+				structTag := reflect.StructTag(strings.Trim(f.Tag.Value, "`"))
+				tag := structTag.Get("json")
 				if tag == "" || tag == "-" {
 					continue
 				}
 				parts := strings.Split(tag, ",")
 				jsonName = parts[0]
-				omitEmpty = slicesContains(parts[1:], "omitempty")
+				// Same order huma itself checks (schema.go:895-921): omitempty, then omitzero,
+				// then an explicit `required` tag, which overrides whatever the json tag said —
+				// in EITHER direction, so `required:"true"` re-requires a field that omitempty
+				// or omitzero would otherwise have exempted.
+				optional = slicesContains(parts[1:], "omitempty") || slicesContains(parts[1:], "omitzero")
+				if v, ok := structTag.Lookup("required"); ok {
+					optional = v == "false"
+				}
 			}
-			if omitEmpty {
+			if optional {
 				continue
 			}
 			name := "<embedded>"
@@ -213,6 +232,38 @@ func TestRequiredPointerToObjectOffenders_CatchesTheUntaggedShape(t *testing.T) 
 	require.Contains(t, joined, "Bad *Thing", "the tagged, non-omitempty field must still be caught")
 	require.Contains(t, joined, "Suggestion *Thing", "the untagged exported field must be caught — this is the #1569 R6B/B3 fix")
 	require.NotContains(t, joined, "OK *Thing", "the omitempty field must not be reported")
+}
+
+// TestRequiredPointerToObjectOffenders_HandlesOmitzeroAndRequiredOverride is the guard's own
+// falsification for #1569 R6C/item 8: huma honours `omitzero` and an explicit `required` struct
+// tag override (schema.go:895-921), in that order, and this branch was rewritten in the same round
+// without either. Before the fix, `WithOmitZero` was a false positive (reported despite huma
+// treating it as optional) and `RequiredTrueDespiteOmitEmpty` was a false negative (not reported
+// despite huma keeping it required); `RequiredFalseNoOmit` proves the override works the other
+// direction too, with no omitempty/omitzero present at all.
+func TestRequiredPointerToObjectOffenders_HandlesOmitzeroAndRequiredOverride(t *testing.T) {
+	schemas := map[string]any{
+		"domain.Thing": map[string]any{"type": "object"},
+		"Thing":        map[string]any{"type": "object"},
+	}
+
+	src := "package sample\n\n" +
+		"type WithOmitZero struct {\n\tOK *Thing `json:\"ok,omitzero\"`\n}\n\n" +
+		"type RequiredFalseNoOmit struct {\n\tAlsoOK *Thing `json:\"also_ok\" required:\"false\"`\n}\n\n" +
+		"type RequiredTrueDespiteOmitEmpty struct {\n\tBad *Thing `json:\"bad,omitempty\" required:\"true\"`\n}\n"
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "sample.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	offenders := requiredPointerToObjectOffenders(fset, file, schemas)
+	sort.Strings(offenders)
+	joined := strings.Join(offenders, "\n")
+
+	require.Len(t, offenders, 1, "exactly the required:\"true\" field must be reported:\n%s", joined)
+	require.Contains(t, joined, "Bad *Thing", "required:\"true\" must re-require a field even though omitempty is present")
+	require.NotContains(t, joined, "OK *Thing", "omitzero alone must exempt the field, same as omitempty")
+	require.NotContains(t, joined, "AlsoOK", "required:\"false\" must exempt the field even with no omitempty/omitzero at all")
 }
 
 func slicesContains(haystack []string, needle string) bool {
