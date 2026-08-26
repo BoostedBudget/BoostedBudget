@@ -217,3 +217,30 @@ func TestHoldingHistoryService_RepositoryErrorsPropagate(t *testing.T) {
 	_, err = svc.GetAccountHoldingsHistory(context.Background(), "u", "a", "")
 	assert.ErrorIs(t, err, boom)
 }
+
+// A day the account held NOTHING on is answered, not refused (#1569 T7.8).
+//
+// The repository now offers a fully-liquidated day in the date listing (its rows are retained,
+// marked absent) and answers it with zero positions. The service must carry that through as a
+// DATED, empty day — AsOfDate set, Positions empty — because that is the true observation "on this
+// day the account held nothing". Collapsing it into the bare no-history response, or into the
+// ErrHoldingHistoryDateNotRetained refusal, would tell the user a day we kept does not exist.
+func TestHoldingHistoryService_FullyLiquidatedDay_IsAnsweredAsADatedEmptyDay(t *testing.T) {
+	day := "2026-08-20"
+	repo := &stubHoldingSnapshotRepo{dates: []string{day}, positions: []domain.HoldingSnapshotView{}}
+	svc := NewHoldingHistoryService(repo)
+
+	// Both entry points: "the latest" and an explicit request for that same day.
+	for _, asOf := range []string{"", day} {
+		out, err := svc.GetAccountHoldingsHistory(context.Background(), "user-1", "acct-1", asOf)
+
+		require.NoError(t, err, "the day IS retained — refusing it denies data we kept (as_of=%q)", asOf)
+		require.NotNil(t, out)
+		require.NotNil(t, out.AsOfDate, "the answer must be DATED — a nil day is the no-history response (as_of=%q)", asOf)
+		assert.Equal(t, day, *out.AsOfDate)
+		assert.Equal(t, []string{day}, out.AvailableDates, "the retained day must stay in the picker")
+		assert.Empty(t, out.Positions, "an absent row is not a position")
+		assert.NotNil(t, out.Positions, "empty, never nil — nil marshals as null")
+		assert.Nil(t, out.TotalValue, "nothing carried a value; that is unknown, not zero")
+	}
+}
