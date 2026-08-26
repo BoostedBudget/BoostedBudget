@@ -266,6 +266,34 @@ func accountBalanceProjection(alias string) string {
 // new empty state and not an unbounded figure. `ash.status <> 'active'` on the subquery is the
 // same reflex: if the open interval disagrees with accounts.status, no bound is derived and
 // nothing is claimed.
+//
+// ── DECISION 5: EVERY closed window, not just the current one (#1569 round 6, G-D). ─────────
+// Decision 4's bound is an upper one and nothing else, and an account can close more than once.
+// After active → removed → active → removed it admits everything before the SECOND removal —
+// including the post-first-closure race row Decision 4 exists specifically to exclude. If the
+// second live period recorded no snapshot of its own, that row became "the last known balance
+// before it closed": precisely the blend the decisions above were written to prevent. Reproduced
+// against real Postgres before it was fixed, in
+// TestAccountRepository_LastKnownBalance_AcrossARelink_Integration; the single-closure fixture
+// could not see it because it closes each account exactly once and never restores one.
+//
+// ⚠ THE NARROW REPAIR IS WRONG, and the test separates the two. Bounding from below at the LAST
+// ACTIVE interval's valid_from does kill the race row — and kills every measurement taken during
+// an EARLIER live period with it, which on a re-linked-and-re-closed account is usually the only
+// history there is. Answering "we recorded nothing" when a real, dated, retained figure exists is
+// the wrong direction on the surface whose thesis is that history is retained. So the rule is
+// stated as what it actually means: a snapshot is admissible unless it falls inside a window
+// during which the account was not live. The `NOT EXISTS ... closed` leg below is that predicate,
+// and its boundaries agree with Decision 4's — strictly AFTER a closure instant is excluded (a
+// snapshot AT the closure is a measurement of the account as it closed, which the
+// `closedAtTheInstant` case pins), and a snapshot at the re-open instant, `valid_to`, is
+// admitted.
+//
+// ⚠ THE UPPER BOUND STAYS, and is not redundant belt-and-braces. The open interval's arm of that
+// NOT EXISTS covers the same rows, but only WHEN THERE IS AN OPEN INTERVAL. A NOT
+// EXISTS over an empty history admits everything; Decision 4's scalar subquery yields NULL and
+// admits nothing. Fail-closed is the behaviour that must survive a row the 000152 backfill never
+// reached, so the two are kept together deliberately.
 const lastKnownBalanceLateral = `
 	LEFT JOIN LATERAL (
 	    SELECT bs.current_balance AS amount, bs.snapshot_at AS at
@@ -278,6 +306,14 @@ const lastKnownBalanceLateral = `
 	          WHERE ash.account_id = $ALIAS.id
 	            AND ash.valid_to IS NULL
 	            AND ash.status <> 'active'
+	      )
+	      AND NOT EXISTS (
+	          SELECT 1
+	          FROM account_status_history closed
+	          WHERE closed.account_id = $ALIAS.id
+	            AND closed.status <> 'active'
+	            AND bs.snapshot_at > closed.valid_from
+	            AND (closed.valid_to IS NULL OR bs.snapshot_at < closed.valid_to)
 	      )
 	    ORDER BY bs.snapshot_at DESC
 	    LIMIT 1
