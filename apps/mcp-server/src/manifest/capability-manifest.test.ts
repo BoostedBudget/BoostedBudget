@@ -317,7 +317,7 @@ describe('helper functions', () => {
 // ── Completeness: every known operationId is classified ───────────────────
 
 describe('completeness', () => {
-  it('covers all 194 known operationIds (no unknown ops in the spec)', async () => {
+  it('covers all 203 known operationIds (no unknown ops in the spec)', async () => {
     // We import the full list to ensure no ops are silently absent
     // +8 from Issue #138: getHoldings, getPortfolioSummary, getPortfolioHistory,
     //   getInvestmentTransactions, getPortfolioAllocationBreakdown, getTopMovers,
@@ -353,7 +353,7 @@ describe('completeness', () => {
     //   and getUserBoostExecutions (read). All three were already in api/openapi.yaml but in NO
     //   manifest entry — check:manifest and the spec-index build were both failing at that HEAD.
     const { ALL_OPERATION_IDS } = await import('./capability-manifest')
-    expect(ALL_OPERATION_IDS.length).toBe(199)
+    expect(ALL_OPERATION_IDS.length).toBe(203)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified

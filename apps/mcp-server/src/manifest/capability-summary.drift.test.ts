@@ -98,11 +98,11 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
   it('documents the known baseline values (informational — the drift check above is authoritative)', () => {
     const fresh = computeCapabilitySummary(readSpecIndex())
 
-    expect(fresh.totalOperations).toBe(199)
-    expect(fresh.allowedOperations).toBe(134)
-    expect(fresh.readOperations).toBe(89)
+    expect(fresh.totalOperations).toBe(203)
+    expect(fresh.allowedOperations).toBe(137)
+    expect(fresh.readOperations).toBe(92)
     expect(fresh.writeOperations).toBe(45)
-    expect(fresh.excludedOperations).toBe(65)
+    expect(fresh.excludedOperations).toBe(66)
     expect(fresh.destructiveWriteOperations).toBe(4)
     expect(fresh.allowedOperations).toBe(fresh.readOperations + fresh.writeOperations)
     expect(fresh.totalOperations).toBe(fresh.allowedOperations + fresh.excludedOperations)

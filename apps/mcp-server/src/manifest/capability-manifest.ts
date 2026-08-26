@@ -191,6 +191,14 @@ const REASON_DASHBOARD_DEFERRED = 'Dashboard layout writes deferred to follow-up
 const REASON_SUBSCRIPTION_INAPP = 'Subscription management stays in-app'
 const REASON_DELETION_INAPP = 'Account deletion must be a deliberate in-app action'
 const REASON_PRIVACY_INAPP = 'Privacy/consent settings require deliberate in-app action (deferred)'
+// ⚠ #1587. Every other read here returns one slice of the user's data; this one returns ALL of it —
+// 49 tables, the entire retained financial history, decrypted, in a single call. That is a different
+// kind of operation from `read`, and the difference is not the sensitivity of any one field: it is
+// that one compromised or over-eager agent call exfiltrates everything at once, with no per-resource
+// step where anything could notice. GDPR portability is a right the USER exercises deliberately, and
+// the app surface for it exists. Excluded, not read.
+const REASON_EXPORT_INAPP =
+  'Bulk export of the user\'s entire retained history must be a deliberate in-app action, never a single agent call (#1587)'
 const REASON_HOUSEHOLD_INAPP = 'Household membership, invites & consent management must be a deliberate in-app action'
 const REASON_INTERNAL = 'Internal infrastructure endpoint'
 const REASON_WEBHOOK = 'Internal webhook endpoint'
@@ -356,6 +364,9 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getBoostByID'),
   read('getBoostExecutions'), // per-boost automation history
   read('getUserBoostExecutions'), // #1569 Task 14: GET /api/v1/boost-executions, per-user history
+  // #1572: GET /api/v1/rule-executions. The twin of getUserBoostExecutions — per-user automation
+  // history, tenancy-scoped to the caller, read-only. Classified identically for the same reasons.
+  read('getUserRuleExecutions'),
   excludedWrite('createBoost', REASON_RULES_UNATTENDED),
   excludedWrite('updateBoost', REASON_RULES_UNATTENDED),
   excludedWrite('deleteBoost', REASON_RULES_UNATTENDED),
@@ -496,6 +507,10 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   }),
   // #1300 M20: contribution ledger
   read('listSavingsGoalContributions'),
+  // #1569: the same ledger for a goal the user has DELETED. Retained, not destroyed — reading it
+  // is exactly as safe as reading a live goal's, and the whole point of #1569 is that this money
+  // stays visible. Deleting or purging the goal remains excluded above.
+  read('listDeletedSavingsGoalContributions'),
   write('logSavingsGoalContribution'),
   write('confirmSavingsGoalContribution', { idempotent: true }),
   write('rejectSavingsGoalContribution', { idempotent: true }), // R3-7: sticky tombstone
@@ -566,6 +581,9 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getTransactions'),
   read('getTransactionByID'),
   read('getTransactionReviewSummary'),
+  // #1579: GET /api/v1/transaction-annotation-history — what a category or review write overwrote,
+  // tenancy-scoped to the caller. Read-only history of the user's own edits.
+  read('getUserTransactionAnnotationHistory'),
   write('updateTransactionCategory', { idempotent: true }),
   write('updateTransactionTags', { idempotent: true }),
   write('setTransactionReviewed', { idempotent: true }),
@@ -587,6 +605,10 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // ── User ────────────────────────────────────────────────────────────────
   excludedWrite('requestDeletion', REASON_DELETION_INAPP, 'account-deletion'),
   excluded('cancelDeletion', REASON_DELETION_INAPP, 'account-deletion'),
+  // GET /api/v1/user/data-export. A GET, and it destroys nothing — but see REASON_EXPORT_INAPP:
+  // it returns the whole retained history in one call, which is a different operation from the
+  // per-resource reads above. Sits beside the other deliberate-in-app user actions on purpose.
+  excluded('getDataExport', REASON_EXPORT_INAPP),
 
   // ── User Accounts ────────────────────────────────────────────────────────
   read('getUserAccounts'),

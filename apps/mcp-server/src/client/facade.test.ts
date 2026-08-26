@@ -86,7 +86,7 @@ describe('createApiClient', () => {
     )
   })
 
-  it('contains exactly 133 allowed operation methods', () => {
+  it('contains exactly 137 allowed operation methods', () => {
     const mutator = mock(() => Promise.resolve({})) as unknown as FetchMutator
     const client = createApiClient(mutator)
 
@@ -111,6 +111,6 @@ describe('createApiClient', () => {
     //                and deleteSavingsGoalContribution excluded — it hard-deletes a savings
     //                ledger row, so the facade must no longer be able to reach it. purgeSavingsGoal
     //                is also newly classified but excluded, so it adds no facade method.
-    expect(count).toBe(134)
+    expect(count).toBe(137)
   })
 })

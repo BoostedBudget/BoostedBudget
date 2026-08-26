@@ -141,6 +141,10 @@ export function createApiClient(mutator: FetchMutator) {
       toggleRule(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: `/api/v1/auto-categorization/${id}/toggle`, method: 'POST', data, signal })
       },
+      /** GET /api/v1/rule-executions */
+      getUserRuleExecutions(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/rule-executions', method: 'GET', params, signal })
+      },
     } as const,
     boosts: {
       /** GET /api/v1/boost-executions */
@@ -441,6 +445,10 @@ export function createApiClient(mutator: FetchMutator) {
       getDeletedSavingsGoals(signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/savings-goals/deleted', method: 'GET', signal })
       },
+      /** GET /api/v1/savings-goals/deleted/{goalID}/contributions */
+      listDeletedSavingsGoalContributions(goalID: string, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/savings-goals/deleted/${goalID}/contributions`, method: 'GET', signal })
+      },
       /** GET /api/v1/savings-goals/progress-summary */
       getSavingsProgressSummary(signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/savings-goals/progress-summary', method: 'GET', signal })
@@ -521,6 +529,10 @@ export function createApiClient(mutator: FetchMutator) {
       },
     } as const,
     transactions: {
+      /** GET /api/v1/transaction-annotation-history */
+      getUserTransactionAnnotationHistory(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/transaction-annotation-history', method: 'GET', params, signal })
+      },
       /** GET /api/v1/transactions */
       getTransactions(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/transactions', method: 'GET', params, signal })
