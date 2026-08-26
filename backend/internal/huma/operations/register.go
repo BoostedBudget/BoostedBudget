@@ -81,6 +81,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Issue #138: Investment portfolio endpoints (8 ops: 4 core + 4 analytics)
 	investmentHandler := &InvestmentHandler{}
 
+	// Issue #1569: retained holdings history for a closed account (1 op)
+	holdingHistoryHandler := &HoldingHistoryHandler{}
+
 	// Issue #1300 M20: Savings goal contribution API (D6 source-a manual log + confirm + delete)
 	contributionHandler := &ContributionHandler{}
 
@@ -160,6 +163,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #138: Investment portfolio (4 core + 4 analytics operations)
 	RegisterInvestmentRoutes(api, investmentHandler)
+
+	// Issue #1569: retained holdings history (historical universe — see holding_history.go)
+	RegisterHoldingHistoryRoutes(api, holdingHistoryHandler)
 
 	// Issue #1300 M20: Savings goal contribution API
 	RegisterContributionRoutes(api, contributionHandler)

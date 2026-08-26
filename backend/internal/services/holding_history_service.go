@@ -1,0 +1,117 @@
+package services
+
+// HoldingHistoryService — the read side of holding_snapshots (Issue #1569).
+//
+// WHY THIS EXISTS. Privacy policy 8.2a tells the user, in words this branch shipped, that when
+// they remove a linked bank account "that account's transaction, balance, and holdings history is
+// retained — it is not erased — so you can still view it under 'Closed accounts' on your Accounts
+// page." Until this service that sentence was false for the holdings half: the rows were captured
+// on every sync and there was no way out of the table. Retention nobody can reach reads as
+// deletion, which is the failure #1569 is named for.
+//
+// WHY A SEPARATE SERVICE, not a method on InvestmentService. Every method on InvestmentService
+// answers a CURRENT-STATE question and reads through repositories that render
+// currentStateAccountLeg. This one answers a HISTORICAL question about an account those reads are
+// built to exclude. Keeping them apart means no current-state caller can reach a historical
+// figure by autocompleting onto the wrong method, and the split is visible at the wiring site.
+
+import (
+	"context"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+)
+
+// HoldingHistoryService reads one account's retained holdings history.
+type HoldingHistoryService interface {
+	// GetAccountHoldingsHistory returns the account's retained positions for one UTC day.
+	//
+	// asOf is a YYYY-MM-DD UTC calendar day, or "" for the most recent retained day. Passing a day
+	// with no retained positions returns domain.ErrHoldingHistoryDateNotRetained rather than an
+	// empty set: "we kept nothing for that day" and "the account held nothing that day" are
+	// different facts, and collapsing them would put a false claim in front of the user on the one
+	// surface that exists to stop making false claims.
+	//
+	// An account with no retained history at all is NOT an error — it is a brokerage that was
+	// removed before this branch started capturing, and the caller says so in words.
+	GetAccountHoldingsHistory(ctx context.Context, userID, accountID, asOf string) (*domain.HoldingSnapshotHistory, error)
+}
+
+type holdingHistoryService struct {
+	snapshotRepo repository.HoldingSnapshotRepository
+}
+
+// NewHoldingHistoryService creates a new HoldingHistoryService.
+func NewHoldingHistoryService(snapshotRepo repository.HoldingSnapshotRepository) HoldingHistoryService {
+	return &holdingHistoryService{snapshotRepo: snapshotRepo}
+}
+
+func (s *holdingHistoryService) GetAccountHoldingsHistory(ctx context.Context, userID, accountID, asOf string) (*domain.HoldingSnapshotHistory, error) {
+	dates, err := s.snapshotRepo.ListHistoryDatesForAccount(ctx, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &domain.HoldingSnapshotHistory{
+		AccountID: accountID,
+		// Never nil. A nil slice marshals as `null`, which a client cannot tell from a failed read
+		// — the same ambiguity the deleted-goal ledger had to remove.
+		AvailableDates: dates,
+		Positions:      []domain.HoldingSnapshotView{},
+	}
+	if len(dates) == 0 {
+		return out, nil
+	}
+
+	// dates is newest-first, so dates[0] is "the latest" without a second query or a sort here.
+	day := dates[0]
+	if asOf != "" {
+		if !containsDate(dates, asOf) {
+			return nil, domain.ErrHoldingHistoryDateNotRetained
+		}
+		day = asOf
+	}
+
+	positions, err := s.snapshotRepo.GetHistoryForAccountOnDate(ctx, userID, accountID, day)
+	if err != nil {
+		return nil, err
+	}
+
+	out.AsOfDate = &day
+	if positions != nil {
+		out.Positions = positions
+	}
+	out.TotalValue = sumInstitutionValue(out.Positions)
+	return out, nil
+}
+
+func containsDate(dates []string, want string) bool {
+	for _, d := range dates {
+		if d == want {
+			return true
+		}
+	}
+	return false
+}
+
+// sumInstitutionValue pre-computes the day's total so no consumer — the UI, or an AI assistant
+// calling this as a tool — has to add the rows up itself.
+//
+// Nil, not zero, when NOT ONE position carries a value: a portfolio whose values the provider
+// never sent is not a portfolio worth nothing. Positions that do carry values are summed even if
+// others do not, and the caller labels the figure as the total of what is known.
+func sumInstitutionValue(positions []domain.HoldingSnapshotView) *float64 {
+	var total float64
+	seen := false
+	for _, p := range positions {
+		if p.InstitutionValue == nil {
+			continue
+		}
+		total += *p.InstitutionValue
+		seen = true
+	}
+	if !seen {
+		return nil
+	}
+	return &total
+}

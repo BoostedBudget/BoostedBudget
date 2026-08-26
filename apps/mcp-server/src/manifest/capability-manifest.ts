@@ -239,6 +239,28 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getInvestmentGainLossSummary'), // unrealized gain/loss (realized unsupported)
   read('getInvestmentIncomeSummary'), // dividends + reinvested income; AI-tool-callable
 
+  // ── Retained holdings history (Issue #1569) ──────────────────────────────
+  //
+  // CLASSIFIED `read`, DELIBERATELY, and here is the reason rather than a category name.
+  //
+  // Verified against the handler it actually routes to
+  // (backend/internal/huma/operations/holding_history.go -> HoldingHistoryService ->
+  // holdingSnapshotRepository.ListHistoryDatesForAccount / GetHistoryForAccountOnDate). Both are
+  // bare SELECTs; neither the service nor the handler issues a write, and the operation takes no
+  // request body. Non-mutating, so `read`.
+  //
+  // NOT `excluded`. The bar this branch settled for exclusion is bulk egress — the GDPR export is
+  // excluded because ONE call returns everything the user has. This is the opposite shape:
+  // account_id is `required:true`, so a caller must already know which account it is asking about
+  // and gets one account's positions on one day. It is the same per-resource shape as getHoldings
+  // beside it, on data getHoldings deliberately cannot reach.
+  //
+  // ⚠ THE REASON ABOVE IS SCOPED TO WHAT THE OPERATION DOES TODAY, on purpose. If account_id ever
+  // becomes optional, or an "all days" mode is added, the per-resource justification stops being
+  // true and this entry must be re-derived — it does not carry over. (Five allowlist reasons
+  // shipped false on this branch by being asserted of every case a predicate matched.)
+  read('getAccountHoldingsHistory'), // one closed account's retained positions on one past UTC day
+
   // ── Analytics (all read) ────────────────────────────────────────────────
   read('getCashFlowHistory'),
   read('getCashFlowSummary'),
