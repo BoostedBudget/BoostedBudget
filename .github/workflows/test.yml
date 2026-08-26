@@ -1768,8 +1768,15 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-frontend-test-timeout.test.sh
 
+      # #1569 Codex finding 5: the test-typecheck gate must fail closed whenever tsc did not
+      # finish. Drives a COPY of the gate against a stub compiler, so the crash-mid-check and
+      # failed-mktemp paths are constructed rather than reasoned about.
+      - name: Test the test-typecheck gate fails closed
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash apps/web/scripts/__tests__/typecheck-tests-gate.test.sh
+
       # Same "make test-scripts runs in no CI job" reasoning as the step above. This one asserts
-      # that the 22 hand-maintained process-isolated test paths all still EXIST and that
+      # that the 23 hand-maintained process-isolated test paths all still EXIST and that
       # test-conflict-files.sh and test-regular.sh still agree on them. Both runners take those
       # paths on faith, and a stale entry in any MULTI-file group is silent: bun exits 0 having
       # skipped the filter it could not resolve, so the file simply stops being tested while this
@@ -2147,6 +2154,18 @@ jobs:
       # verifying nothing about schema identity — on every run before this commit. The script now
       # fails closed on both an unchecked `migrate` exit code and an empty dump, and checks
       # client-vs-server major versions up front, so a future mismatch is loud rather than silent.
+      # #1569 Codex finding 1: the destructive-target guard's own suite. Runs HERE, after the
+      # Postgres container is up, and not with the other pure-shell suites at the top of this job,
+      # because half of its cases must point at a LIVE cluster: a suite that can only reach dead
+      # ports can observe the guard refusing, never the guard SAYING YES to a real database — which
+      # is exactly the blind spot that let a name-only guard admit `production_test`. It creates and
+      # drops its own guardprobe_* databases on the container; it never touches DATABASE_URL's.
+      - name: Test migration destructive-target guard
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: bash scripts/__tests__/test-migrations-target-guard.test.sh
+
       - name: Run comprehensive migration tests
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}

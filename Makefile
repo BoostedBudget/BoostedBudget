@@ -221,45 +221,48 @@ test-scripts:
 	@echo "Running shell script regression suites"
 	@echo "========================================"
 	@echo ""
-	@echo "1/12: check-frontend-coverage.test.sh (exercises the real lcov merger)"
+	@echo "1/13: check-frontend-coverage.test.sh (exercises the real lcov merger)"
 	@if command -v lcov &> /dev/null; then \
 		bash scripts/check-frontend-coverage.test.sh; \
 	else \
 		echo "⚠️  lcov not installed — skipping (install: brew install lcov). CI always has lcov."; \
 	fi
 	@echo ""
-	@echo "2/12: check-orphan-chunks.test.sh"
+	@echo "2/13: check-orphan-chunks.test.sh"
 	@bash scripts/__tests__/check-orphan-chunks.test.sh
 	@echo ""
-	@echo "3/12: rollback-residue.test.sh"
+	@echo "3/13: rollback-residue.test.sh"
 	@bash scripts/__tests__/rollback-residue.test.sh
 	@echo ""
-	@echo "4/12: pg_dump-via-docker.test.sh"
+	@echo "4/13: pg_dump-via-docker.test.sh"
 	@bash scripts/__tests__/pg_dump-via-docker.test.sh
 	@echo ""
-	@echo "5/12: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
+	@echo "5/13: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
 	@bash scripts/__tests__/check-e2e-storage-state.test.sh
 	@echo ""
-	@echo "6/12: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
+	@echo "6/13: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
 	@bash scripts/__tests__/check-mcp-job-triggers.test.sh
 	@echo ""
-	@echo "7/12: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
+	@echo "7/13: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
 	@bash scripts/__tests__/check-typographic-quotes.test.sh
 	@echo ""
-	@echo "8/12: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is not in effect; cause unestablished)"
+	@echo "8/13: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is not in effect; cause unestablished)"
 	@bash scripts/__tests__/check-frontend-test-timeout.test.sh
 	@echo ""
-	@echo "9/12: check-isolated-test-lists.test.sh (#1537 — the 22 process-isolated test paths must exist and stay in sync)"
+	@echo "9/13: check-isolated-test-lists.test.sh (#1537 — the 23 process-isolated test paths must exist and stay in sync)"
 	@bash scripts/__tests__/check-isolated-test-lists.test.sh
 	@echo ""
-	@echo "10/12: check-e2e-seed-fails-loudly.test.sh (#1569 A1 — the E2E seeder must not swallow a failed seed)"
+	@echo "10/13: check-e2e-seed-fails-loudly.test.sh (#1569 A1 — the E2E seeder must not swallow a failed seed)"
 	@bash scripts/__tests__/check-e2e-seed-fails-loudly.test.sh
 	@echo ""
-	@echo "11/12: test-migrations-target-guard.test.sh (#1589 — the migration suite must refuse a non-disposable DROP target)"
+	@echo "11/13: test-migrations-target-guard.test.sh (#1589/#1569 — host + name + live-cluster gates on the DROP target; needs a live local Postgres)"
 	@bash scripts/__tests__/test-migrations-target-guard.test.sh
 	@echo ""
-	@echo "12/12: root-migrate-delegation.test.sh (#1588 — one migration runner; schema_migrations cannot lie)"
+	@echo "12/13: root-migrate-delegation.test.sh (#1588 — one migration runner; schema_migrations cannot lie)"
 	@bash scripts/__tests__/root-migrate-delegation.test.sh
+	@echo ""
+	@echo "13/13: typecheck-tests-gate.test.sh (#1569 — the test typecheck gate must fail closed when tsc did not finish)"
+	@bash apps/web/scripts/__tests__/typecheck-tests-gate.test.sh
 	@echo ""
 	@echo "✅ Shell script regression suites passed!"
 
