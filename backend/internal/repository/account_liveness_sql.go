@@ -88,15 +88,18 @@ func accountLiveOnDateSQL(accountExpr, dateExpr string) string {
 //
 // HISTORICAL-STATE universe — what was held / owed THEN.
 //
-//	`holding_snapshots`, `liability_statements` (tasks 6/10). These DO carry an as_of_date, are
-//	append-only, and their readers (GetByAccountDateRange) are deliberately independent of the
-//	account's current status, so a disconnected brokerage's last confirmed position is RETAINED
-//	and answerable by a query that can say when it was true.
+//	`holding_snapshots`, `liability_statements` (tasks 6/10). These DO carry an as_of_date and are
+//	append-only, so a disconnected account's last confirmed position/statement is RETAINED either
+//	way — but whether it is ANSWERABLE differs by table now, so treat the two entries below as
+//	separate claims rather than one.
 //
-//	⚠ UPDATED #1569 R6B/C1 — the "no caller" claim below is now FALSE and was already half-false
-//	when it was written; both halves are corrected here rather than deleted, because the shape of
-//	the mistake (declaring a universe unreachable without checking for readers this round added or
-//	already had) is the thing worth a reader seeing.
+//	⚠ UPDATED #1569 R6B/C1, corrected again R6C — the "no caller" claim was FALSE for
+//	holding_snapshots and was already half-false when it was written; both halves are corrected
+//	below rather than deleted, because the shape of the mistake (declaring a universe unreachable
+//	without checking for readers this round added or already had) is the thing worth a reader
+//	seeing. R6C found that C1's fix had gone further than the facts warranted: it deleted the "no
+//	way out" warning for BOTH tables when only holding_snapshots had actually gained a way out.
+//	liability_statements has none, and the warning is restored for it below, scoped to that table.
 //
 //	holding_snapshots now HAS a user-facing historical reader: HoldingHistoryService
 //	(internal/services/holding_history_service.go), reached through
@@ -112,9 +115,18 @@ func accountLiveOnDateSQL(accountExpr, dateExpr string) string {
 //	inaccurate about the TABLE, even though it was accurate about the specific
 //	GetByAccountDateRange query being described.
 //
-//	The current-state ruling above does NOT depend on either correction. It stands on its own
-//	ground: an unlabelled stale position would inflate net worth permanently, whether or not a
-//	history surface exists.
+//	liability_statements, by contrast, has NO reader of either kind: LiabilityStatementRepository
+//	appears in exactly one non-test file — its own — so GetByAccountDateRange has zero non-test
+//	callers here too, with no HoldingHistoryService-shaped path standing in for it. So for THIS
+//	table the original "no way out" warning stands: a disconnected loan's last confirmed statement
+//	is RETAINED but answerable by nothing today. That is a standing ruling, not an oversight —
+//	privacy policy §8.2a does not name liabilities, so retaining the row without a reader breaks no
+//	promise, and building a liabilities reader alongside the holdings one was deliberately kept out
+//	of scope for this branch.
+//
+//	The current-state ruling above does NOT depend on any of this. It stands on its own ground: an
+//	unlabelled stale position would inflate net worth permanently, whether or not a history surface
+//	exists for either table.
 //
 // The one query T12 moved across the line is investmentAnalyticsRepository.IncomeSummary: it
 // aggregates investment_transactions over a closed date range — an event question — but was
@@ -126,10 +138,18 @@ func accountLiveOnDateSQL(accountExpr, dateExpr string) string {
 //
 // WHAT WOULD CHANGE THIS RULING. Not an opinion — a capability. If a current-state read ever
 // gains a way to LABEL a row with the date it was last confirmed, then "show the last confirmed
-// position, as of 2025-06-04" becomes expressible and is strictly better than hiding it. The
-// DATA for that already exists in holding_snapshots; the service method, the endpoint and the UI
-// do not. Until a caller can render that label, widening the read only produces an unlabelled
-// stale number, which is the thing this ruling refuses.
+// position, as of 2025-06-04" becomes expressible and is strictly better than hiding it.
+//
+//	⚠ CORRECTED R6C — this paragraph used to say the service method, the endpoint and the UI for
+//	that label do not exist. They do, as of this branch: HoldingHistoryService (:101 above), GET
+//	/api/v1/investments/holdings/history (:102-103 above), and ClosedAccountHoldingsHistory
+//	(apps/web/src/features/investments/components/HoldingsTable.tsx:414). What that caller
+//	provides, though, is a separate HISTORICAL query path, not a label folded into the
+//	CURRENT-STATE read this function guards — GetByUserID and the allocation totals still return
+//	nothing for a terminal account, and still should, because "as of DATE" belongs in the
+//	historical view, not in a query whose contract is "right now". So the ruling is unchanged, but
+//	the reason has moved: not that the labelling capability is missing, but that folding it into
+//	the current-state read would duplicate a capability that now correctly lives elsewhere.
 func currentStateAccountLeg(alias string) string {
 	return alias + ".status = 'active'"
 }
