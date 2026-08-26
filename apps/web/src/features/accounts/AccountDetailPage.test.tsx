@@ -18,7 +18,11 @@ import { render, screen, fireEvent, act } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 
 import { AccountDetailPage } from './AccountDetailPage'
-import { mockUseGetAccounts, mockRefetchAccounts } from '@/test/mocks/accounts-api'
+import {
+  mockUseGetAccounts,
+  mockRefetchAccounts,
+  mockUseGetAccountBalanceHistory,
+} from '@/test/mocks/accounts-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 
 // ============================================================================
@@ -447,5 +451,71 @@ describe('AccountDetailPage — closed accounts (Issue #1569)', () => {
     expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
     // fix round 1, item 1: the closure date must still be reachable somewhere in the app.
     expect(screen.getByText(/closed on/i)).toBeInTheDocument()
+  })
+
+  // ── #1569: the retained BALANCE history, on EVERY account type ─────────────────────────────
+  //
+  // Privacy policy §8.2a promises a removed account's balance history is retained "so you can
+  // still view it". Until this round the only per-account balance on this page was the single
+  // last-known figure in the header (#1591); the day-by-day rows existed in balance_snapshots and
+  // were reachable from nothing but the GDPR export. These tests pin WHERE the reader is mounted,
+  // which is the half a component test cannot see.
+  describe('retained balance history section (#1569)', () => {
+    // mockUseGetAccounts is an untyped shared stub whose inferred `data` is `undefined`, so every
+    // mockReturnValue in this file reports a type error. Narrowed once, here, rather than adding
+    // three more to the test-typecheck ratchet.
+    type AccountsQueryStub = ReturnType<typeof mockUseGetAccounts>
+    const showAccounts = (accounts: Array<Record<string, unknown>>) => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts },
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      } as unknown as AccountsQueryStub)
+    }
+    const showClosed = (account: Record<string, unknown>) => showAccounts([account])
+
+    it('mounts the retained balance history for a closed DEPOSITORY account', () => {
+      // The case with no holdings history at all: before this round a closed checking account's
+      // detail page had no retained financial history on it whatsoever.
+      showClosed({ ...closedAccount, type: 'depository', subtype: 'checking' })
+      mockUseGetAccountBalanceHistory.mockReturnValue({
+        data: {
+          account_id: 'acc-closed',
+          points: [{ date: '2026-02-01', current_balance: 1234, available_balance: 1200, currency_code: 'USD' }],
+        },
+        isLoading: false,
+        isError: false,
+        error: null,
+      })
+
+      renderDetailPage('acc-closed')
+
+      expect(screen.getByText('Balance history')).toBeInTheDocument()
+      expect(screen.getByText('Feb 1, 2026')).toBeInTheDocument()
+      expect(screen.getByText('$1,234.00')).toBeInTheDocument()
+    })
+
+    it('mounts it for a closed INVESTMENT account too, beside the holdings section', () => {
+      showClosed({ ...closedAccount, type: 'investment', subtype: 'brokerage' })
+      renderDetailPage('acc-closed')
+      expect(screen.getByText('Balance history')).toBeInTheDocument()
+      expect(screen.getByText('Holdings')).toBeInTheDocument()
+    })
+
+    // A LIVE account must not get it. Its balances are answered by the dashboard's aggregated
+    // series and by its own current balance, and putting a historical table beside a live figure
+    // is exactly the two-universes confusion the rest of #1569 removes. It also means a live
+    // account issues no request for it at all.
+    it('does not mount it for a live account', () => {
+      mockUseGetAccountBalanceHistory.mockClear()
+      showAccounts([mockDepositoryAccount])
+
+      renderDetailPage('acc-depository-1')
+
+      expect(screen.queryByText('Balance history')).toBeNull()
+      expect(mockUseGetAccountBalanceHistory).not.toHaveBeenCalled()
+    })
   })
 })

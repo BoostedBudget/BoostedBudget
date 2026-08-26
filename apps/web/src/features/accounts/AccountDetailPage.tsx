@@ -18,6 +18,7 @@ import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/acc
 import { AccountSummaryHeader } from './components/AccountSummaryHeader'
 import { getAccountTypeLabel, getAccountClosedDate, getAccountLastKnownBalance } from './utils'
 import { isInactive } from './hooks/useActiveAccounts'
+import { ClosedAccountBalanceHistory } from './components/ClosedAccountBalanceHistory'
 import { HoldingsTable } from '../investments/components/HoldingsTable'
 import { NetWorthSection } from '../net-worth/components/NetWorthSection'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -107,6 +108,7 @@ export function AccountDetailPage() {
   // the page never decides on its own whether a half-pair is renderable.
   const lastKnown = getAccountLastKnownBalance(account)
   const isInvestment = account.type === 'investment'
+  const isClosed = isInactive(account)
 
   return (
     <PageContainer>
@@ -126,11 +128,33 @@ export function AccountDetailPage() {
           customEmoji={account.custom_emoji}
           customIcon={account.custom_icon}
           customColor={account.custom_color}
-          isClosed={isInactive(account)}
+          isClosed={isClosed}
           closedOn={getAccountClosedDate(account)}
           lastKnownBalance={lastKnown?.amount}
           lastKnownBalanceAt={lastKnown?.at}
         />
+
+        {/*
+          Retained balance history — Issue #1569, and EVERY account type, not just investments.
+          Privacy policy §8.2a promises a removed account's balance history is retained "so you can
+          still view it", and until now the only per-account balance on this page was the single
+          last-known figure in the header above (#1591). The day-by-day rows existed and were
+          reachable from nothing.
+
+          Rendered only for a CLOSED account on purpose: a live account's balances are answered by
+          the dashboard's aggregated series and by its own current balance, and putting a
+          historical table beside a live figure is exactly the two-universes confusion the rest of
+          #1569 removes. The section also mounts the query, so a live account pays nothing.
+        */}
+        {isClosed && (
+          <NetWorthSection title="Balance history">
+            <ClosedAccountBalanceHistory
+              accountId={account.id}
+              accountType={account.type}
+              closedOn={getAccountClosedDate(account)}
+            />
+          </NetWorthSection>
+        )}
 
         {/* Investment-only sections */}
         {isInvestment && (

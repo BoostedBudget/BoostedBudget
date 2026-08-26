@@ -265,6 +265,153 @@ describe('PrivacyPolicy', () => {
     expect(section).not.toMatch(/restore|undelete|recover/i)
   })
 
+  // ══════════════════════════════════════════════════════════════════════════════════════════
+  // §8.2a's VIEW promise, tied to readers that actually exist (#1569)
+  // ══════════════════════════════════════════════════════════════════════════════════════════
+  //
+  // ⚠ WHY THIS IS NOT A THIRD TEXT ASSERTION. Every guard above this point checks that the policy
+  // SAYS something. That is exactly why the sentence shipped false three times: /is retained/i,
+  // /you can still view it/i and /closed accounts/i were all satisfied by a sentence whose
+  // holdings clause named a screen that did not exist, and later by whose balance clause named a
+  // reader that did not exist either. A promise about the product cannot be verified by reading
+  // the promise.
+  //
+  // So this reads the CLAUSE LIST out of the policy source, and requires each kind it names to
+  // have a registered reader whose evidence is re-checked against the repository on every run.
+  // Two directions, both of which must fail:
+  //   - add a kind to the sentence with no reader  → the registry lookup fails
+  //   - delete a reader and leave the sentence     → that reader's evidence fails
+  //
+  // The evidence is deliberately split into an API half (the generated spec index, which is a
+  // build product of api/openapi.yaml and therefore of the Go routes) and a UI half (a source file
+  // that mounts it). Either half alone is insufficient: T2 shipped an endpoint with no screen, and
+  // "a component exists" says nothing about whether it can reach any data.
+
+  const REPO_ROOT = join(import.meta.dir, '../../../..')
+
+  /** The generated MCP spec index — one entry per operation in api/openapi.yaml. */
+  function specOperations(): Array<{ operationId: string; parameters?: Array<{ name: string }> }> {
+    const raw = readFileSync(
+      join(REPO_ROOT, 'apps/mcp-server/src/spec/generated/spec-index.json'),
+      'utf-8'
+    )
+    return JSON.parse(raw).entries
+  }
+
+  function repoFile(rel: string): string {
+    return readFileSync(join(REPO_ROOT, rel), 'utf-8')
+  }
+
+  /**
+   * One registered reader per kind of history §8.2a promises the user can VIEW.
+   *
+   * ⚠ Each entry is a claim that must be re-derived, not inherited. `apiParam` is what makes the
+   * endpoint able to answer for ONE account: an operation that only answers in aggregate cannot
+   * make this promise true, which is precisely how the balance clause was false while
+   * getBalanceHistory existed the whole time (it takes account_types and has never taken an
+   * account id).
+   */
+  const VIEWABLE_HISTORY_READERS: Record<
+    string,
+    { apiOperationId: string; apiParam: string; uiFile: string; uiNeedle: string }
+  > = {
+    transaction: {
+      apiOperationId: 'getTransactions',
+      apiParam: 'account_ids',
+      uiFile: 'apps/web/src/features/transactions/hooks/useTransactionFilters.ts',
+      uiNeedle: 'account_ids',
+    },
+    balance: {
+      // #1569, this round. Before it, the ONLY per-account balance anywhere was the single
+      // last-known figure in AccountSummaryHeader (#1591) — one number is not a history.
+      apiOperationId: 'getAccountBalanceHistory',
+      apiParam: 'id',
+      uiFile: 'apps/web/src/features/accounts/components/ClosedAccountBalanceHistory.tsx',
+      uiNeedle: 'useGetAccountBalanceHistory',
+    },
+    holdings: {
+      // #1569, previous round.
+      apiOperationId: 'getAccountHoldingsHistory',
+      apiParam: 'account_id',
+      uiFile: 'apps/web/src/features/investments/components/HoldingsTable.tsx',
+      uiNeedle: 'useGetAccountHoldingsHistory',
+    },
+  }
+
+  /**
+   * The kinds §8.2a actually names, read out of the policy source rather than restated here.
+   *
+   * Anchored on the possessive that introduces the list, so a sentence reworded around it still
+   * parses, and a list item added anywhere in it is picked up.
+   */
+  function kindsNamedInPolicy(): string[] {
+    const source = repoFile('apps/web/src/legal/PrivacyPolicy.tsx')
+    // JSX wraps the paragraph across lines; collapse to one line before matching.
+    const flat = source.replace(/\s+/g, ' ')
+    const m = flat.match(/that account's ([^<]+?) history <strong>is\s*retained<\/strong>/)
+    expect(m, 'the §8.2a clause list could not be parsed — this guard would be vacuous').not.toBeNull()
+    return m![1]
+      .split(/,| and /)
+      .map((k) => k.trim())
+      .filter(Boolean)
+  }
+
+  it('names at least the three kinds of history it has always named (Section 8.2a)', () => {
+    // A canary for the PARSE, not a freeze on the sentence. A parse that silently yielded [] or
+    // one item would make the registry test below vacuous and green forever — which is the failure
+    // mode this whole block exists to prevent. Deliberately NOT an exact-equality assertion: a
+    // FOURTH kind added alongside a real reader should pass here and be caught (or not) by the
+    // registry test on its own merits, rather than failing a list nobody remembered to update.
+    const kinds = kindsNamedInPolicy()
+    expect(kinds).toEqual(expect.arrayContaining(['transaction', 'balance', 'holdings']))
+    expect(kinds.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('promises no kind of viewable history without a reader that exists (Section 8.2a)', () => {
+    const ops = specOperations()
+
+    for (const kind of kindsNamedInPolicy()) {
+      const reader = VIEWABLE_HISTORY_READERS[kind]
+      expect(
+        reader,
+        `§8.2a promises the user can view "${kind}" history, but no reader is registered for it. ` +
+          'Either build the reader and register it here, or DELETE THE CLAUSE FROM THE POLICY. ' +
+          'A promise in a privacy policy is the one place a stale claim is not merely untidy.'
+      ).toBeDefined()
+
+      const op = ops.find((o) => o.operationId === reader.apiOperationId)
+      expect(op, `${kind}: ${reader.apiOperationId} is no longer in the API spec`).toBeDefined()
+      expect(
+        (op!.parameters ?? []).map((prm) => prm.name),
+        `${kind}: ${reader.apiOperationId} no longer takes ${reader.apiParam}, so it can no longer ` +
+          'answer for ONE account — which is what §8.2a promises about a single removed account.'
+      ).toContain(reader.apiParam)
+
+      expect(
+        repoFile(reader.uiFile),
+        `${kind}: ${reader.uiFile} no longer calls ${reader.uiNeedle}, so the endpoint is reachable ` +
+          'by an API consumer and not by the person the policy is addressed to.'
+      ).toContain(reader.uiNeedle)
+    }
+  })
+
+  // The other half of the promise, and the half that was quietly wrong even after the readers were
+  // built: §8.2a used to say all three kinds are viewable "under 'Closed accounts' on your Accounts
+  // page". For a closed checking/savings/credit account that was the wrong place — the account
+  // detail page renders a transactions link only for an investment account, so its transactions are
+  // found in the Transactions list. The sentence now names each location, and this pins that.
+  it('names the right place for each kind, not one place for all three (Section 8.2a)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    const section = subsectionText(/8\.2a Removing a Linked Bank Account/)
+
+    expect(section).toMatch(/closed accounts/i)
+    expect(section).toMatch(/balances/i)
+    expect(section).toMatch(/holdings/i)
+    // Transactions are NOT under "Closed accounts" — they are in the Transactions list.
+    expect(section).toMatch(/transactions (stay|remain) in your Transactions list/i)
+    expect(section).toMatch(/filter by that account/i)
+  })
+
   it('renders household member deletion cross-reference (Section 8.5)', () => {
     renderWithRouter(<PrivacyPolicy />)
     expect(screen.getByText(/removed household members/i)).toBeInTheDocument()
