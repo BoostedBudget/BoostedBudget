@@ -3,6 +3,7 @@ package repository
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -45,15 +46,17 @@ type DataExportTable struct {
 	// dataExportGlobalExcludedColumns. Each one needs a reason in the comment beside it: either it
 	// is a secret, or it identifies a DIFFERENT data subject.
 	ExcludedColumns []string
-
-	// DecryptedColumns are stored encrypted at rest ("ENC$"+ciphertext) but their plaintext IS this
-	// user's own data, so the export carries the plaintext. Exporting the ciphertext would be worse
-	// than useless: unreadable to the user and still a copy of a secret-adjacent value.
-	//
-	// Listing a column that happens to hold plaintext is harmless — FieldEncryptor.DecryptString
-	// passes through any value lacking the "ENC$" prefix (dual-read support).
-	DecryptedColumns []string
 }
+
+const (
+	// dataExportCiphertextPrefix mirrors crypto's unexported envelope marker. appcrypto.IsEncrypted
+	// is the authority on whether a value carries it; this constant only exists to strip it.
+	dataExportCiphertextPrefix = "ENC$"
+
+	// dataExportMinCiphertextBytes is the smallest byte count a real envelope can decode to: a
+	// 12-byte AES-GCM nonce plus the 16-byte authentication tag, with an empty plaintext.
+	dataExportMinCiphertextBytes = 12 + 16
+)
 
 // dataExportGlobalExcludedColumns are dropped from EVERY table, matched by exact column name.
 //
@@ -89,13 +92,11 @@ var DataExportTables = []DataExportTable{
 		Table:              "users",
 		OwnershipPredicate: "t.id = $1",
 		OrderBy:            "t.id",
-		DecryptedColumns:   []string{"email", "paddle_customer_id", "paddle_subscription_id"},
 	},
 	{
 		Table:              "user_identities",
 		OwnershipPredicate: "t.user_id = $1",
 		OrderBy:            "t.created_at, t.id",
-		DecryptedColumns:   []string{"email"},
 	},
 	{
 		Table:              "privacy_settings",
@@ -118,19 +119,16 @@ var DataExportTables = []DataExportTable{
 		Table:              "linked_items",
 		OwnershipPredicate: "t.user_id = $1",
 		OrderBy:            "t.created_at, t.id",
-		DecryptedColumns:   []string{"item_id", "institution_id", "institution_name"},
 	},
 	{
 		Table:              "user_accounts",
 		OwnershipPredicate: "t.user_id = $1",
 		OrderBy:            "t.created_at, t.id",
-		DecryptedColumns:   []string{"institution_id", "mask", "account_name_hint"},
 	},
 	{
 		Table:              "accounts",
 		OwnershipPredicate: "t.user_id = $1",
 		OrderBy:            "t.created_at, t.id",
-		DecryptedColumns:   []string{"plaid_account_id", "name", "persistent_account_id"},
 	},
 	{
 		Table:              "account_status_history",
@@ -324,8 +322,7 @@ var DataExportTables = []DataExportTable{
 		// predicate matches: accepted_user_id when this user sent the invite, inviter_user_id when
 		// this user accepted it. invitee_email is retained — it is either this user's own address
 		// or an address this user typed in themselves.
-		ExcludedColumns:  []string{"inviter_user_id", "accepted_user_id"},
-		DecryptedColumns: []string{"invitee_email"},
+		ExcludedColumns: []string{"inviter_user_id", "accepted_user_id"},
 	},
 
 	// --- Billing -------------------------------------------------------------------------------
@@ -345,7 +342,6 @@ var DataExportTables = []DataExportTable{
 		Table:              "paddle_transactions",
 		OwnershipPredicate: "t.user_id = $1",
 		OrderBy:            "t.created_at, t.id",
-		DecryptedColumns:   []string{"transaction_id"},
 	},
 	{
 		Table:              "referral_codes",
@@ -519,10 +515,8 @@ func (r *dataExportRepository) exportTable(ctx context.Context, tbl DataExportTa
 			}
 		}
 
-		for _, col := range tbl.DecryptedColumns {
-			if err := r.decryptColumn(row, tbl.Table, col); err != nil {
-				return nil, err
-			}
+		if err := r.decryptEveryEnvelope(row, tbl.Table); err != nil {
+			return nil, err
 		}
 
 		out = append(out, row)
@@ -534,27 +528,61 @@ func (r *dataExportRepository) exportTable(ctx context.Context, tbl DataExportTa
 	return out, nil
 }
 
-// decryptColumn replaces an at-rest ciphertext with its plaintext, in place.
+// decryptEveryEnvelope replaces every at-rest ciphertext in the row with its plaintext, in place.
 //
-// A column that is absent (dropped by a migration, or excluded above) or NULL is left alone: the
-// export must not invent a value, and a decrypt list that has outlived its column is a stale list,
-// not a failure of this request. A column present but undecryptable IS a failure — returning
-// "ENC$..." to the user would be a silently corrupt export.
-func (r *dataExportRepository) decryptColumn(row map[string]any, table, column string) error {
-	value, present := row[column]
-	if !present || value == nil {
-		return nil
+// ⚠ THIS IS DERIVED, NOT LISTED, AND THAT IS THE WHOLE POINT. The first draft of this file carried
+// a per-table `DecryptedColumns` list, and the list was wrong the day it was written: fifteen
+// encrypted columns were missing from it — accounts.official_name and .mask,
+// transactions.external_transaction_id and .external_metadata, every mortgage and student-loan
+// address and account field, paddle_transactions.payload/subscription_id/customer_id,
+// user_identities.provider_user_id, notifications.action_url — so the export handed the data
+// subject unusable "ENC$…" strings where their own data belonged. Nothing noticed, because the
+// integration test decrypted-and-checked exactly one column and the secret-shaped guard's column
+// pattern (token|secret|password|clerk|encrypt|cipher|blind_idx|hash) matches none of those names.
+//
+// A hand-maintained encrypted-column list is the same failure mode as the hand-maintained table
+// list that produced #1581. So the question asked here is not "is this column on the list" but "is
+// this VALUE wearing the envelope this application puts on ciphertext" — which no migration, no new
+// repository and no forgotten review can get wrong.
+//
+// ⚠ THE EXCLUSIONS RUN FIRST, IN THE CALLER, AND THE ORDER IS LOAD-BEARING. access_token_encrypted
+// is a live Plaid bearer credential that is also ENC$-enveloped; it is deleted from the row before
+// this function ever sees it, so "decrypt everything encrypted" never means "hand out the token".
+// A future withheld ciphertext column must be withheld the same way — by exclusion, not by being
+// left off a decrypt list, because there is no longer a decrypt list to be left off.
+func (r *dataExportRepository) decryptEveryEnvelope(row map[string]any, table string) error {
+	for column, value := range row {
+		text, ok := value.(string)
+		if !ok || !isCiphertextEnvelope(text) {
+			continue
+		}
+		plain, err := r.enc.DecryptString(text)
+		if err != nil {
+			// A value wearing this application's own envelope that will not decrypt is a corrupt
+			// export, not a request failure to shrug at: returning "ENC$..." to the user is exactly
+			// the defect this function exists to prevent, and doing it silently is worse.
+			return fmt.Errorf("ExportUserData: decrypt %s.%s: %w", table, column, err)
+		}
+		row[column] = plain
 	}
-	text, ok := value.(string)
-	if !ok {
-		return nil
-	}
-	plain, err := r.enc.DecryptString(text)
-	if err != nil {
-		return fmt.Errorf("ExportUserData: decrypt %s.%s: %w", table, column, err)
-	}
-	row[column] = plain
 	return nil
+}
+
+// isCiphertextEnvelope reports whether a value is one this application encrypted, as opposed to a
+// user-typed string that merely begins with the marker.
+//
+// The discriminator is structural rather than a name list: FieldEncryptor.EncryptString emits
+// "ENC$" + base64.StdEncoding(nonce ‖ ciphertext ‖ GCM tag), so a genuine envelope always decodes
+// as standard base64 to at least nonce+tag bytes. A note reading "ENC$ reminder to self" does not,
+// and is exported verbatim as the user wrote it instead of failing their whole export. Without this
+// check, decrypt-by-prefix would turn any free-text column into a denial of service against its own
+// owner's Article 20 request.
+func isCiphertextEnvelope(value string) bool {
+	if !appcrypto.IsEncrypted(value) {
+		return false
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(value, dataExportCiphertextPrefix))
+	return err == nil && len(raw) >= dataExportMinCiphertextBytes
 }
 
 // IsDataExportColumnGloballyExcluded reports whether a column is withheld from every exported
