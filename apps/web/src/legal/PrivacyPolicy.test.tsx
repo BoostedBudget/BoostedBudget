@@ -139,6 +139,28 @@ describe('PrivacyPolicy', () => {
     expect(text).toMatch(/retained past the 6-month window/i)
   })
 
+  // Issue #1592 round 5 (G13). Round 4's own copy fix created a contradiction INSIDE § 8.4: the
+  // opening sentence capped the window ("we may retain your account data in read-only mode for up
+  // to 6 months"), while the paragraph two below said cancelled accounts are "retained past the
+  // 6-month window". "Up to N" and "past N" cannot both be true of the same window, and the two
+  // sentences render three inches apart. Six months is a FLOOR — the reactivation window we
+  // commit to — not a deadline, because the sweep that would enforce a deadline is gated off.
+  //
+  // Both halves are asserted: the capping phrase must be gone AND the floor must be stated. The
+  // negative alone would pass on any rewording that dropped the number entirely, which would be a
+  // different defect, not a fix.
+  it('states six months as a floor, not a cap, while accounts are kept past it (Section 8.4)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    const text = subsectionText(/8\.4/)
+    expect(text).not.toMatch(/read-only mode for up to ?6 months/i)
+    expect(text).toMatch(/read-only mode for at least ?6 months/i)
+    // The two must be reconciled in the same subsection, not merely both present somewhere.
+    expect(text).toMatch(/retained past the 6-month window/i)
+    // …and the opening sentence must itself point forward at the "kept longer" fact, so a reader
+    // who stops after one paragraph is not left with the capped reading.
+    expect(text).toMatch(/longer than that today/i)
+  })
+
   // The distinction is the whole point of I2: the retention sweep's own WHERE clause is
   // `deletion_requested_at IS NULL`, so a deletion the user REQUESTS never goes near the notice
   // gate. § 8.4 must not let a reader conclude that nothing gets deleted ever.

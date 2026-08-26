@@ -64,6 +64,23 @@ describe('FAQSection', () => {
   // The user-requested path is unaffected by the notice gate — deletion_requested_at IS NULL is
   // in the retention sweep's own WHERE clause, so a requested deletion never goes near it. The
   // answer must keep saying so, and must keep the 30-day grace attached to THAT flow.
+  // Issue #1592 round 5 (G13). The FAQ said "we keep it that way for up to 6 months" and then
+  // "we are not automatically deleting cancelled accounts today" — the second sentence tells the
+  // reader nothing is deleted, but the first still caps the window at six months, so a reader
+  // finishing the answer cannot tell what happens in month seven. The legal pages resolve this by
+  // calling six months a floor; the FAQ, which is the surface most people actually read, omitted
+  // the qualification entirely.
+  //
+  // The negative is pinned as well as the positive: dropping "6 months" altogether would satisfy
+  // a bare "says it is kept past the window" assertion while removing the commitment.
+  it('states six months as a floor and says the data is kept past that window', () => {
+    render(<FAQSection />)
+    const answer = answerFor(/what happens to my data if i cancel/i)
+    expect(answer).not.toMatch(/for up to 6 months/i)
+    expect(answer).toMatch(/for at least 6 months/i)
+    expect(answer).toMatch(/kept past that 6-month window/i)
+  })
+
   it('keeps the user-requested deletion promise, with its 30-day grace period, distinct from cancelling', () => {
     render(<FAQSection />)
     const answer = answerFor(/what happens to my data if i cancel/i)

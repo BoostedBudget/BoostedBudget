@@ -32,7 +32,7 @@ const faqs: FAQItem[] = [
   {
     question: 'What happens to my data if I cancel?',
     answer:
-      'Cancelling and deleting are two different things. When you cancel, your account switches to read-only: everything you have already recorded stays there, you can still view and export it, and we keep it that way for up to 6 months so you can pick up where you left off by resubscribing. We are not automatically deleting cancelled accounts today - see Section 8.4 of our Privacy Policy for exactly what an automatic deletion would destroy, and when we will start doing it. If you want your data gone, you can request deletion at any time: we hold it through a 30-day grace period in case you change your mind, then permanently delete it.',
+      'Cancelling and deleting are two different things. When you cancel, your account switches to read-only: everything you have already recorded stays there, you can still view and export it, and we keep it that way for at least 6 months so you can pick up where you left off by resubscribing. We are not automatically deleting cancelled accounts today, so in practice your data is kept past that 6-month window rather than deleted at the end of it - see Section 8.4 of our Privacy Policy for exactly what an automatic deletion would destroy, and when we will start doing it. If you want your data gone, you can request deletion at any time: we hold it through a 30-day grace period in case you change your mind, then permanently delete it.',
   },
   {
     question: 'Is there a free trial?',

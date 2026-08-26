@@ -184,6 +184,41 @@ describe('TermsOfService', () => {
     expect(text).toMatch(/request deletion at any time/i)
   })
 
+  // Issue #1592 round 5 (G13) — the same contradiction as Privacy Policy § 8.4, in § 7 and again
+  // in the Key Points Summary. Round 4 added "cancelled accounts are kept past the 6-month
+  // window" without reconciling the sentence above it, which still said "for up to 6 months".
+  it('states six months as a floor, not a cap, in the cancellation clause (Section 7)', () => {
+    renderWithRouter(<TermsOfService />)
+    const h2 = Array.from(document.querySelectorAll('h2')).find((h) =>
+      /trial expiration and read-only access/i.test(h.textContent ?? '')
+    )
+    expect(h2).toBeDefined()
+    let text = ''
+    let node: Element | null = h2!.nextElementSibling
+    while (node && node.tagName !== 'H2') {
+      text += ' ' + (node.textContent ?? '')
+      node = node.nextElementSibling
+    }
+    text = text.replace(/\s+/g, ' ').trim()
+
+    expect(text).not.toMatch(/account data for up to ?6 months after cancellation/i)
+    expect(text).toMatch(/account data for at least ?6 months after cancellation/i)
+    expect(text).toMatch(/longer than that today/i)
+    expect(text).toMatch(/kept past the 6-month window/i)
+  })
+
+  // The Key Points Summary is the only part of this document most readers finish. An unqualified
+  // "retained for up to 6 months" there re-states the capped claim the body no longer makes.
+  it('carries the same floor qualification in the Key Points Summary', () => {
+    renderWithRouter(<TermsOfService />)
+    const summary = document.querySelector('.privacy-summary')
+    expect(summary).not.toBeNull()
+    const text = (summary!.textContent ?? '').replace(/\s+/g, ' ').trim()
+    expect(text).not.toMatch(/data retained for up to 6 months/i)
+    expect(text).toMatch(/data retained for at least 6 months/i)
+    expect(text).toMatch(/longer while automatic deletion is not yet running/i)
+  })
+
   it('renders 30-day data preservation for removed household members (Section 9.2)', () => {
     renderWithRouter(<TermsOfService />)
     // First assert the section heading to locate §9.2 specifically
