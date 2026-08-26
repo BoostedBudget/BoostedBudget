@@ -606,8 +606,64 @@ func buildPlaceholders(count, startIndex int) []string {
 //
 // Materialization is what makes this query fast, and it is also what forbids parallelism (a CTE Scan
 // is parallel-restricted, which is why the `Gather` the pre-retention plan had does not come back).
-// That trade is real and settled in materialization's favour by the numbers above. The parallel
-// no-tiebreak ceiling is 37.7ms; nothing measured gets closer to it without losing the dedup.
+// That trade is real and settled in materialization's favour by the numbers above.
+//
+// ── #1569 T3 round 5: the ceiling above was WRONG, and #1582's 2x criterion is still NOT met ─────
+//
+// This paragraph used to end "the parallel no-tiebreak ceiling is 37.7ms; nothing measured gets
+// closer to it without losing the dedup" -- which read as "2x may be unreachable without a
+// correctness regression". Re-derived from scratch, that is false in both halves. Conditions for
+// EVERY number below, because ratios only travel if their conditions do: Apple M4, 10 cores,
+// 16 GiB, macOS 15.3.1, load avg ~4.3; Postgres 17.11 in Docker on localhost:5434 (NOT the
+// Homebrew PG15 on 5432); database `t3bench_r5` = `pg_dump -s` of the current migrated schema plus
+// testdata/t3bench_seed.sql unmodified; best-of-7 via psql `\timing`, plans confirmed with
+// EXPLAIN (ANALYZE, BUFFERS); measured 2026-08-26 at commit 3d21e077.
+//
+//	pre-#1569 (DISTINCT ON + JOIN)   22.7ms   1.00x   Gather, 2 workers
+//	HEAD                            136.2ms   6.00x   no Gather (CTE Scan x2)
+//	no tiebreak (dedup DROPPED)      26.9ms   1.19x   Gather, 2 workers
+//	option (b), day-winner JOIN    1,956ms   86.2x   nested loop, estimate collapse
+//	option (b), losers ANTI JOIN     76.2ms   3.36x   Hash Semi + Hash Anti, no Gather
+//	  ...the same, parallelism forced 33.1ms  1.46x   Gather, 3 workers
+//
+// Three corrections fall out of that table:
+//
+//  1. The no-tiebreak ceiling is 1.19x, not 37.7ms/2.02x. So #1582's "within ~2x" was NEVER pinned
+//     against a correctness regression -- the criterion does not conflict with the joint-account
+//     dedup, and nothing here licenses dropping it. (The no-tiebreak variant is not merely faster,
+//     it is WRONG: it returns 5,436,775 where every correct variant returns 4,898,422.)
+//
+//  2. Materialization is not intrinsic to the retention rewrite. It happens because the TIEBREAK
+//     makes household_grants a SECOND reference; delete the tiebreak and Postgres auto-inlines the
+//     single-reference CTE, the parallel-restricted CTE Scan disappears, and Gather returns. Any
+//     future attempt should aim at getting the reference count back to one, not at hinting the CTE.
+//
+//  3. Option (b) -- the ticket's `(fingerprint, day)` mitigation -- was built and measured, twice.
+//     Written literally (a per-(fingerprint, day) winner relation equi-joined on
+//     `(user_account_id, date)`) it is 1.96s, 14x WORSE than HEAD: generate_series's fixed 1000-row
+//     estimate collapses through DISTINCT ON + HashAggregate to 191 estimated rows against 34,685
+//     actual, so the planner picks a nested loop and demotes `a.id = t.account_id` to a join filter,
+//     discarding 6.2M rows. Casting the day to `date` so the key is hashable does not rescue it
+//     (1.95s) -- the estimate, not the type, chooses the plan.
+//
+//     Rewritten as an ANTI join it works: keep the fast single-reference semi-join, then subtract
+//     the (user_account_id, day) pairs where a contested fingerprint's rival outranks this one.
+//     Output is identical to HEAD on all four columns, the plan is Hash Semi Join + Hash Anti Join
+//     with no SubPlan and no CTE, and it runs 76.2ms = 3.36x. It is a real 1.8x improvement on
+//     HEAD and it is NOT shipped here: it MISSES the 2x criterion anyway, it rewrites the predicate
+//     all nine reads depend on, and its day expansion needs an upper date bound that
+//     getMonthOverMonthSpendingHousehold does not have.
+//
+// So: #1582's "within ~2x" is NOT met at HEAD (6.00x) and is NOT met by option (b) (3.36x). It is
+// also not proven unreachable -- with parallel_setup_cost/parallel_tuple_cost zeroed the anti-join
+// form plans a Gather and hits 1.46x WITH the dedup intact. What blocks it is that the serial and
+// parallel plans sit within ~2% of each other at default GUCs and application SQL cannot break the
+// tie. A target met only when the planner happens to flip parallel is not an SLA, so this is
+// recorded as unmet rather than claimed. #1582 is NOT closed by this branch.
+//
+// One thing that is NOT a factor: #1585's third ORDER BY leg on the merchant reads. With it,
+// 169.0ms best of 5; with only two legs, 170.3ms best of 5. It sorts at most a few hundred
+// post-aggregation groups and does not move any ceiling here.
 //
 // Pinned by TestAnalyticsRepository_GetSpendingByCategory_Household_DepartedMemberSharedPeriodRetained.
 func householdGrantsCTE() string {
