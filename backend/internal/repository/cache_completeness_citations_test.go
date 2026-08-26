@@ -109,6 +109,7 @@ package repository
 import (
 	"go/ast"
 	"go/parser"
+	"go/scanner"
 	"go/token"
 	"os"
 	"path/filepath"
@@ -865,6 +866,51 @@ var methodCitationKindAliases = map[string][]string{
 	"ScopeHousehold": {"ScopeFor("},
 }
 
+// reScopeForCall matches a ScopeFor(<first arg>, <second arg>) call and captures the second
+// argument, which is the ONLY thing that decides which Scope.Kind the call resolves to
+// (cache.ScopeFor, internal/cache/consumer.go:19-23): a literal `nil` second argument produces
+// ScopeUser, anything else produces ScopeHousehold. Re-derived for #1569 R6B/B1 — see the
+// scopeForCallKind doc comment for why the alias table above cannot tell the two kinds apart on
+// its own.
+var reScopeForCall = regexp.MustCompile(`ScopeFor\(\s*[^,()]+,\s*([^)]+)\)`)
+
+// scopeForCallKind returns the Scope.Kind identifier ("ScopeUser" or "ScopeHousehold") that the
+// nearest ScopeFor(...) call within window lines of [lo, hi] in path resolves to, or "" when no
+// such call is found there.
+//
+// WHY THIS EXISTS (#1569 R6B/B1). methodCitationKindAliases maps BOTH ScopeUser and ScopeHousehold
+// to the same literal text, "ScopeFor(" — the alias only proves a ScopeFor call is nearby, not
+// which kind it is. Without this check, a citation naming ScopeHousehold is satisfied by a call
+// site that actually resolves to ScopeUser (ScopeFor(x, nil)), because identifierNearRange's plain
+// substring search cannot see the argument that decides the kind. This is deliberately kept
+// separate from identifierNearRange (which stays a general, alias-agnostic substring search used by
+// every other citation) rather than teaching it argument-parsing it does not need for any other case.
+func scopeForCallKind(path string, lo, hi, window int) string {
+	b, err := readSourceWithCommentsBlanked(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(b), "\n")
+	lo, hi = lo-1-window, hi-1+window
+	if lo < 0 {
+		lo = 0
+	}
+	if hi >= len(lines) {
+		hi = len(lines) - 1
+	}
+	if lo > hi {
+		return ""
+	}
+	m := reScopeForCall.FindStringSubmatch(strings.Join(lines[lo:hi+1], "\n"))
+	if m == nil {
+		return ""
+	}
+	if strings.TrimSpace(m[1]) == "nil" {
+		return "ScopeUser"
+	}
+	return "ScopeHousehold"
+}
+
 // methodCitationProblem is the guard's whole relation for ONE pair, given a resolved on-disk path.
 // It returns ("", false) when the pair is not checkable at all, and otherwise (problem, true) with
 // problem empty when the citation is sound.
@@ -916,10 +962,24 @@ func methodCitationProblem(resolved, method string, lo, hi int) (string, bool) {
 	// good reason (see above — it punishes call-site citations by demanding the declaration), but as
 	// a fallback where containment is impossible it is exactly right, and it caught four stale refs
 	// that the silent skip had been swallowing.
-	for _, want := range append([]string{method}, methodCitationKindAliases[method]...) {
-		if identifierNearRange(resolved, want, lo, hi, 3) {
-			return "", true
+	if identifierNearRange(resolved, method, lo, hi, 3) {
+		return "", true
+	}
+	for _, alias := range methodCitationKindAliases[method] {
+		if !identifierNearRange(resolved, alias, lo, hi, 3) {
+			continue
 		}
+		// The ScopeUser/ScopeHousehold alias is argument-aware: matching the literal
+		// "ScopeFor(" text only proves A ScopeFor call is nearby, not which kind it resolves to.
+		// Confirm the second argument actually produces the kind this citation claims before
+		// accepting the match — see scopeForCallKind.
+		if method == "ScopeUser" || method == "ScopeHousehold" {
+			if got := scopeForCallKind(resolved, lo, hi, 3); got == "" || got == method {
+				return "", true
+			}
+			continue
+		}
+		return "", true
 	}
 	return citedSpan(lo, hi) + " is cited for " + method +
 		", which the file neither declares nor mentions within 3 lines of that ref — " +
@@ -990,11 +1050,57 @@ func TestMethodCitationsPointInsideTheirMethod(t *testing.T) {
 	}
 }
 
+// readSourceWithCommentsBlanked reads a .go file and returns its bytes with every comment's text
+// overwritten with spaces (newlines inside block comments are preserved so line numbers in the
+// result still line up with the original file). Falls back to the raw bytes if the file cannot be
+// tokenized (e.g. a syntax error mid-edit) — a fallback search over uncommented raw text is the
+// pre-existing, more permissive behaviour, not a new failure mode.
+//
+// WHY THIS EXISTS (#1569 R6B/B2). identifierNearRange is the fallback relation for a citation whose
+// named method the file does not DECLARE — it used to run over raw source, so a citation for a
+// method the file merely MENTIONS IN A COMMENT (e.g. a doc comment cross-referencing another type's
+// method by name) satisfied the same check as a real call site. Blanking comments first means the
+// fallback can only be satisfied by identifiers that appear in actual code.
+func readSourceWithCommentsBlanked(path string) ([]byte, error) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	fset := token.NewFileSet()
+	file := fset.AddFile(path, fset.Base(), len(src))
+	var sc scanner.Scanner
+	sc.Init(file, src, nil, scanner.ScanComments)
+	out := append([]byte(nil), src...)
+	sawToken := false
+	for {
+		pos, tok, lit := sc.Scan()
+		if tok == token.EOF {
+			break
+		}
+		sawToken = true
+		if tok != token.COMMENT {
+			continue
+		}
+		start := file.Offset(pos)
+		for i := 0; i < len(lit) && start+i < len(out); i++ {
+			if out[start+i] != '\n' {
+				out[start+i] = ' '
+			}
+		}
+	}
+	if !sawToken {
+		return src, nil // unparseable: fall back to raw text rather than reporting an empty file
+	}
+	return out, nil
+}
+
 // identifierNearRange reports whether ident appears within window lines either side of the cited
-// interval [lo, hi] in path. Used only as the fallback relation for a cited name the file does not
-// declare (a call-site or table-name citation).
+// interval [lo, hi] in path, with comments blanked out first — a citation is checking for CODE, and
+// a comment merely mentioning the identifier's name is not evidence the file contains it. Used only
+// as the fallback relation for a cited name the file does not declare (a call-site or table-name
+// citation).
 func identifierNearRange(path, ident string, lo, hi, window int) bool {
-	b, err := os.ReadFile(path)
+	b, err := readSourceWithCommentsBlanked(path)
 	if err != nil {
 		return true // unreadable file is TestDispositionCitationsResolve's business, not ours
 	}
@@ -1682,8 +1788,11 @@ func TestMethodCitationRelation_RangesAndAliases(t *testing.T) {
 	//  8 func Other() {
 	//  9 	_ = ScopeFor("u", nil)
 	// 10 }
+	// 11 (blank)
+	// 12 // CommentOnlyThing is mentioned here but never declared or called anywhere in this file.
 	src := "package sample\n\n// Doc comment for Target.\nfunc Target() {\n\t_ = 1\n}\n\n" +
-		"func Other() {\n\t_ = ScopeFor(\"u\", nil)\n}\n"
+		"func Other() {\n\t_ = ScopeFor(\"u\", nil)\n}\n\n" +
+		"// CommentOnlyThing is mentioned here but never declared or called anywhere in this file.\n"
 	path := filepath.Join(t.TempDir(), "sample.go")
 	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
@@ -1719,6 +1828,19 @@ func TestMethodCitationRelation_RangesAndAliases(t *testing.T) {
 			"the alias must still BITE: if the call moves out of the cited range the citation is stale"},
 		{"non-alias identifier absent entirely", "NoSuchThing", 1, 2, true, true,
 			"the fallback proximity relation is unchanged for everything outside the alias table"},
+
+		// #1569 R6B/B1: the fixture's only ScopeFor call is ScopeFor("u", nil), which resolves to
+		// ScopeUser. A citation naming ScopeHousehold against that exact same range must be a
+		// violation — the alias table cannot let "a ScopeFor call is nearby" stand in for "the
+		// call this citation claims is nearby".
+		{"alias names the WRONG scope kind for the nearby ScopeFor call", "ScopeHousehold", 8, 10, true, true,
+			"ScopeFor(\"u\", nil) resolves to ScopeUser, not ScopeHousehold — the alias must not paper over that"},
+
+		// #1569 R6B/B2: the fallback must search CODE, not comments — a citation naming a method
+		// the file does not contain must not pass just because a nearby comment happens to mention
+		// the same name in prose.
+		{"non-alias identifier appears only inside a comment", "CommentOnlyThing", 12, 12, true, true,
+			"a comment merely mentioning the name is not evidence the file contains the code"},
 	}
 
 	for _, tc := range cases {

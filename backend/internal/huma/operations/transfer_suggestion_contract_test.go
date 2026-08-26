@@ -106,6 +106,25 @@ func TestTransferSuggestionFile_NoRequiredPointerToStructField(t *testing.T) {
 	file, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
 	require.NoError(t, err)
 
+	offenders := requiredPointerToObjectOffenders(fset, file, schemas)
+
+	sort.Strings(offenders)
+	require.Empty(t, offenders,
+		"each of these is a pointer to a type the contract publishes as an object, with no omitempty, so huma keeps it in `required` while a nil emits it ABSENT — a body the published schema rejects. Add omitempty (a nullable scalar or string alias is exempt and is not reported here):\n%s",
+		strings.Join(offenders, "\n"))
+}
+
+// requiredPointerToObjectOffenders walks file's struct types and reports every exported field that
+// is a pointer to a type schemas publishes as an OBJECT and that huma will keep in `required`: a
+// tagged field with no `omitempty`, OR a field with no json tag at all.
+//
+// #1569 R6B/B3: the untagged branch is not a hedge — an exported, untagged field is NOT exempt from
+// this check. huma (like encoding/json) falls back to the literal Go field name as the property
+// name when there is no json tag at all, and there is no way to express omitempty without a tag, so
+// an untagged exported pointer-to-object field is unconditionally required in the generated schema.
+// The guard used to skip every untagged field before ever reaching this logic (`if f.Tag == nil {
+// continue }`), which is exactly the shape this branch now catches.
+func requiredPointerToObjectOffenders(fset *token.FileSet, file *ast.File, schemas map[string]any) []string {
 	var offenders []string
 	ast.Inspect(file, func(n ast.Node) bool {
 		st, ok := n.(*ast.StructType)
@@ -113,9 +132,6 @@ func TestTransferSuggestionFile_NoRequiredPointerToStructField(t *testing.T) {
 			return true
 		}
 		for _, f := range st.Fields.List {
-			if f.Tag == nil {
-				continue
-			}
 			star, ok := f.Type.(*ast.StarExpr)
 			if !ok {
 				continue
@@ -135,26 +151,68 @@ func TestTransferSuggestionFile_NoRequiredPointerToStructField(t *testing.T) {
 				// nullable scalar/alias, for which `required` is legitimate.
 				continue
 			}
-			tag := reflect.StructTag(strings.Trim(f.Tag.Value, "`")).Get("json")
-			if tag == "" || tag == "-" {
-				continue
+
+			var jsonName string
+			omitEmpty := false
+			if f.Tag == nil {
+				if len(f.Names) == 0 || !f.Names[0].IsExported() {
+					continue // embedded or unexported: a different shape this check does not name
+				}
+				jsonName = f.Names[0].Name
+			} else {
+				tag := reflect.StructTag(strings.Trim(f.Tag.Value, "`")).Get("json")
+				if tag == "" || tag == "-" {
+					continue
+				}
+				parts := strings.Split(tag, ",")
+				jsonName = parts[0]
+				omitEmpty = slicesContains(parts[1:], "omitempty")
 			}
-			if slicesContains(strings.Split(tag, ",")[1:], "omitempty") {
+			if omitEmpty {
 				continue
 			}
 			name := "<embedded>"
 			if len(f.Names) > 0 {
 				name = f.Names[0].Name
 			}
-			offenders = append(offenders, name+" *"+typeName+" `json:\""+tag+"\"` at "+fset.Position(f.Pos()).String())
+			tagDisplay := jsonName
+			if f.Tag == nil {
+				tagDisplay = jsonName + " (no json tag — huma uses the Go field name verbatim)"
+			}
+			offenders = append(offenders, name+" *"+typeName+" `json:\""+tagDisplay+"\"` at "+fset.Position(f.Pos()).String())
 		}
 		return true
 	})
+	return offenders
+}
 
+// TestRequiredPointerToObjectOffenders_CatchesTheUntaggedShape is the guard's own falsification for
+// #1569 R6B/B3: a synthetic file with an EXPORTED, UNTAGGED pointer-to-object field must be caught,
+// proving the untagged branch introduced above actually changes the guard's behaviour rather than
+// being dead code that happens to compile.
+func TestRequiredPointerToObjectOffenders_CatchesTheUntaggedShape(t *testing.T) {
+	schemas := map[string]any{
+		"domain.Thing": map[string]any{"type": "object"},
+		"Thing":        map[string]any{"type": "object"},
+	}
+
+	src := "package sample\n\n" +
+		"type WithOmitEmpty struct {\n\tOK *Thing `json:\"ok,omitempty\"`\n}\n\n" +
+		"type WithoutOmitEmpty struct {\n\tBad *Thing `json:\"bad\"`\n}\n\n" +
+		"type Untagged struct {\n\tSuggestion *Thing\n}\n"
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "sample.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	offenders := requiredPointerToObjectOffenders(fset, file, schemas)
 	sort.Strings(offenders)
-	require.Empty(t, offenders,
-		"each of these is a pointer to a type the contract publishes as an object, with no omitempty, so huma keeps it in `required` while a nil emits it ABSENT — a body the published schema rejects. Add omitempty (a nullable scalar or string alias is exempt and is not reported here):\n%s",
-		strings.Join(offenders, "\n"))
+
+	require.Len(t, offenders, 2, "exactly the tagged-without-omitempty and the untagged fields must be reported, not the omitempty one:\n%s", strings.Join(offenders, "\n"))
+	joined := strings.Join(offenders, "\n")
+	require.Contains(t, joined, "Bad *Thing", "the tagged, non-omitempty field must still be caught")
+	require.Contains(t, joined, "Suggestion *Thing", "the untagged exported field must be caught — this is the #1569 R6B/B3 fix")
+	require.NotContains(t, joined, "OK *Thing", "the omitempty field must not be reported")
 }
 
 func slicesContains(haystack []string, needle string) bool {
