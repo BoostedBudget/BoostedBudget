@@ -639,6 +639,8 @@ func buildPlaceholders(count, startIndex int) []string {
 //	option (b), day-winner JOIN    1,956ms   86.2x   nested loop, estimate collapse
 //	option (b), losers ANTI JOIN     76.2ms   3.36x   Hash Semi + Hash Anti, no Gather
 //	  ...the same, parallelism forced 33.1ms  1.46x   Gather, 3 workers
+//	  ⚠ BOTH anti-join rows are WRONG OUTPUT, see the round-6 correction below. Their
+//	    timings are retained only so nobody re-measures a variant that cannot ship.
 //
 // Three corrections fall out of that table:
 //
@@ -660,17 +662,69 @@ func buildPlaceholders(count, startIndex int) []string {
 //     discarding 6.2M rows. Casting the day to `date` so the key is hashable does not rescue it
 //     (1.95s) -- the estimate, not the type, chooses the plan.
 //
-//     Rewritten as an ANTI join it works: keep the fast single-reference semi-join, then subtract
-//     the (user_account_id, day) pairs where a contested fingerprint's rival outranks this one.
-//     Output is identical to HEAD on all four columns, the plan is Hash Semi Join + Hash Anti Join
-//     with no SubPlan and no CTE, and it runs 76.2ms = 3.36x. It is a real 1.8x improvement on
-//     HEAD and it is NOT shipped here: it MISSES the 2x criterion anyway, it rewrites the predicate
-//     all nine reads depend on, and its day expansion needs an upper date bound that
-//     getMonthOverMonthSpendingHousehold does not have.
+//     Rewritten as an ANTI join it is FASTER AND WRONG. This paragraph used to say "Output is
+//     identical to HEAD on all four columns" -- an assertion with no diff method, no row count
+//     and no reproducer, sitting two lines under a row that DID carry its falsification. Round 6
+//     was told to ship the anti-join and re-established that claim first. It does not hold.
 //
-// So: #1582's "within ~2x" is NOT met at HEAD (6.00x) and is NOT met by option (b) (3.36x). It is
-// also not proven unreachable -- with parallel_setup_cost/parallel_tuple_cost zeroed the anti-join
-// form plans a Gather and hits 1.46x WITH the dedup intact. What blocks it is that the serial and
+// ── #1569 T3 round 6: the anti-join is REFUTED, not merely deferred ──────────────────────────────
+//
+// The rewrite splits HEAD's single `EXISTS(g : g covers this day AND g wins its tiebreak)` into
+// `EXISTS(g : g covers) AND NOT EXISTS(g : g covers AND g loses)`. Those are different questions:
+// the first asks whether SOME covering grant wins, the second whether EVERY covering grant wins.
+// They agree only while no user_account holds two grants covering the same day -- and
+// uq_household_account_shares_active forbids two UN-REVOKED grants per (household, user_account)
+// and nothing more, so unsharing an account and re-sharing it later the SAME DAY produces exactly
+// that, with the day-overlap predicate (generous at both ends, by design) putting both grants on
+// the boundary day. Two reproducible consequences, both money DISAPPEARING:
+//
+//   - the member's own, uncontested, freshly re-fingerprinted account is dropped for that day
+//     because an unrelated revoked grant of the same user_account lost a tiebreak; and
+//   - worse, on a JOINT account both copies are dropped -- the re-shared copy loses to the other
+//     member, the other member loses to the original copy -- so the account contributes nothing at
+//     all on that day. HEAD counts exactly one copy, which is the whole point of the dedup.
+//
+// This is a property of the DECOMPOSITION, not of one transcription of it. Measured, not argued:
+// the recorded day-expansion shape (subtract the (user_account_id, day) pairs where a contested
+// fingerprint's rival outranks this one) was rebuilt with generate_series and produces the same
+// two wrong answers. Any relation keyed on (user_account_id, day) has the same defect, because
+// "this user_account loses" is existential over grants while the correct rule is existential over
+// WINNERS. Getting it right needs the winner decided per fingerprint before the subtraction, which
+// an anti-join cannot express without aggregating the day expansion -- and it is that expansion,
+// not the anti-join, that would need an upper date bound.
+//
+// Pinned by TestT3BenchAntiJoinIsNotEquivalent (t3bench_equality_test.go), which builds all three
+// shapes -- including a control proving the probe still agrees on the plain joint-account case --
+// and evaluates the REAL predicate functions, not transcriptions of them.
+//
+// The equality harness built to check this is TestT3BenchAntiJoinEquality in the same file: it
+// runs both forms of all NINE reads against the seeded household and compares full result sets,
+// row count and every column. It PASSES -- and that pass is precisely why it is not sufficient
+// evidence. The seed gives each user_account one open grant plus non-overlapping closed ones, so
+// it cannot contain the divergent shape. An agreement harness bounds the risk; it does not
+// establish the identity.
+//
+// A second finding, since it kills the number as well as the claim: the anti-join written WITHOUT
+// a day expansion (top-level correlated NOT EXISTS, expected to pull up into a Hash Anti Join on
+// the hashable user_account_id leg) does not pull up at all. Postgres keeps it as SubPlan 2 and
+// executes it 177,778 times against HEAD's 30,781, and it is 4.5x SLOWER, not 1.8x faster:
+// SpendingByCategory 128.5ms -> 544.8ms. Conditions: same box and database as the round-5 table
+// (Apple M4 / 10 cores / 16 GiB / macOS 15.3.1, load avg ~3.5; Postgres 17.11 in Docker on
+// localhost:5434, database `t3bench_r5`), measured 2026-08-26 at commit e042468d, by
+// TestT3BenchAntiJoinEquality's own timer -- best of 5, NOT the table's best of 7. That same run
+// re-measures HEAD at 128.5-164.4ms across the nine reads, which reproduces the table's 136.2ms.
+//
+// So nothing is shipped from option (b), and #1582 stays open at HEAD's 6.00x. The next idea worth
+// trying is the one that keeps the ∃-over-winners shape while removing the correlated subplan:
+// give each grant a precomputed daterange and a `range_agg` multirange of the days it LOSES, so
+// the tiebreak becomes a scalar `NOT (t.date <@ g.loss_days)` inside the single semi-join. That is
+// an identity by construction (a union of loss intervals) and needs no date bound. It is not built
+// or measured here; it is a direction, not a result.
+//
+// So: #1582's "within ~2x" is NOT met at HEAD (6.00x), and option (b) does not count as a data
+// point at all now that its output is refuted. It is also not proven unreachable -- with
+// parallel_setup_cost/parallel_tuple_cost zeroed the anti-join form plans a Gather and hits 1.46x,
+// though that measurement inherits the same wrong output and so bounds nothing on its own. What blocks it is that the serial and
 // parallel plans sit within ~2% of each other at default GUCs and application SQL cannot break the
 // tie. A target met only when the planner happens to flip parallel is not an SLA, so this is
 // recorded as unmet rather than claimed. #1582 is NOT closed by this branch.
