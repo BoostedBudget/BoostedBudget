@@ -165,14 +165,14 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 	// ---- investment_transactions off accounts. -------------------------------------------------
 	// Re-derived for #1569 T8 rather than assumed. `accounts` is soft-removed, so this edge only
 	// fires when an accounts ROW is genuinely hard-deleted, and there is exactly one statement in
-	// the tree that does that: account_repository.go:1091, inside PurgeAccount — an explicit,
+	// the tree that does that: account_repository.go:1118, inside PurgeAccount — an explicit,
 	// user-invoked destruction with its own endpoint, its own audit row and a live-data
 	// precondition. (`DELETE FROM accounts` appears nowhere else in non-test Go.) Migration 000151's
 	// header anticipated this path and left the edge CASCADE deliberately: a purged account's
 	// investment transactions are precisely what the user asked to destroy, and leaving them behind
 	// orphaned would be the residue the purge exists to remove. The second route to this edge is
 	// the users cascade above, which reaches accounts first.
-	{child: "investment_transactions", parent: "accounts", constraint: "fk_inv_txn_account_id"}: "explicit user-invoked PurgeAccount (account_repository.go:1091) is the only hard DELETE FROM accounts; the row is what the user asked to destroy",
+	{child: "investment_transactions", parent: "accounts", constraint: "fk_inv_txn_account_id"}: "explicit user-invoked PurgeAccount (account_repository.go:1118) is the only hard DELETE FROM accounts; the row is what the user asked to destroy",
 
 	// ---- The three tables whose ONLY erasure route is this edge. -------------------------------
 	// None of these three has a foreign key to `users`, so `DELETE FROM users` reaches them only
