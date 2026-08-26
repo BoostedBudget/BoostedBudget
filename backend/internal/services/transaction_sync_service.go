@@ -1053,17 +1053,6 @@ func (s *transactionSyncService) processAddedTransactions(
 
 	s.logger.Info("stored added transactions", "stored", len(transactions), "skipped", len(added)-len(transactions))
 
-	// Issue #1586: the stranded-annotation mirror. TombstoneByExternalID moves a settling pending
-	// row's annotations onto its posted twin, but only a twin that is ALREADY stored — which is
-	// guaranteed within one sync by the added/modified/removed ordering and guaranteed by nothing
-	// across syncs. When Plaid delivers the removal in sync N and the posted twin in sync N+1, the
-	// user's category, notes, tags and review state stay on a row that renders nowhere.
-	//
-	// So the twin, on arrival, looks BACK for an already-tombstoned pending row it points at. Only
-	// rows carrying Plaid's own pending_transaction_id are candidates; the pairing is never a
-	// heuristic on amount/date/merchant.
-	s.pullForwardStrandedSettlements(ctx, linkedItem.UserID, transactions)
-
 	// Issue #1213: Emit analytics/match-count side-effects only for genuinely inserted rows.
 	if s.ruleApplicationService != nil && len(ruleApplications) > 0 {
 		s.ruleApplicationService.EmitBatchSideEffects(ctx, linkedItem.UserID, ruleApplications, insertedIDs)
@@ -1081,6 +1070,25 @@ func (s *transactionSyncService) processAddedTransactions(
 			// Log but don't fail - transaction monitoring is non-critical
 			s.logger.Warn("failed to monitor for transfer suggestion matches", "error", err)
 		}
+	}
+
+	// Issue #1586: the stranded-annotation mirror. TombstoneByExternalID moves a settling pending
+	// row's annotations onto its posted twin, but only a twin that is ALREADY stored — which is
+	// guaranteed within one sync by the added/modified/removed ordering and guaranteed by nothing
+	// across syncs. When Plaid delivers the removal in sync N and the posted twin in sync N+1, the
+	// user's category, notes, tags and review state stay on a row that renders nowhere.
+	//
+	// So the twin, on arrival, looks BACK for an already-tombstoned pending row it points at. Only
+	// rows carrying Plaid's own pending_transaction_id are candidates; the pairing is never a
+	// heuristic on amount/date/merchant.
+	//
+	// ⚠ IT RUNS LAST, AFTER THE TWO SIDE-EFFECT BLOCKS ABOVE, AND THE ORDER IS DELIBERATE. Its
+	// failure now returns (see the function's own note), and the rule-application side effects fire
+	// only for GENUINELY INSERTED ids — on the re-delivered retry the rows already exist, so
+	// insertedIDs is empty and those analytics would be lost for good if the return jumped over
+	// them. Nothing here depends on the repair having happened.
+	if err := s.pullForwardStrandedSettlements(ctx, linkedItem.UserID, transactions); err != nil {
+		return err
 	}
 
 	return nil
@@ -1270,7 +1278,9 @@ func (s *transactionSyncService) processModifiedTransactions(
 	// write paths derive pending_transaction_id_blind_idx, and Update writes it as
 	// COALESCE(new, stored), so a pointer arriving on a modification is kept. Covering only the
 	// added path would leave that route stranded for exactly the same reason the ticket describes.
-	s.pullForwardStrandedSettlements(ctx, linkedItem.UserID, settledCandidates)
+	if err := s.pullForwardStrandedSettlements(ctx, linkedItem.UserID, settledCandidates); err != nil {
+		return err
+	}
 
 	s.logger.Info("updated modified transactions",
 		"updated", successCount, "upserted", upsertedCount,
@@ -1282,10 +1292,27 @@ func (s *transactionSyncService) processModifiedTransactions(
 // Plaid's pending_transaction_id, so it can pull forward any annotations stranded on an
 // already-tombstoned pending twin (#1586).
 //
-// BEST-EFFORT, DELIBERATELY. It is a repair of a display problem, not part of storing the provider's
-// data: failing the sync here would stall the cursor and re-deliver the whole page for something
-// that will be retried on the next sync anyway, and #1570's storage-before-cursor contract makes
-// re-delivery the normal outcome. The repository call is idempotent, so a retry costs nothing.
+// ⚠ ITS FAILURE RETURNS, AND THAT IS THE FIX FOR A COMMENT THAT WAS FALSE. This used to log and
+// swallow, justified by the claim that a failed repair "will be retried on next sync". It could
+// not be: both callers are inside the storage steps that run BEFORE #1570's single cursor advance,
+// so a swallowed failure was immediately followed by telling Plaid we had consumed the page — and
+// /transactions/sync does not re-deliver a transaction the stored cursor is past. The posted twin
+// stored fine, the repair did not, and the user's category, notes, tags and review state stayed on
+// the tombstoned pending row FOREVER. The retry the comment promised had no way to happen.
+//
+// Returning makes the promise true: the sync fails, the cursor stays where the run started, Plaid
+// re-delivers the same page, and the repair (which is idempotent) runs again. It is also the
+// contract the writes either side of this already have — a CreateBatch or Update failure returns
+// from these same two functions, and a failed repair is the same class of transient database error.
+// "Idempotent" is not an assumption here: TestLateSettlement_IsIdempotent_Integration runs the
+// repair twice against real Postgres and pins that the second run is a no-op.
+//
+// ⚠ THE COST IS REAL. A repair that fails PERMANENTLY now stalls this item's ingestion rather than
+// quietly losing one user's annotations. That is the right direction to fail in — a stalled cursor
+// surfaces as a sync failure with metrics and a dead-letter job, where the swallow was invisible to
+// everyone including the user whose data it stranded — but it is a trade, not a free win. The
+// escape hatch if this ever fires on a non-transient fault is a durable repair job; River exists,
+// but this service holds no client for it, so that is a wiring change and not a one-line one.
 //
 // Rows with no pointer are filtered out here rather than in SQL: the overwhelming majority of a
 // sync batch is not a settlement, and there is no reason to send their ids to the database.
@@ -1293,7 +1320,7 @@ func (s *transactionSyncService) pullForwardStrandedSettlements(
 	ctx context.Context,
 	userID string,
 	stored []domain.Transaction,
-) {
+) error {
 	ids := make([]string, 0, len(stored))
 	for i := range stored {
 		if stored[i].PendingTransactionID == nil || *stored[i].PendingTransactionID == "" {
@@ -1305,19 +1332,21 @@ func (s *transactionSyncService) pullForwardStrandedSettlements(
 		ids = append(ids, stored[i].ID)
 	}
 	if len(ids) == 0 {
-		return
+		return nil
 	}
 
 	moved, err := s.transactionRepo.PullForwardSettledPendingAnnotations(ctx, userID, ids)
 	if err != nil {
-		s.logger.Warn("failed to pull forward stranded settlement annotations",
+		s.logger.Error("failed to pull forward stranded settlement annotations",
 			"user_id", userID, "candidates", len(ids), "error", err)
-		return
+		return fmt.Errorf("failed to pull forward stranded settlement annotations for %d candidate(s): %w",
+			len(ids), err)
 	}
 	if moved > 0 {
 		s.logger.Info("pulled forward annotations stranded by a cross-sync settlement",
 			"user_id", userID, "candidates", len(ids), "moved", moved)
 	}
+	return nil
 }
 
 // detectAndUpsertProposedContributions creates proposed contribution rows for every
