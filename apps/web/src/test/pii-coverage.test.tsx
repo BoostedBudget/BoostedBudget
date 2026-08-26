@@ -1917,13 +1917,16 @@ describe('PII coverage — Round 14: PortfolioHoldingsWidget (hand-built table)'
             user_id: 'user-1',
             account_id: 'acc-1',
             security_id: 'sec-1',
-            ticker_symbol: null,
+            // HoldingView.ticker_symbol is `string | undefined`, never null — a security with
+            // no ticker is an absent field, and the widget must still mask its name.
+            ticker_symbol: undefined,
             security_name: SENTINEL_SECURITY_NAME,
             quantity: 10,
             institution_value: 99999.99,
             day_change_pct: 1.23,
           },
         ],
+        count: 1,
       },
       isLoading: false,
       isError: false,
