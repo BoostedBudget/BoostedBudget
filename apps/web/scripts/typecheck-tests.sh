@@ -43,7 +43,31 @@ if [ "$CHECKED" -lt 300 ]; then
 fi
 
 "$TSC" -p tsconfig.test.json --noEmit > "$OUT" 2>&1
+TSC_STATUS=$?
 TOTAL=$(grep -cE 'error TS[0-9]+' "$OUT" || true)
+
+# ⚠ THE GATE MUST NOT PASS WHEN tsc NEVER RAN. Measured: this run's exit status cannot be
+# checked naively, because tsc exits 1 BOTH for "type errors found" — the normal case here,
+# ~2,100 of them — AND for "could not run at all" (bad config, OOM, a missing binary). The
+# two are indistinguishable by exit code alone, which is why the first version of this script
+# did not check it.
+#
+# The discriminator is the REPORT, not the status: a run that fails non-zero while emitting
+# ZERO `error TS` lines type-checked nothing. Without this, a tsc that resolved the file list
+# and then died printed "0 stale @ts-expect-error directives" and exited 0 — proven by
+# substituting a stub that emits 400 --listFiles paths and then exits 7, which turned the
+# whole gate green. The file-count floor above does NOT cover this: it is a separate tsc
+# invocation, so a binary that lists files fine and crashes mid-check sails past it.
+#
+# Residual, stated rather than hidden: a crash AFTER some errors are emitted still looks like
+# a normal error run. Closing that needs a completion sentinel tsc does not provide.
+if [ "$TSC_STATUS" -ne 0 ] && [ "$TOTAL" -eq 0 ]; then
+  echo "typecheck-tests: tsc exited $TSC_STATUS but reported no type errors at all." >&2
+  echo "  That means it did not type-check — a crash, an OOM, or an unreadable config —" >&2
+  echo "  NOT that the test files are clean. Refusing to report a pass. Output was:" >&2
+  sed 's/^/    /' "$OUT" >&2
+  exit 1
+fi
 
 STALE=$(grep -E 'error TS2578' "$OUT" || true)
 if [ -n "$STALE" ]; then
