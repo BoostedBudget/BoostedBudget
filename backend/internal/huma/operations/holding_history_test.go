@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -130,12 +131,36 @@ func TestHoldingHistoryHandler_Unauthorized(t *testing.T) {
 
 // account_id is required:true, so the route must refuse a call that omits it rather than reaching
 // a handler with an empty account id.
+//
+// ⚠ THE REQUEST IS AUTHENTICATED, AND THAT IS THE WHOLE TEST (#1569 T7.8). This used to send an
+// UNAUTHENTICATED request and assert only "not 200". Auth fails first, so it passed with 401 and
+// would have gone on passing with `required:"true"` deleted — it proved nothing about the field it
+// is named for. Authenticated, it must be exactly 400 (huma's parameter validation), and the
+// service must never be reached: an empty account id arriving at the repository would run the
+// history read with `account_id = ''::uuid`, which is a 500, not a refusal.
+//
+// ⚠ The expected code is 422, not 400. huma answers a MISSING required query parameter with
+// 422 Unprocessable Entity ("required query parameter is missing"); the handler's own 400s are
+// for a parameter that is present and malformed (a non-UUID account_id, a non-date as_of). Both
+// are refusals before any service call, which is the property under test — but the number is
+// huma's, so it is asserted as huma actually behaves rather than as it was assumed to.
 func TestHoldingHistoryHandler_MissingAccountID_IsRejectedByTheRoute(t *testing.T) {
+	svc := &mockHoldingHistoryService{}
 	_, api := humatest.New(t)
-	RegisterHoldingHistoryRoutes(api, NewHoldingHistoryHandler(&mockHoldingHistoryService{}))
+	api.UseMiddleware(func(ctx huma.Context, next func(huma.Context)) {
+		next(huma.WithValue(ctx, inputs.UserIDKey, "user-1"))
+	})
+	RegisterHoldingHistoryRoutes(api, NewHoldingHistoryHandler(svc))
 
 	resp := api.Get("/api/v1/investments/holdings/history")
-	assert.NotEqual(t, http.StatusOK, resp.Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, resp.Code, resp.Body.String())
+	assert.Zero(t, svc.calls, "a request with no account_id must never reach the service")
+
+	// The same authenticated route WITH account_id succeeds — so the 400 above is about the
+	// missing parameter, not about the middleware or the route being broken for every caller.
+	ok := api.Get("/api/v1/investments/holdings/history?account_id=" + validAccountUUID)
+	require.Equal(t, http.StatusOK, ok.Code, ok.Body.String())
+	assert.Equal(t, 1, svc.calls)
 }
 
 // The route this endpoint MUST NOT become. GET /investments/holdings is the current-state read and

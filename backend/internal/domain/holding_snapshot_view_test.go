@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -63,4 +64,49 @@ func TestHoldingSnapshotView_HasNoDayChangeField(t *testing.T) {
 func hasField(v any, name string) bool {
 	_, ok := reflect.TypeOf(v).FieldByName(name)
 	return ok
+}
+
+// The wire shape of the no-history response (#1569 T7.8).
+//
+// Nothing serialized this response before, so `as_of_date` could document one contract
+// (`null`), generate a second (`type: string`) and ship a third (the key absent) without a single
+// test noticing. This marshals the REAL struct the handler returns and pins all three of the
+// decisions the type makes about absence:
+//
+//	as_of_date      omitted when nil  — a *string CAN express null, and this one deliberately does not
+//	available_dates always present    — `[]` is what tells the client there is no retained history
+//	positions       always present    — never null, which a client cannot tell from a failed read
+func TestHoldingSnapshotHistory_NoHistoryResponse_WireShape(t *testing.T) {
+	// Exactly what holdingHistoryService returns on the bare no-history path.
+	out := &HoldingSnapshotHistory{
+		AccountID:      "acct-1",
+		AvailableDates: []string{},
+		Positions:      []HoldingSnapshotView{},
+	}
+
+	b, err := json.Marshal(out)
+	require.NoError(t, err)
+
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(b, &raw))
+
+	_, hasAsOf := raw["as_of_date"]
+	assert.False(t, hasAsOf,
+		"as_of_date is omitempty: it must be ABSENT, not null — the doc string says so and the generated schema types it as a plain string. Got: %s", b)
+	assert.JSONEq(t, `{"account_id":"acct-1","available_dates":[],"positions":[]}`, string(b),
+		"available_dates and positions must both be present and empty — `null` is indistinguishable from a failed read")
+
+	// And the dated case still carries the day, so the assertion above is about absence rather
+	// than about the field never being emitted at all.
+	day := "2026-08-20"
+	dated, err := json.Marshal(&HoldingSnapshotHistory{
+		AccountID:      "acct-1",
+		AsOfDate:       &day,
+		AvailableDates: []string{day},
+		Positions:      []HoldingSnapshotView{},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, string(dated), `"as_of_date":"2026-08-20"`)
+	assert.NotContains(t, string(dated), `"total_value"`,
+		"a day whose positions carry no value has an UNKNOWN total, and an omitted key is how that is said — never 0")
 }
