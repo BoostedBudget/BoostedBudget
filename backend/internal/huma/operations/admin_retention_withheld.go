@@ -109,8 +109,9 @@ type AdminRetentionWithheldCursor struct {
 // That is ACCEPTED rather than closed, deliberately: this is a human triage surface polled by an
 // operator, the skew is bounded by one refresh, and the alternative — a REPEATABLE READ
 // transaction or a single statement returning both — would put a snapshot-holding transaction on
-// an admin read of an unbounded backlog to buy consistency nobody acts on. Read as_of, and read
-// both numbers as of that instant ± the window between the two queries. Pinned by
+// an admin read of an unbounded backlog to buy consistency nobody acts on. Read as_of as the instant the
+// RESPONSE was calculated, after both queries returned, and read both numbers as observations made
+// at or before it — by a gap that is not bounded, so the disagreement is not bounded either. Pinned by
 // TestListAdminRetentionWithheld_CountAndPageAreEventuallyConsistent, which interleaves a
 // population change between the two reads and asserts the handler reports both faithfully instead
 // of reconciling them into a number it did not measure.
@@ -139,7 +140,11 @@ type ListAdminRetentionWithheldOutput struct {
 		// full, which is all a keyset walk can honestly say without a second query.
 		NextCursor *AdminRetentionWithheldCursor `json:"next_cursor,omitempty"`
 		Limit      int                           `json:"limit"`
-		AsOf       string                        `json:"as_of"`
+		// AsOf is the instant this RESPONSE was calculated — assigned after BOTH repository queries
+		// have returned — not an instant either query observed and not an interval they bracket. Both
+		// reads happened at or before it, by a gap that is not bounded under load. days_withheld is
+		// derived from it, once, so no two rows in one response disagree about where the boundary is.
+		AsOf string `json:"as_of" doc:"The instant this response was calculated, assigned after both queries returned — not the instant either query observed. days_withheld is derived from it. Both the count and the returned page were read at or before this instant, by a gap that is not bounded, so they may disagree by any number of rows."`
 	}
 }
 
@@ -214,7 +219,9 @@ func (h *AdminHandler) ListAdminRetentionWithheld(ctx context.Context, input *Li
 	// ONE instant for the whole response, for the reason #1466 threaded asOf through every liveness
 	// derivation in this codebase: days_withheld is a comparison against a clock, and reading
 	// time.Now() per row would let two rows in one response disagree about where the boundary is.
-	// Echoed back as as_of so a reader can tell which instant the numbers were computed for.
+	// Taken AFTER both reads, so it is the response-CALCULATION instant: both queries observed the
+	// population at or before it. It is not a bracket around them and bounds their disagreement at
+	// nothing. Echoed back as as_of so a reader knows which instant days_withheld was computed for.
 	asOf := time.Now().UTC()
 
 	out := &ListAdminRetentionWithheldOutput{}
@@ -284,7 +291,8 @@ func RegisterAdminRetentionWithheldOperations(api huma.API, handler *AdminHandle
 			"email address is returned. withheld_total and the returned page come from two separate " +
 			"queries and are eventually consistent: a notice marker, a deletion request or a retention " +
 			"clock crossing the current instant between them can make the total disagree with the page " +
-			"by a row. Keyset-paginated: pass next_cursor's two fields back as cursor_expires_at and " +
+			"by any number of rows — the gap is not bounded. as_of is when the response was calculated, " +
+			"after both queries returned. Keyset-paginated: pass next_cursor's two fields back as cursor_expires_at and " +
 			"cursor_user_id; next_cursor is absent on the final page. Requires admin role.",
 		Tags:     []string{"Admin"},
 		Security: []map[string][]string{{"clerk": {}}},

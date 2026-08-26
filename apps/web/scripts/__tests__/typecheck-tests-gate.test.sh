@@ -14,6 +14,13 @@
 #   3. `mktemp` failure was unchecked, so in a read-only environment the script exited 0 having
 #      type-checked nothing.
 #
+# A FOURTH, added later and just as much a fail-open: the error TOTAL was computed, printed, and
+# gated on by nothing. A genuinely wrong new test simply became error 2,094 and CI stayed green
+# (constructed against the real compiler: the count moved 2,093 -> 2,097 and the gate exited 0).
+# Cases 9-13 pin the ratchet that closed it, INCLUDING the direction that is easy to leave open —
+# a baseline sitting above the true count is slack, so a decrease must fail too — and the case
+# that matters most for a gate: a missing baseline file must not mean "no ceiling".
+#
 # HOW IT IS TESTED. Every case below runs a COPY of the real script inside a sandbox whose
 # `node_modules/.bin/tsc` is a stub. That is what makes the failure modes constructible: a real tsc
 # cannot be asked to crash at a chosen moment. The stub reproduces the two shapes tsc actually
@@ -43,6 +50,9 @@ build_sandbox() {
   mkdir -p "$SANDBOX/web/scripts" "$SANDBOX/web/node_modules/.bin"
   cp "$REAL_SCRIPT" "$SANDBOX/web/scripts/typecheck-tests.sh"
   echo '{}' > "$SANDBOX/web/tsconfig.test.json"
+  # The ratchet's ceiling. Defaults to the stub's own error count so the "healthy" case is a
+  # no-change run; individual cases below rewrite it to construct an increase or a decrease.
+  printf '# sandbox baseline\n%s\n' "${3:-2000}" > "$SANDBOX/web/scripts/typecheck-tests-baseline.txt"
   cat > "$SANDBOX/web/node_modules/.bin/tsc" <<STUB
 #!/usr/bin/env bash
 # Stub tsc. MODE decides what the diagnostics run does; the --listFiles run is always healthy
@@ -91,7 +101,7 @@ build_sandbox healthy
 run_gate
 if [ "$GATE_STATUS" -ne 0 ]; then
   fail "the normal error-laden run was rejected (exit $GATE_STATUS) — output: $GATE_OUTPUT"
-elif ! echo "$GATE_OUTPUT" | grep -q "2000 other type error"; then
+elif ! echo "$GATE_OUTPUT" | grep -q "2000 type error(s) in test files (baseline 2000)"; then
   fail "passed but did not report the error count — output: $GATE_OUTPUT"
 else
   pass "a normal run still exits 0 and reports its error count"
@@ -183,6 +193,99 @@ if [ "$GATE_STATUS" -eq 0 ]; then
   fail "exit status 7 was accepted because the trailer looked complete — output: $GATE_OUTPUT"
 else
   pass "an undocumented exit status fails closed (exit $GATE_STATUS)"
+fi
+
+# ── Case 9: MORE errors than the baseline is rejected (the ratchet's whole point) ──
+# This is the defect in constructed form: a wrong new test becomes error N+1. Before the ratchet
+# the gate printed the higher number and exited 0.
+echo "Case 9: an error count above the baseline is rejected"
+build_sandbox healthy 400 1999
+run_gate
+if [ "$GATE_STATUS" -eq 0 ]; then
+  fail "2000 errors against a baseline of 1999 was reported as a PASS — output: $GATE_OUTPUT"
+elif ! echo "$GATE_OUTPUT" | grep -q "1 NEW type error"; then
+  fail "rejected, but not by the ratchet — output: $GATE_OUTPUT"
+else
+  pass "an increase over the baseline fails (exit $GATE_STATUS)"
+fi
+
+# ── Case 10: FEWER errors than the baseline is also rejected ──
+# A baseline left above the true count is exactly the slack the next regression hides in.
+echo "Case 10: an error count below the baseline is rejected, with the fix instruction"
+build_sandbox healthy 400 2500
+run_gate
+if [ "$GATE_STATUS" -eq 0 ]; then
+  fail "a stale (too-high) baseline was accepted — output: $GATE_OUTPUT"
+elif ! echo "$GATE_OUTPUT" | grep -q -- "--update-baseline"; then
+  fail "rejected, but without telling anyone how to lower it — output: $GATE_OUTPUT"
+else
+  pass "a decrease fails and names the fix (exit $GATE_STATUS)"
+fi
+
+# ── Case 11: a MISSING baseline must not mean "no ceiling" ──
+echo "Case 11: a missing baseline file is rejected"
+build_sandbox healthy
+rm -f "$SANDBOX/web/scripts/typecheck-tests-baseline.txt"
+run_gate
+if [ "$GATE_STATUS" -eq 0 ]; then
+  fail "a missing baseline produced a PASS — the ceiling silently evaporated — output: $GATE_OUTPUT"
+else
+  pass "a missing baseline fails closed (exit $GATE_STATUS)"
+fi
+
+# ── Case 12: a non-numeric baseline must not be guessed at ──
+echo "Case 12: a non-numeric baseline is rejected"
+build_sandbox healthy
+printf '# nothing but a comment\n' > "$SANDBOX/web/scripts/typecheck-tests-baseline.txt"
+run_gate
+if [ "$GATE_STATUS" -eq 0 ]; then
+  fail "a baseline with no number produced a PASS — output: $GATE_OUTPUT"
+else
+  pass "a non-numeric baseline fails closed (exit $GATE_STATUS)"
+fi
+
+# ── Case 13: --update-baseline records the count and KEEPS the explanatory header ──
+# The header is the only place the ratchet's contract is written down for whoever trips it next;
+# a writer that clobbers it turns the next failure into a bare number with no instructions.
+echo "Case 13: --update-baseline rewrites the number and preserves the header"
+build_sandbox healthy 400 1
+BL="$SANDBOX/web/scripts/typecheck-tests-baseline.txt"
+printf '# CONTRACT LINE\n1\n' > "$BL"
+set +e
+GATE_OUTPUT=$(cd "$SANDBOX/web" && bash scripts/typecheck-tests.sh --update-baseline 2>&1)
+GATE_STATUS=$?
+set -e
+if [ "$GATE_STATUS" -ne 0 ]; then
+  fail "--update-baseline exited $GATE_STATUS — output: $GATE_OUTPUT"
+elif ! grep -q '^2000$' "$BL"; then
+  fail "--update-baseline did not record the count; file is: $(cat "$BL")"
+elif ! grep -q 'CONTRACT LINE' "$BL"; then
+  fail "--update-baseline clobbered the explanatory header; file is: $(cat "$BL")"
+else
+  pass "--update-baseline records 2000 and keeps the header"
+fi
+
+# ── Case 14: after --update-baseline the very next run passes (the ratchet is escapable ONLY here) ──
+echo "Case 14: the run after --update-baseline passes"
+run_gate
+if [ "$GATE_STATUS" -ne 0 ]; then
+  fail "the run after --update-baseline still failed — output: $GATE_OUTPUT"
+else
+  pass "the updated baseline is honoured on the next run"
+fi
+
+# ── Case 15: an unknown argument is rejected rather than silently ignored ──
+# A typo'd flag that is ignored is how "--update-baseline" would become a no-op nobody notices.
+echo "Case 15: an unknown argument is rejected"
+build_sandbox healthy
+set +e
+GATE_OUTPUT=$(cd "$SANDBOX/web" && bash scripts/typecheck-tests.sh --updatebaseline 2>&1)
+GATE_STATUS=$?
+set -e
+if [ "$GATE_STATUS" -eq 0 ]; then
+  fail "an unknown flag was silently ignored — output: $GATE_OUTPUT"
+else
+  pass "an unknown argument fails closed (exit $GATE_STATUS)"
 fi
 
 echo ""

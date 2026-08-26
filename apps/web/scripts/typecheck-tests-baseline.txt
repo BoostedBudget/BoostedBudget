@@ -1,0 +1,19 @@
+# Ceiling on type errors in TEST files, enforced by scripts/typecheck-tests.sh (#1569).
+#
+# This number only ever goes DOWN. An increase fails the gate: a type error in a test file is
+# usually a test that is now wrong — asserting a field or a shape the code no longer has — and
+# such a test can still pass at runtime, which is why it needs a gate and not a printout.
+# A DECREASE also fails, with instructions, so the ceiling cannot be left sitting above the true
+# count as slack for the next regression to hide in.
+#
+# Fixed some? `bash apps/web/scripts/typecheck-tests.sh --update-baseline`, then commit this file.
+# Raising it is a deliberate, reviewable act — say why in the commit message.
+#
+# ⚠ MEASURE THIS AGAINST COMMITTED HEAD, NOT YOUR WORKING TREE. It was first recorded as 2096 from
+# a shared clone with three other branches' work uncommitted in it; the true count at HEAD, measured
+# in a clean `git worktree` of the same commit, was 2093. A baseline that quietly absorbs whatever
+# happened to be on disk is a ceiling set by accident.
+#
+# Blank lines and #-comments are ignored; the value is the bare integer below.
+
+2093
