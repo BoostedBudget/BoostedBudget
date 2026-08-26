@@ -1087,6 +1087,12 @@ func (s *transactionSyncService) processAddedTransactions(
 	// only for GENUINELY INSERTED ids — on the re-delivered retry the rows already exist, so
 	// insertedIDs is empty and those analytics would be lost for good if the return jumped over
 	// them. Nothing here depends on the repair having happened.
+	//
+	// ⚠ IT DEPENDS ON CreateBatch HAVING WRITTEN THE PERSISTED ids BACK INTO `transactions` (#1586
+	// gap G7). The slice is passed by reference precisely so that happens: every id here was minted
+	// by this function, and a re-delivered row keeps the id it was first stored with, so before the
+	// write-back the retry that this repair's fail-and-hold-the-cursor design exists to enable was
+	// the one case guaranteed to repair nothing.
 	if err := s.pullForwardStrandedSettlements(ctx, linkedItem.UserID, transactions); err != nil {
 		return err
 	}
@@ -1241,10 +1247,19 @@ func (s *transactionSyncService) processModifiedTransactions(
 					newTxn.MerchantID = &id
 				}
 			}
-			if _, upsertErr := s.transactionRepo.CreateBatch(ctx, []domain.Transaction{*newTxn}); upsertErr != nil {
+			// #1586 (gap G7): the batch is a NAMED SLICE and the row is read back out of it. It
+			// used to be an inline `[]domain.Transaction{*newTxn}` — a COPY — and CreateBatch
+			// writes the PERSISTED id into the element it was handed. On a conflict (this branch's
+			// most likely outcome: no LIVE row, but a tombstoned one the ON CONFLICT arbiter still
+			// sees) that persisted id differs from the UUID minted six lines above, and writing it
+			// into a discarded copy left settledCandidates carrying an id that names no row. The
+			// repair below then matched nothing and reported success.
+			batch := []domain.Transaction{*newTxn}
+			if _, upsertErr := s.transactionRepo.CreateBatch(ctx, batch); upsertErr != nil {
 				return fmt.Errorf("failed to upsert modified transaction %s with no stored row: %w",
 					plaidTxn.TransactionId, upsertErr)
 			}
+			*newTxn = batch[0]
 			s.logger.Info("upserted modified transaction that had no stored row",
 				"transaction_id", plaidTxn.TransactionId)
 			upsertedCount++
