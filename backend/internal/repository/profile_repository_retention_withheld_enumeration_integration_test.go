@@ -311,9 +311,18 @@ func TestRetentionWithheldEnumeration_Integration_KeysetPaginationCoversTiedExpi
 //	    directly would construct a partial state the app cannot produce);
 //	(c) it LEAVES this enumeration in the same stroke, because retentionWithheldPopulationPredicate
 //	    requires `deletion_requested_at IS NULL`;
-//	(d) userRequestedDeletionClaimPredicate now AUTHORISES the hard delete.
+//	(d) userRequestedDeletionClaimPredicate now AUTHORISES the hard delete; and
+//	(e) DeleteUserCascade actually PERFORMS it, and the users row is gone.
 //
 // (d) is the assertion the false comment denied. (a) and (c) are what stop it passing vacuously.
+//
+// ⚠ (e) IS NOT DECORATION. This test used to end at (d) while its name and the prose above claimed
+// it proved user-requested deletion still works. ClaimForDeletion is
+// `UPDATE users SET updated_at = NOW() WHERE ... <predicate>` — it wins a race and erases nothing;
+// the erasure is a later call (#1569 round 6, G-K). A GDPR erasure that failed AFTER authorisation
+// — DeleteUserCascade's own in-transaction re-verification returning (false, nil, nil), a normal
+// outcome — left every assertion green. Measured, not argued: forcing that re-check to refuse
+// fails (e) and nothing else.
 func TestRetentionWithheldEnumeration_Integration_UserRequestedDeletionStillDeletesAWithheldAccount(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -348,4 +357,37 @@ func TestRetentionWithheldEnumeration_Integration_UserRequestedDeletionStillDele
 	require.NoError(t, err)
 	assert.True(t, claimed,
 		"a user-requested GDPR erasure must still delete an account the retention sweep is withholding — 'can never be deleted' would have an administrator refuse a request they are legally obliged to honour")
+
+	// (e) AND THE ROW IS ACTUALLY GONE. ⚠ Steps (a)–(d) prove AUTHORISATION and nothing else.
+	// ClaimForDeletion is `UPDATE users SET updated_at = NOW() WHERE ... <predicate>` — it exists
+	// to win a race, not to erase anything; the erasure happens later, in DeleteUserCascade, via
+	// DeletionService.ExecuteDeletion. This test's name and the prose above claim it proves
+	// user-requested deletion still WORKS on a withheld account, and until this step it stopped
+	// one call short of the only statement that erases a byte (#1569 round 6, G-K). A GDPR erasure
+	// could have failed after authorisation — DeleteUserCascade re-verifies eligibility inside its
+	// own transaction and returns (false, nil, nil), a normal outcome, when that re-check fails —
+	// and every assertion above would still have been green.
+	//
+	// DeleteUserCascade rather than ExecuteDeletion because this is a repository-level test and
+	// ExecuteDeletion is the service wrapper around it (deletion_service.go); the cascade is where
+	// `DELETE FROM users` lives and where the re-verification that could refuse it lives.
+	//
+	// expectedDeletionRequestedAt is read back from the row rather than reconstructed from the Go
+	// clock: the guard is `deletion_requested_at IS NOT DISTINCT FROM $2`, so a value that merely
+	// looks right would make this step pass or fail for a reason unrelated to the withholding.
+	var requestedAt *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT deletion_requested_at FROM users WHERE id = $1`, stuck.ID).Scan(&requestedAt))
+	require.NotNil(t, requestedAt, "fixture: MarkForDeletion must have stamped deletion_requested_at")
+
+	deleted, _, err := repo.DeleteUserCascade(ctx, stuck.ID, requestedAt)
+	require.NoError(t, err)
+	require.True(t, deleted,
+		"the cascade must actually run — a (false, nil, nil) here is the re-verification refusing the erasure AFTER it was authorised, which is exactly the failure the previous version of this test could not see")
+
+	var stillThere int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM users WHERE id = $1`, stuck.ID).Scan(&stillThere))
+	assert.Equal(t, 0, stillThere,
+		"GDPR erasure is a REAL hard delete (docs/decisions/2026-08-01-gdpr-erasure-hard-delete.md) — a surviving row means the notice gate withheld the one deletion path it must never touch")
 }
