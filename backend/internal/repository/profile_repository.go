@@ -4843,9 +4843,24 @@ type RetentionWithheldAccount struct {
 // THE STATE IT REACHES. Issue #1569 T1 gated the hard-delete sweep on both promised pre-deletion
 // notices having been recorded (retentionNoticesDeliveredPredicate), and BOTH notice queries bound
 // their population by `retention_expires_at > NOW()` (GetUsersNeedingRetention30dNotice and its 7d
-// sibling). An account whose clock runs out with a marker still NULL is therefore terminal: it can
-// never be deleted, and it can never be noticed. The metric calls that state
+// sibling). An account whose clock runs out with a marker still NULL therefore cannot be deleted
+// BY THE RETENTION SWEEP, or noticed by the current notice queries. The metric calls that state
 // notice_impossible_window_passed.
+//
+// ⚠ SCOPED TO THE SWEEP ON PURPOSE — an earlier draft said "it can never be deleted", which is
+// globally false and falsely reassuring. User-requested GDPR erasure is the OTHER authorisation
+// and it is untouched: userRequestedDeletionClaimPredicate requires `deletion_requested_at IS NOT
+// NULL`, retentionWithheldPopulationPredicate requires that same column to be NULL, so the two
+// populations are disjoint by construction — a withheld account that requests erasure leaves this
+// enumeration in the same statement that makes it a user-requested deletion candidate, and
+// services/deletion_service.go's ExecuteDeletion routes it by kind rather than treating every
+// deletion as a retention deletion. Nothing in #1569 T1 blocks a user's own erasure request, and
+// writing otherwise here would put a GDPR refusal one confident reader away. Proved by
+// TestRetentionWithheldEnumeration_Integration_UserRequestedDeletionStillDeletesAWithheldAccount.
+//
+// The population is INACTIVE OR CANCELLED, not cancelled alone — expiredRetentionClockPredicate's
+// `subscription_status IN ('inactive', 'cancelled')`, spliced (not restated) into the shared
+// predicate below, so the count and this enumeration cannot disagree about who is in it.
 //
 // ⚠ CORRECTING #1584'S OWN PREMISE, because it is half stale and re-deriving it from the ticket
 // would waste a round: the ticket says "no existing query can SELECT these users at all". They have

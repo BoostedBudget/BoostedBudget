@@ -92,9 +92,28 @@ type AdminRetentionWithheldCursor struct {
 //
 // ⚠ WithheldTotal IS THE WHOLE-POPULATION COUNT, NOT THE PAGE'S. It comes from
 // CountRetentionDeletionsWithheld over the SAME spliced predicate the listing selects on
-// (repository.retentionWithheldPopulationPredicate), so the number and the list beneath it cannot
-// describe different populations — which is why the count is re-read here rather than left to the
-// client to infer from len(accounts).
+// (repository.retentionWithheldPopulationPredicate), which is why the count is re-read here rather
+// than left to the client to infer from len(accounts) — page one of a hundred would otherwise
+// report a backlog of `limit`.
+//
+// ⚠ THE TWO NUMBERS ARE EVENTUALLY CONSISTENT, NOT ONE SNAPSHOT, and an earlier draft of this
+// comment claimed the opposite. Sharing a predicate makes the two reads describe the same
+// population DEFINITION; it does not make them observe the same INSTANT. They are separate
+// statements on a pooled connection with no enclosing transaction, so anything that moves a row
+// into or out of the population between them — a notice marker being stamped, a user requesting
+// deletion (which makes deletion_requested_at non-NULL and drops the row), the retention clock of
+// a pending account crossing NOW() (which adds one) — is visible to one read and not the other.
+// The observable results are withheld_total = 1 beside an empty page, or an accounts array longer
+// than withheld_total.
+//
+// That is ACCEPTED rather than closed, deliberately: this is a human triage surface polled by an
+// operator, the skew is bounded by one refresh, and the alternative — a REPEATABLE READ
+// transaction or a single statement returning both — would put a snapshot-holding transaction on
+// an admin read of an unbounded backlog to buy consistency nobody acts on. Read as_of, and read
+// both numbers as of that instant ± the window between the two queries. Pinned by
+// TestListAdminRetentionWithheld_CountAndPageAreEventuallyConsistent, which interleaves a
+// population change between the two reads and asserts the handler reports both faithfully instead
+// of reconciling them into a number it did not measure.
 type ListAdminRetentionWithheldOutput struct {
 	Body struct {
 		Accounts []AdminRetentionWithheldAccount `json:"accounts"`
@@ -105,10 +124,20 @@ type ListAdminRetentionWithheldOutput struct {
 		// is 4000. These two are disjoint — a pending account's clock is still RUNNING, so the
 		// notice sweep can still reach it, and it is not listed in accounts.
 		NoticePending int `json:"notice_pending"`
-		// NextCursor is null on the last page. Non-null does not promise the next page is non-empty
-		// — it promises only that this page was full, which is all a keyset walk can honestly say
-		// without a second query.
-		NextCursor *AdminRetentionWithheldCursor `json:"next_cursor"`
+		// NextCursor is ABSENT on the last page — omitempty, not a null, and the difference is the
+		// contract rather than a style choice. huma renders a *struct field as a bare `$ref`, which
+		// carries no `"null"` in its type union the way a *string field's schema does; marking it
+		// required therefore published a schema that REJECTS the terminating page of every keyset
+		// walk, and generated a TypeScript model typing the field non-optional for a client to
+		// dereference. omitempty drops it from `required`, so absent is the schema-valid encoding of
+		// "the walk is over". Pinned by
+		// TestListAdminRetentionWithheld_LastPageSatisfiesItsOwnGeneratedContract (validates a real
+		// last-page body against the GENERATED schema) and
+		// TestListAdminRetentionWithheld_LastPageOmitsTheCursorFromTheWire.
+		//
+		// Present does not promise the next page is non-empty — it promises only that this page was
+		// full, which is all a keyset walk can honestly say without a second query.
+		NextCursor *AdminRetentionWithheldCursor `json:"next_cursor,omitempty"`
 		Limit      int                           `json:"limit"`
 		AsOf       string                        `json:"as_of"`
 	}
@@ -119,13 +148,29 @@ type ListAdminRetentionWithheldOutput struct {
 //
 // GET /api/v1/admin/retention/withheld
 //
-// THE STATE IT MAKES ADDRESSABLE. T1 stopped the retention sweep hard-deleting a cancelled account
-// that was never sent the 30-day and 7-day notices apps/web/src/legal/PrivacyPolicy.tsx promises.
-// Both notice queries bound their population by retention_expires_at > NOW(), so once an account's
-// clock runs out with a marker still NULL it is terminal: it can never be deleted and can never be
-// noticed. The retention_deletions_withheld gauge has COUNTED that population since T1 (which is
-// why #1584's "no existing query can SELECT these users at all" is only half true); nothing
-// enumerated it, so there was no way to act on any individual account.
+// THE STATE IT MAKES ADDRESSABLE. T1 stopped the retention sweep hard-deleting an INACTIVE OR
+// CANCELLED account that was never sent the 30-day and 7-day notices
+// apps/web/src/legal/PrivacyPolicy.tsx promises. Both statuses, not just cancelled: the population
+// is expiredRetentionClockPredicate's `subscription_status IN ('inactive', 'cancelled')`, spliced
+// into repository.retentionWithheldPopulationPredicate, which the count and this listing share.
+// Both notice queries bound their population by retention_expires_at > NOW(), so once such an
+// account's clock runs out with a marker still NULL it cannot be deleted by the RETENTION SWEEP,
+// or noticed by the current notice queries.
+//
+// ⚠ THAT IS NOT "CAN NEVER BE DELETED", and the stronger phrasing this comment used to carry was
+// false in the one direction that matters most. User-requested GDPR erasure is a SEPARATE
+// authorisation: repository.userRequestedDeletionClaimPredicate requires
+// `deletion_requested_at IS NOT NULL`, while this population requires it to be NULL, so a withheld
+// account that asks to be erased leaves this listing and is deleted by the scheduled-deletion path
+// exactly as any other user is — deletion_service.go's ExecuteDeletion distinguishes the two kinds
+// explicitly. Proved by
+// TestRetentionWithheldEnumeration_Integration_UserRequestedDeletionStillDeletesAWithheldAccount.
+// Telling an administrator no deletion path exists would invite them to refuse a request they are
+// legally obliged to honour.
+//
+// The retention_deletions_withheld gauge has COUNTED this population since T1 (which is why
+// #1584's "no existing query can SELECT these users at all" is only half true); nothing enumerated
+// it, so there was no way to act on any individual account.
 //
 // ⚠ THIS ENDPOINT DRAINS NOTHING, AND ITS BEING READ-ONLY IS THE DESIGN, not an unfinished edge.
 // #1584 lists three mutually exclusive remedies — send late against a re-armed retention_expires_at,
@@ -225,17 +270,22 @@ func RegisterAdminRetentionWithheldOperations(api huma.API, handler *AdminHandle
 		Method:      http.MethodGet,
 		Path:        "/api/v1/admin/retention/withheld",
 		Summary:     "List accounts withheld from retention deletion (admin)",
-		Description: "Returns cancelled accounts whose data-retention window has expired but which the " +
-			"pre-deletion-notice gate is refusing to hard-delete, because at least one of the 30-day and " +
-			"7-day notices promised by the privacy policy was never recorded. These accounts are in a " +
-			"TERMINAL state: the notice queries only select users whose retention clock has not yet run " +
-			"out, so no existing path can send the missing notice, and the deletion sweep will hold them " +
-			"indefinitely. This is a read-only view — it sends nothing, extends no retention clock and " +
-			"waives no notice; choosing between those remedies is an open decision and will land as its " +
-			"own endpoint. has_email_on_file is reported per account because it is the one withholding " +
-			"reason the retention_deletions_withheld metric cannot separate. No email address is " +
-			"returned. Keyset-paginated: pass next_cursor's two fields back as cursor_expires_at and " +
-			"cursor_user_id. Requires admin role.",
+		Description: "Returns inactive or cancelled accounts whose data-retention window has expired " +
+			"but which the pre-deletion-notice gate is refusing to hard-delete, because at least one of " +
+			"the 30-day and 7-day notices promised by the privacy policy was never recorded. What is " +
+			"blocked is the retention sweep, and only it: the notice queries select only users whose " +
+			"retention clock has not yet run out, so no existing path can send the missing notice and " +
+			"the retention sweep will hold these accounts indefinitely. A user-requested GDPR erasure is " +
+			"a separate authorisation and still deletes them normally; requesting deletion also removes " +
+			"the account from this listing. This is a read-only view — it sends nothing, extends no " +
+			"retention clock and waives no notice; choosing between those remedies is an open decision " +
+			"and will land as its own endpoint. has_email_on_file is reported per account because it is " +
+			"the one withholding reason the retention_deletions_withheld metric cannot separate. No " +
+			"email address is returned. withheld_total and the returned page come from two separate " +
+			"queries and are eventually consistent: a notice marker, a deletion request or a retention " +
+			"clock crossing the current instant between them can make the total disagree with the page " +
+			"by a row. Keyset-paginated: pass next_cursor's two fields back as cursor_expires_at and " +
+			"cursor_user_id; next_cursor is absent on the final page. Requires admin role.",
 		Tags:     []string{"Admin"},
 		Security: []map[string][]string{{"clerk": {}}},
 		Middlewares: huma.Middlewares{

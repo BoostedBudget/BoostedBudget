@@ -293,3 +293,59 @@ func TestRetentionWithheldEnumeration_Integration_KeysetPaginationCoversTiedExpi
 		assert.True(t, seen[id], "withheld account %s was never returned by the paged walk despite sharing an expiry with four others", id)
 	}
 }
+
+// TestRetentionWithheldEnumeration_Integration_UserRequestedDeletionStillDeletesAWithheldAccount
+// falsifies the phrase "can never be deleted" that this file and the admin endpoint's doc comment
+// both used to carry about a withheld account. That claim is true only of the RETENTION SWEEP, and
+// stating it globally is dangerous in exactly one direction: it tells an administrator that an
+// account stuck behind the #1569 T1 notice gate is beyond every deletion path, when the path that
+// matters most for GDPR — the user's own erasure request — is untouched and still works.
+//
+// The two authorisations are disjoint by construction rather than by convention, and this test
+// walks the transition between them on one row:
+//
+//	(a) withheld: enumerated here, and retentionDeletionClaimPredicate REFUSES it (the true half —
+//	    without this the test would pass against a gate that was never closed);
+//	(b) the user requests erasure through the production write path (MarkForDeletion, which sets
+//	    deletion_requested_at AND deletion_scheduled_at together — a fixture writing one column
+//	    directly would construct a partial state the app cannot produce);
+//	(c) it LEAVES this enumeration in the same stroke, because retentionWithheldPopulationPredicate
+//	    requires `deletion_requested_at IS NULL`;
+//	(d) userRequestedDeletionClaimPredicate now AUTHORISES the hard delete.
+//
+// (d) is the assertion the false comment denied. (a) and (c) are what stop it passing vacuously.
+func TestRetentionWithheldEnumeration_Integration_UserRequestedDeletionStillDeletesAWithheldAccount(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	stuck := seedNoticeGateUser(t, ctx, pool, repo, "enum_gdpr_erasure", nil, nil)
+
+	// (a) It really is withheld, and the retention sweep really is refusing it.
+	withheld := collectRetentionWithheld(t, ctx, repo)
+	_, isWithheld := withheld[stuck.ID]
+	require.True(t, isWithheld,
+		"the fixture must start in the withheld population, or every assertion below is about the wrong row")
+
+	claimed, err := repo.ClaimForDeletion(ctx, stuck.ID, DeletionKindRetention)
+	require.NoError(t, err)
+	require.False(t, claimed,
+		"the retention sweep must refuse an unnoticed account — that refusal is the #1569 T1 gate, and it is the ONLY thing 'cannot be deleted' was ever true of")
+
+	// (b) The user asks to be erased, through the path the API actually calls.
+	require.NoError(t, repo.MarkForDeletion(ctx, stuck.ID, time.Now().Add(-time.Hour)))
+
+	// (c) The row leaves this listing, because the two populations are disjoint on
+	// deletion_requested_at. An operator watching the backlog sees it drain, not linger.
+	withheldAfter := collectRetentionWithheld(t, ctx, repo)
+	_, stillWithheld := withheldAfter[stuck.ID]
+	assert.False(t, stillWithheld,
+		"an account with a pending erasure request is no longer being held BY THE NOTICE GATE — listing it would put a row on an operator's exception list that is already on its way out")
+
+	// (d) And the deletion is authorised. This is the claim the old wording denied.
+	claimed, err = repo.ClaimForDeletion(ctx, stuck.ID, DeletionKindUserRequested)
+	require.NoError(t, err)
+	assert.True(t, claimed,
+		"a user-requested GDPR erasure must still delete an account the retention sweep is withholding — 'can never be deleted' would have an administrator refuse a request they are legally obliged to honour")
+}
