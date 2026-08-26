@@ -45,7 +45,7 @@ const isoDateLayout = "2006-01-02"
 type GetAccountHoldingsHistoryInput struct {
 	inputs.AuthenticatedInput
 	AccountID string `query:"account_id" required:"true" doc:"Account whose retained holdings history to read. Required — this endpoint is per-account by design; there is no whole-portfolio historical read, because a portfolio total mixing live and closed accounts is a current-state figure."`
-	AsOf      string `query:"as_of" doc:"UTC calendar day (YYYY-MM-DD) to read. Omit for the most recent retained day. A day with no retained positions returns 404 rather than an empty list."`
+	AsOf      string `query:"as_of" doc:"UTC calendar day (YYYY-MM-DD) to read. Omit for the most recent retained day. A day nothing was retained for returns 404 rather than an empty list; a day the account was observed holding nothing returns 200 with an empty position list, because those are different facts."`
 }
 
 // GetAccountHoldingsHistoryOutput is the response for GET /investments/holdings/history.
@@ -95,8 +95,11 @@ func RegisterHoldingHistoryRoutes(api huma.API, handler *HoldingHistoryHandler) 
 			"Removing a linked bank account retains its holdings history rather than erasing it, and this is the only " +
 			"endpoint that reads it back: GET /investments/holdings answers a CURRENT-STATE question and deliberately " +
 			"returns nothing for a closed account. " +
-			"Omit as_of for the most recent retained day; a day with no retained positions returns 404 rather than an " +
-			"empty list, because \"we kept nothing for that day\" is not \"the account held nothing that day\". " +
+			"Omit as_of for the most recent retained day. A day NOTHING was retained for returns 404 rather than an " +
+			"empty list, because \"we kept nothing for that day\" is not \"the account held nothing that day\" — and the " +
+			"second fact has its own answer: a day on which the account was observed holding nothing (a completed " +
+			"liquidation, whose rows are retained and marked absent) is listed in available_dates and returns 200 with " +
+			"an empty positions list. " +
 			"⚠ These are HISTORICAL figures. They carry no day-change, because day-change is measured against today's " +
 			"prior close, and they must never be presented as what the account holds now.",
 		Tags:     []string{"Investments"},

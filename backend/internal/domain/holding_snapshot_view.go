@@ -50,9 +50,19 @@ type HoldingSnapshotView struct {
 // positions on it, and every other day that can be asked for.
 type HoldingSnapshotHistory struct {
 	AccountID string `json:"account_id"`
-	// AsOfDate is the day Positions describes, or nil when the account has no retained history at
-	// all. Echoed back so a client that asked for "the latest" learns which day that was.
-	AsOfDate *string `json:"as_of_date,omitempty" doc:"UTC calendar day (YYYY-MM-DD) the positions describe; null when no history is retained"`
+	// AsOfDate is the day Positions describes. Echoed back so a client that asked for "the latest"
+	// learns which day that was.
+	//
+	// ⚠ OMITTED — NOT null — when the account has no retained history at all (#1569 T7.8). The
+	// doc string used to promise `null` while `omitempty` made the key vanish, and the generated
+	// schema said plain `type: string`, so the promise was one no response could keep. The
+	// mismatch is resolved towards what SHIPS rather than towards the promise, deliberately:
+	// dropping omitempty would make huma mark the field required-and-nullable, a breaking change
+	// to every generated client model, to convey a fact AvailableDates already carries
+	// unambiguously (it is never nil, so `available_dates: []` IS "no retained history"). A key
+	// that is present-and-null and a key that is absent are the same `undefined` to the one
+	// consumer that reads it.
+	AsOfDate *string `json:"as_of_date,omitempty" doc:"UTC calendar day (YYYY-MM-DD) the positions describe; omitted when no history is retained for this account"`
 	// AvailableDates lists every UTC day with at least one retained position, newest first.
 	AvailableDates []string              `json:"available_dates" doc:"Every UTC day (YYYY-MM-DD) with retained positions, newest first"`
 	Positions      []HoldingSnapshotView `json:"positions"`
