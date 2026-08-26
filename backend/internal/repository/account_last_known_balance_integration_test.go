@@ -95,8 +95,8 @@ func TestAccountRepository_LastKnownBalance_Integration(t *testing.T) {
 	// ciphertext. Reads decrypt again, which is why the assertions below can still look accounts up
 	// by their plaintext names.
 	byName := map[string]string{
-		closedWithHistory: uuid.New().String(),
-		closedNoHistory:   uuid.New().String(),
+		closedWithHistory:     uuid.New().String(),
+		closedNoHistory:       uuid.New().String(),
 		closedZero:            uuid.New().String(),
 		stillActive:           uuid.New().String(),
 		closedThenSnapshotted: uuid.New().String(),
@@ -233,7 +233,7 @@ func TestAccountRepository_LastKnownBalance_Integration(t *testing.T) {
 
 		// ── Case 5: a snapshot written AFTER the terminal transition is not a last-known balance.
 		// "Last known balance … as of <date>" claims a figure from before the account closed. The
-		// newest row on this account is dated an hour into the future of the closure, written by a
+		// newest row on this account is dated one millisecond after the closure, written by a
 		// sync that had not noticed yet. Taking it would print a post-closure number under a
 		// pre-closure caption — the exact unlabelled-blend defect the whole #1591 ruling exists to
 		// refuse. The row itself is RETAINED (#1569); it is simply not the answer to this question.

@@ -39,7 +39,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
-// collectRetentionWithheldPage walks every page of the enumeration to exhaustion and returns the
+// collectRetentionWithheld walks every page of the enumeration to exhaustion and returns the
 // rows keyed by user id. Walking to exhaustion (rather than reading one page) is what makes a
 // "not enumerated" assertion honest: a row that merely sorts late is still enumerated eventually.
 func collectRetentionWithheld(t *testing.T, ctx context.Context, repo *profileRepository) map[string]RetentionWithheldAccount {
