@@ -47,12 +47,14 @@ import type {
 
 import type {
   ErrorModel,
+  GetAccountHoldingsHistoryParams,
   GetHoldingsOutputBody,
   GetHoldingsParams,
   GetInvestmentTransactionsOutputBody,
   GetInvestmentTransactionsParams,
   GetPortfolioHistoryOutputBody,
   GetPortfolioHistoryParams,
+  HoldingSnapshotHistory,
   PortfolioSummary
 } from '../../models';
 
@@ -162,6 +164,100 @@ export function useGetHoldings<TData = Awaited<ReturnType<typeof getHoldings>>, 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getGetHoldingsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Returns the investment positions retained for one account as they stood on a past UTC day, with the list of every other day that can be asked for and the day's pre-computed total value (Issue #1569). Removing a linked bank account retains its holdings history rather than erasing it, and this is the only endpoint that reads it back: GET /investments/holdings answers a CURRENT-STATE question and deliberately returns nothing for a closed account. Omit as_of for the most recent retained day; a day with no retained positions returns 404 rather than an empty list, because "we kept nothing for that day" is not "the account held nothing that day". ⚠ These are HISTORICAL figures. They carry no day-change, because day-change is measured against today's prior close, and they must never be presented as what the account holds now.
+ * @summary Get an account's retained holdings history
+ */
+export const getAccountHoldingsHistory = (
+    params: GetAccountHoldingsHistoryParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<HoldingSnapshotHistory>(
+      {url: `/api/v1/investments/holdings/history`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetAccountHoldingsHistoryQueryKey = (params?: GetAccountHoldingsHistoryParams,) => {
+    return [
+    `/api/v1/investments/holdings/history`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetAccountHoldingsHistoryQueryOptions = <TData = Awaited<ReturnType<typeof getAccountHoldingsHistory>>, TError = ErrorType<ErrorModel>>(params: GetAccountHoldingsHistoryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAccountHoldingsHistory>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetAccountHoldingsHistoryQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getAccountHoldingsHistory>>> = ({ signal }) => getAccountHoldingsHistory(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getAccountHoldingsHistory>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetAccountHoldingsHistoryQueryResult = NonNullable<Awaited<ReturnType<typeof getAccountHoldingsHistory>>>
+export type GetAccountHoldingsHistoryQueryError = ErrorType<ErrorModel>
+
+
+export function useGetAccountHoldingsHistory<TData = Awaited<ReturnType<typeof getAccountHoldingsHistory>>, TError = ErrorType<ErrorModel>>(
+ params: GetAccountHoldingsHistoryParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAccountHoldingsHistory>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAccountHoldingsHistory>>,
+          TError,
+          Awaited<ReturnType<typeof getAccountHoldingsHistory>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetAccountHoldingsHistory<TData = Awaited<ReturnType<typeof getAccountHoldingsHistory>>, TError = ErrorType<ErrorModel>>(
+ params: GetAccountHoldingsHistoryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAccountHoldingsHistory>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAccountHoldingsHistory>>,
+          TError,
+          Awaited<ReturnType<typeof getAccountHoldingsHistory>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetAccountHoldingsHistory<TData = Awaited<ReturnType<typeof getAccountHoldingsHistory>>, TError = ErrorType<ErrorModel>>(
+ params: GetAccountHoldingsHistoryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAccountHoldingsHistory>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get an account's retained holdings history
+ */
+
+export function useGetAccountHoldingsHistory<TData = Awaited<ReturnType<typeof getAccountHoldingsHistory>>, TError = ErrorType<ErrorModel>>(
+ params: GetAccountHoldingsHistoryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAccountHoldingsHistory>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetAccountHoldingsHistoryQueryOptions(params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

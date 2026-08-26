@@ -6,6 +6,23 @@
 
 import { mock } from 'bun:test'
 import * as RealInvestmentsModule from '@boostedbudget/api-client/endpoints/investments/investments'
+import type {
+  GetAccountHoldingsHistoryQueryResult,
+  GetHoldingsQueryResult,
+} from '@boostedbudget/api-client/endpoints/investments/investments'
+import type { GetAccountHoldingsHistoryParams } from '@boostedbudget/api-client/models/getAccountHoldingsHistoryParams'
+import type { GetHoldingsParams } from '@boostedbudget/api-client/models/getHoldingsParams'
+
+// A `data: undefined` default narrows the factory's inferred return type to `undefined`, so every
+// `mockReturnValue({ data: … })` in a test is then a type error against the default rather than
+// against the response. Annotate the return type so `data` is `TData | undefined` from the start.
+type QueryStateMock<TData> = {
+  data: TData | undefined
+  isLoading: boolean
+  isError: boolean
+  /** react-query hands the consumer the rejection too; PortfolioHoldingsWidget renders its message. */
+  error?: unknown
+}
 
 // === getInvestmentTransactions (raw fetcher — used by useInfiniteInvestmentTransactions) ===
 export const mockGetInvestmentTransactions = mock(() =>
@@ -27,20 +44,27 @@ export const mockUseGetPortfolioHistory = mock(() => ({
 }))
 
 // === useGetHoldings ===
-export const mockUseGetHoldings = mock(() => ({
-  data: undefined,
-  isLoading: false,
-  isError: false,
-}))
+export const mockUseGetHoldings = mock(
+  (_params?: GetHoldingsParams, _options?: unknown): QueryStateMock<GetHoldingsQueryResult> => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+  }),
+)
 
 // === useGetAccountHoldingsHistory (#1569 — a CLOSED account's retained positions) ===
 // Defaults to "no history recorded", which is the honest zero-value for an account nothing was
 // ever captured for; tests that want rows set it explicitly.
-export const mockUseGetAccountHoldingsHistory = mock(() => ({
-  data: undefined,
-  isLoading: false,
-  isError: false,
-}))
+export const mockUseGetAccountHoldingsHistory = mock(
+  (
+    _params?: GetAccountHoldingsHistoryParams,
+    _options?: unknown,
+  ): QueryStateMock<GetAccountHoldingsHistoryQueryResult> => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+  }),
+)
 
 // === useInfiniteInvestmentTransactions (wrapper hook mock for component tests) ===
 export const mockFetchNextInvestmentPage = mock(() => Promise.resolve())
