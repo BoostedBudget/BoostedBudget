@@ -67,7 +67,7 @@ retaining path; an audit row written **in the same transaction** as the delete; 
 refuses to run on live data; and an entry in `allowedHistoryDeletes` (guard G2) giving the reason.
 
 Today this bucket has exactly five members — the five distinct functions keyed in
-`allowedHistoryDeletes` (`history_delete_guard_test.go:57-91`, eight `(function, table)` entries
+`allowedHistoryDeletes` (`history_delete_guard_test.go:94-186`, eight `(function, table)` entries
 across them). ⚠ **They do not all meet the four requirements, and this document previously implied
 they did.** The strong form holds for the three purges only:
 
