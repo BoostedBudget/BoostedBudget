@@ -63,6 +63,11 @@ type TransactionRepository interface {
 	// Returns a map of transaction IDs that were genuinely inserted (as opposed to
 	// conflict-preserved by ON CONFLICT DO UPDATE).  Callers use this to gate
 	// analytics / match-count side-effects on fresh inserts only (Issue #1213).
+	//
+	// ⚠ IT ALSO WRITES THE PERSISTED id BACK INTO EACH ELEMENT (#1586). A conflict keeps the id the
+	// row was first stored with, so a caller that minted its own UUID is otherwise left holding one
+	// that names no row. Read ids out of the slice AFTER the call, never from before it. The
+	// returned map is the other question — "is this row new?" — and does NOT widen to conflict rows.
 	CreateBatch(ctx context.Context, transactions []domain.Transaction) (map[string]bool, error)
 
 	// Update updates an existing transaction
@@ -376,6 +381,11 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 	valueStrings := make([]string, 0, len(transactions))
 	valueArgs := make([]interface{}, 0, len(transactions)*numFields)
 
+	// #1586 (gap G7): the blind index of each element, in input order. It is the ONLY key that
+	// survives the round trip -- the id does not, because a conflict row keeps the id it was first
+	// stored with -- so it is what the persisted ids returned below are matched back on.
+	blindIdxByInput := make([]*string, len(transactions))
+
 	for i, tx := range transactions {
 		// Generate UUID if not set
 		if tx.ID == "" {
@@ -392,6 +402,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		if err != nil {
 			return nil, fmt.Errorf("failed to encrypt transaction fields: %w", err)
 		}
+		blindIdxByInput[i] = extIDBlindIdx
 
 		// Create placeholders for this row
 		placeholders := make([]string, numFields)
@@ -549,7 +560,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			    EXCLUDED.pending_transaction_id_blind_idx,
 			    transactions.pending_transaction_id_blind_idx),
 			updated_at = NOW()
-		RETURNING id, (xmax::text::bigint = 0) AS inserted
+		RETURNING id, (xmax::text::bigint = 0) AS inserted, external_transaction_id_blind_idx
 	`, strings.Join(valueStrings, ", "))
 
 	rows, err := r.db.Query(ctx, query, valueArgs...)
@@ -559,18 +570,58 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 	defer rows.Close()
 
 	insertedIDs := make(map[string]bool)
+	persistedByBlindIdx := make(map[string]string, len(transactions))
 	for rows.Next() {
 		var id string
 		var inserted bool
-		if err := rows.Scan(&id, &inserted); err != nil {
+		var blindIdx *string
+		if err := rows.Scan(&id, &inserted, &blindIdx); err != nil {
 			return nil, fmt.Errorf("failed to scan batch create result: %w", err)
 		}
 		if inserted {
 			insertedIDs[id] = true
 		}
+		if blindIdx != nil {
+			persistedByBlindIdx[*blindIdx] = id
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed to iterate batch create results: %w", err)
+	}
+
+	// #1586 (gap G7): TELL THE CALLER WHICH ROW IT ACTUALLY WROTE.
+	//
+	// TWO RETURNED SETS, TWO DIFFERENT MEANINGS, AND THEY MUST NOT BE CONFLATED:
+	//
+	//   insertedIDs        -- "this row is NEW". Deliberately excludes conflict rows, and stays
+	//                         that way: EmitBatchSideEffects fires rule analytics and per-rule
+	//                         match counts off it, and a re-delivered transaction must not re-fire
+	//                         them (#1213). Nothing below widens it.
+	//   transactions[i].ID -- "this is the row in the database". Now true for conflict rows too.
+	//
+	// WHY IT HAS TO BE WRITTEN BACK. Every id here is minted by the CALLER (or by the loop above)
+	// before the statement runs, and ON CONFLICT DO UPDATE does not assign `id`: a conflict keeps
+	// the id the row was FIRST stored with. The caller was left holding a UUID that names no row,
+	// and there is no second query that could recover the real one without the blind index -- which
+	// is derived in here and never leaves. So this is the only layer that can answer it.
+	//
+	// The concrete casualty was the settlement repair (#1586): pullForwardStrandedSettlements takes
+	// the stored rows' ids, and on a RE-DELIVERY -- which is precisely the retry the repair's
+	// fail-and-hold-the-cursor design is built on -- every one of them was a phantom, so the repair
+	// matched zero rows and reported success forever. Pinned by
+	// TestLateSettlement_RedeliveredTwinIsRepairableByItsPersistedID_Integration.
+	//
+	// Mutating the caller's slice is this method's existing contract, not a new one: it already
+	// assigns missing ids, timestamps and the encrypted PII fields in place. Rule applications keyed
+	// on the PRE-conflict id are unaffected, because they are gated on insertedIDs, which a conflict
+	// row is never in.
+	for i := range transactions {
+		if blindIdxByInput[i] == nil {
+			continue
+		}
+		if persisted, ok := persistedByBlindIdx[*blindIdxByInput[i]]; ok {
+			transactions[i].ID = persisted
+		}
 	}
 
 	return insertedIDs, nil

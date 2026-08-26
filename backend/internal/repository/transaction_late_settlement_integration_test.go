@@ -271,3 +271,63 @@ func TestLateSettlement_IsIdempotent_Integration(t *testing.T) {
 	assert.Equal(t, before, f.settlementHistoryFor(t, ctx, f.postedID),
 		"a re-run changes nothing, so it records nothing")
 }
+
+// TestLateSettlement_RedeliveredTwinIsRepairableByItsPersistedID_Integration — #1586, gap G7.
+//
+// THE DEFECT. pullForwardStrandedSettlements repairs against `stored[i].ID`, the id the SERVICE
+// holds in memory. processAddedTransactions mints a fresh UUID for every mapped transaction before
+// it calls CreateBatch, and CreateBatch's ON CONFLICT DO UPDATE does not write `id`: the stored row
+// keeps the id it was first inserted with. So on a RE-DELIVERY the service's id names no row at
+// all, the repair matches zero rows, and it reports success while doing nothing.
+//
+// WHY THAT SEQUENCE IS REACHED RATHER THAN HYPOTHETICAL, and it is the one the surrounding design
+// depends on. A repair failure now returns so that the cursor stays put and Plaid re-delivers the
+// page — the entire justification for stalling the item's ingestion is that the second attempt
+// works. The second attempt is exactly a re-delivery, so before this fix the retry the design was
+// built around was the ONE case guaranteed to repair nothing. A re-link or a cursor reset
+// (transaction_sync_service.go's full re-sync path) reaches it the same way.
+//
+// The pull-forward itself is unchanged and correct; what was wrong is the id handed to it.
+func TestLateSettlement_RedeliveredTwinIsRepairableByItsPersistedID_Integration(t *testing.T) {
+	ctx := context.Background()
+	f := seedSettlementFixture(t)
+
+	// Sync N (removal, no twin stored) then sync N+1 (the twin arrives and is INSERTED). The repair
+	// that should have run at the end of sync N+1 failed transiently, so nothing was pulled forward
+	// and the cursor was left where the run started.
+	lateSettle(t, ctx, f, domain.Transaction{})
+
+	// Sync N+2: Plaid re-delivers the same page. The service maps it afresh and mints a NEW UUID,
+	// exactly as processAddedTransactions does, so the id it will repair against is not the stored
+	// row's id unless CreateBatch reports the persisted one back.
+	redelivered := []domain.Transaction{{
+		ID: uuid.New().String(), UserID: f.userID, AccountID: f.accountID, LinkedItemID: f.linkedItemID,
+		Source: domain.SourcePlaid, ExternalTransactionID: &f.postedExtID,
+		Amount: 42.00, Date: time.Now().AddDate(0, 0, -1), Name: "Posted Coffee",
+		PendingTransactionID: &f.pendingExtID,
+	}}
+	minted := redelivered[0].ID
+
+	insertedIDs, err := f.repo.CreateBatch(ctx, redelivered)
+	require.NoError(t, err)
+
+	assert.Empty(t, insertedIDs,
+		"a re-delivered row is a conflict-update and NOT an insert. This is the half that must not "+
+			"widen: EmitBatchSideEffects fires rule analytics and match counts only for ids in this "+
+			"map, and a re-delivery must not re-fire them")
+
+	assert.Equal(t, f.postedID, redelivered[0].ID,
+		"CreateBatch must report the PERSISTED id of a conflict row, not the caller's minted one "+
+			"(minted %s); the caller has no other way to learn it", minted)
+
+	moved := f.pullForward(t, ctx, redelivered[0].ID)
+	assert.Equal(t, int64(1), moved,
+		"the repair must reach the stored twin on a re-delivery; against a phantom id it matches "+
+			"zero rows and reports success")
+
+	posted, err := f.repo.GetByID(ctx, f.postedID)
+	require.NoError(t, err)
+	require.NotNil(t, posted.UserNotes, "the user's note must have landed on the row they can see")
+	assert.Equal(t, "split with Sam, they owe me half", *posted.UserNotes)
+	assert.ElementsMatch(t, []string{"holiday", "shared"}, posted.Tags)
+}

@@ -109,9 +109,9 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
-	rows := pgxmock.NewRows([]string{"id", "inserted"}).
-		AddRow("test-id-1", true).
-		AddRow("test-id-2", true)
+	rows := pgxmock.NewRows([]string{"id", "inserted", "external_transaction_id_blind_idx"}).
+		AddRow("test-id-1", true, nil).
+		AddRow("test-id-2", true, nil)
 	mock.ExpectQuery("INSERT INTO transactions").
 		WithArgs(args...).
 		WillReturnRows(rows)
@@ -2273,8 +2273,8 @@ func TestTransactionRepository_CreateBatch_WithUserAccountID(t *testing.T) {
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
-	rows := pgxmock.NewRows([]string{"id", "inserted"}).
-		AddRow("test-id-relink-1", true)
+	rows := pgxmock.NewRows([]string{"id", "inserted", "external_transaction_id_blind_idx"}).
+		AddRow("test-id-relink-1", true, nil)
 	mock.ExpectQuery("INSERT INTO transactions").
 		WithArgs(args...).
 		WillReturnRows(rows)
@@ -2322,8 +2322,8 @@ func TestTransactionRepository_CreateBatch_DOUpdateBehavior(t *testing.T) {
 
 	// The query should use ON CONFLICT DO UPDATE (not DO NOTHING) and RETURNING xmax
 	// Issue #1213: RETURNING id, (xmax::text::bigint = 0) AS inserted
-	rows := pgxmock.NewRows([]string{"id", "inserted"}).
-		AddRow("test-do-update-id", false) // conflict-updated row: inserted=false
+	rows := pgxmock.NewRows([]string{"id", "inserted", "external_transaction_id_blind_idx"}).
+		AddRow("test-do-update-id", false, nil) // conflict-updated row: inserted=false
 	mock.ExpectQuery("ON CONFLICT.*DO UPDATE").
 		WithArgs(args...).
 		WillReturnRows(rows)
@@ -2374,8 +2374,8 @@ func TestTransactionRepository_CreateBatch_PersistsOverrideAndReview(t *testing.
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
-	rows := pgxmock.NewRows([]string{"id", "inserted"}).
-		AddRow("test-override-id", true)
+	rows := pgxmock.NewRows([]string{"id", "inserted", "external_transaction_id_blind_idx"}).
+		AddRow("test-override-id", true, nil)
 	mock.ExpectQuery("category_override_kind, pfc_primary_override, pfc_detailed_override, custom_category_override_id,[\\s]+category_source, reviewed, reviewed_at").
 		WithArgs(args...).
 		WillReturnRows(rows)
@@ -2398,8 +2398,13 @@ func TestTransactionRepository_CreateBatch_ReturnsInsertedIDs(t *testing.T) {
 	repo := NewTransactionRepository(mockDB, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
+	enc := newTestFieldEncryptor(t)
 	freshID := uuid.New().String()
 	conflictExistingID := uuid.New().String() // the id returned for the conflict row is the EXISTING row's id
+	// #1586 gap G7: the conflict row is MINTED with a different id from the one already stored,
+	// which is what a re-delivery looks like. Pre-assigning the stored id here (as this test used
+	// to) made the write-back a no-op and hid the defect.
+	conflictMintedID := uuid.New().String()
 	externalID1 := "plaid_tx_fresh"
 	externalID2 := "plaid_tx_conflict"
 
@@ -2416,7 +2421,7 @@ func TestTransactionRepository_CreateBatch_ReturnsInsertedIDs(t *testing.T) {
 			Name:                  "Fresh Transaction",
 		},
 		{
-			ID:                    conflictExistingID, // pre-assigned; on conflict RETURNING returns the existing row id
+			ID:                    conflictMintedID, // on conflict RETURNING returns the EXISTING row's id instead
 			UserID:                "user-123",
 			AccountID:             "account-123",
 			LinkedItemID:          "item-123",
@@ -2431,9 +2436,11 @@ func TestTransactionRepository_CreateBatch_ReturnsInsertedIDs(t *testing.T) {
 	// RETURNING id, (xmax::text::bigint = 0) AS inserted
 	// Fresh insert: our pre-assigned id, xmax=0 (inserted=true)
 	// Conflict update: existing row id, xmax!=0 (inserted=false)
-	rows := pgxmock.NewRows([]string{"id", "inserted"}).
-		AddRow(freshID, true).
-		AddRow(conflictExistingID, false)
+	blindFresh := enc.BlindIndex(externalID1)
+	blindConflict := enc.BlindIndex(externalID2)
+	rows := pgxmock.NewRows([]string{"id", "inserted", "external_transaction_id_blind_idx"}).
+		AddRow(freshID, true, &blindFresh).
+		AddRow(conflictExistingID, false, &blindConflict)
 
 	args := make([]interface{}, 66) // 33 fields * 2 rows (#1578 added pending_transaction_id_blind_idx)
 	for i := range args {
@@ -2448,6 +2455,16 @@ func TestTransactionRepository_CreateBatch_ReturnsInsertedIDs(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, insertedIDs[freshID], "fresh insert should be in insertedIDs")
 	assert.False(t, insertedIDs[conflictExistingID], "conflict-preserved row should NOT be in insertedIDs")
+	assert.False(t, insertedIDs[conflictMintedID], "nor under the id the caller minted for it")
+
+	// #1586 gap G7: the two returned facts are DIFFERENT questions and must stay so. insertedIDs
+	// answers "is this row new?" and deliberately excludes the conflict row, because
+	// EmitBatchSideEffects fires rule analytics off it and a re-delivery must not re-fire them. The
+	// slice answers "which row did I write?", and for the conflict row that is the STORED id — the
+	// only thing the caller can safely hand to a follow-up statement.
+	assert.Equal(t, freshID, transactions[0].ID, "a fresh insert keeps the id it was written with")
+	assert.Equal(t, conflictExistingID, transactions[1].ID,
+		"a conflict row must come back carrying the PERSISTED id, not the minted one")
 	require.NoError(t, mockDB.ExpectationsWereMet())
 }
 
