@@ -2166,6 +2166,23 @@ jobs:
           DATABASE_URL: ${{ env.DATABASE_URL }}
         run: bash scripts/__tests__/test-migrations-target-guard.test.sh
 
+      # #1569 round 5 (G3): the LAST suite under scripts/__tests__ that no workflow ran. It was
+      # reachable only through `make test-scripts`, which no job invokes — so its eight cases,
+      # including its own mutant, proved nothing about any commit. A guard that exists but never
+      # runs is the same as no guard, and this was the third instance of that class on this branch.
+      #
+      # Filed HERE, beside the target-guard suite, because it is about the same subject: the root
+      # Makefile's migrate-* recipes and scripts/resolve-dev-database-url.sh, i.e. WHICH database a
+      # destructive migration command would reach. It does not need the Postgres container — every
+      # case either dry-runs make (`make -n` against a sentinel URL on a dead port) or drives the
+      # resolver through docker/psql shims — but it must not be pulled away from the guard it is a
+      # sibling of. It neither reads nor writes this job's DATABASE_URL database: the make cases
+      # override DATABASE_URL with the sentinel, and the resolver cases run under `env -u
+      # DATABASE_URL`.
+      - name: Test root Makefile migrate delegation and dev-URL resolver
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/root-migrate-delegation.test.sh
+
       - name: Run comprehensive migration tests
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
