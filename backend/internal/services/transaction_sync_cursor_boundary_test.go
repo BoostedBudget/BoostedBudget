@@ -478,8 +478,7 @@ func TestSyncTransactions_RemovedAlreadyTombstoned_AdvancesCursor(t *testing.T) 
 	mockPlaidService.AssertExpectations(t)
 }
 
-// TestSyncTransactions_UnmappableAddedRowIsSkippedAndTheCursorStillAdvances_Integration pins
-// residual (1) of the #1570 STORAGE-BEFORE-CURSOR CONTRACT — as a DECISION, not as a defect.
+// TestSyncTransactions_UnmappableAddedRowIsSkippedAndTheCursorStillAdvances pins residual (1) of the #1570 STORAGE-BEFORE-CURSOR CONTRACT — as a DECISION, not as a defect.
 //
 // ⚠ READ THIS BEFORE "FIXING" WHAT IT ASSERTS. A review reported this shape as data loss: an added
 // transaction Plaid names against a plaid_account_id with no accounts row is Warn'd and skipped,
