@@ -282,3 +282,171 @@ func TestAccountRepository_LastKnownBalance_Integration(t *testing.T) {
 			"combining AsOf with IncludeLastKnownBalance must be refused, got %v", err)
 	})
 }
+
+// TestAccountRepository_LastKnownBalance_AcrossARelink_Integration is the case the fixture above
+// structurally cannot reach: it closes every account exactly ONCE and never restores one, so a
+// second live period never exists (#1569 round 6, G-D).
+//
+// ⚠ THE HOLE. Decision 4 bounds `snapshot_at` only from ABOVE — at the valid_from of the OPEN
+// non-active interval, i.e. the MOST RECENT closure. After active → removed → active → removed,
+// everything before the SECOND removal satisfies that bound, including the post-first-closure race
+// row Decision 4 exists specifically to exclude. If the second live period recorded no snapshot of
+// its own, that row — a measurement taken while the account was NOT live — became "the last known
+// balance before it closed". Exactly the blend the three-decision note was written to prevent.
+//
+// ⚠ THE FIX IS NOT THE OBVIOUS ONE, and this test is why. The narrow repair is a lower bound at the
+// last ACTIVE interval's valid_from. It kills the race row — and it also kills every legitimate
+// measurement taken during an EARLIER live period, which on a re-linked-and-re-closed account is
+// usually the only history there is. On the one surface whose thesis is that history is retained,
+// answering "we have nothing" when a real, dated, retained figure exists is the wrong direction.
+// So the bound is per-INTERVAL instead: a snapshot is admissible unless it falls strictly inside
+// some non-active interval. `notDuringAClosedInterval` in account_liveness_sql.go carries the
+// argument; the two cases below are what separate the two candidate fixes, and the second one
+// FAILS under the narrow repair.
+//
+// EVERY TRANSITION GOES THROUGH THE PRODUCTION STATUS PATH — MarkRemovedByProvider and
+// RestoreProviderRemovedAccount, the only pair that can legitimately produce active → removed →
+// active. A hand-set `status` column would bypass record_account_status_change entirely and leave
+// account_status_history with no second interval at all, making the boundary this test is about
+// untestable while still going green.
+func TestAccountRepository_LastKnownBalance_AcrossARelink_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	repo := NewAccountRepository(tx, newTestFieldEncryptor(t))
+	snapshots := NewBalanceSnapshotRepository(tx)
+
+	userID := uuid.New()
+	linkedItemID := uuid.New()
+	userAccountID := uuid.New()
+	prefix := "relink-lkb-" + userID.String()
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "test|"+prefix, prefix+"@example.com")
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-test-token')`, linkedItemID, userID, prefix+"-item")
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id, primary_type)
+		VALUES ($1, $2, $3, 'depository')`, userAccountID, userID, prefix+"-inst")
+	require.NoError(t, err)
+
+	uaID := userAccountID.String()
+	f := func(v float64) *float64 { return &v }
+
+	const (
+		// Nothing at all recorded during the FIRST live period, so the only candidate the old
+		// upper bound admits is the race row. This is the defect in its purest form.
+		raceOnly = "relink-race-only"
+		// A real measurement during the first live period, THEN the race row. Separates the two
+		// candidate fixes: the narrow lower bound answers NULL here, discarding retained history
+		// that is genuinely a pre-closure figure; the per-interval bound answers 1200.00.
+		realThenRace = "relink-real-then-race"
+	)
+	byName := map[string]string{
+		raceOnly:     uuid.New().String(),
+		realThenRace: uuid.New().String(),
+	}
+	require.NoError(t, repo.CreateBatch(ctx, userID.String(), []domain.Account{
+		{ID: byName[raceOnly], UserID: userID.String(), LinkedItemID: linkedItemID.String(), UserAccountID: &uaID,
+			PlaidAccountID: prefix + "-1", Name: raceOnly, Type: "depository",
+			CurrentBalance: f(600.00), AvailableBalance: f(600.00), CurrencyCode: "USD"},
+		{ID: byName[realThenRace], UserID: userID.String(), LinkedItemID: linkedItemID.String(), UserAccountID: &uaID,
+			PlaidAccountID: prefix + "-2", Name: realThenRace, Type: "depository",
+			CurrentBalance: f(1200.00), AvailableBalance: f(1200.00), CurrencyCode: "USD"},
+	}))
+
+	snap := func(accountID string, amount *float64, at time.Time) {
+		t.Helper()
+		require.NoError(t, snapshots.Create(ctx, &domain.BalanceSnapshot{
+			AccountID: accountID, UserAccountID: &uaID, UserID: userID.String(),
+			CurrentBalance: amount, AvailableBalance: amount,
+			CurrencyCode: "USD", SnapshotAt: at, Source: domain.SnapshotSourcePlaidWebhook,
+		}))
+	}
+	openIntervalStart := func(accountID string) time.Time {
+		t.Helper()
+		var at time.Time
+		require.NoError(t, tx.QueryRow(ctx, `
+			SELECT valid_from FROM account_status_history
+			WHERE account_id = $1 AND valid_to IS NULL`, accountID).Scan(&at))
+		return at
+	}
+
+	// ── FIRST LIVE PERIOD. Only realThenRace records anything.
+	firstLiveSnapshotAt := time.Now().UTC().AddDate(0, 0, -20)
+	snap(byName[realThenRace], f(1200.00), firstLiveSnapshotAt)
+
+	// ── FIRST CLOSURE. The provider stopped reporting the account, which is the ONLY cause
+	// RestoreProviderRemovedAccount will later undo.
+	for _, name := range []string{raceOnly, realThenRace} {
+		require.NoError(t, repo.MarkRemovedByProvider(ctx, byName[name], userID.String()))
+	}
+
+	// ── THE RACE, one millisecond after the first closure: an in-flight sync holding a stale
+	// account list. Retained (#1569), and not a live-account measurement.
+	for _, name := range []string{raceOnly, realThenRace} {
+		snap(byName[name], f(9999.99), openIntervalStart(byName[name]).Add(time.Millisecond))
+	}
+
+	// ── RE-LINK. The bank started reporting the account again.
+	for _, name := range []string{raceOnly, realThenRace} {
+		require.NoError(t, repo.RestoreProviderRemovedAccount(ctx, byName[name], userID.String()))
+	}
+	// ── SECOND LIVE PERIOD records NOTHING. That is the whole point: with a snapshot here the
+	// ORDER BY would pick it and the missing bound would stay hidden.
+
+	// ── SECOND CLOSURE.
+	for _, name := range []string{raceOnly, realThenRace} {
+		require.NoError(t, repo.MarkRemovedByProvider(ctx, byName[name], userID.String()))
+	}
+
+	// Fixture precondition: the history really does have four intervals per account, or the shapes
+	// above never happened and every assertion below is vacuous.
+	for _, name := range []string{raceOnly, realThenRace} {
+		var intervals int
+		require.NoError(t, tx.QueryRow(ctx,
+			`SELECT COUNT(*) FROM account_status_history WHERE account_id = $1`,
+			byName[name]).Scan(&intervals))
+		require.Equal(t, 4, intervals,
+			"%s: expected created/removed/active/removed intervals; the transitions did not happen", name)
+	}
+
+	rows, err := repo.GetAccountsWithInstitutionFiltered(ctx, userID.String(),
+		AccountFilterOptions{AllStatuses: true, IncludeLastKnownBalance: true})
+	require.NoError(t, err)
+	got := map[string]domain.Account{}
+	for _, a := range rows {
+		got[a.Name] = a
+	}
+	require.Len(t, got, 2, "fixture: both accounts must come back")
+
+	t.Run("a post-closure race row is not resurrected by a later re-link", func(t *testing.T) {
+		a := got[raceOnly]
+		require.Nil(t, a.CurrentBalance, "precondition: a closed account still carries no current balance")
+		assert.Nil(t, a.LastKnownBalance,
+			"9999.99 was measured while the account was NOT live; a second live period does not make it a "+
+				"pre-closure figure, and nothing else was ever recorded")
+		assert.Nil(t, a.LastKnownBalanceAt, "both or neither — a lone date is the caption T7 removed")
+	})
+
+	t.Run("a genuine first-period measurement survives the re-link", func(t *testing.T) {
+		// ⚠ This is the case a naive lower bound at the last ACTIVE interval's valid_from would
+		// get WRONG, answering NULL and throwing away retained history that is a real, dated,
+		// pre-closure figure. Two candidate fixes, one observable difference.
+		b := got[realThenRace]
+		require.NotNil(t, b.LastKnownBalance,
+			"1200.00 was measured while the account was live and is still on record")
+		assert.InDelta(t, 1200.00, *b.LastKnownBalance, 0.001,
+			"must be the live-period figure, not the 9999.99 race row")
+		require.NotNil(t, b.LastKnownBalanceAt)
+		assert.WithinDuration(t, firstLiveSnapshotAt, *b.LastKnownBalanceAt, time.Minute)
+	})
+}
