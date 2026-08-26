@@ -17,7 +17,15 @@ import "time"
 // share ONE statement, so there is nothing separate to fix for the single one.
 
 // Change sources, pinned by the live `chk_transaction_annotation_history_source` CHECK:
-// change_source IN ('category','review').
+// change_source IN ('category','review','settlement','erasure').
+//
+// ⚠ THIS LINE SAID `('category','review')` UNTIL IT WAS CORRECTED, and it was wrong by two values:
+// migration 000170 widened the CHECK to admit 'settlement' and 000172 to admit 'erasure', both of
+// which are declared right below it. A stale statement of what the database allows is worse than no
+// statement, because the next reader takes it as the authority on which sources are legal and
+// concludes that writing one of the other two would be rejected. It is not re-derived by hand any
+// more: TestAnnotationChangeSourcesMatchTheLiveCheck reads the constraint out of pg_constraint and
+// fails when this set and the database's disagree in either direction.
 const (
 	// TransactionAnnotationChangeCategory marks a row written by UpdateCategory or
 	// BulkUpdateCategory. Those statements rewrite `reviewed` and `reviewed_at` as a SIDE EFFECT of
@@ -98,7 +106,9 @@ type TransactionAnnotationChange struct {
 	// what was overwritten on it.
 	TransactionID string `json:"transaction_id"`
 
-	// ChangeSource is TransactionAnnotationChangeCategory or TransactionAnnotationChangeReview.
+	// ChangeSource is one of the four TransactionAnnotationChange* constants above —
+	// 'category', 'review', 'settlement' or 'erasure'. (This comment named only the first two,
+	// which stopped being true at migration 000170.)
 	ChangeSource string `json:"change_source"`
 
 	Prior TransactionAnnotation `json:"prior"`
