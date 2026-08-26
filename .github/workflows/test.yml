@@ -981,24 +981,34 @@ jobs:
                 f"{passed} pass, {failed} fail, {skipped if skipped is not None else 0} skip{ran_desc}")
           PY
 
+      # #1569 task 7.1: same shape as the frontend-test job above — each of the checks below is
+      # INDEPENDENT of the "Guard — MCP unit suite" step and of each other (none consumes another's
+      # output), so each gets `if: always() && !cancelled()` so one early failure cannot hide the
+      # rest. The job still goes red overall because a failing step fails the job regardless of
+      # `if:`.
       - name: Typecheck MCP server
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         # Uses --skipLibCheck to avoid OOM from large generated api-client type declarations.
         run: NODE_OPTIONS=--max-old-space-size=2048 bun run typecheck
 
       - name: Lint MCP server
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: bun run lint
 
       - name: Check manifest completeness (deny-by-default CI gate)
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: bun run scripts/check-manifest-completeness.ts
 
       - name: Check no direct API call bypasses
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: bun run scripts/check-no-direct-api-calls.ts
 
       - name: Rebuild spec index and check for drift
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: |
           bun run src/spec/index-builder.ts
@@ -1010,6 +1020,7 @@ jobs:
           fi
 
       - name: Rebuild facade and check for drift
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: |
           bun run scripts/generate-facade.ts
@@ -1764,7 +1775,21 @@ jobs:
       #
       # Wired here rather than left to `make test-scripts`, which no CI job runs: a guard written
       # because a missing flag broke CI was itself invisible to CI.
+      #
+      # #1569 task 7.1: this and every other step down to "Combine coverage reports" below is an
+      # INDEPENDENT guard/verification — none of them consumes another's output, they only share
+      # the workspace set up by "Install workspace dependencies" above. Before this fix, one early
+      # guard failing (e.g. the typecheck-tests-gate meta-test) skipped all 13 steps after it
+      # (default GitHub Actions behaviour: a step with no `if:` only runs while job status is
+      # still "success"), so CI reported one red step instead of "none of your gates ran". Each
+      # gets `if: always() && !cancelled()` so a sibling's failure cannot hide it; the job still
+      # goes red overall because a failing step fails the job regardless of `if:`. Genuinely
+      # dependent steps below (the rrweb proof on Chromium install, the coverage-merge test on
+      # lcov, "Combine coverage" on the coverage run) are NOT blanket always() — each is additionally
+      # gated on ITS OWN real prerequisite's outcome, so it does not run against missing input and
+      # produce a confusing secondary failure that masks the true cause.
       - name: Guard — frontend suite must run with an effective per-test timeout (#1537)
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-frontend-test-timeout.test.sh
 
@@ -1772,6 +1797,7 @@ jobs:
       # finish. Drives a COPY of the gate against a stub compiler, so the crash-mid-check and
       # failed-mktemp paths are constructed rather than reasoned about.
       - name: Test the test-typecheck gate fails closed
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash apps/web/scripts/__tests__/typecheck-tests-gate.test.sh
 
@@ -1783,6 +1809,7 @@ jobs:
       # job stays green. Runs BEFORE the suite so the failure names the stale path rather than
       # surfacing later as unexplained pollution in an unrelated test.
       - name: Guard — process-isolated test list must exist and stay in sync (#1537)
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-isolated-test-lists.test.sh
 
@@ -1795,14 +1822,17 @@ jobs:
       # and no Clerk credentials, so it must not wait behind the E2E job to report that the E2E
       # job's own reporting is broken.
       - name: Guard — the E2E seeder must fail loudly (#1569)
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-e2e-seed-fails-loudly.test.sh
 
       - name: Lint frontend
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bun run lint
 
       - name: Typecheck frontend
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bun run typecheck
 
@@ -1816,14 +1846,22 @@ jobs:
       # of change that could silently break this mechanism, which eight of #1514's
       # <option>-text fixes depend on.
       - name: Install Chromium for rrweb mask-proof
+        id: install-chromium-rrweb
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bunx playwright install --with-deps chromium
 
+      # Genuinely dependent on the step above (needs the Chromium binary it installs), so it is
+      # gated on that step's own outcome rather than unconditional always() — running this without
+      # a real Chromium would fail for an unrelated reason and mask whichever earlier guard failed.
       - name: Run rrweb <option> masking proof
+        if: always() && !cancelled() && steps.install-chromium-rrweb.outcome == 'success'
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bun run test:rrweb-mask-proof
 
       - name: Run frontend tests with coverage
+        id: frontend-coverage-run
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: |
           echo "::group::Running frontend tests with coverage"
@@ -1831,6 +1869,8 @@ jobs:
           echo "::endgroup::"
 
       - name: Ensure lcov is installed
+        id: ensure-lcov
+        if: always() && !cancelled()
         env:
           LC_ALL: C
           LANG: C
@@ -1854,13 +1894,21 @@ jobs:
       # Must run after "Ensure lcov is installed" above: it invokes the real lcov binary,
       # not a stub. Was previously unwired from every runner (no Makefile target, no CI
       # step) — see scripts/check-frontend-coverage.test.sh's own header.
+      # Genuinely dependent on "Ensure lcov is installed" (invokes the real lcov binary), so
+      # gated on that step's own outcome rather than unconditional always().
       - name: Test frontend coverage merge tooling
+        if: always() && !cancelled() && steps.ensure-lcov.outcome == 'success'
         env:
           LC_ALL: C
           LANG: C
         run: bash ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/scripts/check-frontend-coverage.test.sh
 
+      # Genuinely dependent on "Run frontend tests with coverage" (merges the lcov files that step
+      # produces), so gated on that step's own outcome — an unconditional always() here would try
+      # to merge coverage that was never generated and fail for a confusing, unrelated reason.
       - name: Combine coverage reports and enforce thresholds
+        id: combine-coverage
+        if: always() && !cancelled() && steps.frontend-coverage-run.outcome == 'success'
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         env:
           LC_ALL: C
@@ -1881,6 +1929,7 @@ jobs:
 
       - name: Upload combined coverage report
         id: upload-frontend-coverage
+        if: always() && !cancelled() && steps.combine-coverage.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         continue-on-error: true
         with:
