@@ -3232,6 +3232,32 @@
       "description": "Returns all available data residency regions. Use this to populate region selectors. This is a public endpoint."
     },
     {
+      "operationId": "getUserRuleExecutions",
+      "method": "GET",
+      "path": "/api/v1/rule-executions",
+      "summary": "Get automation rule execution history",
+      "tags": [
+        "Auto-Categorization"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Retrieves every categorization-rule execution for the authenticated user, newest first. A row exists for each time a rule actually CHANGED a transaction's category or tags; a rule that matched but changed nothing is counted in the rule's match_count and is not recorded here. Executions whose rule has since been deleted are still returned, carrying rule_id = null plus rule_name and definition_snapshot captured at execution time.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Maximum number of results",
+          "type": "integer"
+        },
+        {
+          "name": "offset",
+          "in": "query",
+          "description": "Number of results to skip",
+          "type": "integer"
+        }
+      ]
+    },
+    {
       "operationId": "getSavingsGoals",
       "method": "GET",
       "path": "/api/v1/savings-goals",
@@ -3280,6 +3306,28 @@
       "description": "Lists savings goals the user has deleted. Deleting a goal retains it and every contribution logged against it (Issue #1569); this endpoint is how the client shows what was kept and offers POST /savings-goals/{id}/purge, which refuses unless the goal is already deleted. Each entry carries deleted_at."
     },
     {
+      "operationId": "listDeletedSavingsGoalContributions",
+      "method": "GET",
+      "path": "/api/v1/savings-goals/deleted/{goalID}/contributions",
+      "summary": "List a deleted savings goal's retained contributions",
+      "tags": [
+        "Savings Goals",
+        "Contributions"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns the contributions retained under a goal the user has DELETED, newest first, with their confirmed total (Issue #1569). Deleting a goal tombstones it and keeps every contribution logged against it — including amounts the user entered by hand, which no provider can supply again — and this is the only endpoint that can read them back; the live GET /savings-goals/{goalID}/contributions deliberately returns nothing for a deleted goal. Returns an empty list for a goal that is not deleted. Pair it with GET /savings-goals/deleted, and with POST /savings-goals/{id}/purge to destroy them for good.",
+      "parameters": [
+        {
+          "name": "goalID",
+          "in": "path",
+          "required": true,
+          "description": "ID of a savings goal the user has already deleted",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "operationId": "getSavingsProgressSummary",
       "method": "GET",
       "path": "/api/v1/savings-goals/progress-summary",
@@ -3303,7 +3351,7 @@
       ],
       "manifestClass": "read",
       "excluded": false,
-      "description": "Returns all confirmed and proposed contributions for a savings goal, newest first.",
+      "description": "Returns all confirmed and proposed contributions for a savings goal, newest first. Returns an empty list for a goal the user has DELETED — those contributions are retained but are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).",
       "parameters": [
         {
           "name": "goalID",
@@ -3475,7 +3523,7 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Removes a savings goal from the user's collection. Does NOT destroy any data — every contribution logged against the goal is retained. Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its contributions.",
+      "description": "Removes a savings goal from the user's collection. Does NOT destroy any data — every contribution logged against the goal is retained and stays readable at GET /savings-goals/deleted/{goalID}/contributions (the live GET /savings-goals/{goalID}/contributions returns nothing once the goal is deleted). Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its contributions.",
       "parameters": [
         {
           "name": "id",
@@ -3705,6 +3753,32 @@
           "required": true,
           "description": "Tag UUID",
           "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "getUserTransactionAnnotationHistory",
+      "method": "GET",
+      "path": "/api/v1/transaction-annotation-history",
+      "summary": "Get transaction annotation change history",
+      "tags": [
+        "Transactions"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Retrieves the before/after record of every category or review-state overwrite the authenticated user made on a transaction, newest first. A row exists for each write that actually changed a tracked value; re-writing the identical value records nothing. change_source distinguishes a recategorisation ('category') — which also rewrites the review state as a side effect — from a review-state write ('review'). Changes made to a transaction that has since been removed are still returned.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Maximum number of results",
+          "type": "integer"
+        },
+        {
+          "name": "offset",
+          "in": "query",
+          "description": "Number of results to skip",
+          "type": "integer"
         }
       ]
     },
@@ -4248,6 +4322,18 @@
           "type": "string"
         }
       ]
+    },
+    {
+      "operationId": "getDataExport",
+      "method": "GET",
+      "path": "/api/v1/user/data-export",
+      "summary": "Export my data",
+      "tags": [
+        "Privacy"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Returns a machine-readable JSON export of the authenticated user's own data (GDPR Article 20, right to data portability). Scoped strictly to the caller: rows belonging to household peers are never included, and credentials, encrypted-at-rest secrets and third-party authentication identifiers are excluded."
     },
     {
       "operationId": "requestDeletion",
