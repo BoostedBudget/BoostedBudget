@@ -256,7 +256,15 @@ test-scripts:
 	@bash scripts/__tests__/check-e2e-seed-fails-loudly.test.sh
 	@echo ""
 	@echo "11/13: test-migrations-target-guard.test.sh (#1589/#1569 — host + name + live-cluster gates on the DROP target; needs a live local Postgres)"
-	@bash scripts/__tests__/test-migrations-target-guard.test.sh
+	@if [ -n "$$GUARD_TEST_ADMIN_URL" ] || [ -n "$$DATABASE_URL" ] || \
+	    (command -v pg_isready >/dev/null 2>&1 && \
+	     (pg_isready -h localhost -p 5434 >/dev/null 2>&1 || pg_isready -h localhost -p 5432 >/dev/null 2>&1)); then \
+		bash scripts/__tests__/test-migrations-target-guard.test.sh; \
+	else \
+		echo "⚠️  SKIPPED — no live Postgres reachable (tried GUARD_TEST_ADMIN_URL, DATABASE_URL, localhost:5434, localhost:5432)."; \
+		echo "    Start the dev database (make dev) to run this suite's live-cluster cases locally."; \
+		echo "    CI always has a live Postgres and runs this suite unconditionally — this skip is local-only."; \
+	fi
 	@echo ""
 	@echo "12/13: root-migrate-delegation.test.sh (#1588 — one migration runner; schema_migrations cannot lie)"
 	@bash scripts/__tests__/root-migrate-delegation.test.sh
