@@ -64,6 +64,13 @@ func (m *MockBalanceSnapshotRepository) GetLatestByAccountID(ctx context.Context
 	return args.Get(0).(*domain.BalanceSnapshot), args.Error(1)
 }
 
+// #1569: the per-account retained balance history is a HISTORICAL read served by its own service.
+// The dashboard answers current-state and aggregate questions and must never reach it, so this
+// panics rather than returning a zero value a mistaken caller could silently consume.
+func (m *MockBalanceSnapshotRepository) GetAccountBalanceHistory(context.Context, string, string, *time.Time, *time.Time) ([]domain.AccountBalanceHistoryPoint, error) {
+	panic("the dashboard must not read per-account retained balance history")
+}
+
 func (m *MockBalanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
 	args := m.Called(ctx, requestingUserID, scope, asOf)
 	if args.Get(0) == nil {

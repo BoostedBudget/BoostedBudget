@@ -1852,6 +1852,13 @@ func (m *mockBalanceSnapshotRepository) GetLatestByUserID(ctx context.Context, u
 func (m *mockBalanceSnapshotRepository) GetLatestByAccountID(ctx context.Context, accountID string) (*domain.BalanceSnapshot, error) {
 	return nil, nil
 }
+
+// The per-account retained balance history (#1569) is a HISTORICAL read and no analytics or
+// dashboard path may reach it — those all answer current-state or aggregate questions. Panics
+// rather than returning nil so a future edit that routes one through here fails loudly.
+func (m *mockBalanceSnapshotRepository) GetAccountBalanceHistory(context.Context, string, string, *time.Time, *time.Time) ([]domain.AccountBalanceHistoryPoint, error) {
+	panic("analytics/dashboard must not read per-account retained balance history")
+}
 func (m *mockBalanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
 	return nil, nil
 }

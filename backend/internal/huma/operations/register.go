@@ -84,6 +84,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Issue #1569: retained holdings history for a closed account (1 op)
 	holdingHistoryHandler := &HoldingHistoryHandler{}
 
+	// Issue #1569: retained per-account balance history for a closed account (1 op)
+	accountBalanceHistoryHandler := &AccountBalanceHistoryHandler{}
+
 	// Issue #1300 M20: Savings goal contribution API (D6 source-a manual log + confirm + delete)
 	contributionHandler := &ContributionHandler{}
 
@@ -166,6 +169,10 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #1569: retained holdings history (historical universe — see holding_history.go)
 	RegisterHoldingHistoryRoutes(api, holdingHistoryHandler)
+
+	// Issue #1569: retained per-account balance history (historical universe — see
+	// account_balance_history.go)
+	RegisterAccountBalanceHistoryRoutes(api, accountBalanceHistoryHandler)
 
 	// Issue #1300 M20: Savings goal contribution API
 	RegisterContributionRoutes(api, contributionHandler)
