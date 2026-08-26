@@ -74,7 +74,7 @@ func TestHoldingHistoryHandler_InvalidAccountID_Is400(t *testing.T) {
 // as_of goes into a ::date cast. Validating its shape here is what keeps a typo a 400 instead of
 // a Postgres error rendered as an internal server error.
 func TestHoldingHistoryHandler_MalformedAsOf_Is400(t *testing.T) {
-	for _, bad := range []string{"20-08-2026", "2026-8-1", "yesterday", "2026-08-20T00:00:00Z", "2026-08-20; DROP"} {
+	for _, bad := range []string{"20-08-2026", "2026-8-1", "yesterday", "2026-08-20T00:00:00Z", "2026-08-20; DROP", "2026-02-30", "2026-13-01", "2026-00-15", "2026-04-31"} {
 		svc := &mockHoldingHistoryService{}
 		handler := NewHoldingHistoryHandler(svc)
 

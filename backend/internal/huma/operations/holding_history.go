@@ -14,7 +14,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"regexp"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
@@ -34,9 +34,12 @@ func NewHoldingHistoryHandler(svc services.HoldingHistoryService) *HoldingHistor
 	return &HoldingHistoryHandler{historyService: svc}
 }
 
-// isoDate matches a YYYY-MM-DD calendar day. Validated before it reaches the ::date cast so a
-// malformed value is a 400 rather than a Postgres error surfacing as a 500.
-var isoDate = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+// isoDateLayout is the reference layout for a YYYY-MM-DD UTC calendar day, validated with
+// time.Parse (not a shape-only regex) before it reaches the ::date cast. A regex that only checks
+// digit positions passes impossible calendar dates like 2026-02-30 or 2026-13-01 straight through
+// to the database; time.Parse rejects both, along with malformed shapes and trailing garbage,
+// because it actually constructs the calendar date rather than pattern-matching its shape.
+const isoDateLayout = "2006-01-02"
 
 // GetAccountHoldingsHistoryInput is the input for GET /investments/holdings/history.
 type GetAccountHoldingsHistoryInput struct {
@@ -60,8 +63,10 @@ func (h *HoldingHistoryHandler) GetAccountHoldingsHistory(ctx context.Context, i
 	if _, err := uuid.Parse(input.AccountID); err != nil {
 		return nil, huma.Error400BadRequest("invalid account_id: must be a valid UUID")
 	}
-	if input.AsOf != "" && !isoDate.MatchString(input.AsOf) {
-		return nil, huma.Error400BadRequest("invalid as_of: must be a UTC calendar day formatted YYYY-MM-DD")
+	if input.AsOf != "" {
+		if _, err := time.Parse(isoDateLayout, input.AsOf); err != nil {
+			return nil, huma.Error400BadRequest("invalid as_of: must be a valid UTC calendar day formatted YYYY-MM-DD")
+		}
 	}
 
 	history, err := h.historyService.GetAccountHoldingsHistory(ctx, input.UserID, input.AccountID, input.AsOf)
