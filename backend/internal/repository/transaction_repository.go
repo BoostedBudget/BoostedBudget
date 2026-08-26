@@ -1757,22 +1757,48 @@ func (r *transactionRepository) UpdateTags(ctx context.Context, id string, userI
 		return fmt.Errorf("failed to marshal tags_source: %w", err)
 	}
 
+	// #1569 gap G12: the annotation capture, on the statement that REPLACES the user's whole tag
+	// array. `FROM transactions prior` is the self-join that makes `prior.*` the pre-update tuple
+	// while RETURNING gives the post-update one, so what this statement overwrites is recorded BY
+	// THE SAME STATEMENT — see transaction_annotation_capture.go for why a service-layer
+	// read-then-write records a wrong prior value under concurrency.
+	//
+	// ⚠ THE COMMENT BELOW USED TO CLAIM THIS CAPTURE EXISTED. It said narrowing the predicate
+	// "would make this statement disagree with the annotation capture that mirrors it", and there
+	// was no capture to disagree with — the seventh false written justification on this branch. The
+	// sentence is true now because the CTE is here, not because it was reworded.
 	query := `
-		-- tombstone-exempt(write:transactions): liveness is the SERVICE layer's gate, exactly as for
+		WITH updated AS (
+		-- tombstone-exempt(write:transactions t): liveness is the SERVICE layer's gate, exactly as for
 		-- UpdateCategory below (#1569 T8 write-target audit). Narrowing the write predicate would
 		-- change WHICH ROWS ARE AFFECTED, which is a behaviour change, and would make this statement
 		-- disagree with the annotation capture that mirrors it.
-		UPDATE transactions
+		UPDATE transactions t
 		SET tags = $1, tags_source = $2, updated_at = $3
-		WHERE id = $4 AND user_id = $5
-	`
+		-- tombstone-exempt(transactions prior, write:transactions t): the prior alias is the PRE-IMAGE of the row this
+		-- statement is already updating (prior.id = t.id), not an independent read. Filtering it
+		-- would narrow WHICH ROWS THE UPDATE AFFECTS rather than filter a read, and would make the
+		-- capture disagree with the write it is capturing — identical to UpdateCategory and
+		-- SetReviewed below, and for the same reason (#1569 T8 write-target audit).
+		FROM transactions prior
+		WHERE prior.id = t.id
+		  AND t.id = $4 AND t.user_id = $5
+		RETURNING ` + annotationCaptureReturning("t") + `
+		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeTags, "updated") + `
+		SELECT COUNT(*) FROM updated`
 
-	ct, err := r.db.Exec(ctx, query, tagsJSON, tagsSourceJSON, time.Now(), id, userID)
+	// Lock-first (#1569 Task 6, review fix R79), with the write's own predicate — see
+	// transaction_annotation_capture.go. The capture and the lock are ONE requirement: an unlocked
+	// capture can record a transition no write performed, and can suppress the record entirely when
+	// the write happens to restore the stale value.
+	updatedRows, err := runCapturingUpdate(ctx, r.db,
+		"id = $1 AND user_id = $2", []any{id, userID},
+		query, []any{tagsJSON, tagsSourceJSON, time.Now(), id, userID})
 	if err != nil {
 		return fmt.Errorf("failed to update transaction tags: %w", err)
 	}
 
-	if ct.RowsAffected() == 0 {
+	if updatedRows == 0 {
 		return ErrTransactionNotFound
 	}
 

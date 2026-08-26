@@ -6628,6 +6628,18 @@ components:
         reviewed_at:
           format: date-time
           type: string
+        tags:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        tags_source:
+          items:
+            $ref: "#/components/schemas/TagSource"
+          type:
+            - array
+            - "null"
       required:
         - reviewed
       type: object
