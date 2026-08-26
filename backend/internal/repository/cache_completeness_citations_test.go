@@ -80,6 +80,18 @@ package repository
 //     and was NOT fixed: a plausible unique candidate exists 56 lines away, and nothing identifies
 //     what the citation meant, so it is left visibly stale rather than confidently wrong.
 //
+//     ⚠ AND THE SAME LINE NUMBER SHOWS THE STANDARD CUTTING BOTH WAYS, which is why it is worth
+//     spelling out. There were TWO citations of `analytics_repository.go:717`, in different files,
+//     and they got opposite treatments -- correctly:
+//       - the one described above has no prose naming a target, so intent is unrecoverable and it
+//         stays stale;
+//       - `custom_category_tombstone_integration_test.go`'s `:717`/`:732` DID name their target in
+//         prose ("buildSpendingFilter") while pointing at `householdGrantsCTE`, so intent was
+//         recoverable and #1585 re-pointed them to `:907`/`:922` FROM THE PROSE.
+//     So "was NOT fixed" above is a statement about THAT citation, not about the line number. The
+//     rule is not "leave 717 alone"; it is "fix from intent where the prose supplies it, and leave
+//     it visibly stale where nothing does".
+//
 //     So an IN-RANGE check is enforced here too (TestExactCitationsAreInRange below) for exact
 //     `file.go:NNN` refs — cheap, zero false positives, and it catches precisely the class that
 //     actually occurred. Approximate `~:NNN` refs are exempt by the `~` convention: it means
