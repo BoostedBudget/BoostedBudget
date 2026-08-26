@@ -9,6 +9,25 @@
 // testdata/t3bench_seed.sql builds that database and documents its shape. Set
 // T3BENCH_EXPLAIN=1 to also print EXPLAIN (ANALYZE, BUFFERS) for each of the nine reads.
 // The DB it points at MUST be a throwaway — it is never cleaned up.
+//
+// ⚠ THERE IS NO CI PERF GUARD, AND THIS TEST IS NOT ONE. Nothing in .github/workflows, the
+// Makefiles or scripts/ sets `-tags t3bench` (checked 2026-08-26), so CI never builds this file and
+// no threshold is ever compared. It is a measurement instrument you point at a database by hand,
+// and the numbers recorded in analytics_repository.go are only as current as the last time a
+// person ran it.
+//
+// ⚠ It used to `t.Skip` when T3BENCH_URL was unset. That is fail-open — the same green-by-absence
+// shape #1569 spent five rounds removing from six other guards — and it is worse than it looks:
+// `go test` DISCARDS a passing package's output unless -v is passed, so even a stderr banner on
+// the skip path is invisible in the exact invocation most likely to hide it. So a missing
+// T3BENCH_URL is now a FATAL, not a skip. Asking for `-tags t3bench` IS asking to benchmark;
+// having measured nothing is a failure of that request, and it cannot be mistaken for a pass.
+// This is safe precisely because no automated caller sets the tag — if one ever does, it must
+// supply a seeded T3BENCH_URL, which is the point.
+//
+// Last run by a human: 2026-08-26, commit 3d21e077, Apple M4 / 10 cores / 16 GiB / macOS 15.3.1,
+// against Postgres 17.11 in Docker on localhost:5434. Seed loaded clean against the schema of that
+// day (no rot). See householdGrantsCTE's round-5 table for what it produced.
 package repository
 
 import (
@@ -68,7 +87,20 @@ func benchScope() *domain.HouseholdScope {
 func TestT3Bench(t *testing.T) {
 	url := os.Getenv("T3BENCH_URL")
 	if url == "" {
-		t.Skip("T3BENCH_URL not set")
+		// Loud on purpose: a silent skip here reads as "the benchmark passed".
+		fmt.Fprint(os.Stderr, "\n"+
+			"################################################################################\n"+
+			"# T3BENCH DID NOT RUN. T3BENCH_URL is unset, so NOTHING was measured.           #\n"+
+			"# This is NOT a perf guard and measures nothing without a URL. The timings in   #\n"+
+			"# analytics_repository.go are unverified by this run. To actually measure:      #\n"+
+			"#   createdb t3bench && pg_dump -s <migrated-db> | psql t3bench \\               #\n"+
+			"#     && psql t3bench -f internal/repository/testdata/t3bench_seed.sql          #\n"+
+			"#   T3BENCH_URL=postgres://.../t3bench go test -tags t3bench -run TestT3Bench \\ #\n"+
+			"#     ./internal/repository/ -v                                                 #\n"+
+			"################################################################################\n\n")
+		t.Fatal("T3BENCH_URL not set — NOTHING MEASURED (see the banner above). " +
+			"This is a hard failure on purpose: -tags t3bench asks for a benchmark, and a skip " +
+			"here would be indistinguishable from a passing perf check.")
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, url)

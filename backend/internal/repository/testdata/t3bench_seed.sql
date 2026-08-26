@@ -12,6 +12,21 @@
 --   createdb t3bench && pg_dump -s <integration-db> | psql t3bench && psql t3bench -f this
 --   T3BENCH_URL=postgres://.../t3bench go test -tags t3bench -run TestT3Bench ./internal/repository/ -v
 --
+-- ⚠ THERE IS NO CI PERFORMANCE GUARD FOR THESE QUERIES. Not here, not in .github/workflows, not
+-- anywhere. Nothing in CI loads this seed, runs TestT3Bench, or compares a timing against a
+-- threshold, so a change that makes the household reads ten times slower will merge green. That is
+-- a deliberate accepted gap, not an oversight: the guard would need a 200k-row seeded Postgres and
+-- a wall-clock threshold, and a wall-clock threshold on a shared, contended runner is a flake
+-- generator that gets deleted by whoever it wakes at 3am — a guard that is disabled after a month
+-- is worse than a documented absence, because it also carries a false claim of coverage. If one is
+-- ever added it must assert a RANGE, not a point, and it must fail loudly when the seed is missing
+-- rather than skipping. Until then, the numbers in analytics_repository.go are dated measurements
+-- taken by hand, and every one of them names its machine and its run count for that reason.
+--
+-- Verified 2026-08-26 (commit 3d21e077): this file loads clean, with no errors, against a
+-- `pg_dump -s` of the current migrated schema on Postgres 17.11, producing 200,000 transactions /
+-- 50 user_accounts / 80 grants / 50 accounts. It had not rotted as of that date.
+--
 -- ⚠ THIS FILE WILL ROT, SILENTLY. Nothing compiles or executes it — not CI, not `go test` — and it
 -- names ~12 columns across 7 tables. The first migration that adds a NOT NULL column without a
 -- default, or tightens a CHECK, breaks these INSERTs, and the only person who finds out is whoever
