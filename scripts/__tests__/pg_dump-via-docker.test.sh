@@ -20,6 +20,16 @@
 # object" query) — harmless, and skipped automatically if docker isn't reachable.
 set -uo pipefail
 
+# PROSE-ASSERTION AUDIT (#1569 task 7.1). This file's `grep -qi` checks below (unbound variable,
+# is not a running container, no running Postgres container, no 'pg_dump' found on PATH,
+# PGHOSTADDR/PGSERVICE, refusing a connection URL / --dbname=, must be a plain integer) are all
+# kept as literal substring matches. Decision: INCIDENTAL WORDING, deliberately not re-asserted
+# on the exact sentence — each is a short structural fragment naming the mechanism the guard
+# detected (a state, not a computed SCOPE CLAIM), unlike the typecheck-tests-gate defect this
+# task fixed, where the asserted prose described *what a number measured* and that description
+# itself was factually wrong. Nothing here claims a scope; there is nothing to falsify by an
+# honest correction. Left unchanged.
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="$SCRIPT_DIR/pg_dump-via-docker"
 
