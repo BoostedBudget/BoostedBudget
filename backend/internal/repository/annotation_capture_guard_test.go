@@ -364,6 +364,17 @@ func TestAnnotationCaptureGuard_CatchesEveryConstructedViolation(t *testing.T) {
 		assert.ElementsMatch(t, []string{"reviewed", "reviewed_at"}, f.columns)
 	})
 
+	t.Run("G12: an uncaptured whole-array tags replace", func(t *testing.T) {
+		f, ok := byName["UnguardedTagsWrite"]
+		require.True(t, ok,
+			"a tags write was invisible to this guard: annotationTrackedColumns is derived from "+
+				"annotationCapturedColumns, which carried no tags column, so `SET tags =` matched "+
+				"nothing. UpdateTags sat in that hole for the whole of #1579 — neither captured nor "+
+				"exempted, and an absent reason prompts nobody to check it")
+		assert.False(t, f.captured)
+		assert.ElementsMatch(t, []string{"tags", "tags_source"}, f.columns)
+	})
+
 	t.Run("the compliant control is not flagged", func(t *testing.T) {
 		f, ok := byName["GuardedReviewWrite"]
 		require.True(t, ok)

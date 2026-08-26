@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { TagSource } from './tagSource';
 
 export interface TransactionAnnotation {
   category_override_kind?: string;
@@ -40,4 +41,8 @@ export interface TransactionAnnotation {
   pfc_primary_override?: string;
   reviewed: boolean;
   reviewed_at?: string;
+  /** @nullable */
+  tags?: string[] | null;
+  /** @nullable */
+  tags_source?: TagSource[] | null;
 }

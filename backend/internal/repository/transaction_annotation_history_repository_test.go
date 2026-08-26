@@ -53,13 +53,21 @@ func TestTransactionAnnotationHistoryRepository_GetByUserID_FiltersOnTheRowsOwnU
 			"prior_reviewed", "prior_reviewed_at",
 			"new_category_override_kind", "new_pfc_primary_override", "new_pfc_detailed_override",
 			"new_custom_category_override_id", "new_effective_category_name", "new_category_source",
-			"new_reviewed", "new_reviewed_at", "changed_at",
+			"new_reviewed", "new_reviewed_at",
+			"prior_tags", "prior_tags_source", "new_tags", "new_tags_source",
+			"changed_at",
 		}).AddRow(
 			"chg-1", userID, "tx-1", domain.TransactionAnnotationChangeCategory,
 			&kind, &prev, (*string)(nil), (*string)(nil), &prev, ptrStr("manual"),
 			true, &reviewedAt,
 			ptrStr("custom"), (*string)(nil), (*string)(nil), ptrStr("cat-1"), ptrStr("Weekend Coffee"), ptrStr("manual"),
-			true, &changedAt, changedAt,
+			true, &changedAt,
+			// #1569 gap G12: recorded on both sides. A category write does not change tags, so both
+			// halves carry the same array — and the NULL pair below it is the pre-000173 row shape,
+			// which must stay nil rather than becoming [].
+			[]byte(`["holiday"]`), []byte(`[{"tag":"holiday","source":"manual"}]`),
+			[]byte(`["holiday"]`), []byte(`[{"tag":"holiday","source":"manual"}]`),
+			changedAt,
 		))
 
 	rows, total, err := repo.GetByUserID(ctx, userID, 20, 0)
@@ -74,6 +82,12 @@ func TestTransactionAnnotationHistoryRepository_GetByUserID_FiltersOnTheRowsOwnU
 	require.NotNil(t, rows[0].Prior.ReviewedAt)
 	require.NotNil(t, rows[0].New.EffectiveCategoryName)
 	assert.Equal(t, "Weekend Coffee", *rows[0].New.EffectiveCategoryName)
+
+	// #1569 gap G12: the recorded tag state reaches the reader. A writer with no reader ships
+	// nothing observable.
+	assert.Equal(t, []string{"holiday"}, rows[0].Prior.Tags)
+	require.Len(t, rows[0].New.TagsSource, 1)
+	assert.Equal(t, "manual", rows[0].New.TagsSource[0].Source)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -97,7 +111,9 @@ func TestTransactionAnnotationHistoryRepository_GetByUserID_EmptyIsAnEmptySliceN
 			"prior_reviewed", "prior_reviewed_at",
 			"new_category_override_kind", "new_pfc_primary_override", "new_pfc_detailed_override",
 			"new_custom_category_override_id", "new_effective_category_name", "new_category_source",
-			"new_reviewed", "new_reviewed_at", "changed_at",
+			"new_reviewed", "new_reviewed_at",
+			"prior_tags", "prior_tags_source", "new_tags", "new_tags_source",
+			"changed_at",
 		}))
 
 	rows, total, err := repo.GetByUserID(context.Background(), "user-empty", 20, 0)
@@ -162,6 +178,7 @@ func TestAnnotationCaptureSourcesMatchTheCheckConstraint(t *testing.T) {
 		domain.TransactionAnnotationChangeReview,
 		domain.TransactionAnnotationChangeSettlement,
 		domain.TransactionAnnotationChangeErasure,
+		domain.TransactionAnnotationChangeTags,
 	} {
 		assert.True(t, allowed[source],
 			"the writer interpolates %q, which the live CHECK would reject", source)

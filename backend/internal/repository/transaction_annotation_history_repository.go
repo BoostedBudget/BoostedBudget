@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -56,7 +57,24 @@ const transactionAnnotationHistoryColumns = `id, user_id, transaction_id, change
 	new_category_override_kind, new_pfc_primary_override, new_pfc_detailed_override,
 	new_custom_category_override_id, new_effective_category_name, new_category_source,
 	new_reviewed, new_reviewed_at,
+	prior_tags, prior_tags_source, new_tags, new_tags_source,
 	changed_at`
+
+// unmarshalAnnotationTags fills one side's tag columns from their JSONB bytes. A NULL column leaves
+// the field nil, which is the honest value for a row written before migration 000173 existed.
+func unmarshalAnnotationTags(side *domain.TransactionAnnotation, tags, tagsSource []byte) error {
+	if len(tags) > 0 {
+		if err := json.Unmarshal(tags, &side.Tags); err != nil {
+			return fmt.Errorf("failed to unmarshal recorded tags: %w", err)
+		}
+	}
+	if len(tagsSource) > 0 {
+		if err := json.Unmarshal(tagsSource, &side.TagsSource); err != nil {
+			return fmt.Errorf("failed to unmarshal recorded tags_source: %w", err)
+		}
+	}
+	return nil
+}
 
 // GetByUserID returns the user's annotation history, newest first.
 //
@@ -100,6 +118,7 @@ func (r *transactionAnnotationHistoryRepository) GetByUserID(
 	changes := make([]*domain.TransactionAnnotationChange, 0)
 	for rows.Next() {
 		c := &domain.TransactionAnnotationChange{}
+		var priorTags, priorTagsSource, newTags, newTagsSource []byte
 		if err := rows.Scan(
 			&c.ID,
 			&c.UserID,
@@ -121,9 +140,19 @@ func (r *transactionAnnotationHistoryRepository) GetByUserID(
 			&c.New.CategorySource,
 			&c.New.Reviewed,
 			&c.New.ReviewedAt,
+			&priorTags, &priorTagsSource, &newTags, &newTagsSource,
 			&c.ChangedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan transaction annotation change: %w", err)
+		}
+		// #1569 gap G12: JSONB, unmarshalled the same way transaction_repository.go unmarshals the
+		// live columns. NULL stays nil — "not recorded", which is every row older than migration
+		// 000173 — rather than becoming an empty array that would claim the user had no tags.
+		if err := unmarshalAnnotationTags(&c.Prior, priorTags, priorTagsSource); err != nil {
+			return nil, 0, err
+		}
+		if err := unmarshalAnnotationTags(&c.New, newTags, newTagsSource); err != nil {
+			return nil, 0, err
 		}
 		changes = append(changes, c)
 	}

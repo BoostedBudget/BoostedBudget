@@ -17,7 +17,7 @@ import "time"
 // share ONE statement, so there is nothing separate to fix for the single one.
 
 // Change sources, pinned by the live `chk_transaction_annotation_history_source` CHECK:
-// change_source IN ('category','review','settlement','erasure').
+// change_source IN ('category','review','settlement','erasure','tags').
 //
 // ⚠ THIS LINE SAID `('category','review')` UNTIL IT WAS CORRECTED, and it was wrong by two values:
 // migration 000170 widened the CHECK to admit 'settlement' and 000172 to admit 'erasure', both of
@@ -63,6 +63,19 @@ const (
 	// the same statement and are hard-deleted moments later in the same database transaction; a
 	// record that vanishes with the thing it records is not a record.
 	TransactionAnnotationChangeErasure = "erasure"
+
+	// TransactionAnnotationChangeTags marks a row written by UpdateTags (#1569 gap G12).
+	//
+	// It is a WHOLE-ARRAY REPLACE: every tag dropped from the array is gone the moment the
+	// statement returns, and nothing else in the system holds the previous set. The statement
+	// carried no capture at all until G12, and the guard could not see it — annotationTrackedColumns
+	// is derived from annotationCapturedColumns, which had no tags column, so `SET tags =` matched
+	// nothing and UpdateTags sat in neither the captured set nor the exemption list.
+	//
+	// It is its own source because change_source answers "what did the user ask for". They asked to
+	// retag. Every category column on one of these rows is unchanged by construction, so filing it
+	// under 'category' would describe a recategorisation that did not happen.
+	TransactionAnnotationChangeTags = "tags"
 )
 
 // TransactionAnnotation is the complete user-set annotation on a transaction at one moment: the
@@ -88,6 +101,18 @@ type TransactionAnnotation struct {
 	// ReviewedAt is the fact #1579 missed. A transaction reviewed in March and recategorised in
 	// August reports August, and March survives nowhere else.
 	ReviewedAt *time.Time `json:"reviewed_at,omitempty"`
+
+	// Tags and TagsSource are the user's tag array and its per-tag provenance (#1569 gap G12).
+	//
+	// They are here because the WRITER records them and a writer with no reader ships nothing
+	// observable — the lesson task 5 paid for on rule_execution_history. A 'tags' row whose every
+	// visible field were identical on both sides would read as a change that did not happen.
+	//
+	// nil means NOT RECORDED, which is what every row written before migration 000173 carries. An
+	// empty array means the user genuinely had no tags, and the two must not be conflated: `[]`
+	// would claim a fact about a row that predates the column.
+	Tags       []string    `json:"tags,omitempty"`
+	TagsSource []TagSource `json:"tags_source,omitempty"`
 }
 
 // TransactionAnnotationChange is one row of transaction_annotation_history: a before/after pair for
@@ -106,9 +131,9 @@ type TransactionAnnotationChange struct {
 	// what was overwritten on it.
 	TransactionID string `json:"transaction_id"`
 
-	// ChangeSource is one of the four TransactionAnnotationChange* constants above —
-	// 'category', 'review', 'settlement' or 'erasure'. (This comment named only the first two,
-	// which stopped being true at migration 000170.)
+	// ChangeSource is one of the five TransactionAnnotationChange* constants above —
+	// 'category', 'review', 'settlement', 'erasure' or 'tags'. (This comment named only the first
+	// two, which stopped being true at migration 000170; 000173 added the fifth.)
 	ChangeSource string `json:"change_source"`
 
 	Prior TransactionAnnotation `json:"prior"`

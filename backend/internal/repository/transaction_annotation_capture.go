@@ -144,6 +144,15 @@ var annotationCapturedColumns = []string{
 	"category_source",
 	"reviewed",
 	"reviewed_at",
+
+	// #1569 gap G12. tags/tags_source are user-authored exactly as the category columns are — the
+	// settlement move carries them onto the posted twin for that reason — and UpdateTags REPLACES
+	// the whole array, so a dropped tag has no other copy anywhere. Their absence from this list
+	// did not merely leave UpdateTags unrecorded: it made it INVISIBLE to
+	// TestAnnotationCaptureIsUsedByEveryAnnotationWritingStatement, whose universe is derived from
+	// this slice. Migration 000173 added the four history columns these generate.
+	"tags",
+	"tags_source",
 }
 
 // annotationCaptureReturning is the RETURNING list a capturing UPDATE must expose. `prior.*` is the
