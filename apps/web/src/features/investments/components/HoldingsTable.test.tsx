@@ -13,10 +13,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HoldingsTable } from './HoldingsTable'
-import { mockUseGetHoldings } from '@/test/mocks/investments-api'
+import { mockUseGetHoldings, mockUseGetAccountHoldingsHistory } from '@/test/mocks/investments-api'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import { mockUseUser, createMockClerkUser, mockClerkUser } from '@/test/mocks/clerk'
 import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
+import type { HoldingSnapshotView } from '@boostedbudget/api-client/models/holdingSnapshotView'
 import type { Account } from '@boostedbudget/api-client/models'
 
 function makeHolding(overrides: Partial<HoldingView> & { id: string }): HoldingView {
@@ -476,8 +477,60 @@ describe('HoldingsTable', () => {
   // says so. AccountsPage lists closed accounts, so a user CAN reach this tab for one, and the
   // generic empty state told them "nothing synced yet" — which is false: positions were synced,
   // retained, and are being withheld on purpose.
-  describe('disconnected account (#1569 T12)', () => {
-    const accountClosed = makeAccount({ id: 'acct-closed', name: 'Old Brokerage', status: 'removed' })
+  // ── #1569: a closed account's RETAINED holdings history ────────────────────────────────
+  //
+  // T12 half A ruled that positions are a CURRENT-STATE question and stay hidden once an account
+  // goes terminal. That ruling stands — the live read is untouched — but the slot it left behind
+  // used to hold a notice saying only the transactions were still reachable. That was honest while
+  // holding_snapshots had no reader, and false against privacy policy §8.2a, which tells the user a
+  // removed account's holdings history "is retained ... so you can still view it under 'Closed
+  // accounts'". The reader was built rather than the policy narrowed, and these tests are what
+  // stop the promise going stale again.
+  describe('closed account holdings history (#1569)', () => {
+    const accountClosed = makeAccount({
+      id: 'acct-closed',
+      name: 'Old Brokerage',
+      status: 'removed',
+      // Deliberately a DIFFERENT day from the snapshot date below: with both the same, a mutant
+      // that rendered the wrong one — or a raw ISO string — survived, because the other half of
+      // the caption still produced the expected text.
+      removed_at: '2026-03-10T00:00:00Z',
+    })
+
+    const position = (overrides: Partial<HoldingSnapshotView> = {}): HoldingSnapshotView => ({
+      security_id: 'sec-1',
+      as_of_date: '2026-03-04',
+      quantity: 10,
+      cost_basis: 4000,
+      institution_value: 5000,
+      institution_price: 500,
+      security_name: 'Apple Inc',
+      ticker_symbol: 'AAPL',
+      security_type: 'stock',
+      gain_loss: 1000,
+      gain_loss_pct: 25,
+      ...overrides,
+    })
+
+    function withHistory(overrides: Partial<{
+      as_of_date: string
+      available_dates: string[]
+      positions: HoldingSnapshotView[]
+      total_value: number
+    }> = {}) {
+      mockUseGetAccountHoldingsHistory.mockReturnValue({
+        data: {
+          account_id: 'acct-closed',
+          as_of_date: '2026-03-04',
+          available_dates: ['2026-03-04'],
+          positions: [position()],
+          total_value: 5000,
+          ...overrides,
+        },
+        isLoading: false,
+        isError: false,
+      })
+    }
 
     beforeEach(() => {
       mockUseGetAccounts.mockReturnValue({
@@ -491,41 +544,189 @@ describe('HoldingsTable', () => {
         isLoading: false,
         isError: false,
       })
+      mockUseGetAccountHoldingsHistory.mockReturnValue({
+        data: { account_id: 'acct-closed', available_dates: [], positions: [] },
+        isLoading: false,
+        isError: false,
+      })
     })
 
-    it('explains WHY a disconnected account shows no positions, instead of "nothing synced yet"', () => {
+    // THE DEFECT THIS CLOSES. §8.2a says the user can still view a removed account's holdings
+    // history. Before this, they could not see a single position.
+    it('renders the retained positions of a closed account', () => {
+      withHistory()
       render(<HoldingsTable accountId="acct-closed" />)
-      expect(screen.getByText(/disconnected/i)).toBeDefined()
+
+      expect(screen.getByText('AAPL')).toBeDefined()
+      expect(screen.getByText('Apple Inc')).toBeDefined()
       expect(screen.queryByText(/no holdings synced yet/i)).toBeNull()
     })
 
-    it('says the history was kept, so the user is not told their data is gone', () => {
-      render(<HoldingsTable accountId="acct-closed" />)
-      expect(screen.getByText(/retained/i)).toBeDefined()
-    })
-
-    // Fix round 1 (I4). The first draft told the user "the positions we last confirmed are kept
-    // on record". They ARE kept — in holding_snapshots — but nothing reads that table: zero
-    // non-test callers, no service method, no endpoint, no UI. Promising the user data no
-    // surface can show them is #1569's own complaint pointed the other way, so the notice now
-    // claims only what it can deliver: the TRANSACTIONS are visible, and the positions stop.
-    it('promises the user nothing it cannot actually show them', () => {
+    it('names the day the positions were true, so they cannot read as current', () => {
+      withHistory()
       const { container } = render(<HoldingsTable accountId="acct-closed" />)
       const text = container.textContent ?? ''
-      expect(text).not.toMatch(/positions .*(kept on record|last confirmed)/i)
-      // What IS reachable today: the account's transactions.
-      expect(text).toMatch(/transactions/i)
+
+      // The SNAPSHOT day, formatted — not the raw ISO string, and not the closure day.
+      expect(text).toMatch(/Positions as of Mar 4, 2026/)
+      expect(text).not.toMatch(/2026-03-04/)
+      expect(text).toMatch(/not what the account holds today/i)
+    })
+
+    // The closure date is a different fact from the snapshot date and comes from a different
+    // field (getAccountClosedDate). Both must render, and neither may stand in for the other.
+    it('names the day the account closed, alongside the day the positions were true', () => {
+      withHistory()
+      const { container } = render(<HoldingsTable accountId="acct-closed" />)
+      const text = container.textContent ?? ''
+
+      expect(text).toMatch(/closed on Mar 10, 2026/)
+      expect(text).toMatch(/Positions as of Mar 4, 2026/)
+    })
+
+    // Information never by colour alone: the state is carried by the word "Closed".
+    it('says the account is closed in words, not only by tint', () => {
+      withHistory()
+      render(<HoldingsTable accountId="acct-closed" />)
+      expect(screen.getByText(/closed account/i)).toBeDefined()
+    })
+
+    // Day change is measured against today's prior close. A historical position must not carry it,
+    // and the backend type has no field for it — this pins the UI half of that separation.
+    it('does not render day-change columns over historical positions', () => {
+      withHistory()
+      render(<HoldingsTable accountId="acct-closed" />)
+
+      expect(screen.queryByText(/Day Change \(\$\)/)).toBeNull()
+      expect(screen.queryByText(/Day Change \(%\)/)).toBeNull()
+      // The shared value columns ARE there — the historical table is the same table, minus what
+      // cannot mean anything on a past day.
+      expect(screen.getByText(/Market Value/)).toBeDefined()
+      expect(screen.getByText(/Gain\/Loss \(\$\)/)).toBeDefined()
+    })
+
+    // PII: DataTable masks a <td> ONLY when the column id is in maskedColumnIds. Holdings are
+    // money, so every value column must be listed — "it's a DataTable so it's masked" is false.
+    it('masks every money and security cell for session replay', () => {
+      withHistory()
+      const { container } = render(<HoldingsTable accountId="acct-closed" />)
+
+      const maskedText = Array.from(container.querySelectorAll('[data-ph-mask]')).map(
+        (el) => el.textContent ?? '',
+      )
+      for (const value of ['AAPL', 'Apple Inc', '$5,000', '$4,000', '$1,000']) {
+        expect(maskedText.some((t) => t.includes(value))).toBe(true)
+      }
+    })
+
+    // Attributes are recorded verbatim by session replay and cannot be covered by any mask, so no
+    // element on this surface may carry an amount in an aria-label or title.
+    it('puts no amount into an attribute', () => {
+      withHistory()
+      const { container } = render(<HoldingsTable accountId="acct-closed" />)
+
+      for (const el of Array.from(container.querySelectorAll('[aria-label], [title]'))) {
+        const attrs = `${el.getAttribute('aria-label') ?? ''} ${el.getAttribute('title') ?? ''}`
+        expect(attrs).not.toMatch(/\d[\d,]*\.?\d*\s*$|\$/)
+      }
+    })
+
+    it('shows the day total from the server rather than adding the rows up', () => {
+      withHistory({ total_value: 7777 })
+      const { container } = render(<HoldingsTable accountId="acct-closed" />)
+      expect(container.textContent ?? '').toMatch(/\$7,777/)
+    })
+
+    // Nil, not zero. A portfolio whose values the provider never sent is not worth nothing.
+    it('renders no total when the server could not compute one', () => {
+      mockUseGetAccountHoldingsHistory.mockReturnValue({
+        data: {
+          account_id: 'acct-closed',
+          as_of_date: '2026-03-04',
+          available_dates: ['2026-03-04'],
+          positions: [position({ institution_value: undefined, cost_basis: undefined })],
+        },
+        isLoading: false,
+        isError: false,
+      })
+      const { container } = render(<HoldingsTable accountId="acct-closed" />)
+      expect(container.textContent ?? '').not.toMatch(/Total recorded value/i)
+    })
+
+    it('offers a labelled day picker only when more than one day was recorded', () => {
+      withHistory()
+      const single = render(<HoldingsTable accountId="acct-closed" />)
+      expect(single.container.querySelector('select')).toBeNull()
+      single.unmount()
+
+      withHistory({ available_dates: ['2026-03-04', '2026-03-03'] })
+      render(<HoldingsTable accountId="acct-closed" />)
+
+      const select = screen.getByLabelText(/positions as of/i)
+      expect(select).toBeDefined()
+      expect(screen.getByText('Mar 3, 2026')).toBeDefined()
+    })
+
+    it('asks the server for the day the user picked', async () => {
+      withHistory({ available_dates: ['2026-03-04', '2026-03-03'] })
+      render(<HoldingsTable accountId="acct-closed" />)
+
+      mockUseGetAccountHoldingsHistory.mockClear()
+      fireEvent.change(screen.getByLabelText(/positions as of/i), {
+        target: { value: '2026-03-03' },
+      })
+
+      const args = mockUseGetAccountHoldingsHistory.mock.calls.at(-1)?.[0] as
+        | { account_id: string; as_of?: string }
+        | undefined
+      expect(args?.account_id).toBe('acct-closed')
+      expect(args?.as_of).toBe('2026-03-03')
+    })
+
+    // The account stopped syncing before daily capture existed. Do not imply the data was
+    // destroyed, and do not render an empty table that reads as "held nothing".
+    it('says nothing was recorded, without claiming anything was deleted', () => {
+      const { container } = render(<HoldingsTable accountId="acct-closed" />)
+      const text = container.textContent ?? ''
+
+      expect(text).toMatch(/no day-by-day positions were recorded/i)
+      expect(text).toMatch(/nothing was deleted/i)
+    })
+
+    it('tells the user the history is kept rather than erased', () => {
+      withHistory()
+      const { container } = render(<HoldingsTable accountId="acct-closed" />)
+      expect(container.textContent ?? '').toMatch(/keeps this account's history rather than erasing it/i)
+    })
+
+    it('says the retained figures are excluded from active balances and reports', () => {
+      withHistory()
+      const { container } = render(<HoldingsTable accountId="acct-closed" />)
+      expect(container.textContent ?? '').toMatch(/excluded from your active balances and reports/i)
+    })
+
+    it('surfaces a load failure without saying the history is gone', () => {
+      mockUseGetAccountHoldingsHistory.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        isError: true,
+      })
+      render(<HoldingsTable accountId="acct-closed" />)
+
+      const alert = screen.getByRole('alert')
+      expect(alert.textContent ?? '').toMatch(/still kept/i)
     })
 
     it('leaves a live account on the ordinary empty state', () => {
       render(<HoldingsTable accountId="acct-alpha" />)
       expect(screen.getByText(/no holdings synced yet/i)).toBeDefined()
-      expect(screen.queryByText(/disconnected/i)).toBeNull()
+      expect(screen.queryByText(/closed account/i)).toBeNull()
     })
 
-    // The notice must not appear over real rows: if the backend ever did return a position for a
-    // terminal account, the honest thing is to show the position, not to claim there is none.
+    // If the backend ever did return a live position for a terminal account, the honest thing is
+    // to show it as current rather than to swap in the historical view.
     it('does not replace holdings that are actually present', () => {
+      withHistory()
       mockUseGetHoldings.mockReturnValue({
         data: { holdings: [makeHolding({ id: 'h9', ticker_symbol: 'ZZZ', account_id: 'acct-closed' })], count: 1 },
         isLoading: false,
@@ -533,7 +734,7 @@ describe('HoldingsTable', () => {
       })
       render(<HoldingsTable accountId="acct-closed" />)
       expect(screen.getByText('ZZZ')).toBeDefined()
-      expect(screen.queryByText(/disconnected/i)).toBeNull()
+      expect(screen.queryByText(/closed account/i)).toBeNull()
     })
   })
 })

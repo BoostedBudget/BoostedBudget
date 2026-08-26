@@ -323,6 +323,10 @@ export function createApiClient(mutator: FetchMutator) {
       getHoldings(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/investments/holdings', method: 'GET', params, signal })
       },
+      /** GET /api/v1/investments/holdings/history */
+      getAccountHoldingsHistory(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/holdings/history', method: 'GET', params, signal })
+      },
       /** GET /api/v1/investments/investment-transactions */
       getInvestmentTransactions(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/investments/investment-transactions', method: 'GET', params, signal })

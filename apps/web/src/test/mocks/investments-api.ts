@@ -33,6 +33,15 @@ export const mockUseGetHoldings = mock(() => ({
   isError: false,
 }))
 
+// === useGetAccountHoldingsHistory (#1569 — a CLOSED account's retained positions) ===
+// Defaults to "no history recorded", which is the honest zero-value for an account nothing was
+// ever captured for; tests that want rows set it explicitly.
+export const mockUseGetAccountHoldingsHistory = mock(() => ({
+  data: undefined,
+  isLoading: false,
+  isError: false,
+}))
+
 // === useInfiniteInvestmentTransactions (wrapper hook mock for component tests) ===
 export const mockFetchNextInvestmentPage = mock(() => Promise.resolve())
 export const mockUseInfiniteInvestmentTransactions = mock(() => ({
@@ -54,4 +63,5 @@ mock.module('@boostedbudget/api-client/endpoints/investments/investments', () =>
   useGetPortfolioSummary: mockUseGetPortfolioSummary,
   useGetPortfolioHistory: mockUseGetPortfolioHistory,
   useGetHoldings: mockUseGetHoldings,
+  useGetAccountHoldingsHistory: mockUseGetAccountHoldingsHistory,
 }))
