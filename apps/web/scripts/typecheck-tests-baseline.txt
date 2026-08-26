@@ -1,8 +1,17 @@
-# Ceiling on type errors in TEST files, enforced by scripts/typecheck-tests.sh (#1569).
+# Ceiling on type errors across tsconfig.test.json's compilation, enforced by
+# scripts/typecheck-tests.sh (#1569).
 #
-# This number only ever goes DOWN. An increase fails the gate: a type error in a test file is
-# usually a test that is now wrong — asserting a field or a shape the code no longer has — and
-# such a test can still pass at runtime, which is why it needs a gate and not a printout.
+# ⚠ CORRECTED #1569 R6C (same false scoping as C4's fix to typecheck-tests.sh's own messages,
+# left uncorrected here). This is NOT a count of errors "in test files" — tsconfig.test.json
+# compiles the ~390 test files PLUS everything they import, and measured, only a small fraction of
+# the total lives in a test file itself; most is in the shared mock/API-client infrastructure those
+# tests pull in. See typecheck-tests.sh's own header for the measured breakdown.
+#
+# This number only ever goes DOWN. An increase fails the gate: a NEW type error here is usually a
+# test that is now wrong — asserting a field or a shape the code no longer has — and such a test
+# can still pass at runtime, which is why it needs a gate and not a printout. That reasoning still
+# holds for errors that originate in a test file; it does not relabel the errors that originate in
+# what a test file imports, which this ceiling also counts.
 # A DECREASE also fails, with instructions, so the ceiling cannot be left sitting above the true
 # count as slack for the next regression to hide in.
 #
