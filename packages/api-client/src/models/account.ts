@@ -41,6 +41,7 @@ export interface Account {
   custom_emoji?: string;
   custom_icon?: string;
   display_order?: number;
+  expired_at?: string;
   id: string;
   institution_name?: string;
   is_hidden: boolean;

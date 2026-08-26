@@ -71,7 +71,6 @@ components:
           $ref: "#/components/schemas/TransferSuggestion"
       required:
         - message
-        - suggestion
       type: object
     Account:
       additionalProperties: false
@@ -96,6 +95,9 @@ components:
         display_order:
           format: int64
           type: integer
+        expired_at:
+          format: date-time
+          type: string
         id:
           type: string
         institution_name:
@@ -1568,7 +1570,6 @@ components:
           $ref: "#/components/schemas/TransferSuggestion"
       required:
         - message
-        - suggestion
       type: object
     CashFlowHistoryResponse:
       additionalProperties: false
@@ -2132,7 +2133,6 @@ components:
           $ref: "#/components/schemas/TransferSuggestion"
       required:
         - message
-        - suggestion
       type: object
     ConnectionPoolStats:
       additionalProperties: false
@@ -2889,7 +2889,6 @@ components:
           $ref: "#/components/schemas/TransferSuggestion"
       required:
         - message
-        - suggestion
       type: object
     DeletedGoalContributionsBody:
       additionalProperties: false
@@ -3495,6 +3494,79 @@ components:
         - success
         - message
       type: object
+    HoldingSnapshotHistory:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/HoldingSnapshotHistory.json
+          format: uri
+          readOnly: true
+          type: string
+        account_id:
+          type: string
+        as_of_date:
+          description: UTC calendar day (YYYY-MM-DD) the positions describe; null when no history is retained
+          type: string
+        available_dates:
+          description: Every UTC day (YYYY-MM-DD) with retained positions, newest first
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        positions:
+          items:
+            $ref: "#/components/schemas/HoldingSnapshotView"
+          type:
+            - array
+            - "null"
+        total_value:
+          format: double
+          type: number
+      required:
+        - account_id
+        - available_dates
+        - positions
+      type: object
+    HoldingSnapshotView:
+      additionalProperties: false
+      properties:
+        as_of_date:
+          description: UTC calendar day (YYYY-MM-DD) these figures were true
+          type: string
+        cost_basis:
+          format: double
+          type: number
+        gain_loss:
+          format: double
+          type: number
+        gain_loss_pct:
+          format: double
+          type: number
+        institution_price:
+          format: double
+          type: number
+        institution_value:
+          format: double
+          type: number
+        quantity:
+          format: double
+          type: number
+        security_id:
+          type: string
+        security_name:
+          type: string
+        security_type:
+          type: string
+        ticker_symbol:
+          type: string
+      required:
+        - security_id
+        - as_of_date
+        - quantity
+      type: object
     HoldingView:
       additionalProperties: false
       properties:
@@ -4038,6 +4110,7 @@ components:
             - array
             - "null"
         as_of:
+          description: The instant this response was calculated, assigned after both queries returned — not the instant either query observed. days_withheld is derived from it. Both the count and the returned page were read at or before this instant, by a gap that is not bounded, so they may disagree by any number of rows.
           type: string
         limit:
           format: int64
@@ -5450,7 +5523,6 @@ components:
           $ref: "#/components/schemas/TransferSuggestion"
       required:
         - message
-        - suggestion
       type: object
     RejectedWebhookAttemptMetrics:
       additionalProperties: false
@@ -8683,7 +8755,7 @@ paths:
         - Admin
   /api/v1/admin/retention/withheld:
     get:
-      description: "Returns inactive or cancelled accounts whose data-retention window has expired but which the pre-deletion-notice gate is refusing to hard-delete, because at least one of the 30-day and 7-day notices promised by the privacy policy was never recorded. What is blocked is the retention sweep, and only it: the notice queries select only users whose retention clock has not yet run out, so no existing path can send the missing notice and the retention sweep will hold these accounts indefinitely. A user-requested GDPR erasure is a separate authorisation and still deletes them normally; requesting deletion also removes the account from this listing. This is a read-only view — it sends nothing, extends no retention clock and waives no notice; choosing between those remedies is an open decision and will land as its own endpoint. has_email_on_file is reported per account because it is the one withholding reason the retention_deletions_withheld metric cannot separate. No email address is returned. withheld_total and the returned page come from two separate queries and are eventually consistent: a notice marker, a deletion request or a retention clock crossing the current instant between them can make the total disagree with the page by a row. Keyset-paginated: pass next_cursor's two fields back as cursor_expires_at and cursor_user_id; next_cursor is absent on the final page. Requires admin role."
+      description: "Returns inactive or cancelled accounts whose data-retention window has expired but which the pre-deletion-notice gate is refusing to hard-delete, because at least one of the 30-day and 7-day notices promised by the privacy policy was never recorded. What is blocked is the retention sweep, and only it: the notice queries select only users whose retention clock has not yet run out, so no existing path can send the missing notice and the retention sweep will hold these accounts indefinitely. A user-requested GDPR erasure is a separate authorisation and still deletes them normally; requesting deletion also removes the account from this listing. This is a read-only view — it sends nothing, extends no retention clock and waives no notice; choosing between those remedies is an open decision and will land as its own endpoint. has_email_on_file is reported per account because it is the one withholding reason the retention_deletions_withheld metric cannot separate. No email address is returned. withheld_total and the returned page come from two separate queries and are eventually consistent: a notice marker, a deletion request or a retention clock crossing the current instant between them can make the total disagree with the page by any number of rows — the gap is not bounded. as_of is when the response was calculated, after both queries returned. Keyset-paginated: pass next_cursor's two fields back as cursor_expires_at and cursor_user_id; next_cursor is absent on the final page. Requires admin role."
       operationId: listAdminRetentionWithheld
       parameters:
         - description: Number of accounts to return
@@ -12270,6 +12342,44 @@ paths:
       summary: List portfolio holdings
       tags:
         - Investments
+  /api/v1/investments/holdings/history:
+    get:
+      description: "Returns the investment positions retained for one account as they stood on a past UTC day, with the list of every other day that can be asked for and the day's pre-computed total value (Issue #1569). Removing a linked bank account retains its holdings history rather than erasing it, and this is the only endpoint that reads it back: GET /investments/holdings answers a CURRENT-STATE question and deliberately returns nothing for a closed account. Omit as_of for the most recent retained day; a day with no retained positions returns 404 rather than an empty list, because \"we kept nothing for that day\" is not \"the account held nothing that day\". ⚠ These are HISTORICAL figures. They carry no day-change, because day-change is measured against today's prior close, and they must never be presented as what the account holds now."
+      operationId: getAccountHoldingsHistory
+      parameters:
+        - description: Account whose retained holdings history to read. Required — this endpoint is per-account by design; there is no whole-portfolio historical read, because a portfolio total mixing live and closed accounts is a current-state figure.
+          explode: false
+          in: query
+          name: account_id
+          required: true
+          schema:
+            description: Account whose retained holdings history to read. Required — this endpoint is per-account by design; there is no whole-portfolio historical read, because a portfolio total mixing live and closed accounts is a current-state figure.
+            type: string
+        - description: UTC calendar day (YYYY-MM-DD) to read. Omit for the most recent retained day. A day with no retained positions returns 404 rather than an empty list.
+          explode: false
+          in: query
+          name: as_of
+          schema:
+            description: UTC calendar day (YYYY-MM-DD) to read. Omit for the most recent retained day. A day with no retained positions returns 404 rather than an empty list.
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HoldingSnapshotHistory"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get an account's retained holdings history
+      tags:
+        - Investments
   /api/v1/investments/investment-transactions:
     get:
       description: Returns investment transactions for the authenticated user using keyset (cursor) pagination. Supports filtering by account, security, activity type (buy/sell/dividend/reinvest/fee/cash/other), and date range.
@@ -14165,7 +14275,12 @@ paths:
         - Tags
   /api/v1/transaction-annotation-history:
     get:
-      description: Retrieves the before/after record of every category or review-state overwrite the authenticated user made on a transaction, newest first. A row exists for each write that actually changed a tracked value; re-writing the identical value records nothing. change_source distinguishes a recategorisation ('category') — which also rewrites the review state as a side effect — from a review-state write ('review'). Changes made to a transaction that has since been removed are still returned.
+      description: |-
+        Retrieves the before/after record of every change to a transaction's category, review state or tags for the authenticated user, newest first. A row exists for each write that actually changed a tracked value; re-writing the identical value records nothing. Changes made to a transaction that has since been removed are still returned.
+
+        `change_source` answers *what was asked for*, and has five values. Two are the user acting on their own transaction: 'category' — a recategorisation, which ALSO rewrites `reviewed`/`reviewed_at` as a side effect, so a review timestamp can be lost by a write the user thought was only about the category; and 'review' — a review-state write, single or bulk, which leaves the category alone. 'tags' is a whole-array tag replace: every tag dropped is gone the moment it returns and the previous set survives nowhere else, so `prior_tags` here is the only record of it; category fields are unchanged on these rows by construction.
+
+        The remaining two record changes the user did NOT ask for, which is exactly why they are not filed under 'category'. 'settlement' is written when a pending charge posts and the sync carries the manual category from the pending row onto the posted twin, replacing whatever the twin had — it explains why the twin no longer agrees with the rule_execution_history entry for the rule that categorised it moments earlier. 'erasure' is the one source whose cause is another user: when a different user exercises GDPR erasure their custom categories are hard-deleted, and a surviving user's transaction pointing at one has its override cleared. That row is the ONLY explanation anywhere for a category changing under a user who did nothing — no other record of it exists, and none is written for the erased user's own transactions, which are deleted in the same database transaction.
       operationId: getUserTransactionAnnotationHistory
       parameters:
         - description: Maximum number of results

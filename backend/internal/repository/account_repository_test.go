@@ -535,7 +535,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status", "removed_at", "replaced_at", "replaced_by_id",
+		"user_account_id", "status", "removed_at", "replaced_at", "expired_at", "replaced_by_id",
 		"created_at", "updated_at",
 	}).AddRow(
 		accountID, uuid.New().String(), userID, "plaid-acc-1",
@@ -543,7 +543,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		&balance, &available, "USD",
 		strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), strPtr("💰"),
 		&displayOrder, false,
-		&userAccountID, domain.AccountStatusActive, nil, nil, nil,
+		&userAccountID, domain.AccountStatusActive, nil, nil, nil, nil,
 		now, now,
 	)
 
@@ -553,7 +553,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id, status, removed_at, replaced_at, replaced_by_id,
+		       user_account_id, status, removed_at, replaced_at, expired_at, replaced_by_id,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -600,7 +600,7 @@ func TestAccountRepository_GetByIDAndUser_NotFound(t *testing.T) {
 		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id, status, removed_at, replaced_at, replaced_by_id,
+		       user_account_id, status, removed_at, replaced_at, expired_at, replaced_by_id,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -814,7 +814,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at",
+		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
 		AddRow(
@@ -823,7 +823,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 			&bal1, &avail1, "USD",
 			strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), nil,
 			&order0, false,
-			nil, "active", nil, nil, nil,
+			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
 		AddRow(
@@ -832,7 +832,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 			&bal2, &avail2, "USD",
 			nil, nil, nil, nil,
 			&order1, false,
-			nil, "active", nil, nil, nil,
+			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		)
 
@@ -844,7 +844,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -887,7 +887,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at",
+		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
 		AddRow(
@@ -896,7 +896,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 			&bal1, &avail1, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
-			nil, "active", nil, nil, nil,
+			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
 		AddRow(
@@ -905,7 +905,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 			&bal2, &avail2, "USD",
 			strPtr("Closed Account"), nil, nil, nil,
 			nil, true, // This one is hidden
-			nil, "active", nil, nil, nil,
+			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Bank of America"), strPtr("active"),
 		)
 
@@ -917,7 +917,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -1780,7 +1780,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at",
+		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
 		AddRow(
@@ -1789,7 +1789,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 			&bal1, &avail1, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
-			nil, "active", nil, nil, nil,
+			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
 		AddRow(
@@ -1798,7 +1798,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 			&bal2, &avail2, "USD",
 			nil, nil, nil, nil,
 			nil, false,
-			nil, "replaced", &replacedAt, nil, nil,
+			nil, "replaced", &replacedAt, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		)
 	// Note: expired account is NOT included in the mock result rows.
@@ -1810,7 +1810,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -1858,7 +1858,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at",
+		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
 		AddRow(
@@ -1867,7 +1867,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 			nil, nil, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
-			nil, "active", nil, nil, nil,
+			nil, "active", nil, nil, nil, nil,
 			now, now, nil, nil, // l.institution_name = NULL, l.status = NULL
 		)
 
@@ -1877,7 +1877,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id

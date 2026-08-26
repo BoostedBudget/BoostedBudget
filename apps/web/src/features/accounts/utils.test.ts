@@ -379,11 +379,10 @@ describe('getAccountClosedDate', () => {
   // The precedence mirrors which timestamp the backend actually stamps per status:
   //   'removed'  → removed_at   (MarkRemovedByLinkedItemID / UpdateStatus)
   //   'replaced' → replaced_at  (UpdateStatus)
-  //   'expired'  → no dedicated column exists; ExpireAccountsByFingerprint touches only
-  //                updated_at, so that is the best available proxy.
-  // All three columns are selected by the account reads and carried over the wire — see
-  // account_repository.go GetByIDAndUser, whose comment exists precisely to stop one being
-  // dropped from a projection.
+  //   'expired'  → expired_at   (ExpireAccountsByFingerprint, migration 000155)
+  // All four columns are selected by the two account reads whose rows reach this helper and are
+  // carried over the wire — see account_repository.go GetByIDAndUser, whose comment exists
+  // precisely to stop one being dropped from a projection.
 
   it('returns undefined for an active account — it has not closed', () => {
     expect(getAccountClosedDate({ ...baseAccount, status: 'active' })).toBeUndefined()
@@ -410,13 +409,60 @@ describe('getAccountClosedDate', () => {
     expect(getAccountClosedDate(account)).toBe('2026-02-01T00:00:00Z')
   })
 
-  it('falls back to updated_at for an expired account (no dedicated timestamp exists)', () => {
+  // ⚠ THE MOTIVATING DEFECT (#1569 round 6, G-F). `expired` was the one terminal status with no
+  // dedicated column, so this helper fell through to `updated_at`. But `updated_at` is bumped with
+  // NO status predicate by ordinary cosmetic writes — accountRepository.Update (nickname / emoji /
+  // colour / hide) and UpdateDisplayOrders (drag-reorder) — so renaming or reordering a CLOSED
+  // account moved its rendered "Closed on {date}" forward to today, on the one surface whose
+  // stated thesis is that history is retained. Migration 000155 added `accounts.expired_at` on
+  // this same branch, and its CHECK (accounts_expired_at_consistency) makes it NOT NULL for every
+  // 'expired' row, backfill included — so preferring it is total, not best-effort.
+  it('prefers expired_at for an expired account, so a cosmetic write cannot move the date', () => {
+    const account: Account = {
+      ...baseAccount,
+      status: 'expired',
+      expired_at: '2026-04-01T00:00:00Z',
+      // The rename happened later. Before this fix, THIS is what the UI rendered.
+      updated_at: '2026-07-15T09:30:00Z',
+    }
+    expect(getAccountClosedDate(account)).toBe('2026-04-01T00:00:00Z')
+  })
+
+  // The pre-000155 shape can still arrive from a read whose projection omits the column (only the
+  // two reads that reach this helper carry it). `updated_at` remains the last resort rather than
+  // rendering nothing — a stale date is worse than no date only if it is silently wrong, and the
+  // caption is explicitly a closure date.
+  it('still falls back to updated_at when expired_at is absent from the projection', () => {
     const account: Account = {
       ...baseAccount,
       status: 'expired',
       updated_at: '2026-04-01T00:00:00Z',
     }
     expect(getAccountClosedDate(account)).toBe('2026-04-01T00:00:00Z')
+  })
+
+  // Precedence is per-status by construction, but the CHECK constraints make the columns mutually
+  // exclusive anyway, so this pins the ORDER rather than a reachable row: expired_at must not
+  // outrank removed_at or replaced_at if a projection ever carries two.
+  it('ranks expired_at below removed_at and replaced_at', () => {
+    expect(
+      getAccountClosedDate({
+        ...baseAccount,
+        status: 'removed',
+        removed_at: '2026-03-01T00:00:00Z',
+        expired_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-07-01T00:00:00Z',
+      })
+    ).toBe('2026-03-01T00:00:00Z')
+    expect(
+      getAccountClosedDate({
+        ...baseAccount,
+        status: 'replaced',
+        replaced_at: '2026-02-01T00:00:00Z',
+        expired_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-07-01T00:00:00Z',
+      })
+    ).toBe('2026-02-01T00:00:00Z')
   })
 })
 

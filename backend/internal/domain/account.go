@@ -91,15 +91,25 @@ type Account struct {
 	RemovedReason *string `json:"-" db:"removed_reason"`
 	// ExpiredAt is when the 90-day fingerprint TTL was released, moving this account to
 	// status = 'expired' (AccountRepository.ExpireAccountsByFingerprint). NULL for every other
-	// status. Issue #1569 Task 6, migration 000155.
+	// status, and NEVER NULL when status = 'expired' — migration 000155's
+	// accounts_expired_at_consistency CHECK pairs the two in both directions, backfill included.
+	// Issue #1569 Task 6, migration 000155.
 	//
-	// Not serialised (`json:"-"`), same reasoning as RemovedReason above: domain.Account IS an API
-	// response type (huma/operations/plaid.go), and this branch's task is a data-correctness fix
-	// (add the timestamp, audit the write, stop the false-cause interval), not a new user-facing
-	// field. No production path currently reads this back into the struct either — it is written
-	// by ExpireAccountsByFingerprint's UPDATE and otherwise exists for the same reason removed_at/
-	// replaced_at do: a durable, queryable record of when a terminal transition happened.
-	ExpiredAt *time.Time `json:"-" db:"expired_at"`
+	// ⚠ SERIALISED, unlike RemovedReason above, and the reason is a user-visible defect rather
+	// than symmetry (#1569 round 6, G-F). apps/web/src/features/accounts/utils.ts's
+	// getAccountClosedDate renders "Closed on {date}" from
+	// `removed_at ?? replaced_at ?? expired_at ?? updated_at`. While this field was withheld,
+	// 'expired' fell through to `updated_at` — which accountRepository.Update (nickname / emoji /
+	// colour / hide) and UpdateDisplayOrders (drag-reorder) both bump with NO status predicate. So
+	// renaming or reordering a closed account moved its rendered closure date forward to today, on
+	// the one surface whose stated thesis is that history is retained.
+	//
+	// ⚠ Carried by exactly the two reads whose rows reach that helper — GetByIDAndUser (returned
+	// verbatim by PATCH /api/v1/accounts/{id}, i.e. by the rename itself) and
+	// GetAccountsWithInstitutionFiltered (the accounts list / detail page). Any NEW read whose rows
+	// reach the frontend must carry it too; the same trap GetByIDAndUser's comment already
+	// describes for replaced_at, one column along.
+	ExpiredAt *time.Time `json:"expired_at,omitempty" db:"expired_at"`
 	// ⚠ DEAD COLUMN — never written non-NULL by any production path (#1537 round 14). Its only
 	// writer is accountRepository.UpdateStatus, and that method's sole production caller
 	// (services/account_service.go:510, the re-link soft-delete) passes a literal nil. The only other
