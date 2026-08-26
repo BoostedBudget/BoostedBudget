@@ -175,6 +175,20 @@ Pinned by `TestT3BenchAntiJoinIsNotEquivalent` (`t3bench_equality_test.go`), whi
 shapes — including a control proving the probe still agrees on the plain joint-account case — and
 evaluates the REAL predicate functions, not transcriptions of them.
 
+**And pinned against real Postgres**, because until #1569 round 6 nothing was:
+`TestAnalyticsRepository_GetSpendingByCategory_Household_SameDayUnshareReshare_PlainAccountCountedOnce`
+and
+`TestAnalyticsRepository_GetSpendingByCategory_Household_SameDayUnshareReshare_JointAccountCountedOnce`
+(`analytics_repository_household_integration_test.go`) build the divergent shape through the
+production share/revoke paths and assert HEAD's amounts. Both return $60; under the anti-join
+predicate both return **$0**. Measured under exactly that mutation, the four existing household
+tests that come closest —
+`TestAnalyticsRepository_GetSpendingByCategory_Household_JointAccountCountedOnce`,
+`TestAnalyticsRepository_GetSpendingByCategory_Household_JointAccountWithClosedGrantCountedOnce`,
+`TestAnalyticsRepository_GetSpendingByCategory_Household_DepartedMemberSharedPeriodRetained` and
+`TestAnalyticsRepository_GetSpendingByCategory_Household_ClipsToSharedAt` — **all still passed.**
+The suite agreed with the wrong variant, which is the same blind spot as the seed's.
+
 ### Why the agreement harness is not evidence
 
 `TestT3BenchAntiJoinEquality`, in the same file, runs both forms of all NINE reads against the seeded
