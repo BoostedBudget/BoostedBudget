@@ -166,10 +166,13 @@ if [ -n "$STALE" ]; then
 fi
 
 echo "typecheck-tests: $CHECKED test files checked, 0 stale @ts-expect-error directives."
+# ⚠ #1569 R6B/C4: TOTAL is `error TS[0-9]+` lines from tsc's WHOLE tsconfig.test.json compilation
+# (test files plus everything they import), not a count scoped to test files — only CHECKED above
+# is test-file-specific. Wording corrected here; the number and the gate it feeds are UNCHANGED.
 if [ "$UPDATE_BASELINE" -eq 1 ]; then
-  echo "typecheck-tests: $TOTAL type error(s) in test files (recording as the new baseline)."
+  echo "typecheck-tests: $TOTAL type error(s) across tsconfig.test.json's compilation (recording as the new baseline)."
 else
-  echo "typecheck-tests: $TOTAL type error(s) in test files (baseline $BASELINE)."
+  echo "typecheck-tests: $TOTAL type error(s) across tsconfig.test.json's compilation (baseline $BASELINE)."
 fi
 
 # Where the errors actually are, derived from THIS run. Printed instead of asserted in a comment,
@@ -204,8 +207,8 @@ if [ "$UPDATE_BASELINE" -eq 1 ]; then
 fi
 
 if [ "$TOTAL" -gt "$BASELINE" ]; then
-  echo "typecheck-tests: $((TOTAL - BASELINE)) NEW type error(s) in test files ($TOTAL > baseline $BASELINE)." >&2
-  echo "  A type error in a test file is usually a test that is now WRONG — asserting a field or a" >&2
+  echo "typecheck-tests: $((TOTAL - BASELINE)) NEW type error(s) across tsconfig.test.json's compilation ($TOTAL > baseline $BASELINE)." >&2
+  echo "  A type error here is usually a test that is now WRONG — asserting a field or a" >&2
   echo "  shape the code no longer has — and such a test can still pass at runtime. Fix it." >&2
   echo "  Raising the baseline is a deliberate, reviewable act, not a way past this message." >&2
   report_hotspots >&2

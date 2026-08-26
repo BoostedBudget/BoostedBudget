@@ -463,9 +463,10 @@ function ClosedAccountHoldingsHistory({
     )
   }
 
-  // No history at all. This is a real case rather than an error: the account stopped syncing
-  // before the app began recording positions day by day. Say exactly that, and do not imply the
-  // figures were destroyed.
+  // No history at all. This is a real case rather than an error. #1569 R6B/C3: the cause is not
+  // established — the account may simply have held nothing, or day-by-day capture may not have
+  // covered it for other reasons — so the copy below stays neutral about WHY and only states the
+  // fact, while still being explicit that nothing was destroyed.
   if (availableDates.length === 0) {
     return (
       <div
@@ -476,8 +477,8 @@ function ClosedAccountHoldingsHistory({
           No day-by-day positions were recorded for this account.
         </p>
         <p className="mt-1">
-          This account stopped syncing before we began keeping a daily record of what it held.
-          Nothing was deleted — its transactions are retained and still appear in your activity.
+          We don&apos;t have retained holdings history for this account. Nothing was deleted — its
+          transactions are retained and still appear in your activity.
         </p>
       </div>
     )

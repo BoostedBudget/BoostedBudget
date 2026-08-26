@@ -683,8 +683,10 @@ describe('HoldingsTable', () => {
       expect(args?.as_of).toBe('2026-03-03')
     })
 
-    // The account stopped syncing before daily capture existed. Do not imply the data was
-    // destroyed, and do not render an empty table that reads as "held nothing".
+    // No retained holdings history for this account. #1569 R6B/C3: the cause is not established
+    // (it may have held nothing, or capture may not have covered it) so the copy must not claim
+    // one; it must also not imply the data was destroyed, or render an empty table that reads as
+    // "held nothing".
     it('says nothing was recorded, without claiming anything was deleted', () => {
       const { container } = render(<HoldingsTable accountId="acct-closed" />)
       const text = container.textContent ?? ''
