@@ -474,6 +474,43 @@ func effectiveCategoryDisplayExpr() string {
 	return `t.effective_category_name`
 }
 
+// ─── #1585: the spending reads' tiebreaker ───────────────────────────────────────────────────────
+//
+// The six spending reads (GetSpendingByCategory / GetSpendingByMerchant / GetSpendingTrends, each
+// with a household sibling) used to sort by `total` alone. Rows tied on total therefore came back
+// in whatever order the executor emitted them: a HashAggregate emits hash-bucket order, a
+// GroupAggregate emits GROUP BY key order, and Postgres's sort is not required to be stable. The
+// SAME data could answer the SAME question two ways once the plan changed — which is exactly how
+// this was found on #1569 T3 (identical result MULTISETS, different row ORDER inside equal totals).
+//
+// It matters beyond cosmetics because CLAUDE.md designs these methods to be tool-callable by an
+// in-app AI assistant, which has no way to know a reordering is meaningless, and because the
+// merchant reads apply a LIMIT — an unstable order makes the cut-off row arbitrary.
+//
+// The ruling is ALPHABETICAL BY NAME, applied identically to both members of every pair. NULL
+// ordering is left at the ASC default (NULLS LAST) deliberately: a NULL name sorts last, which is
+// itself deterministic. It is also unreachable today — `effective_category_name` is scanned into a
+// non-pointer string (a NULL already fails the scan), and the merchant name COALESCEs to the
+// literal 'Unknown'.
+//
+// ⚠ Alphabetical alone does NOT determinise the MERCHANT reads. Their name is an aggregate
+// (`MAX(COALESCE(...))`) whose chain bottoms out in the literal 'Unknown', while the GROUP BY is on
+// a merchant-KEY expression, not the name. Several distinct keys — a merchants row literally named
+// "Unknown", a raw `merchant_name = 'Unknown'`, and the no-merchant 'unknown' bucket — render the
+// same display name and tie again on it. So the merchant reads carry the grouped key as a THIRD
+// sort leg. Pinned by TestAnalyticsRepository_TieOrder_SpendingByMerchant_IsPlanIndependent.
+//
+// merchantGroupKeyExpr is that key. It is shared by GROUP BY and ORDER BY in both merchant reads so
+// the two can never drift apart — ordering by an expression the query does not actually group on
+// would be a planner error, not a silent reordering.
+const merchantGroupKeyExpr = `CASE
+		    WHEN t.merchant_id IS NOT NULL
+		      THEN 'merchant:' || COALESCE(mno.merged_into_merchant_id, t.merchant_id)::text
+		    WHEN NULLIF(t.merchant_name, '') IS NOT NULL
+		      THEN 'raw:' || t.merchant_name
+		    ELSE 'unknown'
+		  END`
+
 // effectiveTransferExpr returns the SQL expression for the effective PFC primary used
 // in transfer filtering. Reads the denormalized effective_pfc_primary column directly.
 // effective_pfc_primary is NULL for custom-kind rows (never match TRANSFER%), so
@@ -893,7 +930,8 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 	return clause, args, argIndex
 }
 
-// GetSpendingByCategory returns expense totals grouped by effective primary category.
+// GetSpendingByCategory returns expense totals grouped by effective primary category, ordered by
+// total descending and then alphabetically by category display name (#1585).
 // When filters.Category is non-empty, returns the detailed subcategory breakdown.
 func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
 	if filters.HouseholdScope != nil {
@@ -930,7 +968,7 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 		  AND t.pending = false
 		%s%s
 		GROUP BY category, category_display
-		ORDER BY total DESC
+		ORDER BY total DESC, category_display ASC
 	`, catExpr, displayExpr, categoryFilter, extraClause)
 
 	rows, err := r.db.Query(ctx, query, args...)
@@ -995,7 +1033,7 @@ func (r *analyticsRepository) getSpendingByCategoryHousehold(ctx context.Context
 		  AND t.pending = false
 		%s%s
 		GROUP BY category, category_display
-		ORDER BY total DESC
+		ORDER BY total DESC, category_display ASC
 	`, householdGrantsCTE(), catExpr, displayExpr, householdSharedTransactionPredicate("t", "a"), categoryFilter, extraClause)
 
 	rows, err := r.db.Query(ctx, query, args...)
@@ -1020,7 +1058,9 @@ func (r *analyticsRepository) getSpendingByCategoryHousehold(ctx context.Context
 	return results, nil
 }
 
-// GetSpendingByMerchant returns expense totals grouped by effective merchant, ordered by total descending.
+// GetSpendingByMerchant returns expense totals grouped by effective merchant, ordered by total
+// descending, ties broken alphabetically by merchant name and then by the grouped merchant key
+// (#1585 — see merchantGroupKeyExpr for why the name alone is not enough here).
 // Merchants renamed or merged by the user are grouped under their canonical (target) display name.
 // Groups by a synthetic key: 'merchant:<id>', 'raw:<name>', or 'unknown' — so renamed/merged variants
 // collapse into one row. merchant_id is NULL for unlinked/unknown groups (preserves "not clickable" frontend behavior).
@@ -1051,15 +1091,8 @@ func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID 
 		  AND t.amount > 0
 		  AND t.pending = false
 		` + extraClause + `
-		GROUP BY
-		  CASE
-		    WHEN t.merchant_id IS NOT NULL
-		      THEN 'merchant:' || COALESCE(mno.merged_into_merchant_id, t.merchant_id)::text
-		    WHEN NULLIF(t.merchant_name, '') IS NOT NULL
-		      THEN 'raw:' || t.merchant_name
-		    ELSE 'unknown'
-		  END
-		ORDER BY total DESC
+		GROUP BY ` + merchantGroupKeyExpr + `
+		ORDER BY total DESC, merchant_name ASC, ` + merchantGroupKeyExpr + ` ASC
 		LIMIT ` + limitPlaceholder
 
 	rows, err := r.db.Query(ctx, query, args...)
@@ -1114,15 +1147,8 @@ func (r *analyticsRepository) getSpendingByMerchantHousehold(ctx context.Context
 		  AND t.amount > 0
 		  AND t.pending = false
 		` + extraClause + `
-		GROUP BY
-		  CASE
-		    WHEN t.merchant_id IS NOT NULL
-		      THEN 'merchant:' || COALESCE(mno.merged_into_merchant_id, t.merchant_id)::text
-		    WHEN NULLIF(t.merchant_name, '') IS NOT NULL
-		      THEN 'raw:' || t.merchant_name
-		    ELSE 'unknown'
-		  END
-		ORDER BY total DESC
+		GROUP BY ` + merchantGroupKeyExpr + `
+		ORDER BY total DESC, merchant_name ASC, ` + merchantGroupKeyExpr + ` ASC
 		LIMIT ` + limitPlaceholder
 
 	rows, err := r.db.Query(ctx, query, args...)
@@ -1148,7 +1174,8 @@ func (r *analyticsRepository) getSpendingByMerchantHousehold(ctx context.Context
 }
 
 // GetSpendingTrends returns monthly expense totals per category for trend chart data.
-// Results are ordered by period_start ASC, total DESC.
+// Results are ordered by period_start ASC, total DESC, then alphabetically by category display
+// name so that equal-total categories have a documented, plan-independent order (#1585).
 func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error) {
 	if filters.HouseholdScope != nil {
 		return r.getSpendingTrendsHousehold(ctx, userID, filters)
@@ -1175,7 +1202,7 @@ func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID stri
 		  AND t.pending = false
 		%s
 		GROUP BY period_start, category, category_display
-		ORDER BY period_start ASC, total DESC
+		ORDER BY period_start ASC, total DESC, category_display ASC
 	`, catExpr, displayExprTrends, extraClause)
 
 	rows, err := r.db.Query(ctx, query, args...)
@@ -1226,7 +1253,7 @@ func (r *analyticsRepository) getSpendingTrendsHousehold(ctx context.Context, re
 		  AND t.pending = false
 		%s
 		GROUP BY period_start, category, category_display
-		ORDER BY period_start ASC, total DESC
+		ORDER BY period_start ASC, total DESC, category_display ASC
 	`, householdGrantsCTE(), catExpr, displayExprTrends, householdSharedTransactionPredicate("t", "a"), extraClause)
 
 	rows, err := r.db.Query(ctx, query, args...)
