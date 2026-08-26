@@ -2,7 +2,8 @@
 
 // Equality harness for the #1569 T3 (#1582) "option (b) anti-join" candidate.
 //
-// WHY THIS FILE EXISTS. householdGrantsCTE's round-5 table records an anti-join rewrite at
+// WHY THIS FILE EXISTS. The round-5 table in docs/decisions/2026-08-26-household-grants-cte-performance.md
+// (it lived in householdGrantsCTE's doc comment until #1569 round 6) records an anti-join rewrite at
 // 76.2ms vs HEAD's 136.2ms and asserts, in prose, that its "output is identical to HEAD on all
 // four columns". That assertion carried NO diff method, NO row count and NO reproducer, while
 // the row two lines above it (the no-tiebreak variant) carried both its numbers and its
