@@ -60,16 +60,24 @@ func (s *holdingHistoryService) GetAccountHoldingsHistory(ctx context.Context, u
 		AvailableDates: dates,
 		Positions:      []domain.HoldingSnapshotView{},
 	}
-	if len(dates) == 0 {
+	// An explicit as_of is a request for ONE specific day, and that request is refused when the
+	// day was never retained — even when the account has no retained history at all. Collapsing
+	// that into the bare 200-empty-body case would make "give me 2026-01-01" succeed silently
+	// for an account with zero history while an identical request against an account that DOES
+	// have other retained days 404s, which is the inconsistency this branch exists to remove.
+	if asOf != "" {
+		if !slices.Contains(dates, asOf) {
+			return nil, domain.ErrHoldingHistoryDateNotRetained
+		}
+	} else if len(dates) == 0 {
+		// The bare (no as_of) call is the one case where "nothing retained" is a fact to render,
+		// not a refusal: there is no specific day being asked for, so there is nothing to refuse.
 		return out, nil
 	}
 
 	// dates is newest-first, so dates[0] is "the latest" without a second query or a sort here.
 	day := dates[0]
 	if asOf != "" {
-		if !slices.Contains(dates, asOf) {
-			return nil, domain.ErrHoldingHistoryDateNotRetained
-		}
 		day = asOf
 	}
 

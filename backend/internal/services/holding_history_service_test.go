@@ -176,6 +176,36 @@ func TestHoldingHistoryService_TotalValue_SumsTheValuesItDoesHave(t *testing.T) 
 	assert.InDelta(t, 1300.0, *got.TotalValue, 0.0001)
 }
 
+// An explicit as_of against an account with NO retained history at all must still be refused,
+// not answered with a 200 empty body — otherwise the identical request against an account that
+// DOES have other retained days 404s while this one silently succeeds. #1569 R6B/A1.
+func TestHoldingHistoryService_ExplicitAsOf_NoHistoryAtAll_IsRefusedNotEmpty(t *testing.T) {
+	repo := &stubHoldingSnapshotRepo{dates: []string{}}
+	svc := NewHoldingHistoryService(repo)
+
+	got, err := svc.GetAccountHoldingsHistory(context.Background(), "user-1", "acct-1", "2026-01-01")
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrHoldingHistoryDateNotRetained))
+	assert.Nil(t, got)
+	assert.Zero(t, repo.calls, "an unretained day must be refused BEFORE a position query is issued")
+}
+
+// The bare (no as_of) call against an account with no retained history is the one deliberate
+// case that stays a 200 empty body — there is no specific day being asked for. #1569 R6B/A1.
+func TestHoldingHistoryService_BareCall_NoHistoryAtAll_Is200EmptyBody(t *testing.T) {
+	repo := &stubHoldingSnapshotRepo{dates: []string{}}
+	svc := NewHoldingHistoryService(repo)
+
+	got, err := svc.GetAccountHoldingsHistory(context.Background(), "user-1", "acct-1", "")
+
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Nil(t, got.AsOfDate)
+	assert.Empty(t, got.Positions)
+	assert.Zero(t, repo.calls)
+}
+
 func TestHoldingHistoryService_RepositoryErrorsPropagate(t *testing.T) {
 	boom := errors.New("db down")
 
