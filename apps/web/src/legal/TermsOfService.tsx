@@ -192,10 +192,12 @@ export function TermsOfService() {
             <li>Premium features (advanced reports, API access) are unavailable</li>
           </ul>
           <p>
-            Your data is preserved in read-only mode. If you do not request deletion, we may retain
-            your account data for up to <strong>6 months</strong> after cancellation. You can
-            subscribe or resubscribe at any time during this period to immediately restore full
-            access to all features.
+            Your data is preserved in read-only mode. If you do not request deletion, we retain
+            your account data for at least <strong>6 months</strong> after cancellation — and, as
+            explained below, longer than that today, because we are not yet automatically deleting
+            cancelled accounts. Six months is the minimum we commit to, not a deadline. You can
+            subscribe or resubscribe at any time to immediately restore full access to all
+            features.
           </p>
           <p>
             Before we automatically delete a cancelled account, we email you twice — 30 days
@@ -604,7 +606,7 @@ export function TermsOfService() {
           <h2>Key Points Summary</h2>
           <ul>
             <li><strong>Free trial:</strong> 60 days, no credit card required, no ads</li>
-            <li><strong>After trial:</strong> Read-only access — data retained for up to 6 months (or until you request deletion)</li>
+            <li><strong>After trial:</strong> Read-only access — data retained for at least 6 months, and longer while automatic deletion is not yet running (or until you request deletion)</li>
             <li><strong>Refunds:</strong> No refunds for any billing period; access continues until period ends</li>
             <li><strong>Price changes:</strong> 30 days' email notice before any price increase</li>
             <li><strong>No money movement:</strong> We never move money on your behalf; not a bank or financial institution</li>

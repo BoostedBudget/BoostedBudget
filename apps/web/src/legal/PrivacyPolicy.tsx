@@ -309,9 +309,11 @@ export function PrivacyPolicy() {
 
           <h3>8.4 Cancelled Accounts (No Deletion Request)</h3>
           <p>
-            If you cancel your subscription but do not request account deletion, we may retain your
-            account data in read-only mode for up to <strong>6 months</strong> to allow reactivation.
-            You may request deletion sooner at any time per Section 8.2.
+            If you cancel your subscription but do not request account deletion, we retain your
+            account data in read-only mode for at least <strong>6 months</strong> to allow
+            reactivation — and, as explained below, longer than that today, because we are not yet
+            automatically deleting cancelled accounts. Six months is the minimum we commit to, not a
+            deadline. You may request deletion sooner at any time per Section 8.2.
           </p>
           <p>
             Before we automatically delete a cancelled account, we email you twice — 30 days
