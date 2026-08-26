@@ -116,9 +116,11 @@ func TestTransferSuggestionFile_NoRequiredPointerToStructField(t *testing.T) {
 
 // requiredPointerToObjectOffenders walks file's struct types and reports every exported field that
 // is a pointer to a type schemas publishes as an OBJECT and that huma will keep in `required`: a
-// tagged field with none of `omitempty`, `omitzero`, or an explicit `required:"false"` override, OR
-// an untagged field with no `required:"false"` override either (an untagged field cannot carry
-// omitempty/omitzero at all, so the struct tag is its only way out).
+// field with none of `omitempty`, `omitzero`, or an explicit `required:"false"` override.
+//
+// The property NAME follows huma's own fallback chain: the json tag's first component when it has
+// one, and the literal Go field name otherwise — which covers a field with no struct tag at all, a
+// field whose tags do not include `json`, and a json tag that carries only options (`json:",omitempty"`).
 //
 // #1569 R6B/B3: the untagged branch is not a hedge — an exported, untagged field is NOT exempt from
 // this check. huma (like encoding/json) falls back to the literal Go field name as the property
@@ -126,6 +128,14 @@ func TestTransferSuggestionFile_NoRequiredPointerToStructField(t *testing.T) {
 // an untagged exported pointer-to-object field is unconditionally required in the generated schema.
 // The guard used to skip every untagged field before ever reaching this logic (`if f.Tag == nil {
 // continue }`), which is exactly the shape this branch now catches.
+//
+// #1569 task 7.9/item 1: the two arms above were merged, because splitting on `f.Tag == nil` was
+// the wrong axis and left a hole between them. A field carrying a struct tag that is not a json tag
+// — `required:"true"`, or only a `db:` tag — took the tagged arm, found no json tag, and was
+// skipped by `if tag == "" { continue }`, while the untagged arm never saw it because f.Tag was not
+// nil. huma has no such gap: the json tag and the `required` tag are read independently
+// (schema.go:895-921), so those fields are published as required objects. Pinned by
+// TestRequiredPointerToObjectOffenders_SeesAFieldWhoseOnlyTagIsNotJSON.
 //
 // #1569 R6C/item 8: this branch only checked the json tag for `omitempty`, but huma's own
 // required-field logic (SchemaFromType, huma/v2@v2.39.1 schema.go:895-921) honours THREE ways to
@@ -163,29 +173,44 @@ func requiredPointerToObjectOffenders(fset *token.FileSet, file *ast.File, schem
 				continue
 			}
 
-			var jsonName string
-			optional := false
-			if f.Tag == nil {
-				if len(f.Names) == 0 || !f.Names[0].IsExported() {
-					continue // embedded or unexported: a different shape this check does not name
-				}
-				jsonName = f.Names[0].Name
-			} else {
-				structTag := reflect.StructTag(strings.Trim(f.Tag.Value, "`"))
-				tag := structTag.Get("json")
-				if tag == "" || tag == "-" {
-					continue
-				}
-				parts := strings.Split(tag, ",")
+			// The struct tag is read as a WHOLE, never as "is there a json tag or not", because
+			// huma reads it that way: the json tag decides the property NAME and carries
+			// omitempty/omitzero, but the `required` tag is looked up independently of it and
+			// wins. A field whose only tag is `required:"true"` — or `db:"..."` — has no json tag
+			// and is still published, under its Go field name, as required.
+			var structTag reflect.StructTag
+			if f.Tag != nil {
+				structTag = reflect.StructTag(strings.Trim(f.Tag.Value, "`"))
+			}
+			jsonTag := structTag.Get("json")
+			if jsonTag == "-" {
+				continue // removed from the schema entirely (huma: `if name == "-" { continue }`)
+			}
+
+			// No json tag, or a json tag that specifies only options and no name: huma falls back
+			// to the literal Go field name (schema.go:904-907). An embedded or unexported field is
+			// a different shape this check does not name.
+			jsonName := ""
+			if parts := strings.Split(jsonTag, ","); jsonTag != "" && parts[0] != "" {
 				jsonName = parts[0]
-				// Same order huma itself checks (schema.go:895-921): omitempty, then omitzero,
-				// then an explicit `required` tag, which overrides whatever the json tag said —
-				// in EITHER direction, so `required:"true"` re-requires a field that omitempty
-				// or omitzero would otherwise have exempted.
-				optional = slicesContains(parts[1:], "omitempty") || slicesContains(parts[1:], "omitzero")
-				if v, ok := structTag.Lookup("required"); ok {
-					optional = v == "false"
-				}
+			} else if len(f.Names) == 0 || !f.Names[0].IsExported() {
+				continue
+			} else {
+				jsonName = f.Names[0].Name
+			}
+
+			// Same order huma itself checks (schema.go:895-921): omitempty, then omitzero, then an
+			// explicit `required` tag, which overrides whatever the json tag said — in EITHER
+			// direction, so `required:"true"` re-requires a field that omitempty or omitzero would
+			// otherwise have exempted, and `required:"false"` exempts a field that has no json tag
+			// to carry omitempty in the first place.
+			optional := false
+			if jsonTag != "" {
+				opts := strings.Split(jsonTag, ",")[1:]
+				optional = slicesContains(opts, "omitempty") || slicesContains(opts, "omitzero")
+			}
+			if v, ok := structTag.Lookup("required"); ok {
+				optional = v == "false"
 			}
 			if optional {
 				continue
@@ -195,8 +220,8 @@ func requiredPointerToObjectOffenders(fset *token.FileSet, file *ast.File, schem
 				name = f.Names[0].Name
 			}
 			tagDisplay := jsonName
-			if f.Tag == nil {
-				tagDisplay = jsonName + " (no json tag — huma uses the Go field name verbatim)"
+			if strings.Split(jsonTag, ",")[0] == "" {
+				tagDisplay = jsonName + " (no json name — huma uses the Go field name verbatim)"
 			}
 			offenders = append(offenders, name+" *"+typeName+" `json:\""+tagDisplay+"\"` at "+fset.Position(f.Pos()).String())
 		}
@@ -273,4 +298,48 @@ func slicesContains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestRequiredPointerToObjectOffenders_SeesAFieldWhoseOnlyTagIsNotJSON is the guard's own
+// falsification for #1569 task 7.9 item 1, and it is the SECOND hole found in this one branch.
+//
+// The round that taught this guard `omitzero` and `required:"false"` reached those checks only via
+// the `f.Tag != nil` arm, which starts by reading the json tag and BAILS OUT when it is absent
+// (`if tag == "" || tag == "-" { continue }`). So a field carrying any struct tag at all except a
+// json one — `required:"true"`, or nothing but a `db:` tag — took the tagged arm, found no json
+// tag, and was skipped. It was invisible to both arms: the untagged arm never saw it either,
+// because `f.Tag` was not nil.
+//
+// huma does not skip it. SchemaFromType reads `if j := f.Tag.Get("json"); j != ""` and, when that
+// is empty, keeps `name := f.Name` and the default `fieldRequired = true`, then applies any
+// `required` tag on top (huma/v2@v2.39.1 schema.go:895-921). So both shapes below are published as
+// REQUIRED objects — exactly the defect class this guard exists to catch — and `required:"false"`
+// must still exempt a field that has no json tag to carry omitempty.
+func TestRequiredPointerToObjectOffenders_SeesAFieldWhoseOnlyTagIsNotJSON(t *testing.T) {
+	schemas := map[string]any{
+		"domain.Thing": map[string]any{"type": "object"},
+		"Thing":        map[string]any{"type": "object"},
+	}
+
+	src := "package sample\n\n" +
+		"type OnlyRequiredTrue struct {\n\tSuggestion *Thing `required:\"true\"`\n}\n\n" +
+		"type OnlyADBTag struct {\n\tAlsoBad *Thing `db:\"also_bad\"`\n}\n\n" +
+		"type OnlyRequiredFalse struct {\n\tOK *Thing `required:\"false\"`\n}\n\n" +
+		"type ExplicitlyIgnored struct {\n\tSkipped *Thing `json:\"-\"`\n}\n\n" +
+		"type EmptyJSONNameWithOmit struct {\n\tAlsoOK *Thing `json:\",omitempty\"`\n}\n"
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "sample.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	offenders := requiredPointerToObjectOffenders(fset, file, schemas)
+	sort.Strings(offenders)
+	joined := strings.Join(offenders, "\n")
+
+	require.Len(t, offenders, 2, "exactly the required:\"true\" field and the db-tag-only field must be reported:\n%s", joined)
+	require.Contains(t, joined, "Suggestion *Thing", "a field whose only tag is required:\"true\" is emitted as a required object under its Go field name")
+	require.Contains(t, joined, "AlsoBad *Thing", "a field with a non-json struct tag and no json tag is emitted as a required object under its Go field name")
+	require.NotContains(t, joined, "OK *Thing", "required:\"false\" must exempt a field that has no json tag at all")
+	require.NotContains(t, joined, "Skipped", "json:\"-\" removes the field from the schema entirely")
+	require.NotContains(t, joined, "AlsoOK", "an empty json name still carries its options: omitempty exempts it")
 }
