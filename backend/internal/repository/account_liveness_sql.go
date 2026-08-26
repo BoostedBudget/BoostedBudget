@@ -243,12 +243,42 @@ func accountBalanceProjection(alias string) string {
 // TestNoRawAccountBalanceReadWithoutTheCurrentStateLeg is keyed on the alias that carries the
 // balance column, and that alias here is `bs` over `balance_snapshots` — history, the seam the
 // whole ruling turns on — not `a` over `accounts`.
+// ── DECISION 4: BEFORE IT CLOSED, and the bound is read, not assumed (#1591 fix round). ─────
+// "Last known balance … as of 4 Jun 2025" claims a figure the account held while it was still
+// live. The first draft asked only for the NEWEST snapshot on a non-active account, and nothing
+// serialises snapshot insertion against the status transition: transactionSyncService reads the
+// account list, the user disconnects mid-run, and the sync's snapshot pass then writes a row dated
+// AFTER the closure. balanceSnapshotRepository.Create has no idea; there is no status check on the
+// write path and there should not be, because the row is a real observation and #1569 retains it.
+// So the READ carries the constraint instead, and the bound comes from the same
+// account_status_history the rest of this file's liveness rules come from: the OPEN interval
+// (valid_to IS NULL) is the account's current, terminal one, and its valid_from is the instant it
+// stopped being live.
+//
+// `<=`, not `<`. The interval is half-open — terminal AT valid_from — but a snapshot stamped in
+// the same instant as the transition is a measurement of the account as it closed, not after it,
+// and admitting it costs nothing a user could misread. A snapshot one tick later is refused.
+//
+// FAILS CLOSED, and that is deliberate. If an account somehow has no open interval — a status
+// column written by something that bypassed the trigger, a row the 000152 backfill never reached —
+// the scalar subquery is NULL, the comparison is NULL, the lateral yields no row, and BOTH columns
+// come back NULL. That is Decision 3's existing no-snapshot rendering (no caption at all), not a
+// new empty state and not an unbounded figure. `ash.status <> 'active'` on the subquery is the
+// same reflex: if the open interval disagrees with accounts.status, no bound is derived and
+// nothing is claimed.
 const lastKnownBalanceLateral = `
 	LEFT JOIN LATERAL (
 	    SELECT bs.current_balance AS amount, bs.snapshot_at AS at
 	    FROM balance_snapshots bs
 	    WHERE bs.account_id = $ALIAS.id
 	      AND $ALIAS.status <> 'active'
+	      AND bs.snapshot_at <= (
+	          SELECT ash.valid_from
+	          FROM account_status_history ash
+	          WHERE ash.account_id = $ALIAS.id
+	            AND ash.valid_to IS NULL
+	            AND ash.status <> 'active'
+	      )
 	    ORDER BY bs.snapshot_at DESC
 	    LIMIT 1
 	) lkb ON TRUE`
