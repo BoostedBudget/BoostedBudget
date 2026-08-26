@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"regexp"
 	"testing"
 	"time"
 
@@ -210,4 +212,64 @@ type routingSpyTransactionService struct {
 func (s *routingSpyTransactionService) GetTransactionByID(ctx context.Context, userID, transactionID string) (*domain.Transaction, error) {
 	s.getByIDCalls++
 	return s.mockTransactionService.GetTransactionByID(ctx, userID, transactionID)
+}
+
+// ── The shipped description is this endpoint's only documentation (#1569 round 6, G-G) ──────────
+//
+// This endpoint has NO frontend renderer. Whatever the OpenAPI description says about
+// change_source is the entire explanation any consumer gets, which makes an incomplete
+// enumeration there a different class of defect from an incomplete Go comment.
+//
+// It shipped incomplete: the description named 'category' and 'review' and stopped, while the live
+// CHECK constraint admits five values. Commit 238a69c0 corrected the domain COMMENT and left the
+// PUBLISHED text untouched — the two drifted precisely because only one of them had a test.
+//
+// The expected set is DERIVED from the domain constants, not typed out here, so a sixth source
+// fails this test on the day it is declared rather than on the day someone re-reads the prose.
+// The domain constants are themselves pinned to the database by
+// TestAnnotationChangeSourcesMatchTheLiveCheck, so the chain runs: pg_constraint -> domain
+// constants -> this description.
+func annotationChangeSourceValuesFromDomain(t *testing.T) []string {
+	t.Helper()
+
+	const domainFile = "../../domain/transaction_annotation_history.go"
+	src, err := os.ReadFile(domainFile)
+	require.NoError(t, err, "read %s", domainFile)
+
+	// Matches `TransactionAnnotationChangeX = "value"` in a const block.
+	re := regexp.MustCompile(`TransactionAnnotationChange\w+\s*=\s*"([^"]+)"`)
+	matches := re.FindAllStringSubmatch(string(src), -1)
+
+	var values []string
+	for _, m := range matches {
+		values = append(values, m[1])
+	}
+
+	// Fail closed: a rename would empty this set, and an empty set is satisfied by any description.
+	require.GreaterOrEqual(t, len(values), 5,
+		"expected at least the five known change sources in %s, found %v — re-point this guard "+
+			"rather than letting it pass on an empty set", domainFile, values)
+	return values
+}
+
+func TestAnnotationHistoryDescriptionEnumeratesEveryChangeSource(t *testing.T) {
+	_, api := humatest.New(t)
+	histSvc := new(mockTransactionAnnotationHistoryService)
+	RegisterTransactionAnnotationHistoryRoutes(api, NewTransactionAnnotationHistoryHandler(histSvc))
+
+	var description string
+	for _, item := range api.OpenAPI().Paths {
+		if item.Get != nil && item.Get.OperationID == "getUserTransactionAnnotationHistory" {
+			description = item.Get.Description
+		}
+	}
+	require.NotEmpty(t, description,
+		"the operation was not found in the generated spec — this guard would otherwise pass vacuously")
+
+	for _, source := range annotationChangeSourceValuesFromDomain(t) {
+		assert.Contains(t, description, "'"+source+"'",
+			"the published description does not mention change_source value %q. This endpoint has no "+
+				"UI, so the description is the only place a consumer can learn the value exists.",
+			source)
+	}
 }

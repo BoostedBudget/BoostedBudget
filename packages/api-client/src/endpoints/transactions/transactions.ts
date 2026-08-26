@@ -119,7 +119,11 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
 };
 
 /**
- * Retrieves the before/after record of every category or review-state overwrite the authenticated user made on a transaction, newest first. A row exists for each write that actually changed a tracked value; re-writing the identical value records nothing. change_source distinguishes a recategorisation ('category') — which also rewrites the review state as a side effect — from a review-state write ('review'). Changes made to a transaction that has since been removed are still returned.
+ * Retrieves the before/after record of every change to a transaction's category, review state or tags for the authenticated user, newest first. A row exists for each write that actually changed a tracked value; re-writing the identical value records nothing. Changes made to a transaction that has since been removed are still returned.
+ *
+ * `change_source` answers *what was asked for*, and has five values. Two are the user acting on their own transaction: 'category' — a recategorisation, which ALSO rewrites `reviewed`/`reviewed_at` as a side effect, so a review timestamp can be lost by a write the user thought was only about the category; and 'review' — a review-state write, single or bulk, which leaves the category alone. 'tags' is a whole-array tag replace: every tag dropped is gone the moment it returns and the previous set survives nowhere else, so `prior_tags` here is the only record of it; category fields are unchanged on these rows by construction.
+ *
+ * The remaining two record changes the user did NOT ask for, which is exactly why they are not filed under 'category'. 'settlement' is written when a pending charge posts and the sync carries the manual category from the pending row onto the posted twin, replacing whatever the twin had — it explains why the twin no longer agrees with the rule_execution_history entry for the rule that categorised it moments earlier. 'erasure' is the one source whose cause is another user: when a different user exercises GDPR erasure their custom categories are hard-deleted, and a surviving user's transaction pointing at one has its override cleared. That row is the ONLY explanation anywhere for a category changing under a user who did nothing — no other record of it exists, and none is written for the erased user's own transactions, which are deleted in the same database transaction.
  * @summary Get transaction annotation change history
  */
 export const getUserTransactionAnnotationHistory = (
