@@ -798,7 +798,7 @@ func TestCategoryTombstone_ExemptReadsStillSeeTheHistory_Integration(t *testing.
 		assert.InDelta(t, 4.50, sum, 0.001)
 	})
 
-	// analytics_repository.go:963 — buildSpendingFilter, RollUpChildren = true.
+	// analytics_repository.go:981 — buildSpendingFilter, RollUpChildren = true.
 	t.Run("analytics with rollup still reports the tombstoned category's spend", func(t *testing.T) {
 		rows, err := analyticsRepo.GetSpendingByCategory(ctx, f.userID, domain.SpendingFilters{
 			StartDate:         start,
@@ -811,7 +811,7 @@ func TestCategoryTombstone_ExemptReadsStillSeeTheHistory_Integration(t *testing.
 			"a closed month quietly restated itself because a category was deleted")
 	})
 
-	// analytics_repository.go:978 — buildSpendingFilter, RollUpChildren = false.
+	// analytics_repository.go:996 — buildSpendingFilter, RollUpChildren = false.
 	t.Run("analytics without rollup still reports it", func(t *testing.T) {
 		rows, err := analyticsRepo.GetSpendingByCategory(ctx, f.userID, domain.SpendingFilters{
 			StartDate:         start,

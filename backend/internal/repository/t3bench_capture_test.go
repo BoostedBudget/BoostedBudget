@@ -25,9 +25,18 @@
 // This is safe precisely because no automated caller sets the tag — if one ever does, it must
 // supply a seeded T3BENCH_URL, which is the point.
 //
+// ⚠ THIS HARNESS RUNS BEST OF 5 (`iters` below), and it is not the only instrument whose numbers
+// are recorded in analytics_repository.go. householdGrantsCTE's round-5 TABLE was NOT produced
+// here -- it is psql `\timing`, best of 7, over hand-written query variants that exist nowhere in
+// Go. The merchant-leg pair just after that table IS from here, hence best of 5. A comment once
+// claimed best-of-7 over both and the wrong count propagated into the ledger (#1569 round 5, Codex
+// F6), so: quote a number from this file only as "best of 5", and if you change `iters` you are
+// re-labelling every figure attributed to the harness -- update those citations in the same commit.
+//
 // Last run by a human: 2026-08-26, commit 3d21e077, Apple M4 / 10 cores / 16 GiB / macOS 15.3.1,
-// against Postgres 17.11 in Docker on localhost:5434. Seed loaded clean against the schema of that
-// day (no rot). See householdGrantsCTE's round-5 table for what it produced.
+// against Postgres 17.11 in Docker on localhost:5434, database `t3bench_r5`. Seed loaded clean
+// against the schema of that day (no rot). Re-run the same day for F6 to confirm the instrument:
+// SpendingByMerchant best 166.8ms mean 170.8ms (n=5).
 package repository
 
 import (
@@ -156,6 +165,8 @@ func TestT3Bench(t *testing.T) {
 		}},
 	}
 
+	// Best of 5. The count is part of every number this harness reports (the `n=` in the line
+	// printed below), so a comment citing a figure from here must say best of 5 -- see the header.
 	iters := 5
 	explainOnly := os.Getenv("T3BENCH_EXPLAIN") != ""
 	for _, tc := range cases {
@@ -169,6 +180,7 @@ func TestT3Bench(t *testing.T) {
 			t.Fatalf("%s: no SQL captured", tc.name)
 		}
 
+		// best of `iters`; the mean is printed alongside so a single lucky run is visible as one.
 		var best, total time.Duration
 		for i := 0; i < iters; i++ {
 			t0 := time.Now()
