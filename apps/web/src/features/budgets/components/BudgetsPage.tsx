@@ -285,6 +285,18 @@ export function BudgetsPage() {
         onBudgetCreated={handleBudgetCreated}
       />
 
+      {/*
+        Issue #1569: this dialog used to say the budget and its categories "will be permanently
+        deleted". They are not. `budgetRepository.Delete` tombstones the budget and its categories
+        (`deleted_at = NOW()`) in one transaction, and `budget_period_events` / `rollover_history`
+        survive by design. Claiming destruction that did not happen is the worse direction to be
+        wrong in for a privacy claim.
+
+        "This action cannot be undone" stays, because it is separately TRUE: no restore endpoint
+        exists anywhere in this system and nothing sets `deleted_at = NULL`. Retained is not
+        recoverable, and the copy deliberately promises no "deleted budgets" surface or purge verb
+        — budgets have neither, so naming one would be a NEW false claim.
+      */}
       <ConfirmationDialog
         open={activeDialog === 'delete-budget'}
         onOpenChange={(open) => !open && closeDialog()}
@@ -294,7 +306,8 @@ export function BudgetsPage() {
           <>
             Are you sure you want to delete &ldquo;<span data-ph-mask>{deletingBudget.name}</span>&rdquo;? This budget and its{' '}
             {deletingBudget.categories?.length === 1 ? '1 category' : `${deletingBudget.categories?.length ?? 0} categories`}{' '}
-            will be permanently deleted. This action cannot be undone.
+            leave your budgets, but nothing is thrown away &mdash; the spending, period history and
+            rollovers already recorded against them are kept. This action cannot be undone.
           </>
         ) : ''}
         confirmText={deletingBudget?.name ?? ''}
