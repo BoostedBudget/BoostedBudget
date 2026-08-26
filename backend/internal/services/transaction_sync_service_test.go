@@ -4479,10 +4479,17 @@ func TestProcessAddedTransactions_NoPointerMeansNoPullForward(t *testing.T) {
 	mockassert.NoCallTo(t, &mockTransactionRepo.Mock, "PullForwardSettledPendingAnnotations")
 }
 
-// TestProcessAddedTransactions_PullForwardFailureDoesNotFailTheSync. The pull-forward repairs a
-// display problem; failing the sync for it would stall the cursor and re-deliver the whole page,
-// and the repository call is idempotent so the next sync retries for free.
-func TestProcessAddedTransactions_PullForwardFailureDoesNotFailTheSync(t *testing.T) {
+// TestProcessAddedTransactions_PullForwardFailureReturns.
+//
+// ⚠ THIS TEST USED TO ASSERT THE OPPOSITE, and its reason was the false comment that made the
+// defect look acceptable: "failing the sync for it would stall the cursor and re-deliver the whole
+// page, and the repository call is idempotent so the next sync retries for free". The re-delivery
+// it dismissed as a cost is the only thing that CAN retry the repair — swallowing the error let the
+// caller advance Plaid's cursor, and /transactions/sync does not re-deliver a transaction the
+// stored cursor is past, so the promised free retry could never happen and the user's annotations
+// stranded permanently. Returning is what makes the retry real; see
+// transaction_sync_settlement_repair_cursor_test.go for the cursor half of the contract.
+func TestProcessAddedTransactions_PullForwardFailureReturns(t *testing.T) {
 	mockTransactionRepo := new(MockTransactionRepository)
 
 	service := NewTransactionSyncService(
@@ -4502,8 +4509,8 @@ func TestProcessAddedTransactions_PullForwardFailureDoesNotFailTheSync(t *testin
 	mockTransactionRepo.On("PullForwardSettledPendingAnnotations", ctx, "user-1586c", mock.Anything).
 		Return(int64(0), errors.New("deadlock detected"))
 
-	assert.NoError(t, service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil),
-		"a failed repair must not abort storage the provider already confirmed")
+	assert.Error(t, service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil),
+		"a failed repair must return, so the caller holds the cursor and Plaid re-delivers the page")
 	mockTransactionRepo.AssertExpectations(t)
 }
 
