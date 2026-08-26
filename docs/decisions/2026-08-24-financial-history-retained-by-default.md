@@ -574,10 +574,45 @@ complement of the three terminal states. There is no fifth value for the rule to
 Mechanically pinned by `TestNoAccountProjectionCarriesATerminalBalance`; the historical half is
 asserted over the same account in the same test — the snapshots are untouched.
 
-**Known consequence, deliberately not fixed here.** `AccountsPage.tsx`'s balance-range filter and
-sort coalesce an absent balance to `0` (~`:336`, ~`:367`), so a closed account with no balance
-matches a `min/max` range and sorts as zero. What a range predicate should mean for an unknown
-value is a product decision, not a mechanical one; it wants a ticket.
+**The frontend consequence was filed as #1580 and is now fixed, not deferred.** An earlier version
+of this paragraph said the accounts list still coalesced an absent balance to `0`, so a closed
+account matched a `min/max` range and sorted as zero, and that the question "wants a ticket". That
+ticket was filed and shipped; the paragraph's two `AccountsPage.tsx` line anchors no longer point at
+balance code at all. What shipped:
+
+- **An account with no current balance matches no BOUNDED range, in either direction.**
+  `accountMatchesBalanceRange` (`apps/web/src/features/accounts/utils.ts`) delegates to
+  `balanceMatchesRange`, which returns `false` for a `null`/`undefined` balance whenever `min` or
+  `max` is set, and `true` for a range with neither bound (a range with no bounds is not a
+  predicate). The old `?? 0` got the defect BOTH ways — `min: 1` excluded a closed account and
+  `max: 100` included it — and neither answer meant *unknown*.
+- **It sorts into its own group, always last, in both directions.** `compareAccountsByBalance`
+  delegates to `compareBalanceValues`, which applies `direction` INSIDE the comparator so that
+  negating the result at the call site cannot flip the grouping. "No balance" is not a quantity, so
+  it can be neither the largest nor the smallest value.
+- **Net worth shares the same two helpers, deliberately.**
+  `apps/web/src/features/net-worth/utils/applyFilterAndSort.ts` calls `balanceMatchesRange` and
+  `compareBalanceValues` rather than re-deriving the rule; the breakdown passes magnitude and the
+  accounts list passes the signed balance, so only the sign convention differs and it stays at the
+  call site. The two
+  surfaces disagreeing about a balance-less account is exactly the defect this closes.
+- **The set is "has no balance", not "is closed".** An ACTIVE account has no `current_balance` until
+  its first sync lands, and it is excluded and grouped the same way. That is wider than closed
+  accounts, so it is pinned by its own tests (`apps/web/src/features/accounts/utils.test.ts`) rather
+  than left to be discovered.
+
+**Other follow-ups filed off this decision, and where they landed.** #1580 above; **#1572**
+(`rule_execution_history` should write its `definition_snapshot` at execution time, so a retained
+execution row still explains itself after the rule is edited — read path wired in
+`backend/cmd/server/main.go`); **#1578** (a user's annotations must follow a pending transaction to
+its posted twin, rather than being stranded when Plaid settles it —
+`backend/internal/repository/transaction_repository.go`, pinned by
+`backend/internal/repository/transaction_settled_pending_move_integration_test.go`); and **#1579**
+(a bulk category/review overwrite recorded no prior value — now captured into
+`transaction_annotation_history` inside the same statement, read path in
+`backend/internal/repository/transaction_annotation_history_repository.go`). None of the three is a
+retention EXCEPTION; each is retention that was promised by this document and not yet delivered by
+the code, which is the failure mode a decision record is most likely to hide.
 
 ---
 
