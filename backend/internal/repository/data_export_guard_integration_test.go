@@ -270,18 +270,17 @@ func TestDataExportWithholdsEverySecretShapedColumn(t *testing.T) {
 		for _, col := range tbl.ExcludedColumns {
 			explicit[col] = true
 		}
-		decrypted := map[string]bool{}
-		for _, col := range tbl.DecryptedColumns {
-			decrypted[col] = true
-		}
-
 		for _, col := range columns {
 			if !secretShapedColumnPattern.MatchString(col) {
 				continue
 			}
-			// Withheld by the global rule, by this table's own list, or decrypted on the way out
-			// (the plaintext is the user's own data — an institution name, their email).
-			if repository.IsDataExportColumnGloballyExcluded(col) || explicit[col] || decrypted[col] {
+			// Withheld by the global rule or by this table's own list. There is deliberately no
+			// third "…or it is decrypted on the way out" branch any more: decryption is now derived
+			// from the value's envelope rather than from a per-table list, and re-introducing a
+			// list here would put the drift back in the guard after it was taken out of the
+			// production path. It was dead weight in any case — not one of the columns the old list
+			// named matches secretShapedColumnPattern, so the branch never fired.
+			if repository.IsDataExportColumnGloballyExcluded(col) || explicit[col] {
 				continue
 			}
 			leaks = append(leaks, tbl.Table+"."+col)
@@ -292,11 +291,6 @@ func TestDataExportWithholdsEverySecretShapedColumn(t *testing.T) {
 				"%s excludes column %q, which the table does not have — the exclusion is stale and "+
 					"is protecting nothing", tbl.Table, col)
 		}
-		for _, col := range tbl.DecryptedColumns {
-			require.Contains(t, columns, col,
-				"%s decrypts column %q, which the table does not have — the decrypt entry is stale",
-				tbl.Table, col)
-		}
 	}
 
 	sort.Strings(leaks)
@@ -305,8 +299,7 @@ func TestDataExportWithholdsEverySecretShapedColumn(t *testing.T) {
 			"Exporting a credential is worse than not exporting at all: it hands out a live secret "+
 			"and, for an at-rest ciphertext, hands out something the user cannot even read. Add each "+
 			"to the table's ExcludedColumns (with the reason), to "+
-			"dataExportGlobalExcludedColumns, or — if the plaintext genuinely is the user's own "+
-			"data — to DecryptedColumns:\n    %s",
+			"or to dataExportGlobalExcludedColumns:\n    %s",
 			len(leaks), strings.Join(leaks, "\n    "))
 	}
 }
