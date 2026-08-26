@@ -101,8 +101,12 @@ build_sandbox healthy
 run_gate
 if [ "$GATE_STATUS" -ne 0 ]; then
   fail "the normal error-laden run was rejected (exit $GATE_STATUS) — output: $GATE_OUTPUT"
-elif ! echo "$GATE_OUTPUT" | grep -q "2000 type error(s) in test files (baseline 2000)"; then
-  fail "passed but did not report the error count — output: $GATE_OUTPUT"
+elif ! echo "$GATE_OUTPUT" | grep -qE "2000 type error\(s\).*baseline 2000"; then
+  # Load-bearing facts are the NUMBER and the BASELINE, not the prose between them — that prose is
+  # incidental (it was corrected once already, from "in test files" to "across tsconfig.test.json's
+  # compilation", and stayed true both times). Asserting the exact sentence here re-breaks on every
+  # future honest wording fix; asserting the two numbers survives them.
+  fail "passed but did not report the error count and baseline — output: $GATE_OUTPUT"
 else
   pass "a normal run still exits 0 and reports its error count"
 fi
