@@ -103,3 +103,34 @@ describe('formatPercent', () => {
     expect(formatPercent(66.666667)).toBe('66.67%')
   })
 })
+
+// Issue #1569: formatCurrencyFull hardcoded USD, and the retained-balance surface renders figures
+// the API labels with a per-point currency_code. A 1000 EUR balance rendered as $1,000.00 — a
+// wrong number, on the one screen whose purpose is showing retained truth.
+describe('formatCurrencyFull currency argument', () => {
+  it('defaults to USD so no pre-existing call site changes meaning', () => {
+    expect(formatCurrencyFull(1000)).toBe('$1,000.00')
+    expect(formatCurrencyFull(1000, undefined)).toBe('$1,000.00')
+  })
+
+  it('formats a non-USD code in that currency, not as dollars', () => {
+    const eur = formatCurrencyFull(1000, 'EUR')
+    expect(eur).not.toBe('$1,000.00')
+    expect(eur).toContain('€')
+
+    const gbp = formatCurrencyFull(1000, 'GBP')
+    expect(gbp).toContain('£')
+  })
+
+  it('accepts a lowercase code', () => {
+    expect(formatCurrencyFull(1000, 'eur')).toBe(formatCurrencyFull(1000, 'EUR'))
+  })
+
+  it('falls back to USD instead of throwing on a malformed code', () => {
+    // Intl.NumberFormat raises a RangeError on a code that is not three letters. A cell in a table
+    // is not the place to take the page down over a bad string from a provider.
+    expect(() => formatCurrencyFull(1000, '')).not.toThrow()
+    expect(formatCurrencyFull(1000, '')).toBe('$1,000.00')
+    expect(formatCurrencyFull(1000, 'NOTACODE')).toBe('$1,000.00')
+  })
+})

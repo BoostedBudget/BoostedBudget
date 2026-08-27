@@ -28,6 +28,14 @@
  * accessible rendering of the SAME numbers, which is also why no information here is carried by
  * colour: the word "Closed" states the state, the day states the date, and the badge only tints.
  *
+ * ⚠ EVERY FIGURE IS RENDERED IN THE CURRENCY IT WAS RECORDED IN. The API carries currency_code per
+ * POINT, not once for the series, because a re-linked account can in principle change it. Both
+ * money columns pass `row.currency_code` to formatCurrencyFull; before that argument existed the
+ * formatter hardcoded USD and a retained 1000 EUR balance rendered as $1,000.00 — a wrong number,
+ * not a missing one, on the surface whose whole purpose is showing retained truth. The chart is
+ * unlabelled by currency on purpose: it plots one account's series, and its accessible rendering is
+ * the table below, where each row states its own currency.
+ *
  * ⚠ PII IS NOT AUTOMATIC. DataTable masks a <td> only when that column's id is listed in
  * `maskedColumnIds`, so both money columns are listed by id below. The chart's aria-label is
  * deliberately structural and carries NO amount — an attribute is recorded verbatim by session
@@ -76,7 +84,7 @@ const COLUMNS: ColumnDef<AccountBalanceHistoryPoint>[] = [
     // the provider simply did not report.
     render: (row) => (
       <span className="tabular-nums">
-        {row.current_balance == null ? '—' : formatCurrencyFull(row.current_balance)}
+        {row.current_balance == null ? '—' : formatCurrencyFull(row.current_balance, row.currency_code)}
       </span>
     ),
   },
@@ -87,7 +95,7 @@ const COLUMNS: ColumnDef<AccountBalanceHistoryPoint>[] = [
     align: 'right',
     render: (row) => (
       <span className="tabular-nums">
-        {row.available_balance == null ? '—' : formatCurrencyFull(row.available_balance)}
+        {row.available_balance == null ? '—' : formatCurrencyFull(row.available_balance, row.currency_code)}
       </span>
     ),
   },
