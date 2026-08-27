@@ -518,8 +518,14 @@ const lastKnownBalanceProjection = "lkb.amount AS last_known_balance, lkb.at AS 
 //     rather than looping (measured:
 //     TestPortfolioSnapshot_Upsert_CyclicSuccessionPointer_TerminatesAndCountsEverything), and a
 //     20-edge chain counts once (TestPortfolioSnapshot_Upsert_ChainLongerThanTheOldRecursionCap_StillCountsOnce).
-//     Under a cycle nobody is a survivor and nothing is rationed away — corrupt pointers must not
-//     delete a user's money.
+//     A cycle rations nobody — corrupt pointers must not delete a user's money.
+//
+//     ⚠ THAT LAST SENTENCE USED TO BE TRUE OF ONE TOPOLOGY AND STATED OF ALL OF THEM (#1569
+//     T10-FIX item 4). For a closed A ↔ B it held for free: each member has a successor, so
+//     neither is a survivor and nothing is rationed. Add one edge leaving the cycle and it broke —
+//     A → B, B → A, B → C makes A → C derivable, C survives, and both cycle members are rationed
+//     away. Measured: $11,000 reported as $2,000. The property is now ENFORCED rather than
+//     emergent, by the `cyclic` CTE, which withholds every account on a cycle from `succession`.
 //
 //     ⚠ HONESTY ABOUT THAT TEST'S REACH. It was RED against the pre-fix single-layer walk, which
 //     is what it was written for. Re-inserting a 16-cap into item_closure alone does NOT turn it
@@ -651,6 +657,30 @@ const accountChainSupersessionCTE = `
 	    JOIN succ_edge e ON e.pred_id = x.succ_id
 	    WHERE e.succ_id <> x.pred_id
 	),
+	-- Accounts that lie on a SUCCESSION CYCLE — X reaches Y and Y reaches X. A cycle is corrupt
+	-- data: it asserts that two accounts each replaced the other, and no reading of it is true.
+	-- Members are withheld from the succession relation entirely, so a cycle rations nobody.
+	--
+	-- ⚠ #1569 T10-FIX item 4. The cycle-safety property was previously an EMERGENT one — a closed
+	-- A ↔ B produces no surviving pair, because each member has a successor of its own — and it
+	-- held only for that topology. Add one real edge leaving the cycle (A → B, B → A, B → C) and
+	-- the closure also derives A → C; C supersedes nobody, so (A,C) and (B,C) are both surviving
+	-- pairs and BOTH cycle members are rationed away. Measured against Postgres, not reasoned: a
+	-- $11,000 portfolio reported as $2,000, with $9,000 deleted by a pointer nobody can act on.
+	-- Pinned by TestPortfolioSnapshot_Upsert_CycleWithAnOutgoingTail_StillRationsNobody.
+	--
+	-- ⚠ THE COST, STATED. B → C may be a perfectly real re-link, and withholding B keeps its value
+	-- beside C's — an over-count. That is the deliberate direction: this whole family exists
+	-- because succession rules DELETE money when they are wrong, and a corrupt pointer is exactly
+	-- when the rule cannot be trusted to be right. An over-count is visible and repairable; a
+	-- silently missing account is neither.
+	cyclic AS (
+	    SELECT DISTINCT x.pred_id AS account_id
+	    FROM succ_closure x
+	    JOIN succ_closure y
+	      ON y.pred_id = x.succ_id
+	     AND y.succ_id = x.pred_id
+	),
 	-- Every (predecessor, observed successor) pair on a day, both members live on that day.
 	succession AS (
 	    SELECT DISTINCT l.snapshot_date,
@@ -666,6 +696,7 @@ const accountChainSupersessionCTE = `
 	    WHERE EXISTS (SELECT 1 FROM succ_closure x
 	                  WHERE x.pred_id = l.account_id
 	                    AND x.succ_id = s.account_id)
+	      AND NOT EXISTS (SELECT 1 FROM cyclic z WHERE z.account_id = l.account_id)
 	      AND $OBSERVED
 	),
 	-- A successor that is itself superseded by an observed successor is not a survivor and must
