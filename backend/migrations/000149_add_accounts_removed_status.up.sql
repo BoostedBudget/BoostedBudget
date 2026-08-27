@@ -1,12 +1,24 @@
--- Issue #1569: add a 'removed' status to accounts — the USER deliberately disconnected this
--- account. This is schema groundwork for retaining financial history by default: instead of
+-- Issue #1569: add a 'removed' status to accounts — this account stopped being connected.
+--
+-- ⚠ CORRECTED IN PLACE (#1569 T7-FIX). This header, and the COMMENT ON COLUMN at the foot of the
+-- file, used to say 'removed' meant "the USER deliberately disconnected this account". That was
+-- true on the day this migration was written and became false at migration 000154, which added
+-- removed_reason and with it THREE causes: 'user_disconnect', 'provider_absent' (the bank stopped
+-- reporting the account) and 'link_removed' (one of this product's own flows removed the Plaid
+-- Item — the orphaned-item sweep passes it). MarkRemovedByProvider and MarkRemovedByLinkedItemID
+-- both stamp removed_at, so the old wording described a user action that never happened. The
+-- corrected COMMENT text is re-issued to already-migrated databases by migration 000175, the same
+-- way 000174 re-issued the last correction to this file.
+--
+-- This is schema groundwork for retaining financial history by default: instead of
 -- destroying an account's rows when the user disconnects it, we now have a status value that
 -- records *why* the account stopped being active, distinct from the two existing values:
 --
 --   active   = currently linked and live
 --   replaced = superseded by a re-link (existing, 000033)
 --   expired  = the 90-day fingerprint TTL released the hold on this row (existing, 000107)
---   removed  = the USER deliberately disconnected this account (new, this migration)
+--   removed  = the account stopped being connected (new, this migration). One cause when this
+--              file was written (a user disconnect); THREE since 000154 — see the header above.
 --
 -- Conflating 'removed' with 'replaced' or 'expired' would lose the reason in exactly the table
 -- we are building to record reasons: a re-link, a TTL expiry, and a deliberate disconnect are
@@ -90,4 +102,4 @@ BEGIN
 END $$;
 
 COMMENT ON COLUMN accounts.removed_at IS
-$COMMENT$Timestamp when the user deliberately disconnected this account (status = 'removed'). Never NULL while status = 'removed' -- accounts_removed_at_consistency requires it. Left NULL by every Go writer that moves the row to another status, but that direction is a code convention, NOT a constraint: the CHECK is one-directional (see 000155's Step 3 header). Distinct from replaced_at (re-link) and the TTL clock behind 'expired' (linked_items.status_changed_at).$COMMENT$;
+$COMMENT$Timestamp when this account stopped being connected (status = 'removed'). NOT necessarily a user action: 'removed' has THREE causes and removed_reason (migration 000154) records which one -- 'user_disconnect' (the user asked, via DisconnectAccount or DisconnectInstitution), 'provider_absent' (a confirmed-complete Plaid /accounts/get stopped returning it, i.e. the bank closed it) or 'link_removed' (one of this product's own flows removed the account's Plaid Item). A NULL reason predates 000154 and is treated as a user disconnect. Never NULL while status = 'removed' -- accounts_removed_at_consistency requires it. Left NULL by every Go writer that moves the row to another status, but that direction is a code convention, NOT a constraint: the CHECK is one-directional (see 000155's Step 3 header). Distinct from replaced_at (re-link) and the TTL clock behind 'expired' (linked_items.status_changed_at).$COMMENT$;

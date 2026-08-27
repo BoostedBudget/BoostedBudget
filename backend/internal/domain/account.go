@@ -68,7 +68,15 @@ type Account struct {
 	// Soft-delete fields for re-link handling (Issue #171)
 	Status       AccountStatus `json:"status" db:"status" enum:"active,replaced,expired,removed"` // Issue #1569: enumerated so orval emits a union, not `string`
 	ReplacedAt   *time.Time    `json:"replaced_at,omitempty" db:"replaced_at"`   // When this account was replaced
-	// RemovedAt is when the user deliberately disconnected this account (status = 'removed').
+	// RemovedAt is when this account stopped being connected (status = 'removed').
+	//
+	// ⚠ NOT necessarily a user action, and this comment used to say it was (#1569 T7-FIX). Three
+	// causes reach 'removed' and RemovedReason (right below) is what distinguishes them:
+	// MarkRemovedByProvider stamps RemovedAt for an account the bank stopped reporting, and
+	// MarkRemovedByLinkedItemID stamps it for the orphaned-item sweep. Reading this field as
+	// "the user disconnected it" is wrong for two of the three, and it is the read that would
+	// wrongly make a provider-removed account look like something the user asked for.
+	//
 	// NEVER NULL when status = 'removed' — migration 000149's accounts_removed_at_consistency CHECK
 	// requires it. NULL for every other status by CONVENTION, not by constraint: that CHECK is
 	// one-directional and tolerates a stamped removed_at on a non-'removed' row (#1569 task 7.9).
