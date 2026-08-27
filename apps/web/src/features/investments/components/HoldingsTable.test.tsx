@@ -16,7 +16,7 @@ import { HoldingsTable } from './HoldingsTable'
 import { mockUseGetHoldings, mockUseGetAccountHoldingsHistory } from '@/test/mocks/investments-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
-import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
+import { mockUseGetAccounts, mockRefetchAccounts } from '@/test/mocks/accounts-api'
 import { mockUseUser, createMockClerkUser, mockClerkUser } from '@/test/mocks/clerk'
 import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
 import type { HoldingSnapshotView } from '@boostedbudget/api-client/models/holdingSnapshotView'
@@ -821,6 +821,86 @@ describe('HoldingsTable', () => {
       render(<HoldingsTable accountId="acct-closed" />)
       expect(screen.getByText('ZZZ')).toBeDefined()
       expect(screen.queryByText(/closed account/i)).toBeNull()
+    })
+
+    // ── #1569 R9 layer 2: the composed failure ──────────────────────────────────────────
+    //
+    // Third instance of the pattern round 8 fixed twice (SavingsPage's live-goals error arm and
+    // its empty arm). This one is the worst of the three because of WHERE it lands: on a closed
+    // account the LIVE current-state read is *supposed* to return nothing, so an error on it told
+    // the user to "refresh the page" — a page that can never produce live holdings — while the
+    // history we deliberately kept sat hidden behind that message. The fix is round 8's shape,
+    // not a third pattern: the page's own failure stays visible, and the retained surface becomes
+    // ADDITIVE beneath it rather than preempted by it.
+    //
+    // Modelled on SavingsPage.test.tsx's "keeps the deleted-goals panel reachable when the live
+    // goals query fails" — both halves are asserted in every test, because either half alone is
+    // satisfiable by a mutant (delete the error branch, or never mount the history).
+    describe('composed failure: the live read fails and history exists (#1569 R9)', () => {
+      it('keeps the retained holdings history reachable when the live holdings read fails', () => {
+        withHistory()
+        mockUseGetHoldings.mockReturnValue({ data: undefined, isLoading: false, isError: true })
+        render(<HoldingsTable accountId="acct-closed" />)
+
+        // The live failure is NOT swallowed...
+        expect(screen.getByRole('alert').textContent ?? '').toMatch(/could not load current holdings/i)
+        // ...and the history we kept survives it.
+        expect(screen.getByText('AAPL')).toBeDefined()
+        expect(screen.getByText('Apple Inc')).toBeDefined()
+      })
+
+      it('does not tell a closed account to refresh a page that can never show live holdings', () => {
+        withHistory()
+        mockUseGetHoldings.mockReturnValue({ data: undefined, isLoading: false, isError: true })
+        const { container } = render(<HoldingsTable accountId="acct-closed" />)
+
+        expect(container.textContent ?? '').not.toMatch(/refresh the page/i)
+        // Still communicated, just honestly — the assertion above must not be satisfiable by
+        // dropping the error branch altogether.
+        expect(screen.getByRole('alert')).toBeDefined()
+      })
+
+      // The counterweight. A LIVE account whose holdings read genuinely failed must still get the
+      // ordinary error, and must NOT be handed a closed-account history surface.
+      it('still tells a live account to refresh when its holdings read fails', () => {
+        mockUseGetHoldings.mockReturnValue({ data: undefined, isLoading: false, isError: true })
+        render(<HoldingsTable accountId="acct-alpha" />)
+
+        expect(screen.getByText(/unable to load holdings\. please refresh the page/i)).toBeDefined()
+        expect(screen.queryByText(/closed account/i)).toBeNull()
+      })
+
+      it('still tells the portfolio view to refresh when the holdings read fails', () => {
+        mockUseGetHoldings.mockReturnValue({ data: undefined, isLoading: false, isError: true })
+        render(<HoldingsTable />)
+
+        expect(screen.getByText(/unable to load holdings\. please refresh the page/i)).toBeDefined()
+      })
+
+      // ── B2: a failed ACCOUNTS read must not become a claim about the account ──────────
+      //
+      // scopedAccountIsDisconnected returns false when `accounts` is undefined, and useAllAccounts'
+      // isError was discarded at the call site — so a failed accounts read on a CLOSED account fell
+      // through to the live empty state and asserted "No holdings synced yet for this account."
+      // That is a false statement about a closed account, manufactured by a failure.
+      it('does not claim nothing synced when the accounts read itself failed', () => {
+        mockUseGetAccounts.mockReturnValue({
+          data: undefined,
+          isLoading: false,
+          isError: true,
+          error: null,
+          refetch: mockRefetchAccounts,
+        })
+        mockUseGetHoldings.mockReturnValue({
+          data: { holdings: [], count: 0 },
+          isLoading: false,
+          isError: false,
+        })
+        render(<HoldingsTable accountId="acct-closed" />)
+
+        expect(screen.queryByText(/no holdings synced yet/i)).toBeNull()
+        expect(screen.getByRole('alert').textContent ?? '').toMatch(/nothing was deleted/i)
+      })
     })
   })
 })
