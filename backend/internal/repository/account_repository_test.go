@@ -1669,8 +1669,7 @@ func TestAccountRepository_GetByLinkedItemID_ExcludesReplaced(t *testing.T) {
 
 // TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuses verifies the
 // separate, sync-only read (Issue #1569 Task 1b) has NO status predicate — unlike
-// GetByLinkedItemID above, which callers must keep using for holdings/liability/
-// balance-snapshot syncs.
+// GetByLinkedItemID above, which callers must keep using for holdings/liability syncs.
 func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuses(t *testing.T) {
 	mock, repo := setupAccountMockDB(t)
 	defer mock.Close()
