@@ -393,7 +393,13 @@ var DataExportWithheldTables = map[string]string{
 		"Go error strings, which describe BoostedBudget's processing rather than the user's " +
 		"finances; the financial rows a failed job would have written are exported from their own " +
 		"tables.",
-	"audit_logs": "Security audit trail. It is retained under a legal-obligation basis rather than " +
+	"holding_observations": "Internal capture marker (#1569 T9-FIX). One row per (account, UTC " +
+		"day) recording that a holdings capture COMPLETED — it carries no value, no position and " +
+		"nothing the user reported or entered. What the capture FOUND is exported in full under " +
+		"`holding_snapshots`; this table exists only so that an account observed holding nothing " +
+		"is distinguishable from one never observed, which is a fact about our sync schedule " +
+		"rather than about the user's finances.",
+		"audit_logs": "Security audit trail. It is retained under a legal-obligation basis rather than " +
 		"held on the user's behalf, it is redacted rather than deleted on erasure, and its " +
 		"`changes` column can carry before/after values of rows that were subsequently corrected. " +
 		"Requests for it go through privacy@boostedbudget.com so they can be answered individually.",

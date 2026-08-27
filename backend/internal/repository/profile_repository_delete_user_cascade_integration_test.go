@@ -1532,6 +1532,7 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		{Table: "credit_liabilities", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "custom_categories", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "holding_snapshots", Column: "user_id", DeleteRule: "CASCADE"},
+		{Table: "holding_observations", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "holdings", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "household_invites", Column: "accepted_user_id", DeleteRule: "SET NULL"},
 		{Table: "household_invites", Column: "inviter_user_id", DeleteRule: "CASCADE"},
@@ -1720,6 +1721,13 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 	execNoErr(t, ctx, pool, `
 		INSERT INTO holding_snapshots (user_id, account_id, security_id, as_of_date, quantity)
 		VALUES ($1, $2, $3, CURRENT_DATE, 1)`, target.ID, accountID, securityID)
+
+	// #1569 T9-FIX item 2: the record that a capture RAN for an account on a day, which is the
+	// only trace an account holding nothing leaves. Not history — it carries no value — but it is
+	// user-scoped, so erasure has to reach it like everything else.
+	execNoErr(t, ctx, pool, `
+		INSERT INTO holding_observations (user_id, account_id, as_of_date)
+		VALUES ($1, $2, CURRENT_DATE)`, target.ID, accountID)
 
 	execNoErr(t, ctx, pool, `
 		INSERT INTO liability_statements (user_id, account_id, liability_type, as_of_date, details)
