@@ -154,6 +154,16 @@ function isFromDeletedRule(execution: RuleExecution): boolean {
 
 export function RuleAutomationHistoryPanel() {
   const [isOpen, setIsOpen] = useState(false)
+  // ⚠ KNOWN, DELIBERATELY UNFIXED (#1569 round 9, recorded so it is not rediscovered as new).
+  // `total > PAGE_SIZE` gates the pager, but `offset` is independent state. Page to offset 20,
+  // then have a refetch return a `total` of 20 or fewer (rows aged out, a rule deleted), and the
+  // request still asks for offset 20: the body renders empty while the only control that could
+  // send the reader back to page 1 has just been removed. `total === 0` is safe — the whole panel
+  // returns null above — so the stranded window is 1..PAGE_SIZE.
+  // ⚠ FIX BOTH PANELS OR NEITHER: boosts/components/BoostAutomationHistoryPanel.tsx has the identical shape (same
+  // PAGE_SIZE, same independent offset, same `total > PAGE_SIZE` gate). Fixing one alone leaves
+  // the same bug live on the sibling surface and makes the pair inconsistent — a sibling task
+  // this round declined to fix one in isolation for exactly that reason.
   const [offset, setOffset] = useState(0)
   const panelId = useId()
   const trackEvent = useTrackEvent()

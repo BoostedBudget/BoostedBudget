@@ -82,6 +82,13 @@ export function AccountDetailPage() {
     )
   }
 
+  // The isError-before-!account order is NOT the 404-vs-error conflation that BoostDetailPage had
+  // (#1569 round 9 checked for it here and it does not exist). That defect needs a read keyed on
+  // the entity, where react-query turns a genuine 404 into `isError` and the not-found branch
+  // becomes unreachable. This page reads the LIST (useGetAccounts) and finds the account in it, so
+  // a missing account is a successful response with no match — the two states arrive by different
+  // routes and cannot be confused. Keep it that way: switching to a per-account GET would make the
+  // "Account not found" branch below dead and every deleted account read as a failed load.
   if (isError) {
     return (
       <PageContainer>
