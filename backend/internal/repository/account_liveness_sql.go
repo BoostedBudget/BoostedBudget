@@ -437,9 +437,14 @@ const lastKnownBalanceProjection = "lkb.amount AS last_known_balance, lkb.at AS 
 //	   l ended" simply does not hold. It fails in BOTH orderings, and the two orderings both exist —
 //	   ExchangePublicToken marks the predecessor before inserting the successor, while item B's
 //	   CreateBatch backstop supersedes it after. Measured, not reasoned: the intervals were printed.
-//	   ⚠ NOT `accounts.replaced_by_id` either, which reads like the obvious column: the production
-//	   re-link passes nil for it (account_service.go's UpdateStatus call), so it is NULL on every
-//	   predecessor this rule needs to recognise. Only item B's new CreateBatch path sets it.
+//	   ⚠ NOT `accounts.replaced_by_id` ALONE, which reads like the obvious column. The production
+//	   re-link passes nil for it (account_service.go's UpdateStatus call), so the re-link itself
+//	   never writes it; the ONLY writer is CreateBatch's supersedeStrandedChainSiblings, which
+//	   runs on every CreateBatch and pairs each predecessor of the chain with one of the batch's
+//	   own new rows. So the column is present on a re-link that reached CreateBatch and absent on
+//	   one that did not, and neither pointer is a substitute for the other — leg 2 reads BOTH.
+//	   ⚠ It is no longer true, as this comment said for three rounds, that the account pointer is
+//	   universally absent.
 //	   ⚠ NOT current status, on either row. A past day must not be re-judged by what the accounts
 //	   look like today — the same trap the liveness comment above exists for.
 //	3. Y has an observation. Without this leg the window between a re-link and the successor's
@@ -447,12 +452,22 @@ const lastKnownBalanceProjection = "lkb.amount AS last_known_balance, lkb.at AS 
 //	   move — because the successor exists but holds nothing yet. Pinned by
 //	   TestPortfolioSnapshot_Upsert_RelinkBeforeTheSuccessorHasSynced_KeepsThePredecessor.
 //
-// ⚠ WHAT THIS DOES NOT COVER, stated rather than left for a reader to discover. The old item's
-// `replaced_by_id` is written by the SAME fail-open block as item B's account status update
-// (account_service.go step 5b logs and continues). If that write fails, no succession is recorded,
-// and this rule counts both siblings — the doubling comes back for that user until something
-// re-links them again. Item B's CreateBatch backstop repairs the ACCOUNT row, not the item row, so
-// it does not close this window; it is smaller than the one before this task and it is real.
+// ⚠ WHAT THIS DOES NOT COVER, stated rather than left for a reader to discover. The two writes in
+// account_service.go step 5b — the old item's `replaced_by_id` and the predecessor account's
+// status — are INDEPENDENT fail-open blocks, so there are two single-write failures, not one:
+//
+//   - 7b, both fail: the predecessors stay 'active', and CreateBatch's backstop retires them and
+//     writes the account pointer inside the transaction that inserts the successor.
+//   - 7a, only the ITEM write fails: the predecessor is already 'replaced' with a NULL pointer,
+//     which a `status = 'active'` backstop could not see at all. No item pointer, no account
+//     pointer, no succession row — full doubling on a plain 1:1 chain, and the likelier of the two
+//     failures. #1569 T10.1 item B: the backstop now also fills the pointer on a chain row left
+//     'replaced' with none, which changes no status and therefore no current-state read.
+//
+// ⚠ What remains open is narrower: a re-link whose item write fails and which then never REACHES
+// CreateBatch (a later Plaid call or MatchOrCreate refuses the link first). Nothing has recorded
+// the succession and nothing later will, so both siblings are counted until the chain is re-linked
+// again. It is smaller than the window before this task and it is real.
 //
 // ⚠ "Absence of holdings is not evidence of an empty portfolio" is the deliberate reading of leg 3,
 // and it agrees with the repair's own ruling that a day with no rows is unreconstructable rather
@@ -491,21 +506,65 @@ const lastKnownBalanceProjection = "lkb.amount AS last_known_balance, lkb.at AS 
 //  2. IT WALKS THE WHOLE CHAIN. The first version looked exactly ONE edge ahead. For A → B → C on
 //     one day with B never synced, A saw its direct successor B unobserved and stayed in while B
 //     was excluded by C — so A and C were both summed, which is the original doubling one link
-//     further along ($9,000 for a $5,000 portfolio, measured). item_succession is the transitive
-//     closure of linked_items.replaced_by_id, depth-capped at 16 and self-edge-guarded so a cyclic
-//     or self-referential pointer cannot loop.
+//     further along ($9,000 for a $5,000 portfolio, measured).
+//
+//     ⚠ THE WALK IS NO LONGER DEPTH-CAPPED, and that is #1569 T10.1 item F. It used to stop at 16
+//     edges, with `depth` carried inside the recursive tuple — which bounded the closure AND made
+//     the UNION dedup weaker than the comment beside it claimed, since (pred, succ, 1) and
+//     (pred, succ, 2) are distinct rows. Nothing anywhere proves a chain cannot exceed 16 links,
+//     and a 17-edge same-day chain let its first and last member both count. Over a FINITE set of
+//     accounts a UNION closure that does NOT carry depth converges on its own, so removing depth
+//     removes the cap and restores the dedup at the same time. A cyclic pointer then terminates
+//     rather than looping (measured:
+//     TestPortfolioSnapshot_Upsert_CyclicSuccessionPointer_TerminatesAndCountsEverything), and a
+//     20-edge chain counts once (TestPortfolioSnapshot_Upsert_ChainLongerThanTheOldRecursionCap_StillCountsOnce).
+//     Under a cycle nobody is a survivor and nothing is rationed away — corrupt pointers must not
+//     delete a user's money.
+//
+//     ⚠ HONESTY ABOUT THAT TEST'S REACH. It was RED against the pre-fix single-layer walk, which
+//     is what it was written for. Re-inserting a 16-cap into item_closure alone does NOT turn it
+//     red again, because the account-level closure in (3) composes capped item paths into longer
+//     ones — 20 edges are reachable as two hops of ten. That is a real robustness property of the
+//     two layers, not evidence the cap was harmless; the cap is removed because nothing bounds a
+//     chain's length and a comment claiming completeness beside a silent truncation is worse than
+//     either.
 //
 //     ⚠ A transitive successor that is ITSELF superseded must not be counted as a survivor, or the
 //     rationing in (1) inflates: A1/A2 → B → C would see two successors for one old item and
 //     exclude both predecessors again. `surviving` drops any successor that has an observed
 //     successor of its own.
 //
-//  3. IT ACCEPTS THE ACCOUNT-LEVEL POINTER TOO. The item pointer is written fail-open
-//     (account_service.go step 5b logs and continues), and CreateBatch's backstop —
-//     supersedeStrandedChainSiblings — repairs the ACCOUNT row, setting accounts.replaced_by_id,
-//     not the item row. So on the failure path the item-level test finds nothing and both rows are
-//     counted. Reading EITHER recorded pointer closes that window: both are written only by a
-//     re-link, and leg 1 (same chain key) still gates them.
+//  3. IT ACCEPTS THE ACCOUNT-LEVEL POINTER TOO, AND COMPOSES THE TWO KINDS OF EDGE. The item
+//     pointer is written fail-open (account_service.go step 5b logs and continues), and
+//     CreateBatch's backstop — supersedeStrandedChainSiblings — repairs the ACCOUNT row, setting
+//     accounts.replaced_by_id, not the item row. So on the failure path the item-level test finds
+//     nothing and both rows are counted. Reading either recorded pointer closes that window, and
+//     leg 1 (same chain key) still gates both.
+//
+//     ⚠ #1569 T10.1 item D: reading either one was NOT enough, because a chain need not use the
+//     same pointer type throughout. A → B recorded only by the item pointer and B → C only by the
+//     account pointer used to leave A and C both summed: each pointer type closed transitively
+//     WITHIN itself, and nothing composed an item edge with an account edge. The walk is now built
+//     in two layers — item_closure over linked_items.replaced_by_id, then succ_closure over
+//     ACCOUNT-level edges that accept either an account pointer or an item_closure hop — so a
+//     mixed chain is closed like any other.
+//
+//     ⚠ The two layers are BOTH needed and neither subsumes the other. item_closure alone cannot
+//     see an account pointer. succ_closure alone cannot step through a link whose successor item
+//     reported no account for the chain at all: there is no account row to hop through, and the
+//     item layer supplies that edge directly.
+//
+//     ⚠ Both closures range over every account sharing the chain key, whatever its status and
+//     whatever day it was live on. Succession is a recorded fact about two rows, not a per-day
+//     fact; only the (pred, succ) pairs in `succession` are restricted to accounts live on the
+//     day. Scoping the WALK to a day's live set is what stopped it stepping through an
+//     intermediate that was not live.
+//
+//     ⚠ It is FALSE, as this comment said for three rounds, that "both pointers are written only
+//     by a re-link". supersedeStrandedChainSiblings runs on EVERY CreateBatch and keys on the
+//     chain alone, so a batch that is not a re-link at all can write the account pointer. That is
+//     why it retires at most as many predecessors as the batch brought successors for the chain
+//     (item E): the chain key is not by itself evidence that a live sibling was replaced.
 //
 // ⚠ KNOWN, AND STATED RATHER THAN LEFT TO BE DISCOVERED. The rationing groups by the PREDECESSOR'S
 // linked item. Two DIFFERENT live items whose accounts share one chain key, both replaced by one
@@ -516,31 +575,67 @@ const lastKnownBalanceProjection = "lkb.amount AS last_known_balance, lkb.at AS 
 // worse and was rejected: it collapses A → B → C into one group and keeps one of A/B.
 const accountChainLiveCTE = `
 	live_all AS (
-	    SELECT $DAYCOL AS snapshot_date, a.id AS account_id,
-	           a.user_account_id, a.linked_item_id, a.replaced_by_id
+	    SELECT $DAYCOL AS snapshot_date, a.id AS account_id, a.user_id AS owner_id,
+	           a.user_account_id, a.linked_item_id
 	    FROM $FROM
 	    WHERE $WHERE
 	      AND $LIVENESS
 	),
-	-- Transitive closure of linked_items.replaced_by_id, seeded only from items this user actually
-	-- has live rows under. "<> id" refuses a self-edge and the depth cap refuses a cycle; UNION
-	-- (not UNION ALL) keeps the working set from re-deriving paths it already has.
-	item_succession AS (
-	    SELECT li.id AS pred_item_id, li.replaced_by_id AS succ_item_id, 1 AS depth
+	-- Every account sharing a chain key with something live on some day here, WHATEVER its status
+	-- and whatever day it was live on. The walk below runs over this set rather than over the
+	-- day's live set: succession is a recorded fact about two rows, not a per-day fact, and
+	-- scoping the walk to one day is what stopped it stepping through an intermediate that was
+	-- not live that day. Only the finished (pred, succ) pairs are day-restricted.
+	chain_accounts AS (
+	    SELECT a.id, a.user_account_id, a.linked_item_id, a.replaced_by_id
+	    FROM accounts a
+	    WHERE a.user_id IN (SELECT owner_id FROM live_all)
+	      AND a.user_account_id IN (
+	          SELECT user_account_id FROM live_all WHERE user_account_id IS NOT NULL)
+	),
+	-- Layer 1: transitive closure of linked_items.replaced_by_id. "<> id" refuses a self-edge.
+	-- NO depth column: over a finite set of items a UNION closure converges on its own, and
+	-- carrying depth both capped the walk (item F) and made this UNION dedup weaker than it looks,
+	-- since (pred, succ, 1) and (pred, succ, 2) are distinct rows.
+	item_closure AS (
+	    SELECT li.id AS pred_item_id, li.replaced_by_id AS succ_item_id
 	    FROM linked_items li
 	    WHERE li.replaced_by_id IS NOT NULL
 	      AND li.replaced_by_id <> li.id
-	      AND li.id IN (SELECT linked_item_id FROM live_all)
+	      AND li.id IN (SELECT linked_item_id FROM chain_accounts)
 	  UNION
-	    SELECT x.pred_item_id, li.replaced_by_id, x.depth + 1
-	    FROM item_succession x
+	    SELECT x.pred_item_id, li.replaced_by_id
+	    FROM item_closure x
 	    JOIN linked_items li ON li.id = x.succ_item_id
 	    WHERE li.replaced_by_id IS NOT NULL
 	      AND li.replaced_by_id <> li.id
-	      AND x.depth < 16
+	      AND li.replaced_by_id <> x.pred_item_id
 	),
-	-- Every (predecessor, observed successor) pair on a day. Leg 1 — same logical account, plain
-	-- equality so a legacy NULL matches nothing — gates both succession routes.
+	-- Layer 2, one ACCOUNT-level edge. Leg 1 — same logical account, plain equality so a legacy
+	-- NULL matches nothing — gates both succession routes. Either recorded pointer supplies an
+	-- edge, which is what lets a chain switch pointer type half way along (item D).
+	succ_edge AS (
+	    SELECT p.id AS pred_id, c.id AS succ_id
+	    FROM chain_accounts p
+	    JOIN chain_accounts c
+	      ON c.user_account_id = p.user_account_id
+	     AND c.id <> p.id
+	    WHERE c.id = p.replaced_by_id
+	       OR EXISTS (SELECT 1 FROM item_closure x
+	                  WHERE x.pred_item_id = p.linked_item_id
+	                    AND x.succ_item_id = c.linked_item_id)
+	),
+	-- Layer 2's transitive closure, again with no depth: this is the one that composes an item
+	-- edge with an account edge.
+	succ_closure AS (
+	    SELECT pred_id, succ_id FROM succ_edge
+	  UNION
+	    SELECT x.pred_id, e.succ_id
+	    FROM succ_closure x
+	    JOIN succ_edge e ON e.pred_id = x.succ_id
+	    WHERE e.succ_id <> x.pred_id
+	),
+	-- Every (predecessor, observed successor) pair on a day, both members live on that day.
 	succession AS (
 	    SELECT DISTINCT l.snapshot_date,
 	           l.linked_item_id AS pred_item_id,
@@ -552,12 +647,9 @@ const accountChainLiveCTE = `
 	      ON s.snapshot_date = l.snapshot_date
 	     AND s.account_id <> l.account_id
 	     AND s.user_account_id = l.user_account_id
-	    WHERE (
-	              EXISTS (SELECT 1 FROM item_succession x
-	                      WHERE x.pred_item_id = l.linked_item_id
-	                        AND x.succ_item_id = s.linked_item_id)
-	           OR s.account_id = l.replaced_by_id
-	          )
+	    WHERE EXISTS (SELECT 1 FROM succ_closure x
+	                  WHERE x.pred_id = l.account_id
+	                    AND x.succ_id = s.account_id)
 	      AND $OBSERVED
 	),
 	-- A successor that is itself superseded by an observed successor is not a survivor and must
