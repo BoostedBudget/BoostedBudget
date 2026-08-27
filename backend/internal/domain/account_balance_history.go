@@ -37,6 +37,15 @@ type AccountBalanceHistoryPoint struct {
 //
 // Points is never nil — an account with nothing recorded returns an empty slice, so the caller
 // distinguishes "we kept nothing" from "the read failed" without inspecting an error.
+//
+// ⚠ `nullable:"false"` IS LOAD-BEARING, NOT DECORATION (#1569 T7-FIX, finding H). huma marks every
+// Go slice `type: [array, "null"]` by default, so the generated schema and orval's client declared
+// `points` as `AccountBalanceHistoryPoint[] | null` while the service guaranteed the opposite. On
+// this endpoint that ambiguity is the whole message: `null` reads as "the read failed" and `[]`
+// reads as "nothing was destroyed, we simply kept nothing", and the screen it feeds exists to say
+// the second one. The tag makes the schema follow the implementation instead of contradicting it.
+// Pinned by TestAccountBalanceHistorySchema_PointsIsNeverNull (the schema) and
+// TestAccountBalanceHistoryHandler_EmptyHistoryIs200 (the wire).
 type AccountBalanceHistory struct {
 	AccountID string `json:"account_id"`
 	// FirstDate / LastDate bound the series without the caller re-deriving them, and are nil when
@@ -44,5 +53,5 @@ type AccountBalanceHistory struct {
 	// everything: an LLM tool-caller should not spend tokens doing arithmetic over the rows.
 	FirstDate *string                      `json:"first_date,omitempty"`
 	LastDate  *string                      `json:"last_date,omitempty"`
-	Points    []AccountBalanceHistoryPoint `json:"points"`
+	Points    []AccountBalanceHistoryPoint `json:"points" nullable:"false"`
 }
