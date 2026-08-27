@@ -174,6 +174,23 @@ describe('DeletedGoalsPanel', () => {
     expect(screen.queryByText(/Erase this goal for good\?/i)).toBeNull()
   })
 
+  // ⚠ The disarm above is not enough on its own, and this is the hole the FIRST draft of it left:
+  // the dialog can already be open when the refetch fails. Confirming it would purge from exactly
+  // the listing we just declared unverified, through a button the disarm never touches. The dialog
+  // closes with the listing instead.
+  it('closes an already-open confirmation when the listing goes stale', () => {
+    const { rerender } = render(<DeletedGoalsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+    fireEvent.click(screen.getByRole('button', { name: /delete permanently/i }))
+    expect(screen.getByText(/Erase this goal for good\?/i)).toBeTruthy()
+
+    withStaleListing()
+    rerender(<DeletedGoalsPanel />)
+
+    expect(screen.queryByText(/Erase this goal for good\?/i)).toBeNull()
+    expect(mockPurgeSavingsGoalMutateAsync).not.toHaveBeenCalled()
+  })
+
   it('lets the user retry from the degraded notice', async () => {
     withStaleListing()
     render(<DeletedGoalsPanel />)
