@@ -354,14 +354,44 @@ func (r *balanceSnapshotRepository) GetSnapshotsAsOfForUser(ctx context.Context,
 func (r *balanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
 
-	query := "WITH " + householdAccountsCTEForBalancesAsOf() + `
-		SELECT DISTINCT ON (bs.user_account_id)
-		       bs.id, bs.account_id, bs.user_account_id, bs.user_id, bs.current_balance, bs.available_balance,
-		       bs.currency_code, bs.snapshot_at, bs.source, bs.created_at
-		FROM balance_snapshots bs
-		JOIN household_accounts ha ON ha.user_account_id = bs.user_account_id
-		WHERE bs.snapshot_at <= $4
-		ORDER BY bs.user_account_id, bs.snapshot_at DESC
+	// #1569 T10.2: the inner grain is the PHYSICAL ACCOUNT, not the user_account.
+	//
+	// ⚠ THE TWO DEDUPS HERE ARE ABOUT DIFFERENT THINGS and only one of them belongs at the
+	// user_account grain. household_accounts (above) resolves a JOINT ACCOUNT — the same physical
+	// account linked and shared by two members — and picks one member's copy; that stays exactly as
+	// it was, and $60 shared by two people is still $60. This DISTINCT ON was resolving something
+	// else entirely: several snapshots of ONE shared unit down to the latest. When that unit holds
+	// TWO accounts because they are maskless siblings, it silently kept one and dropped the other.
+	//
+	// ⚠ NO SCHEMA CHANGE IS NEEDED FOR THIS, and the plan's premise that one was is wrong —
+	// measured rather than argued (TestMasklessPair_HouseholdBalanceReads_CountBothAccounts).
+	// uq_household_account_shares_active constrains SHARE ROWS to one per (household,
+	// user_account); it says nothing about how many accounts a share row COVERS. Both maskless
+	// accounts hang off the shared user_account and both their snapshots already carry its id, so
+	// they were always inside the household's grant — the query dropped one after the join, not
+	// before it. Re-fanning the grants would have widened nothing and fixed nothing.
+	query := "WITH RECURSIVE " + householdAccountsCTEForBalancesAsOf() + `,
+		latest AS (
+		    SELECT DISTINCT ON (` + snapshotIdentityKey + `)
+		           bs.id, bs.account_id, bs.user_account_id, bs.user_id, bs.current_balance, bs.available_balance,
+		           bs.currency_code, bs.snapshot_at, bs.source, bs.created_at
+		    FROM balance_snapshots bs
+		    JOIN household_accounts ha ON ha.user_account_id = bs.user_account_id
+		    WHERE bs.snapshot_at <= $4
+		    ORDER BY ` + snapshotIdentityKey + `, bs.snapshot_at DESC, bs.id DESC
+		),
+		live_all AS (
+		    SELECT DATE '0001-01-01' AS snapshot_date, a.id AS account_id, a.user_id AS owner_id,
+		           a.user_account_id, a.linked_item_id
+		    FROM accounts a
+		    JOIN latest l ON l.account_id = a.id
+		),` + accountChainSupersessionCTESQL("TRUE") + `
+		SELECT l.id, l.account_id, l.user_account_id, l.user_id, l.current_balance, l.available_balance,
+		       l.currency_code, l.snapshot_at, l.source, l.created_at
+		FROM latest l
+		WHERE NOT EXISTS (
+		    SELECT 1 FROM superseded x WHERE x.account_id = l.account_id
+		)
 	`
 
 	args := householdScopeArgs(requestingUserID, scope)
@@ -401,55 +431,62 @@ func (r *balanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Con
 func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
 
-	const queryBase = `
-		WITH ` + `%s,` + `
+	// #1569 T10.2: STAGE 1 IS NOW PER ACCOUNT, and stage 2 resolves the joint-account fingerprint by
+	// choosing a WINNING user_account rather than a winning row.
+	//
+	// ⚠ THE TWO COLLAPSES MUST NOT BE THE SAME COLLAPSE. Keying either stage on the user_account
+	// alone deletes one of two maskless accounts (migration 000100 forces them to share one
+	// user_accounts row), and keying stage 2 on the ACCOUNT alone double-counts a joint account
+	// that two members both linked. So: stage 2 picks ONE user_account per (day, fingerprint) — $60
+	// shared by two people is still $60, unchanged — and then EVERY account behind that winner is
+	// kept.
+	//
+	// ⚠ No schema change was needed; see GetSnapshotsAsOfForHousehold for the measurement that
+	// retired the "the share grain must move" premise.
+	queryBase := `
+		WITH RECURSIVE ` + `%s,` + `
 		per_account_per_day AS (
-		    -- #1569 T7, stage 1 of 2: collapse to ONE row per (day, user_account_id), applying the
+		    -- #1569 T7, stage 1 of 3: ONE row per (day, user_account_id, ACCOUNT), applying the
 		    -- grant INTERVAL clip that makes a departed member's shared period survive their
 		    -- departure without leaking a single day past it.
 		    --
-		    -- This stage is not optional bookkeeping. household_accounts now emits one row per grant
-		    -- INTERVAL, and a user_account can match several on the same day (closed intervals are
-		    -- unconstrained by uq_household_account_shares_active and may overlap). The stage-2 dedup
-		    -- below keys on the fingerprint, which a re-fingerprinted account changes between
-		    -- intervals — so without this collapse ONE account lands in two buckets and its balance is
-		    -- summed TWICE into that day's total. Pinned by
+		    -- The user_account_id term is not redundant beside the account: household_accounts emits
+		    -- one row per grant INTERVAL, a user_account can match several on the same day (closed
+		    -- intervals are unconstrained by uq_household_account_shares_active and may overlap), and
+		    -- a re-fingerprinted account changes fingerprint between intervals — so without this
+		    -- collapse ONE account lands in two buckets and its balance is summed TWICE. Pinned by
 		    -- TestHouseholdShareRange_OverlappingRefingerprintedIntervalsDoNotDoubleCount.
 		    --
 		    -- The interval in force wins (share_started_at DESC, share_row_id), matching
-		    -- householdAccountsCTEForBalancesAsOf's rule, so the fingerprint carried into stage 2 is
-		    -- the one that was actually recorded on that day.
-		    SELECT DISTINCT ON ((bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.user_account_id)
+		    -- householdAccountsCTEForBalancesAsOf's rule, so the fingerprint carried onward is the one
+		    -- that was actually recorded on that day.
+		    SELECT DISTINCT ON ((bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.user_account_id, bs.account_id)
 		        (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
 		        ha.user_account_id,
 		        ha.fingerprint,
+		        bs.account_id,
 		        bs.snapshot_at,
 		        bs.id AS snapshot_id,
 		        bs.current_balance,
 		        a.type AS account_type
 		    FROM balance_snapshots bs
 		    JOIN household_accounts ha ON ha.user_account_id = bs.user_account_id
-		    -- This join exists solely to supply a.type for the per-type grouping; the balance itself
-		    -- always comes from the balance_snapshots row. It matches EVERY member of a re-link chain
-		    -- sharing that user_account_id, so type selection has to be an explicit PREFERENCE, not a
-		    -- filter:
-		    --
-		    --   * #1561 removed AND a.status = 'active' from the household ANALYTICS joins, correctly
-		    --     — there it was dropping pre-relink history. Applying the same removal here was wrong
-		    --     (restored in 58920ae3): with no preference, DISTINCT ON breaks the tie on a.id (an
-		    --     arbitrary UUID) and can attribute the balance to a REPLACED member's type.
-		    --   * But expressing that preference as a JOIN predicate was ALSO wrong. When no active row
-		    --     shares the user_account_id — exactly what ExpireAccountsByFingerprint leaves behind
-		    --     for a whole fingerprint — the LEFT JOIN yields a NULL a.type, which lands in the ''
-		    --     bucket and, because NULL never satisfies = ANY, is dropped outright by the
-		    --     accountTypes filter. Personal scope keeps those snapshots (it reads the type from the
-		    --     snapshot's own account row), so household history silently disagreed with it.
-		    --
-		    -- So the join is unfiltered and the ORDER BY prefers an active row, falling back to any
-		    -- chain member's type when none is active. Both properties are pinned:
-		    -- TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType (active wins) and
-		    -- TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory (fallback).
-		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id
+		    -- ⚠ THIS JOIN IS ON THE SNAPSHOT'S OWN ACCOUNT (a.id = bs.account_id), which #1569 T10.2
+		    -- changed from a.user_account_id = bs.user_account_id. The old form matched EVERY member
+		    -- of a chain, so a.type had to be chosen by an explicit preference — an ORDER BY term
+		    -- reading (a.status = 'active') DESC NULLS LAST, a.id — and that preference had already
+		    -- been wrong in both directions once (as a filtered join it dropped an expired-only
+		    -- chain's history; with no preference at all it attributed a balance to a replaced
+		    -- member's type). A snapshot knows which account it came from. Reading the type from that
+		    -- account is what personal scope always did, needs no preference, and makes both pinned
+		    -- properties hold by construction rather than by tie-break:
+		    -- TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType (the snapshot is
+		    -- the active member's, so its type is the active member's) and
+		    -- TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory (an
+		    -- expired account still has a row, so a.type is not NULL and the type filter still
+		    -- matches). LEFT, because bs.account_id is nullable (ON DELETE SET NULL) and an orphaned
+		    -- snapshot must still reach the total, in the '' type bucket, exactly as in personal scope.
+		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    -- The caller's requested window, at date resolution because that is what it is: a
 		    -- range of calendar days the chart covers.
 		    WHERE (bs.snapshot_at AT TIME ZONE 'UTC')::date >= $4::date
@@ -470,30 +507,53 @@ func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context
 		      -- TestHouseholdShareRange_RevocationDayKeepsOnlyPreRevocationInstants.
 		      AND bs.snapshot_at >= ha.share_started_at
 		      AND (ha.share_ended_at IS NULL OR bs.snapshot_at < ha.share_ended_at)
-		    ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.user_account_id,
+		    ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.user_account_id, bs.account_id,
 		             ha.share_started_at DESC, ha.share_row_id,
-		             bs.snapshot_at DESC, bs.id DESC,
-		             (a.status = 'active') DESC NULLS LAST, a.id
+		             bs.snapshot_at DESC, bs.id DESC
 		),
-		latest_per_account_per_day AS (
-		    -- Stage 2, unchanged in intent: resolve joint-account fingerprint collisions PER DAY, the
-		    -- freshest-synced copy winning. Its input is already one row per (day, user_account), so
-		    -- the snapshot-recency ordering picks the same winner it always did; the trailing
-		    -- user_account_id keeps a full tie deterministic rather than arbitrary.
+		fingerprint_winner AS (
+		    -- Stage 2: resolve joint-account fingerprint collisions PER DAY — the same physical
+		    -- account linked and shared by TWO members must be counted ONCE, and it is the
+		    -- freshest-synced member's copy that wins, chosen independently each day so a member who
+		    -- only started syncing mid-range does not erase the other's earlier history.
+		    --
+		    -- ⚠ IT PICKS A WINNING user_account, NOT A WINNING ROW. Picking a row is what the
+		    -- pre-#1569-T10.2 version did, and with two maskless accounts behind one user_account it
+		    -- discarded the other one. The winner's ENTIRE set of accounts survives stage 3.
 		    SELECT DISTINCT ON (snapshot_date, fingerprint)
-		        snapshot_date,
-		        current_balance,
-		        account_type
+		        snapshot_date, fingerprint, user_account_id
 		    FROM per_account_per_day
 		    ORDER BY snapshot_date, fingerprint, snapshot_at DESC, snapshot_id DESC, user_account_id
+		),
+		kept AS (
+		    SELECT p.*
+		    FROM per_account_per_day p
+		    JOIN fingerprint_winner w
+		      ON w.snapshot_date = p.snapshot_date
+		     AND w.fingerprint = p.fingerprint
+		     AND w.user_account_id = p.user_account_id
+		),
+		live_all AS (
+		    SELECT k.snapshot_date, a.id AS account_id, a.user_id AS owner_id,
+		           a.user_account_id, a.linked_item_id
+		    FROM kept k
+		    JOIN accounts a ON a.id = k.account_id
+		),` + accountChainSupersessionCTESQL("TRUE") + `
+		SELECT k.snapshot_date,
+		       COALESCE(k.account_type, '') AS account_type,
+		       SUM(k.current_balance) AS type_balance
+		FROM kept k
+		-- Stage 3: a genuine re-link chain, whose two members are two ACCOUNTS behind one
+		-- user_account and would otherwise both be summed on the overlap day. Same recorded-
+		-- succession rule the personal reads apply; see accountChainSupersessionCTE.
+		WHERE NOT EXISTS (
+		    SELECT 1 FROM superseded x
+		    WHERE x.snapshot_date = k.snapshot_date
+		      AND x.account_id = k.account_id
 		)
-		SELECT snapshot_date,
-		       COALESCE(account_type, '') AS account_type,
-		       SUM(current_balance) AS type_balance
-		FROM latest_per_account_per_day
 		%s
-		GROUP BY snapshot_date, account_type
-		ORDER BY snapshot_date ASC, account_type ASC
+		GROUP BY k.snapshot_date, k.account_type
+		ORDER BY k.snapshot_date ASC, account_type ASC
 	`
 
 	args := householdScopeArgs(requestingUserID, scope)
@@ -502,7 +562,7 @@ func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context
 	var query string
 	if len(accountTypes) > 0 {
 		args = append(args, accountTypes)
-		query = fmt.Sprintf(queryBase, householdAccountsCTEForBalancesPerDay(), "WHERE account_type = ANY($6)")
+		query = fmt.Sprintf(queryBase, householdAccountsCTEForBalancesPerDay(), "AND k.account_type = ANY($6)")
 	} else {
 		query = fmt.Sprintf(queryBase, householdAccountsCTEForBalancesPerDay(), "")
 	}

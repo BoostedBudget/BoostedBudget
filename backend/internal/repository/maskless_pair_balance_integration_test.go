@@ -201,3 +201,103 @@ func TestMasklessPair_RelinkChainStillCollapses(t *testing.T) {
 	}
 	assert.InDelta(t, 800.0, byDay[at.Format("2006-01-02")], 0.01, "same, for the history chart")
 }
+
+// ─── Adversarial: the two rulings the household fix could have broken ─────────────────────────
+//
+// This branch has a recorded case of a household query rewrite turning a joint account's $60 into
+// $0, which four pre-existing tests did not notice. The two tests below are written against THIS
+// rewrite specifically, in the two directions it could fail: too little (a joint account erased or
+// halved) and too much (a joint account or a re-link chain counted twice).
+
+// TestMasklessPair_HouseholdJointAccountStillCountsOnce is the $60 ruling, asserted on BOTH
+// household reads at once.
+//
+// A joint account is ONE physical account that TWO members each linked, so each has their own
+// user_account with the SAME physical fingerprint, and each syncs their own snapshots. The
+// household must see $60, not $120 and not $0. The T10.2 rewrite moved the inner grain to the
+// account and the fingerprint resolution to "pick a winning user_account", and picking the wrong
+// thing at either step produces exactly one of those two wrong answers.
+func TestMasklessPair_HouseholdJointAccountStillCountsOnce(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ownerAcct := setupHouseholdMemberAccount(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	now := time.Now().UTC()
+	fingerprint := "joint-fp-" + ownerAcct.UserAccountID
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+
+	// Both copies of the SAME physical account, on the same day, at the same value.
+	at := now.Add(-4 * time.Hour)
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 60, at)
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 60, at.Add(time.Hour))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+
+	snaps, err := repo.GetSnapshotsAsOfForHousehold(ctx, owner, scope, now)
+	require.NoError(t, err)
+	assert.InDelta(t, 60.0, sumSnapshots(snaps), 0.01,
+		"120 means the fingerprint dedup stopped resolving joint copies; 0 means the account-grain "+
+			"rewrite lost the row entirely")
+
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, at.Add(-24*time.Hour), now, nil)
+	require.NoError(t, err)
+	byDay := map[string]float64{}
+	for _, p := range points {
+		byDay[p.Date.Format("2006-01-02")] = p.TotalBalance
+	}
+	day := at.Format("2006-01-02")
+	require.Contains(t, byDay, day, "the joint account's day must be present at all — 0 is the "+
+		"failure mode a previous household rewrite on this branch actually shipped")
+	assert.InDelta(t, 60.0, byDay[day], 0.01, "one physical account, one contribution")
+}
+
+// TestMasklessPair_HouseholdRelinkChainStillCollapses is the too-much direction inside household
+// scope: the account-grain rewrite must not turn a re-link overlap day into a doubled total.
+func TestMasklessPair_HouseholdRelinkChainStillCollapses(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+
+	ua := insertTestUserAccount(t, pool, member)
+	oldItem := insertTestLinkedItem(t, pool, member)
+	newItem := insertTestLinkedItem(t, pool, member)
+	oldAcct := insertTestAccountNamed(t, pool, oldItem, member, ua, "Old Checking", "depository")
+	newAcct := insertTestAccountNamed(t, pool, newItem, member, ua, "New Checking", "depository")
+	_, err := pool.Exec(ctx, `UPDATE linked_items SET replaced_by_id = $1 WHERE id = $2`, newItem, oldItem)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE accounts SET status = 'replaced', replaced_at = now() WHERE id = $1`, oldAcct)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	insertHouseholdShare(t, pool, hh, ua, nil, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+
+	at := now.Add(-6 * time.Hour)
+	insertBalanceSnapshot(t, pool, member, oldAcct, ua, 800, at)
+	insertBalanceSnapshot(t, pool, member, newAcct, ua, 800, at.Add(time.Hour))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+
+	snaps, err := repo.GetSnapshotsAsOfForHousehold(ctx, owner, scope, now)
+	require.NoError(t, err)
+	assert.InDelta(t, 800.0, sumSnapshots(snaps), 0.01, "1600 is the overlap double-count")
+
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, at.Add(-24*time.Hour), now, nil)
+	require.NoError(t, err)
+	byDay := map[string]float64{}
+	for _, p := range points {
+		byDay[p.Date.Format("2006-01-02")] = p.TotalBalance
+	}
+	assert.InDelta(t, 800.0, byDay[at.Format("2006-01-02")], 0.01,
+		"the household chart must collapse a recorded re-link the same way personal scope does")
+}
