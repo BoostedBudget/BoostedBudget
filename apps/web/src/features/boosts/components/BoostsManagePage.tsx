@@ -353,10 +353,11 @@ export function BoostsManagePage({ showTypeSegment = false, boostTypeFilter }: B
         )}
       </div>
 
-      {/* Delete Confirmation Dialog — Issue #960 */}
       <BoostAutomationHistoryPanel />
 
       {/*
+        Delete Confirmation Dialog — Issue #960.
+
         Issue #1569: `boostsRepository.Delete` tombstones the boost (`deleted_at = NOW()`) and
         touches no execution row, so the runs are kept. This dialog used to be silent about that.
         It can now name where they are read, because BoostAutomationHistoryPanel — rendered just

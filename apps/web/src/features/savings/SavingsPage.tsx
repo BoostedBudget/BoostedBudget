@@ -170,7 +170,8 @@ export function SavingsPage() {
         {/*
           #1569 whole-branch review, C2. This branch is exactly where the disclosure matters most:
           the user who just deleted their LAST goal was told, in the confirm dialog, that every
-          contribution is kept and that they can erase the goal for good later from "Deleted
+          contribution still logged against it is kept and that they can erase the goal for good
+          later from "Deleted
           goals". Returning the empty state before <DeletedGoalsPanel> made both halves of that
           promise false for them, and left POST /savings-goals/{id}/purge with no reachable
           caller. The panel self-hides on an empty listing, so a genuine first-run page is
@@ -257,10 +258,20 @@ export function SavingsPage() {
         }}
         onConfirm={() => void handleConfirmDelete()}
         title="Delete savings goal"
+        /*
+          #1569 T8.5: this used to read "Nothing is thrown away — every contribution you logged is
+          kept", which is FALSE for any user who has already deleted an individual contribution.
+          DELETE /savings-goals/{goalID}/contributions/{id} HARD-deletes the row
+          (savings_contribution_repository.DeleteContribution) and is the sanctioned
+          explicit-destruction exception, reachable from GoalContributionsSheet. The claim is now
+          scoped to what THIS action does, matching DeletedGoalsPanel's already-correct "on its own"
+          wording. Pinned by a NEGATIVE assertion in SavingsPage.test.tsx — the unscoped sentence
+          must not come back.
+        */
         description={
           deletingGoal
-            ? <>Remove &ldquo;<span data-ph-mask>{deletingGoal.name}</span>&rdquo; from your goals? Nothing is thrown away — every contribution you logged is kept, and you can erase the goal for good later from &ldquo;Deleted goals&rdquo;.</>
-            : 'Remove this goal from your list? Nothing is thrown away.'
+            ? <>Remove &ldquo;<span data-ph-mask>{deletingGoal.name}</span>&rdquo; from your goals? Deleting the goal doesn&apos;t throw anything away on its own — every contribution still logged against it is kept, and you can erase the goal for good later from &ldquo;Deleted goals&rdquo;.</>
+            : 'Remove this goal from your list? Deleting the goal doesn\'t throw anything away on its own.'
         }
         variant="destructive"
         confirmButtonText="Delete"

@@ -154,12 +154,18 @@ export function AccountTable({
               about the ACCOUNT, not about a (non-existent) figure, and because a third line would
               not fit a 160px numeric column.
             */}
+            {/*
+              ⚠ #1569 T8.5: the tooltip must stay true for all three `removed` causes
+              (user_disconnect / provider_absent / link_removed) plus `replaced` and `expired`.
+              accounts.removed_reason is not on the wire, so telling the user THEY disconnected it
+              was wrong for two of the five states. Keep this copy in step with AccountCard.tsx.
+            */}
             {isInactive(row) && (
               <Badge
                 variant="secondary"
                 size="sm"
                 className="ml-2"
-                title="This account was disconnected and is no longer active; its history is retained"
+                title="This account is no longer active — it may have been disconnected, replaced by a re-link, or stopped being reported by your bank. Its history is retained."
               >
                 <Archive className="h-2.5 w-2.5" aria-hidden="true" />
                 {closedOn ? `Closed ${formatHistoryLabel(closedOn, 'MMM d, yyyy')}` : 'Closed'}

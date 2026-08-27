@@ -504,9 +504,17 @@ test.describe('Savings Page - Delete Flow', () => {
     // #1569 T12: the copy changed and had to. Deleting a goal RETAINS it and every
     // contribution logged against it (task 8), so "This cannot be undone" was false — and it was
     // the reason no user would ever go looking for the Deleted goals section that reclaims them.
+    // #1569 T8.5: the unscoped "Nothing is thrown away — every contribution you logged is kept"
+    // was FALSE once the user had explicitly deleted an individual contribution, which HARD-deletes
+    // it (savings_contribution_repository.DeleteContribution). The claim is now scoped to what
+    // deleting the GOAL does. The NEGATIVE assertions below are the load-bearing half: a positive
+    // check alone would stay green if the false unscoped sentence were restored.
     await expect(dialog).toContainText(/remove/i)
-    await expect(dialog).toContainText(/nothing is thrown away/i)
+    await expect(dialog).toContainText(/on its own/i)
     await expect(dialog).toContainText('Vacation Fund')
+    const dialogText = (await dialog.textContent()) ?? ''
+    expect(dialogText).not.toMatch(/nothing is thrown away/i)
+    expect(dialogText).not.toMatch(/every contribution you logged is kept/i)
   })
 
   test('confirming delete removes goal from grid', async ({ page }) => {

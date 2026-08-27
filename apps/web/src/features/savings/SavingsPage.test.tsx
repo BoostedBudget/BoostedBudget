@@ -264,6 +264,15 @@ describe('SavingsPage', () => {
       expect(screen.getByRole('button', { name: /new goal/i })).toBeDefined()
     })
 
+    // #1569 T8.5 folded the copy assertions in here rather than adding an `it` of their own: every
+    // test in this file re-stubs mockUseGetSavingsGoals, and each such stub costs one entry in the
+    // typecheck-tests ratchet, which must not move for a copy fix.
+    //
+    // The POSITIVE half alone would be worthless: the previous, FALSE copy ("Nothing is thrown
+    // away — every contribution you logged is kept") also contained "kept" and "Deleted goals", so
+    // a reviewer could restore it with a positive-only test still green. The NEGATIVE assertions
+    // are the load-bearing half. They are false because an explicitly deleted contribution is HARD
+    // deleted (savings_contribution_repository.DeleteContribution).
     it('opens delete confirmation dialog when Delete is clicked on a goal card', async () => {
       const user = userEvent.setup()
       mockUseGetSavingsGoals.mockReturnValue({
@@ -277,6 +286,11 @@ describe('SavingsPage', () => {
       await user.click(deleteButton)
       expect(screen.getByRole('alertdialog')).toBeDefined()
       expect(screen.getByText(/delete savings goal/i)).toBeDefined()
+
+      const text = screen.getByRole('alertdialog').textContent ?? ''
+      expect(text).toMatch(/on its own/i)
+      expect(text).not.toMatch(/nothing is thrown away/i)
+      expect(text).not.toMatch(/every contribution you logged is kept/i)
     })
 
     it('cancel on delete dialog closes it without calling deleteGoal', async () => {
