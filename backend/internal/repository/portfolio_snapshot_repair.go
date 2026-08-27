@@ -89,22 +89,16 @@ WITH candidate AS (
 -- The accounts recorded as live on each candidate day. Same predicate Upsert applies, rendered
 -- from the same string (account_liveness_sql.go) — a rebuild that disagreed with Upsert about
 -- which accounts belong to a day would reintroduce task 10's Critical 1 from the other side.
--- ⚠ ONE ROW PER (day, RE-LINK CHAIN), not per physical account — #1569 T9.1 item A. The capture
+-- ⚠ A SUPERSEDED PREDECESSOR IS NOT COUNTED BESIDE ITS SUCCESSOR — #1569 T9.1 item A. The capture
 -- applies the same liveness test, so on a changeover day it writes holding_snapshots for BOTH
--- members of a chain; each row is a correct observation of a real account and summing the two
--- doubles one logical portfolio. accountChainWinnerOrderSQL states the rule and why the
--- has-an-observation leg comes first; here the observation is "rows exist for THIS day", so a
--- sibling the capture never reached on a given day cannot win that day and drag it into
--- refused_no_coverage. Deduping HERE and not further down is deliberate: expected, observed and
--- rebuilt all read the live CTE, so the coverage verdict counts the same universe the reconstruction
--- sums, and a chain can never be reported as two-thirds-covered.
-live AS (
-    SELECT DISTINCT ON (c.snapshot_date, $CHAINKEY) c.snapshot_date, a.id AS account_id
-    FROM candidate c
-    JOIN accounts a ON a.user_id = c.user_id
-    WHERE $LIVENESS
-    ORDER BY c.snapshot_date, $CHAINKEY, $CHAINWINNER
-),
+-- members of a re-link chain; each row is a correct observation of a real account, and summing the
+-- two doubles one logical portfolio. accountChainLiveCTE states the rule and, importantly, why it
+-- is NOT "one row per user_account_id" — two maskless accounts at one institution really do share a
+-- chain key, and collapsing them halves a portfolio. Here the has-an-observation test is "rows
+-- exist for THIS day", so a sibling the capture never reached on a given day cannot suppress the
+-- one it did. Excluding HERE and not further down is deliberate: expected, observed and rebuilt all
+-- read the live CTE, so the coverage verdict counts the same universe the reconstruction sums.
+$CHAINLIVE,
 -- The accounts a complete day WOULD have a record for: live, and known to bear holdings. The
 -- evidence is either a history row on ANY day or a current holdings row. Current holdings decide
 -- membership of this set ONLY — no value is ever read from them.
@@ -266,15 +260,17 @@ SELECT outcome, count(*)::int FROM final GROUP BY outcome
 func (r *portfolioSnapshotRepository) RepairUserFromHistory(ctx context.Context, userID string) (domain.PortfolioRepairSummary, error) {
 	var summary domain.PortfolioRepairSummary
 
-	// $LIVENESS, $CHAINKEY and $CHAINWINNER are substituted from the shared rules in
-	// account_liveness_sql.go — the same strings Upsert and the holdings capture render. Every
-	// operand is a compile-time constant; no user input reaches this substitution.
+	// $CHAINLIVE is substituted from the shared rule in account_liveness_sql.go, which renders the
+	// same liveness predicate Upsert and the holdings capture use. Every operand is a compile-time
+	// constant; no user input reaches this substitution.
 	query := strings.NewReplacer(
-		"$LIVENESS", accountLiveOnDateSQL("a.id", "c.snapshot_date"),
-		"$CHAINKEY", accountChainKeyExpr,
-		"$CHAINWINNER", accountChainWinnerOrderSQL(
-			`EXISTS (SELECT 1 FROM holding_snapshots hw WHERE hw.account_id = a.id`+
-				` AND hw.as_of_date = c.snapshot_date AND hw.user_id = $1::uuid)`),
+		"$CHAINLIVE", accountChainLiveCTESQL(
+			"c.snapshot_date",
+			"candidate c JOIN accounts a ON a.user_id = c.user_id",
+			"TRUE",
+			"c.snapshot_date",
+			`EXISTS (SELECT 1 FROM holding_snapshots hw WHERE hw.account_id = s.account_id`+
+				` AND hw.as_of_date = s.snapshot_date AND hw.user_id = $1::uuid)`),
 	).Replace(repairSelectSQL)
 
 	rows, err := r.db.Query(ctx, query, userID)
