@@ -2,8 +2,11 @@
  * DeletedGoalsPanel — Issue #1569 Task 12, gap 2.
  *
  * Deleting a savings goal no longer destroys anything (Task 8): the goal is tombstoned and every
- * contribution logged against it — including amounts the user typed in by hand, which no provider
- * can supply again — is retained. Two things followed from that and neither had a UI:
+ * contribution STILL logged against it — including amounts the user typed in by hand, which no
+ * provider can supply again — is retained. "Still logged" is the whole qualifier: DELETE
+ * /savings-goals/{goalID}/contributions/{id} is a hard delete, so a contribution the user
+ * explicitly deleted earlier was destroyed then and no tombstone brings it back. Two things
+ * followed from that and neither had a UI:
  *
  *   1. The user is never told their data was kept, so from where they sit the retention may as
  *      well not exist.
@@ -213,8 +216,9 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
           )}
           <p className="px-1 text-xs text-muted-foreground">
             Deleting a goal doesn&apos;t throw anything away on its own &mdash; every contribution
-            you logged is still saved here, so you can look back at what you put aside. Open a goal
-            to see them. Two things do erase it for good: the button below, and permanently
+            still logged against it is kept here, so you can look back at what you put aside. Open a
+            goal to see them. A contribution you deleted yourself was erased at that point and is
+            not here. Two things do erase the rest for good: the button below, and permanently
             deleting the account the goal was tracking.
           </p>
           {/*

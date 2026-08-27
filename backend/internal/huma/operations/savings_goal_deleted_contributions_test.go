@@ -3,7 +3,9 @@ package operations
 // savings_goal_deleted_contributions_test.go — Issue #1569 T2.
 //
 // GET /api/v1/savings-goals/deleted/{goalID}/contributions is the read that makes the DELETE
-// endpoint's promise ("every contribution logged against the goal is retained") observable. It is a
+// endpoint's promise ("every contribution still logged against the goal is retained") observable —
+// still logged, because deleting one contribution explicitly is a hard delete and no goal
+// tombstone brings it back. It is a
 // SEPARATE, explicitly opted-into route rather than a widening of
 // GET /savings-goals/{goalID}/contributions: the client asks for a deleted goal's ledger only from
 // the deleted-goals surface, and no live path can accidentally serve a tombstoned goal.

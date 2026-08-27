@@ -101,7 +101,7 @@ type ListDeletedGoalContributionsInput struct {
 // derive it from: savings_goals.current_amount is frozen at whatever the last recompute wrote, and
 // no live read will ever touch a tombstoned goal again.
 type DeletedGoalContributionsBody struct {
-	Contributions  []*domain.SavingsGoalContribution `json:"contributions" doc:"Every contribution logged against the deleted goal, newest first"`
+	Contributions  []*domain.SavingsGoalContribution `json:"contributions" doc:"Every contribution still logged against the deleted goal, newest first. One the user explicitly deleted earlier was destroyed at that point and is not here"`
 	TotalConfirmed float64                           `json:"total_confirmed" doc:"Sum of the confirmed contributions; proposed and rejected rows are excluded"`
 }
 
@@ -252,7 +252,8 @@ func (h *ContributionHandler) ListContributions(ctx context.Context, input *List
 // ListDeletedGoalContributions handles
 // GET /api/v1/savings-goals/deleted/{goalID}/contributions (Issue #1569 T2).
 //
-// The DELETE endpoint promises that "every contribution logged against the goal is retained".
+// The DELETE endpoint promises that "every contribution still logged against the goal is
+// retained" — still logged, because deleting one contribution explicitly is a hard delete.
 // This is the read that makes that promise checkable: without it the rows survive in the table and
 // are visible to nobody, which is the "retention that reads as deletion" failure #1569 is named
 // for — and it lands on hand-logged amounts no provider can ever supply again.
@@ -401,8 +402,10 @@ func RegisterContributionRoutes(api huma.API, handler *ContributionHandler) {
 		Summary:     "List a deleted savings goal's retained contributions",
 		Description: "Returns the contributions retained under a goal the user has DELETED, newest first, " +
 			"with their confirmed total (Issue #1569). Deleting a goal tombstones it and keeps every " +
-			"contribution logged against it — including amounts the user entered by hand, which no " +
-			"provider can supply again — and this is the only endpoint that can read them back; the live " +
+			"contribution STILL logged against it — including amounts the user entered by hand, which no " +
+			"provider can supply again. A contribution the user explicitly deleted earlier via DELETE " +
+			"/savings-goals/{goalID}/contributions/{id} was destroyed then and is not listed here. This " +
+			"is the only endpoint that can read the retained ones back; the live " +
 			"GET /savings-goals/{goalID}/contributions deliberately returns nothing for a deleted goal. " +
 			"Returns an empty list for a goal that is not deleted. Pair it with " +
 			"GET /savings-goals/deleted, and with POST /savings-goals/{id}/purge to destroy them for good.",
