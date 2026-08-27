@@ -41,9 +41,13 @@ export const mockUseGetActiveSavingsGoals = mock(() => ({
 
 // #1569 Task 12: deleted-goals listing + purge.
 export const mockDeletedSavingsGoalsRefetch = mock(() => Promise.resolve(null as any))
+// `isError` present-and-false for the same reason as mockUseGetAccounts above: DeletedGoalsPanel
+// reads it (it is what disarms purge on a degraded listing), and a factory that omits the key
+// makes that arm unreachable AND untypable in every test.
 export const mockUseGetDeletedSavingsGoals = mock(() => ({
   data: undefined,
   isLoading: false,
+  isError: false,
   error: null,
   refetch: mockDeletedSavingsGoalsRefetch,
 }))
