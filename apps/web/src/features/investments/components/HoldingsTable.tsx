@@ -1,4 +1,4 @@
-import { useId, useState, useMemo } from 'react'
+import { useId, useState, useMemo, useEffect } from 'react'
 import {
   useGetHoldings,
   useGetAccountHoldingsHistory,
@@ -281,6 +281,13 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
     return scoped ? getAccountClosedDate(scoped) : undefined
   }, [isScoped, accounts, accountId])
 
+  // A fixed discriminator for the view event — never free text, never an amount. Same treatment
+  // as ClosedAccountBalanceHistory's accountType on the sibling surface.
+  const scopedAccountType = useMemo(() => {
+    if (!isScoped || !accounts) return undefined
+    return accounts.find((a) => a.id === accountId)?.type
+  }, [isScoped, accounts, accountId])
+
   const activeColumnIds = isScoped ? ACCOUNT_HOLDINGS_COLUMN_IDS : PORTFOLIO_HOLDINGS_COLUMN_IDS
   const tablePrefsKey = isScoped ? 'account-holdings' : 'portfolio-holdings'
 
@@ -362,7 +369,13 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
   // The disconnected notice REPLACES the empty state, never the rows. If a position is somehow
   // present for a terminal account, showing it beats claiming there is nothing.
   if (scopedAccountIsDisconnected && sortedHoldings.length === 0 && accountId) {
-    return <ClosedAccountHoldingsHistory accountId={accountId} closedOn={scopedAccountClosedOn} />
+    return (
+      <ClosedAccountHoldingsHistory
+        accountId={accountId}
+        accountType={scopedAccountType}
+        closedOn={scopedAccountClosedOn}
+      />
+    )
   }
 
   return (
@@ -413,9 +426,12 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
  */
 function ClosedAccountHoldingsHistory({
   accountId,
+  accountType,
   closedOn,
 }: {
   accountId: string
+  /** A fixed discriminator on the analytics event — never free text, never an amount. */
+  accountType?: string
   closedOn?: string
 }) {
   const trackEvent = useTrackEvent()
@@ -445,6 +461,26 @@ function ClosedAccountHoldingsHistory({
 
   const availableDates = data?.available_dates ?? []
   const shownDate = data?.as_of_date
+
+  // THE VIEW MEASUREMENT (#1569 T7.8): did anyone actually go and look at the money we kept?
+  // Fired once the read resolves, whether or not anything was retained — "the user opened it and
+  // we had nothing" is the more interesting half of that question, not a case to drop. The
+  // date-changed event below cannot answer it: the picker only renders above one available day.
+  //
+  // ⚠ COUNTS ONLY. No amount, no security name, no date — event properties are not covered by
+  // session-replay masking, and a security name is portfolio composition.
+  const resolved = !isLoading && !isError
+  useEffect(() => {
+    if (!resolved) return
+    trackEvent(ANALYTICS_EVENTS.ACCOUNT_HOLDINGS_HISTORY_VIEWED, {
+      account_type: accountType,
+      retained_days: availableDates.length,
+      positions_shown: positions.length,
+    })
+    // trackEvent is stable (useCallback with empty deps in useTrackEvent); the effect is keyed on
+    // the account and the resolution, not on the arrays, so re-sorting does not re-fire it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolved, accountId])
 
   if (isLoading) {
     return (
@@ -540,8 +576,20 @@ function ClosedAccountHoldingsHistory({
         onFiltersChange={noopFiltersChange}
         maskedColumnIds={MASKED_COLUMN_IDS}
         emptyState={
+          /*
+            #1569 T7.8 — the fully liquidated day. Reaching this state means the day IS in
+            available_dates (it is retained) and every one of its rows is marked absent: the
+            account was observed holding nothing. The old copy ("No positions were recorded for
+            this day") denied a day we recorded, which is the same false claim about retained data
+            this whole surface exists to stop making. A day we kept nothing for never gets here —
+            the server 404s it — so this can say what is actually true.
+
+            ⚠ It says WHAT, not WHY, per the same R6B/C2 rule as the no-history copy above: the
+            rows record that the positions stopped being held, not whether they were sold,
+            transferred out, or dropped by the provider. Naming a cause would invent one.
+          */
           <p className="text-sm text-muted-foreground p-4">
-            No positions were recorded for this day.
+            This account held no positions on this day — we recorded the day, and it was empty.
           </p>
         }
         columnSizing={sizing}
