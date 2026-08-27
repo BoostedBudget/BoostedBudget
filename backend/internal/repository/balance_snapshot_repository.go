@@ -355,8 +355,16 @@ func (r *balanceSnapshotRepository) GetSnapshotsAsOfForUser(ctx context.Context,
 // GetSnapshotsAsOfForHousehold retrieves the latest snapshot at or before asOf for every
 // account shared into the household, across all members. Joint accounts (same physical
 // fingerprint shared by two members) dedup via householdAccountsCTEForBalancesAsOf, which picks
-// the freshest-synced copy — then DISTINCT ON here also collapses that chosen
-// user_account_id to its single latest-as-of-asOf snapshot. Issue #1369 — Phase 5.
+// the freshest-synced copy. Issue #1369 — Phase 5.
+//
+// ⚠ IT RETURNS ONE ROW PER PHYSICAL ACCOUNT, NOT ONE PER user_account. This sentence used to say
+// the DISTINCT ON "also collapses that chosen user_account_id to its single latest snapshot", and
+// #1569 T10.2 changed exactly that (see snapshotIdentityKey) because collapsing to the
+// user_account deletes one of two maskless siblings. It is corrected rather than deleted because
+// callers were written against the old wording: dashboard_service.go had two loops that classified
+// a snapshot by looking its CHAIN key up in an account map, which is only sound when a chain
+// yields one row, and the household net-worth baseline was still doing it a round later
+// (#1569 T10-FIX item 3 — a credit card counted as a depository asset).
 func (r *balanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
 
@@ -427,16 +435,22 @@ func (r *balanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Con
 // the DISTINCT ON candidate set — filtering candidates first could let a stale copy whose type
 // happens to match beat the freshest copy for a day.
 //
-// Pre-existing, unchanged-by-this-fix assumption: current_balance always comes from the
-// selected balance_snapshots row directly (never wrong), but account_type comes from
-// whichever `accounts` row the LEFT JOIN matches by user_account_id — not specifically
-// bs.account_id. The ORDER BY prefers the ACTIVE chain member's type and falls back to any
-// member's type when the whole chain has been expired or replaced; the choice is only
-// ambiguous if two 'active' accounts rows ever shared one user_account_id, which the Plaid
-// re-link handler guarantees never happens (no DB constraint enforces it — see migration
-// 000033). The trailing `a.id` ORDER BY tiebreak keeps that (should-be-impossible) case
-// deterministic rather than fanning out and double-summing balances, as the pre-#1378
-// query did.
+// ⚠ THE PARAGRAPH THAT WAS HERE DESCRIBED A JOIN THIS QUERY NO LONGER HAS, and it is replaced
+// rather than trimmed because its reasoning is the reasoning that has to stop. It said
+// account_type comes from "whichever accounts row the LEFT JOIN matches by user_account_id", with
+// an ORDER BY preferring the ACTIVE chain member and an a.id tiebreak for the case where two
+// active rows share a user_account_id — a case it called should-be-impossible on the strength of
+// the re-link handler. It is not impossible: migration 000100 FORCES two maskless accounts at one
+// institution onto one user_accounts row, so the "tiebreak" was routinely deciding which of two
+// real accounts a balance was attributed to.
+//
+// #1569 T10.2 replaced it with `a.id = bs.account_id`. A snapshot knows which account it came
+// from; reading the type from that account needs no preference and is what personal scope always
+// did. current_balance likewise always comes from the selected balance_snapshots row.
+//
+// Pinned by TestGetAggregatedHistoryForHousehold_RelinkChain_ASnapshotKeepsItsOwnAccountsType,
+// which is the one that actually separates the two joins — see its comment for why the test that
+// preceded it did not (#1569 T10-FIX item 6).
 func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
 
