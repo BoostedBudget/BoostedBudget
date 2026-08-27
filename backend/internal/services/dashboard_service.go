@@ -158,13 +158,13 @@ func baselineBalanceForComparison(
 ) float64 {
 	var total float64
 	seenAccounts := make(map[string]bool)
-	superseded := supersededChainMembers(snapshots, activeAccounts, historicalAccounts)
+	superseded := supersededSnapshotIDs(snapshots, activeAccounts, historicalAccounts)
 	for _, snapshot := range snapshots {
 		account, exists := snapshotAccount(snapshot, activeAccounts, historicalAccounts)
 		if !exists {
 			continue
 		}
-		if dedupChains && superseded[account.ID] {
+		if dedupChains && superseded[snapshot.ID] {
 			continue
 		}
 		// Dedup AFTER resolution, on the resolved account's OWN id.
@@ -220,13 +220,24 @@ func accountTypeMatchesFilter(accountType string, accountTypes []string) bool {
 	return false
 }
 
-// hasSnapshotOutsideAccountMap reports whether any snapshot's chain key is absent from accountMap.
-// It gates the extra all-statuses account read behind the only case that needs it: a chain with no
-// active member left. A chain that was merely re-linked still resolves through the chain-aware map's
-// user_account_id key, so the common path keeps its single account query and its single round trip.
+// hasSnapshotOutsideAccountMap reports whether any snapshot's OWN accounts row is absent from
+// accountMap. It gates the extra all-statuses account read behind the cases that need it.
+//
+// ⚠ #1569 T10-FIX WIDENED THIS FROM THE CHAIN KEY TO THE OWN ROW, and the difference is a maskless
+// pair. Asking about the chain key answered "present" for a CLOSED sibling purely because its LIVE
+// twin occupies that key — so the as-of read never ran, the closed sibling never entered the
+// baseline universe, and the baseline lost its contribution while the current total kept it under
+// the twin. Both legs then agreed on a number neither of them should have produced. Asking about
+// the snapshot's own row asks the question the caller actually has: can this snapshot be resolved
+// to the account it was written for?
+//
+// The cost is one extra account query for a re-linked chain, whose predecessor row is likewise not
+// in the active-only map. That is the correct trade: the predecessor's TYPE is what the baseline's
+// AccountTypes filter is applied to, and inferring it from the successor is the same guess this
+// whole family of defects is made of.
 func hasSnapshotOutsideAccountMap(snapshots []domain.BalanceSnapshot, accountMap map[string]domain.Account) bool {
 	for _, snapshot := range snapshots {
-		if _, exists := accountMap[snapshotChainKey(snapshot)]; !exists {
+		if _, exists := snapshotOwnAccount(snapshot, accountMap); !exists {
 			return true
 		}
 	}
@@ -330,8 +341,14 @@ func chainRepresentativeBeats(candidate, incumbent domain.Account) bool {
 	return candidate.ID < incumbent.ID
 }
 
-// supersededChainMembers returns the ids of accounts that must NOT contribute to a total because a
-// LIVE member of the same re-link chain is contributing instead.
+// supersededSnapshotIDs returns the ids of SNAPSHOTS that must NOT contribute to a total because
+// the money they carry is already on the books under a live account.
+//
+// ⚠ IT IS KEYED BY SNAPSHOT, NOT BY ACCOUNT, and that is not cosmetic. Both rules below concern a
+// snapshot that snapshotAccount resolves to an account OTHER than the one it was written for, so an
+// account-keyed answer named the wrong row — the successor — and the callers, which skipped on the
+// RESOLVED account's id, would have dropped the successor's own snapshot along with it or (as
+// shipped) dropped neither.
 //
 // ⚠ WHY A SECOND RULE EXISTS AT ALL, when the repository already applies the succession one. They
 // answer different questions with different evidence, and neither subsumes the other:
@@ -351,29 +368,60 @@ func chainRepresentativeBeats(candidate, incumbent domain.Account) bool {
 // count. That is the whole distinction the task turns on, expressed in the one piece of evidence
 // available at this layer.
 //
-// ⚠ KNOWN RESIDUAL, stated rather than left to be found. A maskless pair one of whose members has
-// since been disconnected loses that member's BASELINE contribution here, because the rule cannot
-// tell "retired predecessor" from "sibling the user disconnected". The pre-#1569 chain-key seen-set
-// dropped one of the two unconditionally, so this is strictly narrower than what it replaced — but
-// it is not nothing, and the honest fix is a recorded succession pointer, not a better guess.
-func supersededChainMembers(snapshots []domain.BalanceSnapshot, maps ...map[string]domain.Account) map[string]bool {
+// ⚠ #1569 T10-FIX narrowed the first rule from "not active" to "'replaced'", and added the second.
+// "Not active" was wrong in a way that MOVED MONEY: it treated a maskless sibling the user simply
+// CLOSED as a retired predecessor. Round 10 never observed it because snapshotAccount resolved that
+// closed sibling to its live twin before this function saw it, so the sibling never presented as
+// terminal here at all — and its balance was added a second time under the twin's id and TYPE
+// instead. 'replaced' is written by the re-link and the CreateBatch backstop and by nothing else;
+// 'removed'/'expired' mean closed, and a closed account is nobody's predecessor.
+//
+// THE SECOND RULE — the stand-in withdrawal — is what actually stops that double count, and it is
+// stated in terms of the SET rather than of a status because the closed sibling has no accounts row
+// in the CURRENT universe at all (GetByUserID is active-only), so there is no status to read. A
+// snapshot with no own row is stood in for by the chain's live member (#1109, so a re-linked chain
+// whose successor has not synced yet keeps reporting its last known balance); the stand-in is
+// withdrawn the moment that live member contributes a snapshot of its own, because then it is
+// already counted as itself. Pinned by
+// TestGetBalanceSummary_MasklessPair_ClosedSiblingIsNotCountedThroughTheLiveTwin (which measures
+// the total) and TestGetNetWorth_MasklessPair_ClosedCreditSiblingIsNotAnAsset (which measures the
+// type — a closed CREDIT sibling was being reported inside TotalAssets).
+//
+// ⚠ RESIDUAL. This is still per-instant evidence, not a recorded pointer. A closed sibling whose
+// live twin has NO snapshot in the same set is still stood in for, and is then counted under the
+// twin. That shape needs the twin to be silent at the very cutoff being read, and the honest fix
+// remains a recorded succession pointer rather than a better guess.
+func supersededSnapshotIDs(snapshots []domain.BalanceSnapshot, maps ...map[string]domain.Account) map[string]bool {
 	liveChains := map[string]bool{}
-	resolved := make([]domain.Account, 0, len(snapshots))
+	claimed := map[string]bool{}
+	owners := make(map[string]domain.Account, len(snapshots))
 	for _, snapshot := range snapshots {
-		account, exists := snapshotAccount(snapshot, maps...)
+		account, exists := snapshotOwnAccount(snapshot, maps...)
 		if !exists {
 			continue
 		}
-		resolved = append(resolved, account)
+		owners[snapshot.ID] = account
+		claimed[account.ID] = true
 		if account.Status == domain.AccountStatusActive && hasChainKey(account) {
 			liveChains[accountChainKey(account)] = true
 		}
 	}
 	out := map[string]bool{}
-	for _, account := range resolved {
-		if account.Status != domain.AccountStatusActive && hasChainKey(account) &&
-			liveChains[accountChainKey(account)] {
-			out[account.ID] = true
+	for _, snapshot := range snapshots {
+		own, hasOwn := owners[snapshot.ID]
+		if hasOwn {
+			if own.Status == domain.AccountStatusReplaced && hasChainKey(own) &&
+				liveChains[accountChainKey(own)] {
+				out[snapshot.ID] = true
+			}
+			continue
+		}
+		// No accounts row for this snapshot in this universe, so snapshotAccount stands the chain's
+		// live member in for it. That is only sound while the live member has no snapshot of its
+		// own here; when it does, it is already counted as itself and the stand-in would add a
+		// SECOND balance — and a second account's TYPE — under one identity.
+		if representative, ok := liveChainRepresentative(snapshot, maps...); ok && claimed[representative.ID] {
+			out[snapshot.ID] = true
 		}
 	}
 	return out
@@ -390,53 +438,85 @@ func hasChainKey(a domain.Account) bool {
 // ⚠ TWO RULES MEET HERE AND THEY PULL IN OPPOSITE DIRECTIONS. Getting the precedence wrong breaks
 // one of two shipped rulings, and this function exists so the choice is written down once.
 //
-//  1. A LIVE CHAIN REPRESENTATIVE WINS over a terminal predecessor. A snapshot taken before a
-//     re-link is interpreted by the SUCCESSOR, which is the add-only merge direction
+//  1. THE SNAPSHOT BELONGS TO ITS OWN ACCOUNT. Two accounts at one institution with no mask are
+//     forced to share a user_accounts row (migration 000100), so resolving through the chain key
+//     made a two-account breakdown two copies of whichever account won buildChainAwareAccountMap's
+//     chain-key slot (#1569 T10.2).
+//
+//  2. ...UNLESS THAT ACCOUNT IS 'replaced', in which case it is a retired PREDECESSOR and the
+//     snapshot is interpreted by the live SUCCESSOR. That is the add-only merge direction
 //     mergeMissingAccounts already applies and which
 //     TestDashboard_PastAsOfDate_MergeDirection_DecidesInclusionUnderATypeFilter pins as a TOTAL,
 //     not a label: resolving to the predecessor drops $300 under a type filter. Having the current
 //     leg and the baseline leg of one response resolve one chain differently is a class of bug this
 //     file has been bitten by twice (#1369 G1, #1537 round 10).
 //
-//  2. ...UNLESS THE SNAPSHOT'S OWN ACCOUNT IS ALSO LIVE, in which case it is a maskless SIBLING and
-//     not a predecessor, and the snapshot belongs to itself (#1569 T10.2). Two accounts at one
-//     institution with no mask are forced to share a user_accounts row (migration 000100), so
-//     resolving both through the chain key made a two-account breakdown two copies of whichever
-//     account won buildChainAwareAccountMap's chain-key slot.
+// ⚠ 'replaced' — NOT "terminal" — IS THE DISCRIMINATOR, and #1569 T10-FIX corrected that. Round 10
+// wrote rule 2 as "a live chain representative wins over a terminal predecessor, unless the
+// snapshot's own account is ALSO live". A maskless sibling that the user simply CLOSED is terminal
+// and is not a predecessor, so that form resolved a closed CREDIT card to its live DEPOSITORY twin
+// and reported a liability inside TotalAssets. 'replaced' is written by the re-link and the
+// CreateBatch backstop and by nothing else; 'removed'/'expired' mean closed.
 //
-// "Live" is the discriminator because it is the only evidence available at this layer, and it is
-// exactly the right one: 'replaced' is written by the re-link and the CreateBatch backstop and
-// by nothing else, while a maskless pair is 'active' on both sides permanently.
+// ⚠ AND THE OWN-ACCOUNT LOOKUP IS ONLY AS GOOD AS THE UNIVERSE IT SEARCHES. A closed sibling is
+// absent from the active-only current map entirely, so there is no status to read and the chain-key
+// stand-in below fires anyway. supersededSnapshotIDs withdraws that stand-in when the live member
+// already contributes a snapshot of its own; the two functions are one rule in two halves and
+// neither is sufficient alone.
 //
 // maps are consulted in caller order (active-now first, historical/as-of second) at each step.
 func snapshotAccount(snapshot domain.BalanceSnapshot, maps ...map[string]domain.Account) (domain.Account, bool) {
-	lookup := func(key string) (domain.Account, bool) {
-		for _, m := range maps {
-			if account, ok := m[key]; ok {
-				return account, true
-			}
-		}
-		return domain.Account{}, false
-	}
-	liveLookup := func(key string) (domain.Account, bool) {
-		for _, m := range maps {
-			if account, ok := m[key]; ok && account.Status == domain.AccountStatusActive {
-				return account, true
-			}
-		}
-		return domain.Account{}, false
-	}
-
-	if representative, ok := liveLookup(snapshotChainKey(snapshot)); ok {
-		if own, ownOK := liveLookup(snapshot.AccountID); ownOK {
+	if own, ok := snapshotOwnAccount(snapshot, maps...); ok {
+		if own.Status != domain.AccountStatusReplaced {
 			return own, true
 		}
-		return representative, true
-	}
-	if own, ok := lookup(snapshot.AccountID); ok {
+		if representative, repOK := liveChainRepresentative(snapshot, maps...); repOK {
+			return representative, true
+		}
 		return own, true
 	}
-	return lookup(snapshotChainKey(snapshot))
+	// The snapshot's own accounts row is not in this universe at all. Standing in for it with the
+	// chain's live member is the #1109 rule and it keeps real money on the books
+	// (TestDashboardService_GetNetWorth_ResolvesByUserAccountID: a re-linked chain whose successor
+	// has not synced yet still reports its last known balance). It is also how a CLOSED maskless
+	// sibling gets counted a second time under its live twin — which is why the stand-in is
+	// withdrawn by supersededSnapshotIDs whenever that live member already has a snapshot of its
+	// own in the same set. Both halves are needed; neither is sufficient.
+	if representative, ok := liveChainRepresentative(snapshot, maps...); ok {
+		return representative, true
+	}
+	return lookupInAccountMaps(snapshotChainKey(snapshot), maps...)
+}
+
+// snapshotOwnAccount resolves a snapshot to the accounts row it was actually written for: its own
+// account_id, or — only when balance_snapshots.account_id has been NULLed by its ON DELETE SET NULL
+// FK — the chain key, which is then the only identity the row still carries.
+func snapshotOwnAccount(snapshot domain.BalanceSnapshot, maps ...map[string]domain.Account) (domain.Account, bool) {
+	if snapshot.AccountID != "" {
+		return lookupInAccountMaps(snapshot.AccountID, maps...)
+	}
+	return lookupInAccountMaps(snapshotChainKey(snapshot), maps...)
+}
+
+func liveChainRepresentative(snapshot domain.BalanceSnapshot, maps ...map[string]domain.Account) (domain.Account, bool) {
+	for _, m := range maps {
+		if account, ok := m[snapshotChainKey(snapshot)]; ok && account.Status == domain.AccountStatusActive {
+			return account, true
+		}
+	}
+	return domain.Account{}, false
+}
+
+func lookupInAccountMaps(key string, maps ...map[string]domain.Account) (domain.Account, bool) {
+	if key == "" {
+		return domain.Account{}, false
+	}
+	for _, m := range maps {
+		if account, ok := m[key]; ok {
+			return account, true
+		}
+	}
+	return domain.Account{}, false
 }
 
 // DashboardService provides balance dashboard functionality
@@ -523,13 +603,13 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 	// by twice (#1369 G1, #1537 round 10). It fires only when BOTH chain members contributed a row
 	// at this instant — the overlap case — so a past as-of date whose only live member is the
 	// now-terminal predecessor is untouched.
-	supersededNow := supersededChainMembers(snapshots, accountMap)
+	supersededNow := supersededSnapshotIDs(snapshots, accountMap)
 	for _, snapshot := range snapshots {
 		account, exists := snapshotAccount(snapshot, accountMap)
 		if !exists {
 			continue // Skip if account not found
 		}
-		if supersededNow[account.ID] {
+		if supersededNow[snapshot.ID] {
 			continue
 		}
 
@@ -818,13 +898,13 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 	// by twice (#1369 G1, #1537 round 10). It fires only when BOTH chain members contributed a row
 	// at this instant — the overlap case — so a past as-of date whose only live member is the
 	// now-terminal predecessor is untouched.
-	supersededNow := supersededChainMembers(snapshots, accountMap)
+	supersededNow := supersededSnapshotIDs(snapshots, accountMap)
 	for _, snapshot := range snapshots {
 		account, exists := snapshotAccount(snapshot, accountMap)
 		if !exists {
 			continue
 		}
-		if supersededNow[account.ID] {
+		if supersededNow[snapshot.ID] {
 			continue
 		}
 		if len(filters.AccountTypes) > 0 {
@@ -1017,13 +1097,13 @@ func (s *dashboardService) GetAccountTypes(ctx context.Context, userID string) (
 	// by twice (#1369 G1, #1537 round 10). It fires only when BOTH chain members contributed a row
 	// at this instant — the overlap case — so a past as-of date whose only live member is the
 	// now-terminal predecessor is untouched.
-	supersededNow := supersededChainMembers(snapshots, accountMap)
+	supersededNow := supersededSnapshotIDs(snapshots, accountMap)
 	for _, snapshot := range snapshots {
 		account, exists := snapshotAccount(snapshot, accountMap)
 		if !exists {
 			continue
 		}
-		if supersededNow[account.ID] {
+		if supersededNow[snapshot.ID] {
 			continue
 		}
 
@@ -1112,13 +1192,13 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 	// by twice (#1369 G1, #1537 round 10). It fires only when BOTH chain members contributed a row
 	// at this instant — the overlap case — so a past as-of date whose only live member is the
 	// now-terminal predecessor is untouched.
-	supersededNow := supersededChainMembers(snapshots, accountMap)
+	supersededNow := supersededSnapshotIDs(snapshots, accountMap)
 	for _, snapshot := range snapshots {
 		account, exists := snapshotAccount(snapshot, accountMap)
 		if !exists {
 			continue // Skip if account not found
 		}
-		if supersededNow[account.ID] {
+		if supersededNow[snapshot.ID] {
 			continue
 		}
 
@@ -1257,7 +1337,7 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 
 		var prevAssets, prevLiabilities float64
 		seenAccounts := make(map[string]bool)
-		superseded := supersededChainMembers(previousSnapshots, accountMap, historicalMap)
+		superseded := supersededSnapshotIDs(previousSnapshots, accountMap, historicalMap)
 
 		for _, snapshot := range previousSnapshots {
 			// Active map first, historical map as fallback — the same precedence
@@ -1266,7 +1346,7 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 			if !exists {
 				continue
 			}
-			if superseded[account.ID] {
+			if superseded[snapshot.ID] {
 				continue
 			}
 			// Dedup on the resolved account's OWN id — see baselineBalanceForComparison for why
@@ -1364,13 +1444,13 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 	// by twice (#1369 G1, #1537 round 10). It fires only when BOTH chain members contributed a row
 	// at this instant — the overlap case — so a past as-of date whose only live member is the
 	// now-terminal predecessor is untouched.
-	supersededNow := supersededChainMembers(snapshots, accountMap)
+	supersededNow := supersededSnapshotIDs(snapshots, accountMap)
 	for _, snapshot := range snapshots {
 		account, exists := snapshotAccount(snapshot, accountMap)
 		if !exists {
 			continue
 		}
-		if supersededNow[account.ID] {
+		if supersededNow[snapshot.ID] {
 			continue
 		}
 		if len(filters.AccountTypes) > 0 {
