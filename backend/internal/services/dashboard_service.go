@@ -341,7 +341,7 @@ func chainRepresentativeBeats(candidate, incumbent domain.Account) bool {
 	return candidate.ID < incumbent.ID
 }
 
-// supersededSnapshotIDs returns the ids of SNAPSHOTS that must NOT contribute to a total because
+// supersededSnapshotIndexes returns the SLICE INDEXES of SNAPSHOTS that must NOT contribute to a total because
 // the money they carry is already on the books under a live account.
 //
 // ⚠ IT IS KEYED BY THE SNAPSHOT'S POSITION IN THE SLICE, NOT BY ACCOUNT, and not by snapshot id
@@ -466,7 +466,7 @@ func hasChainKey(a domain.Account) bool {
 //
 // ⚠ AND THE OWN-ACCOUNT LOOKUP IS ONLY AS GOOD AS THE UNIVERSE IT SEARCHES. A closed sibling is
 // absent from the active-only current map entirely, so there is no status to read and the chain-key
-// stand-in below fires anyway. supersededSnapshotIDs withdraws that stand-in when the live member
+// stand-in below fires anyway. supersededSnapshotIndexes withdraws that stand-in when the live member
 // already contributes a snapshot of its own; the two functions are one rule in two halves and
 // neither is sufficient alone.
 //
@@ -486,7 +486,7 @@ func snapshotAccount(snapshot domain.BalanceSnapshot, maps ...map[string]domain.
 	// (TestDashboardService_GetNetWorth_ResolvesByUserAccountID: a re-linked chain whose successor
 	// has not synced yet still reports its last known balance). It is also how a CLOSED maskless
 	// sibling gets counted a second time under its live twin — which is why the stand-in is
-	// withdrawn by supersededSnapshotIDs whenever that live member already has a snapshot of its
+	// withdrawn by supersededSnapshotIndexes whenever that live member already has a snapshot of its
 	// own in the same set. Both halves are needed; neither is sufficient.
 	if representative, ok := liveChainRepresentative(snapshot, maps...); ok {
 		return representative, true
@@ -684,7 +684,7 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 		// #1569 T10.2 made false — GetSnapshotsAsOfForUser returns one row per PHYSICAL ACCOUNT
 		// (snapshotIdentityKey), precisely so a maskless pair is not halved. A chain can therefore
 		// surface twice for two reasons now: two live siblings sharing a user_account (which MUST
-		// both count, and which supersededSnapshotIDs deliberately does not collapse), and a legacy
+		// both count, and which supersededSnapshotIndexes deliberately does not collapse), and a legacy
 		// NULL-user_account_id row keying on its raw account_id beside its post-relink sibling. The
 		// sort exists for the second, whose two rows carry different instants.
 		sort.Slice(previousSnapshots, func(i, j int) bool {

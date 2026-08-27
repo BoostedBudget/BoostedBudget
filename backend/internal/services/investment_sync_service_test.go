@@ -699,7 +699,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_FirstSync_NoLastSynced
 	// No InvestmentsLastSyncedDate → first sync
 	// AccessToken is already decrypted by the repository layer
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -735,6 +735,71 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_FirstSync_NoLastSynced
 	deps.linkedItemRepo.AssertExpectations(t)
 }
 
+// TestInvestmentSyncService_SyncInvestmentTransactions_RetainedAccount_StillStored is THE
+// regression test for Issue #1569 round 11 task 1: the exact defect task 1b already fixed for
+// banking (transaction_sync_service.go:915, GetByLinkedItemIDIncludingRetained), left in place
+// one file over for investment transactions.
+//
+// A user disconnects (or Plaid retires) one brokerage account inside a linked item that keeps
+// syncing. The account row survives as 'removed' — investment_transactions carries no cascade
+// or wipe on that path, and investmentTransactionRepository.UpsertBatch is a pure
+// INSERT ... ON CONFLICT DO UPDATE (semantically identical to the banking path), so there is no
+// wipe-and-reinsert reason to scope the account map to 'active' only here. Before this fix,
+// SyncInvestmentTransactions built its account map from active-only GetByLinkedItemID, so the
+// retained account never appears in accountMap and mapPlaidInvestmentTransactions silently
+// Warn+skips every transaction Plaid delivers for it, forever.
+//
+// Mutation-check: reverting investment_sync_service.go:498 to GetByLinkedItemID must turn this
+// RED, since the mock below only ever stubs GetByLinkedItemIDIncludingRetained.
+func TestInvestmentSyncService_SyncInvestmentTransactions_RetainedAccount_StillStored(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	userID := uuid.New().String()
+	plaidAccountID := "plaid-acct-retained"
+	internalAccountID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-001", userID)
+
+	// The account was disconnected but the linked item keeps syncing (sibling accounts
+	// remain active); GetByLinkedItemIDIncludingRetained must be the source, not
+	// GetByLinkedItemID, or this retained account never lands in the map.
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID, Status: domain.AccountStatusRemoved},
+	}, nil)
+
+	txn := makePlaidCashTxn("txn-retained-001", plaidAccountID, 250.0, "2024-01-15")
+	txnResp := plaid.NewInvestmentsTransactionsGetResponse(
+		makeMinimalPlaidItem(),
+		[]plaid.AccountBase{},
+		[]plaid.Security{},
+		[]plaid.InvestmentTransaction{txn},
+		1,
+		"req-001",
+	)
+
+	deps.plaidSvc.On("InvestmentsTransactionsGet", ctx, linkedItem.AccessToken, mock.Anything, mock.Anything, int32(0), int32(500)).
+		Return(txnResp, nil)
+
+	// The transaction for the retained account must actually be stored (mapped to its
+	// internal account ID), not silently dropped.
+	deps.invTxnRepo.On("UpsertBatch", ctx, mock.MatchedBy(func(txns []domain.InvestmentTransaction) bool {
+		if len(txns) != 1 {
+			return false
+		}
+		return txns[0].AccountID == internalAccountID
+	})).Return(1, nil)
+
+	deps.linkedItemRepo.On("UpdateInvestmentsLastSyncedDate", ctx, linkedItem.ID, mock.Anything).Return(nil)
+
+	result, err := svc.SyncInvestmentTransactions(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.TransactionsInserted,
+		"a retained account's investment transaction must be stored, not permanently skipped")
+	deps.accountRepo.AssertExpectations(t)
+	deps.invTxnRepo.AssertExpectations(t)
+}
+
 // TestInvestmentSyncService_SyncInvestmentTransactions_IncrementalSync_UsesLastSyncedDate
 // verifies that on incremental sync, startDate = lastSyncedDate - 1 day (overlap for safety).
 func TestInvestmentSyncService_SyncInvestmentTransactions_IncrementalSync_UsesLastSyncedDate(t *testing.T) {
@@ -750,7 +815,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_IncrementalSync_UsesLa
 	linkedItem.InvestmentsLastSyncedDate = &lastSyncedDate
 	// AccessToken is already decrypted by the repository layer
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -794,7 +859,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_Pagination_SinglePage(
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -835,7 +900,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_Pagination_MultiplePag
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -909,7 +974,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_Pagination_ExactBounda
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -952,7 +1017,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_DuplicatesSkipped(t *t
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -988,7 +1053,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_UpdatesLastSyncedDate(
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -1027,7 +1092,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_PartialPageError_NoDat
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -1076,7 +1141,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_NullSecurityID(t *test
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -1119,7 +1184,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_SecurityResolution(t *
 	internalSecurityID := "internal-" + uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -1224,7 +1289,7 @@ func TestInvestmentSyncService_ProcessWebhook_RoutesInvestmentTransactions(t *te
 
 	// SyncInvestmentTransactions dependencies (empty response)
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	deps.plaidSvc.On("InvestmentsTransactionsGet", ctx, "tok", mock.Anything, mock.Anything, int32(0), int32(500)).
 		Return(plaid.NewInvestmentsTransactionsGetResponse(
 			makeMinimalPlaidItem(), nil, nil, []plaid.InvestmentTransaction{}, 0, "req-001",
@@ -1456,7 +1521,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_CashTxnQuantityPriceAl
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-r23", userID)
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 

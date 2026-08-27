@@ -109,7 +109,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_BumpsOnPartialCommitEv
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-partial", userID)
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 

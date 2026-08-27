@@ -495,7 +495,17 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 	// userAccountMap carries the stable user_account_id (survives Plaid re-links)
 	// so investment transactions written here have the chain-expansion key set on
 	// insert (mirrors the banking UpsertBatch approach — Issue #1109).
-	accounts, err := s.accountRepo.GetByLinkedItemID(ctx, linkedItem.ID)
+	//
+	// Issue #1569 round 11 task 1: this MUST be GetByLinkedItemIDIncludingRetained, not
+	// GetByLinkedItemID. Unlike SyncHoldings above (which wipes-and-reinserts via
+	// ReplaceForAccount and must stay active-only), investment transactions are written by
+	// investmentTransactionRepository.UpsertBatch — a pure INSERT ... ON CONFLICT DO UPDATE,
+	// identical in shape to the banking path fixed by task 1b
+	// (transaction_sync_service.go:915). An active-only map here means a retained
+	// (removed/expired/replaced) brokerage account inside a still-live linked item drops out
+	// of accountMap, and mapPlaidInvestmentTransactions Warn+skips every transaction Plaid
+	// delivers for it, forever. See TestInvestmentSyncService_SyncInvestmentTransactions_RetainedAccount_StillStored.
+	accounts, err := s.accountRepo.GetByLinkedItemIDIncludingRetained(ctx, linkedItem.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts for linked item: %w", err)
 	}
