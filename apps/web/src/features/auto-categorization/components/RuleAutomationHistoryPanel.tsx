@@ -304,11 +304,23 @@ export function RuleAutomationHistoryPanel() {
 
       {isOpen && (
         <div id={panelId} className="mt-2 space-y-2">
+          {/*
+            ⚠ THIS USED TO SAY "EVERY TIME", AND THAT WAS FALSE (#1569 T9-FIX item 8). The backend
+            withholds one class deliberately: an execution against a PENDING transaction the
+            provider removed when it settled, whose posted twin carries its own execution — listing
+            both would report one charge as two automation runs (operations/rule_executions.go).
+            The OpenAPI description has documented that exception correctly since the endpoint
+            shipped; this panel, added in the same round, overstated it. An unscoped completeness
+            claim on a retention surface is the defect class this issue exists to remove, so the
+            sentence names the exception rather than being softened into vagueness.
+          */}
           <p className="px-1 text-xs text-muted-foreground">
-            Every time one of your rules changed a transaction, including rules you have since
-            deleted &mdash; deleting a rule stops it running but keeps the record of what it already
-            did. Those rows are marked &ldquo;Deleted rule&rdquo; and show the name and conditions
-            the rule had when it ran.
+            What your rules changed, including rules you have since deleted &mdash; deleting a rule
+            stops it running but keeps the record of what it already did. Those rows are marked
+            &ldquo;Deleted rule&rdquo; and show the name and conditions the rule had when it ran.
+            One kind of run is left out: a rule that changed a pending charge your bank then
+            replaced when it settled, because the settled charge carries the same run and showing
+            both would count it twice.
           </p>
 
           {isLoading && (
