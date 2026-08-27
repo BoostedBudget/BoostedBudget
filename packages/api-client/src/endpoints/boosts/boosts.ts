@@ -116,7 +116,7 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
 };
 
 /**
- * Retrieves every boost execution for the authenticated user with an optional status filter. Unlike /boosts/{id}/executions this also returns executions whose boost has since been deleted: those carry boost_id = null plus boost_name and definition_snapshot, captured at execution time.
+ * Retrieves every boost execution for the authenticated user with an optional status filter. Unlike /boosts/{id}/executions this also returns executions whose boost has since been deleted. Every row carries boost_name and definition_snapshot, captured at execution time, so it is readable with or without its parent. Do NOT key "deleted boost" off boost_id being null: normal deletion TOMBSTONES the boost, so those executions keep their original non-null boost_id and the boost simply stops appearing in GET /boosts. boost_id is null only when the boost ROW itself was destroyed (the FK is ON DELETE SET NULL), which today means a purge or GDPR erasure. To mark a row as coming from a deleted boost, treat a null boost_id OR a boost_id absent from GET /boosts as deleted.
  * @summary Get account-wide boost execution history
  */
 export const getUserBoostExecutions = (

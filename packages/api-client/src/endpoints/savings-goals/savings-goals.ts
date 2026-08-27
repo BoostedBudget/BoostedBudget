@@ -362,7 +362,7 @@ export function useGetActiveSavingsGoals<TData = Awaited<ReturnType<typeof getAc
 
 
 /**
- * Lists savings goals the user has deleted. Deleting a goal retains it and every contribution logged against it (Issue #1569); this endpoint is how the client shows what was kept and offers POST /savings-goals/{id}/purge, which refuses unless the goal is already deleted. Each entry carries deleted_at.
+ * Lists savings goals the user has deleted. Deleting a goal retains it and every contribution STILL logged against it (Issue #1569) — a contribution the user explicitly deleted earlier via DELETE /savings-goals/{goalID}/contributions/{id} was destroyed then and does not come back here. This endpoint is how the client shows what was kept and offers POST /savings-goals/{id}/purge, which refuses unless the goal is already deleted. Each entry carries deleted_at.
  * @summary Get deleted savings goals
  */
 export const getDeletedSavingsGoals = (
@@ -800,7 +800,7 @@ export const useLogSavingsGoalContribution = <TError = ErrorType<ErrorModel>,
       return useMutation(getLogSavingsGoalContributionMutationOptions(options), queryClient);
     }
     /**
- * Removes a contribution (proposed or confirmed). Triggers goal progress recomputation.
+ * PERMANENTLY DESTROYS a contribution (proposed or confirmed) and triggers goal progress recomputation. This is a hard delete, not a tombstone, and it is one of the sanctioned explicit-destruction exceptions under the retain-by-default rule (#1569): a hand-logged amount erased here cannot be recovered and no provider can supply it again. Deleting the GOAL does not do this — that retains every contribution still logged against it.
  * @summary Delete a savings goal contribution
  */
 export const deleteSavingsGoalContribution = (
@@ -992,7 +992,7 @@ export const useRejectSavingsGoalContribution = <TError = ErrorType<ErrorModel>,
       return useMutation(getRejectSavingsGoalContributionMutationOptions(options), queryClient);
     }
     /**
- * Removes a savings goal from the user's collection. Does NOT destroy any data — every contribution logged against the goal is retained and stays readable at GET /savings-goals/deleted/{goalID}/contributions (the live GET /savings-goals/{goalID}/contributions returns nothing once the goal is deleted). Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its contributions.
+ * Removes a savings goal from the user's collection. Destroys nothing ON ITS OWN — every contribution still logged against the goal is retained and stays readable at GET /savings-goals/deleted/{goalID}/contributions (the live GET /savings-goals/{goalID}/contributions returns nothing once the goal is deleted). It does not resurrect a contribution the user had already deleted explicitly, which was destroyed at that point. Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its remaining contributions.
  * @summary Delete savings goal
  */
 export const deleteSavingsGoal = (
