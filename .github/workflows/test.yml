@@ -1637,6 +1637,7 @@ jobs:
           migrate -database "$DATABASE_URL" -path backend/migrations up
 
       - name: Run integration tests
+        id: run-integration-tests
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
@@ -1659,8 +1660,44 @@ jobs:
             exit 1
           fi
           echo "Integration packages: $PKGS"
+          # #1569 Task 8.3: instrument coverage for these packages too. -coverpkg is scoped to
+          # ./internal/... (not $PKGS) so a covered line executed by an integration test in one
+          # package but living in another (e.g. a repository method exercised only via a service
+          # integration test) still counts — matching the unit job's -coverpkg semantics.
           # shellcheck disable=SC2086
-          go test $PKGS -tags integration -p 1 -timeout 10m -v
+          go test $PKGS -tags integration -p 1 -timeout 10m -v \
+            -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=./internal/...
+
+      - name: Check Go integration coverage threshold (≥80%)
+        # #1569 Task 8.3: the backend-test job's 74% gate runs WITHOUT -tags integration, so the
+        # entire read path for retained history (data_export_repository.go, the history-dated
+        # holding/liability queries, rule_execution_history_repository.go, etc.) measures 0% there
+        # and is invisible to that gate — even though it is well covered by the integration suite
+        # this job runs. This step closes that blind spot with its own gate on THIS job's profile.
+        #
+        # Floor measured locally 2026-08-26 against a warm Postgres 17 (docker-compose, port 5434)
+        # with `cd backend && DATABASE_URL=... go test -tags integration -p 1 -count=1
+        # -coverprofile=/tmp/int.out -covermode=atomic -coverpkg=./internal/... ./internal/...`:
+        # `go tool cover -func=/tmp/int.out | tail -1` reported 83.6%. Floor set to 80% — a few
+        # points below the measured baseline, not a guess — so it ratchets against regression
+        # without failing on ordinary environment variance (Postgres/Redis timing, etc.).
+        # (One unrelated pre-existing integration test, TestAccountRepository_Reads_Integration_-
+        # ReturnRemovedAt, failed assertions during this measurement without affecting the
+        # coverage figure below.)
+        #
+        # Runs even if the tests step failed or was cancelled-but-not-cancelled, so a real
+        # coverage regression is never hidden behind an unrelated red test (Round 7: steps
+        # defaulting to if: success() silently skipped 13 later steps, including a coverage
+        # gate, in another job). This step is independent of test pass/fail — it only needs the
+        # profile file the previous step wrote — so it does not gate on that step's outcome.
+        if: always() && !cancelled()
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: |
+          echo "::group::Checking integration coverage threshold"
+          bash ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/scripts/check-coverage.sh \
+            coverage-integration.out \
+            80
+          echo "::endgroup::"
 
       - name: Save Go build cache
         # G4 fix: the old guard (`if: ... && steps.cache-go-build.outputs.cache-hit != 'true'`)
