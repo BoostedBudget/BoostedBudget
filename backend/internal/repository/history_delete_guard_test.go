@@ -249,6 +249,28 @@ var (
 	sqlBlockCommentRegexp = regexp.MustCompile(`(?s)/\*.*?\*/`)
 	sqlLineCommentRegexp  = regexp.MustCompile(`--[^\n]*`)
 	sqlWhitespaceRegexp   = regexp.MustCompile(`\s+`)
+	// sqlStringLiteralRegexp and sqlDollarQuoteRegexp are #1569 T8-FIX, finding D. This guard scans
+	// TEXT, not parsed SQL, so anything a user or a column default can put inside quotes was being
+	// read as SQL structure. All three consequences were real and none had a production instance:
+	//
+	//   - `WHERE note = 'DELETE FROM savings_goal_contributions'` reported an unallowlisted delete
+	//     of a table nothing deletes — the direction that gets a guard deleted by the next engineer;
+	//   - a `;` inside a literal truncated a real delete's slice, so a predicate fragment past it
+	//     read as missing (a false failure again — the previous note here claimed truncation "can
+	//     only make the predicate check STRICTER, never bless a widening", which is true and was
+	//     beside the point: stricter here means WRONG, not safe);
+	//   - a fragment written inside a literal (`AND label = 'deleted_at IS NOT NULL'`) satisfied the
+	//     predicate pin for a DELETE that does not carry it.
+	//
+	// Blanking them is exactly proportionate to a text scanner; writing a SQL parser is not. The
+	// standard-SQL escape `''` is handled, so `'it''s'` closes where it should.
+	//
+	// ⚠ THE ONE ORDERING THIS DEPENDS ON: comments are stripped BEFORE literals are blanked, so an
+	// apostrophe in a comment cannot open a literal. The converse — a `--` INSIDE a literal, which
+	// comment-stripping would eat first — is the remaining miss. Nothing in the corpus writes one,
+	// and it can only shorten a slice, never lend a predicate.
+	sqlStringLiteralRegexp = regexp.MustCompile(`'(?:[^']|'')*'`)
+	sqlDollarQuoteRegexp   = regexp.MustCompile(`(?s)\$\$.*?\$\$`)
 	// statementBoundaryRegexp is the STATEMENT BOUNDARY, not the table matcher. Two things end a
 	// delete's slice, whichever comes first:
 	//
@@ -263,16 +285,21 @@ var (
 	// gone. Pinned by TestHistoryDeleteStatements_SplitsAtTheStatementTerminator.
 	//
 	// Comments are stripped by normaliseSQL BEFORE this runs, so a `;` inside a comment is not a
-	// boundary. A `;` inside a string or dollar-quoted literal WOULD be, and would truncate the
-	// slice early — which can only make the predicate check STRICTER (a fragment past it reads as
-	// missing), never bless a widening. Nothing in the corpus writes one.
+	// boundary. Neither is a `;` inside a string or dollar-quoted literal: normaliseSQL blanks those
+	// too (#1569 T8-FIX, finding D — see sqlStringLiteralRegexp). Pinned by
+	// TestHistoryDeleteStatements_IsNotFooledByAQuotedLiteral, in both directions: a literal's
+	// semicolon must not end a statement and a real one still must.
 	statementBoundaryRegexp = regexp.MustCompile(`\b(?:DELETE FROM|TRUNCATE)\b|;`)
 )
 
-// normaliseSQL strips SQL comments, collapses whitespace and upper-cases.
+// normaliseSQL strips SQL comments, blanks quoted literals, collapses whitespace and upper-cases.
+// Order matters: comments first (an apostrophe in a comment must not open a literal), literals
+// second (their contents are DATA and carry no SQL structure), whitespace last.
 func normaliseSQL(sql string) string {
 	sql = sqlBlockCommentRegexp.ReplaceAllString(sql, " ")
 	sql = sqlLineCommentRegexp.ReplaceAllString(sql, " ")
+	sql = sqlDollarQuoteRegexp.ReplaceAllString(sql, " ")
+	sql = sqlStringLiteralRegexp.ReplaceAllString(sql, " ")
 	sql = sqlWhitespaceRegexp.ReplaceAllString(sql, " ")
 	return strings.ToUpper(strings.TrimSpace(sql))
 }
@@ -318,10 +345,16 @@ type historyDeleteSiteFound struct {
 }
 
 // sqlAssemblyUnit reports whether n is a statement-sized unit of SQL assembly: the node whose
-// string literals may legitimately be halves of ONE query (`A` + helper + `B`, or a fmt.Sprintf
-// whose format string and fragments are separate literals). It is the same unit the tombstone
-// read-guards use (transaction_tombstone_guard_test.go), deliberately — one notion of "what counts
-// as one query", not two.
+// string literals may legitimately be halves of ONE query (`A` + helper + `B`). It is the same unit
+// the tombstone read-guards use (transaction_tombstone_guard_test.go), deliberately — one notion of
+// "what counts as one query", not two.
+//
+// ⚠ IT IS NOT THE WHOLE STORY, AND SAYING SO WAS #1569 T8-FIX FINDING E. An ExprStmt is one CALL,
+// and a call carries SQL PARAMETER VALUES beside its query. literalUnitsInFunc therefore stops at a
+// call ARGUMENT before it reaches the enclosing statement; this predicate is what it falls back to.
+// The previous note claimed the unit covered "a fmt.Sprintf whose format string and fragments are
+// separate literals" — that was the hole, not a feature: a format argument and a value argument are
+// different arguments and must not lend each other predicates.
 func sqlAssemblyUnit(n ast.Node) bool {
 	switch n.(type) {
 	case *ast.AssignStmt, *ast.ValueSpec, *ast.ReturnStmt, *ast.ExprStmt:
@@ -345,6 +378,34 @@ func sqlAssemblyUnit(n ast.Node) bool {
 // ⚠ IT FAILS OPEN NOWHERE. A literal with no enclosing unit — a `case "..."` expression, a switch
 // tag, an `if` condition — is NOT dropped; it becomes a unit of its own, so a delete written there
 // is still seen. What it does not get is a sibling's text.
+//
+// ⚠ THE BOUNDARY IS THE ARGUMENT, NOT THE CALL (#1569 T8-FIX, finding E). The nearest enclosing
+// CALL ARGUMENT wins over the enclosing statement, so
+// `db.Exec(ctx, "DELETE FROM x WHERE user_id = $1", "help: deleted_at IS NOT NULL")` gives three
+// units, not one, and the unrelated parameter can no longer satisfy the delete's predicate pin. A
+// concatenation INSIDE one argument is still one unit. Pinned in both directions by
+// TestHistoryDeleteScan_DoesNotLendAPredicateFromASiblingArgument.
+// assemblyOwner returns the node whose literals lit may be joined with: the nearest enclosing CALL
+// ARGUMENT, else the nearest enclosing assembly statement, else lit itself. stack holds lit's
+// ancestors, outermost first.
+func assemblyOwner(lit ast.Node, stack []ast.Node) ast.Node {
+	child := lit
+	for i := len(stack) - 1; i >= 0; i-- {
+		if call, ok := stack[i].(*ast.CallExpr); ok {
+			for _, arg := range call.Args {
+				if ast.Node(arg) == child {
+					return child
+				}
+			}
+		}
+		if sqlAssemblyUnit(stack[i]) {
+			return stack[i]
+		}
+		child = stack[i]
+	}
+	return lit
+}
+
 func literalUnitsInFunc(fset *token.FileSet, body *ast.BlockStmt) []string {
 	type group struct {
 		pos   token.Pos
@@ -360,13 +421,7 @@ func literalUnitsInFunc(fset *token.FileSet, body *ast.BlockStmt) []string {
 		}
 		if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING {
 			if str, e := strconv.Unquote(lit.Value); e == nil {
-				var owner ast.Node = lit
-				for i := len(stack) - 1; i >= 0; i-- {
-					if sqlAssemblyUnit(stack[i]) {
-						owner = stack[i]
-						break
-					}
-				}
+				owner := assemblyOwner(lit, stack)
 				if groups[owner] == nil {
 					groups[owner] = &group{pos: owner.Pos()}
 				}
@@ -805,6 +860,134 @@ func TestHistoryDeleteScan_DoesNotLendAPredicateFromAnotherLiteral(t *testing.T)
 		}
 		if missing := missingPredicateFragments(site.statements[0], entry.predicate); len(missing) > 0 {
 			t.Fatalf("splitting by statement broke a legitimately concatenated query, missing %v "+
+				"(statement: %s)", missing, site.statements[0])
+		}
+	})
+}
+
+// TestHistoryDeleteStatements_IsNotFooledByAQuotedLiteral is #1569 T8-FIX, finding D.
+//
+// The statement partition scans NORMALISED TEXT, not parsed SQL. A quoted string in a legitimate
+// query — a note, a label, a help column's default — can contain the very tokens the partition
+// keys on, and both failure directions are real:
+//
+//   - a `DELETE FROM <history table>` inside a literal is reported as an unallowlisted delete of a
+//     table nothing deletes. A guard that fires on legitimate code gets deleted by the next
+//     engineer, so this direction is the one that kills the guard;
+//   - a `;` inside a literal truncates a real delete's slice early, so a predicate fragment past it
+//     reads as missing (false failure again), while a fragment sitting INSIDE a literal must never
+//     count as the DELETE carrying it.
+//
+// The fix is not a SQL parser: normaliseSQL now blanks single-quoted and dollar-quoted literals the
+// same way it already blanked comments, which is exactly proportionate to a guard that scans text.
+func TestHistoryDeleteStatements_IsNotFooledByAQuotedLiteral(t *testing.T) {
+	t.Run("a delete inside a quoted literal is not a delete", func(t *testing.T) {
+		sites := historyDeleteSites(
+			`UPDATE audit_notes SET body = $1 `+
+				`WHERE note = 'DELETE FROM savings_goal_contributions; deleted_at IS NOT NULL'`,
+			historyBearingTables)
+		if len(sites) != 0 {
+			t.Fatalf("a quoted literal must not read as a delete, got %v", sites)
+		}
+	})
+
+	t.Run("a semicolon inside a quoted literal does not end the statement", func(t *testing.T) {
+		entry := allowedHistoryDeletes["repository/account_repository.go#PurgeAccount|savings_goals"]
+		stmts := historyDeleteStatements(
+			`DELETE FROM savings_goals WHERE account_id = $1 AND user_id = $2 `+
+				`AND source <> 'imported;manual' AND deleted_at IS NOT NULL`,
+			historyBearingTables)["savings_goals"]
+		if len(stmts) != 1 {
+			t.Fatalf("expected one statement, got %d: %q", len(stmts), stmts)
+		}
+		if missing := missingPredicateFragments(stmts[0], entry.predicate); len(missing) > 0 {
+			t.Fatalf("a semicolon inside a literal truncated the statement; missing %v (statement: %s)",
+				missing, stmts[0])
+		}
+	})
+
+	t.Run("a predicate fragment inside a quoted literal does not satisfy the predicate", func(t *testing.T) {
+		entry := allowedHistoryDeletes["repository/account_repository.go#PurgeAccount|savings_goals"]
+		stmts := historyDeleteStatements(
+			`DELETE FROM savings_goals WHERE account_id = $1 AND user_id = $2 `+
+				`AND label = 'deleted_at IS NOT NULL'`,
+			historyBearingTables)["savings_goals"]
+		if len(stmts) != 1 {
+			t.Fatalf("expected one statement, got %d: %q", len(stmts), stmts)
+		}
+		missing := missingPredicateFragments(stmts[0], entry.predicate)
+		if len(missing) != 1 || missing[0] != "deleted_at IS NOT NULL" {
+			t.Fatalf("a quoted literal lent the DELETE a predicate it does not carry; missing %v "+
+				"(statement: %s)", missing, stmts[0])
+		}
+	})
+
+	t.Run("a real statement terminator is still a boundary", func(t *testing.T) {
+		stmts := historyDeleteStatements(
+			`DELETE FROM savings_goals WHERE label = 'a;b' AND user_id = $1; `+
+				`SELECT 1 FROM savings_goals WHERE deleted_at IS NOT NULL`,
+			historyBearingTables)["savings_goals"]
+		if len(stmts) != 1 {
+			t.Fatalf("expected one statement, got %d: %q", len(stmts), stmts)
+		}
+		if strings.Contains(stmts[0], "SELECT") {
+			t.Fatalf("blanking literals must not disable the real terminator: %q", stmts[0])
+		}
+	})
+}
+
+// TestHistoryDeleteScan_DoesNotLendAPredicateFromASiblingArgument is #1569 T8-FIX, finding E.
+//
+// T8.2 narrowed literal-joining from per FUNCTION to per ast.ExprStmt, and the note called that
+// unit "one query". It is not: an ExprStmt is one whole CALL, parameter values included, so
+//
+//	db.Exec(ctx, "DELETE FROM savings_goals WHERE user_id = $1", "help: deleted_at IS NOT NULL")
+//
+// still let an unrelated argument supply the predicate a widened DELETE had lost. The unit is now
+// the ARGUMENT of a call, so sibling arguments are separate and a concatenation inside ONE argument
+// is still joined.
+func TestHistoryDeleteScan_DoesNotLendAPredicateFromASiblingArgument(t *testing.T) {
+	entry := allowedHistoryDeletes["repository/account_repository.go#PurgeAccount|savings_goals"]
+
+	scan := func(t *testing.T, body string) *historyDeleteSiteFound {
+		t.Helper()
+		dir := t.TempDir()
+		src := "package fake\n\nfunc PurgeLookalike(db any) {\n" + body + "\n}\n"
+		if err := os.WriteFile(filepath.Join(dir, "fake.go"), []byte(src), 0o600); err != nil {
+			t.Fatalf("writing fixture: %v", err)
+		}
+		found := scanHistoryDeletes(t, dir, historyBearingTables)
+		site := found["fake.go#PurgeLookalike|savings_goals"]
+		if site == nil {
+			t.Fatalf("the fixture's delete was not seen at all; keys: %v", found)
+		}
+		return site
+	}
+
+	t.Run("a sibling call argument does not satisfy the predicate", func(t *testing.T) {
+		site := scan(t, "\t_ = fmt.Sprint(db,\n"+
+			"\t\t`DELETE FROM savings_goals WHERE account_id = $1 AND user_id = $2`,\n"+
+			"\t\t`help text: deleted_at IS NOT NULL`)")
+		if len(site.statements) != 1 {
+			t.Fatalf("expected one statement, got %d: %q", len(site.statements), site.statements)
+		}
+		missing := missingPredicateFragments(site.statements[0], entry.predicate)
+		if len(missing) != 1 || missing[0] != "deleted_at IS NOT NULL" {
+			t.Fatalf("a sibling ARGUMENT lent the DELETE a predicate it no longer carries; missing "+
+				"%v (statement: %s)", missing, site.statements[0])
+		}
+	})
+
+	t.Run("a concatenation inside ONE argument is still joined", func(t *testing.T) {
+		site := scan(t, "\t_ = fmt.Sprint(db,\n"+
+			"\t\t`DELETE FROM savings_goals WHERE account_id = $1 AND user_id = $2`+\n"+
+			"\t\t\t` AND deleted_at IS NOT NULL`,\n"+
+			"\t\t`unrelated`)")
+		if len(site.statements) != 1 {
+			t.Fatalf("expected one statement, got %d: %q", len(site.statements), site.statements)
+		}
+		if missing := missingPredicateFragments(site.statements[0], entry.predicate); len(missing) > 0 {
+			t.Fatalf("splitting by argument broke a legitimately concatenated query, missing %v "+
 				"(statement: %s)", missing, site.statements[0])
 		}
 	})
