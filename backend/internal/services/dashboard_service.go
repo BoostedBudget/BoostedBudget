@@ -158,13 +158,13 @@ func baselineBalanceForComparison(
 ) float64 {
 	var total float64
 	seenAccounts := make(map[string]bool)
-	superseded := supersededSnapshotIDs(snapshots, activeAccounts, historicalAccounts)
-	for _, snapshot := range snapshots {
+	superseded := supersededSnapshotIndexes(snapshots, activeAccounts, historicalAccounts)
+	for i, snapshot := range snapshots {
 		account, exists := snapshotAccount(snapshot, activeAccounts, historicalAccounts)
 		if !exists {
 			continue
 		}
-		if dedupChains && superseded[snapshot.ID] {
+		if dedupChains && superseded[i] {
 			continue
 		}
 		// Dedup AFTER resolution, on the resolved account's OWN id.
@@ -344,7 +344,13 @@ func chainRepresentativeBeats(candidate, incumbent domain.Account) bool {
 // supersededSnapshotIDs returns the ids of SNAPSHOTS that must NOT contribute to a total because
 // the money they carry is already on the books under a live account.
 //
-// ⚠ IT IS KEYED BY SNAPSHOT, NOT BY ACCOUNT, and that is not cosmetic. Both rules below concern a
+// ⚠ IT IS KEYED BY THE SNAPSHOT'S POSITION IN THE SLICE, NOT BY ACCOUNT, and not by snapshot id
+// either. Not by account because both rules below concern a snapshot that snapshotAccount resolves
+// to an account OTHER than the one it was written for, so an account-keyed answer named the wrong
+// row — the successor — and the callers, which skipped on the RESOLVED account's id, would have
+// dropped the successor's own snapshot along with it or (as shipped) dropped neither. Not by
+// snapshot id because an empty or duplicated id would collapse several rows onto one key and
+// suppress every one of them; the index cannot collide. Both rules below concern a
 // snapshot that snapshotAccount resolves to an account OTHER than the one it was written for, so an
 // account-keyed answer named the wrong row — the successor — and the callers, which skipped on the
 // RESOLVED account's id, would have dropped the successor's own snapshot along with it or (as
@@ -391,28 +397,28 @@ func chainRepresentativeBeats(candidate, incumbent domain.Account) bool {
 // live twin has NO snapshot in the same set is still stood in for, and is then counted under the
 // twin. That shape needs the twin to be silent at the very cutoff being read, and the honest fix
 // remains a recorded succession pointer rather than a better guess.
-func supersededSnapshotIDs(snapshots []domain.BalanceSnapshot, maps ...map[string]domain.Account) map[string]bool {
+func supersededSnapshotIndexes(snapshots []domain.BalanceSnapshot, maps ...map[string]domain.Account) map[int]bool {
 	liveChains := map[string]bool{}
 	claimed := map[string]bool{}
-	owners := make(map[string]domain.Account, len(snapshots))
-	for _, snapshot := range snapshots {
+	owners := make(map[int]domain.Account, len(snapshots))
+	for i, snapshot := range snapshots {
 		account, exists := snapshotOwnAccount(snapshot, maps...)
 		if !exists {
 			continue
 		}
-		owners[snapshot.ID] = account
+		owners[i] = account
 		claimed[account.ID] = true
 		if account.Status == domain.AccountStatusActive && hasChainKey(account) {
 			liveChains[accountChainKey(account)] = true
 		}
 	}
-	out := map[string]bool{}
-	for _, snapshot := range snapshots {
-		own, hasOwn := owners[snapshot.ID]
+	out := map[int]bool{}
+	for i, snapshot := range snapshots {
+		own, hasOwn := owners[i]
 		if hasOwn {
 			if own.Status == domain.AccountStatusReplaced && hasChainKey(own) &&
 				liveChains[accountChainKey(own)] {
-				out[snapshot.ID] = true
+				out[i] = true
 			}
 			continue
 		}
@@ -421,7 +427,7 @@ func supersededSnapshotIDs(snapshots []domain.BalanceSnapshot, maps ...map[strin
 		// own here; when it does, it is already counted as itself and the stand-in would add a
 		// SECOND balance — and a second account's TYPE — under one identity.
 		if representative, ok := liveChainRepresentative(snapshot, maps...); ok && claimed[representative.ID] {
-			out[snapshot.ID] = true
+			out[i] = true
 		}
 	}
 	return out
@@ -603,13 +609,13 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 	// by twice (#1369 G1, #1537 round 10). It fires only when BOTH chain members contributed a row
 	// at this instant — the overlap case — so a past as-of date whose only live member is the
 	// now-terminal predecessor is untouched.
-	supersededNow := supersededSnapshotIDs(snapshots, accountMap)
-	for _, snapshot := range snapshots {
+	supersededNow := supersededSnapshotIndexes(snapshots, accountMap)
+	for i, snapshot := range snapshots {
 		account, exists := snapshotAccount(snapshot, accountMap)
 		if !exists {
 			continue // Skip if account not found
 		}
-		if supersededNow[snapshot.ID] {
+		if supersededNow[i] {
 			continue
 		}
 
@@ -902,13 +908,13 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 	// by twice (#1369 G1, #1537 round 10). It fires only when BOTH chain members contributed a row
 	// at this instant — the overlap case — so a past as-of date whose only live member is the
 	// now-terminal predecessor is untouched.
-	supersededNow := supersededSnapshotIDs(snapshots, accountMap)
-	for _, snapshot := range snapshots {
+	supersededNow := supersededSnapshotIndexes(snapshots, accountMap)
+	for i, snapshot := range snapshots {
 		account, exists := snapshotAccount(snapshot, accountMap)
 		if !exists {
 			continue
 		}
-		if supersededNow[snapshot.ID] {
+		if supersededNow[i] {
 			continue
 		}
 		if len(filters.AccountTypes) > 0 {
@@ -1101,13 +1107,13 @@ func (s *dashboardService) GetAccountTypes(ctx context.Context, userID string) (
 	// by twice (#1369 G1, #1537 round 10). It fires only when BOTH chain members contributed a row
 	// at this instant — the overlap case — so a past as-of date whose only live member is the
 	// now-terminal predecessor is untouched.
-	supersededNow := supersededSnapshotIDs(snapshots, accountMap)
-	for _, snapshot := range snapshots {
+	supersededNow := supersededSnapshotIndexes(snapshots, accountMap)
+	for i, snapshot := range snapshots {
 		account, exists := snapshotAccount(snapshot, accountMap)
 		if !exists {
 			continue
 		}
-		if supersededNow[snapshot.ID] {
+		if supersededNow[i] {
 			continue
 		}
 
@@ -1196,13 +1202,13 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 	// by twice (#1369 G1, #1537 round 10). It fires only when BOTH chain members contributed a row
 	// at this instant — the overlap case — so a past as-of date whose only live member is the
 	// now-terminal predecessor is untouched.
-	supersededNow := supersededSnapshotIDs(snapshots, accountMap)
-	for _, snapshot := range snapshots {
+	supersededNow := supersededSnapshotIndexes(snapshots, accountMap)
+	for i, snapshot := range snapshots {
 		account, exists := snapshotAccount(snapshot, accountMap)
 		if !exists {
 			continue // Skip if account not found
 		}
-		if supersededNow[snapshot.ID] {
+		if supersededNow[i] {
 			continue
 		}
 
@@ -1341,16 +1347,16 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 
 		var prevAssets, prevLiabilities float64
 		seenAccounts := make(map[string]bool)
-		superseded := supersededSnapshotIDs(previousSnapshots, accountMap, historicalMap)
+		superseded := supersededSnapshotIndexes(previousSnapshots, accountMap, historicalMap)
 
-		for _, snapshot := range previousSnapshots {
+		for i, snapshot := range previousSnapshots {
 			// Active map first, historical map as fallback — the same precedence
 			// baselineBalanceForComparison uses, through the same resolver.
 			account, exists := snapshotAccount(snapshot, accountMap, historicalMap)
 			if !exists {
 				continue
 			}
-			if superseded[snapshot.ID] {
+			if superseded[i] {
 				continue
 			}
 			// Dedup on the resolved account's OWN id — see baselineBalanceForComparison for why
@@ -1448,13 +1454,13 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 	// by twice (#1369 G1, #1537 round 10). It fires only when BOTH chain members contributed a row
 	// at this instant — the overlap case — so a past as-of date whose only live member is the
 	// now-terminal predecessor is untouched.
-	supersededNow := supersededSnapshotIDs(snapshots, accountMap)
-	for _, snapshot := range snapshots {
+	supersededNow := supersededSnapshotIndexes(snapshots, accountMap)
+	for i, snapshot := range snapshots {
 		account, exists := snapshotAccount(snapshot, accountMap)
 		if !exists {
 			continue
 		}
-		if supersededNow[snapshot.ID] {
+		if supersededNow[i] {
 			continue
 		}
 		if len(filters.AccountTypes) > 0 {
@@ -1576,13 +1582,13 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 			// whichever of the two occupied the chain-key slot — $100 of assets and $50 of
 			// liabilities reported as $150 of one of them. Pinned by
 			// TestGetNetWorthHousehold_Baseline_MasklessPairKeepsEachAccountsOwnCategory.
-			superseded := supersededSnapshotIDs(previousSnapshots, previousAccountMap, historicalMap)
-			for _, snapshot := range previousSnapshots {
+			superseded := supersededSnapshotIndexes(previousSnapshots, previousAccountMap, historicalMap)
+			for i, snapshot := range previousSnapshots {
 				account, exists := snapshotAccount(snapshot, previousAccountMap, historicalMap)
 				if !exists {
 					continue
 				}
-				if superseded[snapshot.ID] {
+				if superseded[i] {
 					continue
 				}
 				// The same AccountTypes filter the current-period loop above applies.
