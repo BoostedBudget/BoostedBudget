@@ -470,4 +470,32 @@ describe('GoalContributionsSheet', () => {
       })
     })
   })
+
+  // Issue #1569 T9.5 — a failed read must not render as "No contributions yet". This sheet's own
+  // twin, DeletedGoalContributions, already refuses to do that; the live ledger did not.
+  describe('failed read', () => {
+    it('reports the failed read and does not claim there are no contributions', () => {
+      mockUseListSavingsGoalContributions.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        // Widened: the mock is typed from its default `error: null`.
+        error: new Error('network down') as unknown as null,
+        refetch: mock(() => Promise.resolve({})),
+      })
+
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      expect(screen.getByRole('alert')).toBeInTheDocument()
+      expect(screen.getByText(/couldn't load/i)).toBeInTheDocument()
+      expect(screen.queryByText(/No contributions yet/i)).toBeNull()
+    })
+  })
 })
