@@ -29,6 +29,21 @@ export const HOUSEHOLD_SHARE_CONSENT_COPY = {
     'Choose which of your accounts to share with this household. All accounts are shared by ' +
     'default — you can change this any time after joining.',
 
+  /**
+   * Shown on the ONE control that covers a multi-account sharing unit in `ConsentPreview`
+   * (issue #1569 T10.3 item C).
+   *
+   * Two maskless accounts at one institution can share a single `user_account_id`, which is the id
+   * the backend hides by — so they are shared or hidden together and no per-account choice exists.
+   * The UI used to render a switch per account bound to that one value; it failed closed, but it
+   * offered a choice it could not honour. This line says why there is one switch, so the invitee is
+   * told the truth about what they are consenting to rather than being shown a control that lies.
+   *
+   * Not a change to what is shared or to the consent language itself, so
+   * `HOUSEHOLD_SHARE_CONSENT_VERSION` is deliberately NOT bumped.
+   */
+  sharedUnitNote: 'Your bank reports these accounts together, so they share one setting.',
+
   /** `DialogTitle` for `ShareNewAccountsDialog`, shown after linking new accounts via Plaid. */
   shareNewAccountsTitle: 'Share your new accounts?',
 
