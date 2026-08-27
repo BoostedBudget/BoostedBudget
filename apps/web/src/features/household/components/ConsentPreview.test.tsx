@@ -149,7 +149,13 @@ describe('ConsentPreview', () => {
 
     const [sw] = screen.getAllByRole('switch')
     expect(sw).toBeDisabled()
-    expect(sw).toHaveAttribute('aria-checked', 'true')
+    // ⚠ #1569 T10-FIX item 8: this used to assert 'true'. AcceptInvite builds the shareable set
+    // from `user_accounts`, so an account with no user_account_id can NEVER enter
+    // household_account_shares — "Shared" was a false statement made on a consent screen, even
+    // though it fails closed.
+    expect(sw).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByText(HOUSEHOLD_SHARE_CONSENT_COPY.unshareableStatus)).toBeInTheDocument()
+    expect(screen.getByText(HOUSEHOLD_SHARE_CONSENT_COPY.unshareableNote)).toBeInTheDocument()
 
     fireEvent.click(sw)
 
