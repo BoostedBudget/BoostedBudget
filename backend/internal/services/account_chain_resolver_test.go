@@ -220,7 +220,7 @@ func TestAccountChainResolver_ResolveActiveID(t *testing.T) {
 	})
 
 	// #1569 R11 T2: two live siblings sharing one user_account_id is an ordinary Plaid shape
-	// (masked accounts at the same institution), not corruption. Before this fix,
+	// (maskless accounts at the same institution), not corruption. Before this fix,
 	// GetByUserAccountAndStatus's ORDER BY created_at ASC meant accounts[0] was deterministically
 	// the OLDER of the two, discarded silently. This test uses DIFFERENT balances on the two
 	// siblings so a regression that silently resolves to either one is distinguishable from a

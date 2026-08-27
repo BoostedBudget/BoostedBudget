@@ -190,14 +190,14 @@ func TestBoostExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing
 	assert.Equal(t, "stable-to-uaid", *s.ToUserAccountID)
 }
 
-// TestBoostExecution_TransferAction_ChainResolver_AmbiguousChain_SkipsSuggestion pins #1569
-// R11 T2's deliberate site-2 decision: when the chain has more than one live account
-// (ErrAmbiguousActiveAccount), the transfer suggestion is money-moving, so the safe default is
-// to SKIP creating it entirely rather than falling back to the rule's stale pinned account —
-// unlike the savings-goal destination site (T2 site 3), which falls back to the goal's own
-// physical row. Guessing between two live siblings for a money-moving suggestion is exactly the
-// defect this task fixes.
-func TestBoostExecution_TransferAction_ChainResolver_AmbiguousChain_SkipsSuggestion(t *testing.T) {
+// TestBoostExecution_TransferAction_ChainResolver_AmbiguousChain_UsesPinnedAccount pins #1569
+// R11 T2's site-2 decision (fix round 1: an earlier revision skipped the suggestion here, which
+// was a monotonicity bug — see resolveAndVerifyUserAccount's doc comment). When the chain has
+// more than one live account (ErrAmbiguousActiveAccount), the suggestion still gets created,
+// using the rule's pinned FromAccountID/ToAccountID — the SAME fallback behaviour as
+// ErrNoActiveAccount, and the same kind of fallback the savings-goal destination site (T2 site 3)
+// uses. The resolver still refuses to guess WHICH live sibling to use; it does not refuse to act.
+func TestBoostExecution_TransferAction_ChainResolver_AmbiguousChain_UsesPinnedAccount(t *testing.T) {
 	execRepo := &mockBoostExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
 	boostRepo := &mockBoostsRepository{}
@@ -243,8 +243,15 @@ func TestBoostExecution_TransferAction_ChainResolver_AmbiguousChain_SkipsSuggest
 	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
 
-	assert.Empty(t, suggRepo.suggestions,
-		"an ambiguous chain must skip the suggestion entirely, not guess between the two live siblings")
+	require.Len(t, suggRepo.suggestions, 1,
+		"an ambiguous chain must not block the suggestion — it is not a guess, it is the rule's already-pinned account")
+	s := suggRepo.suggestions[0]
+	require.NotNil(t, s.FromAccountID)
+	assert.Equal(t, "replaced-from-account", *s.FromAccountID,
+		"an ambiguous chain must fall back to the pinned FromAccountID, the same outcome as ErrNoActiveAccount")
+	require.NotNil(t, s.ToAccountID)
+	assert.Equal(t, "replaced-to-account", *s.ToAccountID,
+		"an ambiguous chain must fall back to the pinned ToAccountID, not guess between the two live siblings")
 }
 
 // TestBoostExecution_TransferAction_ChainResolver_NilFallback verifies that when

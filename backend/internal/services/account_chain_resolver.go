@@ -104,7 +104,7 @@ func (r *accountChainResolver) ResolveActiveID(ctx context.Context, userAccountI
 	}
 	if len(accounts) > 1 {
 		// #1569 R11 T2: two live siblings sharing one user_account_id is an ordinary Plaid
-		// shape (masked accounts), not corruption. Silently returning accounts[0] here is
+		// shape (maskless accounts), not corruption. Silently returning accounts[0] here is
 		// exactly the defect this task fixes — surface the ambiguity instead.
 		return "", ErrAmbiguousActiveAccount
 	}
