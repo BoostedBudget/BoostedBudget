@@ -824,7 +824,7 @@ func TestPortfolioRepair_ExaminedCountsEveryCandidateDay(t *testing.T) {
 // The capture applies accountLiveOnDateClause, so on a re-link day it writes holding_snapshots for
 // BOTH chain members — that is correct at the capture grain (each physical account really was
 // observed) and wrong the moment the two are summed into one portfolio total. Upsert and the
-// repair must agree, so the chain dedup lives in both.
+// repair must agree, so the succession exclusion lives in both.
 //
 // The predecessor's row is deliberately the LARGER of the two, so a rebuild that keeps the wrong
 // sibling cannot pass by arithmetic accident either.
@@ -855,8 +855,8 @@ func TestPortfolioRepair_SameDayRelink_ReconstructsTheChainOnce(t *testing.T) {
 
 	got := readPortfolioSnapshot(ctx, t, tx, userID, day)
 	assert.InDelta(t, 5000.0, got.totalValue, 0.001,
-		"12000 is the double-count (7000 retained + 5000 successor); 7000 means the dedup kept "+
-			"the predecessor rather than the chain's latest member")
+		"12000 is the double-count (7000 retained + 5000 successor); 7000 means the exclusion ran "+
+			"backwards and dropped the successor instead of the superseded predecessor")
 	assert.InDelta(t, 3000.0, got.totalCostBasis, 0.001)
 
 	l, ok := readLedger(ctx, t, tx, userID, day)

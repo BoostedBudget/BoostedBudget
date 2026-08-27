@@ -181,10 +181,18 @@ func seedRelinkedInvestmentChain(ctx context.Context, t *testing.T, db DB, prefi
 		newAccountID, newItemID, userID, prefix+"-acct2-"+newAccountID.String(), userAccountID)
 	require.NoError(t, err, "seed the successor account")
 
-	// THE RE-LINK: the predecessor is retained, not deleted, and closes its active interval today.
+	// THE RE-LINK, in the shape production writes it (account_service step 5b): the OLD LINKED
+	// ITEM is marked replaced and points at the new one — that item-level link is the only durable
+	// record that these two accounts are a chain rather than two accounts that happen to share a
+	// user_account_id. The account row is marked replaced with a NULL replaced_by_id, exactly as
+	// UpdateStatus(..., AccountStatusReplaced, nil) leaves it.
 	_, err = db.Exec(ctx, `
-		UPDATE accounts SET status = 'replaced', replaced_by_id = $2, replaced_at = NOW(), updated_at = NOW()
-		WHERE id = $1`, oldAccountID, newAccountID)
+		UPDATE linked_items SET status = 'replaced', replaced_at = NOW(), replaced_by_id = $2
+		WHERE id = (SELECT linked_item_id FROM accounts WHERE id = $1)`, oldAccountID, newItemID)
+	require.NoError(t, err, "mark the predecessor's linked item replaced")
+	_, err = db.Exec(ctx, `
+		UPDATE accounts SET status = 'replaced', replaced_at = NOW(), updated_at = NOW()
+		WHERE id = $1`, oldAccountID)
 	require.NoError(t, err, "mark the predecessor replaced")
 
 	return userID, oldAccountID, newAccountID, secID
@@ -230,12 +238,12 @@ func TestPortfolioSnapshot_Upsert_SameDayRelink_CountsTheChainOnce(t *testing.T)
 	require.NoError(t, err)
 
 	require.InDelta(t, 5000.0, snap.TotalValue, 0.001,
-		"9000 here is the double-count: the re-linked chain contributed twice on the overlap day, "+
-			"so a $5,000 portfolio reads as $9,000 the day the user changed brokers. The winner "+
-			"must be the chain's FRESHEST observation (the successor's 5000), matching the "+
-			"balance side's DedupKeepsLatestInChain rule.")
+		"9000 here is the double-count: both members of the chain contributed on the overlap day, "+
+			"so a $5,000 portfolio reads as $9,000 the day the user changed brokers. Only the "+
+			"SUPERSEDED member may be dropped, and only because the successor's linked item is "+
+			"recorded as replacing its own.")
 	require.InDelta(t, 3000.0, snap.TotalCostBasis, 0.001,
-		"cost basis must be deduped by the same rule, or gain/loss is computed against a doubled basis")
+		"cost basis must be excluded by the same rule, or gain/loss is computed against a doubled basis")
 }
 
 // TestPortfolioSnapshot_Upsert_RelinkBeforeTheSuccessorHasSynced_KeepsThePredecessor pins the OTHER
@@ -273,13 +281,19 @@ func TestPortfolioSnapshot_Upsert_RelinkBeforeTheSuccessorHasSynced_KeepsThePred
 			"next sync")
 }
 
-// TestPortfolioSnapshot_Upsert_BothSiblingsLeftActive_StillCountsTheChainOnce is the case leg 2 of
-// the chain-winner order cannot separate, and it is not hypothetical: account_service's re-link
-// LOGS AND CONTINUES when its UpdateStatus of the predecessor fails (item B of #1569 task 9.1), so
-// a transient error leaves both siblings 'active' with nothing to say so. Chain dedup must hold the
-// portfolio number correct across that window, and the winner must be the successor — the sibling
-// the user's new bank connection actually feeds.
-func TestPortfolioSnapshot_Upsert_BothSiblingsLeftActive_StillCountsTheChainOnce(t *testing.T) {
+// TestPortfolioSnapshot_Upsert_TwoLiveAccountsSharingAChainKey_BOTHCount is the test that refuted
+// this fix's first version, and it is kept as the guard against ever writing that version again.
+//
+// The first fix collapsed each user_account_id to one row, copying the balance side. It rested on
+// an invariant stated as fact in account_liveness_sql.go's household comment — that two 'active'
+// accounts never share a user_account_id — and that invariant is FALSE. MatchOrCreate keys on
+// (user, institution, MASK), and a NULL mask matches every other NULL mask at that institution, so
+// a brokerage and an IRA at one broker (neither of which Plaid gives a mask) get the SAME
+// user_accounts row while both are live. Probed against real Postgres before this test was written.
+//
+// One-row-per-chain therefore HALVES such a portfolio: a larger error than the doubling it was
+// meant to fix, in the opposite direction, and invisible because the number stays plausible.
+func TestPortfolioSnapshot_Upsert_TwoLiveAccountsSharingAChainKey_BOTHCount(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
 
@@ -287,46 +301,49 @@ func TestPortfolioSnapshot_Upsert_BothSiblingsLeftActive_StillCountsTheChainOnce
 	require.NoError(t, err)
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	userID, oldAccountID, newAccountID, secID := seedRelinkedInvestmentChain(ctx, t, tx, "psnap-bothactive")
+	userID, linkedItemID, brokerage, secID := seedInvestmentFixture(ctx, t, tx, "psnap-maskless")
 
-	// Undo the status transition: this is the fail-open state, where the re-link created the
-	// successor and never managed to mark the predecessor.
+	// Both accounts get the SAME user_account_id, exactly as MatchOrCreate would hand them out for
+	// two maskless accounts at one institution, and BOTH stay active — they coexist, they are not
+	// a chain.
+	userAccountID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		UPDATE accounts SET status = 'active', replaced_by_id = NULL, replaced_at = NULL
-		WHERE id = $1`, oldAccountID)
+		INSERT INTO user_accounts (id, user_id, institution_id, primary_type)
+		VALUES ($1, $2, $3, 'investment')`, userAccountID, userID, "psnap-maskless-ins")
 	require.NoError(t, err)
-	// created_at defaults to the TRANSACTION timestamp, so both rows tie on it inside one test
-	// transaction. Production never does — the predecessor predates the re-link by weeks.
-	_, err = tx.Exec(ctx, `UPDATE accounts SET created_at = NOW() - INTERVAL '30 days' WHERE id = $1`,
-		oldAccountID)
+	_, err = tx.Exec(ctx, `UPDATE accounts SET user_account_id = $2 WHERE id = $1`, brokerage, userAccountID)
 	require.NoError(t, err)
 
+	ira := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
-		VALUES ($1, $2, $3, $4, 10, 3000.00, 4000.00)`, uuid.New(), userID, oldAccountID, secID)
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Roth IRA', 'investment', 'active', $5)`,
+		ira, linkedItemID, userID, "psnap-maskless-ira-"+ira.String(), userAccountID)
 	require.NoError(t, err)
-	_, err = tx.Exec(ctx, `
-		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
-		VALUES ($1, $2, $3, $4, 10, 3000.00, 5000.00)`, uuid.New(), userID, newAccountID, secID)
-	require.NoError(t, err)
+
+	for _, acct := range []uuid.UUID{brokerage, ira} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+			VALUES ($1, $2, $3, $4, 10, 2000.00, 4000.00)`, uuid.New(), userID, acct, secID)
+		require.NoError(t, err)
+	}
 
 	now := time.Now().UTC()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 
 	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), today)
 	require.NoError(t, err)
-	require.InDelta(t, 5000.0, snap.TotalValue, 0.001,
-		"9000 means the both-active window doubles the portfolio; 4000 means the winner was "+
-			"decided by uuid rather than by chain recency")
+	require.InDelta(t, 8000.0, snap.TotalValue, 0.001,
+		"4000 means one of two genuinely live accounts was dropped as a duplicate of the other. "+
+			"They overlap in time; a re-link chain abuts. Only succession may exclude a row.")
 }
 
-// TestPortfolioSnapshot_Upsert_LegacyNullUserAccountIDs_DoNotCollapseIntoOneChain guards the half
-// of the dedup key that is easy to drop as noise. `accounts.user_account_id` is NULLABLE and
-// pre-dates the chain design, so two entirely unrelated legacy accounts both key on NULL. Deduping
-// on the raw column would put them in ONE bucket and silently delete a whole account's holdings
-// from every portfolio total — the opposite failure to the one the dedup was added for, and a much
-// quieter one. COALESCE(user_account_id, id) is why they stay separate; it is the same key
-// balance_snapshot_repository.go uses, for the same reason.
+// TestPortfolioSnapshot_Upsert_LegacyNullUserAccountIDs_DoNotCollapseIntoOneChain guards the NULL
+// half of the sibling test. `accounts.user_account_id` is NULLABLE and pre-dates the chain design,
+// so two entirely unrelated legacy accounts both carry NULL. Plain SQL equality already refuses to
+// match NULL to NULL, which is exactly right here — but "fixing" that with IS NOT DISTINCT FROM,
+// or with a COALESCE onto a shared literal, would make every identity-less account a sibling of
+// every other and silently delete whole accounts from the portfolio total.
 func TestPortfolioSnapshot_Upsert_LegacyNullUserAccountIDs_DoNotCollapseIntoOneChain(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -359,4 +376,100 @@ func TestPortfolioSnapshot_Upsert_LegacyNullUserAccountIDs_DoNotCollapseIntoOneC
 	require.InDelta(t, 5000.0, snap.TotalValue, 0.001,
 		"2500 means the two NULL-keyed accounts collapsed into one bucket and half the user's "+
 			"portfolio vanished")
+}
+
+// TestPortfolioSnapshot_Upsert_RelinkDoesNotSuppressAnUNRELATEDAccountOnTheOldItem pins the
+// same-chain leg of the exclusion, which two mutation rounds showed nothing else was holding.
+//
+// The shape is ordinary: a user with two accounts at one institution closes one of them at the
+// bank, then re-links. The new item reports only the survivor. On the changeover day the old
+// item's OTHER account was still live and still held money — it has no successor at all — so it
+// must count. Drop the `s.user_account_id = l.user_account_id` leg and the survivor's successor
+// suppresses it too, silently deleting a real account's holdings from that day's total.
+func TestPortfolioSnapshot_Upsert_RelinkDoesNotSuppressAnUNRELATEDAccountOnTheOldItem(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, oldAccountID, newAccountID, secID := seedRelinkedInvestmentChain(ctx, t, tx, "psnap-unrelated")
+
+	// A SECOND account on the OLD item, with its own stable identity and no successor.
+	var oldItemID uuid.UUID
+	require.NoError(t, tx.QueryRow(ctx, `SELECT linked_item_id FROM accounts WHERE id = $1`, oldAccountID).
+		Scan(&oldItemID))
+	otherUA, otherAccount := uuid.New(), uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id, primary_type)
+		VALUES ($1, $2, 'psnap-unrelated-ins2', 'investment')`, otherUA, userID)
+	require.NoError(t, err)
+	// Inserted ACTIVE and then closed, so the 000152 trigger records a real active interval — an
+	// account inserted straight into a terminal status has no 'active' history and is excluded by
+	// liveness before this rule ever sees it, which would make the test pass for the wrong reason.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Closed At The Bank', 'investment', 'active', $5)`,
+		otherAccount, oldItemID, userID, "psnap-unrelated-other-"+otherAccount.String(), otherUA)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		UPDATE accounts SET status = 'replaced', replaced_at = NOW() WHERE id = $1`, otherAccount)
+	require.NoError(t, err)
+
+	for acct, value := range map[uuid.UUID]float64{oldAccountID: 4000, newAccountID: 5000, otherAccount: 1500} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+			VALUES ($1, $2, $3, $4, 10, 1000.00, $5)`, uuid.New(), userID, acct, secID, value)
+		require.NoError(t, err)
+	}
+
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), today)
+	require.NoError(t, err)
+	require.InDelta(t, 6500.0, snap.TotalValue, 0.001,
+		"expected the successor (5000) plus the unrelated old-item account (1500). 5000 means the "+
+			"exclusion reached across chains and deleted an account nothing replaced; 9000+ means "+
+			"the predecessor was not excluded at all")
+}
+
+// TestPortfolioSnapshot_Upsert_NullChainKeysAcrossARelink_BothCount pins the NULL half of the same
+// leg, which is a separate mutation: `IS NOT DISTINCT FROM` makes NULL match NULL.
+//
+// Two identity-less accounts, one on a replaced item and one on its successor, may or may not be
+// the same logical account — the chain key that would say is exactly what is missing. Under NULL
+// matching, the older one is deleted from the total. Under plain equality it is retained and the
+// day may double-count. #1569's bias decides the tie: retain and possibly over-report a legacy
+// shape rather than silently destroy a real account's holdings, and the doubling is at least
+// visible while the deletion is not.
+func TestPortfolioSnapshot_Upsert_NullChainKeysAcrossARelink_BothCount(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, oldAccountID, newAccountID, secID := seedRelinkedInvestmentChain(ctx, t, tx, "psnap-nullrelink")
+	_, err = tx.Exec(ctx, `UPDATE accounts SET user_account_id = NULL WHERE id = ANY($1)`,
+		[]uuid.UUID{oldAccountID, newAccountID})
+	require.NoError(t, err, "strip the chain key from BOTH members — the legacy shape")
+
+	for acct, value := range map[uuid.UUID]float64{oldAccountID: 4000, newAccountID: 5000} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+			VALUES ($1, $2, $3, $4, 10, 1000.00, $5)`, uuid.New(), userID, acct, secID, value)
+		require.NoError(t, err)
+	}
+
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), today)
+	require.NoError(t, err)
+	require.InDelta(t, 9000.0, snap.TotalValue, 0.001,
+		"5000 means NULL was matched to NULL and an account with no recorded relationship to the "+
+			"successor was deleted from the total")
 }

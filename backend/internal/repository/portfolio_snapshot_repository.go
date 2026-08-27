@@ -51,39 +51,19 @@ func NewPortfolioSnapshotRepository(db DB) PortfolioSnapshotRepository {
 // holdings state in a single round-trip, avoiding the snapshot-race that would occur if totals
 // were computed in Go and raced with concurrent writes.
 func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string, snapshotDate time.Time) (*domain.PortfolioSnapshot, error) {
-	// chain_winner collapses each re-link chain to the ONE accounts row whose holdings represent
-	// the logical account on this day — see accountChainWinnerOrderSQL (account_liveness_sql.go)
-	// for the rule and why the portfolio side needs the has-an-observation leg the balance side
-	// does not. The liveness test lives here rather than beside the holdings JOIN so that a
-	// chain member excluded by liveness cannot win its chain and suppress the member that was
-	// genuinely live.
+	// `live` is the set of the user's accounts recorded live on snapshotDate, MINUS any a sibling
+	// superseded on that day — see accountChainLiveCTE (account_liveness_sql.go) for the rule, for
+	// why it is a succession test rather than one-row-per-user_account_id, and for the measurement
+	// that ruled the simpler version out. The liveness test lives inside that CTE rather than
+	// beside the holdings JOIN so a superseded predecessor is removed before anything is summed.
 	query := `
-		WITH chain_winner AS (
-			SELECT DISTINCT ON (` + accountChainKeyExpr + `) a.id
-			FROM accounts a
-			WHERE a.user_id = $1::uuid
-			-- Was this account LIVE ON snapshotDate, not "is it active right now"? A plain
-			-- a.status = 'active' answers the wrong question for this query: Upsert re-derives
-			-- and re-writes a PAST day's total every time it runs (upsert keyed on
-			-- (user_id, snapshot_date)), so once an account is later removed, recomputing that
-			-- same past day with a current-status predicate would drop its holdings and silently
-			-- rewrite history the user already saw — the portfolio curve retroactively falls for
-			-- a day nothing changed on. Under retention the holdings rows still exist, so the
-			-- correct question is recorded liveness at ANY POINT DURING the snapshot's calendar
-			-- date, read from account_status_history's half-open [valid_from, valid_to) intervals.
-			-- The overlap test — not "live at midnight of the snapshot date" — matters for the
-			-- ordinary (non-recompute) write too: a same-day daily upsert for an account linked
-			-- earlier that same day has valid_from AFTER midnight, so a midnight-instant check
-			-- would wrongly exclude it. Issue #1569.
-			--
-			-- ⚠ This is no longer a copy. It is rendered from the SAME accountLiveOnDateClause the
-			-- holdings capture and the portfolio repair render (account_liveness_sql.go). Task 10's
-			-- review measured what the two-copy version cost: a valid_to > → >= edit on the
-			-- history copy alone left the whole integration package green. Do not re-inline it.
-			  AND ` + accountLiveOnDateSQL("a.id", "$2") + `
-			ORDER BY ` + accountChainKeyExpr + `, ` +
-		accountChainWinnerOrderSQL("EXISTS (SELECT 1 FROM holdings hw WHERE hw.account_id = a.id)") + `
-		)
+		WITH ` + accountChainLiveCTESQL(
+		"$2::date",
+		"accounts a",
+		"a.user_id = $1::uuid",
+		"$2",
+		"EXISTS (SELECT 1 FROM holdings hw WHERE hw.account_id = s.account_id)",
+	) + `
 		INSERT INTO portfolio_snapshots (
 			id,
 			user_id,
@@ -119,7 +99,7 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 			NOW(),
 			NOW()
 		FROM holdings h
-		JOIN chain_winner cw ON cw.id = h.account_id
+		JOIN live lv ON lv.account_id = h.account_id
 		WHERE h.user_id = $1::uuid
 		ON CONFLICT (user_id, snapshot_date) DO UPDATE SET
 			total_value       = EXCLUDED.total_value,

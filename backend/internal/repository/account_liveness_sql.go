@@ -32,6 +32,7 @@ const accountLiveOnDateClause = `
 	    SELECT 1 FROM account_status_history ash
 	    WHERE ash.account_id = $ACCOUNT
 	      AND ash.status = 'active'
+
 	      -- Explicitly UTC (#1569 F4): "$n::date + INTERVAL '1 day'" yields a timestamp WITHOUT
 	      -- time zone, which Postgres resolves against the SESSION TimeZone when compared to a
 	      -- timestamptz. Production is correct only because NewPool pins TimeZone=UTC (the #1461
@@ -378,68 +379,131 @@ func lastKnownBalanceLateralSQL(alias string) string {
 // syntax error, and a lateral with no projection is dead weight nobody would notice.
 const lastKnownBalanceProjection = "lkb.amount AS last_known_balance, lkb.at AS last_known_balance_at"
 
-// ─── #1569 T9.1 item A: ONE ROW PER RE-LINK CHAIN, on the portfolio side too ─────────────────
+// ─── #1569 T9.1 item A: a SUPERSEDED predecessor must not be counted beside its successor ────
 //
 // THE DEFECT RETENTION CREATED. accountLiveOnDateClause above answers "was this PHYSICAL account
 // live at any point during this day", and it is right to. But a re-link produces TWO physical
-// `accounts` rows for ONE logical account, sharing a `user_account_id`, and on the changeover day
-// BOTH are live: the predecessor until the switch, the successor after it. Summing "every account
-// live that day" therefore counts one $5,000 portfolio as $9,000 — a doubling on the single day a
-// user changes brokers, in a curve whose whole purpose is to be compared day to day.
+// `accounts` rows for ONE logical account, and on the changeover day BOTH are live: the
+// predecessor until the switch, the successor after it. Summing "every account live that day"
+// therefore counted one $5,000 portfolio as $9,000 — a doubling on the single day a user changes
+// brokers, in a curve whose whole purpose is to be compared day to day. Measured, in Upsert and
+// again in the repair's reconstruction, before it was fixed.
 //
 // It was not a bug before this branch. The old re-link path DELETED the predecessor's holdings, so
-// "everything live that day" could only ever match one row's worth of money. Retaining them is what
-// made the aggregate double, which is why the fix belongs here and NOT in the liveness predicate —
-// narrowing liveness to "active right now" or "live at midnight" would re-break the two cases the
-// long comment above exists to protect.
+// "everything live that day" could only ever match one row's worth of money. Retaining them is
+// what made the aggregate double, which is why the fix belongs here and NOT in the liveness
+// predicate — narrowing liveness to "active right now" or "live at midnight" would re-break the
+// two cases the long comment above exists to protect.
 //
-// ⚠ THE BALANCE SIDE ALREADY SOLVED THIS, and reusing its rule matters more than inventing a
-// better one: two subtly different dedup rules over the same chains is its own defect.
-// balance_snapshot_repository.go dedups on `COALESCE(user_account_id::text, account_id::text)` —
-// the chain when there is one, the raw account id when the column is a legacy NULL, so NULLs land
-// in separate buckets instead of collapsing into one — and keeps the chain's LATEST row
-// (dashboard_service.go's baselineBalanceForComparison, pinned by
-// TestGetBalanceSummary_PeriodComparison_DedupKeepsLatestInChain). The key is copied verbatim.
+// ⚠⚠ WHY THIS IS NOT "ONE ROW PER user_account_id", WHICH IS WHAT I WROTE FIRST AND HAD TO UNDO.
 //
-// WHY THE ORDER IS NOT JUST "LATEST", and this is the one place the portfolio side must differ.
-// A balance_snapshot IS an observation, so "the chain's latest row" and "the chain's latest
-// observation" are the same sentence. `holdings` is not: it is one CURRENT-STATE row set per
-// physical account, and a re-link creates the successor BEFORE any investment sync has written a
-// single holding for it. Ordering on chain recency alone would hand that window an empty winner
-// and write ZERO for the day — a cliff in the curve on a day the user's money did not move, which
-// is the same retroactive rewrite the liveness predicate was written to prevent
-// (TestPortfolioSnapshot_Upsert_RelinkBeforeTheSuccessorHasSynced_KeepsThePredecessor pins it).
-// So observation comes first and recency breaks the tie among members that HAVE one:
+// The balance side dedups exactly that way — `COALESCE(user_account_id, account_id)`, keep the
+// latest (balance_snapshot_repository.go, and dashboard_service.go's
+// TestGetBalanceSummary_PeriodComparison_DedupKeepsLatestInChain) — and reusing a rule that already
+// exists beats inventing one. So the first version of this fix copied it. It rested on an
+// invariant this file's own household comment states as fact: that "two 'active' accounts rows
+// [sharing] one user_account_id ... the Plaid re-link handler guarantees never happens".
 //
-//	1. has an observation (holdings rows / that day's holding_snapshots)  DESC
-//	2. a.status = 'active' DESC — the chain member the re-link left standing
-//	3. a.created_at DESC — the chain's latest member, i.e. the successor
-//	4. a.id DESC — determinism, never reached in practice
+// THAT INVARIANT IS FALSE, and it was measured rather than argued. userAccountService.MatchOrCreate
+// keys on (user_id, institution_id, MASK) and nothing else, and accountRepository's lookup treats a
+// NULL mask as a value that matches every other NULL mask at that institution
+// (FindByInstitutionAndMask's `mask_blind_idx IS NULL` branch). Probed against real Postgres: two
+// MatchOrCreate calls for one institution with no mask — a brokerage and an IRA at the same broker,
+// an entirely ordinary Plaid shape — return the SAME user_accounts row, as do two accounts that
+// merely share a mask. Both accounts are then live, simultaneously, under one chain key. A
+// one-row-per-chain rule silently drops one of them, which HALVES that user's portfolio: a bigger
+// money error, in the opposite direction, than the doubling it was written to fix.
 //
-// ⚠ LEG 2 IS NOT REDUNDANT WITH LEG 3, and leg 3 is not redundant with leg 2. `created_at`
-// defaults to now(), which is the TRANSACTION timestamp: two accounts rows written in one
-// transaction tie on it exactly, and the tie then falls through to a random uuid. Leg 2 separates
-// the ordinary re-link (predecessor 'replaced', successor 'active') without depending on wall
-// clocks at all. Leg 3 is what separates the case leg 2 cannot: BOTH siblings still 'active',
-// which account_service's re-link produces whenever its UpdateStatus of the predecessor fails —
-// it logs and continues, so the failure is silent (item B of this task). The two legs cover
-// different failures and both are pinned by their own test.
+// ⚠ The balance side is dedup'ing these same accounts by the same key and therefore has the same
+// hole. That is NOT fixed here (out of scope, and its shape differs — it dedups snapshot rows, not
+// accounts), but nothing downstream should read the balance rule as validated by this file any
+// more.
 //
-// ⚠ NOT captured_at / updated_at, and the reason is measurable rather than stylistic: the daily
-// capture sweeps every live account in ONE pass, so on a re-link day both siblings are stamped
-// within the same instant and their relative order is a coin flip. Migration 000160 makes the same
-// point about captured_at at a different grain ("provenance, not a selection key").
+// THE RULE THAT IS ACTUALLY TRUE. A re-link predecessor is not merely "another row with the same
+// chain key". It is a row whose LINKED ITEM was replaced by the item its sibling belongs to, and
+// that is a recorded fact: account_service's re-link stamps linked_items.replaced_by_id on the old
+// item, pointing at the new one. Two coexisting maskless accounts share ONE linked item and can
+// never satisfy that test. So:
 //
-// ⚠ "Absence of holdings is not evidence of an empty portfolio" is the deliberate reading of rule
-// 1, and it agrees with the repair's own ruling that a day with no rows is unreconstructable
-// rather than zero. A CONFIRMED empty successor is representable — that is what
-// holding_snapshots.present is for — and it reaches the repair through rule 1 being satisfied
-// (rows exist) with nothing present to sum.
-const accountChainKeyExpr = `COALESCE(a.user_account_id::text, a.id::text)`
+//	Exclude X from day D when a sibling Y is also live on D, Y belongs to the linked item that
+//	replaced X's linked item, and Y has an observation.
+//
+//	1. same chain — plain SQL equality on user_account_id, so a legacy NULL matches NOTHING. Here
+//	   that is the wanted behaviour, not a hazard to COALESCE away: two identity-less accounts have
+//	   no recorded relationship and must both count.
+//	2. item succession — `linked_items.replaced_by_id`. ⚠ NOT account_status_history intervals,
+//	   which was this fix's SECOND wrong version: the status trigger stamps clock_timestamp(), and
+//	   the successor's interval opens ~1 ms before the predecessor's closes, so "s began at or after
+//	   l ended" simply does not hold. It fails in BOTH orderings, and the two orderings both exist —
+//	   ExchangePublicToken marks the predecessor before inserting the successor, while item B's
+//	   CreateBatch backstop supersedes it after. Measured, not reasoned: the intervals were printed.
+//	   ⚠ NOT `accounts.replaced_by_id` either, which reads like the obvious column: the production
+//	   re-link passes nil for it (account_service.go's UpdateStatus call), so it is NULL on every
+//	   predecessor this rule needs to recognise. Only item B's new CreateBatch path sets it.
+//	   ⚠ NOT current status, on either row. A past day must not be re-judged by what the accounts
+//	   look like today — the same trap the liveness comment above exists for.
+//	3. Y has an observation. Without this leg the window between a re-link and the successor's
+//	   first sync writes ZERO for the day — a cliff in the curve on a day the user's money did not
+//	   move — because the successor exists but holds nothing yet. Pinned by
+//	   TestPortfolioSnapshot_Upsert_RelinkBeforeTheSuccessorHasSynced_KeepsThePredecessor.
+//
+// ⚠ WHAT THIS DOES NOT COVER, stated rather than left for a reader to discover. The old item's
+// `replaced_by_id` is written by the SAME fail-open block as item B's account status update
+// (account_service.go step 5b logs and continues). If that write fails, no succession is recorded,
+// and this rule counts both siblings — the doubling comes back for that user until something
+// re-links them again. Item B's CreateBatch backstop repairs the ACCOUNT row, not the item row, so
+// it does not close this window; it is smaller than the one before this task and it is real.
+//
+// ⚠ "Absence of holdings is not evidence of an empty portfolio" is the deliberate reading of leg 3,
+// and it agrees with the repair's own ruling that a day with no rows is unreconstructable rather
+// than zero. A CONFIRMED empty successor is representable — that is what holding_snapshots.present
+// is for — and it reaches the repair through leg 3 being satisfied (rows exist) with nothing
+// present to sum.
 
-// accountChainWinnerOrderSQL renders the ORDER BY tail of a `DISTINCT ON (… chain key …)` that
-// keeps one accounts row per re-link chain. observedExpr is a boolean SQL expression that is true
-// when THIS caller has an observation for the account (see rule 1 above).
-func accountChainWinnerOrderSQL(observedExpr string) string {
-	return "(" + observedExpr + ") DESC, (a.status = 'active') DESC, a.created_at DESC, a.id DESC"
+// accountChainLiveCTE renders the per-day live set an aggregate may sum over: every account of the
+// user live on the day, MINUS those a sibling superseded. It reuses accountLiveOnDateClause
+// unchanged — the boundary rule stays in exactly one place.
+//
+// $DAYCOL / $FROM / $WHERE supply the caller's candidate (day, account) pairs, $DATE names the day
+// for the liveness test, and $OBSERVED is the caller's has-an-observation test for the SIBLING
+// (alias `s`): current holdings for Upsert, that day's holding_snapshots for the repair.
+//
+// It is deliberately NOT a DISTINCT ON. Picking one winner per chain key is the rule that halves a
+// maskless pair; every unsuperseded account survives here, however many share a key.
+const accountChainLiveCTE = `
+	live_all AS (
+	    SELECT $DAYCOL AS snapshot_date, a.id AS account_id,
+	           a.user_account_id, a.linked_item_id
+	    FROM $FROM
+	    WHERE $WHERE
+	      AND $LIVENESS
+	),
+	live AS (
+	    SELECT l.snapshot_date, l.account_id
+	    FROM live_all l
+	    WHERE NOT EXISTS (
+	        SELECT 1
+	        FROM live_all s
+	        JOIN linked_items li ON li.id = l.linked_item_id
+	        WHERE s.snapshot_date = l.snapshot_date
+	          AND s.account_id <> l.account_id
+	          -- Same logical account. Plain equality, so a legacy NULL matches nothing.
+	          AND s.user_account_id = l.user_account_id
+	          -- ...and s is under the linked item that REPLACED l's. This is the whole
+	          -- discriminator: a re-link puts predecessor and successor under DIFFERENT items and
+	          -- records the link, while coexisting siblings share one item and can never satisfy it.
+	          AND li.replaced_by_id = s.linked_item_id
+	          AND $OBSERVED
+	    )
+	)`
+
+// accountChainLiveCTESQL renders accountChainLiveCTE for one caller.
+func accountChainLiveCTESQL(dayCol, fromClause, whereClause, dateExpr, observedExpr string) string {
+	return strings.NewReplacer(
+		"$DAYCOL", dayCol,
+		"$FROM", fromClause,
+		"$WHERE", whereClause,
+		"$LIVENESS", accountLiveOnDateSQL("a.id", dateExpr),
+		"$OBSERVED", observedExpr,
+	).Replace(accountChainLiveCTE)
 }
