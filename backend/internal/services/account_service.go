@@ -607,9 +607,28 @@ func (s *accountService) LinkAccounts(
 				"error", err,
 			)
 		} else {
+			// ⚠ FAIL-OPEN, and deliberately left that way — #1569 task 9.1 item B.
+			//
+			// This loop runs BEFORE the successor rows exist (step 6b), and returning here would
+			// throw away a bank connection the user just authorised in order to fix a bookkeeping
+			// row. Until this task it was also UNBACKED: a transient failure left two 'active'
+			// accounts sharing one user_account_id with nothing recording it, and every
+			// current-state read — live holdings, the four investment-analytics SUMs — counted
+			// one logical position twice, permanently.
+			//
+			// It is now backed by the write that would otherwise create the second active row:
+			// accountRepository.CreateBatch supersedes any stranded sibling of the chain INSIDE
+			// the transaction that inserts the successor (supersedeStrandedChainSiblings). So a
+			// failure here degrades to "the tombstone lands a few seconds later, atomically",
+			// which is why this stays a log and not a return.
+			//
+			// Still logged at Error: reaching CreateBatch is not guaranteed (a later Plaid call or
+			// MatchOrCreate can refuse the link first), in which case the predecessor is left
+			// 'active' with no successor to supersede it — harmless, since one active row per
+			// chain is exactly correct, but a database write failing is worth surfacing on its own.
 			for _, oldAcct := range oldAccounts {
 				if err := s.accountRepo.UpdateStatus(ctx, oldAcct.ID, user.ID, domain.AccountStatusReplaced, nil); err != nil {
-					s.logger.Error("failed to soft-delete old account",
+					s.logger.Error("failed to mark the re-linked predecessor account 'replaced'; CreateBatch will supersede it atomically when the successor is inserted",
 						"account_id", oldAcct.ID,
 						"error", err,
 					)
