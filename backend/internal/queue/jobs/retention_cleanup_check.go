@@ -828,7 +828,7 @@ var retentionDeletionItems = []retentionDeletionItem{
 	},
 	{
 		phrase:      "your investment holdings and their day-by-day snapshots, every buy and sell recorded against them, and your portfolio value history",
-		tables:      []string{"holdings", "holding_snapshots", "investment_transactions", "portfolio_snapshots", "portfolio_snapshot_repairs"},
+		tables:      []string{"holdings", "holding_snapshots", "holding_observations", "investment_transactions", "portfolio_snapshots", "portfolio_snapshot_repairs"},
 		mustMention: []string{"holdings", "portfolio"},
 	},
 	{

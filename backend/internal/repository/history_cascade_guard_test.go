@@ -140,7 +140,13 @@ var deliberatelyNotHistoryBearing = map[string]string{
 	// table whose NAME reads like history. Each of these is a system record, not the user's
 	// financial history: nothing here is something the user would notice losing, and none of it is
 	// what #1569 promised to retain.
-	"holdings": "LIVE STATE, not history: what the account holds right now. ReplaceForAccount " +
+	"holding_observations": "CAPTURE MARKER, not history (#1569 T9-FIX): one row per (account, " +
+		"UTC day) saying a holdings capture completed. It records that we LOOKED; what we FOUND " +
+		"is holding_snapshots, which is history and is classified as such. Nothing here is a " +
+		"value, and a user would not notice losing it — the reason it exists at all is that an " +
+		"account holding nothing writes no snapshot row, so 'confirmed empty' and 'never synced' " +
+		"were indistinguishable and the portfolio re-link rule reported a stale predecessor.",
+		"holdings": "LIVE STATE, not history: what the account holds right now. ReplaceForAccount " +
 		"deliberately deletes and re-inserts it on every sync, which is how it stays true. The " +
 		"history is holding_snapshots, captured in that SAME transaction but AFTER the inserts, " +
 		"derived from the rows just written — it records the new state, it does not preserve the " +

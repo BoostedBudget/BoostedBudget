@@ -65,6 +65,13 @@ func TestHoldingRepository_ReplaceForAccount_DeletesOldInsertNew(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holding_snapshots`)).
 		WithArgs(accountID, userID, pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// #1569 T9-FIX item 2: and then the observation itself. Neither statement above writes
+	// anything for an account that holds nothing, so "the capture ran" needs its own record —
+	// without it a confirmed-empty re-link successor is indistinguishable from one that has
+	// never synced, and the portfolio reports the retained predecessor's stale valuation.
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holding_observations`)).
+		WithArgs(userID, accountID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
 	_, err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{holding})
@@ -97,6 +104,13 @@ func TestHoldingRepository_ReplaceForAccount_EmptyHoldings(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holding_snapshots`)).
 		WithArgs(accountID, userID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// #1569 T9-FIX item 2: and then the observation itself. Neither statement above writes
+	// anything for an account that holds nothing, so "the capture ran" needs its own record —
+	// without it a confirmed-empty re-link successor is indistinguishable from one that has
+	// never synced, and the portfolio reports the retained predecessor's stale valuation.
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holding_observations`)).
+		WithArgs(userID, accountID, pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 

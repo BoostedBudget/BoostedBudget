@@ -102,6 +102,43 @@ const captureHoldingSnapshotsSQL = `
 		institution_price = EXCLUDED.institution_price
 `
 
+// recordHoldingObservationSQL is half three of a capture, and the only half that runs when there
+// is nothing to record: it writes down that the capture COMPLETED for this (account, UTC day).
+//
+// The other two halves are both position-shaped, so an account observed holding NOTHING leaves no
+// trace at all — the mark-absent can only touch rows that already exist, and the INSERT ... SELECT
+// selects nothing. For an account with prior history the day's all-absent rows carry the
+// observation; for one WITHOUT prior history (a re-link successor whose first sync comes back
+// empty) nothing does, and the portfolio re-link rule then cannot tell "confirmed empty" from
+// "not synced yet" and reports the predecessor's stale valuation. See migration 000176.
+//
+// $1 = user_id, $2 = account_id, $3 = as_of_date.
+const recordHoldingObservationSQL = `
+	INSERT INTO holding_observations (user_id, account_id, as_of_date, observed_at)
+	VALUES ($1, $2, $3::date, now())
+	ON CONFLICT (account_id, as_of_date) DO UPDATE SET
+		user_id     = EXCLUDED.user_id,
+		observed_at = EXCLUDED.observed_at
+`
+
+// recordHoldingObservationsForUserSQL is the whole-user form, scoped to exactly the accounts
+// captureHoldingSnapshotsForUserSQL would have written for: live on the day, and belonging to
+// this user. It reads `accounts` rather than `holdings` on purpose — an account that holds
+// nothing has no holdings row, and that account is the entire reason this record exists.
+//
+// $1 = user_id, $2 = as_of_date.
+var recordHoldingObservationsForUserSQL = `
+	INSERT INTO holding_observations (user_id, account_id, as_of_date, observed_at)
+	SELECT a.user_id, a.id, $2::date, now()
+	FROM accounts a
+	WHERE a.user_id = $1::uuid
+	  AND a.type = 'investment'
+	  AND ` + accountLiveOnDateSQL("a.id", "$2") + `
+	ON CONFLICT (account_id, as_of_date) DO UPDATE SET
+		user_id     = EXCLUDED.user_id,
+		observed_at = EXCLUDED.observed_at
+`
+
 // captureHoldingSnapshots records one account's post-replace position SET. db is expected to be
 // the pgx.Tx that just performed the replace, so both halves and the replace commit together.
 //
@@ -126,6 +163,9 @@ func captureHoldingSnapshots(ctx context.Context, db DB, accountID, userID strin
 		return time.Time{}, err
 	}
 	if _, err := db.Exec(ctx, captureHoldingSnapshotsSQL, accountID, userID, day); err != nil {
+		return time.Time{}, err
+	}
+	if _, err := db.Exec(ctx, recordHoldingObservationSQL, userID, accountID, day); err != nil {
 		return time.Time{}, err
 	}
 	return day, nil
@@ -270,6 +310,9 @@ func (r *holdingSnapshotRepository) CaptureForUser(ctx context.Context, userID s
 		return time.Time{}, err
 	}
 	if _, err := tx.Exec(ctx, captureHoldingSnapshotsForUserSQL, userID, day); err != nil {
+		return time.Time{}, err
+	}
+	if _, err := tx.Exec(ctx, recordHoldingObservationsForUserSQL, userID, day); err != nil {
 		return time.Time{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

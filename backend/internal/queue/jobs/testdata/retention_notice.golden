@@ -21,7 +21,7 @@ tables: transactions, transaction_annotation_history, user_tags, merchant_name_o
 phrase: your transactions, together with every category, note, tag and merchant name you set on them, and the record of those edits
 
 ### item 04
-tables: holdings, holding_snapshots, investment_transactions, portfolio_snapshots, portfolio_snapshot_repairs
+tables: holdings, holding_snapshots, holding_observations, investment_transactions, portfolio_snapshots, portfolio_snapshot_repairs
 phrase: your investment holdings and their day-by-day snapshots, every buy and sell recorded against them, and your portfolio value history
 
 ### item 05
