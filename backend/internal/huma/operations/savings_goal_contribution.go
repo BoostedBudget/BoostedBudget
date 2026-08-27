@@ -388,8 +388,9 @@ func RegisterContributionRoutes(api huma.API, handler *ContributionHandler) {
 		Path:        "/api/v1/savings-goals/{goalID}/contributions",
 		Summary:     "List savings goal contributions",
 		Description: "Returns all confirmed and proposed contributions for a savings goal, newest first. " +
-			"Returns an empty list for a goal the user has DELETED — those contributions are retained " +
-			"but are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).",
+			"Returns an empty list for a goal the user has DELETED — the contributions still logged " +
+			"against it are retained and are read through " +
+			"GET /savings-goals/deleted/{goalID}/contributions instead (#1569).",
 		Tags:        []string{"Savings Goals", "Contributions"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.ListContributions)

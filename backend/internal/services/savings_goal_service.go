@@ -513,7 +513,9 @@ func (s *savingsGoalService) DeleteGoal(ctx context.Context, userID, goalID stri
 		return domain.ErrSavingsGoalNotFound
 	}
 
-	// Tombstone the goal. Contributions are retained; see SavingsGoalRepository.Delete.
+	// Tombstone the goal. Every contribution STILL logged against it is retained (one the user
+	// explicitly deleted was hard-deleted then and does not come back); see
+	// SavingsGoalRepository.Delete.
 	if err := s.goalRepo.Delete(ctx, goalID, userID, s.auditLogRepo); err != nil {
 		s.logger.Error("failed to delete savings goal",
 			slog.String("goal_id", goalID),
