@@ -4,15 +4,23 @@ package repository
 
 // Issue #1569 Task 1b — stop dropping new transactions for retained accounts.
 //
-// GetByLinkedItemID (WHERE status = 'active') is shared by the holdings, liability,
-// investment-transaction and balance-snapshot syncs, whose wipe-and-reinsert semantics must
-// stay active-only. transaction_sync_service.buildAccountMaps needs the opposite — every
-// account regardless of status, so a Plaid-delivered transaction for a disconnected/expired/
-// replaced account is still stored rather than Warn'd-and-skipped forever. This file proves,
-// against a real database, that the new separate read (GetByLinkedItemIDIncludingRetained)
-// does that without disturbing GetByLinkedItemID's existing active-only contract, and that a
-// transaction stored against a retained account this way is genuinely visible through the
-// unified feed — not merely present in the table.
+// GetByLinkedItemID (WHERE status = 'active') is shared by the holdings and liability syncs,
+// whose ReplaceForAccount wipe-and-reinsert semantics must stay active-only.
+// transaction_sync_service.buildAccountMaps needs the opposite — every account regardless of
+// status, so a Plaid-delivered transaction for a disconnected/expired/replaced account is
+// still stored rather than Warn'd-and-skipped forever. This file proves, against a real
+// database, that the new separate read (GetByLinkedItemIDIncludingRetained) does that without
+// disturbing GetByLinkedItemID's existing active-only contract, and that a transaction stored
+// against a retained account this way is genuinely visible through the unified feed — not
+// merely present in the table.
+//
+// ⚠ investment-transaction sync is NOT one of GetByLinkedItemID's wipe-and-reinsert callers:
+// its writer (investmentTransactionRepository.UpsertBatch) is a pure
+// INSERT ... ON CONFLICT DO UPDATE, so it reads GetByLinkedItemIDIncludingRetained too (Issue
+// #1569 round 11 task 1). Balance-snapshot sync (createBalanceSnapshots) was never a
+// GetByLinkedItemID caller either — it reads GetByLinkedItemIDIncludingRetained for an
+// unrelated reason (its account-restore pass needs to see removed rows) and filters to the
+// active subset itself before writing any snapshot.
 
 import (
 	"context"
@@ -121,10 +129,10 @@ func TestAccountRepository_GetByLinkedItemIDIncludingRetained_DoesNotLeakAcrossU
 
 // TestAccountRepository_GetByLinkedItemID_StaysActiveOnlySideBySideWithIncludingRetained pins
 // the trap this task's brief warns about most directly: the shared, active-only
-// GetByLinkedItemID must NOT have been widened. Holdings, liability and balance-snapshot
-// syncs all wipe-and-reinsert on every run against whatever GetByLinkedItemID returns; if it
-// silently started returning a retained account, a later sync could clear or replace that
-// account's holdings/liabilities/snapshots — the destruction Issue #1569 exists to stop.
+// GetByLinkedItemID must NOT have been widened. Holdings and liability syncs wipe-and-reinsert
+// on every run against whatever GetByLinkedItemID returns; if it silently started returning a
+// retained account, a later sync could clear or replace that account's
+// holdings/liabilities — the destruction Issue #1569 exists to stop.
 func TestAccountRepository_GetByLinkedItemID_StaysActiveOnlySideBySideWithIncludingRetained(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -139,8 +147,8 @@ func TestAccountRepository_GetByLinkedItemID_StaysActiveOnlySideBySideWithInclud
 
 	activeOnly, err := repo.GetByLinkedItemID(ctx, f.LinkedItemID.String())
 	require.NoError(t, err)
-	require.Len(t, activeOnly, 1, "GetByLinkedItemID must stay active-only — holdings/liability/"+
-		"balance-snapshot syncs depend on this to avoid destroying a retained account's data")
+	require.Len(t, activeOnly, 1, "GetByLinkedItemID must stay active-only — holdings/liability "+
+		"syncs depend on this to avoid destroying a retained account's data")
 	assert.Equal(t, f.AccountID.String(), activeOnly[0].ID)
 	for _, a := range activeOnly {
 		assert.NotEqual(t, removedID.String(), a.ID, "removed sibling must not leak into the active-only read")

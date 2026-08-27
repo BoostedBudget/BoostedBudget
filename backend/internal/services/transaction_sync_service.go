@@ -909,9 +909,15 @@ func (s *transactionSyncService) buildAccountMaps(ctx context.Context, linkedIte
 	// These are real transactions — the money moved — so they are stored against the
 	// account like any other; retained-account visibility in the unified feed is handled by
 	// retainedAccountVisibilityLeg (transaction_repository.go), not by excluding rows here.
-	// Do NOT switch this to GetByLinkedItemID: that method is shared by the
-	// holdings/liability/balance-snapshot syncs, whose wipe-and-reinsert semantics must stay
-	// active-only (see the doc comment on AccountRepository.GetByLinkedItemID).
+	// Do NOT switch this to GetByLinkedItemID: its remaining wipe-and-reinsert callers are the
+	// holdings and liability syncs, whose ReplaceForAccount semantics must stay active-only
+	// (see the doc comment on AccountRepository.GetByLinkedItemID). Investment-transaction
+	// sync used to be grouped with them but was fixed in Issue #1569 round 11 task 1 — it now
+	// reads GetByLinkedItemIDIncludingRetained too, for the identical reason this method does.
+	// Balance-snapshot sync (createBalanceSnapshots below) was never a GetByLinkedItemID
+	// caller either; it reads GetByLinkedItemIDIncludingRetained for its own, unrelated
+	// reason (its account-restore pass needs to see removed rows) and filters to the active
+	// subset itself before writing any snapshot.
 	accounts, err := s.accountRepo.GetByLinkedItemIDIncludingRetained(ctx, linkedItemID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load accounts for linked item %s: %w", linkedItemID, err)
