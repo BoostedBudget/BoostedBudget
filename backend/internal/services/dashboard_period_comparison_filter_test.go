@@ -1025,6 +1025,15 @@ func TestGetBalanceSummary_PeriodComparison_DedupKeepsLatestInChain(t *testing.T
 			UserID: userID, CurrentBalance: &cur, SnapshotAt: time.Now().UTC()}}, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
 		Return(previous, nil)
+	// #1569 T10-FIX item 2: the baseline universe is resolved at the baseline cutoff, and the
+	// predecessor is part of it. Supplying it is what makes this fixture exercise dedup at all —
+	// a snapshot naming an account that is in NO universe is now dropped before dedup sees it, so
+	// without this row the two assertions below would hold for the wrong reason.
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
+		mock.MatchedBy(asOfBaselineOpts(defaultBaselineCutoff()))).
+		Return(append(append([]domain.Account{}, accounts...),
+			domain.Account{ID: "acct-old", UserID: userID, Name: "Old Checking", Type: "depository",
+				Status: domain.AccountStatusReplaced, UserAccountID: &stableUA}), nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 
@@ -1066,6 +1075,13 @@ func TestGetNetWorth_PeriodComparison_DedupKeepsLatestInChain(t *testing.T) {
 			UserID: userID, CurrentBalance: &cur, SnapshotAt: time.Now().UTC()}}, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
 		Return(previous, nil)
+	// See the balance-summary twin: the predecessor must be in the baseline universe for this
+	// fixture to reach the dedup it is testing (#1569 T10-FIX item 2).
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
+		mock.MatchedBy(asOfBaselineOpts(defaultBaselineCutoff()))).
+		Return(append(append([]domain.Account{}, accounts...),
+			domain.Account{ID: "acct-old", UserID: userID, Name: "Old Checking", Type: "depository",
+				Status: domain.AccountStatusReplaced, UserAccountID: &stableUA}), nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 

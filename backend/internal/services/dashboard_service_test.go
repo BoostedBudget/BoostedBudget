@@ -1242,6 +1242,15 @@ func TestDashboardService_GetNetWorth_PreviousPeriodResolvesChain(t *testing.T) 
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
 		Return([]domain.BalanceSnapshot{previousSnapshot}, nil)
+	// #1569 T10-FIX item 2: the baseline universe is now resolved whenever a snapshot's OWN
+	// accounts row is missing from the current map — which is exactly this snapshot's situation —
+	// rather than only when its chain key misses too. The predecessor was live at the cutoff.
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
+		mock.MatchedBy(asOfBaselineOpts(defaultBaselineCutoff()))).
+		Return([]domain.Account{activeAccount, {
+			ID: "account-replaced-id", UserID: userID, Name: "Checking (old)", Type: "depository",
+			Status: domain.AccountStatusReplaced, UserAccountID: &stableUA,
+		}}, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 
@@ -1312,6 +1321,15 @@ func TestGetBalanceSummary_PreviousPeriodChainDedup(t *testing.T) {
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
 		Return([]domain.BalanceSnapshot{prevSnapReplaced, prevSnapActive}, nil)
+	// #1569 T10-FIX item 2: the baseline universe now resolves whenever a snapshot's OWN accounts
+	// row is missing. Supplying the predecessor as 'replaced' is what lets the collapse below
+	// happen for the RIGHT reason — a recorded predecessor deferring to its live successor.
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
+		mock.MatchedBy(asOfBaselineOpts(defaultBaselineCutoff()))).
+		Return([]domain.Account{activeAccount, {
+			ID: "account-replaced", UserID: userID, Name: "Checking (old)", Type: "depository",
+			Status: domain.AccountStatusReplaced, UserAccountID: &stableUA,
+		}}, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 
@@ -1375,6 +1393,14 @@ func TestGetNetWorth_PreviousPeriodChainDedup(t *testing.T) {
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
 		Return([]domain.BalanceSnapshot{prevSnapReplaced, prevSnapActive}, nil)
+	// #1569 T10-FIX item 2: see the balance-summary twin — the predecessor must be in the baseline
+	// universe for the collapse to happen for the right reason.
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
+		mock.MatchedBy(asOfBaselineOpts(defaultBaselineCutoff()))).
+		Return([]domain.Account{activeAccount, {
+			ID: "account-replaced", UserID: userID, Name: "Checking (old)", Type: "depository",
+			Status: domain.AccountStatusReplaced, UserAccountID: &stableUA,
+		}}, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 
