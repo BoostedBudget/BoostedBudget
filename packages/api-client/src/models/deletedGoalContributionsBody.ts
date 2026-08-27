@@ -36,7 +36,7 @@ export interface DeletedGoalContributionsBody {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   /**
-     * Every contribution logged against the deleted goal, newest first
+     * Every contribution still logged against the deleted goal, newest first. One the user explicitly deleted earlier was destroyed at that point and is not here
      * @nullable
      */
   contributions: SavingsGoalContribution[] | null;
