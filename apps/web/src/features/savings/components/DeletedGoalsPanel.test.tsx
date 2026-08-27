@@ -82,6 +82,59 @@ describe('DeletedGoalsPanel', () => {
     expect(container.textContent).toBe('')
   })
 
+  // A failed listing read must never render as ABSENT. An absent panel is read as "you have
+  // deleted nothing" — a false statement about retained money, which is this branch's core
+  // defect class. Same discipline as ClosedAccountBalanceHistory ("does not claim the history
+  // was lost") and HoldingsTable ("surfaces a load failure without saying the history is gone").
+  it('surfaces a failed listing read instead of claiming nothing was deleted', () => {
+    mockUseGetDeletedSavingsGoals.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error('boom'),
+      refetch: mockDeletedSavingsGoalsRefetch,
+    } as unknown as ReturnType<typeof mockUseGetDeletedSavingsGoals>)
+    render(<DeletedGoalsPanel />)
+
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent ?? '').toMatch(/could not load/i)
+    expect(alert.textContent ?? '').toMatch(/still kept/i)
+  })
+
+  it('lets the user retry a failed listing read', async () => {
+    mockUseGetDeletedSavingsGoals.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error('boom'),
+      refetch: mockDeletedSavingsGoalsRefetch,
+    } as unknown as ReturnType<typeof mockUseGetDeletedSavingsGoals>)
+    render(<DeletedGoalsPanel />)
+
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    await waitFor(() => expect(mockDeletedSavingsGoalsRefetch).toHaveBeenCalled())
+  })
+
+  // React Query keeps the last successful page while a refetch fails. Showing it is right —
+  // those rows are real — but showing it SILENTLY lets a purge act on a listing we know is
+  // unverified. Say so, and keep the rows.
+  it('keeps a stale listing on screen but says it could not be refreshed', () => {
+    mockUseGetDeletedSavingsGoals.mockReturnValue({
+      data: [deletedGoal],
+      isLoading: false,
+      isError: true,
+      error: new Error('boom'),
+      refetch: mockDeletedSavingsGoalsRefetch,
+    } as unknown as ReturnType<typeof mockUseGetDeletedSavingsGoals>)
+    render(<DeletedGoalsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+
+    expect(screen.getByText('Japan Trip')).toBeTruthy()
+    const status = screen.getByRole('status')
+    expect(status.textContent ?? '').toMatch(/out of date/i)
+    expect(status.textContent ?? '').toMatch(/still kept/i)
+  })
+
   it('lists a deleted goal with when it was deleted', () => {
     render(<DeletedGoalsPanel />)
     fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
