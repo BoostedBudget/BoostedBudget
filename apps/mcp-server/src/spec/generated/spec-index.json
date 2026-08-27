@@ -1587,7 +1587,7 @@
       ],
       "manifestClass": "read",
       "excluded": false,
-      "description": "Retrieves every boost execution for the authenticated user with an optional status filter. Unlike /boosts/{id}/executions this also returns executions whose boost has since been deleted: those carry boost_id = null plus boost_name and definition_snapshot, captured at execution time.",
+      "description": "Retrieves every boost execution for the authenticated user with an optional status filter. Unlike /boosts/{id}/executions this also returns executions whose boost has since been deleted. Every row carries boost_name and definition_snapshot, captured at execution time, so it is readable with or without its parent. Do NOT key \"deleted boost\" off boost_id being null: normal deletion TOMBSTONES the boost, so those executions keep their original non-null boost_id and the boost simply stops appearing in GET /boosts. boost_id is null only when the boost ROW itself was destroyed (the FK is ON DELETE SET NULL), which today means a purge or GDPR erasure. To mark a row as coming from a deleted boost, treat a null boost_id OR a boost_id absent from GET /boosts as deleted.",
       "parameters": [
         {
           "name": "status",
@@ -3395,7 +3395,7 @@
       ],
       "manifestClass": "read",
       "excluded": false,
-      "description": "Lists savings goals the user has deleted. Deleting a goal retains it and every contribution logged against it (Issue #1569); this endpoint is how the client shows what was kept and offers POST /savings-goals/{id}/purge, which refuses unless the goal is already deleted. Each entry carries deleted_at."
+      "description": "Lists savings goals the user has deleted. Deleting a goal retains it and every contribution STILL logged against it (Issue #1569) — a contribution the user explicitly deleted earlier via DELETE /savings-goals/{goalID}/contributions/{id} was destroyed then and does not come back here. This endpoint is how the client shows what was kept and offers POST /savings-goals/{id}/purge, which refuses unless the goal is already deleted. Each entry carries deleted_at."
     },
     {
       "operationId": "listDeletedSavingsGoalContributions",
@@ -3487,7 +3487,7 @@
       ],
       "manifestClass": "destructive",
       "excluded": true,
-      "description": "Removes a contribution (proposed or confirmed). Triggers goal progress recomputation.",
+      "description": "PERMANENTLY DESTROYS a contribution (proposed or confirmed) and triggers goal progress recomputation. This is a hard delete, not a tombstone, and it is one of the sanctioned explicit-destruction exceptions under the retain-by-default rule (#1569): a hand-logged amount erased here cannot be recovered and no provider can supply it again. Deleting the GOAL does not do this — that retains every contribution still logged against it.",
       "parameters": [
         {
           "name": "goalID",
@@ -3615,7 +3615,7 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Removes a savings goal from the user's collection. Does NOT destroy any data — every contribution logged against the goal is retained and stays readable at GET /savings-goals/deleted/{goalID}/contributions (the live GET /savings-goals/{goalID}/contributions returns nothing once the goal is deleted). Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its contributions.",
+      "description": "Removes a savings goal from the user's collection. Destroys nothing ON ITS OWN — every contribution still logged against the goal is retained and stays readable at GET /savings-goals/deleted/{goalID}/contributions (the live GET /savings-goals/{goalID}/contributions returns nothing once the goal is deleted). It does not resurrect a contribution the user had already deleted explicitly, which was destroyed at that point. Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its remaining contributions.",
       "parameters": [
         {
           "name": "id",
