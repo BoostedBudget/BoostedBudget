@@ -51,14 +51,32 @@ import (
 
 // fkCascadeEdge is one `ON DELETE CASCADE` foreign key: the CHILD table carries the constraint and
 // is what gets deleted when a row in PARENT goes.
+//
+// THE COLUMN LISTS ARE PART OF THE KEY (#1569 T8.7 item B). Without them the pinned identity of an
+// edge is only {child, parent, conname}, and a migration that DROPs and re-ADDs the same conname
+// between the same pair of tables pointing at DIFFERENT columns keeps the key intact — G1 stays
+// green while the edge now cascades along a path nobody allowlisted. With them, such a re-add
+// produces an edge the allowlist does not contain (reported as unallowlisted) and leaves the pinned
+// entry unmatched (reported as stale), so it fails in both directions at once.
+//
+// The FK's delete ACTION needs no pinning here: the live query filters on `confdeltype = 'c'`, so
+// an edge that stops being CASCADE simply drops out of the set and is reported stale.
+//
+// ⚠ Derived from `conkey`/`confkey` as column NAMES, never from `pg_get_constraintdef` text. The
+// deparse output is `ruleutils.c` formatting and shifts with the server version and the column
+// types — see TestAccountTypeUniverseMatchesTheHoldingsGate, which had to stop asserting it.
+// Comma-joined in CONSTRAINT ORDER, not sorted: for a composite FK the pairing of child column to
+// parent column is positional, so reordering is a real change.
 type fkCascadeEdge struct {
 	child      string
 	parent     string
 	constraint string
+	childCols  string
+	parentCols string
 }
 
 func (e fkCascadeEdge) String() string {
-	return fmt.Sprintf("%s -> %s (%s)", e.child, e.parent, e.constraint)
+	return fmt.Sprintf("%s(%s) -> %s(%s) (%s)", e.child, e.childCols, e.parent, e.parentCols, e.constraint)
 }
 
 // historyBearingTables is the set #1569 established, with what each one is FOR. The value is used in
@@ -144,23 +162,23 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 	// ---- GDPR erasure off `users`. -------------------------------------------------------------
 	// One real `DELETE FROM users` is the whole erasure mechanism (ADR 2026-08-01). Every one of
 	// these is required: removing any of them strands personal data after a completed erasure.
-	{child: "account_status_history", parent: "users", constraint: "fk_ash_user_id"}:                                    "GDPR erasure path off users",
-	{child: "balance_snapshots", parent: "users", constraint: "fk_balance_snapshots_user_id"}:                           "GDPR erasure path off users",
-	{child: "boost_executions", parent: "users", constraint: "fk_boost_executions_user_id"}:                             "GDPR erasure path off users",
-	{child: "boosts", parent: "users", constraint: "fk_boosts_user_id"}:                                                 "GDPR erasure path off users",
-	{child: "budgets", parent: "users", constraint: "fk_budgets_user_id"}:                                               "GDPR erasure path off users",
-	{child: "custom_categories", parent: "users", constraint: "fk_custom_categories_user_id"}:                           "GDPR erasure path off users",
-	{child: "holding_snapshots", parent: "users", constraint: "fk_holding_snapshots_user_id"}:                           "GDPR erasure path off users",
-	{child: "liability_statements", parent: "users", constraint: "fk_liability_statements_user_id"}:                     "GDPR erasure path off users",
-	{child: "portfolio_snapshot_repairs", parent: "users", constraint: "portfolio_snapshot_repairs_user_id_fkey"}:       "GDPR erasure path off users",
-	{child: "transaction_annotation_history", parent: "users", constraint: "fk_transaction_annotation_history_user_id"}: "GDPR erasure path off users; the row carries no FK to transactions, so this is its ONLY route to erasure",
-	{child: "portfolio_snapshots", parent: "users", constraint: "fk_portfolio_snapshots_user_id"}:                       "GDPR erasure path off users",
-	{child: "rollover_history", parent: "users", constraint: "fk_rollover_history_user_id"}:                             "GDPR erasure path off users",
-	{child: "rule_execution_history", parent: "users", constraint: "fk_rule_execution_history_user_id"}:                 "GDPR erasure path off users",
-	{child: "savings_goals", parent: "users", constraint: "fk_savings_goals_user_id"}:                                   "GDPR erasure path off users",
-	{child: "transactions", parent: "users", constraint: "fk_transactions_user_id"}:                                     "GDPR erasure path off users",
-	{child: "accounts", parent: "users", constraint: "fk_accounts_user_id"}:                                             "GDPR erasure path off users",
-	{child: "investment_transactions", parent: "users", constraint: "fk_inv_txn_user_id"}:                               "GDPR erasure path off users",
+	{child: "account_status_history", parent: "users", constraint: "fk_ash_user_id", childCols: "user_id", parentCols: "id"}:                                    "GDPR erasure path off users",
+	{child: "balance_snapshots", parent: "users", constraint: "fk_balance_snapshots_user_id", childCols: "user_id", parentCols: "id"}:                           "GDPR erasure path off users",
+	{child: "boost_executions", parent: "users", constraint: "fk_boost_executions_user_id", childCols: "user_id", parentCols: "id"}:                             "GDPR erasure path off users",
+	{child: "boosts", parent: "users", constraint: "fk_boosts_user_id", childCols: "user_id", parentCols: "id"}:                                                 "GDPR erasure path off users",
+	{child: "budgets", parent: "users", constraint: "fk_budgets_user_id", childCols: "user_id", parentCols: "id"}:                                               "GDPR erasure path off users",
+	{child: "custom_categories", parent: "users", constraint: "fk_custom_categories_user_id", childCols: "user_id", parentCols: "id"}:                           "GDPR erasure path off users",
+	{child: "holding_snapshots", parent: "users", constraint: "fk_holding_snapshots_user_id", childCols: "user_id", parentCols: "id"}:                           "GDPR erasure path off users",
+	{child: "liability_statements", parent: "users", constraint: "fk_liability_statements_user_id", childCols: "user_id", parentCols: "id"}:                     "GDPR erasure path off users",
+	{child: "portfolio_snapshot_repairs", parent: "users", constraint: "portfolio_snapshot_repairs_user_id_fkey", childCols: "user_id", parentCols: "id"}:       "GDPR erasure path off users",
+	{child: "transaction_annotation_history", parent: "users", constraint: "fk_transaction_annotation_history_user_id", childCols: "user_id", parentCols: "id"}: "GDPR erasure path off users; the row carries no FK to transactions, so this is its ONLY route to erasure",
+	{child: "portfolio_snapshots", parent: "users", constraint: "fk_portfolio_snapshots_user_id", childCols: "user_id", parentCols: "id"}:                       "GDPR erasure path off users",
+	{child: "rollover_history", parent: "users", constraint: "fk_rollover_history_user_id", childCols: "user_id", parentCols: "id"}:                             "GDPR erasure path off users",
+	{child: "rule_execution_history", parent: "users", constraint: "fk_rule_execution_history_user_id", childCols: "user_id", parentCols: "id"}:                 "GDPR erasure path off users",
+	{child: "savings_goals", parent: "users", constraint: "fk_savings_goals_user_id", childCols: "user_id", parentCols: "id"}:                                   "GDPR erasure path off users",
+	{child: "transactions", parent: "users", constraint: "fk_transactions_user_id", childCols: "user_id", parentCols: "id"}:                                     "GDPR erasure path off users",
+	{child: "accounts", parent: "users", constraint: "fk_accounts_user_id", childCols: "user_id", parentCols: "id"}:                                             "GDPR erasure path off users",
+	{child: "investment_transactions", parent: "users", constraint: "fk_inv_txn_user_id", childCols: "user_id", parentCols: "id"}:                               "GDPR erasure path off users",
 
 	// ---- investment_transactions off accounts. -------------------------------------------------
 	// Re-derived for #1569 T8 rather than assumed. `accounts` is soft-removed, so this edge only
@@ -172,7 +190,7 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 	// investment transactions are precisely what the user asked to destroy, and leaving them behind
 	// orphaned would be the residue the purge exists to remove. The second route to this edge is
 	// the users cascade above, which reaches accounts first.
-	{child: "investment_transactions", parent: "accounts", constraint: "fk_inv_txn_account_id"}: "explicit user-invoked PurgeAccount (account_repository.go:1118) is the only hard DELETE FROM accounts; the row is what the user asked to destroy",
+	{child: "investment_transactions", parent: "accounts", constraint: "fk_inv_txn_account_id", childCols: "account_id", parentCols: "id"}: "explicit user-invoked PurgeAccount (account_repository.go:1118) is the only hard DELETE FROM accounts; the row is what the user asked to destroy",
 
 	// ---- The three tables whose ONLY erasure route is this edge. -------------------------------
 	// None of these three has a foreign key to `users`, so `DELETE FROM users` reaches them only
@@ -193,21 +211,21 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 	//
 	// Nothing in this file checks that a reason string is TRUE — they are prose for the next
 	// reader. Re-derive before relying on one.
-	{child: "budget_categories", parent: "budgets", constraint: "fk_budget_categories_budget_id"}:               "ONLY erasure path: budget_categories has no user_id FK; budgets is tombstoned by its ordinary delete and has no purge path, so this fires only under GDPR erasure",
-	{child: "savings_goal_contributions", parent: "savings_goals", constraint: "fk_contributions_savings_goal"}: "ONLY erasure path: savings_goal_contributions has no user_id column. savings_goals is tombstoned by its ordinary delete, so no ordinary delete fires this — but GDPR erasure AND the three explicit purges that hard-delete a tombstoned goal (PurgeGoal, PurgeAccount, PurgeLinkedItem) all do",
+	{child: "budget_categories", parent: "budgets", constraint: "fk_budget_categories_budget_id", childCols: "budget_id", parentCols: "id"}:                     "ONLY erasure path: budget_categories has no user_id FK; budgets is tombstoned by its ordinary delete and has no purge path, so this fires only under GDPR erasure",
+	{child: "savings_goal_contributions", parent: "savings_goals", constraint: "fk_contributions_savings_goal", childCols: "savings_goal_id", parentCols: "id"}: "ONLY erasure path: savings_goal_contributions has no user_id column. savings_goals is tombstoned by its ordinary delete, so no ordinary delete fires this — but GDPR erasure AND the three explicit purges that hard-delete a tombstoned goal (PurgeGoal, PurgeAccount, PurgeLinkedItem) all do",
 
 	// ---- Explicit destruction: the account purge. ----------------------------------------------
 	// `PurgeAccount` (account_repository.go) is the user asking, in words, for one account's data to
 	// be destroyed; it refuses to run on a live account. These three edges are how the derived
 	// history goes with it. See TestAccountRepository_PurgeAccount_Integration_RemovesEverythingDerived.
-	{child: "account_status_history", parent: "accounts", constraint: "fk_ash_account_id"}:                "explicit account purge destroys derived history for that account",
-	{child: "holding_snapshots", parent: "accounts", constraint: "fk_holding_snapshots_account_id"}:       "explicit account purge destroys derived history for that account",
-	{child: "liability_statements", parent: "accounts", constraint: "fk_liability_statements_account_id"}: "explicit account purge destroys derived history for that account",
+	{child: "account_status_history", parent: "accounts", constraint: "fk_ash_account_id", childCols: "account_id", parentCols: "id"}:                "explicit account purge destroys derived history for that account",
+	{child: "holding_snapshots", parent: "accounts", constraint: "fk_holding_snapshots_account_id", childCols: "account_id", parentCols: "id"}:       "explicit account purge destroys derived history for that account",
+	{child: "liability_statements", parent: "accounts", constraint: "fk_liability_statements_account_id", childCols: "account_id", parentCols: "id"}: "explicit account purge destroys derived history for that account",
 
 	// ---- Tombstoned-parent cascades that no ordinary delete can reach. -------------------------
-	{child: "accounts", parent: "linked_items", constraint: "fk_accounts_linked_item_id"}:                         "linked_items rows are themselves purged only by an explicit disconnect-and-purge; a disconnect soft-removes and keeps the row",
-	{child: "budget_categories", parent: "custom_categories", constraint: "fk_budget_categories_custom_category"}: "custom_categories is tombstoned, so this cascade fires only under GDPR erasure",
-	{child: "budget_categories", parent: "savings_goals", constraint: "fk_budget_categories_savings_goal"}:        "savings_goals is tombstoned by its ordinary delete, so no ordinary goal delete fires this; GDPR erasure and the three explicit purges that hard-delete a tombstoned goal (PurgeGoal, PurgeAccount, PurgeLinkedItem) all do",
+	{child: "accounts", parent: "linked_items", constraint: "fk_accounts_linked_item_id", childCols: "linked_item_id", parentCols: "id"}:                             "linked_items rows are themselves purged only by an explicit disconnect-and-purge; a disconnect soft-removes and keeps the row",
+	{child: "budget_categories", parent: "custom_categories", constraint: "fk_budget_categories_custom_category", childCols: "custom_category_id", parentCols: "id"}: "custom_categories is tombstoned, so this cascade fires only under GDPR erasure",
+	{child: "budget_categories", parent: "savings_goals", constraint: "fk_budget_categories_savings_goal", childCols: "savings_goal_id", parentCols: "id"}:           "savings_goals is tombstoned by its ordinary delete, so no ordinary goal delete fires this; GDPR erasure and the three explicit purges that hard-delete a tombstoned goal (PurgeGoal, PurgeAccount, PurgeLinkedItem) all do",
 }
 
 // historyShapedTableName matches the table names that READ as a record of something that happened.
@@ -315,6 +333,7 @@ func TestHistoryCascadeGuard_FlagsACascadeIntoAHistoryTable(t *testing.T) {
 	newCascade := fkCascadeEdge{
 		child: "rule_execution_history", parent: "categorization_rules",
 		constraint: "fk_rule_execution_history_rule_id",
+		childCols:  "rule_id", parentCols: "id",
 	}
 	bad, stale := historyCascadeVerdict([]fkCascadeEdge{newCascade}, historyBearingTables, allowedHistoryCascades)
 	if len(bad) != 1 || !strings.Contains(bad[0], "fk_rule_execution_history_rule_id") {
@@ -328,11 +347,50 @@ func TestHistoryCascadeGuard_FlagsACascadeIntoAHistoryTable(t *testing.T) {
 	}
 }
 
+// TestHistoryCascadeGuard_FlagsAColumnListChangeUnderTheSameConstraintName is the case item B of
+// #1569 T8.7 exists for, and it is the one shape that used to slip through entirely.
+//
+// A migration DROPs `fk_holding_snapshots_account_id` and re-ADDs a constraint with the SAME NAME,
+// between the SAME two tables, still ON DELETE CASCADE — but pointing at a different column. Before
+// the column lists were part of the key, the edge Postgres reported was byte-identical to the pinned
+// one and G1 said nothing, even though the cascade now travels a path nobody reviewed.
+//
+// Both directions must fire: the new edge is unallowlisted, and the pinned entry is stale.
+func TestHistoryCascadeGuard_FlagsAColumnListChangeUnderTheSameConstraintName(t *testing.T) {
+	pinned := fkCascadeEdge{
+		child: "holding_snapshots", parent: "accounts",
+		constraint: "fk_holding_snapshots_account_id",
+		childCols:  "account_id", parentCols: "id",
+	}
+	if _, ok := allowedHistoryCascades[pinned]; !ok {
+		t.Fatalf("%s must be in the allowlist for this test to mean anything", pinned)
+	}
+	repointed := pinned
+	repointed.childCols = "source_account_id"
+
+	var edges []fkCascadeEdge
+	for e := range allowedHistoryCascades {
+		if e == pinned {
+			edges = append(edges, repointed)
+			continue
+		}
+		edges = append(edges, e)
+	}
+
+	bad, stale := historyCascadeVerdict(edges, historyBearingTables, allowedHistoryCascades)
+	if len(bad) != 1 || !strings.Contains(bad[0], "source_account_id") {
+		t.Fatalf("the re-pointed constraint must be reported as unallowlisted, got %v", bad)
+	}
+	if len(stale) != 1 || !strings.Contains(stale[0], "(account_id)") {
+		t.Fatalf("the pinned entry it no longer matches must be reported stale, got %v", stale)
+	}
+}
+
 // TestHistoryCascadeGuard_FlagsAStaleAllowlistEntry pins the other direction. An allowlist that
 // outlives its edge is how the next reader concludes that destroying this history was already
 // agreed.
 func TestHistoryCascadeGuard_FlagsAStaleAllowlistEntry(t *testing.T) {
-	gone := fkCascadeEdge{child: "balance_snapshots", parent: "users", constraint: "fk_balance_snapshots_user_id"}
+	gone := fkCascadeEdge{child: "balance_snapshots", parent: "users", constraint: "fk_balance_snapshots_user_id", childCols: "user_id", parentCols: "id"}
 	var kept []fkCascadeEdge
 	for e := range allowedHistoryCascades {
 		if e != gone {
@@ -353,7 +411,7 @@ func TestHistoryCascadeGuard_FlagsAStaleAllowlistEntry(t *testing.T) {
 // business; a guard that fires on all of them gets an allowlist entry added reflexively.
 func TestHistoryCascadeGuard_IgnoresCascadesIntoNonHistoryTables(t *testing.T) {
 	bad, _ := historyCascadeVerdict(
-		[]fkCascadeEdge{{child: "notifications", parent: "users", constraint: "fk_notifications_user_id"}},
+		[]fkCascadeEdge{{child: "notifications", parent: "users", constraint: "fk_notifications_user_id", childCols: "user_id", parentCols: "id"}},
 		historyBearingTables, allowedHistoryCascades)
 	if len(bad) != 0 {
 		t.Fatalf("notifications is not history-bearing; got %v", bad)
@@ -375,6 +433,11 @@ func TestHistoryCascadeGuard_PinnedAllowlistIsSelfConsistent(t *testing.T) {
 		if strings.TrimSpace(allowedHistoryCascades[e]) == "" {
 			t.Errorf("allowlist entry %s has no reason; the reason is the point", e)
 		}
+		if strings.TrimSpace(e.childCols) == "" || strings.TrimSpace(e.parentCols) == "" {
+			t.Errorf("allowlist entry %s has an empty column list. An entry written without one can "+
+				"never match a live edge (the live query always supplies both), so it is permanently "+
+				"stale — and it pins nothing about WHICH columns the cascade travels along", e)
+		}
 	}
 	bad, stale := historyCascadeVerdict(edges, historyBearingTables, allowedHistoryCascades)
 	if len(bad) != 0 || len(stale) != 0 {
@@ -394,7 +457,7 @@ func TestHistoryCascadeGuard_BudgetPeriodEventsStaysOutOfScope(t *testing.T) {
 		}
 	}
 	bad, _ := historyCascadeVerdict(
-		[]fkCascadeEdge{{child: "budget_period_events", parent: "budgets", constraint: "fk_budget_period_events_budget"}},
+		[]fkCascadeEdge{{child: "budget_period_events", parent: "budgets", constraint: "fk_budget_period_events_budget", childCols: "budget_id", parentCols: "id"}},
 		historyBearingTables, allowedHistoryCascades)
 	if len(bad) != 0 {
 		t.Fatalf("budget_period_events must stay CASCADE and must not be flagged; got %v", bad)

@@ -32,10 +32,26 @@ func TestNoUnallowlistedCascadeIntoHistoryTable(t *testing.T) {
 	require.NoError(t, err, "connect to test database")
 	defer pool.Close()
 
+	// The column lists come from conkey/confkey resolved through pg_attribute — the catalog's own
+	// answer to "which columns" — and NOT from pg_get_constraintdef's text. That text is
+	// ruleutils.c formatting; TestAccountTypeUniverseMatchesTheHoldingsGate had to stop asserting it
+	// because a server upgrade or a column-type change rewrites it with no semantic change, and
+	// re-deriving the column list by parsing it here would import exactly that brittleness.
+	//
+	// WITH ORDINALITY preserves the constraint's own column order, which is load-bearing for a
+	// composite FK: the child/parent columns pair up positionally, so a reordering is a real change.
+	// The schema has one such FK today (fk_subscription_entitlements_payer_is_owner), so this is not
+	// a hypothetical shape.
 	rows, err := pool.Query(ctx, `
 		SELECT c.conrelid::regclass::text  AS child,
 		       c.confrelid::regclass::text AS parent,
-		       c.conname
+		       c.conname,
+		       (SELECT string_agg(a.attname, ',' ORDER BY k.ord)
+		          FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+		          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum) AS child_cols,
+		       (SELECT string_agg(a.attname, ',' ORDER BY k.ord)
+		          FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
+		          JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum) AS parent_cols
 		FROM pg_constraint c
 		WHERE c.contype = 'f' AND c.confdeltype = 'c'`)
 	require.NoError(t, err)
@@ -44,7 +60,12 @@ func TestNoUnallowlistedCascadeIntoHistoryTable(t *testing.T) {
 	var edges []fkCascadeEdge
 	for rows.Next() {
 		var e fkCascadeEdge
-		require.NoError(t, rows.Scan(&e.child, &e.parent, &e.constraint))
+		require.NoError(t, rows.Scan(&e.child, &e.parent, &e.constraint, &e.childCols, &e.parentCols))
+		// Fail closed on the derivation itself. An empty column list would make every edge
+		// mismatch its allowlist entry in a way that reads like a migration change; if the
+		// catalog join ever stops resolving, say so as itself.
+		require.NotEmpty(t, e.childCols, "could not resolve conkey column names for %s", e.constraint)
+		require.NotEmpty(t, e.parentCols, "could not resolve confkey column names for %s", e.constraint)
 		edges = append(edges, e)
 	}
 	require.NoError(t, rows.Err())
