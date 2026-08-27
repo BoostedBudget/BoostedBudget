@@ -89,6 +89,22 @@ WITH RECURSIVE candidate AS (
 -- The accounts recorded as live on each candidate day. Same predicate Upsert applies, rendered
 -- from the same string (account_liveness_sql.go) — a rebuild that disagreed with Upsert about
 -- which accounts belong to a day would reintroduce task 10's Critical 1 from the other side.
+--
+-- ⚠ THE SAME STRING IS NOT THE SAME QUESTION, and #1569 T10.1 item C is the correction of that
+-- claim. accountChainLiveCTE takes $OBSERVED from its caller, and the two callers pass materially
+-- different tests: Upsert asks "does the successor have ANY current holdings row" — no date
+-- predicate at all — while this repair asks "does it have holding_snapshots for THIS day". A
+-- successor whose last sync predates the day being valued therefore counts as observed for Upsert
+-- and unobserved here, so the Upsert drops the predecessor and the repair keeps it.
+--
+-- Two reviewers read that divergence in opposite directions, so it was MEASURED rather than
+-- argued (TestPortfolioSnapshot_ObservedArmsDisagree_TheRepairRefusesRatherThanRewrites): Upsert
+-- values the day at the successor alone, and the repair — having kept the predecessor — finds a
+-- two-account day with one account covered, which is PARTIAL COVERAGE and is refused. The
+-- divergence never writes a number; it produces a refusal this ledger records with both counts.
+-- Each arm is also symmetric with what its own caller SUMS: Upsert sums current holdings with no
+-- date filter, this repair sums holding_snapshots for the day. Asking a question the sum does not
+-- ask is what would double or halve a total, and neither arm does. Left as it is, deliberately.
 -- ⚠ A SUPERSEDED PREDECESSOR IS NOT COUNTED BESIDE ITS SUCCESSOR — #1569 T9.1 item A. The capture
 -- applies the same liveness test, so on a changeover day it writes holding_snapshots for BOTH
 -- members of a re-link chain; each row is a correct observation of a real account, and summing the
