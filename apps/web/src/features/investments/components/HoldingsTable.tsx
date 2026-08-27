@@ -254,7 +254,12 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
   // STATUS of the account it is scoped to. AccountsPage lists closed accounts and links to them,
   // so this tab is reachable for one, and without the status it can only say "nothing synced
   // yet" — which is the opposite of true.
-  const { accounts } = useAllAccounts()
+  // ⚠ isError IS CONSUMED, not discarded (#1569 R9 B2). scopedAccountIsDisconnected returns false
+  // when `accounts` is undefined, and a FAILED accounts read is indistinguishable from a loaded-
+  // empty one at that predicate — so a closed account whose accounts read failed fell through to
+  // the live empty state and asserted "No holdings synced yet for this account." That is a false
+  // claim about a closed account, manufactured by a failure.
+  const { accounts, isError: accountsIsError } = useAllAccounts()
 
   // Build id→name map for resolving account UUIDs to human-readable names.
   const accountNameById = useMemo(() => {
@@ -358,10 +363,34 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
     )
   }
 
+  // One node, mounted from TWO branches below (the live read's error arm and its empty arm). The
+  // props are identical in both and this route's gzip budget is the tightest in the repo, so the
+  // element is built once rather than written out twice.
+  const retainedHistory = accountId ? (
+    <ClosedAccountHoldingsHistory
+      accountId={accountId}
+      accountType={scopedAccountType}
+      closedOn={scopedAccountClosedOn}
+    />
+  ) : null
+
+  // ⚠ THE LIVE READ'S ERROR IS NOT ALLOWED TO PREEMPT THE RETAINED HISTORY (#1569 R9 B1).
+  // Same shape as SavingsPage's live-goals error arm: the page's own failure keeps its message,
+  // and the retained surface is ADDITIVE beneath it rather than replaced by it. On a closed
+  // account the live read is *expected* to return nothing, so "refresh the page" pointed the user
+  // at a page that can never produce live holdings while the history we deliberately kept sat
+  // hidden behind it — which is also what the comment below (the notice replaces the EMPTY state,
+  // never the rows) already said should not happen.
   if (isError) {
+    const scopedClosed = scopedAccountIsDisconnected && !!accountId
     return (
-      <div className="text-sm text-destructive p-4">
-        Unable to load holdings. Please refresh the page.
+      <div className="flex flex-col gap-3">
+        <div role="alert" className="text-sm text-destructive p-4">
+          {scopedClosed
+            ? 'We could not load current holdings for this account.'
+            : 'Unable to load holdings. Please refresh the page.'}
+        </div>
+        {scopedClosed && retainedHistory}
       </div>
     )
   }
@@ -369,13 +398,7 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
   // The disconnected notice REPLACES the empty state, never the rows. If a position is somehow
   // present for a terminal account, showing it beats claiming there is nothing.
   if (scopedAccountIsDisconnected && sortedHoldings.length === 0 && accountId) {
-    return (
-      <ClosedAccountHoldingsHistory
-        accountId={accountId}
-        accountType={scopedAccountType}
-        closedOn={scopedAccountClosedOn}
-      />
-    )
+    return retainedHistory
   }
 
   return (
@@ -389,9 +412,16 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
       onFiltersChange={setFilters}
       maskedColumnIds={MASKED_COLUMN_IDS}
       emptyState={
-        <p className="text-sm text-muted-foreground p-4">
-          {isScoped ? 'No holdings synced yet for this account.' : 'No holdings found.'}
-        </p>
+        isScoped && accountsIsError ? (
+          <p role="alert" className="text-sm text-destructive p-4">
+            We could not load this account&apos;s details. Nothing was deleted — try again in a
+            moment.
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground p-4">
+            {isScoped ? 'No holdings synced yet for this account.' : 'No holdings found.'}
+          </p>
+        )
       }
       columnSizing={sizing}
       onColumnSizingChange={onSizingChange}
