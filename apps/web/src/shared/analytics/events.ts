@@ -74,6 +74,14 @@ export const ANALYTICS_EVENTS = {
 
   // Auto-categorization
   AUTO_CATEGORIZATION_VIEWED: 'auto_categorization_viewed',
+  // Issue #1569 T9.4: a user opened the account-wide RULE run history — the only surface that can
+  // reach an execution whose categorization rule has since been hard-deleted (rule_id goes NULL,
+  // rule_name and definition_snapshot are kept). The twin of BOOST_EXECUTION_HISTORY_VIEWED, and a
+  // VIEW event for the same reason: #1569's thesis is what the user can SEE, so this is the
+  // measurement that answers "did anyone actually go and look at the history we kept?". Carries
+  // `has_deleted_rule_rows` and `deleted_row_count`, both computed over the page on screen —
+  // counts and a boolean, never a rule name, a condition value, an amount or an id.
+  RULE_EXECUTION_HISTORY_VIEWED: 'rule_execution_history_viewed',
 
   // Dashboard
   DASHBOARD_VIEWED: 'dashboard_viewed',

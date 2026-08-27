@@ -63,7 +63,11 @@ import {
   mockUseGetUserBoostExecutions,
   mockRefetchUserBoostExecutions,
 } from '@/test/mocks/boosts-api'
-import { mockUseGetUserRules } from '@/test/mocks/auto-categorization-api'
+import {
+  mockUseGetUserRules,
+  mockUseGetUserRuleExecutions,
+  mockRefetchUserRuleExecutions,
+} from '@/test/mocks/auto-categorization-api'
 import {
   mockUseGetBudgets,
   mockUseGetCurrentBudget,
@@ -236,6 +240,12 @@ const { ClosedAccountBalanceHistory } = await import(
 )
 const { BoostAutomationHistoryPanel } = await import(
   '@/features/boosts/components/BoostAutomationHistoryPanel'
+)
+// --- #1569 T9.4: the RULE twin of the surface above. Added here by hand, per the note further
+// down this file: membership is not derivable, so a new retained-history surface joins the sweep
+// only because someone adds it.
+const { RuleAutomationHistoryPanel } = await import(
+  '@/features/auto-categorization/components/RuleAutomationHistoryPanel'
 )
 
 const SENTINEL_MERCHANT = 'SENTINEL_MERCHANT_XYZ'
@@ -3412,6 +3422,105 @@ describe('PII coverage — #1569 T8.6: BoostAutomationHistoryPanel (runs of dele
     // The excluded region is not left unasserted: the line below pins the toggle's entire text to
     // "Automation history (N)", so an amount appearing there would fail on its own assertion.
     expect(toggle.textContent).toMatch(/^Automation history \(\d+\)$/)
+    const panel = document.getElementById(toggle.getAttribute('aria-controls') ?? '')
+    expect(panel).not.toBeNull()
+    expect(scanForUnmaskedPII(panel as HTMLElement, sentinels)).toEqual([])
+  })
+})
+
+// ── #1569 T9.4 ────────────────────────────────────────────────────────────────────────────────
+//
+// RuleAutomationHistoryPanel — the automation AUDIT TRAIL of a rule the user has since deleted.
+// The sibling block above covers the boost twin; this is the rule one, and its PII shape is
+// different in a way worth stating: the boost row's only free text is an error message, while this
+// row carries the rule's CONDITIONS, restored out of a frozen `definition_snapshot`. Those are
+// user-typed merchant substrings and amounts — the same class of text as a merchant name on a
+// transaction — reaching the DOM through an indirection (a JSON blob) that no `formatCurrency`
+// grep would ever find. That is exactly the kind of surface this file exists to catch.
+//
+// The condition LABEL ("Merchant contains") is a fixed vocabulary and is deliberately NOT a
+// sentinel: masking it would erase the shape of the rule from replay while protecting nothing.
+describe('PII coverage — #1569 T9.4: RuleAutomationHistoryPanel (runs of deleted rules)', () => {
+  const execution = {
+    id: 'exec-pii-rule-1',
+    rule_id: null,
+    transaction_id: 'txn-pii-1',
+    user_id: 'user-1',
+    rule_name: SENTINEL_RULE_NAME,
+    action_type: 'category',
+    result: 'applied',
+    executed_at: '2026-03-01T10:00:00Z',
+    definition_snapshot: {
+      name: SENTINEL_RULE_NAME,
+      condition_logic: 'AND',
+      conditions: [
+        { type: 'merchant_contains', value: SENTINEL_MERCHANT },
+        { type: 'amount_greater_than', value: 4812.09 },
+      ],
+      captured_by: 'rule_application_service',
+    },
+  }
+
+  // id / rule_id / transaction_id / user_id are opaque keys; action_type and result are fixed
+  // enums the surface must render legibly (a masked outcome would erase what the panel exists to
+  // show); executed_at is a timestamp the row is required to state; `type` and `condition_logic`
+  // are the fixed condition vocabulary, rendered through CONDITION_TYPE_LABELS rather than
+  // verbatim; captured_by is capture metadata that is deliberately never rendered at all.
+  const sentinels: PIISentinel[] = [
+    ...sentinelsFromFixture(execution, {
+      skipKeys: [
+        'id',
+        'rule_id',
+        'transaction_id',
+        'user_id',
+        'action_type',
+        'result',
+        'executed_at',
+        'type',
+        'condition_logic',
+        'captured_by',
+      ],
+      label: 'rule_execution',
+    }),
+    // Numbers are not walked by sentinelsFromFixture, and an amount inside a condition is money
+    // the user typed. Named explicitly so it is covered rather than silently skipped.
+    { value: '4812.09', fieldDescription: 'rule_execution.definition_snapshot condition amount' },
+  ]
+
+  beforeEach(() => {
+    cleanup()
+    mockUseGetUserRuleExecutions.mockReturnValue({
+      data: { executions: [execution], total: 1, limit: 20, offset: 0 },
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve()),
+    } as unknown as ReturnType<typeof mockUseGetUserRuleExecutions>)
+  })
+
+  // Same process-global reasoning as the blocks above.
+  afterEach(() => {
+    mockUseGetUserRuleExecutions.mockReturnValue({
+      data: { executions: [], total: 0, limit: 20, offset: 0 },
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchUserRuleExecutions,
+    } as unknown as ReturnType<typeof mockUseGetUserRuleExecutions>)
+  })
+
+  test('the retained rule name and its frozen conditions are masked once the panel is expanded', async () => {
+    const user = userEvent.setup()
+    render(<RuleAutomationHistoryPanel />, { wrapper: createWrapper() })
+    const toggle = screen.getByRole('button', { name: /rule run history/i })
+    await user.click(toggle)
+    // The marker proves this really is the deleted-rule path.
+    await waitFor(() => expect(screen.getByText('Deleted rule')).toBeInTheDocument())
+    await waitForSentinels(sentinels)
+
+    // ⚠ SCOPED TO THE EXPANDED PANEL for the same reason the boost block is: the toggle's own
+    // label ends in " (1)", and pii-masking.ts's CURRENCY_RE reads a parenthesised number as an
+    // accounting negative. That is a row COUNT, not money. The excluded region is not left
+    // unasserted — the line below pins the toggle's entire text.
+    expect(toggle.textContent).toMatch(/^Rule run history \(\d+\)$/)
     const panel = document.getElementById(toggle.getAttribute('aria-controls') ?? '')
     expect(panel).not.toBeNull()
     expect(scanForUnmaskedPII(panel as HTMLElement, sentinels)).toEqual([])
