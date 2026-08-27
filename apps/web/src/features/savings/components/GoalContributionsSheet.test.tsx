@@ -497,5 +497,59 @@ describe('GoalContributionsSheet', () => {
       expect(screen.getByText(/couldn't load/i)).toBeInTheDocument()
       expect(screen.queryByText(/No contributions yet/i)).toBeNull()
     })
+
+    // ── #1569 T9-FIX item 7: rows that SURVIVED a failed refetch ────────────────────────
+    //
+    // The test above uses `data: undefined`, so it cannot see this at all. React Query keeps the
+    // last successful listing when a later refetch fails, so `data` can be real rows AND `error`
+    // truthy at the same instant — and this sheet rendered the error notice AND the full row
+    // list, verbs included. Confirm/Reject/Delete then act on a row we have just said we cannot
+    // vouch for; Reject writes a sticky tombstone and Delete destroys a hand-logged
+    // contribution outright.
+    //
+    // Same remedy DeletedGoalsPanel took in round 8, and for the same reason: keep the rows —
+    // they are the user's, and blanking them is the false "nothing here" by another route — and
+    // disarm the verbs until the listing can be refreshed.
+    function withStaleRows() {
+      mockUseListSavingsGoalContributions.mockReturnValue({
+        data: [mockProposed, mockConfirmed],
+        isLoading: false,
+        error: new Error('network down') as unknown as null,
+        refetch: mock(() => Promise.resolve({})),
+      })
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+    }
+
+    it('keeps the rows that survived the failed refetch', () => {
+      withStaleRows()
+      expect(screen.getByLabelText('Contributions list')).toBeInTheDocument()
+      expect(screen.queryByText(/No contributions yet/i)).toBeNull()
+    })
+
+    it('disarms every verb on rows it can no longer vouch for', () => {
+      withStaleRows()
+
+      expect(screen.getByRole('button', { name: /confirm/i })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /reject/i })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /delete/i })).toBeDisabled()
+    })
+
+    it('says the listing may be stale rather than only that a request failed', () => {
+      withStaleRows()
+
+      const notice = screen.getByRole('status')
+      expect(notice.textContent ?? '').toMatch(/out of date/i)
+      // A NEGATIVE assertion, like DeletedGoalsPanel's: an unscoped "everything is still kept"
+      // here would be the same false retention claim this branch keeps re-shipping.
+      expect(notice.textContent ?? '').not.toMatch(/no contributions/i)
+    })
   })
 })
