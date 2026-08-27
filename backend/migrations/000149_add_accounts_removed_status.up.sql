@@ -67,7 +67,13 @@ BEGIN
 END $$;
 
 -- =============================================================================
--- Step 3: Pair 'removed' with removed_at, mirroring accounts_replaced_at_consistency
+-- Step 3: Pair 'removed' with removed_at, mirroring accounts_replaced_at_consistency.
+--
+-- One-directional, like the constraint it mirrors: status = 'removed' IMPLIES removed_at IS NOT
+-- NULL. A non-'removed' row carrying a stamped removed_at is TOLERATED by this CHECK; keeping that
+-- from happening is a Go-level discipline (updateStatusWithRemovalReason NULLs the timestamps it is
+-- not stamping; RestoreProviderRemovedAccount NULLs removed_at). See 000155's Step 3 header for why
+-- the converse is deliberately left to code. #1569 task 7.9.
 -- =============================================================================
 
 DO $$
@@ -84,4 +90,4 @@ BEGIN
 END $$;
 
 COMMENT ON COLUMN accounts.removed_at IS
-$COMMENT$Timestamp when the user deliberately disconnected this account (status = 'removed'). NULL for every other status. Distinct from replaced_at (re-link) and the TTL clock behind 'expired' (linked_items.status_changed_at).$COMMENT$;
+$COMMENT$Timestamp when the user deliberately disconnected this account (status = 'removed'). Never NULL while status = 'removed' -- accounts_removed_at_consistency requires it. Left NULL by every Go writer that moves the row to another status, but that direction is a code convention, NOT a constraint: the CHECK is one-directional (see 000155's Step 3 header). Distinct from replaced_at (re-link) and the TTL clock behind 'expired' (linked_items.status_changed_at).$COMMENT$;

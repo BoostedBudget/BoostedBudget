@@ -293,3 +293,80 @@ func TestAccounts_TerminalStatusRequiresATransitionTimestamp(t *testing.T) {
 		})
 	}
 }
+
+// TestAccounts_ATimestampMayOutliveItsStatus is the OTHER direction of the same three CHECKs, and
+// it exists because three comments claimed a guarantee none of them makes (#1569 task 7.9).
+//
+// 000155's header said "status = 'expired' <=> expired_at IS NOT NULL", its Step 3 said the CHECK
+// stops expired_at being set on a non-'expired' row, and domain.Account.ExpiredAt said the CHECK
+// "pairs the two in both directions". Read from pg_constraint, all three constraints are
+// one-directional:
+//
+//	CHECK ((status = 'X' AND X_at IS NOT NULL) OR (status <> 'X'))
+//
+// which says nothing whatsoever about a row whose status is not X. The comments are now corrected;
+// this test is what keeps the correction honest, in BOTH failure directions:
+//
+//   - if someone tightens a CHECK to the biconditional the old comments described, this fails, and
+//     they are made to read 000155's Step 3 header first. That header argues the tightening is the
+//     wrong remedy: status is single-valued, so biconditionals on replaced_at, removed_at and
+//     expired_at together would make the three mutually exclusive — a row could record at most one
+//     lifecycle event ever, and any path back out of a terminal state (RestoreProviderRemovedAccount
+//     already is one) would be FORCED BY THE SCHEMA to erase when the earlier state ended;
+//   - and if the tightening is one day genuinely wanted, this test is the single place that says so
+//     out loud, rather than a comment quietly disagreeing with the DDL for another round.
+//
+// ⚠ What this does NOT say is that a stale timestamp on a live row is acceptable. It is not, and
+// nothing in production writes one: updateStatusWithRemovalReason NULLs every timestamp it is not
+// stamping, and RestoreProviderRemovedAccount NULLs removed_at on the way back to 'active'. That is
+// a Go-level discipline, and this test is precisely the record that the schema is not backing it.
+func TestAccounts_ATimestampMayOutliveItsStatus(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	ctx := context.Background()
+	profileRepo := NewProfileRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := createMarkDisconnectedFixtureUser(t, ctx, pool, profileRepo, suffix)
+	item := createMarkDisconnectedFixtureItem(t, ctx, linkedItemRepo, userID, suffix)
+
+	now := time.Now().UTC()
+
+	cases := []struct {
+		name       string
+		status     string
+		replacedAt any
+		removedAt  any
+		expiredAt  any
+	}{
+		// The restore shape: an account back to 'active' that has not forgotten it was removed.
+		{"active carries removed_at", "active", nil, now, nil},
+		// The multi-step-chain shape: a terminal row that still remembers an earlier step.
+		{"removed carries replaced_at", "removed", now, now, nil},
+		{"removed carries expired_at", "removed", nil, now, now},
+		{"active carries expired_at", "active", nil, nil, now},
+	}
+
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			tx, err := pool.Begin(ctx)
+			require.NoError(t, err)
+			defer tx.Rollback(context.Background()) //nolint:errcheck // probe transaction is always discarded
+
+			_, err = tx.Exec(ctx, `
+				INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type, status,
+				                      updated_at, replaced_at, removed_at, expired_at)
+				VALUES ($1, $2, $3, 'StaleTimestamp', 'depository', $4, $5, $6, $7, $8)`,
+				item.ID, userID, "plaid-t79-stale-"+suffix+"-"+c.name, c.status,
+				now, c.replacedAt, c.removedAt, c.expiredAt)
+			require.NoErrorf(t, err,
+				"the schema REJECTED status=%q with a timestamp from another status still set. The "+
+					"accounts_*_at_consistency CHECKs are one-directional by design — if one was "+
+					"just tightened to a biconditional, read 000155's Step 3 header before keeping "+
+					"the change, and correct that header and domain.Account here if it is kept.",
+				c.status)
+		})
+	}
+}

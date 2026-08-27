@@ -1790,10 +1790,12 @@ func (r *accountRepository) RestoreProviderRemovedAccount(ctx context.Context, a
 		return ErrAccountNotRestorable
 	}
 
-	// Clearing removed_at alongside the status is required by migration 000149's
-	// accounts_removed_at_consistency CHECK read in the other direction: a non-'removed' row with a
-	// stamped removed_at would be a lie about current state even where the constraint tolerates it.
-	// removed_reason goes with it, per 000154's own CHECK.
+	// Clearing removed_at alongside the status is NOT required by migration 000149's
+	// accounts_removed_at_consistency CHECK — that constraint is one-directional and tolerates a
+	// stamped removed_at on a non-'removed' row (#1569 task 7.9). This line IS the enforcement: a
+	// live account whose removed_at still reads six months ago is a lie about current state, and
+	// the schema will not catch it. Any new path back to 'active' must clear it too.
+	// removed_reason is different — 000154's CHECK really does forbid it off a 'removed' row.
 	result, err := tx.Exec(ctx, `
 		UPDATE accounts
 		SET status = 'active', removed_at = NULL, removed_reason = NULL, updated_at = $1

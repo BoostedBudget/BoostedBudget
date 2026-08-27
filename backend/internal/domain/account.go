@@ -69,7 +69,11 @@ type Account struct {
 	Status       AccountStatus `json:"status" db:"status" enum:"active,replaced,expired,removed"` // Issue #1569: enumerated so orval emits a union, not `string`
 	ReplacedAt   *time.Time    `json:"replaced_at,omitempty" db:"replaced_at"`   // When this account was replaced
 	// RemovedAt is when the user deliberately disconnected this account (status = 'removed').
-	// NULL for every other status. Issue #1569, migration 000149.
+	// NEVER NULL when status = 'removed' — migration 000149's accounts_removed_at_consistency CHECK
+	// requires it. NULL for every other status by CONVENTION, not by constraint: that CHECK is
+	// one-directional and tolerates a stamped removed_at on a non-'removed' row (#1569 task 7.9).
+	// The Go writers are what hold the converse up — see the constraint's own Step 3 header for why
+	// it is deliberately left to them. Issue #1569, migration 000149.
 	RemovedAt *time.Time `json:"removed_at,omitempty" db:"removed_at"`
 	// RemovedReason records WHO removed this account — see the RemovalReason constants. It is the
 	// single input to one decision: whether restoreProviderRemovedAccounts may return the account
@@ -90,9 +94,17 @@ type Account struct {
 	// doing; it is not this.
 	RemovedReason *string `json:"-" db:"removed_reason"`
 	// ExpiredAt is when the 90-day fingerprint TTL was released, moving this account to
-	// status = 'expired' (AccountRepository.ExpireAccountsByFingerprint). NULL for every other
-	// status, and NEVER NULL when status = 'expired' — migration 000155's
-	// accounts_expired_at_consistency CHECK pairs the two in both directions, backfill included.
+	// status = 'expired' (AccountRepository.ExpireAccountsByFingerprint). NEVER NULL when
+	// status = 'expired' — migration 000155's accounts_expired_at_consistency CHECK requires it,
+	// backfill included.
+	//
+	// ⚠ NOT a biconditional. An earlier version of this comment said the CHECK "pairs the two in
+	// both directions"; it does not, and neither does its 000149/000033 family
+	// (#1569 task 7.9, re-derived from pg_constraint). expired_at IS NOT NULL on a non-'expired'
+	// row is tolerated by the schema. That direction is held by the Go writers instead, on purpose:
+	// status is single-valued, so enforcing all three converses would make replaced_at/removed_at/
+	// expired_at mutually exclusive and force any un-terminating path to ERASE when the earlier
+	// state ended. 000155's Step 3 header carries the full argument.
 	// Issue #1569 Task 6, migration 000155.
 	//
 	// ⚠ SERIALISED, unlike RemovedReason above, and the reason is a user-visible defect rather
