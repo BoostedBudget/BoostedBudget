@@ -46,62 +46,11 @@ import { AccountSummaryHeader } from '@/features/accounts/components/AccountSumm
 import { getAccountTypeLabel } from '@/features/accounts/utils'
 import { useActiveAccounts } from '@/features/accounts/hooks/useActiveAccounts'
 import { HOUSEHOLD_SHARE_CONSENT_COPY } from '../householdShareConsent'
+import { groupAccountsBySharingUnit, sharingUnitDisplayName } from '../sharingUnits'
 
 export interface ConsentPreviewProps {
   /** Called with the full list of currently-hidden `user_account_id`s whenever a toggle changes. */
   onHiddenAccountIdsChange: (hiddenAccountIds: string[]) => void
-}
-
-/** The name the invitee recognises this account by, in the order the rest of the app uses. */
-function displayNameOf(account: Account): string {
-  return account.nickname || account.official_name || account.name
-}
-
-/**
- * One sharing UNIT: the accounts a single `user_account_id` covers, plus that id.
- *
- * Issue #1569 T10.3 item C. `user_account_id` is the chain/fingerprint key, and two MASKLESS
- * accounts at one institution really can share it — the collision is documented at length in
- * backend/internal/repository/account_liveness_sql.go, which refuses to collapse portfolios on it
- * precisely because it is real. The backend hides by that id, so the unit the invitee can actually
- * make a decision about is the user_account, never the account.
- */
-interface ConsentUnit {
-  key: string
-  /** `undefined` when the account has no `user_account_id` — see the read-only note below. */
-  shareId?: string
-  accounts: Account[]
-}
-
-/**
- * Groups accounts into the units the consent control can actually address.
- *
- * Accounts with NO `user_account_id` are each their own unit and are never grouped with one
- * another: they share the ABSENCE of a sharing id, not a shared one, and merging them would fold
- * unrelated accounts into a single read-only card. Order follows first appearance, so the list the
- * invitee sees keeps the account order the API returned.
- */
-function groupAccountsBySharingUnit(accounts: Account[]): ConsentUnit[] {
-  const units: ConsentUnit[] = []
-  const byShareId = new Map<string, ConsentUnit>()
-
-  for (const account of accounts) {
-    const shareId = account.user_account_id || undefined
-    if (!shareId) {
-      units.push({ key: `account-${account.id}`, accounts: [account] })
-      continue
-    }
-    const existing = byShareId.get(shareId)
-    if (existing) {
-      existing.accounts.push(account)
-      continue
-    }
-    const unit: ConsentUnit = { key: `share-${shareId}`, shareId, accounts: [account] }
-    byShareId.set(shareId, unit)
-    units.push(unit)
-  }
-
-  return units
 }
 
 export function ConsentPreview({ onHiddenAccountIdsChange }: ConsentPreviewProps) {
@@ -149,8 +98,15 @@ export function ConsentPreview({ onHiddenAccountIdsChange }: ConsentPreviewProps
         // account is shown read-only (always shared, no togglable switch)
         // rather than risk that failure mode.
         const { shareId, accounts: unitAccounts } = unit
-        const shared = shareId ? !hiddenIds.has(shareId) : true
-        const displayNames = unitAccounts.map(displayNameOf)
+        // ⚠ #1569 T10-FIX item 8: `: true` was here, and it was a false statement on a consent
+        // screen. AcceptInvite builds the shareable set from `user_accounts`
+        // (household_service.go), so an accounts row with no user_account_id can never enter
+        // `household_account_shares` and no household read will ever see it. The old default
+        // rendered it "Shared" with the switch on. It under-shares, so it fails closed — and it
+        // still tells the invitee the opposite of what will happen.
+        const shareable = Boolean(shareId)
+        const shared = shareId ? !hiddenIds.has(shareId) : false
+        const displayNames = unitAccounts.map(sharingUnitDisplayName)
         // aria-label/title/placeholder/alt are recorded verbatim by PostHog
         // session replay regardless of visual masking (see
         // docs/security/posthog-pii-masking.md and InvitePanel.tsx's
@@ -159,13 +115,19 @@ export function ConsentPreview({ onHiddenAccountIdsChange }: ConsentPreviewProps
         // separate, already-`data-ph-mask`'d text node instead.
         const descriptionId = `consent-account-name-${unit.key}`
 
+        const statusLabel = !shareable
+          ? HOUSEHOLD_SHARE_CONSENT_COPY.unshareableStatus
+          : shared
+            ? 'Shared'
+            : 'Hidden'
+
         const control = (
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">{shared ? 'Shared' : 'Hidden'}</span>
+            <span className="text-xs text-muted-foreground">{statusLabel}</span>
             <Switch
               checked={shared}
-              disabled={!shareId}
-              title={shareId ? undefined : 'Sharing preference unavailable for this account'}
+              disabled={!shareable}
+              title={shareable ? undefined : HOUSEHOLD_SHARE_CONSENT_COPY.unshareableNote}
               onCheckedChange={(next) => {
                 if (shareId) toggleShared(shareId, next)
               }}
@@ -184,7 +146,7 @@ export function ConsentPreview({ onHiddenAccountIdsChange }: ConsentPreviewProps
             key={account.id}
             institutionName={account.institution_name ?? ''}
             mask={account.mask}
-            displayName={displayNameOf(account)}
+            displayName={sharingUnitDisplayName(account)}
             typeLabel={getAccountTypeLabel(account.type, account.subtype)}
             currentBalance={account.current_balance}
             availableBalance={account.available_balance}
@@ -202,11 +164,22 @@ export function ConsentPreview({ onHiddenAccountIdsChange }: ConsentPreviewProps
               Share {displayNames.join(', ')} with your household
             </span>
             {unitAccounts.length === 1 ? (
-              summary(unitAccounts[0], control)
+              <>
+                {summary(unitAccounts[0], control)}
+                {!shareable && (
+                  <p className="border-t px-4 pt-2 text-xs text-muted-foreground">
+                    {HOUSEHOLD_SHARE_CONSENT_COPY.unshareableNote}
+                  </p>
+                )}
+              </>
             ) : (
-              // One card, one switch, every account named. The institution reports these accounts
-              // under one identity we cannot tell apart, so the backend hides them together —
-              // showing two switches would offer a choice that does not exist.
+              // One card, one switch, every account named. ⚠ #1569 T10-FIX item 9: this used to
+              // say the institution reports these accounts under one identity. It does not — it
+              // reports them separately, and OUR matching collapses them:
+              // FindByInstitutionAndMask keys on institution plus mask, and migration 000100's
+              // NULLS NOT DISTINCT unique index forces every maskless account at one institution
+              // onto one user_accounts row. The backend hides by that row, so showing two switches
+              // would offer a choice that does not exist.
               <div className="space-y-2">
                 {unitAccounts.map((account) => summary(account))}
                 <div className="flex items-center justify-between gap-2 border-t pt-2">
