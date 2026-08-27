@@ -75,11 +75,31 @@ const ruleExecutionColumns = `h.id, h.rule_id, h.transaction_id, h.user_id, h.ru
 // the day someone "simplifies" this to an INNER JOIN the coincidence stops holding and every
 // orphaned execution silently disappears. Pinned by
 // TestRuleExecutionHistory_OrphanedTransactionPointerStaysVisible_Integration.
-const visibleRuleExecutions = `
+//
+// ⚠ THE TOMBSTONE LEG IS transactionTombstoneCondition, NOT A SECOND NOTION OF VISIBILITY (#1569
+// T8.2, Item A). It used to be a hand-written `t.deleted_at IS NULL`, which hides EVERY tombstone
+// whatever its reason — far broader than the settlement de-duplication described above, and wrong
+// for the one reason that has no twin. `provider_removed_posted` is a bank reversal of a row that
+// had already POSTED: the transaction itself stays surfacable (domain.TxnDeletedProviderRemovedPosted,
+// TransactionFilters.IncludeReversed), so a trail row pointing at it is history the app is still
+// showing the user, and hiding it is retention that reads as deletion. Calling the shared renderer
+// with includeReversed=true means this read admits EXACTLY the one reason transactions admits and
+// no other — provider_removed_pending, the settled twin, stays hidden, which is the whole point of
+// the de-duplication. If that widening ever changes, it changes in one place.
+//
+// Pinned in both directions: TestRuleExecutionHistory_PostedReversalStaysVisible_Integration (a
+// reversal's trail is returned) and TestRuleExecutionHistory_SettlementDoesNotShowTheSameChargeTwice_Integration
+// (a settled pending's is not).
+var visibleRuleExecutions = fmt.Sprintf(`
 		FROM rule_execution_history h
 		LEFT JOIN transactions t ON t.id = h.transaction_id
+		-- tombstone-exempt(transactions t): transactionTombstoneCondition("t", true) is interpolated
+		-- at the %%s below. It is the SHARED renderer, deliberately called with includeReversed=true:
+		-- this read hides a settled pending's trail row and keeps a posted reversal's, matching
+		-- exactly what the transactions reads themselves surface.
 		WHERE h.user_id = $1
-		  AND (h.transaction_id IS NULL OR t.deleted_at IS NULL)`
+		  AND (h.transaction_id IS NULL OR %s)`,
+	transactionTombstoneCondition("t", true))
 
 // Create writes one execution row.
 //
@@ -168,8 +188,9 @@ func (r *ruleExecutionHistoryRepository) Create(ctx context.Context, execution *
 // Such a row still carries rule_name and definition_snapshot, so a client can say what the
 // automation was.
 //
-// EXCLUDES EXECUTIONS AGAINST A TOMBSTONED TRANSACTION by default — see visibleRuleExecutions for
-// why, which is the settlement duplicate, not tidiness.
+// EXCLUDES EXECUTIONS AGAINST A SETTLED PENDING TRANSACTION — see visibleRuleExecutions for why,
+// which is the settlement duplicate, not tidiness. It does NOT exclude every tombstone: a posted
+// transaction the bank later reversed stays visible here, because it stays visible everywhere else.
 //
 // The id tiebreak is not decoration: clock_timestamp() has microsecond resolution and two rows
 // written for the same transaction in the same batch can land in the same microsecond.
