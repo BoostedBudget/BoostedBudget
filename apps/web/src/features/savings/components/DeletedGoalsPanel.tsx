@@ -62,14 +62,49 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
   const [openLedgers, setOpenLedgers] = useState<ReadonlySet<string>>(() => new Set())
   const trackEvent = useTrackEvent()
 
-  const { data, isLoading, refetch } = useGetDeletedSavingsGoals()
+  const { data, isLoading, isError, refetch } = useGetDeletedSavingsGoals()
   const purgeMutation = usePurgeSavingsGoal()
 
   const goals = (data ?? []) as unknown as SavingsGoal[]
 
   // Nothing deleted (or nothing known yet) means no panel at all — an empty "Deleted goals (0)"
   // header is clutter that tells the user nothing.
-  if (isLoading || goals.length === 0) return null
+  //
+  // ⚠ #1569 R8. `isError` is load-bearing and its absence was the defect: without it a FAILED
+  // read collapsed into the same `goals = []` as a successful empty one, and the panel rendered
+  // as ABSENT. An absent panel is not "we don't know yet" to the person reading it — it is "you
+  // have deleted nothing", a false statement about money we did in fact keep. That is this
+  // branch's core defect class, and this was the first surface it built.
+  if (isLoading) return null
+  if (isError && goals.length === 0) {
+    return (
+      <section aria-labelledby="deleted-goals-heading" className="mt-8">
+        <h2 id="deleted-goals-heading" className="sr-only">
+          Deleted goals
+        </h2>
+        {/*
+          role="alert", not a collapsed disclosure: an error hidden behind a closed panel is
+          indistinguishable from the absent panel we are fixing. Wording copied from
+          DeletedGoalContributions / ClosedAccountBalanceHistory / HoldingsTable — name the
+          failure, never imply the retention failed with it. No amounts or names are rendered
+          here, so there is nothing to mask.
+        */}
+        <div
+          role="alert"
+          className="flex flex-col items-start gap-2 rounded-lg border border-destructive/40 px-4 py-3 text-xs text-destructive"
+        >
+          <p className="m-0">
+            We could not load the goals you have deleted. They are still kept &mdash; try again in
+            a moment.
+          </p>
+          <Button variant="outline" size="sm" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </div>
+      </section>
+    )
+  }
+  if (goals.length === 0) return null
 
   function toggleLedger(goalId: string) {
     setOpenLedgers((open) => {
@@ -132,6 +167,25 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
 
       {isOpen && (
         <div id={panelId} className="mt-2 space-y-2">
+          {/*
+            React Query keeps the last successful listing when a later refetch fails, so `goals`
+            can be real rows AND `isError` true at the same time. We keep the rows — they are the
+            user's, and blanking them would be the same false "nothing deleted" by another route
+            — but we refuse to present them as current, because the one verb on this panel
+            destroys money permanently and acting on a listing we know is unverified is exactly
+            the mistake to prevent. Same degraded-mode shape as
+            BoostAutomationHistoryPanel's markers notice; role="status", not "alert", because
+            what is on screen is still usable.
+          */}
+          {isError && (
+            <div
+              role="status"
+              className="mx-1 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+            >
+              We could not refresh this list just now, so it may be out of date. Everything you
+              deleted is still kept &mdash; try again in a moment.
+            </div>
+          )}
           <p className="px-1 text-xs text-muted-foreground">
             Deleting a goal doesn&apos;t throw anything away on its own &mdash; every contribution
             you logged is still saved here, so you can look back at what you put aside. Open a goal
