@@ -208,3 +208,40 @@ describe('ClosedAccountBalanceHistory (#1569)', () => {
     expect(JSON.stringify(props)).not.toContain('2500')
   })
 })
+
+// Issue #1569 T7-FIX, finding B. The API carries currency_code per point precisely so a retained
+// figure is never re-denominated, and this table dropped it: formatCurrencyFull hardcoded USD, so a
+// 1000 EUR balance rendered as $1,000.00. On a screen whose entire purpose is showing retained
+// truth, that is a wrong number, not a missing one.
+describe('ClosedAccountBalanceHistory currency (#1569)', () => {
+  it('renders a non-USD point in its own currency, not as dollars', () => {
+    withPoints([point({ current_balance: 1000, available_balance: 900, currency_code: 'EUR' })])
+    renderIt()
+
+    expect(screen.queryByText('$1,000.00')).toBeNull()
+    expect(screen.queryByText('$900.00')).toBeNull()
+    expect(screen.getByText(/€1,000\.00/)).toBeInTheDocument()
+    expect(screen.getByText(/€900\.00/)).toBeInTheDocument()
+  })
+
+  // Per POINT, not per series: a re-linked account can change currency, and borrowing the first
+  // row's code for the whole table would silently re-denominate the others.
+  it('uses each row’s own currency rather than the first row’s', () => {
+    withPoints([
+      point({ date: '2026-03-04', current_balance: 1000, available_balance: 900, currency_code: 'EUR' }),
+      point({ date: '2026-03-05', current_balance: 2000, available_balance: 1900, currency_code: 'GBP' }),
+    ])
+    renderIt()
+
+    expect(screen.getByText(/€1,000\.00/)).toBeInTheDocument()
+    expect(screen.getByText(/£2,000\.00/)).toBeInTheDocument()
+    expect(screen.queryByText('$2,000.00')).toBeNull()
+  })
+
+  it('still renders USD points as dollars', () => {
+    withPoints([point({ current_balance: 1000, available_balance: 900, currency_code: 'USD' })])
+    renderIt()
+
+    expect(screen.getByText('$1,000.00')).toBeInTheDocument()
+  })
+})
