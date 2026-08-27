@@ -556,7 +556,7 @@ export const useToggleRule = <TError = ErrorType<ErrorModel>,
       return useMutation(getToggleRuleMutationOptions(options), queryClient);
     }
     /**
- * Retrieves every categorization-rule execution for the authenticated user, newest first. A row exists for each time a rule actually CHANGED a transaction's category or tags; a rule that matched but changed nothing is counted in the rule's match_count and is not recorded here. Executions whose rule has since been deleted are still returned, carrying rule_id = null plus rule_name and definition_snapshot captured at execution time.
+ * Retrieves categorization-rule executions for the authenticated user, newest first. A row exists for each time a rule actually CHANGED a transaction's category or tags; a rule that matched but changed nothing is counted in the rule's match_count and is not recorded here. Executions whose rule has since been deleted are still returned, carrying rule_id = null plus rule_name and definition_snapshot captured at execution time. One class is withheld: an execution against a pending transaction the provider removed when it settled, whose posted twin carries its own execution — showing both would report one charge as two automation runs. Executions against a transaction the provider reversed AFTER it posted ARE returned, because that transaction has no twin and is itself still surfacable.
  * @summary Get automation rule execution history
  */
 export const getUserRuleExecutions = (
