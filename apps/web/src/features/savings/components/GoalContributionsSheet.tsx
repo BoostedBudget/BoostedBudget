@@ -75,16 +75,24 @@ interface ContributionRowProps {
   onConfirmed: () => void
   onRejected: () => void
   onDeleted: () => void
+  /**
+   * The listing this row came from survived a failed refetch, so it is real but unverified
+   * (#1569 T9-FIX item 7). Every verb here writes against a contribution id we can no longer
+   * vouch for — Reject leaves a sticky tombstone and Delete destroys a hand-logged amount — so
+   * all three are disarmed rather than the rows hidden. Same call DeletedGoalsPanel made in
+   * round 8, for the same reason.
+   */
+  disarmed?: boolean
 }
 
-function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDeleted }: ContributionRowProps) {
+function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDeleted, disarmed }: ContributionRowProps) {
   const trackEvent = useTrackEvent()
   const { mutateAsync: confirmMutate, isPending: confirming } = useConfirmSavingsGoalContribution()
   const { mutateAsync: rejectMutate, isPending: rejecting } = useRejectSavingsGoalContribution()
   const { mutateAsync: deleteMutate, isPending: deleting } = useDeleteSavingsGoalContribution()
 
   const isProposed = contribution.status === 'proposed'
-  const busy = confirming || rejecting || deleting
+  const busy = confirming || rejecting || deleting || disarmed === true
 
   const handleConfirm = useCallback(async () => {
     await confirmMutate({ goalID: goalId, id: contribution.id })
@@ -229,13 +237,40 @@ export function GoalContributionsSheet({
               did not. The copy says the read failed and offers a retry — it makes no claim
               either way about what the ledger holds, which the client cannot know.
             */}
-            {!isLoading && error && (
+            {!isLoading && error && visibleContributions.length === 0 && (
               <ErrorState
                 title="We couldn't load these contributions"
                 description="The request failed. Try again in a moment."
                 onRetry={() => void refetch()}
                 className="border-0 bg-transparent"
               />
+            )}
+
+            {/*
+              #1569 T9-FIX item 7. React Query keeps the last successful listing when a later
+              refetch fails, so rows and `error` coexist. The rows stay — they are the user's, and
+              blanking them is the same false "nothing here" by another route — but they are
+              presented as UNVERIFIED, and role="status" rather than "alert" because what is on
+              screen is still readable. The full ErrorState above is for the case where there is
+              nothing to read at all.
+
+              The claim is scoped to what the failure actually did: the LISTING may be stale. An
+              unscoped "everything is still kept" here would be the new false retention claim this
+              branch keeps having to remove.
+            */}
+            {!isLoading && error && visibleContributions.length > 0 && (
+              <div
+                role="status"
+                className="mx-1 mt-2 flex flex-col items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+              >
+                <p className="m-0">
+                  We could not refresh this list just now, so it may be out of date. Confirming,
+                  rejecting and deleting are paused until we can check again.
+                </p>
+                <Button size="sm" variant="outline" onClick={() => void refetch()}>
+                  Try again
+                </Button>
+              </div>
             )}
 
             {!isLoading && !error && visibleContributions.length === 0 && (
@@ -263,6 +298,7 @@ export function GoalContributionsSheet({
                       onConfirmed={handleChanged}
                       onRejected={handleChanged}
                       onDeleted={handleChanged}
+                      disarmed={!!error}
                     />
                   ))}
               </ul>
