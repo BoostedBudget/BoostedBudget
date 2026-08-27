@@ -1609,12 +1609,7 @@ func (s *transactionSyncService) createBalanceSnapshots(
 	if err != nil {
 		return fmt.Errorf("failed to get internal accounts: %w", err)
 	}
-	internalAccounts := make([]domain.Account, 0, len(allAccounts))
-	for _, account := range allAccounts {
-		if account.Status == domain.AccountStatusActive {
-			internalAccounts = append(internalAccounts, account)
-		}
-	}
+	internalAccounts := activeAccounts(allAccounts)
 
 	// `err` is nil here (the fetch above returned early otherwise), which is exactly what the
 	// roster's second argument asserts.
@@ -1633,7 +1628,31 @@ func (s *transactionSyncService) createBalanceSnapshots(
 	// (the retained rows are the whole point) and NEVER touches a user-disconnected account; see
 	// restoreProviderRemovedAccounts. Ordering is deliberate: removal first, so an account absent
 	// from this response cannot be removed and restored in the same pass.
-	s.restoreProviderRemovedAccounts(ctx, linkedItem, roster, allAccounts)
+	restoredCount := s.restoreProviderRemovedAccounts(ctx, linkedItem, roster, allAccounts)
+
+	// Step 2d (Issue #1569 Task 10.3, item A): the restore above WROTE to the database, so
+	// `internalAccounts` — filtered out of a read taken before that write — no longer says which
+	// accounts are active. Building the snapshot map below from that stale slice skipped a
+	// same-pass restore entirely: the account Plaid dropped and returned in ONE response came back
+	// to 'active' but got no balance snapshot, so its net-worth contribution stayed frozen at the
+	// pre-removal figure until some later snapshot event happened to fire, and balance history had
+	// a hole at exactly the moment the account came back.
+	//
+	// Re-read rather than reorder. The removal-before-restore ordering above is deliberate (see
+	// Step 2c) and must survive, and re-deriving the restore predicate here would duplicate its
+	// ownership and cause checks — the database is the only authority on what the restore actually
+	// changed. Guarded on restoredCount, so the overwhelmingly common path costs no extra query; a
+	// failed re-read is non-fatal and simply leaves the pre-restore view in place, which is the
+	// behaviour this step replaces.
+	if restoredCount > 0 {
+		refreshed, refreshErr := s.accountRepo.GetByLinkedItemIDIncludingRetained(ctx, linkedItem.ID)
+		if refreshErr != nil {
+			s.logger.Warn("failed to re-read accounts after a restore; the restored account's balance snapshot waits for the next sync",
+				"item_id", linkedItem.ID, "error", refreshErr)
+		} else {
+			internalAccounts = activeAccounts(refreshed)
+		}
+	}
 
 	// Build map: plaid_account_id -> internal account
 	accountMap := make(map[string]domain.Account)
@@ -1717,6 +1736,23 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		"deduped", dedupedCount,
 	)
 	return nil
+}
+
+// activeAccounts returns the active subset of a retained-inclusive account read.
+//
+// Split out because createBalanceSnapshots derives it twice: once before the reconciliation passes
+// and, when a restore changed something, once from the re-read afterwards. Keeping one definition
+// means the two views cannot drift on what "active" means — in particular, a removed account must
+// accrue NO balance snapshots, which is what stops a user-disconnected account quietly resuming
+// data collection because the bank still reports it.
+func activeAccounts(accounts []domain.Account) []domain.Account {
+	active := make([]domain.Account, 0, len(accounts))
+	for _, account := range accounts {
+		if account.Status == domain.AccountStatusActive {
+			active = append(active, account)
+		}
+	}
+	return active
 }
 
 // isRedundantSnapshot reports whether `next` says nothing `latest` does not already say.
