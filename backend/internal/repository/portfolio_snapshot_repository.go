@@ -56,13 +56,28 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 	// why it is a succession test rather than one-row-per-user_account_id, and for the measurement
 	// that ruled the simpler version out. The liveness test lives inside that CTE rather than
 	// beside the holdings JOIN so a superseded predecessor is removed before anything is summed.
+	// WITH RECURSIVE: accountChainLiveCTE walks linked_items.replaced_by_id transitively, and
+	// Postgres takes RECURSIVE from the WITH keyword rather than from the CTE that needs it. The
+	// non-recursive CTEs beside it are unaffected.
+	//
+	// $OBSERVED has TWO arms, and the second one is the whole of #1569 T9-FIX item 2. "The
+	// successor holds something" is not the question — "did we look at the successor" is. A
+	// successful holdings response can list the successor with ZERO positions, in which case the
+	// capture writes no holdings row and no snapshot row, and reading only the first arm makes a
+	// CONFIRMED-EMPTY successor indistinguishable from one that has never synced. The first
+	// reading keeps the retained predecessor and reports its STALE valuation as the portfolio.
+	// holding_observations records the looking itself (migration 000176) — the same distinction
+	// ListHistoryDatesForAccount already draws between a day whose rows are all absent and a day
+	// with no rows.
 	query := `
-		WITH ` + accountChainLiveCTESQL(
+		WITH RECURSIVE ` + accountChainLiveCTESQL(
 		"$2::date",
 		"accounts a",
 		"a.user_id = $1::uuid",
 		"$2",
-		"EXISTS (SELECT 1 FROM holdings hw WHERE hw.account_id = s.account_id)",
+		"(EXISTS (SELECT 1 FROM holdings hw WHERE hw.account_id = s.account_id)"+
+			" OR EXISTS (SELECT 1 FROM holding_observations ho WHERE ho.account_id = s.account_id"+
+			" AND ho.as_of_date = $2::date AND ho.user_id = $1::uuid))",
 	) + `
 		INSERT INTO portfolio_snapshots (
 			id,

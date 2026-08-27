@@ -465,35 +465,141 @@ const lastKnownBalanceProjection = "lkb.amount AS last_known_balance, lkb.at AS 
 // unchanged — the boundary rule stays in exactly one place.
 //
 // $DAYCOL / $FROM / $WHERE supply the caller's candidate (day, account) pairs, $DATE names the day
-// for the liveness test, and $OBSERVED is the caller's has-an-observation test for the SIBLING
-// (alias `s`): current holdings for Upsert, that day's holding_snapshots for the repair.
+// for the liveness test, and $OBSERVED is the caller's has-an-observation test for the SUCCESSOR
+// (alias `s`): current holdings or today's observation record for Upsert, that day's
+// holding_snapshots or observation record for the repair.
+//
+// ⚠ CALLERS MUST OPEN THEIR WITH LIST WITH `WITH RECURSIVE`. The succession walk below is a
+// recursive CTE, and Postgres takes RECURSIVE from the WITH keyword, not from the CTE.
 //
 // It is deliberately NOT a DISTINCT ON. Picking one winner per chain key is the rule that halves a
 // maskless pair; every unsuperseded account survives here, however many share a key.
+//
+// ── THREE THINGS THIS DOES THAT THE FIRST CORRECT VERSION DID NOT ──────────────────────────────
+//
+//  1. IT COUNTS. The first version excluded a predecessor whenever SOME observed successor shared
+//     its chain key under the replacing item. One old item can hold TWO maskless accounts that
+//     MatchOrCreate gave the SAME user_account_id (the collision documented at length above), and
+//     if the successor item reports only ONE of them, both old rows satisfied that test — so the
+//     account nothing replaced was deleted from the total too. Probed against real Postgres:
+//     $6,500 of retained holdings reported as $5,000. Succession is now RATIONED: within one
+//     (day, predecessor item, chain key) group, at most as many predecessors are excluded as there
+//     are surviving observed successors, ordered by account id so the choice is deterministic and
+//     stable across runs. Which of two indistinguishable predecessors is kept is arbitrary; HOW
+//     MANY are kept is not.
+//
+//  2. IT WALKS THE WHOLE CHAIN. The first version looked exactly ONE edge ahead. For A → B → C on
+//     one day with B never synced, A saw its direct successor B unobserved and stayed in while B
+//     was excluded by C — so A and C were both summed, which is the original doubling one link
+//     further along ($9,000 for a $5,000 portfolio, measured). item_succession is the transitive
+//     closure of linked_items.replaced_by_id, depth-capped at 16 and self-edge-guarded so a cyclic
+//     or self-referential pointer cannot loop.
+//
+//     ⚠ A transitive successor that is ITSELF superseded must not be counted as a survivor, or the
+//     rationing in (1) inflates: A1/A2 → B → C would see two successors for one old item and
+//     exclude both predecessors again. `surviving` drops any successor that has an observed
+//     successor of its own.
+//
+//  3. IT ACCEPTS THE ACCOUNT-LEVEL POINTER TOO. The item pointer is written fail-open
+//     (account_service.go step 5b logs and continues), and CreateBatch's backstop —
+//     supersedeStrandedChainSiblings — repairs the ACCOUNT row, setting accounts.replaced_by_id,
+//     not the item row. So on the failure path the item-level test finds nothing and both rows are
+//     counted. Reading EITHER recorded pointer closes that window: both are written only by a
+//     re-link, and leg 1 (same chain key) still gates them.
+//
+// ⚠ KNOWN, AND STATED RATHER THAN LEFT TO BE DISCOVERED. The rationing groups by the PREDECESSOR'S
+// linked item. Two DIFFERENT live items whose accounts share one chain key, both replaced by one
+// successor, are two groups of one, so both predecessors are excluded against the same single
+// successor. The re-link path replaces exactly one existing item per link, so producing that shape
+// takes two separate re-links of the same chain in one day landing on one successor; it is not
+// reachable from ExchangePublicToken as written. Grouping by chain key alone instead would be
+// worse and was rejected: it collapses A → B → C into one group and keeps one of A/B.
 const accountChainLiveCTE = `
 	live_all AS (
 	    SELECT $DAYCOL AS snapshot_date, a.id AS account_id,
-	           a.user_account_id, a.linked_item_id
+	           a.user_account_id, a.linked_item_id, a.replaced_by_id
 	    FROM $FROM
 	    WHERE $WHERE
 	      AND $LIVENESS
+	),
+	-- Transitive closure of linked_items.replaced_by_id, seeded only from items this user actually
+	-- has live rows under. "<> id" refuses a self-edge and the depth cap refuses a cycle; UNION
+	-- (not UNION ALL) keeps the working set from re-deriving paths it already has.
+	item_succession AS (
+	    SELECT li.id AS pred_item_id, li.replaced_by_id AS succ_item_id, 1 AS depth
+	    FROM linked_items li
+	    WHERE li.replaced_by_id IS NOT NULL
+	      AND li.replaced_by_id <> li.id
+	      AND li.id IN (SELECT linked_item_id FROM live_all)
+	  UNION
+	    SELECT x.pred_item_id, li.replaced_by_id, x.depth + 1
+	    FROM item_succession x
+	    JOIN linked_items li ON li.id = x.succ_item_id
+	    WHERE li.replaced_by_id IS NOT NULL
+	      AND li.replaced_by_id <> li.id
+	      AND x.depth < 16
+	),
+	-- Every (predecessor, observed successor) pair on a day. Leg 1 — same logical account, plain
+	-- equality so a legacy NULL matches nothing — gates both succession routes.
+	succession AS (
+	    SELECT DISTINCT l.snapshot_date,
+	           l.linked_item_id AS pred_item_id,
+	           l.user_account_id,
+	           l.account_id AS pred_id,
+	           s.account_id AS succ_id
+	    FROM live_all l
+	    JOIN live_all s
+	      ON s.snapshot_date = l.snapshot_date
+	     AND s.account_id <> l.account_id
+	     AND s.user_account_id = l.user_account_id
+	    WHERE (
+	              EXISTS (SELECT 1 FROM item_succession x
+	                      WHERE x.pred_item_id = l.linked_item_id
+	                        AND x.succ_item_id = s.linked_item_id)
+	           OR s.account_id = l.replaced_by_id
+	          )
+	      AND $OBSERVED
+	),
+	-- A successor that is itself superseded by an observed successor is not a survivor and must
+	-- not be counted as one — see (1)/(2) above.
+	surviving AS (
+	    SELECT p.*
+	    FROM succession p
+	    WHERE NOT EXISTS (
+	        SELECT 1 FROM succession q
+	        WHERE q.snapshot_date = p.snapshot_date
+	          AND q.pred_id = p.succ_id
+	    )
+	),
+	surviving_counts AS (
+	    SELECT snapshot_date, pred_item_id, user_account_id,
+	           count(DISTINCT succ_id) AS n_surviving
+	    FROM surviving
+	    GROUP BY snapshot_date, pred_item_id, user_account_id
+	),
+	superseded AS (
+	    SELECT r.snapshot_date, r.pred_id AS account_id
+	    FROM (
+	        SELECT DISTINCT snapshot_date, pred_item_id, user_account_id, pred_id,
+	               dense_rank() OVER (
+	                   PARTITION BY snapshot_date, pred_item_id, user_account_id
+	                   ORDER BY pred_id
+	               ) AS rk
+	        FROM surviving
+	    ) r
+	    JOIN surviving_counts c
+	      ON c.snapshot_date = r.snapshot_date
+	     AND c.pred_item_id = r.pred_item_id
+	     AND c.user_account_id = r.user_account_id
+	    WHERE r.rk <= c.n_surviving
 	),
 	live AS (
 	    SELECT l.snapshot_date, l.account_id
 	    FROM live_all l
 	    WHERE NOT EXISTS (
-	        SELECT 1
-	        FROM live_all s
-	        JOIN linked_items li ON li.id = l.linked_item_id
-	        WHERE s.snapshot_date = l.snapshot_date
-	          AND s.account_id <> l.account_id
-	          -- Same logical account. Plain equality, so a legacy NULL matches nothing.
-	          AND s.user_account_id = l.user_account_id
-	          -- ...and s is under the linked item that REPLACED l's. This is the whole
-	          -- discriminator: a re-link puts predecessor and successor under DIFFERENT items and
-	          -- records the link, while coexisting siblings share one item and can never satisfy it.
-	          AND li.replaced_by_id = s.linked_item_id
-	          AND $OBSERVED
+	        SELECT 1 FROM superseded x
+	        WHERE x.snapshot_date = l.snapshot_date
+	          AND x.account_id = l.account_id
 	    )
 	)`
 
