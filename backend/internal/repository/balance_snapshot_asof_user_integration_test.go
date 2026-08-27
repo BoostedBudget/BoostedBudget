@@ -14,6 +14,27 @@ package repository
 // Run with:
 //
 //	DATABASE_URL=postgres://... go test ./internal/repository/ -run TestGetSnapshotsAsOfForUser -tags integration -p 1 -v
+//
+// ⚠ #1569 T10.2 REWROTE THIS TEST'S CENTRAL ASSERTION RATHER THAN EXTENDING IT, because the
+// assertion was WRONG — it encoded the defect as a requirement.
+//
+// It used to loop over the result asserting "one row per chain key: %s appeared twice", i.e. that
+// at most one snapshot may survive per COALESCE(user_account_id, account_id). That is exactly the
+// rule that HALVES a user's total when two maskless accounts at one institution are forced to
+// share a user_accounts row (migration 000100's NULLS NOT DISTINCT unique index) — see
+// maskless_pair_balance_integration_test.go. A test asserting it could only ever go red on the fix.
+//
+// Two things therefore changed here, and only these two:
+//   1. The assertion is now ONE ROW PER ACCOUNT, and the predecessor's absence is asserted by name
+//      rather than inferred from a count.
+//   2. The fixture now RECORDS the re-link it always claimed to model. It previously hung both
+//      chain members off ONE linked item with no replaced_by_id anywhere, which is byte-identical
+//      to a maskless pair — the fixture could not tell the two apart any more than the query could.
+//      A second linked_item with `replaced_by_id` pointing at it is what production writes
+//      (account_service.go step 5b) and is what the succession rule reads.
+//
+// The balances asserted (400 for the chain, 50 for the legacy row) are UNCHANGED. This is a fix to
+// what the test measures identity with, not to what it expects the money to be.
 
 import (
 	"context"
@@ -40,12 +61,21 @@ func TestGetSnapshotsAsOfForUser_Integration(t *testing.T) {
 	`, userID, "test|"+userID.String(), "asof-test-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
+	// TWO linked items, and the old one RECORDS that the new one replaced it. That pointer is the
+	// fixture's most important line — see the rewrite note above. The legacy account keeps the old
+	// item; which item it hangs off is immaterial to it.
 	linkedItemID := uuid.New()
-	_, err = tx.Exec(ctx, `
-		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
-		VALUES ($1, $2, $3, 'enc-test-token')
-	`, linkedItemID, userID, "asof-item-"+linkedItemID.String())
-	require.NoError(t, err, "seed linked_item")
+	newLinkedItemID := uuid.New()
+	for _, li := range []uuid.UUID{linkedItemID, newLinkedItemID} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+			VALUES ($1, $2, $3, 'enc-test-token')
+		`, li, userID, "asof-item-"+li.String())
+		require.NoError(t, err, "seed linked_item")
+	}
+	_, err = tx.Exec(ctx, `UPDATE linked_items SET replaced_by_id = $1 WHERE id = $2`,
+		newLinkedItemID, linkedItemID)
+	require.NoError(t, err, "record the succession")
 
 	// One logical account (user_accounts row) behind a re-link chain of two accounts rows, plus a
 	// second standalone account whose snapshots carry a NULL user_account_id — the legacy shape.
@@ -59,19 +89,20 @@ func TestGetSnapshotsAsOfForUser_Integration(t *testing.T) {
 	oldAcctID, newAcctID, legacyAcctID := uuid.New(), uuid.New(), uuid.New()
 	for _, a := range []struct {
 		id            uuid.UUID
+		linkedItemID  uuid.UUID
 		plaidID       string
 		userAccountID any
 		status        string
 		replacedAt    any
 	}{
-		{oldAcctID, "plaid-asof-old", userAccountID, "replaced", time.Now().UTC()},
-		{newAcctID, "plaid-asof-new", userAccountID, "active", nil},
-		{legacyAcctID, "plaid-asof-legacy", nil, "active", nil},
+		{oldAcctID, linkedItemID, "plaid-asof-old", userAccountID, "replaced", time.Now().UTC()},
+		{newAcctID, newLinkedItemID, "plaid-asof-new", userAccountID, "active", nil},
+		{legacyAcctID, linkedItemID, "plaid-asof-legacy", nil, "active", nil},
 	} {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, user_account_id, status, replaced_at)
 			VALUES ($1, $2, $3, $4, 'Test Account', 'depository', $5, $6, $7)
-		`, a.id, linkedItemID, userID, a.plaidID, a.userAccountID, a.status, a.replacedAt)
+		`, a.id, a.linkedItemID, userID, a.plaidID, a.userAccountID, a.status, a.replacedAt)
 		require.NoError(t, err, "seed account "+a.plaidID)
 	}
 
@@ -112,23 +143,24 @@ func TestGetSnapshotsAsOfForUser_Integration(t *testing.T) {
 	baseline, err := repo.GetSnapshotsAsOfForUser(ctx, userID.String(), baselineCutoff)
 	require.NoError(t, err, "GetSnapshotsAsOfForUser must execute valid SQL")
 
-	byKey := map[string]float64{}
+	// ONE ROW PER ACCOUNT, and the re-link chain contributes exactly one because a SUCCESSION
+	// POINTER says so — not because the two rows share a user_account_id.
+	byAccount := map[string]float64{}
 	for _, s := range baseline {
-		key := s.AccountID
-		if s.UserAccountID != nil {
-			key = *s.UserAccountID
-		}
-		_, dup := byKey[key]
-		assert.False(t, dup, "one row per chain key: %s appeared twice", key)
+		_, dup := byAccount[s.AccountID]
+		assert.False(t, dup, "one row per ACCOUNT: %s appeared twice", s.AccountID)
 		require.NotNil(t, s.CurrentBalance)
-		byKey[key] = *s.CurrentBalance
+		byAccount[s.AccountID] = *s.CurrentBalance
 	}
 
-	require.Len(t, byKey, 2, "one row for the re-link chain, one for the legacy NULL account")
-	assert.InDelta(t, 400.0, byKey[userAccountID.String()], 0.01,
+	require.Len(t, byAccount, 2, "one row for the re-link chain's surviving member, one for the legacy NULL account")
+	assert.NotContains(t, byAccount, oldAcctID.String(),
+		"the predecessor is superseded by an observed successor and must not be counted; if it is "+
+			"here alongside newAcctID the overlap is double-counted")
+	assert.InDelta(t, 400.0, byAccount[newAcctID.String()], 0.01,
 		"the chain's latest row AT OR BEFORE the cutoff is the 23:30 one on the baseline day (400). "+
 			"100 means the pre-relink row won; 900 means the cutoff was not applied at all.")
-	assert.InDelta(t, 50.0, byKey[legacyAcctID.String()], 0.01,
+	assert.InDelta(t, 50.0, byAccount[legacyAcctID.String()], 0.01,
 		"a NULL user_account_id row keys on its raw account_id and is still bounded by the cutoff")
 
 	// A cutoff before every snapshot returns nothing rather than erroring — the degenerate case the

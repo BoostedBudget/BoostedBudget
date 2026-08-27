@@ -89,9 +89,13 @@ var deleteCascadeReachesCachedTables = map[string][]string{
 	"merchants":         {"merchant_name_overrides"},
 	"savings_goals":     {"budget_categories"},
 	"user_accounts":     {"balance_snapshots", "household_account_shares"},
+	// linked_items joined this list in #1569 T10.2 — not because any FK changed, but because
+	// linked_items became a CACHED-READ table (see expectedCachedReadTables). This map records
+	// only the cascade targets that a cached read can observe, so widening that set widens this
+	// one. Re-derived from pg_constraint by TestDeleteCascadeMapMatchesLiveSchema.
 	"users": {"accounts", "balance_snapshots", "budget_categories", "budgets", "custom_categories",
-		"household_account_shares", "merchant_name_overrides", "transactions", "user_accounts",
-		"user_dashboard_preferences", "user_identities"},
+		"household_account_shares", "linked_items", "merchant_name_overrides", "transactions",
+		"user_accounts", "user_dashboard_preferences", "user_identities"},
 }
 
 var (
@@ -525,10 +529,69 @@ func sortedKeys(m map[string]bool) []string {
 // see. Two independent derivations (this scan, and a hand trace of all 19 cache.GetOrLoad sites)
 // produced exactly this list, so a mismatch means one of them broke — investigate, do not just
 // update the literal.
+//
+// ⚠ `linked_items` joined this list in #1569 T10.2 and it is the newest and least obvious member.
+// The balance reads no longer collapse a re-link chain by DISTINCT ON; they apply
+// accountChainSupersessionCTE, whose item_closure layer walks `linked_items.replaced_by_id`. A
+// cached balance/net-worth answer is therefore sensitive to that ONE column — see
+// linkedItemsSuccessionColumnsOnly and TestCachedReadsReadOnlyTheSuccessionColumnsOfLinkedItems,
+// which is what makes the nine column-scoped dispositions below re-derivable rather than asserted.
 var expectedCachedReadTables = []string{
 	"accounts", "balance_snapshots", "budget_categories", "budgets", "custom_categories",
-	"household_account_shares", "merchant_name_overrides", "merchants", "transactions",
-	"user_accounts", "user_dashboard_preferences", "user_identities",
+	"household_account_shares", "linked_items", "merchant_name_overrides", "merchants",
+	"transactions", "user_accounts", "user_dashboard_preferences", "user_identities",
+}
+
+// linkedItemsSuccessionColumnsOnly is the premise every column-scoped `linked_items` disposition
+// rests on: the ONLY columns of that table any cached read touches are `id` and `replaced_by_id`.
+// A write that changes neither cannot change a cached answer, however loudly the table-grained
+// write-set derivation says otherwise.
+//
+// It is a machine-checked premise, not a claim — that is the whole point of stating it here rather
+// than repeating a sentence in ten map entries. See TestCachedReadsReadOnlyTheSuccessionColumnsOfLinkedItems.
+var linkedItemsSuccessionColumnsOnly = map[string]bool{"id": true, "replaced_by_id": true}
+
+// TestCachedReadsReadOnlyTheSuccessionColumnsOfLinkedItems proves the premise above by scanning the
+// same expanded SQL corpus the write-set derivation scans. Every `<alias>.<column>` reference whose
+// alias is bound to `linked_items` must name a column in linkedItemsSuccessionColumnsOnly.
+//
+// The failure direction matters: if a cached read starts reading `linked_items.status` (say), this
+// goes red and the nine dispositions below lose their justification IN THE SAME RUN, rather than
+// quietly becoming false the way a prose reason would.
+func TestCachedReadsReadOnlyTheSuccessionColumnsOfLinkedItems(t *testing.T) {
+	srcs := nonTestRepoSources(t)
+	frags := packageSQLFragments(t, srcs)
+	aliasRe := regexp.MustCompile(`(?i)\blinked_items\s+(?:AS\s+)?([a-z_][a-z0-9_]*)\b`)
+	checked := 0
+	for _, f := range cachedReadRepoFiles {
+		src, ok := srcs[f]
+		if !ok {
+			t.Fatalf("cachedReadRepoFiles names %q, which does not exist", f)
+		}
+		text := normalizeSQL(expandFragments(src, frags))
+		for _, m := range aliasRe.FindAllStringSubmatch(text, -1) {
+			alias := m[1]
+			if strings.EqualFold(alias, "SET") || strings.EqualFold(alias, "WHERE") {
+				continue
+			}
+			colRe := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(alias) + `\.([a-z_][a-z0-9_]*)`)
+			for _, c := range colRe.FindAllStringSubmatch(text, -1) {
+				checked++
+				if !linkedItemsSuccessionColumnsOnly[strings.ToLower(c[1])] {
+					t.Errorf("cached read in %s references linked_items.%s via alias %q. Only %v are "+
+						"allowed: the ten LinkedItemRepository dispositions in "+
+						"cache_completeness_repo_test.go are column-scoped and rest on this. Either "+
+						"revert the read, or re-classify every one of them.",
+						f, c[1], alias, sortedKeys(linkedItemsSuccessionColumnsOnly))
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no linked_items column references found in the cached-read corpus — this guard " +
+			"would pass vacuously. If the succession walk no longer reads linked_items, drop " +
+			"linked_items from expectedCachedReadTables and restore the derived dispositions.")
+	}
 }
 
 func TestCachedReadTableSetMatchesExpected(t *testing.T) {

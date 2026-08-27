@@ -150,6 +150,46 @@ func (r *balanceSnapshotRepository) Create(ctx context.Context, snapshot *domain
 	return err
 }
 
+// aggregatedHistorySQLBase is GetAggregatedHistory's statement with ONE %s hole for the optional
+// account-type predicate. It is a package-level var rather than an inline literal so the pgxmock
+// tests can render the same string the production path renders — a hand-copied duplicate of a
+// 90-line statement is a maintenance trap and told us nothing about correctness that the
+// integration tests do not tell us better.
+var aggregatedHistorySQLBase = `
+		WITH RECURSIVE per_account_per_day AS (
+		    SELECT DISTINCT ON ((bs.snapshot_at AT TIME ZONE 'UTC')::date, ` + snapshotIdentityKey + `)
+		        (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
+		        bs.account_id,
+		        bs.current_balance,
+		        a.type AS account_type
+		    FROM balance_snapshots bs
+		    LEFT JOIN accounts a ON a.id = bs.account_id
+		    WHERE bs.user_id = $1
+		      AND bs.snapshot_at >= $2
+		      AND bs.snapshot_at <= $3
+		      %s
+		    ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date, ` + snapshotIdentityKey + `,
+		             bs.snapshot_at DESC, bs.id DESC
+		),
+		live_all AS (
+		    SELECT p.snapshot_date, a.id AS account_id, a.user_id AS owner_id,
+		           a.user_account_id, a.linked_item_id
+		    FROM per_account_per_day p
+		    JOIN accounts a ON a.id = p.account_id
+		),` + accountChainSupersessionCTESQL("TRUE") + `
+		SELECT p.snapshot_date,
+		       COALESCE(p.account_type, '') AS account_type,
+		       SUM(p.current_balance) AS type_balance
+		FROM per_account_per_day p
+		WHERE NOT EXISTS (
+		    SELECT 1 FROM superseded x
+		    WHERE x.snapshot_date = p.snapshot_date
+		      AND x.account_id = p.account_id
+		)
+		GROUP BY p.snapshot_date, p.account_type
+		ORDER BY p.snapshot_date ASC, account_type ASC
+	`
+
 // GetAggregatedHistory retrieves aggregated balance history for dashboard charts.
 // The query LEFT JOINs accounts unconditionally so that per-type breakdowns are always
 // available for net-worth computation. Orphaned snapshots (deleted account rows) are
@@ -169,35 +209,14 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 	// and is the same shape GetAggregatedHistoryForHousehold already used. Pinned by
 	// TestHistoryRetentionRoundTrip_InstitutionChangeKeepsLastMonthWithoutDoubleCounting, whose
 	// fixture chooses the uuids so the failing direction is deterministic.
-	const queryBase = `
-		WITH per_account_per_day AS (
-		    SELECT
-		        (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
-		        bs.snapshot_at,
-		        bs.id AS snapshot_id,
-		        bs.current_balance,
-		        a.type AS account_type
-		    FROM balance_snapshots bs
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		      AND bs.snapshot_at >= $2
-		      AND bs.snapshot_at <= $3
-		      %s
-		),
-		deduped AS (
-		    SELECT DISTINCT ON (snapshot_date, chain_key)
-		           snapshot_date, current_balance, account_type
-		    FROM per_account_per_day
-		    ORDER BY snapshot_date, chain_key, snapshot_at DESC, snapshot_id DESC
-		)
-		SELECT snapshot_date,
-		       COALESCE(account_type, '') AS account_type,
-		       SUM(current_balance) AS type_balance
-		FROM deduped
-		GROUP BY snapshot_date, account_type
-		ORDER BY snapshot_date ASC, account_type ASC
-	`
+	//
+	// #1569 T10.2: the dedup grain moved from the re-link CHAIN to the PHYSICAL ACCOUNT
+	// (snapshotIdentityKey), and the chain collapse is now done by the recorded-succession rule
+	// instead. Keying on the chain deleted one of two maskless accounts from every day of the
+	// chart — see snapshotIdentityKey and accountChainSupersessionCTE. The re-link direction is
+	// unchanged and still pinned by
+	// TestHistoryRetentionRoundTrip_InstitutionChangeKeepsLastMonthWithoutDoubleCounting.
+	queryBase := aggregatedHistorySQLBase
 
 	var query string
 	var args []interface{}
@@ -242,42 +261,89 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 	return history, nil
 }
 
-// GetLatestByUserID retrieves the most recent balance snapshot for each account for a user
-func (r *balanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userID string) ([]domain.BalanceSnapshot, error) {
-	// Canary counter: every call uses the re-link chain dedup key (Issue #1109).
-	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
-	// Use COALESCE(user_account_id::text, account_id::text) as the dedup key so that
-	// all physical accounts in a re-link chain share one key (user_account_id) and only
-	// the most recent snapshot (the active account) is returned. Legacy rows where
-	// user_account_id IS NULL fall back to account_id, preserving previous behaviour.
-	query := `
-		SELECT DISTINCT ON (COALESCE(user_account_id::text, account_id::text))
-		       id, account_id, user_account_id, user_id, current_balance, available_balance,
-		       currency_code, snapshot_at, source, created_at
-		FROM balance_snapshots
-		WHERE user_id = $1
-		ORDER BY COALESCE(user_account_id::text, account_id::text), snapshot_at DESC
+// ── The personal point-in-time reads (#1569 T10.2) ────────────────────────────────────────────
+//
+// snapshotIdentityKey is the grain these two reads collapse to. It is ONE PHYSICAL ACCOUNT, not
+// one re-link chain, and that change is the whole of the maskless-pair fix.
+//
+// Both reads used to say DISTINCT ON (COALESCE(user_account_id, account_id)) — one row per CHAIN.
+// Two maskless accounts at one institution are FORCED to share a user_accounts row (migration
+// 000100's `UNIQUE (user_id, institution_id_blind_idx, mask_blind_idx) NULLS NOT DISTINCT`, plus
+// FindByInstitutionAndMask's `mask_blind_idx IS NULL` branch), so a brokerage and an IRA at one
+// broker are one chain key with two live accounts, and the chain rule DELETED one of them from
+// every total. Measured, not reasoned: $100 + $400 reported as $400
+// (TestMasklessPair_PersonalBalanceReads_CountBothAccounts).
+//
+// ⚠ THE THREE COALESCE ARMS ARE EACH LOAD-BEARING, and the third one is the trap.
+// balance_snapshots.account_id is NULLABLE with ON DELETE SET NULL, so an orphaned snapshot is a
+// real shape, not a theoretical one. A bare DISTINCT ON (account_id) puts EVERY orphan in ONE
+// group (SQL NULL is a single DISTINCT ON bucket) and silently deletes all but one orphaned
+// account's history — a bigger error than the one being fixed. So: the physical account when
+// there is one, the logical account when the physical row is gone, and a single shared bucket
+// when neither exists, which is exactly what the pre-fix key did for that last case.
+const snapshotIdentityKey = `COALESCE(bs.account_id::text, bs.user_account_id::text, '')`
+
+// personalLatestSnapshotSQL renders the shared body of GetLatestByUserID (no cutoff) and
+// GetSnapshotsAsOfForUser (cutoff at $2). They are one statement with one optional predicate
+// BECAUSE they must agree about which row wins: the two used to be copy-and-paste siblings and
+// the whole point of GetSnapshotsAsOfForUser's doc comment is that they do not drift.
+//
+// ⚠ WITH RECURSIVE is required, not stylistic: accountChainSupersessionCTE walks
+// linked_items.replaced_by_id transitively and Postgres takes RECURSIVE from the WITH keyword.
+//
+// ⚠ $OBSERVED is TRUE here, and that is not a shortcut. live_all is built FROM the winning
+// snapshots, so an account is only in it because it reported a balance at or before the cutoff —
+// membership already IS the observation the portfolio side has to ask for separately. A successor
+// whose first sync lands after the cutoff is therefore absent, and its predecessor is correctly
+// kept: that is the point-in-time answer.
+func personalLatestSnapshotSQL(cutoffClause string) string {
+	return `
+		WITH RECURSIVE latest AS (
+		    SELECT DISTINCT ON (` + snapshotIdentityKey + `)
+		           bs.id, bs.account_id, bs.user_account_id, bs.user_id, bs.current_balance,
+		           bs.available_balance, bs.currency_code, bs.snapshot_at, bs.source, bs.created_at
+		    FROM balance_snapshots bs
+		    WHERE bs.user_id = $1
+		      ` + cutoffClause + `
+		    -- bs.id DESC is #1569 T10.2 and is independently correct even without the rest of this
+		    -- fix: createBalanceSnapshots stamps ONE time.Now() for the whole loop, so two rows can
+		    -- carry an identical snapshot_at and, with no id term, which one wins was free to FLIP
+		    -- between successive requests.
+		    ORDER BY ` + snapshotIdentityKey + `, bs.snapshot_at DESC, bs.id DESC
+		),
+		live_all AS (
+		    SELECT DATE '0001-01-01' AS snapshot_date, a.id AS account_id, a.user_id AS owner_id,
+		           a.user_account_id, a.linked_item_id
+		    FROM accounts a
+		    JOIN latest l ON l.account_id = a.id
+		),` + accountChainSupersessionCTESQL("TRUE") + `
+		SELECT l.id, l.account_id, l.user_account_id, l.user_id, l.current_balance,
+		       l.available_balance, l.currency_code, l.snapshot_at, l.source, l.created_at
+		FROM latest l
+		-- NOT EXISTS against superseded rather than a JOIN to the live CTE: an orphaned snapshot has a
+		-- NULL account_id, joins no accounts row, and must still be returned. A join would drop it.
+		WHERE NOT EXISTS (
+		    SELECT 1 FROM superseded x WHERE x.account_id = l.account_id
+		)
 	`
-	return r.scanSnapshots(ctx, query, userID)
+}
+
+// GetLatestByUserID retrieves the most recent balance snapshot for each of the user's physical
+// accounts, minus those a recorded successor superseded. See personalLatestSnapshotSQL.
+func (r *balanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userID string) ([]domain.BalanceSnapshot, error) {
+	// Canary counter: every call applies the re-link succession rule (Issue #1109).
+	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
+	return r.scanSnapshots(ctx, personalLatestSnapshotSQL(""), userID)
 }
 
 // GetSnapshotsAsOfForUser retrieves the latest snapshot at or before asOf for each of the user's
-// logical accounts. Mirrors GetLatestByUserID exactly — same DISTINCT ON chain key, same ORDER BY —
-// with the single addition of `snapshot_at <= $2`, so the two agree on which row wins a chain when
-// asOf is in the future. Issue #1537.
+// physical accounts. Mirrors GetLatestByUserID exactly — same statement, same tie-break — with the
+// single addition of `snapshot_at <= $2`, so the two agree on which row wins when asOf is in the
+// future. Issue #1537.
 func (r *balanceSnapshotRepository) GetSnapshotsAsOfForUser(ctx context.Context, userID string, asOf time.Time) ([]domain.BalanceSnapshot, error) {
-	// Canary counter: every call uses the re-link chain dedup key (Issue #1109).
+	// Canary counter: every call applies the re-link succession rule (Issue #1109).
 	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
-	query := `
-		SELECT DISTINCT ON (COALESCE(user_account_id::text, account_id::text))
-		       id, account_id, user_account_id, user_id, current_balance, available_balance,
-		       currency_code, snapshot_at, source, created_at
-		FROM balance_snapshots
-		WHERE user_id = $1
-		  AND snapshot_at <= $2
-		ORDER BY COALESCE(user_account_id::text, account_id::text), snapshot_at DESC
-	`
-	return r.scanSnapshots(ctx, query, userID, asOf)
+	return r.scanSnapshots(ctx, personalLatestSnapshotSQL("AND bs.snapshot_at <= $2"), userID, asOf)
 }
 
 // GetSnapshotsAsOfForHousehold retrieves the latest snapshot at or before asOf for every
