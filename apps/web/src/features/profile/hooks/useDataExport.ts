@@ -72,9 +72,18 @@ export function useDataExport(): UseDataExportResult {
         // briefly put a link carrying the filename into the DOM, where session replay records it.
         anchor.click()
       } finally {
-        // Always revoked, including when click() throws — a leaked object URL pins the whole export
-        // in memory for the lifetime of the tab.
-        URL.revokeObjectURL(url)
+        // ⚠ REVOKED ON A LATER TASK, NOT SYNCHRONOUSLY. click() only STARTS the download; the
+        // browser then reads the blob out of the object URL. Chrome keeps the blob alive for an
+        // in-flight download, but Firefox and Safari have historically aborted it when the URL is
+        // revoked first — and this is the GDPR Article 20 path, so an abort is the user silently
+        // not receiving data the app has already built for them.
+        //
+        // What is still guaranteed: the URL IS revoked, on every path including one where click()
+        // throws (the finally runs, and scheduling cannot fail), so the blob — a full copy of the
+        // user's financial history — is not pinned in the tab. What is NOT guaranteed is a bound on
+        // when: a setTimeout is a hint, and a tab closed or frozen in between drops it. That costs
+        // nothing, because tearing the tab down releases the blob anyway.
+        setTimeout(() => URL.revokeObjectURL(url), 0)
       }
 
       const summary: DataExportSummary = {
