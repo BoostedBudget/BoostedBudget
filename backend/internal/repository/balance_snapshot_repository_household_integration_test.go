@@ -425,23 +425,31 @@ func TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccount
 // on `a.id` — an arbitrary UUID — so the balance could be attributed to a REPLACED account's type,
 // and with an accountTypes filter applied it could be dropped from the result entirely.
 //
-// WHAT THE FIX IS, stated exactly, because this comment previously argued for the wrong instrument.
-// It reads as though the fix restored the JOIN PREDICATE. It did not, and restoring it would have
-// reintroduced a second bug: when NO active row shares the user_account_id — what
-// ExpireAccountsByFingerprint leaves behind for a whole fingerprint — a filtered join yields a NULL
-// `a.type`, which NULL never satisfies `= ANY`, so the accountTypes filter drops those snapshots
-// outright while personal scope keeps them. The join is therefore UNFILTERED
-// (`LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id`,
-// balance_snapshot_repository.go:320) and the preference lives in the ORDER BY:
-// `(a.status = 'active') DESC NULLS LAST, a.id` (:313) — active wins, any chain member's type is the
-// fallback, `a.id` only breaks ties within a status class. Both halves are pinned: this test (active
-// wins) and TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory
-// (fallback).
+// ⚠ #1569 T10.2 REMOVED THE INSTRUMENT THIS COMMENT DESCRIBED, and the test now passes for a
+// simpler reason. The history is kept because both of its dead ends are still dead ends.
 //
-// The active account's type is the authoritative one. This test seeds an active `depository` and a
-// replaced `credit` account on the SAME user_account_id, with the replaced account given a
-// deliberately LOWER uuid so the `a.id` tiebreak would choose it — making the pre-fix failure
-// deterministic rather than a coin flip.
+// The fix WAS: leave the accounts join unfiltered (a filtered join yields a NULL `a.type` when no
+// active row shares the user_account_id — what ExpireAccountsByFingerprint leaves behind for a
+// whole fingerprint — and NULL never satisfies `= ANY`, so the accountTypes filter would drop
+// those snapshots outright while personal scope keeps them), and express the preference as an
+// ORDER BY term preferring an active row, with `a.id` breaking ties within a status class.
+//
+// The fix IS: join the snapshot's OWN account, `LEFT JOIN accounts a ON a.id = bs.account_id`
+// (balance_snapshot_repository.go). Both dead ends close by construction rather than by tie-break.
+// A snapshot knows which account produced it, so there is no chain-wide ambiguity to prefer
+// between; and an expired account still HAS a row, so `a.type` is not NULL and the type filter
+// still matches. That change came with T10.2 because the whole query moved to the account grain:
+// keying anything here on the user_account deletes one of two maskless accounts, which the chain-
+// wide join and its status preference both presupposed was impossible.
+//
+// The active account's type is still the authoritative one, and this test still proves it. It seeds
+// an active `depository` and a replaced `credit` account on the SAME user_account_id, with the
+// replaced account given a deliberately LOWER uuid so the old `a.id` tiebreak would have chosen it.
+// The snapshot belongs to the ACTIVE account, so under the current join its type is 'depository'
+// without any preference being consulted — and the fixture's low-uuid trap still catches a
+// regression to a chain-wide join, because that join would readmit the credit row as a candidate.
+// The fallback half is pinned by
+// TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory.
 func TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
