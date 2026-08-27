@@ -757,3 +757,53 @@ func TestPortfolioSnapshot_Upsert_MasklessPairThroughAThreeLinkChain_StillKeepsT
 		"5000 means the superseded middle link B was counted as a surviving successor, so ONE "+
 			"real successor rationed away TWO predecessors and the unreplaced account vanished")
 }
+
+// TestPortfolioSnapshot_DailySweepDoesNotVouchForAnAccountItNeverAsked is SELF-REVIEW of the
+// observation record this task added, and it is the defect that record introduced.
+//
+// holding_observations means "we asked the provider and this is what it said". The per-account
+// capture inside ReplaceForAccount can say that honestly: investment_sync_service reaches it only
+// for an account PRESENT in a confirmed-complete /investments/holdings/get response
+// (PlaidAccountRoster), so zero holdings there is a real confirmed-empty answer.
+//
+// The whole-user daily sweep cannot. It reads our own `holdings` table, not Plaid. Stamping a
+// marker for every live investment account would have said "confirmed empty" about an account
+// nobody asked about — including a re-link successor created minutes earlier that has not synced
+// yet. The predecessor would then be dropped and the portfolio would fall to ZERO for the day,
+// which is precisely the cliff leg 3 of the exclusion rule exists to prevent, re-created by the
+// fix for a different hole.
+//
+// The whole-user form therefore writes no markers at all. This test is what says so in money.
+func TestPortfolioSnapshot_DailySweepDoesNotVouchForAnAccountItNeverAsked(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, oldAccountID, newAccountID, secID := seedRelinkedInvestmentChain(ctx, t, tx, "psnap-sweepvouch")
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+		VALUES ($1, $2, $3, $4, 10, 3000.00, 4000.00)`, uuid.New(), userID, oldAccountID, secID)
+	require.NoError(t, err)
+
+	// The daily sweep runs for every user with holdings, whether or not anything synced.
+	day, err := NewHoldingSnapshotRepository(tx).CaptureForUser(ctx, userID.String())
+	require.NoError(t, err)
+
+	var markers int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT count(*) FROM holding_observations WHERE user_id = $1 AND account_id = $2`,
+		userID, newAccountID).Scan(&markers))
+	require.Equal(t, 0, markers,
+		"the whole-user sweep read our own holdings table, not Plaid — it has no standing to "+
+			"certify that this successor holds nothing")
+
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), day)
+	require.NoError(t, err)
+	require.InDelta(t, 4000.0, snap.TotalValue, 0.001,
+		"0 means the sweep's marker was read as a confirmed-empty successor and the retained "+
+			"predecessor was dropped on re-link day — the cliff, back again")
+}
