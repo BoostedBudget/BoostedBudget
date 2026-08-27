@@ -581,66 +581,6 @@ func (s *accountService) LinkAccounts(
 		return nil, fmt.Errorf("failed to create linked item: %w", err)
 	}
 
-	// Step 5b: Issue #171 and #896 — If this is a re-link, soft-delete the old linked_item and accounts
-	if existingLinkedItem != nil {
-		s.logger.Info("re-link detected, soft-deleting old linked item",
-			"old_item_id", existingLinkedItem.ID,
-			"new_item_id", linkedItem.ID,
-			"institution_id", institutionID,
-		)
-
-		// Mark old linked_item as 'replaced' with replaced_by_id pointing to new item
-		now := time.Now()
-		existingLinkedItem.Status = domain.LinkedItemStatusReplaced
-		existingLinkedItem.StatusChangedAt = &now // Issue #1010: TTL clock for fingerprint release
-		existingLinkedItem.ReplacedAt = &now
-		existingLinkedItem.ReplacedByID = &linkedItem.ID
-		if err := s.linkedItemRepo.Update(ctx, existingLinkedItem); err != nil {
-			s.logger.Error("failed to soft-delete old linked item",
-				"old_item_id", existingLinkedItem.ID,
-				"error", err,
-			)
-			// Continue - the new item was created successfully
-		}
-
-		// Mark old accounts as 'replaced'
-		oldAccounts, err := s.accountRepo.GetByLinkedItemID(ctx, existingLinkedItem.ID)
-		if err != nil {
-			s.logger.Error("failed to get old accounts for soft-delete",
-				"old_item_id", existingLinkedItem.ID,
-				"error", err,
-			)
-		} else {
-			// ⚠ FAIL-OPEN, and deliberately left that way — #1569 task 9.1 item B.
-			//
-			// This loop runs BEFORE the successor rows exist (step 6b), and returning here would
-			// throw away a bank connection the user just authorised in order to fix a bookkeeping
-			// row. Until this task it was also UNBACKED: a transient failure left two 'active'
-			// accounts sharing one user_account_id with nothing recording it, and every
-			// current-state read — live holdings, the four investment-analytics SUMs — counted
-			// one logical position twice, permanently.
-			//
-			// It is now backed by the write that would otherwise create the second active row:
-			// accountRepository.CreateBatch supersedes any stranded sibling of the chain INSIDE
-			// the transaction that inserts the successor (supersedeStrandedChainSiblings). So a
-			// failure here degrades to "the tombstone lands a few seconds later, atomically",
-			// which is why this stays a log and not a return.
-			//
-			// Still logged at Error: reaching CreateBatch is not guaranteed (a later Plaid call or
-			// MatchOrCreate can refuse the link first), in which case the predecessor is left
-			// 'active' with no successor to supersede it — harmless, since one active row per
-			// chain is exactly correct, but a database write failing is worth surfacing on its own.
-			for _, oldAcct := range oldAccounts {
-				if err := s.accountRepo.UpdateStatus(ctx, oldAcct.ID, user.ID, domain.AccountStatusReplaced, nil); err != nil {
-					s.logger.Error("failed to mark the re-linked predecessor account 'replaced'; CreateBatch will supersede it atomically when the successor is inserted",
-						"account_id", oldAcct.ID,
-						"error", err,
-					)
-				}
-			}
-		}
-	}
-
 	// Step 6: Convert Plaid accounts to domain accounts with user_account_id
 	institutionIDFromPlaid := plaidItem.GetInstitutionId()
 	accounts := make([]domain.Account, len(plaidAccounts))
@@ -705,6 +645,82 @@ func (s *accountService) LinkAccounts(
 		}
 
 		accounts[i] = account
+	}
+
+	// Step 6b-pre: Issue #171 and #896 — retire the predecessor, IMMEDIATELY before the successor
+	// rows are written.
+	//
+	// ⚠ #1569 T10-FIX item 1: THIS USED TO RUN AS "STEP 5B", BEFORE THE CONVERSION LOOP ABOVE, AND
+	// THAT ORDERING COULD STRAND EVERY BALANCE AT THE INSTITUTION. The loop refuses the whole link
+	// when any account has no stable identity (ErrStableAccountIdentityUnavailable), and on that
+	// path the predecessor had already been retired: old item 'replaced', every old account
+	// 'replaced', the new item holding NO accounts, and no successor pointer anywhere. Neither
+	// repair mechanism can reach that state — supersedeStrandedChainSiblings and the succession
+	// closure both run INSIDE CreateBatch, which never executes. Retirement is now the last thing
+	// before the write it belongs to, so an early return leaves the user's live connection intact.
+	// Pinned by TestLinkAccounts_RelinkRefused_LeavesThePredecessorLive.
+	//
+	// It stays BEFORE CreateBatch rather than after: the successor insert needs the predecessor's
+	// fingerprint released, and the backstop is a repair for a retirement that FAILED, not a
+	// substitute for one that never ran (TestLinkAccounts_RelinkSucceeds_StillRetiresThePredecessor
+	// pins the order).
+	if existingLinkedItem != nil {
+		s.logger.Info("re-link detected, soft-deleting old linked item",
+			"old_item_id", existingLinkedItem.ID,
+			"new_item_id", linkedItem.ID,
+			"institution_id", institutionID,
+		)
+
+		// Mark old linked_item as 'replaced' with replaced_by_id pointing to new item
+		now := time.Now()
+		existingLinkedItem.Status = domain.LinkedItemStatusReplaced
+		existingLinkedItem.StatusChangedAt = &now // Issue #1010: TTL clock for fingerprint release
+		existingLinkedItem.ReplacedAt = &now
+		existingLinkedItem.ReplacedByID = &linkedItem.ID
+		if err := s.linkedItemRepo.Update(ctx, existingLinkedItem); err != nil {
+			s.logger.Error("failed to soft-delete old linked item",
+				"old_item_id", existingLinkedItem.ID,
+				"error", err,
+			)
+			// Continue - the new item was created successfully
+		}
+
+		// Mark old accounts as 'replaced'
+		oldAccounts, err := s.accountRepo.GetByLinkedItemID(ctx, existingLinkedItem.ID)
+		if err != nil {
+			s.logger.Error("failed to get old accounts for soft-delete",
+				"old_item_id", existingLinkedItem.ID,
+				"error", err,
+			)
+		} else {
+			// ⚠ FAIL-OPEN, and deliberately left that way — #1569 task 9.1 item B.
+			//
+			// This loop runs BEFORE the successor rows exist (step 6b), and returning here would
+			// throw away a bank connection the user just authorised in order to fix a bookkeeping
+			// row. Until this task it was also UNBACKED: a transient failure left two 'active'
+			// accounts sharing one user_account_id with nothing recording it, and every
+			// current-state read — live holdings, the four investment-analytics SUMs — counted
+			// one logical position twice, permanently.
+			//
+			// It is now backed by the write that would otherwise create the second active row:
+			// accountRepository.CreateBatch supersedes any stranded sibling of the chain INSIDE
+			// the transaction that inserts the successor (supersedeStrandedChainSiblings). So a
+			// failure here degrades to "the tombstone lands a few seconds later, atomically",
+			// which is why this stays a log and not a return.
+			//
+			// Still logged at Error: CreateBatch can itself fail, in which case the predecessor is
+			// left 'replaced' with no successor to supersede it. That is the one window the
+			// reordering above does NOT close — it is two statements wide instead of the whole
+			// conversion loop — and a database write failing is worth surfacing on its own.
+			for _, oldAcct := range oldAccounts {
+				if err := s.accountRepo.UpdateStatus(ctx, oldAcct.ID, user.ID, domain.AccountStatusReplaced, nil); err != nil {
+					s.logger.Error("failed to mark the re-linked predecessor account 'replaced'; CreateBatch will supersede it atomically when the successor is inserted",
+						"account_id", oldAcct.ID,
+						"error", err,
+					)
+				}
+			}
+		}
 	}
 
 	// Step 6b: Create accounts in batch

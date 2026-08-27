@@ -13,6 +13,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/mockassert"
 )
 
 // Issue #1569 Phase 0 — stable account identity is a precondition for retention.
@@ -198,4 +199,138 @@ func TestLinkAccounts_NoUserAccountService_RefusesTheLink(t *testing.T) {
 	require.ErrorIs(t, err, ErrStableAccountIdentityUnavailable,
 		"an unwired UserAccountService must refuse the link, not silently create identity-less accounts")
 	accountRepo.AssertNotCalled(t, "CreateBatch", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// ── #1569 T10-FIX item 1: a refused re-link must not strand the predecessor ────────────────────
+
+// newRelinkRefusalHarness is newStableIdentityHarness's re-link sibling: an ACTIVE linked item
+// already exists at the institution, so LinkAccounts takes the step-5b retirement path.
+func newRelinkRefusalHarness(t *testing.T, matchErr error) (
+	svc AccountService, userID string, oldItemID string, oldAccountIDs []string,
+	accountRepo *MockAccountRepository, linkedItemRepo *MockLinkedItemRepository,
+) {
+	t.Helper()
+	ctx := context.Background()
+	userID = uuid.New().String()
+	institutionID := "ins_relink_refusal"
+
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id": "plaid-acct-relink-refusal-1",
+			"balances":   map[string]interface{}{"available": 100.0, "current": 110.0, "iso_currency_code": "USD"},
+			"mask":       "4242", "name": "Checking", "subtype": "checking", "type": "depository",
+		},
+	}
+	_, plaidClient := newTestPlaidServerWithPersistentID(
+		t, "access-relink-refusal", "plaid-item-relink-refusal", plaidAccounts)
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	linkedItemRepo = &MockLinkedItemRepository{}
+	accountRepo = &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+	uaSvc := &MockUserAccountService{}
+
+	oldItemID = uuid.New().String()
+	oldAccountIDs = []string{uuid.New().String(), uuid.New().String()}
+	sharedUA := uuid.New().String()
+	oldAccounts := make([]domain.Account, 0, len(oldAccountIDs))
+	for i, id := range oldAccountIDs {
+		oldAccounts = append(oldAccounts, domain.Account{
+			ID: id, UserID: userID, LinkedItemID: oldItemID, Name: "Old " + id,
+			Type: "depository", Status: domain.AccountStatusActive, UserAccountID: &sharedUA,
+		})
+		_ = i
+	}
+
+	mockUserRepo.On("GetUserByID", ctx, userID).
+		Return(&domain.User{ID: userID, SubscriptionTier: "premium"}, nil)
+	linkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(&domain.LinkedItem{ID: oldItemID, UserID: userID, InstitutionID: institutionID,
+			Status: domain.LinkedItemStatusActive}, nil)
+	accountRepo.On("CheckFingerprintOwnership", mock.Anything, mock.Anything, userID).Return(nil, nil)
+	linkedItemRepo.On("Create", ctx, mock.Anything).Run(func(args mock.Arguments) {
+		args.Get(1).(*domain.LinkedItem).ID = uuid.New().String()
+	}).Return(nil)
+	linkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	accountRepo.On("GetByLinkedItemID", ctx, oldItemID).Return(oldAccounts, nil)
+	accountRepo.On("UpdateStatus", ctx, mock.Anything, userID, domain.AccountStatusReplaced, mock.Anything).Return(nil)
+	accountRepo.On("CreateBatch", ctx, mock.Anything, mock.Anything).Return(nil)
+
+	if matchErr != nil {
+		uaSvc.On("MatchOrCreate", ctx, userID, institutionID, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(nil, matchErr)
+	} else {
+		uaSvc.On("MatchOrCreate", ctx, userID, institutionID, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(&domain.UserAccount{ID: uuid.New().String(), UserID: userID}, nil)
+	}
+
+	svc = NewAccountService(
+		mockPlaidSvc, linkedItemRepo, accountRepo, mockUserRepo, nil,
+		WithEncryptor(newTestFieldEncryptor(t)),
+		WithUserAccountService(uaSvc),
+		WithAccountServiceLogger(slog.Default()),
+	)
+	return svc, userID, oldItemID, oldAccountIDs, accountRepo, linkedItemRepo
+}
+
+// TestLinkAccounts_RelinkRefused_LeavesThePredecessorLive is #1569 T10-FIX item 1.
+//
+// Step 5b retired the predecessor — old item 'replaced', every old account 'replaced' — and step 6
+// then converted the Plaid accounts, any one of which can refuse the whole link. On that path the
+// new item holds NO accounts, the old accounts are all inactive, and no successor pointer exists
+// anywhere. NEITHER repair mechanism can reach it: supersedeStrandedChainSiblings and the
+// succession closure both run inside CreateBatch, which never executed. Every balance the user has
+// at that institution is now attached to rows that read as retired, with nothing live to carry
+// them.
+//
+// The retirement is therefore deferred to the last possible moment — immediately before
+// CreateBatch, once every account has a stable identity and the batch is about to be written.
+func TestLinkAccounts_RelinkRefused_LeavesThePredecessorLive(t *testing.T) {
+	svc, userID, _, _, accountRepo, linkedItemRepo := newRelinkRefusalHarness(
+		t, errors.New("user_accounts lookup exploded"))
+
+	_, err := svc.LinkAccounts(context.Background(), userID, "public-token", "ins_relink_refusal", "Test Bank")
+
+	require.ErrorIs(t, err, ErrStableAccountIdentityUnavailable)
+	accountRepo.AssertNotCalled(t, "CreateBatch", mock.Anything, mock.Anything, mock.Anything)
+	// A refused link must leave the predecessor accounts ACTIVE. Marking them 'replaced' before the
+	// successor exists strands every balance at the institution: the new item has no accounts, and
+	// both repair paths live inside the CreateBatch that never ran.
+	mockassert.NoCallTo(t, &accountRepo.Mock, "UpdateStatus")
+	// The same applies to the linked_item: retiring it points a 'replaced' item at an item with no
+	// accounts, and stops the connection that is still the user's only live one.
+	mockassert.NoCallTo(t, &linkedItemRepo.Mock, "Update")
+}
+
+// TestLinkAccounts_RelinkSucceeds_StillRetiresThePredecessor is the counter-test. Deferring the
+// retirement must not delete it: on the happy path the predecessor is still retired, and still
+// BEFORE CreateBatch, because that is what lets the successor insert claim the fingerprint.
+func TestLinkAccounts_RelinkSucceeds_StillRetiresThePredecessor(t *testing.T) {
+	svc, userID, oldItemID, oldAccountIDs, accountRepo, linkedItemRepo := newRelinkRefusalHarness(t, nil)
+	ctx := context.Background()
+
+	var order []string
+	accountRepo.ExpectedCalls = nil
+	accountRepo.On("CheckFingerprintOwnership", mock.Anything, mock.Anything, userID).Return(nil, nil)
+	accountRepo.On("GetByLinkedItemID", ctx, oldItemID).Return([]domain.Account{
+		{ID: oldAccountIDs[0], UserID: userID, LinkedItemID: oldItemID, Status: domain.AccountStatusActive},
+		{ID: oldAccountIDs[1], UserID: userID, LinkedItemID: oldItemID, Status: domain.AccountStatusActive},
+	}, nil)
+	accountRepo.On("UpdateStatus", ctx, mock.Anything, userID, domain.AccountStatusReplaced, mock.Anything).
+		Run(func(args mock.Arguments) { order = append(order, "retire:"+args.String(1)) }).Return(nil)
+	accountRepo.On("CreateBatch", ctx, mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) { order = append(order, "createbatch") }).Return(nil)
+
+	result, err := svc.LinkAccounts(ctx, userID, "public-token", "ins_relink_refusal", "Test Bank")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	require.Len(t, order, 3, "both predecessors must still be retired, and the batch still written")
+	assert.Equal(t, "createbatch", order[2],
+		"the retirement must still happen BEFORE CreateBatch: the successor insert needs the "+
+			"predecessor's fingerprint released, and supersedeStrandedChainSiblings is the backstop "+
+			"for a retirement that failed, not a substitute for one that never ran")
+	linkedItemRepo.AssertCalled(t, "Update", ctx, mock.Anything)
 }
