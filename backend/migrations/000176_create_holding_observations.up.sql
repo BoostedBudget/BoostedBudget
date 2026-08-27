@@ -43,11 +43,17 @@ CREATE TABLE IF NOT EXISTS holding_observations (
 );
 
 COMMENT ON TABLE holding_observations IS
-    'One row per (account, UTC day) on which a holdings capture COMPLETED for that account '
-    '(#1569 task 9-FIX). It records that we looked, not what we found — the positions live in '
-    'holding_snapshots, and an account that held nothing produces a row here and none there. '
-    'Written in the same transaction as the capture. Not history: it carries no value and nothing '
-    'the user would notice losing, which is why it sits in deliberatelyNotHistoryBearing.';
+    'One row per (account, UTC day) on which a PROVIDER-BACKED holdings capture completed for '
+    'that account (#1569 task 9-FIX). It records that we ASKED PLAID and what it said, not what '
+    'we hold — the positions live in holding_snapshots, and an account that held nothing produces '
+    'a row here and none there. Written in the same transaction as the capture, and ONLY by the '
+    'per-account form (holdingRepository.ReplaceForAccount, reached only for an account present '
+    'in a confirmed-complete /investments/holdings/get response). The whole-user daily sweep '
+    'deliberately writes NOTHING here: it re-reads our own holdings table and so cannot certify '
+    'that anything is empty — a marker from there would drop a not-yet-synced re-link successor''s '
+    'retained predecessor and send that day''s portfolio to zero. Not history: it carries no value '
+    'and nothing the user would notice losing, which is why it sits in '
+    'deliberatelyNotHistoryBearing.';
 
 COMMENT ON COLUMN holding_observations.as_of_date IS
     'UTC calendar date the capture filed under, taken from the SERVER (serverUTCDate) and passed '

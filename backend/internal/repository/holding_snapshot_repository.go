@@ -121,24 +121,6 @@ const recordHoldingObservationSQL = `
 		observed_at = EXCLUDED.observed_at
 `
 
-// recordHoldingObservationsForUserSQL is the whole-user form, scoped to exactly the accounts
-// captureHoldingSnapshotsForUserSQL would have written for: live on the day, and belonging to
-// this user. It reads `accounts` rather than `holdings` on purpose — an account that holds
-// nothing has no holdings row, and that account is the entire reason this record exists.
-//
-// $1 = user_id, $2 = as_of_date.
-var recordHoldingObservationsForUserSQL = `
-	INSERT INTO holding_observations (user_id, account_id, as_of_date, observed_at)
-	SELECT a.user_id, a.id, $2::date, now()
-	FROM accounts a
-	WHERE a.user_id = $1::uuid
-	  AND a.type = 'investment'
-	  AND ` + accountLiveOnDateSQL("a.id", "$2") + `
-	ON CONFLICT (account_id, as_of_date) DO UPDATE SET
-		user_id     = EXCLUDED.user_id,
-		observed_at = EXCLUDED.observed_at
-`
-
 // captureHoldingSnapshots records one account's post-replace position SET. db is expected to be
 // the pgx.Tx that just performed the replace, so both halves and the replace commit together.
 //
@@ -178,6 +160,19 @@ func captureHoldingSnapshots(ctx context.Context, db DB, accountID, userID strin
 // rebuilds those aggregates FROM these rows.
 //
 // $1 = user_id, $2 = as_of_date.
+//
+// ⚠ AND THERE IS NO OBSERVATION HALF HERE, deliberately — the third statement the per-account
+// capture runs (recordHoldingObservationSQL) is absent from this form on purpose, and putting it
+// back is a money bug. holding_observations means "we ASKED THE PROVIDER and this is what it
+// said". The per-account capture can say that: investment_sync_service reaches ReplaceForAccount
+// only for an account PRESENT in a confirmed-complete /investments/holdings/get response, so zero
+// holdings there is a real confirmed-empty answer. This sweep asks nobody — it re-reads our own
+// `holdings` table for every user daily, whether or not anything synced. A marker from here would
+// certify "confirmed empty" for a re-link successor created minutes ago that has not synced yet,
+// the exclusion rule would drop its retained predecessor, and the user's portfolio would fall to
+// ZERO for the day: the exact cliff leg 3 of that rule exists to prevent, re-created by the fix
+// for a different hole. Found on self-review of that fix and pinned by
+// TestPortfolioSnapshot_DailySweepDoesNotVouchForAnAccountItNeverAsked.
 //
 // The mark-absent half deliberately omits the liveness clause its paired INSERT carries: it only
 // ever touches rows that ALREADY exist for this day, and a row exists for a terminal account only
@@ -310,9 +305,6 @@ func (r *holdingSnapshotRepository) CaptureForUser(ctx context.Context, userID s
 		return time.Time{}, err
 	}
 	if _, err := tx.Exec(ctx, captureHoldingSnapshotsForUserSQL, userID, day); err != nil {
-		return time.Time{}, err
-	}
-	if _, err := tx.Exec(ctx, recordHoldingObservationsForUserSQL, userID, day); err != nil {
 		return time.Time{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
