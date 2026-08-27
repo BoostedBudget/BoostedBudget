@@ -499,6 +499,16 @@ describe('HoldingsTable', () => {
       removed_at: '2026-03-10T00:00:00Z',
     })
 
+    // #1569 T9-FIX item 5: the shape the accounts read could not SEE. `is_hidden` changes nothing
+    // in this component — it changes which accounts the backend returns at all — so the fixture
+    // exists to prove the closed-account surface still mounts for one, and the params assertion
+    // beside it proves we now ask for them.
+    const accountClosedHidden = makeAccount({
+      ...accountClosed,
+      id: 'acct-closed-hidden',
+      is_hidden: true,
+    })
+
     const position = (overrides: Partial<HoldingSnapshotView> = {}): HoldingSnapshotView => ({
       security_id: 'sec-1',
       as_of_date: '2026-03-04',
@@ -536,7 +546,7 @@ describe('HoldingsTable', () => {
 
     beforeEach(() => {
       mockUseGetAccounts.mockReturnValue({
-        data: { accounts: [accountAlpha, accountBeta, accountClosed] },
+        data: { accounts: [accountAlpha, accountBeta, accountClosed, accountClosedHidden] },
         isLoading: false,
         error: null,
         refetch: () => Promise.resolve({}),
@@ -905,9 +915,40 @@ describe('HoldingsTable', () => {
       // Self-review of this round's own fix. Keying the error copy on
       // scopedAccountIsDisconnected alone left one axis open: that predicate is FALSE when the
       // accounts read also failed, so a closed account with both reads failing was still told to
-      // refresh. Reachable in production — useAllAccounts and AccountDetailPage's useGetAccounts
-      // use different query keys, so they are separate cache entries and can diverge.
-      it('does not promise a refresh when it cannot even tell what the account is', () => {
+      // refresh. ⚠ The route by which it was reachable is CLOSED as of T9-FIX item 6 — the two
+      // reads now share one query key — but the branch and this test stay: the unscoped mount and
+      // an outright first-load failure still reach it.
+      // ── #1569 T9-FIX items 5 and 6: the account read has to be able to SEE the account ──
+      //
+      // useAllAccounts sends status=all_statuses and nothing else, and the backend defaults
+      // include_hidden to FALSE. A HIDDEN closed investment account is therefore absent from the
+      // response entirely: scopedAccountIsDisconnected is false, and the retained history the
+      // whole surface exists for never mounts. AccountDetailPage — the only production mount of
+      // the scoped form — already asks for hidden accounts, so the two reads were asking
+      // different questions of the same endpoint.
+      //
+      // Asking the same question fixes both halves at once. The params are what this test can
+      // see; the shared cache entry that follows from them is what closes item 6, and the test
+      // below states that consequence.
+      it('asks for hidden accounts, the same question AccountDetailPage asks', () => {
+        render(<HoldingsTable accountId="acct-closed" />)
+
+        expect(mockUseGetAccounts).toHaveBeenCalledWith(
+          { status: 'all_statuses', include_hidden: 'true' },
+          undefined,
+        )
+      })
+
+      it('renders the retained history of a HIDDEN closed account', () => {
+        withHistory()
+        render(<HoldingsTable accountId="acct-closed-hidden" />)
+
+        expect(screen.getByText(/closed account/i)).toBeDefined()
+        expect(screen.getByText('AAPL')).toBeDefined()
+        expect(screen.queryByText(/no holdings synced yet/i)).toBeNull()
+      })
+
+            it('does not promise a refresh when it cannot even tell what the account is', () => {
         mockUseGetAccounts.mockReturnValue({
           data: undefined,
           isLoading: false,
