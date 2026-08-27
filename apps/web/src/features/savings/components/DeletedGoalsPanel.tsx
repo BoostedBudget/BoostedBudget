@@ -323,8 +323,15 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
         </div>
       )}
 
+      {/*
+        ⚠ `!purgeDisarmed` is the second half of the disarm, and leaving it out was the hole the
+        first draft of that fix left behind: the dialog can already be OPEN when the refetch fails,
+        and its confirm button is not the one the disabled prop touches. The confirmation closes
+        with the listing it was raised from — a confirmation is a statement about a row we have
+        just stopped vouching for.
+      */}
       <ConfirmationDialog
-        open={goalToPurge !== null}
+        open={goalToPurge !== null && !purgeDisarmed}
         onOpenChange={(open) => {
           if (!open) setGoalToPurge(null)
         }}

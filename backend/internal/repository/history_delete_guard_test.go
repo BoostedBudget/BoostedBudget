@@ -263,7 +263,10 @@ var (
 	//     predicate pin for a DELETE that does not carry it.
 	//
 	// Blanking them is exactly proportionate to a text scanner; writing a SQL parser is not. The
-	// standard-SQL escape `''` is handled, so `'it''s'` closes where it should.
+	// standard-SQL escape `''` is matched as part of the literal for tidiness, NOT because the guard
+	// depends on it: an escaped literal carries an EVEN number of quotes, so a naive `'[^']*'` splits
+	// `'it''s'` into two adjacent matches and stays in phase across it. Measured, not reasoned — see
+	// the note in TestHistoryDeleteStatements_IsNotFooledByAQuotedLiteral.
 	//
 	// ⚠ THE ONE ORDERING THIS DEPENDS ON: comments are stripped BEFORE literals are blanked, so an
 	// apostrophe in a comment cannot open a literal. The converse — a `--` INSIDE a literal, which
@@ -920,6 +923,27 @@ func TestHistoryDeleteStatements_IsNotFooledByAQuotedLiteral(t *testing.T) {
 			t.Fatalf("a quoted literal lent the DELETE a predicate it does not carry; missing %v "+
 				"(statement: %s)", missing, stmts[0])
 		}
+	})
+
+	// ⚠ THE DIRECTION THAT MATTERS MOST FOR A BLANKING FIX: blanking must not make the guard STOP
+	// GUARDING. A delete that merely sits near quoted literals is still a delete, and `''` must
+	// close a literal where SQL says it does rather than swallowing the rest of the string.
+	t.Run("blanking hides no real delete", func(t *testing.T) {
+		sites := historyDeleteSites(
+			`INSERT INTO audit_notes (a, b) VALUES ('x', 'y'); `+
+				`DELETE FROM transactions WHERE account_id = $1`,
+			historyBearingTables)
+		if len(sites) != 1 || sites[0] != "transactions" {
+			t.Fatalf("a real delete beside quoted literals must still be seen, got %v", sites)
+		}
+		// ⚠ NO SUBTEST FOR THE `''` ESCAPE, DELIBERATELY, AND THE REASON IS WORTH KEEPING. The first
+		// draft of this file asserted that the escape-aware matcher was load-bearing. It is not:
+		// every `''`-escaped literal contains an EVEN number of quotes, so a naive `'[^']*'` splits
+		// `'it''s odd'` into two adjacent matches and stays in phase for the rest of the string.
+		// Replacing the matcher with the naive form was run against this whole test and changed
+		// nothing (measured, not reasoned). The alternation is kept because it classifies literals
+		// correctly, not because any assertion here depends on it — and an assertion that cannot
+		// fail is worse than none, since it reads as coverage.
 	})
 
 	t.Run("a real statement terminator is still a boundary", func(t *testing.T) {
