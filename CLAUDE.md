@@ -179,11 +179,16 @@ keep, so it takes the second mechanism. Both are now enforced:
 `TestNoAccountProjectionCarriesATerminalBalance` for the projection form and
 `TestNoRawAccountBalanceReadWithoutTheCurrentStateLeg` for the raw form.
 
-⚠ **Household spending and household net-worth do NOT agree about a departed member.** Balance /
-net-worth reads honour the shared interval; spending, income and savings-rate reads
-(`householdAccountsCTE`, nine call sites) still erase a departed member's entire past. Known,
-costed deferral — widening the CTE naively double-counts money. See ADR Decision 7 before touching
-it.
+⚠ **Household spending and household net-worth now AGREE about a departed member** (#1569 T23 —
+this entry said the opposite until #1569 T8.5, and the stale version was a deferral that had
+already been paid off). `householdAccountsCTE` is now `householdGrantsCTE`, which emits every grant
+as a half-open interval on the same membership relaxation the balance CTEs use
+(`analytics_repository.go`), and all nine spending / income / savings-rate call sites decide
+inclusion through `householdSharedTransactionPredicate` — an `EXISTS` **semi-join, not a `JOIN`**,
+so an account covered by two grants cannot double-count. Pinned by
+`TestAnalyticsRepository_Household_BalanceAndSpendingUniversesAgreeOverSharedPeriod`.
+⚠ What REMAINS is different and correct: spending clips at **DATE** resolution, balances at the
+**instant**. Read ADR Decision 7 before touching either.
 
 ⚠ Enforced mechanically, and each guard's meta-tests construct the violation and prove it fails:
 - `TestNoUnallowlistedCascadeIntoHistoryTable` (G1) — new `ON DELETE CASCADE` into a history-bearing
