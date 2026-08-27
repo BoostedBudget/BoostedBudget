@@ -812,3 +812,39 @@ func TestUpsertProposedFromTransaction_Integration_LeavesNonManagedProposedRowAl
 	assertManagedFlag(t, pool, manual.ID, false,
 		"the reconciler must not claim ownership of a row it did not create")
 }
+
+// TestInsertManualFromTransaction_Integration_RefusesToOverwriteAConfirmedRow drives a real
+// confirmed row into the (transaction_id, savings_goal_id) conflict slot. Until now
+// ErrContributionAlreadyConfirmed was only ever seen at the Huma layer from a MOCKED repo
+// returning it — nothing proved the repository produces it, nor that the already-confirmed row is
+// left as the user logged it rather than silently re-written with the second call's amount and
+// date.
+func TestInsertManualFromTransaction_Integration_RefusesToOverwriteAConfirmedRow(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -100.0)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	first, err := repo.InsertManualFromTransaction(ctx, userID, goalID, txnID, 40.0, "2026-01-05")
+	require.NoError(t, err, "the first manual log takes the conflict slot as status='confirmed'")
+	require.Equal(t, "confirmed", first.Status)
+
+	second, err := repo.InsertManualFromTransaction(ctx, userID, goalID, txnID, 60.0, "2026-02-09")
+	assert.ErrorIs(t, err, domain.ErrContributionAlreadyConfirmed,
+		"a second manual log against an already-confirmed slot must be refused by the repository "+
+			"itself, not only by a mock standing in for it")
+	assert.Nil(t, second)
+
+	var amount float64
+	var occurredOn, status string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT amount, occurred_on::text, status FROM savings_goal_contributions WHERE id = $1`,
+		first.ID).Scan(&amount, &occurredOn, &status))
+	assert.InDelta(t, 40.0, amount, 0.001, "the confirmed amount the user logged must stand")
+	assert.Equal(t, "2026-01-05", occurredOn, "and so must the date they logged it on")
+	assert.Equal(t, "confirmed", status)
+}
