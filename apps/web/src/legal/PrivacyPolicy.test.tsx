@@ -286,6 +286,28 @@ describe('PrivacyPolicy', () => {
   // build product of api/openapi.yaml and therefore of the Go routes) and a UI half (a source file
   // that mounts it). Either half alone is insufficient: T2 shipped an endpoint with no screen, and
   // "a component exists" says nothing about whether it can reach any data.
+  //
+  // ⚠ WHAT THE UI HALF ACTUALLY CHECKS, AND WHAT IT DOES NOT (T7-FIX, finding D). It was over-sold
+  // to the user as proving the reader is reachable. It did not: it asserted only that a nominated
+  // FILE contained a STRING somewhere, so the balance evidence was satisfied by an `import` line
+  // and the transactions evidence by a key in a filter spec that issues no request at all.
+  // Unmounting the component while leaving the import kept it green.
+  //
+  // It now checks a three-link CHAIN, each link textual but each one a different fact:
+  //
+  //   1. the reader file calls the hook or endpoint function, OUTSIDE its import statements;
+  //   2. a named surface RENDERS that reader (`<Component`), or uses that hook;
+  //   3. App.tsx mounts that surface as a route element (`<Surface />`).
+  //
+  // That is strictly stronger than "the string occurs somewhere" and it is still NOT a proof of
+  // reachability. It is source-text matching: it cannot see that the route is behind a feature
+  // flag, that the render is inside a branch nobody takes, or that the hook is called with
+  // arguments that always return nothing. A real reachability proof would mean mounting the route
+  // and asserting the request goes out, which is a browser-level test and lives in the e2e suite,
+  // not here. The per-component unit tests (ClosedAccountBalanceHistory.test.tsx,
+  // HoldingsTable.test.tsx, AccountDetailPage.test.tsx) are what assert the components mount and
+  // read. This guard's job is narrower and stated as such: the policy may not name a kind of
+  // history whose reader has been deleted, renamed, or unwired from its surface.
 
   const REPO_ROOT = join(import.meta.dir, '../../../..')
 
@@ -310,32 +332,71 @@ describe('PrivacyPolicy', () => {
    * make this promise true, which is precisely how the balance clause was false while
    * getBalanceHistory existed the whole time (it takes account_types and has never taken an
    * account id).
+   *
+   * `readerFile` must CALL the read (`uiNeedles`, matched with imports stripped), `surfaceFile`
+   * must render or use the reader (`surfaceNeedle`), and App.tsx must mount `routeElement` as a
+   * route. See the chain note above for what that does and does not prove.
    */
-  const VIEWABLE_HISTORY_READERS: Record<
-    string,
-    { apiOperationId: string; apiParam: string; uiFile: string; uiNeedle: string }
-  > = {
+  interface ViewableHistoryReader {
+    apiOperationId: string
+    apiParam: string
+    /** The file that actually issues the read. */
+    readerFile: string
+    /** Fragments that must appear in readerFile OUTSIDE its import statements. */
+    uiNeedles: string[]
+    /** The screen that renders or uses the reader. */
+    surfaceFile: string
+    surfaceNeedle: string
+    /** The route element App.tsx must mount for that screen. */
+    routeElement: string
+  }
+
+  const VIEWABLE_HISTORY_READERS: Record<string, ViewableHistoryReader> = {
     transaction: {
       apiOperationId: 'getTransactions',
       apiParam: 'account_ids',
-      uiFile: 'apps/web/src/features/transactions/hooks/useTransactionFilters.ts',
-      uiNeedle: 'account_ids',
+      // ⚠ NOT useTransactionFilters.ts, which the previous version of this guard named. That file
+      // is a filter SPEC — `account_ids` appears in it as a key in a shape declaration and it
+      // issues no request at all, so the evidence was satisfied by something that cannot make the
+      // promise true. useInfiniteTransactions is the file that imports the endpoint function and
+      // puts account_ids on the wire.
+      readerFile: 'apps/web/src/features/transactions/hooks/useInfiniteTransactions.ts',
+      uiNeedles: ['getTransactions(', 'account_ids:'],
+      surfaceFile: 'apps/web/src/features/transactions/TransactionsPage.tsx',
+      surfaceNeedle: 'useInfiniteTransactions(',
+      routeElement: '<TransactionsPage />',
     },
     balance: {
       // #1569, this round. Before it, the ONLY per-account balance anywhere was the single
       // last-known figure in AccountSummaryHeader (#1591) — one number is not a history.
       apiOperationId: 'getAccountBalanceHistory',
       apiParam: 'id',
-      uiFile: 'apps/web/src/features/accounts/components/ClosedAccountBalanceHistory.tsx',
-      uiNeedle: 'useGetAccountBalanceHistory',
+      readerFile: 'apps/web/src/features/accounts/components/ClosedAccountBalanceHistory.tsx',
+      uiNeedles: ['useGetAccountBalanceHistory('],
+      surfaceFile: 'apps/web/src/features/accounts/AccountDetailPage.tsx',
+      surfaceNeedle: '<ClosedAccountBalanceHistory',
+      routeElement: '<AccountDetailPage />',
     },
     holdings: {
       // #1569, previous round.
       apiOperationId: 'getAccountHoldingsHistory',
       apiParam: 'account_id',
-      uiFile: 'apps/web/src/features/investments/components/HoldingsTable.tsx',
-      uiNeedle: 'useGetAccountHoldingsHistory',
+      readerFile: 'apps/web/src/features/investments/components/HoldingsTable.tsx',
+      uiNeedles: ['useGetAccountHoldingsHistory('],
+      surfaceFile: 'apps/web/src/features/accounts/AccountDetailPage.tsx',
+      surfaceNeedle: '<HoldingsTable',
+      routeElement: '<AccountDetailPage />',
     },
+  }
+
+  /**
+   * Drops `import ... from '...'` statements (single- and multi-line) so that an import line cannot
+   * stand in for a call. This is why the needles above end in `(`: a name that only ever appears in
+   * an import is exactly the shape that kept the balance evidence green while the component could
+   * have been unmounted.
+   */
+  function withoutImports(source: string): string {
+    return source.replace(/^import\s[\s\S]*?from\s+['"][^'"]+['"];?\s*$/gm, '')
   }
 
   /**
@@ -387,11 +448,31 @@ describe('PrivacyPolicy', () => {
           'answer for ONE account — which is what §8.2a promises about a single removed account.'
       ).toContain(reader.apiParam)
 
+      // Link 1: the reader file CALLS the read, outside its imports.
+      const readerBody = withoutImports(repoFile(reader.readerFile))
+      for (const needle of reader.uiNeedles) {
+        expect(
+          readerBody,
+          `${kind}: ${reader.readerFile} no longer calls ${needle} outside its import statements, ` +
+            'so the endpoint is reachable by an API consumer and not by the person the policy is ' +
+            'addressed to. An import alone is not a read.'
+        ).toContain(needle)
+      }
+
+      // Link 2: a surface renders or uses that reader.
       expect(
-        repoFile(reader.uiFile),
-        `${kind}: ${reader.uiFile} no longer calls ${reader.uiNeedle}, so the endpoint is reachable ` +
-          'by an API consumer and not by the person the policy is addressed to.'
-      ).toContain(reader.uiNeedle)
+        withoutImports(repoFile(reader.surfaceFile)),
+        `${kind}: ${reader.surfaceFile} no longer contains ${reader.surfaceNeedle}, so the reader ` +
+          'exists but nothing puts it on a screen. Deleting the render while leaving the import is ' +
+          'exactly the edit this link exists to catch.'
+      ).toContain(reader.surfaceNeedle)
+
+      // Link 3: App.tsx mounts that surface as a route.
+      expect(
+        repoFile('apps/web/src/App.tsx'),
+        `${kind}: App.tsx no longer mounts ${reader.routeElement}, so the screen exists and the ` +
+          'user cannot navigate to it.'
+      ).toContain(reader.routeElement)
     }
   })
 
