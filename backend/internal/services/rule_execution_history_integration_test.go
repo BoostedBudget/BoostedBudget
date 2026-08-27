@@ -483,6 +483,13 @@ func TestRuleExecutionHistory_SettlementDoesNotShowTheSameChargeTwice_Integratio
 	ctx := context.Background()
 
 	pending := f.newTransaction("Blue Bottle Coffee")
+	// ⚠ PENDING MUST BE SET, and until #1569 T8.2 it was not. TombstoneByExternalID stamps
+	// deleted_reason as `CASE WHEN pending THEN provider_removed_pending ELSE
+	// provider_removed_posted END`, so a fixture that leaves it false tombstones the row as a
+	// POSTED REVERSAL. This test then asserted that a reversal's trail row is hidden — the exact
+	// behaviour Item A exists to end — while its name and comments claimed to be about settlement.
+	// The reason is asserted below so the fixture cannot drift back.
+	pending.Pending = true
 	f.runSyncPath(t, []domain.Transaction{pending})
 
 	// It settles: a new row with a new id, and the pending one is tombstoned. The tombstone goes
@@ -496,7 +503,9 @@ func TestRuleExecutionHistory_SettlementDoesNotShowTheSameChargeTwice_Integratio
 		TombstoneByExternalID(ctx, domain.SourcePlaid, *pending.ExternalTransactionID,
 			f.userID, domain.TxnDeletedByPlaidSync)
 	require.NoError(t, err)
-	require.NotEmpty(t, reason, "the pending row must actually have been tombstoned")
+	require.Equal(t, domain.TxnDeletedProviderRemovedPending, reason,
+		"the de-duplication under test is the SETTLED PENDING one; a posted reversal is a "+
+			"different reason and stays visible (see the _ReversalStaysVisible_ test below)")
 
 	var tombstoned bool
 	require.NoError(t, f.tx.QueryRow(ctx,
@@ -520,6 +529,47 @@ func TestRuleExecutionHistory_SettlementDoesNotShowTheSameChargeTwice_Integratio
 		require.NotNil(t, r.TransactionID)
 		assert.Equal(t, posted.ID, *r.TransactionID,
 			"a row pointing at the tombstoned pending transaction leaked into the default read")
+	}
+}
+
+// TestRuleExecutionHistory_PostedReversalStaysVisible_Integration is Item A of #1569 T8.2, and the
+// omission it pins was live.
+//
+// A rule categorises a transaction that has ALREADY POSTED. The bank later withdraws it — a
+// reversal or a correction. TombstoneByExternalID stamps provider_removed_posted, and the
+// transaction itself remains surfacable through TransactionFilters.IncludeReversed
+// (transactionTombstoneCondition widens by exactly that one reason). The execution row is retained
+// too. Yet the automation trail hid it, because visibleRuleExecutions asked only
+// `t.deleted_at IS NULL` — every tombstone, whatever its reason.
+//
+// That is this branch's core defect class: the data is retained and the read silently drops it.
+// The user sees a category on a transaction the app is still showing them, and no record of what
+// put it there.
+func TestRuleExecutionHistory_PostedReversalStaysVisible_Integration(t *testing.T) {
+	f := seedRuleHistoryFixture(t)
+	ctx := context.Background()
+
+	// Posted from the start: no pending predecessor, no twin, nothing to de-duplicate against.
+	posted := f.newTransaction("Blue Bottle Coffee")
+	require.False(t, posted.Pending, "the fixture is only meaningful if the row has posted")
+	f.runSyncPath(t, []domain.Transaction{posted})
+
+	reason, err := repository.NewTransactionRepository(f.tx, ruleHistoryEncryptor(t)).
+		TombstoneByExternalID(ctx, domain.SourcePlaid, *posted.ExternalTransactionID,
+			f.userID, domain.TxnDeletedByPlaidSync)
+	require.NoError(t, err)
+	require.Equal(t, domain.TxnDeletedProviderRemovedPosted, reason,
+		"a posted row the provider removed is a reversal, not a settlement")
+
+	rows, total, err := repository.NewRuleExecutionHistoryRepository(f.tx).
+		GetByUserID(ctx, f.userID, 20, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 2, total,
+		"a reversal has no twin: hiding its trail rows deletes history the app still shows")
+	require.Len(t, rows, 2, "total and the page must agree — they share visibleRuleExecutions")
+	for _, r := range rows {
+		require.NotNil(t, r.TransactionID)
+		assert.Equal(t, posted.ID, *r.TransactionID)
 	}
 }
 
