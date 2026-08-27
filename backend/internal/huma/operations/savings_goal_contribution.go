@@ -441,7 +441,7 @@ func RegisterContributionRoutes(api huma.API, handler *ContributionHandler) {
 		Method:        http.MethodDelete,
 		Path:          "/api/v1/savings-goals/{goalID}/contributions/{id}",
 		Summary:       "Delete a savings goal contribution",
-		Description:   "Removes a contribution (proposed or confirmed). Triggers goal progress recomputation.",
+		Description:   "PERMANENTLY DESTROYS a contribution (proposed or confirmed) and triggers goal progress recomputation. This is a hard delete, not a tombstone, and it is one of the sanctioned explicit-destruction exceptions under the retain-by-default rule (#1569): a hand-logged amount erased here cannot be recovered and no provider can supply it again. Deleting the GOAL does not do this — that retains every contribution still logged against it.",
 		Tags:          []string{"Savings Goals", "Contributions"},
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,

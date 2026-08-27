@@ -373,7 +373,7 @@ func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
 		Method:      http.MethodGet,
 		Path:        "/api/v1/savings-goals/deleted",
 		Summary:     "Get deleted savings goals",
-		Description: "Lists savings goals the user has deleted. Deleting a goal retains it and every contribution logged against it (Issue #1569); this endpoint is how the client shows what was kept and offers POST /savings-goals/{id}/purge, which refuses unless the goal is already deleted. Each entry carries deleted_at.",
+		Description: "Lists savings goals the user has deleted. Deleting a goal retains it and every contribution STILL logged against it (Issue #1569) — a contribution the user explicitly deleted earlier via DELETE /savings-goals/{goalID}/contributions/{id} was destroyed then and does not come back here. This endpoint is how the client shows what was kept and offers POST /savings-goals/{id}/purge, which refuses unless the goal is already deleted. Each entry carries deleted_at.",
 		Tags:        []string{"Savings Goals"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetDeletedGoals)
@@ -419,7 +419,7 @@ func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
 		Method:        http.MethodDelete,
 		Path:          "/api/v1/savings-goals/{id}",
 		Summary:       "Delete savings goal",
-		Description:   "Removes a savings goal from the user's collection. Does NOT destroy any data — every contribution logged against the goal is retained and stays readable at GET /savings-goals/deleted/{goalID}/contributions (the live GET /savings-goals/{goalID}/contributions returns nothing once the goal is deleted). Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its contributions.",
+		Description:   "Removes a savings goal from the user's collection. Destroys nothing ON ITS OWN — every contribution still logged against the goal is retained and stays readable at GET /savings-goals/deleted/{goalID}/contributions (the live GET /savings-goals/{goalID}/contributions returns nothing once the goal is deleted). It does not resurrect a contribution the user had already deleted explicitly, which was destroyed at that point. Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its remaining contributions.",
 		Tags:          []string{"Savings Goals"},
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
