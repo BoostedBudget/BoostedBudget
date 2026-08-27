@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -648,4 +649,51 @@ func TestBalanceSnapshotRepository_GetLatestByAccountID_SubSecondPrecision(t *te
 	assert.Equal(t, snapshotAt, snapshot.SnapshotAt)
 	assert.Equal(t, 999999000, snapshot.SnapshotAt.Nanosecond())
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ── #1569 T10-FIX item 7: what the pgxmock expectations above can and cannot catch ─────────────
+//
+// Every GetAggregatedHistory test in this file builds its ExpectQuery from `aggregatedHistorySQLBase`
+// — the SAME package-level template production renders. That is deliberate (a hand-copied 90-line
+// statement is its own maintenance trap) and it has a consequence that must be stated where the
+// tests are, not inferred: a regression in the template updates production and the expectation
+// TOGETHER, and every one of those tests stays green. They pin the Go-side plumbing — the argument
+// list, the row scan, the grouping into BalanceHistoryPoint, the type-filter branch choosing the
+// right rendering — and nothing whatsoever about whether the SQL is correct.
+//
+// The real protection for the SQL is the integration suite, against a real table:
+// TestMasklessPair_PersonalBalanceReads_CountBothAccounts,
+// TestGetAggregatedHistoryForHousehold_RelinkChain_ASnapshotKeepsItsOwnAccountsType and the
+// portfolio chain-topology family. If you change this statement, that is where you find out.
+//
+// TestAggregatedHistorySQLBase_PinsItsLoadBearingFragments is the cheap half of the gap: the four
+// decisions in the template that a silent edit could reverse are asserted here as literal
+// fragments, so at least those cannot move in lockstep with an expectation.
+func TestAggregatedHistorySQLBase_PinsItsLoadBearingFragments(t *testing.T) {
+	sql := aggregatedHistorySQLBase
+
+	// 1. The grain is the PHYSICAL ACCOUNT. Collapsing to the chain key deletes one of two maskless
+	//    siblings from every chart point (#1569 T10.2).
+	assert.Contains(t, sql, "DISTINCT ON ((bs.snapshot_at AT TIME ZONE 'UTC')::date, "+snapshotIdentityKey+")",
+		"the per-day dedup must be per physical account")
+	assert.Equal(t, "COALESCE(bs.account_id::text, bs.user_account_id::text, '')", snapshotIdentityKey,
+		"all three COALESCE arms are load-bearing — see snapshotIdentityKey. A bare bs.account_id "+
+			"puts every orphaned snapshot in ONE DISTINCT ON bucket and deletes all but one")
+
+	// 2. The type comes from the snapshot's OWN account, not from any chain member.
+	assert.Contains(t, sql, "LEFT JOIN accounts a ON a.id = bs.account_id",
+		"a chain-wide join needs a preference to pick a type, and that preference has been wrong "+
+			"in both directions once each")
+	assert.NotContains(t, sql, "a.user_account_id = bs.user_account_id",
+		"the chain-wide join must not come back")
+
+	// 3. Succession is applied, and by the shared rule rather than a second copy of it.
+	assert.Contains(t, sql, accountChainSupersessionCTESQL("TRUE"),
+		"there is ONE succession rule in the backend; a second copy is how the balance side and "+
+			"the portfolio side came to disagree about the same two rows")
+	assert.Contains(t, sql, "SELECT 1 FROM superseded x",
+		"the superseded rows must actually be filtered out, not merely computed")
+
+	// 4. The optional predicate is the ONLY hole, so the type filter cannot be rendered anywhere else.
+	assert.Equal(t, 1, strings.Count(sql, "%s"), "exactly one format hole")
 }
