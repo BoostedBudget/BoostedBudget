@@ -191,6 +191,21 @@ describe('AccountTable', () => {
       expect(screen.getByText('Closed Mar 1, 2026')).toBeInTheDocument()
     })
 
+    // #1569 T8.5 — NEGATIVE assertion is the point. `isInactive` covers `replaced`, `expired` and
+    // `removed`, and `removed` has three causes (user_disconnect / provider_absent / link_removed);
+    // accounts.removed_reason is not on the wire, so this table cannot know which. The old tooltip
+    // said "This account was disconnected" for all of them. Asserting only the new wording would
+    // let the false attribution be restored with the test still green.
+    it('does not tell the user they disconnected an account whose cause it cannot know', () => {
+      render(<AccountTable accounts={[createMockAccount({ status: 'removed', removed_at: '2026-03-01T00:00:00Z' })]} />)
+
+      const title = screen.getByText('Closed Mar 1, 2026').closest('[title]')?.getAttribute('title') ?? ''
+
+      expect(title).not.toMatch(/was disconnected/i)
+      expect(title).toMatch(/no longer active/i)
+      expect(title).toMatch(/history is retained/i)
+    })
+
     it('uses replaced_at for a replaced account, not the edit timestamp', () => {
       const accountsWithClosed = [
         createMockAccount({

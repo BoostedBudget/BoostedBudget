@@ -50,9 +50,17 @@ export function AccountCard({ account, onDisconnect, onPurge, onEdit, isDragging
   // OR that orphan cleanup removed the Plaid item successfully; status alone can't tell which.
   const isDisconnected = linked_item_status === 'disconnected'
 
-  // Issue #1569: a retained (non-active) account — replaced, expired, or deliberately
-  // disconnected. Distinct from isDisconnected above: that's about the linked ITEM's
-  // subscription state; this is about the ACCOUNT's own status.
+  // Issue #1569: a retained (non-active) account — `replaced`, `expired`, or `removed`. Distinct
+  // from isDisconnected above: that's about the linked ITEM's subscription state; this is about the
+  // ACCOUNT's own status.
+  //
+  // ⚠ #1569 T8.5: do NOT say "the user disconnected it". `removed` has THREE causes
+  // (backend/internal/domain/account.go): user_disconnect, provider_absent (the bank stopped
+  // reporting it) and link_removed (one of our own sweeps). accounts.removed_reason is NOT on the
+  // wire — it appears nowhere in api/openapi.yaml — so this component CANNOT tell them apart, and
+  // the badge copy is deliberately worded to be true of all three rather than inventing a
+  // distinction the data cannot support. If removed_reason is ever exposed, revisit the copy here
+  // and in AccountTable.tsx together.
   const isClosed = isInactive(account)
   // Issue #1591: resolved through the helper that owns the "both or neither" rule, so the card
   // never decides for itself whether a half-pair is renderable.
@@ -116,7 +124,7 @@ export function AccountCard({ account, onDisconnect, onPurge, onEdit, isDragging
               (isDisconnected || is_hidden || isClosed) ? (
                 <>
                   {isClosed && (
-                    <Badge variant="secondary" title="This account was disconnected and is no longer active; its history is retained">
+                    <Badge variant="secondary" title="This account is no longer active — it may have been disconnected, replaced by a re-link, or stopped being reported by your bank. Its history is retained.">
                       <Archive className="h-3 w-3" />
                       <span>Closed</span>
                     </Badge>

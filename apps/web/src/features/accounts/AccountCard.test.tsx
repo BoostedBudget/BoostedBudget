@@ -333,6 +333,29 @@ describe('AccountCard', () => {
       expect(screen.getByText('Closed')).toBeInTheDocument()
     })
 
+    // #1569 T8.5 — NEGATIVE assertion is the point. `removed` has three causes
+    // (user_disconnect / provider_absent / link_removed) and `isInactive` also covers `replaced`
+    // and `expired`, but accounts.removed_reason is not on the wire. The old tooltip told every
+    // such user "This account was disconnected", which is a false attribution for a bank that
+    // stopped reporting the account or for our own orphan sweep. Asserting only what the copy
+    // SAYS would let that sentence be restored with this test still green.
+    it('does not tell the user they disconnected an account whose cause it cannot know', () => {
+      const removedAccount: Account = {
+        ...mockAccount,
+        status: 'removed',
+        removed_at: '2026-03-01T00:00:00Z',
+      }
+      renderWithRouter(<AccountCard account={removedAccount} />)
+
+      const badge = screen.getByText('Closed')
+      const titled = badge.closest('[title]')
+      const title = titled?.getAttribute('title') ?? ''
+
+      expect(title).not.toMatch(/was disconnected/i)
+      expect(title).toMatch(/no longer active/i)
+      expect(title).toMatch(/history is retained/i)
+    })
+
     it('does not show a "Closed" badge for an active account', () => {
       renderWithRouter(<AccountCard account={mockAccount} />)
       expect(screen.queryByText('Closed')).toBeNull()
