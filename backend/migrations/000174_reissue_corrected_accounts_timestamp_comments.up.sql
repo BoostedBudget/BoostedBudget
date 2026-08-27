@@ -26,7 +26,7 @@
 -- row every time.
 
 COMMENT ON COLUMN accounts.removed_at IS
-$COMMENT$Timestamp when the user deliberately disconnected this account (status = 'removed'). Never NULL while status = 'removed' -- accounts_removed_at_consistency requires it. Left NULL by every Go writer that moves the row to another status, but that direction is a code convention, NOT a constraint: the CHECK is one-directional (see 000155's Step 3 header). Distinct from replaced_at (re-link) and the TTL clock behind 'expired' (linked_items.status_changed_at).$COMMENT$;
+$COMMENT$Timestamp when this account stopped being connected (status = 'removed'). NOT necessarily a user action: 'removed' has THREE causes and removed_reason (migration 000154) records which one -- 'user_disconnect' (the user asked, via DisconnectAccount or DisconnectInstitution), 'provider_absent' (a confirmed-complete Plaid /accounts/get stopped returning it, i.e. the bank closed it) or 'link_removed' (one of this product's own flows removed the account's Plaid Item). A NULL reason predates 000154 and is treated as a user disconnect. Never NULL while status = 'removed' -- accounts_removed_at_consistency requires it. Left NULL by every Go writer that moves the row to another status, but that direction is a code convention, NOT a constraint: the CHECK is one-directional (see 000155's Step 3 header). Distinct from replaced_at (re-link) and the TTL clock behind 'expired' (linked_items.status_changed_at).$COMMENT$;
 
 COMMENT ON COLUMN accounts.expired_at IS
 $COMMENT$Timestamp when the 90-day fingerprint TTL was released, moving this account to status =
