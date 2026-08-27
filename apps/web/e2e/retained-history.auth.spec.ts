@@ -60,6 +60,11 @@ const DELETED_GOAL = {
   // Midday UTC, not midnight: `formatDeletedOn` renders in the VIEWER's timezone, and a midnight-UTC
   // instant renders as the previous day anywhere west of Greenwich. Same reason `formatHistoryLabel`
   // pins its own parse to T12:00:00Z.
+  //
+  // ⚠ That fixture choice alone is NOT what makes the "March 20, 2026" assertion below hermetic —
+  // midday UTC still renders as March 21 in Pacific/Kiritimati. The environment is pinned too:
+  // playwright.config.ts sets `timezoneId: 'UTC'` and `locale: 'en-US'` for every project
+  // (#1569 T8-FIX, finding F). If either pin is removed, this assertion fails on a valid runner.
   deleted_at: '2026-03-20T12:00:00Z',
 }
 
