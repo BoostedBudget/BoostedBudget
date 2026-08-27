@@ -794,9 +794,12 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 // predicate removed. See the interface doc comment (AccountRepository) for why this is a
 // SEPARATE method rather than a widening of GetByLinkedItemID: holdings and liability syncs
 // wipe-and-reinsert on every run, and feeding them a retained account would let a later
-// sync destroy its holdings/liabilities. Its callers are
-// transaction_sync_service.buildAccountMaps and
-// investment_sync_service.SyncInvestmentTransactions.
+// sync destroy its holdings/liabilities.
+//
+// Deliberately NOT re-listing callers here: the interface doc comment above is the one place
+// that enumerates them, and a second enumeration is how this exact drift happened (Issue
+// #1569 round 11 fix-round-2 found this copy silently missing createBalanceSnapshots after
+// round 11 task 1 added a caller to the interface comment but not here).
 func (r *accountRepository) GetByLinkedItemIDIncludingRetained(ctx context.Context, linkedItemID string) ([]domain.Account, error) {
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
