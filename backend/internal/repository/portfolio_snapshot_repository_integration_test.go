@@ -473,3 +473,287 @@ func TestPortfolioSnapshot_Upsert_NullChainKeysAcrossARelink_BothCount(t *testin
 		"5000 means NULL was matched to NULL and an account with no recorded relationship to the "+
 			"successor was deleted from the total")
 }
+
+// ── #1569 task 9-FIX: three residuals inside the re-link exclusion, all money-visible ─────────
+
+// TestPortfolioSnapshot_Upsert_TwoMasklessPredecessorsOneSuccessor_TheUNREPLACEDOneStillCounts is
+// item 1: the same NULL-mask collision that killed this fix's FIRST version, now biting the
+// replacement rule from the other side.
+//
+// One old item holds TWO maskless accounts that MatchOrCreate handed the SAME user_account_id. The
+// successor item reports only ONE of them. The naive rule asks "does SOME sibling under the
+// replacing item share my chain key and have an observation?" — and the answer is yes for BOTH old
+// accounts, so both are excluded and the one nothing replaced vanishes from the total.
+//
+// The existing unrelated-account test cannot see this: its second old account has a DISTINCT
+// user_account_id, so the chain-key leg already protects it.
+func TestPortfolioSnapshot_Upsert_TwoMasklessPredecessorsOneSuccessor_TheUNREPLACEDOneStillCounts(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, oldAccountID, newAccountID, secID := seedRelinkedInvestmentChain(ctx, t, tx, "psnap-maskless-pair")
+
+	var oldItemID, chainKey uuid.UUID
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT linked_item_id, user_account_id FROM accounts WHERE id = $1`, oldAccountID).
+		Scan(&oldItemID, &chainKey))
+
+	// The SECOND maskless account on the OLD item, sharing the SAME user_account_id — the shape
+	// MatchOrCreate really produces for a brokerage and an IRA at one broker. Inserted active and
+	// then replaced, so the 000152 trigger records a real live interval for today.
+	sibling := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Roth IRA', 'investment', 'active', $5)`,
+		sibling, oldItemID, userID, "psnap-maskless-pair-ira-"+sibling.String(), chainKey)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE accounts SET status = 'replaced', replaced_at = NOW() WHERE id = $1`, sibling)
+	require.NoError(t, err)
+
+	// Both predecessors carry the SAME retained value, so the assertion does not depend on WHICH
+	// of the two the rule keeps — only on the fact that exactly one of them survives.
+	for acct, value := range map[uuid.UUID]float64{oldAccountID: 1500, sibling: 1500, newAccountID: 5000} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+			VALUES ($1, $2, $3, $4, 10, 500.00, $5)`, uuid.New(), userID, acct, secID, value)
+		require.NoError(t, err)
+	}
+
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), today)
+	require.NoError(t, err)
+	require.InDelta(t, 6500.0, snap.TotalValue, 0.001,
+		"5000 means ONE successor suppressed TWO predecessors and a real account's money was "+
+			"deleted from the day; 8000 means neither predecessor was excluded")
+}
+
+// TestPortfolioSnapshot_Upsert_ThreeLinkChainOnOneDay_CountsOnce is item 3: A → B → C, all live on
+// one day, B never observed. A checks only its DIRECT successor B, finds no observation, and stays
+// in; B is excluded because C is observed. A and C are both summed — the doubling, one link
+// further along.
+func TestPortfolioSnapshot_Upsert_ThreeLinkChainOnOneDay_CountsOnce(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// A (old item) → B (middle item), from the shared helper.
+	userID, accountA, accountB, secID := seedRelinkedInvestmentChain(ctx, t, tx, "psnap-3link")
+
+	var middleItemID, chainKey uuid.UUID
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT linked_item_id, user_account_id FROM accounts WHERE id = $1`, accountB).
+		Scan(&middleItemID, &chainKey))
+
+	// B → C: a SECOND re-link of the same chain on the same day.
+	newItemID, accountC := uuid.New(), uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-test-token')`, newItemID, userID, "psnap-3link-item3-"+newItemID.String())
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Newest Brokerage', 'investment', 'active', $5)`,
+		accountC, newItemID, userID, "psnap-3link-acct3-"+accountC.String(), chainKey)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		UPDATE linked_items SET status = 'replaced', replaced_at = NOW(), replaced_by_id = $2 WHERE id = $1`,
+		middleItemID, newItemID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE accounts SET status = 'replaced', replaced_at = NOW() WHERE id = $1`, accountB)
+	require.NoError(t, err)
+
+	// B is the link that was never synced: it has NO holdings at all. A carries the stale value.
+	for acct, value := range map[uuid.UUID]float64{accountA: 4000, accountC: 5000} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+			VALUES ($1, $2, $3, $4, 10, 1000.00, $5)`, uuid.New(), userID, acct, secID, value)
+		require.NoError(t, err)
+	}
+
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), today)
+	require.NoError(t, err)
+	require.InDelta(t, 5000.0, snap.TotalValue, 0.001,
+		"9000 is the three-link double count: the rule looked only ONE edge ahead, saw B "+
+			"unobserved, and kept A alongside the C that already superseded both")
+}
+
+// TestPortfolioSnapshot_Upsert_ConfirmedEmptySuccessor_DropsTheStalePredecessor is item 2, and it
+// turns on a distinction this branch already made once for the holdings day-picker: "we observed
+// it and it held nothing" is NOT "we never observed it".
+//
+// A successful /investments/holdings/get can list the successor with ZERO holdings — the user sold
+// everything before re-linking. ReplaceForAccount still runs, but the capture inserts no row when
+// there is nothing to insert, so the successor looks unobserved, the predecessor is retained, and
+// the portfolio reports the predecessor's STALE value instead of the zero that is true.
+func TestPortfolioSnapshot_Upsert_ConfirmedEmptySuccessor_DropsTheStalePredecessor(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, oldAccountID, newAccountID, secID := seedRelinkedInvestmentChain(ctx, t, tx, "psnap-emptysucc")
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+		VALUES ($1, $2, $3, $4, 10, 3000.00, 4000.00)`, uuid.New(), userID, oldAccountID, secID)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	// The successor holds NOTHING, and that is a CONFIRMED fact: the capture ran for it today and
+	// recorded the observation even though there was no position to record.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holding_observations (user_id, account_id, as_of_date)
+		VALUES ($1, $2, $3::date)`, userID, newAccountID, today)
+	require.NoError(t, err, "record the confirmed-empty observation")
+
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), today)
+	require.NoError(t, err)
+	require.InDelta(t, 0.0, snap.TotalValue, 0.001,
+		"4000 means a CONFIRMED-EMPTY successor was read as an unobserved one, so the retained "+
+			"predecessor's stale valuation was reported as the user's portfolio")
+}
+
+// TestPortfolioSnapshot_Upsert_ItemPointerLost_TheAccountPointerStillIdentifiesTheSuccessor is
+// item 4, the last leg of the money fix.
+//
+// account_service.go step 5b writes linked_items.replaced_by_id FAIL-OPEN: it logs and continues.
+// The backstop that catches that failure — accountRepository.CreateBatch's
+// supersedeStrandedChainSiblings — repairs the ACCOUNT row (status 'replaced' plus
+// accounts.replaced_by_id) inside the transaction that inserts the successor. It does NOT repair
+// the item row. So on that path the item-level succession test finds nothing at all, and the
+// predecessor is summed beside its own successor: the doubling, back again, for that user.
+//
+// The fix reads EITHER recorded pointer. Both are written only by a re-link, and the same-chain
+// leg still gates them.
+func TestPortfolioSnapshot_Upsert_ItemPointerLost_TheAccountPointerStillIdentifiesTheSuccessor(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, oldAccountID, newAccountID, secID := seedRelinkedInvestmentChain(ctx, t, tx, "psnap-itemptr")
+
+	// The fail-open write never landed: the old item still looks active and points at nothing.
+	ct, err := tx.Exec(ctx, `
+		UPDATE linked_items SET status = 'active', replaced_at = NULL, replaced_by_id = NULL
+		WHERE id = (SELECT linked_item_id FROM accounts WHERE id = $1)`, oldAccountID)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, ct.RowsAffected(), "the fixture must have written an item pointer to lose")
+
+	// ...and CreateBatch's backstop repaired the ACCOUNT row instead, which is all it can reach.
+	_, err = tx.Exec(ctx, `UPDATE accounts SET replaced_by_id = $2 WHERE id = $1`,
+		oldAccountID, newAccountID)
+	require.NoError(t, err)
+
+	for acct, value := range map[uuid.UUID]float64{oldAccountID: 4000, newAccountID: 5000} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+			VALUES ($1, $2, $3, $4, 10, 1000.00, $5)`, uuid.New(), userID, acct, secID, value)
+		require.NoError(t, err)
+	}
+
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), today)
+	require.NoError(t, err)
+	require.InDelta(t, 5000.0, snap.TotalValue, 0.001,
+		"9000 means the only surviving record of the succession — accounts.replaced_by_id, written "+
+			"atomically by CreateBatch's backstop — was ignored, so the fail-open item pointer "+
+			"reintroduces the doubling it was supposed to have stopped")
+}
+
+// TestPortfolioSnapshot_Upsert_MasklessPairThroughAThreeLinkChain_StillKeepsTheUNREPLACEDOne is
+// the interaction between items 1 and 3, and it is here because the first draft of this fix
+// SURVIVED the mutant that removes the `surviving` CTE. Rationing and transitivity are each
+// correct alone and wrong together without it.
+//
+// Two maskless predecessors A1/A2 under one old item, whose chain was then re-linked TWICE:
+// A1/A2 → B → C, with B and C both observed. Counting every transitive successor gives the old
+// item TWO successors (B and C) for TWO predecessors, so both are excluded — even though B is
+// itself superseded by C and contributes nothing to the total. The account nothing replaced
+// disappears again, by a different route.
+//
+// `surviving` is the rule that fixes it: a successor that has an observed successor of its own is
+// not a survivor and may not be counted as one.
+func TestPortfolioSnapshot_Upsert_MasklessPairThroughAThreeLinkChain_StillKeepsTheUNREPLACEDOne(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// A1 (old item) → B (middle item).
+	userID, a1, accountB, secID := seedRelinkedInvestmentChain(ctx, t, tx, "psnap-pair3link")
+
+	var oldItemID, middleItemID, chainKey uuid.UUID
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT linked_item_id, user_account_id FROM accounts WHERE id = $1`, a1).Scan(&oldItemID, &chainKey))
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT linked_item_id FROM accounts WHERE id = $1`, accountB).Scan(&middleItemID))
+
+	// A2: the maskless sibling on the OLD item, same chain key, no successor of its own.
+	a2 := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Roth IRA', 'investment', 'active', $5)`,
+		a2, oldItemID, userID, "psnap-pair3link-ira-"+a2.String(), chainKey)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE accounts SET status = 'replaced', replaced_at = NOW() WHERE id = $1`, a2)
+	require.NoError(t, err)
+
+	// B → C: the second re-link, same day.
+	newItemID, accountC := uuid.New(), uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-test-token')`, newItemID, userID, "psnap-pair3link-item3-"+newItemID.String())
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Newest Brokerage', 'investment', 'active', $5)`,
+		accountC, newItemID, userID, "psnap-pair3link-acct3-"+accountC.String(), chainKey)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		UPDATE linked_items SET status = 'replaced', replaced_at = NOW(), replaced_by_id = $2 WHERE id = $1`,
+		middleItemID, newItemID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE accounts SET status = 'replaced', replaced_at = NOW() WHERE id = $1`, accountB)
+	require.NoError(t, err)
+
+	// Both predecessors carry the same retained value, so the assertion does not depend on WHICH
+	// one the deterministic ordering keeps.
+	for acct, value := range map[uuid.UUID]float64{a1: 1500, a2: 1500, accountB: 2000, accountC: 5000} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+			VALUES ($1, $2, $3, $4, 10, 500.00, $5)`, uuid.New(), userID, acct, secID, value)
+		require.NoError(t, err)
+	}
+
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), today)
+	require.NoError(t, err)
+	require.InDelta(t, 6500.0, snap.TotalValue, 0.001,
+		"5000 means the superseded middle link B was counted as a surviving successor, so ONE "+
+			"real successor rationed away TWO predecessors and the unreplaced account vanished")
+}

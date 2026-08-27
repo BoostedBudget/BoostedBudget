@@ -866,3 +866,50 @@ func TestPortfolioRepair_SameDayRelink_ReconstructsTheChainOnce(t *testing.T) {
 			"re-link day look partially covered the moment one sibling stops being captured")
 	assert.Equal(t, 1, l.observedCount)
 }
+
+// TestPortfolioRepair_ConfirmedEmptySuccessor_RebuildsToZeroNotTheStalePredecessor is the repair
+// half of #1569 T9-FIX item 2.
+//
+// The successor was observed on the day and held nothing, so it left no holding_snapshots row at
+// all — an account with no prior history has nothing for the mark-absent half to mark. Before the
+// fix that made it look UNOBSERVED twice over: the re-link rule kept the retained predecessor
+// beside it, and the coverage test then rebuilt the day from the predecessor's rows. The repair
+// wrote the predecessor's STALE valuation into a day whose true total was zero — a plausible
+// number, which is the failure mode this whole file exists to refuse.
+func TestPortfolioRepair_ConfirmedEmptySuccessor_RebuildsToZeroNotTheStalePredecessor(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, oldAccountID, newAccountID, secID := seedRelinkedInvestmentChain(ctx, t, tx, "repair-emptysucc")
+	backdateActiveIntervalStart(ctx, t, tx, oldAccountID, 30)
+	backdateActiveIntervalStart(ctx, t, tx, newAccountID, 30)
+
+	day := dayUTC(ctx, t, tx, 3)
+	seedHoldingSnapshot(ctx, t, tx, userID, oldAccountID, secID, day, true, f64(3000), f64(7000))
+
+	// The successor: observed, and holding nothing. No positions to record, so the ONLY trace is
+	// the observation itself.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holding_observations (user_id, account_id, as_of_date)
+		VALUES ($1, $2, $3::date)`, userID, newAccountID, day)
+	require.NoError(t, err)
+
+	seedPortfolioSnapshot(ctx, t, tx, userID, day, 7000, 3000, 4000, nil)
+
+	sum, err := NewPortfolioSnapshotRepository(tx).RepairUserFromHistory(ctx, userID.String())
+	require.NoError(t, err)
+	require.Equal(t, 1, sum.Examined)
+	require.Equal(t, 1, sum.Repaired,
+		"a refusal here means the confirmed-empty successor still reads as never-captured, so the "+
+			"day stays at the predecessor's stale valuation")
+
+	got := readPortfolioSnapshot(ctx, t, tx, userID, day)
+	assert.InDelta(t, 0.0, got.totalValue, 0.001,
+		"7000 means the retained predecessor was summed into a day on which the successor that "+
+			"replaced it had already been observed holding nothing")
+	assert.InDelta(t, 0.0, got.totalCostBasis, 0.001)
+}

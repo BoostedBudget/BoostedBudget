@@ -76,7 +76,7 @@ import (
 // write set is indistinguishable from an empty one, which would certify this method as
 // cache-irrelevant without proving it. The liveness predicate is substituted at call time instead.
 const repairSelectSQL = `
-WITH candidate AS (
+WITH RECURSIVE candidate AS (
     SELECT ps.user_id, ps.snapshot_date,
            ps.total_value, ps.total_cost_basis, ps.total_gain_loss, ps.total_gain_loss_pct
     FROM portfolio_snapshots ps
@@ -110,6 +110,15 @@ expected AS (
 ),
 -- Observed = the capture ran for this account on this day. Deliberately NOT filtered on present:
 -- a day whose rows are all absent is an observed EMPTY day, not an unobserved one.
+--
+-- ⚠ AND NOT FILTERED ON ROWS EXISTING AT ALL, since #1569 T9-FIX item 2. That distinction was
+-- drawn half way: it separated "all absent" from "some present", but an account observed holding
+-- NOTHING with no prior history for the day leaves no row for either arm to see — the mark-absent
+-- half can only touch rows that already exist, and the INSERT ... SELECT selects nothing. So a
+-- confirmed-empty account fell back into the "never captured" bucket and its day was refused.
+-- holding_observations (migration 000176) records the looking itself, which is what this CTE is
+-- actually asking about. Historic days have no marker rows, so nothing already recorded changes
+-- verdict; only days captured after 000176 can newly become reconstructable.
 observed AS (
     SELECT l.snapshot_date, l.account_id
     FROM live l
@@ -118,6 +127,11 @@ observed AS (
         WHERE hs.account_id = l.account_id
           AND hs.as_of_date = l.snapshot_date
           AND hs.user_id = $1::uuid)
+       OR EXISTS (
+        SELECT 1 FROM holding_observations ho
+        WHERE ho.account_id = l.account_id
+          AND ho.as_of_date = l.snapshot_date
+          AND ho.user_id = $1::uuid)
 ),
 -- The reconstruction. Mirrors Upsert's four columns EXACTLY, including the asymmetry that makes
 -- the last two non-derivable from the first two: gain/loss is summed over only the rows where
@@ -269,8 +283,16 @@ func (r *portfolioSnapshotRepository) RepairUserFromHistory(ctx context.Context,
 			"candidate c JOIN accounts a ON a.user_id = c.user_id",
 			"TRUE",
 			"c.snapshot_date",
-			`EXISTS (SELECT 1 FROM holding_snapshots hw WHERE hw.account_id = s.account_id`+
-				` AND hw.as_of_date = s.snapshot_date AND hw.user_id = $1::uuid)`),
+			// Two arms — #1569 T9-FIX item 2. Rows for the day answer "what did it hold";
+			// holding_observations answers "did we look", which is the question this leg is
+			// actually asking. A successor observed holding NOTHING writes no row (the
+			// mark-absent half can only touch rows that already exist), so without the second
+			// arm a confirmed-empty successor reads as never-synced and the retained
+			// predecessor's stale value is rebuilt into the day.
+			`(EXISTS (SELECT 1 FROM holding_snapshots hw WHERE hw.account_id = s.account_id`+
+				` AND hw.as_of_date = s.snapshot_date AND hw.user_id = $1::uuid)`+
+				` OR EXISTS (SELECT 1 FROM holding_observations ho WHERE ho.account_id = s.account_id`+
+				` AND ho.as_of_date = s.snapshot_date AND ho.user_id = $1::uuid))`),
 	).Replace(repairSelectSQL)
 
 	rows, err := r.db.Query(ctx, query, userID)
