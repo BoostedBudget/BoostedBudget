@@ -259,7 +259,21 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
   // empty one at that predicate — so a closed account whose accounts read failed fell through to
   // the live empty state and asserted "No holdings synced yet for this account." That is a false
   // claim about a closed account, manufactured by a failure.
-  const { accounts, isError: accountsIsError } = useAllAccounts()
+  //
+  // ⚠ include_hidden IS NOT OPTIONAL HERE (#1569 T9-FIX items 5 and 6), and it is the SAME
+  // question AccountDetailPage's own useGetAccounts asks. Two things follow, and both were
+  // broken:
+  //   1. useAllAccounts sends status=all_statuses and nothing else, and the backend defaults
+  //      include_hidden to FALSE. A HIDDEN closed investment account was therefore absent from
+  //      the response, so scopedAccountIsDisconnected read false and the retained history this
+  //      surface exists for never mounted at all.
+  //   2. Identical params mean an identical react-query key, so this read and the parent's are
+  //      ONE cache entry rather than two that can diverge. AccountDetailPage mounts the scoped
+  //      form only after its own read succeeded, so the child now cannot be data-less while the
+  //      parent knows the account — which is the unreachability the error arm below works
+  //      around. That arm stays: this component is also mounted unscoped, and belt-and-braces on
+  //      a false claim about someone's closed account is the cheap side of the trade.
+  const { accounts, isError: accountsIsError } = useAllAccounts({ include_hidden: 'true' })
 
   // Build id→name map for resolving account UUIDs to human-readable names.
   const accountNameById = useMemo(() => {
@@ -269,29 +283,26 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
     return map
   }, [accounts])
 
+  // One lookup, three facts. Three separate useMemos each re-ran the same find over the same
+  // list; collapsing them is also how this change pays for its own bytes on the tightest route
+  // budget in the repo.
+  const scopedAccount = useMemo(
+    () => (isScoped && accounts ? accounts.find((a) => a.id === accountId) : undefined),
+    [isScoped, accounts, accountId],
+  )
+
   // Scoped to an account that is no longer connected. Deliberately derived from the account,
   // never from "zero rows": a live account with nothing in it is a different fact and keeps the
   // ordinary empty state.
-  const scopedAccountIsDisconnected = useMemo(() => {
-    if (!isScoped || !accounts) return false
-    const scoped = accounts.find((a) => a.id === accountId)
-    return scoped != null && isInactive(scoped)
-  }, [isScoped, accounts, accountId])
+  const scopedAccountIsDisconnected = scopedAccount != null && isInactive(scopedAccount)
 
   // Consumed from the helper that owns the "which timestamp means closed" rule (#1591) rather
   // than re-derived here; undefined for an account that is not closed.
-  const scopedAccountClosedOn = useMemo(() => {
-    if (!isScoped || !accounts) return undefined
-    const scoped = accounts.find((a) => a.id === accountId)
-    return scoped ? getAccountClosedDate(scoped) : undefined
-  }, [isScoped, accounts, accountId])
+  const scopedAccountClosedOn = scopedAccount ? getAccountClosedDate(scopedAccount) : undefined
 
   // A fixed discriminator for the view event — never free text, never an amount. Same treatment
   // as ClosedAccountBalanceHistory's accountType on the sibling surface.
-  const scopedAccountType = useMemo(() => {
-    if (!isScoped || !accounts) return undefined
-    return accounts.find((a) => a.id === accountId)?.type
-  }, [isScoped, accounts, accountId])
+  const scopedAccountType = scopedAccount?.type
 
   const activeColumnIds = isScoped ? ACCOUNT_HOLDINGS_COLUMN_IDS : PORTFOLIO_HOLDINGS_COLUMN_IDS
   const tablePrefsKey = isScoped ? 'account-holdings' : 'portfolio-holdings'
@@ -385,8 +396,12 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
     // ⚠ SELF-REVIEW OF THE FIX ABOVE. The first draft keyed the copy on scopedAccountIsDisconnected
     // alone, which left one axis of the same defect open: that predicate is false when the ACCOUNTS
     // read failed too, so a closed account with BOTH reads failing was still told to refresh. It is
-    // a reachable state — useAllAccounts here and AccountDetailPage's own useGetAccounts use
-    // DIFFERENT query keys (include_hidden), so they are separate cache entries and can diverge.
+    // ⚠ WHY IT WAS REACHABLE HAS CHANGED, and the old reason is now false: this read and
+    // AccountDetailPage's used DIFFERENT query keys (include_hidden), so they were separate
+    // cache entries that could diverge. They are one entry now (see the hook call above), which
+    // is what closes item 6. What remains reachable is the unscoped mount and a first load that
+    // fails outright, and stating a failure we can stand behind still beats an instruction we
+    // cannot.
     // When we cannot tell what the account is, we state the failure and stop short of an
     // instruction we cannot stand behind. No new string: the closed-account sentence is reused.
     const cannotPromiseRefresh = scopedAccountIsDisconnected || (isScoped && accountsIsError)
