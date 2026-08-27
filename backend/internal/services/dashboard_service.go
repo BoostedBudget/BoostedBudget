@@ -1543,9 +1543,10 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 		previousAccounts, acctErr := s.accountRepo.GetForHouseholdScopeActiveNow(ctx, userID, scope, previousCutoff)
 		if acctErr == nil {
 			previousAccountMap := buildChainAwareAccountMap(previousAccounts)
-			// Gated on the PREVIOUS-cutoff map, not the "now" map: a chain that merely re-linked
-			// resolves there already, so the extra query stays conditional on the only case that
-			// needs it — a chain with no active member left.
+			// Gated on the PREVIOUS-cutoff map, not the "now" map. ⚠ #1569 T10-FIX: the gate now
+			// asks whether each snapshot's OWN accounts row is present, so a re-linked chain and a
+			// closed maskless sibling both trigger the read — see hasSnapshotOutsideAccountMap for
+			// why resolving the chain key was answering a question nobody asked.
 			historicalMap := map[string]domain.Account{}
 			if hasSnapshotOutsideAccountMap(previousSnapshots, previousAccountMap) {
 				historicalAccounts, histErr := s.accountRepo.GetForHouseholdScopeLiveAsOf(ctx, userID, scope, previousCutoff)
@@ -1563,13 +1564,21 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 				historicalMap = buildChainAwareAccountMap(historicalAccounts)
 			}
 			var prevAssets, prevLiabilities float64
+			// #1569 T10-FIX item 3: resolved per PHYSICAL account, through the same resolver every
+			// other leg uses. This loop was the last raw `map[snapshotChainKey(snapshot)]` lookup
+			// in the file, and once T10.2 made GetSnapshotsAsOfForHousehold return physical rows it
+			// became a classification bug with a plausible-looking total: a maskless depository and
+			// a maskless credit card share a user_accounts row, so both were categorised as
+			// whichever of the two occupied the chain-key slot — $100 of assets and $50 of
+			// liabilities reported as $150 of one of them. Pinned by
+			// TestGetNetWorthHousehold_Baseline_MasklessPairKeepsEachAccountsOwnCategory.
+			superseded := supersededSnapshotIDs(previousSnapshots, previousAccountMap, historicalMap)
 			for _, snapshot := range previousSnapshots {
-				key := snapshotChainKey(snapshot)
-				account, exists := previousAccountMap[key]
+				account, exists := snapshotAccount(snapshot, previousAccountMap, historicalMap)
 				if !exists {
-					account, exists = historicalMap[key]
+					continue
 				}
-				if !exists {
+				if superseded[snapshot.ID] {
 					continue
 				}
 				// The same AccountTypes filter the current-period loop above applies.

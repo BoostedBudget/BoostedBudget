@@ -289,3 +289,62 @@ func TestSnapshotAccount_ReplacedPredecessorStillResolvesToItsLiveSuccessor(t *t
 	assert.Equal(t, "investment", resolvedClosed.Type,
 		"...including its own type, which decides whether an AccountTypes filter counts the money")
 }
+
+// ── #1569 T10-FIX item 3: the household net-worth BASELINE classified by the shared chain key ──
+//
+// GetSnapshotsAsOfForHousehold returns PHYSICAL-account rows as of #1569 T10.2, but this one
+// baseline loop still looked each snapshot up as `previousAccountMap[snapshotChainKey(snapshot)]` —
+// the only remaining raw chain-key lookup in the file. A maskless depository and a maskless credit
+// card share a user_accounts row by schema (migration 000100), so BOTH resolved to whichever of the
+// two won the chain-key slot, and both were classified as that account's category.
+//
+// The total can look right while every part of it is wrong: $100 asset + $50 liability is a $50
+// baseline net worth, but classified together they are either $150 of assets or $150 of
+// liabilities — a $200 error in NetWorthChange either way, and asset/liability splits that do not
+// describe the household at all.
+func TestGetNetWorthHousehold_Baseline_MasklessPairKeepsEachAccountsOwnCategory(t *testing.T) {
+	ctx := context.Background()
+	requestingUserID := "owner-hh-maskless"
+	scope := &domain.HouseholdScope{HouseholdID: "hh-maskless", MemberUserIDs: []string{requestingUserID}}
+	ua := masklessUA
+	now := time.Now().UTC()
+
+	accounts := []domain.Account{
+		{ID: "acct-hh-checking", UserID: requestingUserID, Name: "Checking", Type: "depository",
+			Status: domain.AccountStatusActive, UserAccountID: &ua},
+		{ID: "acct-hh-card", UserID: requestingUserID, Name: "Card", Type: "credit",
+			Status: domain.AccountStatusActive, UserAccountID: &ua},
+	}
+	current := func(checking, card float64, at time.Time) []domain.BalanceSnapshot {
+		return []domain.BalanceSnapshot{
+			{ID: "hh-s-checking-" + at.String(), AccountID: "acct-hh-checking", UserAccountID: &ua,
+				UserID: requestingUserID, CurrentBalance: &checking, SnapshotAt: at},
+			{ID: "hh-s-card-" + at.String(), AccountID: "acct-hh-card", UserAccountID: &ua,
+				UserID: requestingUserID, CurrentBalance: &card, SnapshotAt: at},
+		}
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope,
+		mock.AnythingOfType("time.Time")).Return(current(100, 50, now.Add(-time.Hour)), nil)
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope,
+		mock.AnythingOfType("time.Time")).Return(accounts, nil)
+
+	result, err := NewDashboardService(mockSnapshotRepo, mockAccountRepo).
+		GetNetWorth(ctx, requestingUserID, &domain.DashboardFilters{HouseholdScope: scope})
+	require.NoError(t, err)
+
+	// The current leg already resolves per physical account; it is the control for the baseline.
+	require.InDelta(t, 100.00, result.TotalAssets, 0.001)
+	require.InDelta(t, 50.00, result.TotalLiabilities, 0.001)
+
+	require.NotNil(t, result.PeriodComparison)
+	assert.InDelta(t, 100.00, result.PeriodComparison.PreviousAssets, 0.001,
+		"150 here is the credit card classified as a depository because it shares the chain key")
+	assert.InDelta(t, 50.00, result.PeriodComparison.PreviousLiabilities, 0.001,
+		"0 here is the same defect seen from the other side")
+	assert.InDelta(t, 50.00, result.PeriodComparison.PreviousNetWorth, 0.001)
+	assert.InDelta(t, 0.00, result.PeriodComparison.NetWorthChange, 0.001,
+		"the household's balances did not move; any change here is fabricated by classification")
+}
