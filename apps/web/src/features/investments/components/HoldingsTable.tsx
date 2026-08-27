@@ -382,15 +382,24 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
   // hidden behind it — which is also what the comment below (the notice replaces the EMPTY state,
   // never the rows) already said should not happen.
   if (isError) {
-    const scopedClosed = scopedAccountIsDisconnected && !!accountId
+    // ⚠ SELF-REVIEW OF THE FIX ABOVE. The first draft keyed the copy on scopedAccountIsDisconnected
+    // alone, which left one axis of the same defect open: that predicate is false when the ACCOUNTS
+    // read failed too, so a closed account with BOTH reads failing was still told to refresh. It is
+    // a reachable state — useAllAccounts here and AccountDetailPage's own useGetAccounts use
+    // DIFFERENT query keys (include_hidden), so they are separate cache entries and can diverge.
+    // When we cannot tell what the account is, we state the failure and stop short of an
+    // instruction we cannot stand behind. No new string: the closed-account sentence is reused.
+    const cannotPromiseRefresh = scopedAccountIsDisconnected || (isScoped && accountsIsError)
     return (
       <div className="flex flex-col gap-3">
         <div role="alert" className="text-sm text-destructive p-4">
-          {scopedClosed
+          {cannotPromiseRefresh
             ? 'We could not load current holdings for this account.'
             : 'Unable to load holdings. Please refresh the page.'}
         </div>
-        {scopedClosed && retainedHistory}
+        {/* scopedAccountIsDisconnected already implies a scoped accountId, so retainedHistory is
+            never null here. */}
+        {scopedAccountIsDisconnected && retainedHistory}
       </div>
     )
   }
