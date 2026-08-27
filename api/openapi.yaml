@@ -197,9 +197,7 @@ components:
         points:
           items:
             $ref: "#/components/schemas/AccountBalanceHistoryPoint"
-          type:
-            - array
-            - "null"
+          type: array
       required:
         - account_id
         - points

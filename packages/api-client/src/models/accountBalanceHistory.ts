@@ -38,6 +38,5 @@ export interface AccountBalanceHistory {
   account_id: string;
   first_date?: string;
   last_date?: string;
-  /** @nullable */
-  points: AccountBalanceHistoryPoint[] | null;
+  points: AccountBalanceHistoryPoint[];
 }
