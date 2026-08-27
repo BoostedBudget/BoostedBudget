@@ -706,3 +706,47 @@ describe('issue #1569 task 16: destructive class', () => {
     expect(getCapability('getUserBoostExecutions')?.excluded).toBe(false)
   })
 })
+
+// ── Issue #1569 T9.4: the automation audit trail stays reachable over MCP ───
+//
+// `getUserRuleExecutions` (GET /api/v1/rule-executions) is the RULE twin of
+// `getUserBoostExecutions`: per-user automation history, tenancy-scoped, read-only, and — the
+// point of #1569 — it deliberately returns executions whose rule has since been HARD-deleted,
+// carrying rule_name and definition_snapshot in place of the vanished rule_id.
+//
+// ⚠ WHY AN ASSERTION AND NOT A COMMENT. This manifest is DENY-BY-DEFAULT: `getCapability` returns
+// undefined for anything unlisted and `isAllowed` is then false. So the operation losing its entry
+// — a merge that drops a line, a reshuffle of the Boosts block, a future "tighten MCP" sweep —
+// silently removes the assistant's only route to the retained trail, with no test anywhere failing
+// and no error at the call site. Reclassifying it as `excluded` does the same thing more quietly
+// still. The user's ruling for this task was "build the UI, and ensure this is exposed via mcp";
+// the MCP half was already true, so what this task owes is the guard that keeps it true.
+//
+// This test is deliberately whole-shape rather than a single `class` check: `excluded` and
+// `confirmationRequired` are each independently able to make a read operation unreachable or
+// unusable in a tool loop.
+describe('issue #1569 t9.4: getUserRuleExecutions stays an invocable read', () => {
+  it('is classified, read, not excluded, and needs no confirmation', () => {
+    const entry = getCapability('getUserRuleExecutions')
+    // Deny-by-default: undefined here means the manifest entry was removed outright.
+    expect(entry).toBeDefined()
+    expect(entry?.class).toBe('read')
+    expect(entry?.excluded).toBe(false)
+    expect(entry?.confirmationRequired).toBe(false)
+  })
+
+  it('is actually invocable, not merely present', () => {
+    expect(isAllowed('getUserRuleExecutions')).toBe(true)
+    expect(isExcluded('getUserRuleExecutions')).toBe(false)
+    // A read is never a write and never destructive — reclassifying upward would gate the audit
+    // trail behind a confirmation the assistant cannot give on a read.
+    expect(isWrite('getUserRuleExecutions')).toBe(false)
+    expect(destroysData('getUserRuleExecutions')).toBe(false)
+  })
+
+  // Deliberately NOT asserted here: that the operation exists in the published spec index.
+  // `ALL_OPERATION_IDS` is derived from MANIFEST_ENTRIES, so asserting membership in it would only
+  // restate `expect(entry).toBeDefined()` above while LOOKING like a spec check. The real guard
+  // already exists and is generic — capability-summary.drift.test.ts, "every manifest entry has a
+  // corresponding spec-index entry" — and it covers this operation with no per-op line needed.
+})
