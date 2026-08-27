@@ -274,7 +274,42 @@ describe('RuleAutomationHistoryPanel', () => {
     expect(screen.getByText(/no runs on this page/i)).toBeInTheDocument()
   })
 
-  it('renders each execution once', () => {
+  // ── #1569 T9-FIX item 8: this round's OWN new UI shipped a false claim ─────────────────
+  //
+  // The panel said "EVERY TIME one of your rules changed a transaction". The backend
+  // deliberately withholds one class — an execution against a pending transaction the provider
+  // removed when it settled, whose posted twin carries its own execution — because listing both
+  // would report one charge as two automation runs. The OpenAPI description documents that
+  // exception correctly; the panel did not. The API was honest and the UI overstated it, which
+  // is the exact defect class #1569 exists to remove, shipped by #1569's own surface.
+  //
+  // Pinned as a NEGATIVE assertion on the overclaim as well as a positive one on the exception:
+  // a positive-only check stays green if "Every time" comes back beside it.
+  it('does not claim to list EVERY run', () => {
+    renderPanel()
+    expand()
+    const region = document.getElementById(
+      screen
+        .getByRole('button', { name: /rule run history/i })
+        .getAttribute('aria-controls') as string
+    )
+    expect((region as HTMLElement).textContent ?? '').not.toMatch(/every time/i)
+  })
+
+  it('names the one class of run it does not list', () => {
+    renderPanel()
+    expand()
+    const region = document.getElementById(
+      screen
+        .getByRole('button', { name: /rule run history/i })
+        .getAttribute('aria-controls') as string
+    )
+    const text = (region as HTMLElement).textContent ?? ''
+    expect(text).toMatch(/pending/i)
+    expect(text).toMatch(/settled/i)
+  })
+
+    it('renders each execution once', () => {
     renderPanel()
     expand()
     const region = document.getElementById(

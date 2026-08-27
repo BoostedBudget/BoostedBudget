@@ -101,7 +101,7 @@ type ListDeletedGoalContributionsInput struct {
 // derive it from: savings_goals.current_amount is frozen at whatever the last recompute wrote, and
 // no live read will ever touch a tombstoned goal again.
 type DeletedGoalContributionsBody struct {
-	Contributions  []*domain.SavingsGoalContribution `json:"contributions" doc:"Every contribution still logged against the deleted goal, newest first. One the user explicitly deleted earlier was destroyed at that point and is not here"`
+	Contributions  []*domain.SavingsGoalContribution `json:"contributions" doc:"Every contribution still logged against the deleted goal, newest first. A contribution the user explicitly deleted earlier was destroyed at that point and is not here"`
 	TotalConfirmed float64                           `json:"total_confirmed" doc:"Sum of the confirmed contributions; proposed and rejected rows are excluded"`
 }
 
