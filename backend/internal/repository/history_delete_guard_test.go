@@ -56,6 +56,19 @@ import (
 // TestHistoryDeleteGuard_FlagsAnUnallowlistedDelete, and a real one — a `DELETE FROM
 // rule_execution_history` temporarily added to a live repository method, which turns
 // TestNoUnallowlistedHistoryDelete red naming that method. See task-19-report.md.
+//
+// ⚠ AND A THIRD TIME, WHICH IS THE ONE WORTH READING (#1569 T8.2). T7.5's predicate pin was
+// mutation-checked by dropping a leg from the ONLY occurrence of that text in the file — so it went
+// red by luck of there being no second one. Both mechanisms that decide WHICH TEXT a statement is
+// checked against were too generous: a slice ran past its own terminator to the next DELETE, and
+// every literal in a function was joined before scanning. Either one lets a widened destruction
+// keep its blessing on the strength of text somewhere else entirely. Both are now bounded (see
+// statementBoundaryRegexp and literalUnitsInFunc), and the real corpus was re-mutated against the
+// FIXED guard: dropping `AND deleted_at IS NOT NULL` from PurgeAccount's savings_goals delete while
+// leaving that text in a sibling error string is GREEN under the old guard and RED under this one.
+//
+// The lesson generalises past this file: a passing mutant proves the guard catches THAT mutation,
+// not that the guard is sound. Mutate the mechanism, not just the instance.
 
 // historyDeleteAllowance is one blessing: WHY this function may hard-delete this history table,
 // and WHICH PREDICATE the blessing is scoped to.
@@ -225,10 +238,24 @@ var (
 	sqlBlockCommentRegexp = regexp.MustCompile(`(?s)/\*.*?\*/`)
 	sqlLineCommentRegexp  = regexp.MustCompile(`--[^\n]*`)
 	sqlWhitespaceRegexp   = regexp.MustCompile(`\s+`)
-	// anyDeleteRegexp is the STATEMENT BOUNDARY, not the table matcher: it matches a delete of any
-	// table at all, so that a `DELETE FROM holdings` sitting between two history deletes still ends
-	// the preceding slice.
-	anyDeleteRegexp = regexp.MustCompile(`\b(?:DELETE FROM|TRUNCATE)\b`)
+	// statementBoundaryRegexp is the STATEMENT BOUNDARY, not the table matcher. Two things end a
+	// delete's slice, whichever comes first:
+	//
+	//   - the start of another delete of ANY table, so that a `DELETE FROM holdings` sitting
+	//     between two history deletes still ends the preceding slice;
+	//   - a semicolon, the actual statement terminator.
+	//
+	// ⚠ THE SEMICOLON IS #1569 T8.2, AND WITHOUT IT THE PREDICATE PIN COULD BE BYPASSED. A slice
+	// that ran to the next DELETE swallowed every following statement in the same SQL string, so a
+	// `SELECT ... WHERE deleted_at IS NOT NULL` after an allowlisted purge satisfied that purge's
+	// predicate fragment for SQL the DELETE no longer contained — T7.5's blessing kept, its scope
+	// gone. Pinned by TestHistoryDeleteStatements_SplitsAtTheStatementTerminator.
+	//
+	// Comments are stripped by normaliseSQL BEFORE this runs, so a `;` inside a comment is not a
+	// boundary. A `;` inside a string or dollar-quoted literal WOULD be, and would truncate the
+	// slice early — which can only make the predicate check STRICTER (a fragment past it reads as
+	// missing), never bless a widening. Nothing in the corpus writes one.
+	statementBoundaryRegexp = regexp.MustCompile(`\b(?:DELETE FROM|TRUNCATE)\b|;`)
 )
 
 // normaliseSQL strips SQL comments, collapses whitespace and upper-cases.
@@ -240,16 +267,21 @@ func normaliseSQL(sql string) string {
 }
 
 // historyDeleteStatements returns, per history table, the normalised text of each hard delete of it
-// found in sql. A "statement" runs from the DELETE/TRUNCATE keyword to the start of the next one
-// (or to the end of the input) — deliberately generous at the tail, because over-reading can only
-// make the predicate check MORE permissive, never produce a false failure on legitimate SQL.
+// found in sql. A "statement" runs from the DELETE/TRUNCATE keyword to the next statement boundary
+// — another delete, or a semicolon — or to the end of the input.
+//
+// ⚠ IT USED TO RUN TO THE NEXT DELETE ONLY, and the note here called that "deliberately generous at
+// the tail, because over-reading can only make the predicate check MORE permissive, never produce a
+// false failure on legitimate SQL". The first half was true and the second half was the whole
+// problem: MORE PERMISSIVE is exactly how a widened destruction gets blessed. See
+// statementBoundaryRegexp.
 func historyDeleteStatements(sql string, tables map[string]string) map[string][]string {
 	norm := normaliseSQL(sql)
 	out := map[string][]string{}
 	for _, m := range historyDeleteRefRegexp(tables).FindAllStringSubmatchIndex(norm, -1) {
 		table := strings.ToLower(norm[m[2]:m[3]])
 		end := len(norm)
-		if next := anyDeleteRegexp.FindStringIndex(norm[m[1]:]); next != nil {
+		if next := statementBoundaryRegexp.FindStringIndex(norm[m[1]:]); next != nil {
 			end = m[1] + next[0]
 		}
 		out[table] = append(out[table], norm[m[0]:end])
@@ -274,9 +306,83 @@ type historyDeleteSiteFound struct {
 	statements []string
 }
 
+// sqlAssemblyUnit reports whether n is a statement-sized unit of SQL assembly: the node whose
+// string literals may legitimately be halves of ONE query (`A` + helper + `B`, or a fmt.Sprintf
+// whose format string and fragments are separate literals). It is the same unit the tombstone
+// read-guards use (transaction_tombstone_guard_test.go), deliberately — one notion of "what counts
+// as one query", not two.
+func sqlAssemblyUnit(n ast.Node) bool {
+	switch n.(type) {
+	case *ast.AssignStmt, *ast.ValueSpec, *ast.ReturnStmt, *ast.ExprStmt:
+		return true
+	}
+	return false
+}
+
+// literalUnitsInFunc partitions every string literal in body by its NEAREST enclosing assembly
+// unit, and returns one joined SQL string per unit, ordered by position.
+//
+// ⚠ WHY A PARTITION AND NOT A JOIN (#1569 T8.2, Item B). scanHistoryDeletes used to concatenate
+// EVERY literal in a function before scanning, which meant an allowlisted DELETE was checked
+// against text it does not contain: a help string, an error message, or an unrelated second query
+// in the same function could supply a predicate fragment the DELETE had lost, and the T7.5
+// predicate pin passed while the destruction widened. Pinned by
+// TestHistoryDeleteScan_DoesNotLendAPredicateFromAnotherLiteral, in both directions — the second
+// subtest is the one that matters for keeping this guard alive, because a guard that fires on a
+// legitimately concatenated query gets deleted by the next engineer.
+//
+// ⚠ IT FAILS OPEN NOWHERE. A literal with no enclosing unit — a `case "..."` expression, a switch
+// tag, an `if` condition — is NOT dropped; it becomes a unit of its own, so a delete written there
+// is still seen. What it does not get is a sibling's text.
+func literalUnitsInFunc(fset *token.FileSet, body *ast.BlockStmt) []string {
+	type group struct {
+		pos   token.Pos
+		parts []string
+	}
+	groups := map[ast.Node]*group{}
+	var stack []ast.Node
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return false
+		}
+		if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			if str, e := strconv.Unquote(lit.Value); e == nil {
+				var owner ast.Node = lit
+				for i := len(stack) - 1; i >= 0; i-- {
+					if sqlAssemblyUnit(stack[i]) {
+						owner = stack[i]
+						break
+					}
+				}
+				if groups[owner] == nil {
+					groups[owner] = &group{pos: owner.Pos()}
+				}
+				groups[owner].parts = append(groups[owner].parts, str)
+			}
+		}
+		stack = append(stack, n)
+		return true
+	})
+
+	ordered := make([]*group, 0, len(groups))
+	for _, g := range groups {
+		ordered = append(ordered, g)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].pos < ordered[j].pos })
+
+	out := make([]string, 0, len(ordered))
+	for _, g := range ordered {
+		out = append(out, strings.Join(g.parts, "\n"))
+	}
+	return out
+}
+
 // scanHistoryDeletes walks non-test Go under root and returns every "<rel>#<func>|<table>" key found.
 // Only string LITERALS are inspected, so prose in a comment that quotes `DELETE FROM budgets` — and
-// four files do exactly that, explaining why they no longer do it — is correctly ignored.
+// four files do exactly that, explaining why they no longer do it — is correctly ignored. Literals
+// are grouped per assembly unit, never per function; see literalUnitsInFunc.
 func scanHistoryDeletes(t *testing.T, root string, tables map[string]string) map[string]*historyDeleteSiteFound {
 	t.Helper()
 	found := map[string]*historyDeleteSiteFound{}
@@ -301,24 +407,15 @@ func scanHistoryDeletes(t *testing.T, root string, tables map[string]string) map
 			if !ok || fn.Body == nil {
 				continue
 			}
-			var parts []string
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				lit, ok := n.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					return true
+			for _, unit := range literalUnitsInFunc(fset, fn.Body) {
+				for tbl, stmts := range historyDeleteStatements(unit, tables) {
+					key := rel + "#" + fn.Name.Name + "|" + tbl
+					if found[key] == nil {
+						found[key] = &historyDeleteSiteFound{}
+					}
+					found[key].lines = append(found[key].lines, strconv.Itoa(fset.Position(fn.Pos()).Line))
+					found[key].statements = append(found[key].statements, stmts...)
 				}
-				if s, e := strconv.Unquote(lit.Value); e == nil {
-					parts = append(parts, s)
-				}
-				return true
-			})
-			for tbl, stmts := range historyDeleteStatements(strings.Join(parts, "\n"), tables) {
-				key := rel + "#" + fn.Name.Name + "|" + tbl
-				if found[key] == nil {
-					found[key] = &historyDeleteSiteFound{}
-				}
-				found[key].lines = append(found[key].lines, strconv.Itoa(fset.Position(fn.Pos()).Line))
-				found[key].statements = append(found[key].statements, stmts...)
 			}
 		}
 		return nil
@@ -594,4 +691,102 @@ func TestHistoryDeleteStatements_SplitsAtTheNextDelete(t *testing.T) {
 	if strings.Contains(mixed["balance_snapshots"][0], "HOLDINGS") {
 		t.Fatalf("a delete of a non-history table must end the preceding slice, got %q", mixed["balance_snapshots"][0])
 	}
+}
+
+// TestHistoryDeleteStatements_SplitsAtTheStatementTerminator is #1569 T8.2 Item B, half one.
+//
+// Until this change a "statement" ran from its DELETE keyword to the NEXT DELETE, or to the end of
+// the input. A semicolon was not a boundary, so anything following the delete inside the same SQL
+// string — a SELECT, a second UPDATE, a RETURNING-less follow-up — was folded into the delete's own
+// normalised text and could satisfy a predicate fragment the DELETE no longer carries. That is a
+// bypass of the exact hardening T7.5 added: the blessing survives while the destruction widens.
+//
+// The boundary at the next DELETE is kept; the terminator is now whichever comes first.
+func TestHistoryDeleteStatements_SplitsAtTheStatementTerminator(t *testing.T) {
+	entry := allowedHistoryDeletes["repository/account_repository.go#PurgeAccount|savings_goals"]
+
+	// The widening: the DELETE has lost `AND deleted_at IS NOT NULL`, and a LATER statement in the
+	// same string happens to contain that text. No second DELETE, so nothing else ends the slice.
+	widened := historyDeleteStatements(`
+		DELETE FROM savings_goals WHERE account_id = $1 AND user_id = $2;
+		SELECT count(*) FROM savings_goals WHERE account_id = $1 AND deleted_at IS NOT NULL;
+	`, historyBearingTables)["savings_goals"]
+	if len(widened) != 1 {
+		t.Fatalf("expected one delete statement, got %d: %q", len(widened), widened)
+	}
+	if strings.Contains(widened[0], "SELECT") {
+		t.Fatalf("the delete's slice ran past its terminator into the next statement: %q", widened[0])
+	}
+	missing := missingPredicateFragments(widened[0], entry.predicate)
+	if len(missing) != 1 || missing[0] != "deleted_at IS NOT NULL" {
+		t.Fatalf("a later statement lent the DELETE a predicate it no longer carries; missing %v "+
+			"(statement: %s)", missing, widened[0])
+	}
+
+	// GREEN direction: a terminator INSIDE the delete's own text must not truncate it early, and
+	// the intact statement must still satisfy its predicate.
+	intact := historyDeleteStatements(`
+		DELETE FROM savings_goals
+		WHERE account_id = $1 AND user_id = $2 AND deleted_at IS NOT NULL;
+	`, historyBearingTables)["savings_goals"]
+	if len(intact) != 1 {
+		t.Fatalf("expected one delete statement, got %d", len(intact))
+	}
+	if missing := missingPredicateFragments(intact[0], entry.predicate); len(missing) > 0 {
+		t.Fatalf("the intact statement must satisfy its own predicate, missing %v", missing)
+	}
+}
+
+// TestHistoryDeleteScan_DoesNotLendAPredicateFromAnotherLiteral is #1569 T8.2 Item B, half two.
+//
+// scanHistoryDeletes used to join EVERY string literal in a function before scanning. A help
+// string, an error message, a second unrelated query — any of them could contain the text of a
+// predicate fragment, and the widened DELETE would be blessed by it. The unit of assembly is now
+// the enclosing STATEMENT (the same unit the tombstone read-guards use), so adjacent literals that
+// really do build one query are still joined and two unrelated literals are not.
+func TestHistoryDeleteScan_DoesNotLendAPredicateFromAnotherLiteral(t *testing.T) {
+	entry := allowedHistoryDeletes["repository/account_repository.go#PurgeAccount|savings_goals"]
+
+	scan := func(t *testing.T, body string) *historyDeleteSiteFound {
+		t.Helper()
+		dir := t.TempDir()
+		src := "package fake\n\nfunc PurgeLookalike() {\n" + body + "\n}\n"
+		if err := os.WriteFile(filepath.Join(dir, "fake.go"), []byte(src), 0o600); err != nil {
+			t.Fatalf("writing fixture: %v", err)
+		}
+		found := scanHistoryDeletes(t, dir, historyBearingTables)
+		site := found["fake.go#PurgeLookalike|savings_goals"]
+		if site == nil {
+			t.Fatalf("the fixture's delete was not seen at all; keys: %v", found)
+		}
+		return site
+	}
+
+	t.Run("an unrelated literal does not satisfy the predicate", func(t *testing.T) {
+		site := scan(t, "\tq := `DELETE FROM savings_goals WHERE account_id = $1 AND user_id = $2`\n"+
+			"\thelp := `only tombstoned goals are purged: deleted_at IS NOT NULL`\n"+
+			"\t_, _ = q, help")
+		if len(site.statements) != 1 {
+			t.Fatalf("expected one statement, got %d: %q", len(site.statements), site.statements)
+		}
+		missing := missingPredicateFragments(site.statements[0], entry.predicate)
+		if len(missing) != 1 || missing[0] != "deleted_at IS NOT NULL" {
+			t.Fatalf("a sibling literal lent the DELETE a predicate it no longer carries; missing "+
+				"%v (statement: %s)", missing, site.statements[0])
+		}
+	})
+
+	t.Run("adjacent literals of ONE query are still joined", func(t *testing.T) {
+		site := scan(t, "\tq := `DELETE FROM savings_goals` +\n"+
+			"\t\t` WHERE account_id = $1 AND user_id = $2` +\n"+
+			"\t\t` AND deleted_at IS NOT NULL`\n"+
+			"\t_ = q")
+		if len(site.statements) != 1 {
+			t.Fatalf("expected one statement, got %d: %q", len(site.statements), site.statements)
+		}
+		if missing := missingPredicateFragments(site.statements[0], entry.predicate); len(missing) > 0 {
+			t.Fatalf("splitting by statement broke a legitimately concatenated query, missing %v "+
+				"(statement: %s)", missing, site.statements[0])
+		}
+	})
 }
