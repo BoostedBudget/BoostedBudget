@@ -141,6 +141,40 @@ describe('SavingsPage', () => {
     expect(screen.getByRole('button', { name: /retry/i })).toBeDefined()
   })
 
+  // #1569 R8 layer 2. The live-goals error branch returned before <DeletedGoalsPanel>, so a
+  // transient failure on an unrelated query hid the deleted-goal ledger AND its purge verb —
+  // the same shape as the Critical this surface was built to fix (an empty state rendering
+  // before the panel that made its own promise true). The live-list error must stay visible.
+  it('keeps the deleted-goals panel reachable when the live goals query fails', () => {
+    mockUseGetSavingsGoals.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('Network failure'),
+      refetch: mockSavingsGoalsRefetch,
+    } as unknown as ReturnType<typeof mockUseGetSavingsGoals>)
+    mockUseGetDeletedSavingsGoals.mockReturnValue({
+      data: [
+        {
+          ...baseGoal,
+          id: 'goal-deleted',
+          name: 'Retired Fund',
+          deleted_at: '2024-02-01T00:00:00Z',
+          progress_basis: 'contributions',
+        },
+      ],
+      isLoading: false,
+      error: null,
+      refetch: mockDeletedSavingsGoalsRefetch,
+    } as unknown as ReturnType<typeof mockUseGetDeletedSavingsGoals>)
+    renderPage()
+
+    // The live-list failure is NOT swallowed.
+    expect(screen.getByText(/network failure/i)).toBeDefined()
+    // ...and the retained history survives it.
+    fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+    expect(screen.getByText('Retired Fund')).toBeDefined()
+  })
+
   it('renders empty state when no goals exist', () => {
     renderPage()
     expect(screen.getByText(/no savings goals/i)).toBeDefined()

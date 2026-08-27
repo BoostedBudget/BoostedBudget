@@ -136,6 +136,19 @@ export function SavingsPage() {
         >
           Retry
         </button>
+        {/*
+          #1569 R8. Mounted in the ERROR branch for the same reason it is mounted in the empty
+          branch: a failure of the LIVE-goals query says nothing about the deleted-goals query,
+          which is separate, has its own error arm, and — when it succeeds — is the only place the
+          user can see the contributions we promised to keep, or reach
+          POST /savings-goals/{id}/purge to reclaim them. Hiding it here made a transient network
+          blip read as "you have deleted nothing".
+
+          The live-list failure above is deliberately NOT swallowed: it keeps its message and its
+          Retry, and this panel is additive beneath it. The panel self-hides on an empty listing,
+          so an ordinary failed page is visually unchanged.
+        */}
+        <DeletedGoalsPanel onPurged={() => void refetch()} />
       </main>
     )
   }

@@ -204,6 +204,14 @@ export function BoostsManagePage({ showTypeSegment = false, boostTypeFilter }: B
             Retry
           </Button>
         </div>
+        {/*
+          #1569 R8. Same reasoning as the empty branch below: the retained execution history is a
+          SEPARATE query with its own loading, error and degraded-mode handling, so a failure of
+          the live boosts list is no reason to hide it. Returning before it meant a transient blip
+          on /boosts also erased every record of what the user's automations had already done.
+          The boosts failure above keeps its own message and Retry — this is additive.
+        */}
+        <BoostAutomationHistoryPanel />
       </div>
     )
   }
