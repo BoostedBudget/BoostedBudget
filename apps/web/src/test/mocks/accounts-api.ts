@@ -7,9 +7,17 @@ import type { AccountBalanceHistoryPoint } from '@boostedbudget/api-client/model
 
 // === useGetAccounts ===
 export const mockRefetchAccounts = mock(() => Promise.resolve())
+// ⚠ `isError` IS LOAD-BEARING AND WAS MISSING (#1569 R9). This factory is preloaded for EVERY
+// test in the repo, so the key it omits is omitted everywhere. AccountDetailPage, useAllAccounts
+// and useActiveAccounts all read `isError`; without the key here it was permanently `undefined`,
+// which is falsy — so every accounts-read error path was structurally unreachable in any test that
+// did not replace the whole return value. Worse, the inferred return type had no `isError`, so a
+// test that TRIED to set `isError: true` got TS2561 and the honest test could not be written at
+// all. Present-and-false is the only shape that leaves the error arm reachable.
 export const mockUseGetAccounts = mock(() => ({
   data: undefined,
   isLoading: true,
+  isError: false,
   error: null,
   refetch: mockRefetchAccounts,
 }))

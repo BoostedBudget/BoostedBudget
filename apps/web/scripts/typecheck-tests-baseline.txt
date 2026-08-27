@@ -24,5 +24,16 @@
 # happened to be on disk is a ceiling set by accident.
 #
 # Blank lines and #-comments are ignored; the value is the bare integer below.
+#
+# 2049 -> 2045 (#1569 R9). NOT a hand-wave and NOT `--update-baseline` over whatever was on disk:
+# the four are accounted for individually. src/test/mocks/accounts-api.ts's mockUseGetAccounts
+# factory omitted `isError`, so its inferred return type had no such key and every test that tried
+# to set one got TS2561 "Object literal may only specify known properties, but 'isError' does not
+# exist". Four such errors existed (AccountDetailPage.test.tsx x2, useActiveAccounts.test.ts x2).
+# Adding the key to the factory removed exactly those four and introduced none; the full error
+# listing was diffed before and after and those four lines are the entire delta.
+#
+# ⚠ The errors were not cosmetic — they were the reason the accounts-read error arm could not be
+# tested at all. See the comment on mockUseGetAccounts.
 
-2049
+2045

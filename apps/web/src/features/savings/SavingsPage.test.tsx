@@ -95,6 +95,7 @@ describe('SavingsPage', () => {
     mockUseGetDeletedSavingsGoals.mockReturnValue({
       data: undefined,
       isLoading: false,
+      isError: false,
       error: null,
       refetch: mockDeletedSavingsGoalsRefetch,
     })
@@ -615,6 +616,7 @@ describe('SavingsPage', () => {
       mockUseGetDeletedSavingsGoals.mockReturnValue({
         data: deleted as never,
         isLoading: false,
+        isError: false,
         error: null,
         refetch: mockDeletedSavingsGoalsRefetch,
       })
