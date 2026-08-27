@@ -587,12 +587,38 @@ func (r *dataExportRepository) decryptEveryEnvelope(row map[string]any, table st
 // silently on both restores the round-4 defect — a document full of unreadable "ENC$…" strings,
 // shipped as if it were the user's data, with nothing anywhere saying so.
 //
-// Across a WHOLE export the two stop being ambiguous. A wrong or rotated key fails EVERY envelope,
-// including users.email, which profile_repository encrypts for every account this application has
-// ever created; a colliding user string fails while its neighbours succeed. So: at least one
-// success anywhere in the document proves the key opens this user's data, and the failures beside
-// it are strings the user typed. Zero successes with at least one failure is the key alarm, and it
-// is still loud.
+// Across a WHOLE export the two stop being ambiguous FOR A WHOLLY WRONG KEY. Such a key fails EVERY
+// envelope, including users.email, which profile_repository encrypts for every account this
+// application has ever created; a colliding user string fails while its neighbours succeed. So: at
+// least one success anywhere in the document proves the key opens this user's data, and the
+// failures beside it are strings the user typed. Zero successes with at least one failure is the
+// key alarm, and it is still loud.
+//
+// ⚠ ACCEPTED LIMIT, AND THE RECORDED VERSION OF IT WAS TOO COMFORTABLE (#1569 T8.5). It used to be
+// filed as "unreachable — no rotation machinery in internal/crypto/". The Go half of that is true
+// and re-verified: no `rotat*` anywhere under internal/crypto, one key on FieldEncryptor, one
+// ENCRYPTION_KEY read in config. But ROTATION NEEDS NO CODE. ENCRYPTION_KEY is an environment
+// variable (config.go, fly.staging.toml, docs/SECRETS_REFERENCE.md); changing it is a deploy, not a
+// commit, and from that moment every row written after the change decrypts while every row written
+// before it does not, with no re-encryption tool anywhere in the tree to finish the job. The
+// codebase already treats a rotated key as a LIVE operational case elsewhere — see
+// plaid_orphaned_item_repository.go and domain/plaid_orphaned_item.go, which handle an
+// undecryptable access token rather than declaring it impossible.
+//
+// Under that MIXED-KEY state this rule is wrong in the unsafe direction: one post-rotation row that
+// decrypts (a freshly linked item, a just-edited note) sets decrypted > 0 and suppresses the alarm
+// for every pre-rotation failure, so the export ships raw "ENC$…" ciphertext as the user's data
+// with nothing saying so — the round-4 defect, reachable again by an ops action.
+//
+// ⚠ DELIBERATE DECISION #1569 T8.5: the gate is NOT tightened here, and the reason is not
+// inertia. Every tightening available needs a list of columns that are always this application's
+// ciphertext, and decryptEveryEnvelope was rewritten in #1587 precisely to delete that list — a
+// column left off it was the defect the shape test replaced. Reintroducing the list to catch a
+// state no deployment has ever been in would trade a known-reachable regression for a
+// not-yet-reachable one. What is required instead is the operational rule this comment now records:
+// ROTATING ENCRYPTION_KEY WITHOUT A RE-ENCRYPTION BACKFILL IS NOT A SUPPORTED OPERATION. If key
+// rotation ever becomes a real feature, it must land with a re-encryption backfill AND a per-column
+// key-health signal, and this rule must be revisited in the same change.
 type envelopeTally struct {
 	decrypted int
 	failed    int
