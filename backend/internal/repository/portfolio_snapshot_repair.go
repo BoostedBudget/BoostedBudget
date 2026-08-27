@@ -135,6 +135,14 @@ expected AS (
 -- holding_observations (migration 000176) records the looking itself, which is what this CTE is
 -- actually asking about. Historic days have no marker rows, so nothing already recorded changes
 -- verdict; only days captured after 000176 can newly become reconstructable.
+--
+-- ⚠ ARM 1 IS NOT A WEAKER MARKER, and #1569 T10.3 item B is the measurement that says so. The
+-- whole-user daily sweep writes holding_snapshots without asking any provider, so the obvious worry
+-- is that it satisfies arm 1 for an account nobody looked at — the same class the marker route
+-- refuses by writing no markers. It cannot: captureHoldingSnapshotsForUserSQL selects FROM
+-- holdings, whose only non-test writer is holdingRepository.ReplaceForAccount, reached only for
+-- an account in a confirmed-complete provider response. An unasked account has no holdings to copy
+-- and so gets no row here. See TestPortfolioSnapshot_DailySweepCannotVouchViaTheHoldingsRouteEither.
 observed AS (
     SELECT l.snapshot_date, l.account_id
     FROM live l

@@ -807,3 +807,63 @@ func TestPortfolioSnapshot_DailySweepDoesNotVouchForAnAccountItNeverAsked(t *tes
 		"0 means the sweep's marker was read as a confirmed-empty successor and the retained "+
 			"predecessor was dropped on re-link day — the cliff, back again")
 }
+
+// TestPortfolioSnapshot_DailySweepCannotVouchViaTheHoldingsRouteEither is #1569 T10.3 item B, and
+// it is a MEASUREMENT of a hypothesis rather than a fix for a defect.
+//
+// The test above closes ONE of the two routes by which an account can look observed. The repair's
+// `observed` CTE (portfolio_snapshot_repair.go) has two arms — holding_snapshots for the day, OR an
+// observation marker — and the sweep writes no markers but DOES write holding_snapshots. So the
+// question the test above does not answer is whether the sweep can vouch for an account nobody
+// asked about through the OTHER arm.
+//
+// MEASURED here: it cannot, and the reason is structural rather than lucky.
+// captureHoldingSnapshotsForUserSQL is an `INSERT ... SELECT ... FROM holdings`, so it can only
+// write a row for an account that ALREADY bears holdings — and `holdings` has exactly one writer in
+// non-test code, holdingRepository.ReplaceForAccount, which a sync reaches only for an account
+// present in a confirmed-complete provider response. An account nobody ever asked about therefore
+// has no holdings for the sweep to copy, and the sweep writes it nothing to be observed by. That is
+// precisely the money case the test above names: a re-link successor created minutes ago with no
+// positions of its own.
+//
+// So the sweep's holding_snapshots rows are never a vouch for an UNASKED account. What they are is
+// a restatement of an asked account's last known positions on a later day, which is the sweep's
+// stated purpose and is symmetric with what the repair sums for that day. No behaviour is changed
+// by this test; it exists so the claim above stops resting on the marker route alone.
+func TestPortfolioSnapshot_DailySweepCannotVouchViaTheHoldingsRouteEither(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, oldAccountID, newAccountID, secID := seedRelinkedInvestmentChain(ctx, t, tx, "psnap-sweepholdings")
+
+	// Only the retained predecessor holds anything. The successor was created by the re-link and
+	// has not synced: no holdings, no snapshots, no marker.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+		VALUES ($1, $2, $3, $4, 10, 3000.00, 4000.00)`, uuid.New(), userID, oldAccountID, secID)
+	require.NoError(t, err)
+
+	day, err := NewHoldingSnapshotRepository(tx).CaptureForUser(ctx, userID.String())
+	require.NoError(t, err)
+
+	var successorRows int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT count(*) FROM holding_snapshots WHERE user_id = $1 AND account_id = $2 AND as_of_date = $3`,
+		userID, newAccountID, day).Scan(&successorRows))
+	require.Equal(t, 0, successorRows,
+		"MEASURED: the sweep copies the `holdings` table, and the never-synced successor has no "+
+			"row there — so the repair's holding_snapshots arm has nothing to mistake for an "+
+			"observation. The holdings route cannot vouch for an account nobody asked about")
+
+	var predecessorRows int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT count(*) FROM holding_snapshots WHERE user_id = $1 AND account_id = $2 AND as_of_date = $3`,
+		userID, oldAccountID, day).Scan(&predecessorRows))
+	require.Equal(t, 1, predecessorRows,
+		"control: the sweep really did run and really does write rows, so the zero above is the "+
+			"absence of a vouch and not the absence of a sweep")
+}

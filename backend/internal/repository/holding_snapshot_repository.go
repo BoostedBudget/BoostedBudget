@@ -174,6 +174,23 @@ func captureHoldingSnapshots(ctx context.Context, db DB, accountID, userID strin
 // for a different hole. Found on self-review of that fix and pinned by
 // TestPortfolioSnapshot_DailySweepDoesNotVouchForAnAccountItNeverAsked.
 //
+// ⚠ THAT TEST NAME IS BROADER THAN WHAT IT PINNED, and #1569 T10.3 item B is the measurement that
+// closed the gap rather than a fix. There are TWO routes by which an account can look observed —
+// the repair's `observed` CTE (portfolio_snapshot_repair.go) accepts a marker OR holding_snapshots
+// for the day — and this sweep writes no markers but plainly DOES write holding_snapshots. So the
+// named test spoke for one arm and the name spoke for both.
+//
+// Measured, not argued: the holdings route cannot vouch for an unasked account either, and
+// structurally so. The INSERT below is `SELECT ... FROM holdings`, so it can only write a row for
+// an account that already bears holdings, and `holdings` has exactly ONE writer outside tests —
+// holdingRepository.ReplaceForAccount, which a sync reaches only for an account present in a
+// confirmed-complete provider response. The never-synced re-link successor this whole comment is
+// about has nothing for the sweep to copy, so the sweep writes it nothing to be observed by.
+// TestPortfolioSnapshot_DailySweepCannotVouchViaTheHoldingsRouteEither is that measurement, with a
+// control proving the zero is an absent vouch rather than an absent sweep. What the sweep's rows
+// ARE is a restatement of an ASKED account's last known positions on a later day — the sweep's
+// stated purpose above, and symmetric with what the repair sums for that day. No behaviour changed.
+//
 // The mark-absent half deliberately omits the liveness clause its paired INSERT carries: it only
 // ever touches rows that ALREADY exist for this day, and a row exists for a terminal account only
 // if a capture put it there while the account was still live that same day — in which case the
