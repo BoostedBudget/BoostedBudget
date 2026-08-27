@@ -174,7 +174,7 @@ describe('BoostAutomationHistoryPanel', () => {
     expand()
     expect(mockTrackEvent).toHaveBeenCalledWith(
       ANALYTICS_EVENTS.BOOST_EXECUTION_HISTORY_VIEWED,
-      { has_deleted_boost_rows: true }
+      { has_deleted_boost_rows: true, deleted_markers_unavailable: false }
     )
     const [, props] = mockTrackEvent.mock.calls[0] as unknown as [string, Record<string, unknown>]
     expect(JSON.stringify(props)).not.toMatch(/Old rainy-day rule|boost-deleted|exec-/)
@@ -229,5 +229,75 @@ describe('BoostAutomationHistoryPanel', () => {
       screen.getByRole('button', { name: /automation history/i }).getAttribute('aria-controls') as string
     )
     expect(within(region as HTMLElement).getAllByText('Old rainy-day rule').length).toBe(1)
+  })
+})
+
+// Issue #1569 T7-FIX, finding C. The live-boost query's error was ignored: on failure `liveBoosts`
+// is undefined, `liveBoostIds` stays null and EVERY row is treated as non-deleted, so the panel
+// rendered a complete-looking list with none of the "Deleted boost" markers it promises. Failing
+// open on a "this data was retained" marker is the wrong direction for this issue.
+describe('BoostAutomationHistoryPanel when the live-boost list fails (#1569)', () => {
+  function withFailedLiveBoosts() {
+    mockUseGetBoosts.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('boosts unavailable'),
+      refetch: () => Promise.resolve(),
+    } as unknown as ReturnType<typeof mockUseGetBoosts>)
+  }
+
+  it('says the markers are missing rather than silently rendering none', () => {
+    withFailedLiveBoosts()
+    renderPanel()
+    expand()
+
+    expect(screen.queryAllByText(/^Deleted boost$/).length).toBe(0)
+    expect(screen.getByText(/could not check which of your boosts are still active/i)).toBeInTheDocument()
+  })
+
+  // The retained rows themselves are NOT withheld: a second, decorative request failing must not
+  // take down the history this panel exists to show.
+  it('still lists every retained execution', () => {
+    withFailedLiveBoosts()
+    renderPanel()
+    expand()
+
+    expect(screen.getByText('Old rainy-day rule')).toBeInTheDocument()
+    expect(screen.getByText('Purged transfer rule')).toBeInTheDocument()
+  })
+
+  it('tells analytics the view was degraded, so it is not counted as "nothing was deleted"', () => {
+    withFailedLiveBoosts()
+    renderPanel()
+    expand()
+
+    expect(mockTrackEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ deleted_markers_unavailable: true })
+    )
+  })
+
+  it('shows no such notice while the live list is merely still loading', () => {
+    mockUseGetBoosts.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+      refetch: () => Promise.resolve(),
+    } as unknown as ReturnType<typeof mockUseGetBoosts>)
+    renderPanel()
+    expand()
+
+    expect(screen.queryByText(/could not check which of your boosts are still active/i)).toBeNull()
+  })
+
+  it('shows no such notice on the happy path', () => {
+    renderPanel()
+    expand()
+
+    expect(screen.queryByText(/could not check which of your boosts are still active/i)).toBeNull()
+    expect(mockTrackEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ deleted_markers_unavailable: false })
+    )
   })
 })
