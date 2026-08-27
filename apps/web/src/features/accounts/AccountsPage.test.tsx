@@ -351,6 +351,14 @@ describe('AccountsPage', () => {
       created_at: '2025-01-01T00:00:00Z',
       updated_at: '2025-01-01T00:00:00Z',
     }
+    // ⚠ NO current_balance, deliberately. A terminal account carries no current balance: every
+    // account read routes through accountBalanceProjection, which presents NULL — and
+    // domain.Account.CurrentBalance is a *float64 with `omitempty`, so the key is OMITTED from the
+    // JSON entirely. A fixture with `current_balance: 500` on a 'removed' account is a payload
+    // this API cannot produce. The child components are mocked here so nothing renders it either
+    // way, which is exactly why the wrong shape survived: a regression that forwarded a closed
+    // account's balance would leave these green. See utils.test.ts and
+    // ClosedAccountBalanceHistory.test.tsx for the tests that do render it.
     const closedAccount = {
       id: 'acc-closed',
       name: 'Old Savings',
@@ -360,7 +368,6 @@ describe('AccountsPage', () => {
       status: 'removed',
       removed_at: '2026-03-01T00:00:00Z',
       is_hidden: false,
-      current_balance: 500,
       created_at: '2024-01-01T00:00:00Z',
       updated_at: '2026-03-01T00:00:00Z',
     }
@@ -526,6 +533,8 @@ describe('AccountsPage', () => {
   })
 
   describe('purge dialog integration (Issue #1569, Task 6: destructive, type-to-confirm)', () => {
+    // No current_balance — see the closed-accounts fixture above: a terminal account's balance key
+    // is omitted by the API, and a mocked child cannot catch a fixture that says otherwise.
     const closedAccount = {
       id: 'acc-1',
       linked_item_id: 'item-1',
@@ -536,7 +545,6 @@ describe('AccountsPage', () => {
       status: 'removed',
       removed_at: '2026-03-01T00:00:00Z',
       is_hidden: false,
-      current_balance: 1000,
       created_at: '2025-01-01T00:00:00Z',
     }
 
