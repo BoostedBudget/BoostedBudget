@@ -2942,7 +2942,7 @@ components:
           readOnly: true
           type: string
         contributions:
-          description: Every contribution still logged against the deleted goal, newest first. One the user explicitly deleted earlier was destroyed at that point and is not here
+          description: Every contribution still logged against the deleted goal, newest first. A contribution the user explicitly deleted earlier was destroyed at that point and is not here
           items:
             $ref: "#/components/schemas/SavingsGoalContribution"
           type:
