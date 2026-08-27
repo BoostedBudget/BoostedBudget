@@ -1,9 +1,11 @@
 /**
  * DeletedGoalContributions — Issue #1569 T7, closing C2.
  *
- * Deleting a savings goal tombstones it and destroys nothing: every contribution logged against
- * it is retained, including the amounts the user typed in by hand, which no provider can supply
- * again. T2 made those readable at GET /api/v1/savings-goals/deleted/{goalID}/contributions,
+ * Deleting a savings goal tombstones it and destroys nothing: every contribution STILL logged
+ * against it is retained, including the amounts the user typed in by hand, which no provider can
+ * supply again. Unqualified, that sentence is false — DELETE
+ * /savings-goals/{goalID}/contributions/{id} hard-deletes a single contribution, and deleting the
+ * goal afterwards cannot bring it back. T2 made those readable at GET /api/v1/savings-goals/deleted/{goalID}/contributions,
  * deliberately as a SEPARATE route rather than a flag on the live listing — the live read stays
  * structurally incapable of returning a tombstoned goal's rows.
  *

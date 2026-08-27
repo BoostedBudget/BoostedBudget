@@ -216,10 +216,19 @@ describe('DeletedGoalsPanel', () => {
     expect(document.body.textContent).toMatch(/deleted on/i)
   })
 
-  it('says the contributions were kept, which is the whole point of the tombstone', () => {
+  // The NEGATIVE half is the load-bearing one, and it is here because this is the THIRD time on
+  // this branch that the unscoped retention claim has been corrected at one site and left standing
+  // at a sibling. The unqualified sentence ("every contribution you logged is still saved") is
+  // FALSE: DELETE /savings-goals/{goalID}/contributions/{id} hard-deletes a single contribution
+  // (savings_contribution_repository.DeleteContribution), so a goal tombstone cannot bring it
+  // back. A positive-only assertion stays green if that sentence is restored.
+  it('says the contributions still logged are kept, without promising back the ones the user deleted', () => {
     render(<DeletedGoalsPanel />)
     fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
-    expect(document.body.textContent).toMatch(/still saved|kept/i)
+    const text = document.body.textContent ?? ''
+    expect(text).toMatch(/still saved|kept/i)
+    expect(text).toMatch(/still logged/i)
+    expect(text).not.toMatch(/every contribution you logged is still saved/i)
   })
 
   it('masks the goal name and the amounts for session replay', () => {
@@ -377,7 +386,7 @@ describe('DeletedGoalsPanel', () => {
 //
 // T2 made a deleted goal's contributions readable at
 // GET /api/v1/savings-goals/deleted/{goalID}/contributions. With no UI, the DELETE description's
-// promise ("every contribution logged against the goal is retained") was true for an API consumer
+// promise ("every contribution still logged against the goal is retained") was true for an API consumer
 // and still false for the person who typed the amounts in. Hand-logged contributions are the case
 // that matters: no provider can supply them again, so if the user cannot see them, retaining them
 // buys the user nothing.
