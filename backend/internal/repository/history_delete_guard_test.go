@@ -187,6 +187,19 @@ var allowedHistoryDeletes = map[string]historyDeleteAllowance{
 
 // historyDeleteRefRegexp matches a hard delete of one of the named tables. Alternatives are sorted
 // longest-first so that `savings_goals` cannot claim the prefix of `savings_goal_contributions`.
+//
+// ⚠ WHAT THE TABLE MATCHER ACCEPTS (#1569 T7-FIX, finding E). It used to require a BARE identifier,
+// so `DELETE FROM public.transactions` and `TRUNCATE TABLE "transactions"` were both invisible to
+// G2 and to G4 — a one-token edit that turned the guard off. It now accepts, in any combination:
+//
+//   - an optional schema qualifier (`public.`, `"public".`, or any other schema — a delete routed
+//     through a second schema is still a delete of that table's name and is still reported);
+//   - an optional pair of double quotes around either identifier.
+//
+// It does NOT accept every syntactic form Postgres does: a name split across a comment
+// (`public /* x */ . transactions`) or written with a dollar-quoted alias is still missed, and the
+// guard makes no claim about those. Nothing in the tree writes them, and widening far enough to
+// catch them would mean parsing SQL.
 func historyDeleteRefRegexp(tables map[string]string) *regexp.Regexp {
 	names := make([]string, 0, len(tables))
 	for t := range tables {
@@ -198,8 +211,8 @@ func historyDeleteRefRegexp(tables map[string]string) *regexp.Regexp {
 		}
 		return names[i] < names[j]
 	})
-	return regexp.MustCompile(`(?is)\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(?:ONLY\s+)?(` +
-		strings.Join(names, "|") + `)\b`)
+	return regexp.MustCompile(`(?is)\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(?:ONLY\s+)?` +
+		`(?:"?[a-z_][a-z0-9_]*"?\s*\.\s*)?"?(` + strings.Join(names, "|") + `)(?:"|\b)`)
 }
 
 // sqlBlockCommentRegexp, sqlLineCommentRegexp and sqlWhitespaceRegexp normalise SQL so that
@@ -442,6 +455,15 @@ func TestHistoryDeleteGuard_SeesTheFormsThatDoNotLookLikeADelete(t *testing.T) {
 		{"USING form", "DELETE FROM savings_goal_contributions c USING savings_goals g WHERE c.savings_goal_id = g.id", []string{"savings_goal_contributions"}},
 		{"truncate", "TRUNCATE TABLE balance_snapshots", []string{"balance_snapshots"}},
 		{"truncate only", "TRUNCATE ONLY rollover_history", []string{"rollover_history"}},
+		// #1569 T7-FIX finding E: the schema-qualified and quoted forms, which a bare-identifier
+		// matcher missed entirely — one token of edit was enough to switch both guards off.
+		{"schema qualified", "DELETE FROM public.transactions WHERE id = $1", []string{"transactions"}},
+		{"quoted identifier", `TRUNCATE TABLE "transactions"`, []string{"transactions"}},
+		{"quoted schema and table", `DELETE FROM "public"."balance_snapshots" WHERE id = $1`, []string{"balance_snapshots"}},
+		{"qualified truncate only", "TRUNCATE ONLY public.rollover_history", []string{"rollover_history"}},
+		{"a qualified prefix must still not match the longer name", "DELETE FROM public.savings_goal_contributions WHERE id = $1", []string{"savings_goal_contributions"}},
+		{"a qualified non-history table is still not our business", "DELETE FROM public.notifications WHERE id = $1", nil},
+		{"a suffixed name is not the table", "DELETE FROM public.transactions_archive WHERE id = $1", nil},
 		{"lowercase, newline-separated", "delete\n  from\n  boost_executions\nwhere id = $1", []string{"boost_executions"}},
 		{"prefix must not match the longer name", "DELETE FROM savings_goal_contributions WHERE id = $1", []string{"savings_goal_contributions"}},
 		{"budgets must not match budget_categories", "DELETE FROM budget_categories WHERE id = $1", []string{"budget_categories"}},
