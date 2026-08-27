@@ -77,11 +77,18 @@ export function BoostAutomationHistoryPanel() {
    * `null` while the live list is unknown — still loading, or failed. Both mean "we cannot say
    * which boosts are deleted"; only the second is worth telling the user about, and
    * `markersUnavailable` is what distinguishes them.
+   *
+   * ⚠ #1569 T8-FIX, finding B. `liveBoostsError` is part of the condition, and its absence was the
+   * defect: React Query keeps the last SUCCESSFUL list when a later refetch fails, so `liveBoosts`
+   * and `liveBoostsError` are both set at once. Testing only `!liveBoosts` left the markers being
+   * computed from the stale set while the banner below said markers were unavailable — the UI
+   * contradicting itself, and a row markable "Deleted boost" from a list too old to say so. The two
+   * must move together: this and `markersUnavailable` are one decision expressed twice.
    */
   const liveBoostIds = useMemo<ReadonlySet<string> | null>(() => {
-    if (liveBoostsLoading || !liveBoosts) return null
+    if (liveBoostsLoading || liveBoostsError || !liveBoosts) return null
     return new Set(liveBoosts.map((b) => b.id))
-  }, [liveBoosts, liveBoostsLoading])
+  }, [liveBoosts, liveBoostsLoading, liveBoostsError])
 
   /** The live-boost read failed, so no row can be honestly marked "Deleted boost". */
   const markersUnavailable = !liveBoostsLoading && !!liveBoostsError
