@@ -209,10 +209,21 @@ var allowedHistoryDeletes = map[string]historyDeleteAllowance{
 //     through a second schema is still a delete of that table's name and is still reported);
 //   - an optional pair of double quotes around either identifier.
 //
-// It does NOT accept every syntactic form Postgres does: a name split across a comment
-// (`public /* x */ . transactions`) or written with a dollar-quoted alias is still missed, and the
-// guard makes no claim about those. Nothing in the tree writes them, and widening far enough to
-// catch them would mean parsing SQL.
+// ⚠ WHAT IT DOES AND DOES NOT MISS — AND THE EARLIER VERSION OF THIS PARAGRAPH UNDERSTATED THE
+// COVERAGE (#1569 T8.5). It used to say that a name split across a comment
+// (`public /* x */ . transactions`) "is still missed, and the guard makes no claim about those".
+// That is FALSE, and understating a guard is the same defect as overstating it: a reader either
+// writes a redundant guard or works around a hole that is not there. Both call sites blank or strip
+// comments BEFORE this matcher runs — blankSQLComments (history_delete_sql_guard_test.go, comment
+// bytes → spaces, byte offsets preserved) and normaliseSQL (below) — so by the time the regexp sees
+// the text the comment is whitespace, and `(?:"?[a-z_][a-z0-9_]*"?\s*\.\s*)?` already tolerates
+// whitespace on both sides of the dot. That example MATCHES. So does `DELETE -- c\n FROM
+// transactions`. Measured against this function, not reasoned about.
+//
+// The one real miss is a comment INSIDE the identifier — `DELETE FROM trans/**/actions` — which
+// blanking turns into `trans    actions`, two tokens the matcher cannot rejoin. Nothing in the tree
+// writes that, and catching it would mean parsing SQL rather than scanning it. Do not extend this
+// list with a form you have not run through the matcher first.
 func historyDeleteRefRegexp(tables map[string]string) *regexp.Regexp {
 	names := make([]string, 0, len(tables))
 	for t := range tables {
@@ -567,6 +578,14 @@ func TestHistoryDeleteGuard_SeesTheFormsThatDoNotLookLikeADelete(t *testing.T) {
 		{"a read is not a delete", "SELECT * FROM holding_snapshots WHERE account_id = $1", nil},
 		{"a tombstone is not a delete", "UPDATE budgets SET deleted_at = now() WHERE id = $1", nil},
 		{"another table is not our business", "DELETE FROM notifications WHERE user_id = $1", nil},
+		// #1569 T8.5: the doc above used to disclaim these two forms as "still missed". The first
+		// is CAUGHT — comments are blanked/stripped before the matcher runs, so the split name is
+		// rejoined by whitespace the matcher already tolerates. The second is the one genuine
+		// miss, and it is pinned as a miss so that the doc's claim and the code cannot drift
+		// apart in either direction.
+		{"a name split across a comment IS caught", "DELETE FROM public /* x */ . transactions WHERE id = $1", []string{"transactions"}},
+		{"a comment INSIDE the identifier is the one real miss", "DELETE FROM trans/**/actions WHERE id = $1", nil},
+		{"a comment between DELETE and FROM is caught", "DELETE -- c\n FROM transactions WHERE id = $1", []string{"transactions"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -99,7 +99,8 @@ func accountLiveOnDateSQL(accountExpr, dateExpr string) string {
 //	without checking for readers this round added or already had) is the thing worth a reader
 //	seeing. R6C found that C1's fix had gone further than the facts warranted: it deleted the "no
 //	way out" warning for BOTH tables when only holding_snapshots had actually gained a way out.
-//	liability_statements has none, and the warning is restored for it below, scoped to that table.
+//	liability_statements has no PRODUCT reader, and the warning is restored for it below, scoped to
+//	that table and to product surfaces — it is NOT unreachable, see below.
 //
 //	holding_snapshots now HAS a user-facing historical reader: HoldingHistoryService
 //	(internal/services/holding_history_service.go), reached through
@@ -115,12 +116,28 @@ func accountLiveOnDateSQL(accountExpr, dateExpr string) string {
 //	inaccurate about the TABLE, even though it was accurate about the specific
 //	GetByAccountDateRange query being described.
 //
-//	liability_statements, by contrast, has NO reader of either kind: LiabilityStatementRepository
-//	appears in exactly one non-test file — its own — so GetByAccountDateRange has zero non-test
-//	callers here too, with no HoldingHistoryService-shaped path standing in for it. So for THIS
-//	table the original "no way out" warning stands: a disconnected loan's last confirmed statement
-//	is RETAINED but answerable by nothing today. That is a standing ruling, not an oversight —
-//	privacy policy §8.2a does not name liabilities, so retaining the row without a reader breaks no
+//	liability_statements, by contrast, has no PRODUCT reader: LiabilityStatementRepository appears
+//	in exactly one non-test file — its own — so GetByAccountDateRange has zero non-test callers
+//	here too, with no HoldingHistoryService-shaped path standing in for it. So for THIS table the
+//	original "no way out" warning stands in the form that is actually true: a disconnected loan's
+//	last confirmed statement is RETAINED and unreachable from every SCREEN in the app.
+//
+//	⚠ IT IS NOT "ANSWERABLE BY NOTHING", AND THIS PARAGRAPH SAID SO UNTIL #1569 T8.5 — eleven lines
+//	below the paragraph that exists to apologise for the identical mistake about holding_snapshots.
+//	The Article-20 GDPR export reads the WHOLE table for the user (data_export_repository.go,
+//	`Table: "liability_statements"`, `OwnershipPredicate: "t.user_id = $1"`), and the
+//	account-deletion notice names it to the user too (queue/jobs/retention_cleanup_check.go,
+//	"including their statements and APR schedules"). Both are TABLE-DRIVEN: they name the table as
+//	a string and never mention LiabilityStatementRepository, so the symbol grep that produced the
+//	original claim could not see either of them, twice in a row.
+//
+//	⚠ SO: BEFORE WRITING "NOTHING READS X" ABOUT ANY TABLE, GREP THE TABLE NAME — not the
+//	repository type — through data_export_repository.go and queue/jobs/retention_cleanup_check.go.
+//	That is the check both earlier drafts skipped, and it is the only reason this mistake was able
+//	to happen twice in one comment.
+//
+//	The RULING is unchanged and is not an oversight: no product surface is built for it, privacy
+//	policy §8.2a does not name liabilities, so retaining the row with no in-app reader breaks no
 //	promise, and building a liabilities reader alongside the holdings one was deliberately kept out
 //	of scope for this branch.
 //
