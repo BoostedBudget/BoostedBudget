@@ -110,8 +110,14 @@ func TestPortfolioSnapshot_Upsert_MixedPointerChain_IsTransitivelyClosed(t *test
 }
 
 // TestPortfolioRepair_MixedPointerChain_IsTransitivelyClosed is the repair half of item D. The
-// whole chain family was missing on the repair side, and the repair is the path that reported
-// $12,000.
+// whole chain family was missing on the repair side, and the repair is the path that WRITES the
+// wrong number into recorded history rather than merely reporting it.
+//
+// ⚠ #1569 T10-FIX item 9: this comment said the repair reported $12,000. This fixture's three
+// accounts hold 4000 + 2000 + 5000 = $11,000, which is what the assertion below actually names as
+// the failure value. The figure was carried over from a different fixture; a total stated in a
+// comment that no value in the file adds up to is how a reader concludes the test measures
+// something it does not.
 func TestPortfolioRepair_MixedPointerChain_IsTransitivelyClosed(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()

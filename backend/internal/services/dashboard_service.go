@@ -673,10 +673,14 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 	previousCutoff := endOfDay(previousDate)
 	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForUser(ctx, userID, previousCutoff)
 	if err == nil && len(previousSnapshots) > 0 {
-		// Sort descending so the dedup below keeps the LATEST snapshot per chain key.
-		// The repo already returns one row per chain, but a re-link chain can still surface twice
-		// here when a legacy NULL-user_account_id row keys on its raw account_id (see
-		// baselineBalanceForComparison), and those two rows carry different instants.
+		// Sort descending so the dedup below keeps the LATEST snapshot per sharing chain.
+		// ⚠ #1569 T10-FIX item 9: this said "the repo already returns one row per chain", which
+		// #1569 T10.2 made false — GetSnapshotsAsOfForUser returns one row per PHYSICAL ACCOUNT
+		// (snapshotIdentityKey), precisely so a maskless pair is not halved. A chain can therefore
+		// surface twice for two reasons now: two live siblings sharing a user_account (which MUST
+		// both count, and which supersededSnapshotIDs deliberately does not collapse), and a legacy
+		// NULL-user_account_id row keying on its raw account_id beside its post-relink sibling. The
+		// sort exists for the second, whose two rows carry different instants.
 		sort.Slice(previousSnapshots, func(i, j int) bool {
 			return previousSnapshots[i].SnapshotAt.After(previousSnapshots[j].SnapshotAt)
 		})
