@@ -901,6 +901,26 @@ describe('HoldingsTable', () => {
         expect(screen.queryByText(/no holdings synced yet/i)).toBeNull()
         expect(screen.getByRole('alert').textContent ?? '').toMatch(/nothing was deleted/i)
       })
+
+      // Self-review of this round's own fix. Keying the error copy on
+      // scopedAccountIsDisconnected alone left one axis open: that predicate is FALSE when the
+      // accounts read also failed, so a closed account with both reads failing was still told to
+      // refresh. Reachable in production — useAllAccounts and AccountDetailPage's useGetAccounts
+      // use different query keys, so they are separate cache entries and can diverge.
+      it('does not promise a refresh when it cannot even tell what the account is', () => {
+        mockUseGetAccounts.mockReturnValue({
+          data: undefined,
+          isLoading: false,
+          isError: true,
+          error: null,
+          refetch: mockRefetchAccounts,
+        })
+        mockUseGetHoldings.mockReturnValue({ data: undefined, isLoading: false, isError: true })
+        const { container } = render(<HoldingsTable accountId="acct-closed" />)
+
+        expect(container.textContent ?? '').not.toMatch(/refresh the page/i)
+        expect(screen.getByRole('alert')).toBeDefined()
+      })
     })
   })
 })
