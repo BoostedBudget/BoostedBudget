@@ -118,7 +118,7 @@ describe('DeletedGoalsPanel', () => {
   // React Query keeps the last successful page while a refetch fails. Showing it is right —
   // those rows are real — but showing it SILENTLY lets a purge act on a listing we know is
   // unverified. Say so, and keep the rows.
-  it('keeps a stale listing on screen but says it could not be refreshed', () => {
+  function withStaleListing() {
     mockUseGetDeletedSavingsGoals.mockReturnValue({
       data: [deletedGoal],
       isLoading: false,
@@ -126,13 +126,69 @@ describe('DeletedGoalsPanel', () => {
       error: new Error('boom'),
       refetch: mockDeletedSavingsGoalsRefetch,
     } as unknown as ReturnType<typeof mockUseGetDeletedSavingsGoals>)
+  }
+
+  it('keeps a stale listing on screen but says it could not be refreshed', () => {
+    withStaleListing()
     render(<DeletedGoalsPanel />)
     fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
 
     expect(screen.getByText('Japan Trip')).toBeTruthy()
     const status = screen.getByRole('status')
     expect(status.textContent ?? '').toMatch(/out of date/i)
-    expect(status.textContent ?? '').toMatch(/still kept/i)
+  })
+
+  // #1569 T8-FIX finding C. The degraded notice used to read "Everything you deleted is still
+  // kept", two lines above the same component's own correction that a purge DOES erase a goal for
+  // good. For a user who has already purged, that sentence is FALSE — a new false retention claim
+  // shipped by the round that was removing false retention claims.
+  //
+  // NEGATIVE assertion on purpose: a positive check that the notice mentions staleness stays green
+  // if the unscoped sentence is reinstated alongside it.
+  it('makes no unscoped retention claim in the degraded notice', () => {
+    withStaleListing()
+    render(<DeletedGoalsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+
+    const status = screen.getByRole('status').textContent ?? ''
+    expect(status).not.toMatch(/everything you (?:deleted|have deleted)/i)
+    expect(status).not.toMatch(/nothing (?:was|has been) (?:deleted|erased|lost)/i)
+    // What IS true: the LISTING may be stale, and what is still deleted is still kept.
+    expect(status).toMatch(/out of date/i)
+  })
+
+  // #1569 T8-FIX finding A. The round that decided to keep stale rows and label them shipped the
+  // label but not the guard: "Delete permanently" stayed armed on rows the component had just told
+  // the user it could not verify. Disabling the verb (rather than re-verifying inside the purge) is
+  // the deliberate choice — a re-verify needs the same read that just failed, and the backend
+  // precondition cannot tell a stale row from a current one. The notice carries Retry, so the user
+  // still has a way forward.
+  it('disarms the purge verb while the listing is known to be unverified', () => {
+    withStaleListing()
+    render(<DeletedGoalsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+
+    const purge = screen.getByRole('button', { name: /delete permanently/i }) as HTMLButtonElement
+    expect(purge.disabled).toBe(true)
+    fireEvent.click(purge)
+    expect(screen.queryByText(/Erase this goal for good\?/i)).toBeNull()
+  })
+
+  it('lets the user retry from the degraded notice', async () => {
+    withStaleListing()
+    render(<DeletedGoalsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    await waitFor(() => expect(mockDeletedSavingsGoalsRefetch).toHaveBeenCalled())
+  })
+
+  it('leaves the purge verb armed when the listing is current', () => {
+    render(<DeletedGoalsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+
+    const purge = screen.getByRole('button', { name: /delete permanently/i }) as HTMLButtonElement
+    expect(purge.disabled).toBe(false)
   })
 
   it('lists a deleted goal with when it was deleted', () => {

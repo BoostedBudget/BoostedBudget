@@ -67,6 +67,11 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
 
   const goals = (data ?? []) as unknown as SavingsGoal[]
 
+  // The listing on screen survived a failed refetch, so it is real but unverified. The one verb on
+  // this panel destroys hand-logged money permanently; it stays disarmed until we can refresh.
+  // See the degraded notice below for why this is a disarm rather than a re-verify.
+  const purgeDisarmed = isError && goals.length > 0
+
   // Nothing deleted (or nothing known yet) means no panel at all — an empty "Deleted goals (0)"
   // header is clutter that tells the user nothing.
   //
@@ -176,14 +181,34 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
             the mistake to prevent. Same degraded-mode shape as
             BoostAutomationHistoryPanel's markers notice; role="status", not "alert", because
             what is on screen is still usable.
+
+            ⚠ #1569 T8-FIX, finding A. Saying so was only half the decision: the verb stayed armed
+            on the very rows we had just declared unverified. `purgeDisarmed` finishes it. Disabling
+            rather than re-verifying inside handlePurge is deliberate — a re-verify needs the same
+            read that just failed, and the backend precondition (already-deleted) cannot tell a
+            stale row from a current one, so it would refuse or succeed for the wrong reason. Retry
+            lives in this notice so the user is not stuck.
+
+            ⚠ #1569 T8-FIX, finding C. This notice used to end "Everything you deleted is still
+            kept", two lines above this component's own correction that a purge DOES erase a goal
+            for good — a NEW false retention claim shipped by the round removing false retention
+            claims. The claim is now scoped to what the failure actually did (the LISTING may be
+            stale; what is still deleted is still kept) and pinned by a NEGATIVE assertion, because
+            a positive check stays green if the unscoped sentence comes back.
           */}
           {isError && (
             <div
               role="status"
-              className="mx-1 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+              className="mx-1 flex flex-col items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
             >
-              We could not refresh this list just now, so it may be out of date. Everything you
-              deleted is still kept &mdash; try again in a moment.
+              <p className="m-0">
+                We could not refresh this list just now, so it may be out of date &mdash; a goal you
+                erased elsewhere could still appear here. Whatever is still deleted is still kept.
+                Permanent deletion is paused until we can check again.
+              </p>
+              <Button variant="outline" size="sm" onClick={() => void refetch()}>
+                Retry
+              </Button>
             </div>
           )}
           <p className="px-1 text-xs text-muted-foreground">
@@ -271,6 +296,7 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
                     <Button
                       variant="outline"
                       size="sm"
+                      disabled={purgeDisarmed}
                       onClick={() => setGoalToPurge(goal)}
                       className="text-destructive hover:bg-destructive/10"
                       aria-labelledby={`${panelId}-action ${panelId}-name-${goal.id}`}
