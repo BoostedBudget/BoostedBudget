@@ -573,14 +573,30 @@ const lastKnownBalanceProjection = "lkb.amount AS last_known_balance, lkb.at AS 
 // takes two separate re-links of the same chain in one day landing on one successor; it is not
 // reachable from ExchangePublicToken as written. Grouping by chain key alone instead would be
 // worse and was rejected: it collapses A → B → C into one group and keeps one of A/B.
-const accountChainLiveCTE = `
+// accountChainLiveAllCTE is the LIVENESS half: the caller's candidate (day, account) pairs,
+// narrowed to accounts recorded as live on the day. It is the half the BALANCE reads do NOT use —
+// a balance snapshot is itself the record that the account reported on that day, and re-asking
+// account_status_history would delete a closed account's retained history from the chart, which
+// is the opposite of what #1569 exists to do.
+const accountChainLiveAllCTE = `
 	live_all AS (
 	    SELECT $DAYCOL AS snapshot_date, a.id AS account_id, a.user_id AS owner_id,
 	           a.user_account_id, a.linked_item_id
 	    FROM $FROM
 	    WHERE $WHERE
 	      AND $LIVENESS
-	),
+	),`
+
+// accountChainSupersessionCTE is the SUCCESSION half, split out in #1569 T10.2 so the balance
+// reads can apply the SAME rule over a live_all of their own. It consumes a `live_all` relation
+// with columns (snapshot_date, account_id, owner_id, user_account_id, linked_item_id) and emits
+// `superseded` (snapshot_date, account_id) plus `live` (live_all minus superseded).
+//
+// ⚠ THE SPLIT IS THE POINT. There is ONE succession rule in the backend and this is it; a second
+// copy is how the balance side and the portfolio side came to disagree about the same two rows in
+// the first place. A caller supplies only what genuinely differs — what its candidate rows are,
+// and what "the successor was observed" means for its own data.
+const accountChainSupersessionCTE = `
 	-- Every account sharing a chain key with something live on some day here, WHATEVER its status
 	-- and whatever day it was live on. The walk below runs over this set rather than over the
 	-- day's live set: succession is a recorded fact about two rows, not a per-day fact, and
@@ -695,6 +711,9 @@ const accountChainLiveCTE = `
 	    )
 	)`
 
+// accountChainLiveCTE is the two halves joined, for the callers that want both.
+const accountChainLiveCTE = accountChainLiveAllCTE + accountChainSupersessionCTE
+
 // accountChainLiveCTESQL renders accountChainLiveCTE for one caller.
 func accountChainLiveCTESQL(dayCol, fromClause, whereClause, dateExpr, observedExpr string) string {
 	return strings.NewReplacer(
@@ -704,4 +723,14 @@ func accountChainLiveCTESQL(dayCol, fromClause, whereClause, dateExpr, observedE
 		"$LIVENESS", accountLiveOnDateSQL("a.id", dateExpr),
 		"$OBSERVED", observedExpr,
 	).Replace(accountChainLiveCTE)
+}
+
+// accountChainSupersessionCTESQL renders the succession half alone, for a caller that supplies its
+// own `live_all` CTE ahead of it (and, like every caller, opens its WITH list with RECURSIVE).
+//
+// observedExpr is the caller's "the successor was observed" test on alias `s`. A caller whose
+// live_all is BUILT FROM its own observations — the balance reads, whose candidate rows are
+// snapshots — passes TRUE, because membership of live_all already is the observation.
+func accountChainSupersessionCTESQL(observedExpr string) string {
+	return strings.NewReplacer("$OBSERVED", observedExpr).Replace(accountChainSupersessionCTE)
 }

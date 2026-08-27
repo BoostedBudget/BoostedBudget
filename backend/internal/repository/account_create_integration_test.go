@@ -168,7 +168,19 @@ func TestAccountRepository_CreateBatch_SupersedesAStrandedActiveSibling_Integrat
 	require.NoError(t, tx.QueryRow(ctx,
 		`SELECT count(*) FROM accounts WHERE user_account_id = $1 AND status = 'active'`, userAccountID).
 		Scan(&active))
-	assert.Equal(t, 1, active, "exactly one active row per re-link chain, by construction")
+	assert.Equal(t, 1, active,
+		// #1569 T10.2 REWROTE this message rather than extending it. It used to read "exactly one
+		// active row per re-link chain, by construction", which is FALSE as a general statement and
+		// was quoted downstream as though it were an invariant. supersedeStrandedChainSiblings
+		// EXCLUDES the batch's own rows (`a.id <> ALL($5::uuid[])`) and rations one predecessor per
+		// successor, so two maskless accounts created in one batch both stay 'active' under one
+		// user_account_id permanently — the shape the whole maskless-pair defect rests on, and one
+		// the supersede query's own comment calls out ("a chain CAN hold two active accounts ...
+		// that was never a real invariant anyway"). The COUNT asserted here is unchanged and still
+		// right; what is asserted about it is now scoped to THIS fixture.
+		"this batch brought exactly one successor for a chain that held exactly one stranded "+
+			"predecessor, so the predecessor is retired and the successor is the only active row. "+
+			"Two would mean the supersede did not fire; zero would mean it retired the successor too")
 
 	// The transition must be RECORDED, not merely applied: every liveness and as-of read in this
 	// package resolves against account_status_history, not accounts.status.
