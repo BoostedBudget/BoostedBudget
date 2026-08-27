@@ -55,6 +55,20 @@ func backdateLiveness(ctx context.Context, t *testing.T, db DB, accountID uuid.U
 	require.EqualValues(t, 1, ct.RowsAffected(), "the trigger-created 'active' interval must exist to rewrite")
 }
 
+// backdateActiveIntervalStart moves the START of every 'active' interval on the account back
+// `back` days, whether or not that interval is still open. backdateLiveness above only reaches the
+// OPEN one, which a re-linked predecessor no longer has.
+func backdateActiveIntervalStart(ctx context.Context, t *testing.T, db DB, accountID uuid.UUID, back int) {
+	t.Helper()
+	ct, err := db.Exec(ctx, `
+		UPDATE account_status_history ash
+		SET valid_from = (((now() AT TIME ZONE 'UTC')::date)::timestamp AT TIME ZONE 'UTC')
+		                 - make_interval(days => $2::int)
+		WHERE ash.account_id = $1 AND ash.status = 'active'`, accountID, back)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, ct.RowsAffected(), "exactly one 'active' interval must exist to rewrite")
+}
+
 func seedHoldingSnapshot(
 	ctx context.Context, t *testing.T, db DB,
 	userID, accountID, secID uuid.UUID, day time.Time, present bool, costBasis, instValue *float64,
@@ -803,4 +817,52 @@ func TestPortfolioRepair_ExaminedCountsEveryCandidateDay(t *testing.T) {
 	assert.Equal(t, domain.PortfolioRepairOutcomeVerified, l.outcome)
 	require.NotNil(t, l.repairedTotalValue, "a verified day records the reconstruction it agreed with")
 	assert.InDelta(t, 150.0, *l.repairedTotalValue, 0.001)
+}
+
+// ── #1569 task 9.1, item A (repair half): a past re-link day must reconstruct ONCE ────────────
+//
+// The capture applies accountLiveOnDateClause, so on a re-link day it writes holding_snapshots for
+// BOTH chain members — that is correct at the capture grain (each physical account really was
+// observed) and wrong the moment the two are summed into one portfolio total. Upsert and the
+// repair must agree, so the chain dedup lives in both.
+//
+// The predecessor's row is deliberately the LARGER of the two, so a rebuild that keeps the wrong
+// sibling cannot pass by arithmetic accident either.
+func TestPortfolioRepair_SameDayRelink_ReconstructsTheChainOnce(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, oldAccountID, newAccountID, secID := seedRelinkedInvestmentChain(ctx, t, tx, "repair-relink")
+	// The predecessor's 'active' interval is already CLOSED (the re-link closed it), so the
+	// valid_to IS NULL form cannot reach it — only its start needs moving back.
+	backdateActiveIntervalStart(ctx, t, tx, oldAccountID, 30)
+	backdateActiveIntervalStart(ctx, t, tx, newAccountID, 30)
+
+	day := dayUTC(ctx, t, tx, 3)
+	seedHoldingSnapshot(ctx, t, tx, userID, oldAccountID, secID, day, true, f64(3000), f64(7000))
+	seedHoldingSnapshot(ctx, t, tx, userID, newAccountID, secID, day, true, f64(3000), f64(5000))
+
+	seedPortfolioSnapshot(ctx, t, tx, userID, day, 1, 1, 0, nil)
+
+	sum, err := NewPortfolioSnapshotRepository(tx).RepairUserFromHistory(ctx, userID.String())
+	require.NoError(t, err)
+	require.Equal(t, 1, sum.Examined)
+	require.Equal(t, 1, sum.Repaired, "the day is fully covered once the chain counts as one account")
+
+	got := readPortfolioSnapshot(ctx, t, tx, userID, day)
+	assert.InDelta(t, 5000.0, got.totalValue, 0.001,
+		"12000 is the double-count (7000 retained + 5000 successor); 7000 means the dedup kept "+
+			"the predecessor rather than the chain's latest member")
+	assert.InDelta(t, 3000.0, got.totalCostBasis, 0.001)
+
+	l, ok := readLedger(ctx, t, tx, userID, day)
+	require.True(t, ok)
+	assert.Equal(t, 1, l.expectedCount,
+		"a re-link chain is ONE logical account for coverage too — counting it as two makes every "+
+			"re-link day look partially covered the moment one sibling stops being captured")
+	assert.Equal(t, 1, l.observedCount)
 }
