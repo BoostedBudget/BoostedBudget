@@ -177,7 +177,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID(t *testing.T) {
 	goalRepo.goals = append(goalRepo.goals, existingGoal)
 
 	mockResolver := &mockAccountChainResolver{
-		resolveActiveIDFunc: func(_ context.Context, uaid string) (string, error) {
+		resolveActiveIDFunc: func(_ context.Context, uaid, _ string) (string, error) {
 			if uaid == goalUserAccountID {
 				return activeAccountID, nil
 			}
@@ -325,7 +325,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID_Depth2(t *testing.
 	goalRepo.goals = append(goalRepo.goals, existingGoal)
 
 	mockResolver := &mockAccountChainResolver{
-		resolveActiveIDFunc: func(_ context.Context, uaid string) (string, error) {
+		resolveActiveIDFunc: func(_ context.Context, uaid, _ string) (string, error) {
 			if uaid == stableUserAccountID {
 				return acctCurrent, nil // depth-2 resolved to current
 			}

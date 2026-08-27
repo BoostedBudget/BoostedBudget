@@ -283,12 +283,18 @@ type AccountRepository interface {
 	// Results are sorted by display_order ASC (nulls last), then created_at ASC.
 	GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error)
 
-	// GetByUserAccountAndStatus retrieves accounts by user_account_id and status.
-	// This is used for querying accounts across re-links using stable user_account reference.
+	// GetByUserAccountAndStatus retrieves accounts by user_account_id and status, SCOPED to
+	// userID. This is used for querying accounts across re-links using stable user_account
+	// reference.
 	// Issue #171: Plaid Re-Link Handling
+	// Issue #1569 R11 T2: the user_id predicate was added because this query previously had
+	// NONE — any caller supplying a raw user_account_id (a client-facing stable identifier)
+	// with no ownership check could read another user's accounts. Match the pattern established
+	// in investment_sync_service.go's accounts-by-linked-item guard: scope reads that
+	// cross a stable-identifier boundary to the authenticated actor.
 	//
 	// Returns empty slice if no accounts found (not an error).
-	GetByUserAccountAndStatus(ctx context.Context, userAccountID, status string) ([]domain.Account, error)
+	GetByUserAccountAndStatus(ctx context.Context, userAccountID, status, userID string) ([]domain.Account, error)
 
 	// GetByUserAccountIDAndUser retrieves an account by user_account_id with ownership validation.
 	// Returns ErrAccountNotFound if no account with that user_account_id belongs to userID.
@@ -1712,9 +1718,10 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 	return accounts, nil
 }
 
-// GetByUserAccountAndStatus retrieves accounts by user_account_id and status.
+// GetByUserAccountAndStatus retrieves accounts by user_account_id and status, scoped to userID.
 // Issue #171: Plaid Re-Link Handling
-func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userAccountID, status string) ([]domain.Account, error) {
+// Issue #1569 R11 T2: added the user_id predicate — see the interface doc comment.
+func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userAccountID, status, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
@@ -1723,11 +1730,11 @@ func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userA
 		       nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden,
 		       created_at, updated_at
 		FROM accounts
-		WHERE user_account_id = $1 AND status = $2
+		WHERE user_account_id = $1 AND status = $2 AND user_id = $3
 		ORDER BY created_at ASC
 	`
 
-	rows, err := r.db.Query(ctx, query, userAccountID, status)
+	rows, err := r.db.Query(ctx, query, userAccountID, status, userID)
 	if err != nil {
 		return nil, err
 	}

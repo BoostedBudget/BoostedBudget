@@ -32,6 +32,7 @@ type progressChainResolverStub struct {
 	mu       sync.Mutex
 	resolve  func(ctx context.Context, userAccountID string) (string, error)
 	gotUAIDs []string
+	gotUIDs  []string
 }
 
 func (s *progressChainResolverStub) ListActiveByUser(context.Context, string) ([]domain.Account, error) {
@@ -42,9 +43,10 @@ func (s *progressChainResolverStub) ChainAccountIDs(context.Context, string) ([]
 	return nil, nil
 }
 
-func (s *progressChainResolverStub) ResolveActiveID(ctx context.Context, userAccountID string) (string, error) {
+func (s *progressChainResolverStub) ResolveActiveID(ctx context.Context, userAccountID, userID string) (string, error) {
 	s.mu.Lock()
 	s.gotUAIDs = append(s.gotUAIDs, userAccountID)
+	s.gotUIDs = append(s.gotUIDs, userID)
 	s.mu.Unlock()
 	if s.resolve != nil {
 		return s.resolve(ctx, userAccountID)
@@ -56,6 +58,15 @@ func (s *progressChainResolverStub) calls() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.gotUAIDs...)
+}
+
+// userIDCalls returns the userID each ResolveActiveID call was scoped to, in order — used to
+// pin that resolveBasisAccount threads the REQUESTER's id through (#1569 R11 T2), not the
+// goal's own owner.
+func (s *progressChainResolverStub) userIDCalls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.gotUIDs...)
 }
 
 // assertNoCallTo fails if the mock recorded any call to the named method.
@@ -229,6 +240,119 @@ func TestSavingsProgress_Balance_ChainHasNoLiveMember_StillFreezes(t *testing.T)
 	assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
 	assertNoCallTo(t, &goalRepo.Mock, "MarkCompleted")
 	assert.Equal(t, 1000.0, goal.CurrentAmount, "frozen goal keeps its last computed amount, not the retained row's 3500")
+}
+
+// TestSavingsProgress_Balance_ChainHasTwoLiveMembers_StillFreezes covers #1569 R11 T2: two
+// maskless accounts at one institution can share a user_account_id (migration 000100's
+// NULLS NOT DISTINCT unique index), so the chain resolver refuses to guess and returns
+// ErrAmbiguousActiveAccount. The goal must follow the SAME degradation philosophy as
+// "no live member" — freeze on the physical row — rather than silently recomputing from
+// whichever live sibling ResolveActiveID used to pick.
+//
+// The two live siblings are given DIFFERENT balances from each other AND from the physical
+// row, so a regression that picks either sibling is distinguishable from the correct freeze.
+func TestSavingsProgress_Balance_ChainHasTwoLiveMembers_StillFreezes(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	resolver := &progressChainResolverStub{
+		resolve: func(context.Context, string) (string, error) { return "", ErrAmbiguousActiveAccount },
+	}
+	svc := newChainProgressService(goalRepo, contribRepo, accountRepo, resolver)
+
+	// current_amount (1000) differs from the physical row's frozen balance (3500) AND from
+	// both live siblings (7000, 8000) so every wrong outcome is distinguishable.
+	goal := makeGoal("g1", "u1", "acc-old", domain.ProgressBasisBalance, 10000, 1000)
+	goal.UserAccountID = strPtr1569("uaid-1")
+
+	frozen := 3500.00
+	physicalRow := &domain.Account{
+		ID: "acc-old", UserID: "u1", CurrentBalance: &frozen,
+		Status: domain.AccountStatusReplaced, UpdatedAt: time.Now().Add(-90 * 24 * time.Hour),
+	}
+	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(physicalRow, nil)
+	// Registered as .Maybe() so a regression that guesses a sibling RECORDS the write instead
+	// of panicking on an unexpected mock call.
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+
+	assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
+	assertNoCallTo(t, &goalRepo.Mock, "MarkCompleted")
+	assert.Equal(t, 1000.0, goal.CurrentAmount,
+		"an ambiguous chain freezes the goal — it must not recompute from either live sibling (7000/8000) nor the physical row's 3500")
+}
+
+// TestSavingsProgress_Summary_ChainHasTwoLiveMembers_ReportsDisconnected is the freshness half
+// of the ambiguous-chain test: the API must report basis_account_disconnected, the same signal
+// a fully-terminal chain produces, so the UI explains the frozen number.
+func TestSavingsProgress_Summary_ChainHasTwoLiveMembers_ReportsDisconnected(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	resolver := &progressChainResolverStub{
+		resolve: func(context.Context, string) (string, error) { return "", ErrAmbiguousActiveAccount },
+	}
+	svc := newChainProgressService(goalRepo, contribRepo, accountRepo, resolver)
+
+	recent := time.Now().Add(-1 * time.Hour)
+	goal := &domain.SavingsGoal{
+		ID: "g1", UserID: "u1", Name: "Emergency Fund",
+		CurrentAmount: 3500, TargetAmount: 10000,
+		ProgressBasis: domain.ProgressBasisBalance,
+		AccountID:     "acc-old",
+		UserAccountID: strPtr1569("uaid-1"),
+		BalanceAsOf:   &recent,
+	}
+	frozen := 3500.00
+	physicalRow := &domain.Account{
+		ID: "acc-old", UserID: "u1", CurrentBalance: &frozen,
+		Status: domain.AccountStatusReplaced,
+	}
+
+	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
+	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(0.0, nil)
+	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(physicalRow, nil)
+
+	summary, err := svc.GetProgressSummary(context.Background(), "u1")
+
+	require.NoError(t, err)
+	require.Len(t, summary.Goals, 1)
+	assert.Equal(t, domain.FreshnessBasisAccountDisconnected, summary.Goals[0].Freshness)
+}
+
+// TestSavingsProgress_ResolveActiveID_ScopedToRequester_NotGoalOwner pins that
+// resolveBasisAccount threads the REQUESTER's id into ResolveActiveID (#1569 R11 T2's tenancy
+// fix), the same ownership boundary already enforced on the account read a few lines later.
+func TestSavingsProgress_ResolveActiveID_ScopedToRequester_NotGoalOwner(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	resolver := &progressChainResolverStub{
+		resolve: func(context.Context, string) (string, error) { return "acc-live", nil },
+	}
+	svc := newChainProgressService(goalRepo, contribRepo, accountRepo, resolver)
+
+	goal := &domain.SavingsGoal{
+		ID: "g1", UserID: "other-owner", Name: "Not Mine",
+		CurrentAmount: 1000, TargetAmount: 10000,
+		ProgressBasis: domain.ProgressBasisBalance,
+		AccountID:     "acc-old", UserAccountID: strPtr1569("uaid-1"),
+	}
+	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-live", "u1").Return(nil, ErrAccountNotFoundForProgress).Maybe()
+
+	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
+	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(0.0, nil)
+
+	_, err := svc.GetProgressSummary(context.Background(), "u1")
+	require.NoError(t, err)
+
+	for _, uid := range resolver.userIDCalls() {
+		assert.Equal(t, "u1", uid, "ResolveActiveID must be scoped to the requester, not goal.UserID")
+	}
 }
 
 // ─── honest degradation when the chain reference is absent ───────────────────

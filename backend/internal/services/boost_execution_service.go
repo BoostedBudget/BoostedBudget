@@ -502,16 +502,31 @@ func (s *boostExecutionService) executeTransferSuggestion(ctx context.Context, b
 
 // resolveAndVerifyUserAccount resolves a user_account_id to its active account_id and verifies ownership.
 // Called during transfer suggestion execution to resolve stable identifiers across Plaid re-links.
-// If resolution succeeds, calls onResolve with the active ID. Returns (true, nil) if ownership fails
-// and the entire rule should be skipped; otherwise returns (false, nil).
+// If resolution succeeds, calls onResolve with the active ID. Returns (true, nil) if ownership fails,
+// or if the chain has more than one live account (ErrAmbiguousActiveAccount, #1569 R11 T2) — in both
+// cases the entire suggestion is skipped rather than guessing; otherwise returns (false, nil).
 func (s *boostExecutionService) resolveAndVerifyUserAccount(ctx context.Context, userAccountID, userID, boostID string,
 	onResolve func(string), fieldName string) (bool, error) {
 	if s.chainResolver == nil {
 		return false, nil
 	}
 
-	activeID, err := s.chainResolver.ResolveActiveID(ctx, userAccountID)
+	activeID, err := s.chainResolver.ResolveActiveID(ctx, userAccountID, userID)
 	if err != nil {
+		if errors.Is(err, ErrAmbiguousActiveAccount) {
+			// #1569 R11 T2: two live siblings share this user_account_id (an ordinary Plaid
+			// shape, not corruption — see ErrAmbiguousActiveAccount). This is a money-moving
+			// transfer suggestion, so the safe default here is stronger than the savings-goal
+			// path's "freeze": we refuse to guess which sibling the automation meant AND we
+			// decline to fall back to the rule's stale pinned account id, because that could
+			// silently suggest moving money against a since-replaced account. Skip the whole
+			// suggestion — the caller (executeTransferSuggestion) returns nil without creating
+			// one — so the boost simply does not fire this cycle rather than acting on an
+			// ambiguous chain.
+			slog.Warn("chain resolve: chain has more than one live account; skipping transfer suggestion rather than guessing",
+				"boost_id", boostID, "field", fieldName)
+			return true, nil
+		}
 		if !errors.Is(err, ErrNoActiveAccount) {
 			slog.Warn("chain resolve failed; using raw id", "error", err, "field", fieldName)
 		}
@@ -751,9 +766,19 @@ func (s *boostExecutionService) executeSavingsGoal(ctx context.Context, boost *d
 	// Issue #1109: Resolve savings goal's account to current active account_id via stable user_account_id.
 	toAccountID := goal.AccountID
 	if goal.UserAccountID != nil && *goal.UserAccountID != "" && s.chainResolver != nil {
-		if activeID, err := s.chainResolver.ResolveActiveID(ctx, *goal.UserAccountID); err == nil {
+		if activeID, err := s.chainResolver.ResolveActiveID(ctx, *goal.UserAccountID, boost.UserID); err == nil {
 			toAccountID = activeID
 			observability.AccountsReplacedFiltered.WithLabelValues("automation").Inc()
+		} else if errors.Is(err, ErrAmbiguousActiveAccount) {
+			// #1569 R11 T2: two live siblings share this user_account_id. Unlike the
+			// transfer-suggestion source/destination guard above, this is the goal's OWN
+			// savings destination — the goal already has a physical AccountID it was pinned
+			// against, so falling back to it (same as ErrNoActiveAccount below) is not a
+			// guess between two unrelated accounts, it is the account the goal names. Silently
+			// picking one of the two live siblings instead — the pre-fix behaviour — is the
+			// "mis-picked savings destination" this task exists to stop.
+			slog.Warn("chain resolve: chain has more than one live account for savings goal destination — using the goal's physical account instead of guessing",
+				"goal_id", goal.ID, "boost_id", boost.ID)
 		} else if !errors.Is(err, ErrNoActiveAccount) {
 			slog.Warn("chain resolve failed for savings goal account; using raw id", "error", err)
 		}
