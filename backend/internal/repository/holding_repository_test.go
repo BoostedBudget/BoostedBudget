@@ -67,7 +67,7 @@ func TestHoldingRepository_ReplaceForAccount_DeletesOldInsertNew(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{holding})
+	_, err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{holding})
 
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -100,7 +100,7 @@ func TestHoldingRepository_ReplaceForAccount_EmptyHoldings(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{})
+	_, err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{})
 
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -126,7 +126,7 @@ func TestHoldingRepository_ReplaceForAccount_RollbackOnInsertError(t *testing.T)
 		WillReturnError(errors.New("db constraint error"))
 	mock.ExpectRollback()
 
-	err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{holding})
+	_, err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{holding})
 
 	require.Error(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -372,7 +372,7 @@ func TestHoldingRepository_ReplaceForAccount_RejectsForeignHolding(t *testing.T)
 	theirs := makeTestHolding(foreign, accountID, uuid.New().String())
 
 	// No mock expectations: not a single statement may run.
-	err := repo.ReplaceForAccount(ctx, accountID, actor, []domain.Holding{mine, theirs})
+	_, err := repo.ReplaceForAccount(ctx, accountID, actor, []domain.Holding{mine, theirs})
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrReplaceTenantMismatch)
@@ -391,7 +391,7 @@ func TestHoldingRepository_ReplaceForAccount_RejectsEmptyActor(t *testing.T) {
 	accountID := uuid.New().String()
 	orphan := makeTestHolding("", accountID, uuid.New().String())
 
-	err := repo.ReplaceForAccount(context.Background(), accountID, "", []domain.Holding{orphan})
+	_, err := repo.ReplaceForAccount(context.Background(), accountID, "", []domain.Holding{orphan})
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrReplaceTenantMismatch)
@@ -406,7 +406,7 @@ func TestHoldingRepository_ReplaceForAccount_RejectsEmptyActorWithNoHoldings(t *
 	mock, repo := setupHoldingMockDB(t)
 	defer mock.Close()
 
-	err := repo.ReplaceForAccount(context.Background(), uuid.New().String(), "", nil)
+	_, err := repo.ReplaceForAccount(context.Background(), uuid.New().String(), "", nil)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrReplaceTenantMismatch)
@@ -429,7 +429,7 @@ func TestHoldingRepository_ReplaceForAccount_RejectsForeignAccount(t *testing.T)
 	misfiled := makeTestHolding(userID, accountB, uuid.New().String())
 
 	// No mock expectations: not a single statement may run.
-	err := repo.ReplaceForAccount(context.Background(), accountA, userID, []domain.Holding{mine, misfiled})
+	_, err := repo.ReplaceForAccount(context.Background(), accountA, userID, []domain.Holding{mine, misfiled})
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrReplaceAccountMismatch)
@@ -450,7 +450,7 @@ func TestHoldingRepository_ReplaceForAccount_RejectsEmptyAccountID(t *testing.T)
 			mock, repo := setupHoldingMockDB(t)
 			defer mock.Close()
 
-			err := repo.ReplaceForAccount(context.Background(), "", "u", holdings)
+			_, err := repo.ReplaceForAccount(context.Background(), "", "u", holdings)
 
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrReplaceAccountMismatch)

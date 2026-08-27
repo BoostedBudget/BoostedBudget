@@ -58,7 +58,7 @@ func TestHistorySnapshot_HoldingsReplace_CapturesHistoryWithoutChangingCurrentSt
 	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-cap")
 	repo := NewHoldingRepository(tx)
 
-	err = repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
+	_, err = repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
 		UserID:           userID.String(),
 		AccountID:        accountID.String(),
 		SecurityID:       secID.String(),
@@ -127,15 +127,15 @@ func TestHistorySnapshot_SecondCaptureSameDay_ResolvesToTheLaterPositionSet(t *t
 	repo := NewHoldingRepository(tx)
 
 	// Capture 1: holds both securities.
-	require.NoError(t, repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
+	require.NoError(t, holdingsReplaced(repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secA.String(), Quantity: 10, InstitutionValue: f64(5000)},
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secB.String(), Quantity: 4, InstitutionValue: f64(400)},
-	}))
+	})))
 
 	// Capture 2: secB sold, secA revalued.
-	require.NoError(t, repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
+	require.NoError(t, holdingsReplaced(repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secA.String(), Quantity: 10, InstitutionValue: f64(6000)},
-	}))
+	})))
 
 	day := todayUTC(ctx, t, tx)
 
@@ -190,13 +190,13 @@ func TestHistorySnapshot_FinalCapturesPerDay_KeepsEveryAccountSyncedAtDifferentT
 	require.NoError(t, err)
 
 	repo := NewHoldingRepository(tx)
-	require.NoError(t, repo.ReplaceForAccount(ctx, accountA.String(), userID.String(), []domain.Holding{
+	require.NoError(t, holdingsReplaced(repo.ReplaceForAccount(ctx, accountA.String(), userID.String(), []domain.Holding{
 		{UserID: userID.String(), AccountID: accountA.String(), SecurityID: secID.String(), Quantity: 1, InstitutionValue: f64(100)},
-	}))
+	})))
 
-	require.NoError(t, repo.ReplaceForAccount(ctx, accountB.String(), userID.String(), []domain.Holding{
+	require.NoError(t, holdingsReplaced(repo.ReplaceForAccount(ctx, accountB.String(), userID.String(), []domain.Holding{
 		{UserID: userID.String(), AccountID: accountB.String(), SecurityID: secID.String(), Quantity: 2, InstitutionValue: f64(200)},
-	}))
+	})))
 
 	snapRepo := NewHoldingSnapshotRepository(tx)
 	snaps, err := snapRepo.GetForUserOnDate(ctx, userID.String(), todayUTC(ctx, t, tx))
@@ -227,9 +227,9 @@ func TestHistorySnapshot_DisconnectedBrokerage_HistoryStaysQueryable(t *testing.
 
 	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-disc")
 	repo := NewHoldingRepository(tx)
-	require.NoError(t, repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
+	require.NoError(t, holdingsReplaced(repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(), Quantity: 7, InstitutionValue: f64(700)},
-	}))
+	})))
 
 	// The brokerage goes away: account marked terminal ('removed' — one of the four values
 	// accounts_valid_status permits) and its live positions removed.
@@ -268,10 +268,10 @@ func TestHistorySnapshot_PortfolioSnapshotUpsert_UnchangedByTheCapture(t *testin
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-psnap")
-	require.NoError(t, NewHoldingRepository(tx).ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
+	require.NoError(t, holdingsReplaced(NewHoldingRepository(tx).ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(),
 			Quantity: 10, CostBasis: f64(4000), InstitutionValue: f64(5000)},
-	}))
+	})))
 
 	day := todayUTC(ctx, t, tx)
 	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), day)
@@ -568,9 +568,9 @@ func TestHistorySnapshot_CaptureForUser_AfterASyncCapture_RefreshesTheSameDayRow
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-both")
-	require.NoError(t, NewHoldingRepository(tx).ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
+	require.NoError(t, holdingsReplaced(NewHoldingRepository(tx).ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(), Quantity: 5, InstitutionValue: f64(500)},
-	}))
+	})))
 
 	_, err = NewHoldingSnapshotRepository(tx).CaptureForUser(ctx, userID.String())
 	require.NoError(t, err)
@@ -688,9 +688,9 @@ func TestHistorySnapshot_ConfirmedLiquidation_ZeroesTheDayRatherThanKeepingTheMo
 	repo := NewHoldingRepository(tx)
 
 	// Morning sync.
-	require.NoError(t, repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
+	require.NoError(t, holdingsReplaced(repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(), Quantity: 10, InstitutionValue: f64(5000)},
-	}))
+	})))
 
 	snapRepo := NewHoldingSnapshotRepository(tx)
 	day := todayUTC(ctx, t, tx)
@@ -700,7 +700,7 @@ func TestHistorySnapshot_ConfirmedLiquidation_ZeroesTheDayRatherThanKeepingTheMo
 
 	// Afternoon: Plaid returns the account with zero holdings. The T1 roster gate has already
 	// confirmed the response is complete, so this reaches the repository as a genuine liquidation.
-	require.NoError(t, repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{}))
+	require.NoError(t, holdingsReplaced(repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{})))
 
 	var liveTotal float64
 	require.NoError(t, tx.QueryRow(ctx,
@@ -762,7 +762,7 @@ func TestHistorySnapshot_AbsenceMarking_LeavesEarlierDaysAlone(t *testing.T) {
 	repo := NewHoldingRepository(tx)
 	// Today: the account holds nothing at all. Both the per-account capture and the whole-user
 	// sweep run their absence-marking pass.
-	require.NoError(t, repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{}))
+	require.NoError(t, holdingsReplaced(repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{})))
 	_, err = NewHoldingSnapshotRepository(tx).CaptureForUser(ctx, userID.String())
 	require.NoError(t, err)
 
@@ -923,14 +923,14 @@ func TestHistorySnapshot_ReconstructsAllFourPortfolioSnapshotColumns(t *testing.
 	secNoCostBasis := mkSecurity("no-cost-basis")
 	secNoValue := mkSecurity("no-value")
 
-	require.NoError(t, NewHoldingRepository(tx).ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
+	require.NoError(t, holdingsReplaced(NewHoldingRepository(tx).ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secBoth.String(),
 			Quantity: 10, CostBasis: f64(4000), InstitutionValue: f64(5000)},
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secNoCostBasis.String(),
 			Quantity: 3, CostBasis: nil, InstitutionValue: f64(1000)},
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secNoValue.String(),
 			Quantity: 7, CostBasis: f64(2000), InstitutionValue: nil},
-	}))
+	})))
 
 	day := todayUTC(ctx, t, tx)
 	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), day)
@@ -974,3 +974,41 @@ func TestHistorySnapshot_ReconstructsAllFourPortfolioSnapshotColumns(t *testing.
 	assert.NotEqual(t, costBasis, filteredBasis,
 		"guard against a fixture that makes the two denominators coincide, which would let a wrong rebuild pass")
 }
+
+// TestHistorySnapshot_ReplaceForAccount_ReturnsTheDayItFiledUnder pins the contract #1569 T9.1
+// item C's fix depends on: the day ReplaceForAccount hands back is the SERVER's UTC date, and it is
+// the same as_of_date the rows it just wrote carry. investment_sync_service files its
+// portfolio_snapshots aggregate under this value instead of consulting the Go clock, so a return
+// value that drifted from the rows would move the bug rather than fix it.
+func TestHistorySnapshot_ReplaceForAccount_ReturnsTheDayItFiledUnder(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-retday")
+
+	returned, err := NewHoldingRepository(tx).ReplaceForAccount(ctx, accountID.String(), userID.String(),
+		[]domain.Holding{{
+			UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(),
+			Quantity: 1, CostBasis: f64(10), InstitutionValue: f64(12),
+		}})
+	require.NoError(t, err)
+
+	var rowDay time.Time
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT as_of_date FROM holding_snapshots WHERE account_id = $1`, accountID).Scan(&rowDay))
+
+	require.Equal(t, rowDay, returned,
+		"the returned day must be the as_of_date the capture actually wrote — an aggregate filed "+
+			"under anything else is the orphan item C exists to prevent")
+	require.Equal(t, todayUTC(ctx, t, tx), returned, "and it must come from the SERVER, not the Go process")
+}
+
+// holdingsReplaced adapts holdingRepository.ReplaceForAccount's (day, error) return for the many
+// call sites that assert only on the error. The value it drops is the UTC day the history capture
+// filed under (#1569 T9.1 item C); a test that cares about that day binds both results instead of
+// going through here.
+func holdingsReplaced(_ time.Time, err error) error { return err }

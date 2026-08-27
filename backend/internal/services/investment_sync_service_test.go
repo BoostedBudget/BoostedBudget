@@ -37,9 +37,17 @@ type MockHoldingRepository struct {
 	mock.Mock
 }
 
-func (m *MockHoldingRepository) ReplaceForAccount(ctx context.Context, accountID, userID string, holdings []domain.Holding) error {
+// ReplaceForAccount returns the UTC day the history capture filed under. Existing tests set only
+// an error expectation, so a missing first return value falls back to the zero Time — which is
+// exactly what TestInvestmentSyncService_SyncHoldings_FilesTheAggregateUnderTheCapturedDay relies
+// on being visible rather than papered over.
+func (m *MockHoldingRepository) ReplaceForAccount(ctx context.Context, accountID, userID string, holdings []domain.Holding) (time.Time, error) {
 	args := m.Called(ctx, accountID, userID, holdings)
-	return args.Error(0)
+	day, _ := args.Get(0).(time.Time)
+	if len(args) > 1 {
+		return day, args.Error(1)
+	}
+	return day, nil
 }
 
 func (m *MockHoldingRepository) GetByUserID(ctx context.Context, userID string) ([]domain.Holding, error) {
@@ -1539,4 +1547,99 @@ func TestInvestmentSyncService_SetAnalytics_DoesNotPanic(t *testing.T) {
 		svc.SetAnalytics(nil)
 	}, "SetAnalytics with nil must not panic")
 	assert.Nil(t, iss.analytics, "analytics field should be nil after SetAnalytics(nil)")
+}
+
+// TestInvestmentSyncService_SyncHoldings_FilesTheAggregateUnderTheCapturedDay is #1569 T9.1 item C.
+//
+// The row-level holding_snapshots capture takes its as_of_date from POSTGRES (serverUTCDate, inside
+// ReplaceForAccount's own transaction). This path used to take the portfolio_snapshots aggregate's
+// day from the GO process's clock instead. The two clocks are independent, so a sync that crosses
+// UTC midnight while Postgres has not — or the reverse — files the rows under day D and the
+// aggregate under D+1: an aggregate with nothing behind it, and a day whose rows no aggregate
+// names. portfolio_snapshot_repair.go excludes the current server day, so the orphan survives the
+// next repair pass and is later refused for lack of coverage.
+//
+// The daily worker already solved this by using the day CaptureForUser returns; this path was the
+// outlier. The fix is NOT to compare clocks — it is to stop consulting the second one.
+func TestInvestmentSyncService_SyncHoldings_FilesTheAggregateUnderTheCapturedDay(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	plaidAccountID := "plaid-acct-clock"
+	internalAccountID := uuid.New().String()
+	plaidSecurityID := "plaid-sec-clock"
+	internalSecurityID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-clock", userID)
+
+	// A day the Go clock cannot possibly produce, so "it used time.Now()" is unmistakable.
+	capturedDay := time.Date(2031, 3, 7, 0, 0, 0, 0, time.UTC)
+
+	sec := makePlaidSecurity(plaidSecurityID, "Apple Inc.", "AAPL")
+	holding := makePlaidHolding(plaidAccountID, plaidSecurityID, 10.0, 165.0, 1650.0, 1500.0)
+	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, linkedItem.AccessToken).Return(
+		plaid.NewInvestmentsHoldingsGetResponse(
+			[]plaid.AccountBase{}, []plaid.Holding{holding}, []plaid.Security{sec},
+			makeMinimalPlaidItem(), "req-clock"), nil)
+	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).
+		Return(map[string]string{plaidSecurityID: internalSecurityID}, nil)
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+	}, nil)
+	deps.holdingRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, mock.Anything).
+		Return(capturedDay, nil)
+
+	_, err := svc.SyncHoldings(ctx, linkedItem)
+	require.NoError(t, err)
+
+	deps.snapshotRepo.AssertCalled(t, "Upsert", ctx, userID, capturedDay)
+}
+
+// TestInvestmentSyncService_SyncHoldings_StraddlingUTCMidnight_FilesUnderTheLatestCapturedDay pins
+// WHICH captured day wins when one item's accounts do not all land on the same one.
+//
+// Each account's capture reads the server date inside its own transaction, so a sync that crosses
+// UTC midnight mid-loop genuinely produces two different days. Neither day then has full coverage —
+// which the repair reports honestly rather than silently rebuilding — and the aggregate names the
+// LATER one: the more recent state, and the day the next sync and the daily whole-user capture will
+// complete. Reversing this to the earliest day left the whole services package green.
+func TestInvestmentSyncService_SyncHoldings_StraddlingUTCMidnight_FilesUnderTheLatestCapturedDay(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-straddle", userID)
+	plaidSecurityID := "plaid-sec-straddle"
+	internalSecurityID := uuid.New().String()
+	acctA, acctB := "plaid-acct-A", "plaid-acct-B"
+	internalA, internalB := uuid.New().String(), uuid.New().String()
+
+	dayBefore := time.Date(2031, 3, 7, 0, 0, 0, 0, time.UTC)
+	dayAfter := time.Date(2031, 3, 8, 0, 0, 0, 0, time.UTC)
+
+	sec := makePlaidSecurity(plaidSecurityID, "Apple Inc.", "AAPL")
+	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, linkedItem.AccessToken).Return(
+		plaid.NewInvestmentsHoldingsGetResponse(
+			[]plaid.AccountBase{},
+			[]plaid.Holding{
+				makePlaidHolding(acctA, plaidSecurityID, 10.0, 165.0, 1650.0, 1500.0),
+				makePlaidHolding(acctB, plaidSecurityID, 5.0, 165.0, 825.0, 750.0),
+			},
+			[]plaid.Security{sec}, makeMinimalPlaidItem(), "req-straddle"), nil)
+	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).
+		Return(map[string]string{plaidSecurityID: internalSecurityID}, nil)
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalA, PlaidAccountID: acctA, UserID: userID},
+		{ID: internalB, PlaidAccountID: acctB, UserID: userID},
+	}, nil)
+	// The map iteration order over accountMap is not defined, so the days are attached per
+	// account rather than per call order: whichever runs first, the LATER day must win.
+	deps.holdingRepo.On("ReplaceForAccount", ctx, internalA, userID, mock.Anything).Return(dayBefore, nil)
+	deps.holdingRepo.On("ReplaceForAccount", ctx, internalB, userID, mock.Anything).Return(dayAfter, nil)
+
+	_, err := svc.SyncHoldings(ctx, linkedItem)
+	require.NoError(t, err)
+
+	deps.snapshotRepo.AssertCalled(t, "Upsert", ctx, userID, dayAfter)
+	deps.snapshotRepo.AssertNotCalled(t, "Upsert", ctx, userID, dayBefore)
 }

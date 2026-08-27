@@ -89,7 +89,7 @@ func seedRetentionUniverseFixture(ctx context.Context, t *testing.T, db DB, pref
 	// Historical-state universe: one capture, filed under the SERVER's UTC day.
 	today, err = serverUTCDate(ctx, db)
 	require.NoError(t, err)
-	require.NoError(t, captureHoldingSnapshots(ctx, db, accountID.String(), userID.String()))
+	require.NoError(t, holdingsReplaced(captureHoldingSnapshots(ctx, db, accountID.String(), userID.String())))
 
 	// Event universe: a dividend inside the income window. Plaid stores income as NEGATIVE.
 	itxnID := uuid.New()

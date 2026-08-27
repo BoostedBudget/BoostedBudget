@@ -113,16 +113,22 @@ const captureHoldingSnapshotsSQL = `
 // which satisfies the overlap test for any day. Adding the filter here would be dead code that
 // implies a reachable case. Recorded so the next reader does not re-derive it; if
 // GetByLinkedItemID is ever widened, this becomes reachable and the filter must be added.
-func captureHoldingSnapshots(ctx context.Context, db DB, accountID, userID string) error {
+// It RETURNS the day it filed under — #1569 T9.1 item C. The whole-user form already did, and for
+// the same reason: whoever pairs an aggregate with this capture must file both under one day, and
+// the only way to be sure of that is to take the day from the capture rather than to compute a
+// second one from a second clock.
+func captureHoldingSnapshots(ctx context.Context, db DB, accountID, userID string) (time.Time, error) {
 	day, err := serverUTCDate(ctx, db)
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
 	if _, err := db.Exec(ctx, markHoldingSnapshotsAbsentForAccountSQL, accountID, userID, day); err != nil {
-		return err
+		return time.Time{}, err
 	}
-	_, err = db.Exec(ctx, captureHoldingSnapshotsSQL, accountID, userID, day)
-	return err
+	if _, err := db.Exec(ctx, captureHoldingSnapshotsSQL, accountID, userID, day); err != nil {
+		return time.Time{}, err
+	}
+	return day, nil
 }
 
 // markHoldingSnapshotsAbsentForUserSQL / captureHoldingSnapshotsForUserSQL are the whole-user form,
