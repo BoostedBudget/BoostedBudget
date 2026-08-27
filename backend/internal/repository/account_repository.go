@@ -623,28 +623,94 @@ func (r *accountRepository) CreateBatch(ctx context.Context, userID string, acco
 // reading the predecessor as live on every future day.
 func supersedeStrandedChainSiblings(ctx context.Context, tx pgx.Tx, userID string, accounts []domain.Account, now time.Time) error {
 	newIDs := make([]string, 0, len(accounts))
+	byChain := make(map[string][]string)
+	chainOrder := make([]string, 0, len(accounts))
 	for i := range accounts {
 		newIDs = append(newIDs, accounts[i].ID)
-	}
-
-	const supersedeQuery = `
-		UPDATE accounts
-		SET status = 'replaced', replaced_at = $4, replaced_by_id = $3, updated_at = $4
-		WHERE user_id = $1
-		  AND user_account_id = $2
-		  AND status = 'active'
-		  AND id <> ALL($5::uuid[])
-	`
-
-	for i := range accounts {
 		if accounts[i].UserAccountID == nil {
 			continue
 		}
+		key := *accounts[i].UserAccountID
+		if _, seen := byChain[key]; !seen {
+			chainOrder = append(chainOrder, key)
+		}
+		byChain[key] = append(byChain[key], accounts[i].ID)
+	}
+
+	// ⚠ ONE STATEMENT PER CHAIN KEY, NOT ONE PER NEW ROW, and the pairing is the point.
+	//
+	// `succ` numbers the successors this batch brought for the chain; `cand` numbers the rows it
+	// may retire, ACTIVE ONES FIRST. Joining rk to rk does three things at once, and each is a
+	// money defect if it is dropped:
+	//
+	//   - it caps the retirements at the number of successors (#1569 T10.1 item E). A chain can
+	//     legitimately hold two live maskless siblings — MatchOrCreate keys on
+	//     (user, institution, MASK) and a NULL mask matches every other NULL mask at that
+	//     institution — and a batch carrying ONE row for the chain must not retire both. The one
+	//     it retires is gone from live holdings and from all four SUM(a.current_balance)
+	//     aggregates, and the historical rationing that keeps a sibling on a transition day
+	//     CANNOT put it back into current state.
+	//   - it gives each retired predecessor a DISTINCT successor (item A). accountChainLiveCTE
+	//     rations by count(DISTINCT succ_id), so N predecessors all pointing at successor #1
+	//     ration away exactly one of them and the rest are summed beside their own replacements.
+	//     That is the original doubling, reached through the mitigation written to fix it.
+	//   - it reaches a predecessor a fail-open re-link left 'replaced' with a NULL pointer
+	//     (item B / topology 7a). account_service step 5b writes the ITEM pointer and the ACCOUNT
+	//     status in two INDEPENDENT fail-open blocks; when only the item write fails the row is
+	//     already retired, so a `status = 'active'` filter never sees it, and NEITHER succession
+	//     route can identify its successor. Its status does not change here — only the missing
+	//     pointer is recorded — so no current-state read moves.
+	//
+	// Active rows sort first because their duplication is the one visible in current state TODAY;
+	// a pointerless 'replaced' row only mis-sums history. When successors run out, the leftovers
+	// are left exactly as they were.
+	//
+	// ⚠ THE TRADE THE CAP MAKES, stated rather than left to be discovered. When a chain holds two
+	// live siblings and the batch brings one row for it, capping means the survivor stays 'active'
+	// beside the new row — so a chain CAN hold two active accounts. That was never a real
+	// invariant anyway (MatchOrCreate's NULL-mask collision produces it legitimately, which is why
+	// accountChainLiveCTE is not a DISTINCT ON), and history is unchanged by the cap either way:
+	// the rationing already kept exactly one predecessor in the total whether one pointer was
+	// recorded or two. What changes is CURRENT state, and only in the retaining direction. The
+	// normal re-link path is untouched — account_service step 5b retires every account of the old
+	// item explicitly — so the cap only decides the failure paths, where guessing that a sibling
+	// was replaced is not something the chain key alone can support.
+	//
+	// ⚠ A pointerless 'replaced' row of ANY age is eligible for the pointer fill; there is no
+	// principled cut-off to apply and an arbitrary one would be worse. Filling one long after the
+	// fact is inert: succession pairs require both rows live on the SAME day, and a row retired
+	// months ago never overlaps a row created today.
+	const supersedeQuery = `
+		WITH succ AS (
+		    SELECT id, row_number() OVER (ORDER BY id) AS rk
+		    FROM unnest($3::uuid[]) AS t(id)
+		),
+		cand AS (
+		    SELECT a.id, row_number() OVER (ORDER BY (a.status <> 'active'), a.id) AS rk
+		    FROM accounts a
+		    WHERE a.user_id = $1
+		      AND a.user_account_id = $2
+		      AND a.id <> ALL($5::uuid[])
+		      AND (a.status = 'active'
+		           OR (a.status = 'replaced' AND a.replaced_by_id IS NULL))
+		)
+		UPDATE accounts a
+		SET status = 'replaced',
+		    -- COALESCE, not $4: a row retired by an earlier fail-open write keeps the instant it
+		    -- was actually retired, or accountLiveOnDateClause re-dates its live interval.
+		    replaced_at = COALESCE(a.replaced_at, $4),
+		    replaced_by_id = s.id,
+		    updated_at = $4
+		FROM cand c
+		JOIN succ s ON s.rk = c.rk
+		WHERE a.id = c.id
+	`
+
+	for _, key := range chainOrder {
 		if _, err := tx.Exec(ctx, supersedeQuery,
-			userID, *accounts[i].UserAccountID, accounts[i].ID, now, newIDs,
+			userID, key, byChain[key], now, newIDs,
 		); err != nil {
-			return fmt.Errorf("supersede stranded chain siblings of user_account %s: %w",
-				*accounts[i].UserAccountID, err)
+			return fmt.Errorf("supersede stranded chain siblings of user_account %s: %w", key, err)
 		}
 	}
 	return nil
