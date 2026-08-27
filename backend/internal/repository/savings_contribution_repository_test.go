@@ -468,7 +468,10 @@ func TestSavingsContributionRepository_DeleteManagedForTransaction_NoRows(t *tes
 }
 
 // TestSavingsContributionRepository_ArchiveByGoal tests basis-switch archiving (Codex C10).
-// Only managed_by_reconciliation rows are flipped; user-entered rows are unchanged.
+// This is a wiring test only: it proves the Exec is issued with the goal ID. The claim that a
+// user-entered row survives the basis switch unflagged is a claim about ROWS, which no pgxmock can
+// make — it is proved against real Postgres by
+// TestArchiveByGoal_Integration_LeavesUserEnteredRowsAlone.
 func TestSavingsContributionRepository_ArchiveByGoal(t *testing.T) {
 	mock, repo := setupContributionMockDB(t)
 	defer mock.Close()
@@ -476,7 +479,7 @@ func TestSavingsContributionRepository_ArchiveByGoal(t *testing.T) {
 	ctx := context.Background()
 	goalID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goal_contributions`)).
+	mock.ExpectExec(`UPDATE savings_goal_contributions\s+SET managed_by_reconciliation = false`).
 		WithArgs(goalID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 3))
 
@@ -699,7 +702,8 @@ func TestSavingsContributionRepository_RejectContribution_NotProposed(t *testing
 //
 // Implementation: the ON CONFLICT DO UPDATE WHERE clause must include
 // `AND savings_goal_contributions.managed_by_reconciliation = true` so that the update
-// only fires for rows the reconciler owns, even if status='proposed'.
+// only fires for rows the reconciler owns, even if status='proposed'. This test can only see the
+// SQL text; no fixture here creates the non-managed proposed row the guard is about.
 func TestSavingsContributionRepository_UpsertProposedFromTransaction_C3Guard(t *testing.T) {
 	mock, repo := setupContributionMockDB(t)
 	defer mock.Close()
@@ -719,8 +723,10 @@ func TestSavingsContributionRepository_UpsertProposedFromTransaction_C3Guard(t *
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	// The INSERT ... ON CONFLICT ... DO UPDATE WHERE must include managed_by_reconciliation = true
-	// (C3 defense-in-depth). We match on the presence of this condition in the SQL.
-	mock.ExpectExec("managed_by_reconciliation = true").
+	// (C3 defense-in-depth). Matching the alias-qualified form keeps this from being satisfied by
+	// the INSERT's own column value; the behavioural proof on real rows is
+	// TestUpsertProposedFromTransaction_Integration_LeavesNonManagedProposedRowAlone.
+	mock.ExpectExec(regexp.QuoteMeta(`AND savings_goal_contributions.managed_by_reconciliation = true`)).
 		WithArgs(goalID, txnID, magnitude, pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 

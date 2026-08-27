@@ -672,3 +672,143 @@ func tombstoneTransaction(t *testing.T, pool *pgxpool.Pool, txnID string) {
 	require.NoError(t, err)
 	require.EqualValues(t, 1, ct.RowsAffected(), "fixture must actually be tombstoned")
 }
+
+// =============================================================================
+// Retention: ArchiveByGoal and the reconciler-ownership conflict guard (#1569)
+// =============================================================================
+
+// TestArchiveByGoal_Integration_LeavesUserEnteredRowsAlone pins the EFFECT of ArchiveByGoal on
+// real rows, which the two pgxmock tests of it cannot: both match only the table-name prefix
+// `UPDATE savings_goal_contributions`, never the SET or the WHERE, so they stay green under any
+// mutation of either.
+//
+// Why the effect and not the SQL text: dropping the `AND managed_by_reconciliation = true` leg is
+// nearly harmless (rows already false stay false; only updated_at is bumped). The mutation that
+// matters is inverting the SET to `= true` — that stamps USER-ENTERED contributions as
+// reconciler-managed, and DeleteManagedForTransaction HARD-DELETES rows carrying that flag. So
+// this test seeds one user-entered row alongside one reconciler row and asserts where each lands.
+//
+// Mutants this goes RED on (both validated):
+//   - SET managed_by_reconciliation = true  → the reconciler row is never archived.
+//   - that SET plus dropping the WHERE leg  → the user's own row is marked reconciler-managed and
+//     becomes eligible for the hard delete.
+func TestArchiveByGoal_Integration_LeavesUserEnteredRowsAlone(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	// A contribution the user typed in themselves: manual, confirmed, never reconciler-owned.
+	userRow := &domain.SavingsGoalContribution{
+		SavingsGoalID: goalID,
+		Amount:        42.5,
+		Source:        "manual",
+		Status:        "confirmed",
+		OccurredOn:    time.Now().Format("2006-01-02"),
+	}
+	require.NoError(t, repo.Insert(ctx, userID, userRow))
+
+	// A contribution the reconciler derived from a transfer, still under its management.
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -100.0)
+	require.NoError(t, repo.UpsertProposedFromTransaction(ctx, userID, goalID, txnID, 100.0))
+	var managedRowID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT id FROM savings_goal_contributions WHERE transaction_id = $1 AND savings_goal_id = $2`,
+		txnID, goalID).Scan(&managedRowID))
+	require.True(t, managedFlag(t, pool, managedRowID), "fixture must start reconciler-managed")
+	require.False(t, managedFlag(t, pool, userRow.ID), "fixture must start user-entered")
+
+	// The goal switches progress basis away from "contributions".
+	require.NoError(t, repo.ArchiveByGoal(ctx, goalID))
+
+	// The reconciler's row is released: it is now a permanent historical record.
+	assertManagedFlag(t, pool, managedRowID, false,
+		"ArchiveByGoal must clear managed_by_reconciliation on the reconciler's own row")
+
+	// The user's row is untouched — still theirs, still present, still the same money.
+	assertManagedFlag(t, pool, userRow.ID, false,
+		"ArchiveByGoal must never stamp a user-entered contribution as reconciler-managed: "+
+			"DeleteManagedForTransaction hard-deletes rows carrying that flag")
+	var amount float64
+	var status, source string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT amount, status, source FROM savings_goal_contributions WHERE id = $1`,
+		userRow.ID).Scan(&amount, &status, &source),
+		"the user-entered contribution must still exist after a basis switch")
+	assert.InDelta(t, 42.5, amount, 0.001, "the user's amount must survive the basis switch")
+	assert.Equal(t, "confirmed", status, "the user's status must survive the basis switch")
+	assert.Equal(t, "manual", source, "the user's source must survive the basis switch")
+}
+
+// managedFlag reads the stored managed_by_reconciliation of one contribution row, failing the
+// test outright if the row is gone.
+func managedFlag(t *testing.T, pool *pgxpool.Pool, contribID string) bool {
+	t.Helper()
+	var got bool
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT managed_by_reconciliation FROM savings_goal_contributions WHERE id = $1`,
+		contribID).Scan(&got), "contribution row must still exist")
+	return got
+}
+
+// assertManagedFlag is non-fatal on purpose: a mutation that mis-flags BOTH the reconciler's row
+// and the user's row must be reported against both, not just the first one reached.
+func assertManagedFlag(t *testing.T, pool *pgxpool.Pool, contribID string, want bool, msg string) {
+	t.Helper()
+	assert.Equal(t, want, managedFlag(t, pool, contribID), msg)
+}
+
+// TestUpsertProposedFromTransaction_Integration_LeavesNonManagedProposedRowAlone proves the C3
+// guard against real rows. Its only other test asserts the guard by SUBSTRING-matching
+// "managed_by_reconciliation = true" against the query text — which the INSERT's own column list
+// value would satisfy on its own — and no fixture anywhere creates the row the guard is about:
+// a status='proposed' contribution the reconciler does NOT own.
+//
+// RED on removing `AND savings_goal_contributions.managed_by_reconciliation = true` from the
+// ON CONFLICT DO UPDATE WHERE clause: the reconciler then overwrites the user's amount.
+func TestUpsertProposedFromTransaction_Integration_LeavesNonManagedProposedRowAlone(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -500.0)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	// A proposed row occupying the (transaction_id, savings_goal_id) conflict slot that the
+	// reconciler does not own — e.g. one the user entered against a transaction themselves.
+	manual := &domain.SavingsGoalContribution{
+		SavingsGoalID: goalID,
+		TransactionID: &txnID,
+		Amount:        50.0,
+		Source:        "manual",
+		Status:        "proposed",
+		OccurredOn:    time.Now().Format("2006-01-02"),
+	}
+	require.NoError(t, repo.Insert(ctx, userID, manual))
+	require.False(t, managedFlag(t, pool, manual.ID), "fixture must be a NON-managed proposed row")
+
+	// Sync sees the same transfer and proposes a different amount.
+	require.NoError(t, repo.UpsertProposedFromTransaction(ctx, userID, goalID, txnID, 500.0))
+
+	var rowCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM savings_goal_contributions WHERE transaction_id = $1 AND savings_goal_id = $2`,
+		txnID, goalID).Scan(&rowCount))
+	assert.Equal(t, 1, rowCount, "the conflict slot must still hold exactly one row")
+
+	var amount float64
+	var source string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT amount, source FROM savings_goal_contributions WHERE id = $1`,
+		manual.ID).Scan(&amount, &source))
+	assert.InDelta(t, 50.0, amount, 0.001,
+		"the reconciler must not overwrite the amount on a proposed row it does not own")
+	assert.Equal(t, "manual", source, "the reconciler must not take over a user's row")
+	assertManagedFlag(t, pool, manual.ID, false,
+		"the reconciler must not claim ownership of a row it did not create")
+}
