@@ -1,0 +1,12 @@
+-- Deliberately NOT a symmetric rollback.
+--
+-- The textbook "down" here would re-issue the OLD comment text that this up migration replaces --
+-- the false biconditional claim ("status = 'X' <=> X_at IS NOT NULL") that #1569 task 7.9 corrected
+-- in 000149/000155's own files. Restoring that text would put a known-false claim back into
+-- pg_description, silently, as a side effect of a rollback whose purpose looks purely mechanical.
+-- This migration only ever corrects documentation; there is no schema, data, or behavior for a
+-- rollback to actually undo, so reversing it has no value that outweighs reintroducing a falsehood.
+--
+-- This file intentionally does nothing: comments are left at their corrected text after a
+-- rollback of this migration. If a future change legitimately needs the OLD false wording back
+-- (it should not), that is a new, explicit migration that says so, not this one running in reverse.
