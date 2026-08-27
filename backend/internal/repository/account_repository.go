@@ -571,7 +571,83 @@ func (r *accountRepository) CreateBatch(ctx context.Context, userID string, acco
 		}
 	}
 
+	if err := supersedeStrandedChainSiblings(ctx, tx, userID, accounts, now); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
+}
+
+// supersedeStrandedChainSiblings closes the re-link chain: any OTHER account of this user that is
+// still 'active' under a user_account_id this batch is creating a row for becomes 'replaced',
+// pointing at the row that supersedes it. Issue #1569, task 9.1 item B.
+//
+// ── WHY THIS IS HERE AND NOT IN THE SERVICE ─────────────────────────────────────────────────
+// accountService's re-link already marks the predecessor 'replaced' — and does it FAIL-OPEN: the
+// error is logged and the loop continues ("failed to soft-delete old account"), several Plaid
+// round-trips BEFORE the successor rows are created. So a transient failure leaves two 'active'
+// accounts sharing one user_account_id with nothing recording that it happened. That is precisely
+// the state balance_snapshot_repository.go's dedup comment calls impossible — "the Plaid re-link
+// handler guarantees [it] never happens (no DB constraint enforces it — see migration 000033)" —
+// and while it lasts, every CURRENT-STATE read counts one logical position twice: live holdings
+// (holding_repository.go's GetByUserID) and all four SUM(a.current_balance) aggregates in
+// investment_analytics_repository.go, each of which scopes on currentStateAccountLeg. A $100
+// position reads as $200 and nothing repairs it.
+//
+// ── WHY NOT JUST FAIL THE RE-LINK ───────────────────────────────────────────────────────────
+// Because the failing write is not the one the user asked for. Returning an error from the
+// service's step 5b would throw away a bank connection the user just authorised in order to fix a
+// bookkeeping row, and #1569's whole bias is retain-and-degrade rather than destroy. Moving the
+// enforcement into the transaction that CREATES the second active row inverts that trade: either
+// the successor exists and the predecessor is superseded, or neither happened and the user's next
+// Link attempt starts from a consistent state. Nothing is destroyed on either branch — 'replaced'
+// is the retention tombstone the re-link path already used, and every history read reaches the row
+// through it.
+//
+// ── WHY NOT A REPAIR JOB ────────────────────────────────────────────────────────────────────
+// There is no repair path to extend, and this was checked rather than assumed: 'replaced' has
+// exactly ONE writer in the whole backend (account_service.go's re-link), and the two sweeps that
+// do reconcile account status — plaidItemCleanupService.markAccountsRemoved and the orphaned-item
+// retention sweep — both key off the item being gone AT PLAID, which a re-linked predecessor's
+// item is not. A stranded sibling is invisible to both, forever. Enforcing the invariant at its
+// only write point is smaller than the sweep that would otherwise have to exist, and it is also a
+// repair: a sibling stranded by an EARLIER failure is superseded by the next re-link of that chain.
+//
+// ── SCOPE, and both halves are pinned by TestAccountRepository_CreateBatch_SupersedeTouchesOnlyItsOwnChain ──
+// `user_account_id = $2` and nothing looser. A NULL user_account_id — the legacy shape — matches
+// nothing, because SQL equality over NULL is NULL: an IS NOT DISTINCT FROM here would supersede
+// every identity-less account the user has, in one statement, silently. Rows created by THIS batch
+// are excluded by id, so two new rows that happened to share a chain key cannot supersede each
+// other. And the UPDATE goes through `accounts` normally, so migration 000152's trigger records
+// the transition in account_status_history — without that, accountLiveOnDateClause would keep
+// reading the predecessor as live on every future day.
+func supersedeStrandedChainSiblings(ctx context.Context, tx pgx.Tx, userID string, accounts []domain.Account, now time.Time) error {
+	newIDs := make([]string, 0, len(accounts))
+	for i := range accounts {
+		newIDs = append(newIDs, accounts[i].ID)
+	}
+
+	const supersedeQuery = `
+		UPDATE accounts
+		SET status = 'replaced', replaced_at = $4, replaced_by_id = $3, updated_at = $4
+		WHERE user_id = $1
+		  AND user_account_id = $2
+		  AND status = 'active'
+		  AND id <> ALL($5::uuid[])
+	`
+
+	for i := range accounts {
+		if accounts[i].UserAccountID == nil {
+			continue
+		}
+		if _, err := tx.Exec(ctx, supersedeQuery,
+			userID, *accounts[i].UserAccountID, accounts[i].ID, now, newIDs,
+		); err != nil {
+			return fmt.Errorf("supersede stranded chain siblings of user_account %s: %w",
+				*accounts[i].UserAccountID, err)
+		}
+	}
+	return nil
 }
 
 // GetByLinkedItemID retrieves all accounts for a specific linked item
