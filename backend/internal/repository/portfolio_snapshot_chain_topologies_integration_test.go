@@ -450,6 +450,66 @@ func TestPortfolioSnapshot_Upsert_CyclicSuccessionPointer_TerminatesAndCountsEve
 			"rationed away — corrupt pointers must not delete a user's money")
 }
 
+// TestPortfolioSnapshot_Upsert_CycleWithAnOutgoingTail_StillRationsNobody is #1569 T10-FIX item 4.
+//
+// The cycle-safety property was stated unconditionally — "under a cycle nobody is a survivor and
+// nothing is rationed away" — while holding for exactly one topology, the closed two-node cycle the
+// test above covers. Add ONE real edge leaving the cycle and it stops holding: for A → B, B → A,
+// B → C the closure derives A → C as well, C supersedes nobody, so (A,C) and (B,C) are both
+// surviving pairs and the rationing retires a member of the cycle. Its money disappears.
+//
+// A corrupt pointer must not delete a user's money. That principle is not topology-specific, and it
+// is what this fixture holds the implementation to.
+func TestPortfolioSnapshot_Upsert_CycleWithAnOutgoingTail_StillRationsNobody(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// A → B by the item pointer, from the shared helper.
+	userID, accountA, accountB, secID := seedRelinkedInvestmentChain(ctx, t, tx, "psnap-cycletail")
+	itemA, chainKey := chainOf(ctx, t, tx, accountA)
+	itemB, _ := chainOf(ctx, t, tx, accountB)
+
+	// B → A closes the cycle.
+	_, err = tx.Exec(ctx,
+		`UPDATE linked_items SET status = 'replaced', replaced_at = NOW(), replaced_by_id = $2 WHERE id = $1`,
+		itemB, itemA)
+	require.NoError(t, err)
+
+	// B → C is the outgoing tail, recorded by the ACCOUNT pointer because B's item pointer is
+	// already spoken for by the cycle. The status is deliberately left 'active': this test is about
+	// what the succession walk does, and changing B's liveness would answer a different question.
+	itemC := seedChainItem(ctx, t, tx, userID, "psnap-cycletail-item3")
+	accountC := seedChainAccount(ctx, t, tx, userID, itemC, &chainKey, "psnap-cycletail-c")
+	_, err = tx.Exec(ctx, `UPDATE accounts SET replaced_by_id = $2 WHERE id = $1`, accountB, accountC)
+	require.NoError(t, err)
+
+	seedChainHolding(ctx, t, tx, userID, accountA, secID, 1000, 4000)
+	seedChainHolding(ctx, t, tx, userID, accountB, secID, 1000, 5000)
+	seedChainHolding(ctx, t, tx, userID, accountC, secID, 1000, 2000)
+
+	done := make(chan struct{})
+	var total float64
+	go func() {
+		defer close(done)
+		snap, e := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), todayUTCFromDB(ctx, t, tx))
+		require.NoError(t, e)
+		total = snap.TotalValue
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the succession walk did not terminate on a cyclic pointer with a tail")
+	}
+	assert.InDelta(t, 11000.0, total, 0.001,
+		"7000 is A rationed away by the A→C edge the cycle manufactured; 6000 is both cycle "+
+			"members gone. A pointer that says two accounts replaced each other is corrupt, and "+
+			"corrupt data must not delete money — however many real edges leave the cycle")
+}
+
 // ── item C: the two callers' $OBSERVED arms, MEASURED ─────────────────────────────────────────
 
 // TestPortfolioSnapshot_ObservedArmsDisagree_TheRepairRefusesRatherThanRewrites is the measurement
