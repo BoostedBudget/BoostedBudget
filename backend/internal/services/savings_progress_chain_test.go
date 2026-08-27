@@ -249,8 +249,12 @@ func TestSavingsProgress_Balance_ChainHasNoLiveMember_StillFreezes(t *testing.T)
 // "no live member" — freeze on the physical row — rather than silently recomputing from
 // whichever live sibling ResolveActiveID used to pick.
 //
-// The two live siblings are given DIFFERENT balances from each other AND from the physical
-// row, so a regression that picks either sibling is distinguishable from the correct freeze.
+// This test's resolver stub short-circuits straight to ErrAmbiguousActiveAccount (as the real
+// AccountChainResolver does once it sees len(accounts) > 1) — it does not construct sibling
+// Account values, because resolveBasisAccount never reads them: on this error it falls straight
+// through to the physical row without touching whatever the two live siblings' balances are.
+// The real repository-level "len > 1" behaviour, with two siblings holding DIFFERENT balances,
+// is covered separately by TestAccountChainResolver_ResolveActiveID's ambiguous case.
 func TestSavingsProgress_Balance_ChainHasTwoLiveMembers_StillFreezes(t *testing.T) {
 	goalRepo := &mockSavingsProgressGoalRepo{}
 	contribRepo := &mockSavingsProgressContribRepo{}
@@ -260,8 +264,8 @@ func TestSavingsProgress_Balance_ChainHasTwoLiveMembers_StillFreezes(t *testing.
 	}
 	svc := newChainProgressService(goalRepo, contribRepo, accountRepo, resolver)
 
-	// current_amount (1000) differs from the physical row's frozen balance (3500) AND from
-	// both live siblings (7000, 8000) so every wrong outcome is distinguishable.
+	// current_amount (1000) differs from the physical row's frozen balance (3500), so "did not
+	// move" and "recomputed from the physical row" are distinguishable outcomes.
 	goal := makeGoal("g1", "u1", "acc-old", domain.ProgressBasisBalance, 10000, 1000)
 	goal.UserAccountID = strPtr1569("uaid-1")
 
@@ -281,7 +285,7 @@ func TestSavingsProgress_Balance_ChainHasTwoLiveMembers_StillFreezes(t *testing.
 	assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
 	assertNoCallTo(t, &goalRepo.Mock, "MarkCompleted")
 	assert.Equal(t, 1000.0, goal.CurrentAmount,
-		"an ambiguous chain freezes the goal — it must not recompute from either live sibling (7000/8000) nor the physical row's 3500")
+		"an ambiguous chain freezes the goal — it must not recompute from the physical row's 3500")
 }
 
 // TestSavingsProgress_Summary_ChainHasTwoLiveMembers_ReportsDisconnected is the freshness half

@@ -3118,12 +3118,14 @@ func TestResolveAndVerifyUserAccount_AccountRepoNilFailOpen(t *testing.T) {
 		"nil accountRepo must still apply the resolved ID (fail-open; ownership check skipped)")
 }
 
-// TestResolveAndVerifyUserAccount_AmbiguousChain_SkipsRule pins #1569 R11 T2's site-2
-// decision directly against resolveAndVerifyUserAccount: when the chain resolver reports
-// ErrAmbiguousActiveAccount (more than one live sibling shares the user_account_id), the
-// function must skip the rule (return true) and must NOT call onResolve — unlike
-// ErrNoActiveAccount, which does not skip and simply leaves the raw pinned id in place.
-func TestResolveAndVerifyUserAccount_AmbiguousChain_SkipsRule(t *testing.T) {
+// TestResolveAndVerifyUserAccount_AmbiguousChain_FallsBackLikeNoActiveAccount pins #1569 R11
+// T2's site-2 decision (fix round 1: an earlier revision returned skip=true here, which was a
+// monotonicity bug — the objectively WORSE condition, ErrNoActiveAccount, already did not skip,
+// so skipping only on ambiguity made a stronger-guarantee state produce a WEAKER outcome). The
+// caller's pinned id is not an unrelated guess — executeTransferSuggestion already
+// ownership-verifies it via accountRepo.GetByIDAndUser before calling this function — so this
+// function must NOT skip the rule and must NOT call onResolve, the same as ErrNoActiveAccount.
+func TestResolveAndVerifyUserAccount_AmbiguousChain_FallsBackLikeNoActiveAccount(t *testing.T) {
 	ctx := context.Background()
 
 	stubResolver := &stubChainResolver{resolveErr: ErrAmbiguousActiveAccount}
@@ -3136,8 +3138,8 @@ func TestResolveAndVerifyUserAccount_AmbiguousChain_SkipsRule(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	assert.True(t, skip, "an ambiguous chain must skip the rule rather than guess between live siblings")
-	assert.False(t, onResolveCalled, "onResolve must not be called for an ambiguous chain")
+	assert.False(t, skip, "an ambiguous chain must not skip the rule — it must fall back to the pinned id, like ErrNoActiveAccount does")
+	assert.False(t, onResolveCalled, "onResolve must not be called for an ambiguous chain — the resolver still refuses to guess WHICH sibling")
 }
 
 // ============================================================================
