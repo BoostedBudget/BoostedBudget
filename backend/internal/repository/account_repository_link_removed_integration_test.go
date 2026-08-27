@@ -189,3 +189,120 @@ func TestAccountRepository_MarkRemovedByLinkedItemID_RefusesProviderAbsent_Integ
 	assert.Equal(t, "active", status, "the refusal must happen before the UPDATE, not after it")
 	assert.Nil(t, reason)
 }
+
+// The required-reason guard has never been exercised: no test passes "". A caller that forgets the
+// argument must be refused BEFORE the UPDATE, not silently write removed_reason = '' — which
+// migration 000154's accounts_removed_reason_valid would reject anyway, turning a forgotten
+// argument into a mid-disconnect database error instead of a clear one.
+func TestAccountRepository_MarkRemovedByLinkedItemID_RefusesEmptyReason_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	ctx := context.Background()
+	profileRepo := NewProfileRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+	accountRepo := NewAccountRepository(pool, enc)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := createMarkDisconnectedFixtureUser(t, ctx, pool, profileRepo, suffix)
+	item := createMarkDisconnectedFixtureItem(t, ctx, linkedItemRepo, userID, suffix)
+
+	var accountID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, 'Reasonless', 'depository')
+		RETURNING id`,
+		item.ID, userID, "plaid-noreason-"+suffix).Scan(&accountID))
+
+	err := accountRepo.MarkRemovedByLinkedItemID(ctx, item.ID, domain.RemovalReason(""))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "a removal reason is required")
+
+	var status string
+	var reason *string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT status, removed_reason FROM accounts WHERE id = $1`, accountID).Scan(&status, &reason))
+	assert.Equal(t, "active", status, "the refusal must happen before the UPDATE, not after it")
+	assert.Nil(t, reason, "an unstamped cause is better than a blank one")
+}
+
+// The `AND status = 'active'` scoping carries a documented rationale — "a blanket disconnect must
+// not overwrite a more specific terminal reason" — that nothing tested: no fixture ever put a
+// 'replaced' or an 'expired' account under the item. This seeds both alongside an active one and
+// asserts the disconnect moves only the active row, leaving each terminal account's own cause and
+// timestamp exactly as it found them.
+func TestAccountRepository_MarkRemovedByLinkedItemID_LeavesTerminalAccountsAlone_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	ctx := context.Background()
+	profileRepo := NewProfileRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+	accountRepo := NewAccountRepository(pool, enc)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := createMarkDisconnectedFixtureUser(t, ctx, pool, profileRepo, suffix)
+	item := createMarkDisconnectedFixtureItem(t, ctx, linkedItemRepo, userID, suffix)
+
+	seed := func(name, status string, stampCol string) string {
+		t.Helper()
+		var id string
+		require.NoError(t, pool.QueryRow(ctx, fmt.Sprintf(`
+			INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type, status, %s)
+			VALUES ($1, $2, $3, $4, 'depository', $5, NOW() - INTERVAL '30 days')
+			RETURNING id`, stampCol),
+			item.ID, userID, "plaid-"+status+"-"+suffix, name, status).Scan(&id))
+		return id
+	}
+	// An account superseded by a re-link, and one whose access expired: two MORE specific terminal
+	// causes than "the user disconnected the institution".
+	replacedID := seed("Superseded", "replaced", "replaced_at")
+	expiredID := seed("Expired", "expired", "expired_at")
+
+	var activeID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, 'Still Live', 'depository')
+		RETURNING id`,
+		item.ID, userID, "plaid-active-"+suffix).Scan(&activeID))
+
+	var replacedAtBefore, expiredAtBefore time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT replaced_at FROM accounts WHERE id = $1`, replacedID).Scan(&replacedAtBefore))
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT expired_at FROM accounts WHERE id = $1`, expiredID).Scan(&expiredAtBefore))
+
+	require.NoError(t, accountRepo.MarkRemovedByLinkedItemID(ctx, item.ID, domain.RemovalReasonUserDisconnect))
+
+	readRow := func(id string) (status string, removedAt *time.Time, reason *string) {
+		t.Helper()
+		require.NoError(t, pool.QueryRow(ctx,
+			`SELECT status, removed_at, removed_reason FROM accounts WHERE id = $1`, id,
+		).Scan(&status, &removedAt, &reason))
+		return
+	}
+
+	status, removedAt, reason := readRow(activeID)
+	assert.Equal(t, "removed", status, "the active account is the one the disconnect is about")
+	assert.NotNil(t, removedAt)
+	require.NotNil(t, reason)
+	assert.Equal(t, "user_disconnect", *reason)
+
+	status, removedAt, reason = readRow(replacedID)
+	assert.Equal(t, "replaced", status,
+		"a blanket disconnect must not overwrite the more specific 'replaced' cause")
+	assert.Nil(t, removedAt, "a replaced account never gained a removed_at")
+	assert.Nil(t, reason, "and never gained a removal reason")
+
+	status, removedAt, reason = readRow(expiredID)
+	assert.Equal(t, "expired", status,
+		"a blanket disconnect must not overwrite the more specific 'expired' cause")
+	assert.Nil(t, removedAt)
+	assert.Nil(t, reason)
+
+	var replacedAtAfter, expiredAtAfter time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT replaced_at FROM accounts WHERE id = $1`, replacedID).Scan(&replacedAtAfter))
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT expired_at FROM accounts WHERE id = $1`, expiredID).Scan(&expiredAtAfter))
+	assert.True(t, replacedAtBefore.Equal(replacedAtAfter), "the replacement's own timestamp stands")
+	assert.True(t, expiredAtBefore.Equal(expiredAtAfter), "the expiry's own timestamp stands")
+}
