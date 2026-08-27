@@ -199,12 +199,17 @@ it.
   the SQL fragments it blesses, so dropping `AND deleted_at IS NOT NULL` from a purge no longer
   keeps the blessing. Fragments are matched on comment-stripped, whitespace-collapsed SQL, and must
   spell out polarity (`IS NULL` vs `IS NOT NULL`).
-- `TestNoUnallowlistedMigrationHistoryDelete` / `TestNoUnallowlistedShellHistoryDelete` (G4) — the
-  paths G2's Go-only AST scan cannot see. An UP migration or a `backend/scripts` shell script that
-  hard-deletes history needs an allowlist entry; a DOWN migration only has to carry a `WHERE`,
-  because deleting what its own up migration inserted is a legitimate reversal. It does NOT check
-  that the predicate is correct, and `apps/web/scripts/seed-e2e-data.sql` is deliberately outside
-  its universe.
+- `TestNoUnallowlistedMigrationHistoryDelete` / `TestNoUnallowlistedShellHistoryDelete` /
+  `TestNoUnallowlistedFrontendFixtureHistoryDelete` (G4) — the paths G2's Go-only AST scan cannot
+  see. An UP migration, a `backend/scripts` shell script, or a `apps/web/scripts` fixture (`.sql`
+  and `.sh`) that hard-deletes history needs an allowlist entry; a DOWN migration only has to carry
+  a `WHERE`, because deleting what its own up migration inserted is a legitimate reversal. It does
+  NOT check that the predicate is correct.
+  ⚠ `apps/web/scripts/seed-e2e-data.sql` is now IN the universe (#1569 task 7.9) with its three
+  deletes allowlisted per predicate. The reason is the scoping — every statement is bounded by the
+  fixture user `e2e+clerk_test@boostedbudget.com` or by ids the same DO block just created — NOT
+  "it is E2E, so it only runs locally": the file is `psql $DATABASE_URL -f` and nothing in the tree
+  pins which database that names.
 - `TestNoConfigReadForgetsTheTombstoneFilter` / `TestNoTransactionReadForgetsTheTombstoneFilter` —
   a read that forgets `deleted_at IS NULL` (per reference, alias-qualified).
 - `TestHistoryRetentionRoundTrip_*` (G3) — disconnect / re-link / purge, against real Postgres.

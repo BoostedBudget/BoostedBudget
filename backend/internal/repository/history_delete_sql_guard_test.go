@@ -45,11 +45,14 @@ import (
 //     predicate, not that the predicate is right.
 //   - It does NOT read migrations for anything else — a `DROP TABLE` in a down migration is out of
 //     scope here and is G1's business (the schema half) plus review.
-//   - Its universe is `backend/migrations` and `backend/scripts`. `apps/web/scripts/seed-e2e-data.sql`
-//     also deletes from `balance_snapshots`, `transactions` and `budget_categories` and is
-//     deliberately NOT scanned: it is the Playwright fixture, it runs only against the local e2e
-//     database created by the e2e harness, and it is owned by the frontend tree. Re-derived
-//     2026-08-26; if it ever runs anywhere else, widen this universe rather than arguing about it.
+//   - Its universe is `backend/migrations`, `backend/scripts` and `apps/web/scripts`. The last of
+//     those was excluded for one round because another agent owned the directory, and the exclusion
+//     said the file "runs only against the local e2e database created by the e2e harness". That
+//     reason did not survive re-derivation (#1569 task 7.9): nothing in seed-e2e-data.sql or in
+//     e2e-postgres.sh constrains which database it is pointed at — its own header documents
+//     `psql $DATABASE_URL -f seed-e2e-data.sql`. What actually makes it safe is the scoping of its
+//     predicates, which is now recorded per delete in allowedFrontendFixtureHistoryDeletes. The
+//     rule there is backend/scripts': allowlisted or it fails.
 //   - It says nothing about `UPDATE`. Tombstoning is the normal path and is not a delete.
 
 // allowedMigrationHistoryDeletes lists the migration files that may hard-delete a history-bearing
@@ -95,6 +98,32 @@ var allowedShellHistoryDeletes = map[string]string{
 	"scripts/qa-data-populator/lib/cleanup.sh|transactions":            "QA fixture data cleanup, scoped to one seeded test user by id (keeps the user row)",
 	"scripts/qa-data-populator/lib/cleanup.sh|accounts":                "QA fixture data cleanup, scoped to one seeded test user by id (keeps the user row)",
 	"scripts/qa-data-populator/lib/cleanup.sh|balance_snapshots":       "QA fixture data cleanup, scoped to one seeded test user by id (keeps the user row)",
+}
+
+// allowedFrontendFixtureHistoryDeletes lists the frontend-tree fixture files under
+// apps/web/scripts that may hard-delete a history-bearing table, keyed "<path from the repo
+// root>|<table>", with the reason.
+//
+// ⚠ Re-derived 2026-08-26 by reading every predicate in the file, NOT inherited from "it is E2E, so
+// it is fine". That inherited reason is wrong on its own terms: this file is `psql $DATABASE_URL -f`
+// with no assertion about which database $DATABASE_URL names, so "it only ever runs locally" is a
+// property of today's callers, not of the file.
+//
+// What holds instead is that every delete is scoped to ONE hardcoded fixture identity — the literal
+// email `e2e+clerk_test@boostedbudget.com`, resolved to v_user_id at the top of the DO block — or
+// to ids that same block has just created. Pointed at a database full of real users, the file would
+// destroy the fixture user's rows and nobody else's. And each of these three is an idempotency
+// device rather than a teardown: the DELETE is immediately followed by the INSERT that replaces the
+// rows it removed, so re-running the seed does not accumulate duplicates.
+var allowedFrontendFixtureHistoryDeletes = map[string]string{
+	"apps/web/scripts/seed-e2e-data.sql|balance_snapshots": "e2e seed idempotency, doubly scoped: `account_id IN (<the three accounts this block just created>) AND source = 'e2e_seed'`. Re-inserted on the next statement",
+	"apps/web/scripts/seed-e2e-data.sql|transactions":      "e2e seed idempotency, scoped to the fixture user's own synthetic rows: `user_id = v_user_id AND source = 'plaid' AND external_transaction_id LIKE 'e2e-%'`. Re-inserted on the next statement",
+	// The loosest of the three, and the only one worth arguing about: it removes EVERY category of
+	// that budget, not only the ones a previous seed run inserted. It is still scoped, because
+	// v_budget_id is the budget the same DO block upserted for the fixture user two statements
+	// earlier — the blast radius is one fixture budget, and the categories are re-inserted
+	// immediately. ON CONFLICT is not usable here: the UNIQUE constraint carries NULLs for pfc rows.
+	"apps/web/scripts/seed-e2e-data.sql|budget_categories": "e2e seed idempotency, scoped to `budget_id = v_budget_id`, the fixture user's budget upserted by the same DO block; re-inserted on the next statement. Wider than the other two (it clears the budget's categories, not just seeded ones) and deliberately so — ON CONFLICT is unusable because the UNIQUE constraint has NULLs for pfc rows",
 }
 
 // sqlStatementEndRegexp finds the end of a statement: the first `;`.
@@ -184,6 +213,13 @@ func blankSQLComments(s string) string {
 	}
 	s = sqlBlockCommentRegexp.ReplaceAllStringFunc(s, blank)
 	return sqlLineCommentRegexp.ReplaceAllStringFunc(s, blank)
+}
+
+// repoRootDir resolves the repository root, one level above backend/. G4's universe reaches
+// outside the Go tree, so the scan needs a root that does too.
+func repoRootDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Dir(backendDirRoot(t))
 }
 
 // backendDirRoot resolves backend/ from this package's directory.
@@ -290,11 +326,63 @@ func TestNoUnallowlistedShellHistoryDelete(t *testing.T) {
 	}
 }
 
+// TestNoUnallowlistedFrontendFixtureHistoryDelete is guard G4's frontend-fixture half, added in
+// #1569 task 7.9 when apps/web/scripts stopped being another agent's territory.
+//
+// It scans BOTH .sql and .sh under apps/web/scripts, because the e2e harness is a shell script that
+// runs the .sql and could as easily inline a statement of its own. The rule is backend/scripts':
+// these files are mutable and re-runnable, so there is no qualified-statement escape hatch — every
+// hard delete of a history-bearing table is on the list or it fails.
+func TestNoUnallowlistedFrontendFixtureHistoryDelete(t *testing.T) {
+	root := repoRootDir(t)
+	sites := scanNonGoHistoryDeletes(t, root, "apps/web/scripts", ".sql", false)
+	sites = append(sites, scanNonGoHistoryDeletes(t, root, "apps/web/scripts", ".sh", true)...)
+
+	if len(sites) == 0 {
+		t.Fatalf("scanned apps/web/scripts and found no history DELETE at all, but %d are "+
+			"allowlisted — the scan is broken and would pass vacuously", len(allowedFrontendFixtureHistoryDeletes))
+	}
+
+	matched := map[string]bool{}
+	var offenders []string
+	for _, s := range sites {
+		key := s.file + "|" + s.table
+		if _, ok := allowedFrontendFixtureHistoryDeletes[key]; ok {
+			matched[key] = true
+			continue
+		}
+		offenders = append(offenders, s.file+":"+itoa(s.line)+" -> "+s.table+"\n        "+s.statement)
+	}
+
+	var stale []string
+	for key := range allowedFrontendFixtureHistoryDeletes {
+		if !matched[key] {
+			stale = append(stale, key)
+		}
+	}
+	sort.Strings(stale)
+
+	if len(offenders) > 0 {
+		t.Errorf("%d fixture history delete(s) under apps/web/scripts are not allowlisted (#1569 G4).\n"+
+			"A fixture that talks to the database directly is invisible to every Go guard, and "+
+			"nothing in this tree pins which database $DATABASE_URL names. Scope the statement to "+
+			"the fixture user and say so in allowedFrontendFixtureHistoryDeletes, with a reason you "+
+			"have re-derived from the predicate rather than from \"it is E2E\".\n    %s",
+			len(offenders), strings.Join(offenders, "\n    "))
+	}
+	if len(stale) > 0 {
+		t.Errorf("%d allowlisted fixture delete(s) no longer exist (#1569 G4).\n"+
+			"A stale entry reads as a standing permission to destroy this history. Delete it:\n    %s",
+			len(stale), strings.Join(stale, "\n    "))
+	}
+}
+
 // TestG4AllowlistEntriesHaveReasons keeps either allowlist from becoming a bare suppression list.
 func TestG4AllowlistEntriesHaveReasons(t *testing.T) {
 	for name, list := range map[string]map[string]string{
-		"allowedMigrationHistoryDeletes": allowedMigrationHistoryDeletes,
-		"allowedShellHistoryDeletes":     allowedShellHistoryDeletes,
+		"allowedMigrationHistoryDeletes":       allowedMigrationHistoryDeletes,
+		"allowedShellHistoryDeletes":           allowedShellHistoryDeletes,
+		"allowedFrontendFixtureHistoryDeletes": allowedFrontendFixtureHistoryDeletes,
 	} {
 		for key, reason := range list {
 			if strings.TrimSpace(reason) == "" {
