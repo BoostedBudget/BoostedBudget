@@ -173,8 +173,10 @@ func (f *tombstoneFixture) disconnectChain(t *testing.T, ctx context.Context) {
 	t.Helper()
 	// The account_status_history row the leg reads is written by migration 000151/000152's trigger,
 	// so this deliberately does not hand-write one — the test sees the rows production will have.
+	// removed_reason is stamped for the same reason: MarkRemovedByLinkedItemID always writes the
+	// cause alongside the status, and a fixture without it is a row production cannot produce.
 	_, err := f.tx.Exec(ctx,
-		`UPDATE accounts SET status = 'removed', removed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+		`UPDATE accounts SET status = 'removed', removed_at = NOW(), removed_reason = 'user_disconnect', updated_at = NOW() WHERE id = $1`,
 		f.accountID)
 	require.NoError(t, err, "soft-remove account")
 

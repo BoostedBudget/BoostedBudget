@@ -123,12 +123,22 @@ func seedOrphanBankingTxn(ctx context.Context, t *testing.T, db DB, f retainedFi
 	return txnID
 }
 
-// disconnect soft-removes the whole chain, the way Task 2's DisconnectInstitution does. The
-// account_status_history transition is written by the trigger.
+// disconnect soft-removes the fixture's account the way DisconnectInstitution's write does:
+// status, removed_at AND removed_reason in one statement, because production never leaves the
+// cause unstamped (accountRepository.MarkRemovedByLinkedItemID, and migration 000154's
+// accounts_removed_reason_valid CHECK, which only tolerates a NULL cause on a legacy row).
+// A fixture that omitted it described a row production cannot write, on the exact column that
+// decides whether a sync may resurrect the account (RestoreProviderRemovedAccount refuses
+// anything but 'provider_absent').
+//
+// It is NOT the whole of DisconnectInstitution and does not claim to be: that call also removes
+// the Plaid item and marks linked_items disconnected, and it is scoped by linked_item_id rather
+// than by one account id. This is the accounts write, which is the only part these reads see.
+// The account_status_history transition is written by the trigger.
 func disconnect(ctx context.Context, t *testing.T, db DB, f retainedFixture) {
 	t.Helper()
 	_, err := db.Exec(ctx,
-		`UPDATE accounts SET status = 'removed', removed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+		`UPDATE accounts SET status = 'removed', removed_at = NOW(), removed_reason = 'user_disconnect', updated_at = NOW() WHERE id = $1`,
 		f.AccountID)
 	require.NoError(t, err, "soft-remove account")
 }
@@ -379,9 +389,10 @@ func TestUnifiedFeed_FullyDisconnectedRelinkChain_ShowsPreRelinkTransactions(t *
 		"sanity, and the #1109 contract: while the chain is live the unchained pre-relink row stays "+
 			"hidden and the chained one is resolved by the active sibling")
 
-	// Now the user disconnects the re-linked bank entirely.
+	// Now the user disconnects the re-linked bank entirely — removed_reason stamped in the same
+	// statement, as MarkRemovedByLinkedItemID does it.
 	_, err = tx.Exec(ctx,
-		`UPDATE accounts SET status = 'removed', removed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+		`UPDATE accounts SET status = 'removed', removed_at = NOW(), removed_reason = 'user_disconnect', updated_at = NOW() WHERE id = $1`,
 		newAccountID)
 	require.NoError(t, err)
 
