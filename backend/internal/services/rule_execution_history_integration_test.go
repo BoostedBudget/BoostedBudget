@@ -393,7 +393,16 @@ func TestRuleExecutionHistory_DeletedRuleStillReadable_Integration(t *testing.T)
 	require.NotNil(t, orphan.RuleName)
 	assert.Equal(t, "Coffee is Food", *orphan.RuleName,
 		"rule_name is what a reader shows in place of the rule that is gone")
-	assert.NotEmpty(t, orphan.DefinitionSnapshot)
+	// NotEmpty would pass for `{}`, `null`, or any placeholder — which would be the deleted rule's
+	// definition NOT surviving, the very thing this test is named for. Assert the keys, as both
+	// structural siblings do.
+	var orphanSnap map[string]any
+	require.NoError(t, json.Unmarshal(orphan.DefinitionSnapshot, &orphanSnap),
+		"the deleted rule's snapshot must still be readable JSON")
+	assert.Equal(t, "FOOD_AND_DRINK", orphanSnap["target_pfc_primary"],
+		"the deleted rule's definition survives INTACT, not as an empty placeholder")
+	assert.Equal(t, "Coffee is Food", orphanSnap["name"],
+		"the snapshot still names the rule that is gone")
 }
 
 // TestRuleExecutionHistory_ReadIsTenancyScoped_Integration — one user's automation history is never

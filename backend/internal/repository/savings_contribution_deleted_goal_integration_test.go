@@ -141,7 +141,13 @@ func TestSavingsContributions_DeletedGoal_Integration(t *testing.T) {
 	assert.Equal(t, "manual", got[0].Source)
 	assert.Equal(t, 400.0, got[0].Amount)
 	assert.Equal(t, "confirmed", got[0].Status)
-	assert.NotEmpty(t, got[0].OccurredOn, "the date the user recorded must survive the tombstone")
+	// NotEmpty would pass for any string the scan happened to produce; the fixture seeded
+	// CURRENT_DATE - 1, so assert THAT date. Expected is read back from the same session so the
+	// comparison uses the same UTC calendar day the fixture's CURRENT_DATE resolved against.
+	var expectedOccurredOn string
+	require.NoError(t, tx.QueryRow(ctx, `SELECT (CURRENT_DATE - 1)::text`).Scan(&expectedOccurredOn))
+	assert.Equal(t, expectedOccurredOn, got[0].OccurredOn,
+		"the date the user recorded must survive the tombstone unaltered")
 
 	// --- 2. ...and correctly summed (confirmed only, proposed excluded). ----------------------
 	sum, err := repo.SumConfirmedByDeletedGoal(ctx, userID, deletedGoalID)
