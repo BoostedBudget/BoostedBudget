@@ -387,29 +387,33 @@ func (s *accountService) checkFingerprintOwnership(ctx context.Context, blindIdx
 		// any cached read of that owner's is status-sensitive, this explicit bump is the only thing
 		// that closes the gap. Called AFTER the write above has committed (commit-then-bump).
 		//
-		// ⚠ #1561 NARROWED THIS. The original justification claimed "every cached analytics query
-		// filters accounts.status = 'active'", so the owner's net-worth, cash-flow AND spending
-		// aggregates all went stale; #1561 removed those nine household-scope predicates (personal
-		// scope has had none since #1109). The #1561 CORRECTION that replaced it was then wrong in
-		// turn: it said "the only status filter any of them can reach is
-		// GetAggregatedHistoryForHousehold's account-type join". There is no such filter. That join
-		// is unfiltered — `LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id`
-		// (repository/balance_snapshot_repository.go:320) — and status appears only as the first
-		// DISTINCT ON tiebreak, `(a.status = 'active') DESC NULLS LAST, a.id` (:313).
+		// ⚠ THIS JUSTIFICATION HAS NOW BEEN WRONG THREE TIMES, each time because the tree moved and
+		// the prose did not. Recorded rather than replaced silently:
+		//   1. "every cached analytics query filters accounts.status = 'active'" — #1561 removed the
+		//      nine household-scope predicates and personal scope had had none since #1109.
+		//   2. "the only status filter any of them can reach is GetAggregatedHistoryForHousehold's
+		//      account-type join" — that join was never filtered; status was a DISTINCT ON
+		//      preference, not a predicate.
+		//   3. "that preference is what makes this write cache-relevant" — #1569 T10.2 deleted the
+		//      preference. GetAggregatedHistoryForHousehold now joins the snapshot's OWN account
+		//      (a.id = bs.account_id) instead of every member of its chain, so there is nothing left
+		//      to prefer between.
 		//
-		// Re-derived, and stated as a preference rather than a filter: the three cached wrappers are
-		// analytics_service_cached.go, dashboard_preferences_service_cached.go and
-		// identity_resolver_cached.go; NONE of the queries they reach FILTERS on accounts.status, and
-		// exactly one of them — GetAggregatedHistoryForHousehold, via GetNetWorthTrend — PREFERS an
-		// active row when choosing which chain member's a.type a household balance is attributed to.
-		// That preference is what makes this write cache-relevant. The accounts LIST does filter
-		// status, but it is not a cached read (called directly from GetAccountsFiltered at :960).
+		// WHAT IS TRUE NOW, and re-derivable in one grep: NO cached read references accounts.status
+		// in any form — not as a filter, not as an ordering term. The four files a cache.GetOrLoad
+		// site can reach are pinned as cachedReadRepoFiles in
+		// repository/cache_completeness_write_set_test.go, and a qualified .status reference does
+		// not appear in any of them outside a comment.
 		//
-		// So the bump is still correct, on a much narrower basis: it covers the owner's HOUSEHOLD
-		// net-worth history, where expiring their accounts changes which a.type their balances are
-		// attributed to. For an owner in no household it now invalidates nothing — kept anyway,
-		// because over-invalidation costs one cache miss and this is a cross-user write the
-		// middleware structurally cannot see.
+		// So this write — `SET status = 'expired', expired_at = NOW()`, and nothing else — changes
+		// no cached answer at all. The bump is KEPT anyway and is not dead weight: over-invalidation
+		// costs one cache miss, this is a CROSS-USER write the HTTP middleware structurally cannot
+		// see, and the day someone adds a status-sensitive cached read this is the only thing
+		// standing between that read and a stale cross-user answer. Removing it would be trading a
+		// cache miss for a silent correctness cliff.
+		//
+		// The accounts LIST does filter status, but it is not a cached read (called directly from
+		// GetAccountsFiltered).
 		s.bumpCacheForDispossessedOwner(ctx, ownership.UserID)
 		return nil
 	}

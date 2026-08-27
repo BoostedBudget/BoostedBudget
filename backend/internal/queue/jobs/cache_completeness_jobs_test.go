@@ -243,18 +243,23 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"classified item_cleanup.go above (same file-level reasoning, same table): this sweep's " +
 		"own writes (LinkedItemRepository.MarkForCleanup/ClearCleanupSchedule) touch only " +
 		"linked_items bookkeeping columns (cleanup_scheduled_at and friends), never accounts.status " +
-		"— NO cached read filters accounts.status any more (#1561 removed the household-scope " +
-		"predicates; #1109 had already removed the personal-scope ones). Re-derived rather than " +
-		"inherited: the last cached read that was ever described as filtering it, " +
-		"`GetAggregatedHistoryForHousehold`, does not — its accounts join is unfiltered and status " +
-		"appears only as the FIRST term of that same query's DISTINCT ON tiebreak, `(a.status = " +
-		"'active') DESC NULLS LAST, a.id` (repository/balance_snapshot_repository.go). Cited by " +
-		"query name rather than by line: the " +
+		"— and NO cached read references accounts.status AT ALL any more, in any form. #1561 " +
+		"removed the household-scope predicates and #1109 the personal-scope ones; #1569 T10.2 then " +
+		"removed the LAST reference of any kind, the active-row DISTINCT ON preference in " +
+		"`GetAggregatedHistoryForHousehold`, when that query stopped joining accounts across a whole " +
+		"chain and started joining the snapshot's own account. Re-derive rather than inherit: grep " +
+		"for a qualified .status reference across the four files in cachedReadRepoFiles and nothing " +
+		"outside a comment comes back. Cited by query name rather than by line — the " +
 		"`repository/balance_snapshot_repository.go:NNN` form of this reference rotted three times " +
-		"(:313, then :320/:325, then displaced again by a 16-line doc note above it), so the " +
-		"identifier and the quoted SQL are the anchor. Status is still cache-" +
-		"RELEVANT there, via ordering; it is not a filter anywhere. And none filters on any " +
-		"linked_items column (confirmed by the same repo-wide grep item_cleanup.go's entry cites). " +
+		"(:313, then :320/:325, then displaced again by a 16-line doc note above it). " +
+		"⚠ linked_items IS now a cached-read table (#1569 T10.2: accountChainSupersessionCTE walks " +
+		"linked_items.replaced_by_id to tell a re-link chain from two maskless accounts sharing one " +
+		"user_account), which retires the older claim that no cached read touches the table at all. " +
+		"The verdict is unaffected and is now COLUMN-scoped: this sweep writes cleanup_notified_at " +
+		"and cleanup_scheduled_at, and the only linked_items columns any cached read touches are id " +
+		"and replaced_by_id — machine-checked by " +
+		"TestCachedReadsReadOnlyTheSuccessionColumnsOfLinkedItems in the repository guard, not " +
+		"asserted here. " +
 		"The actual Plaid /item/remove call and any accounts-table effect happen in a SEPARATE, " +
 		"HTTP-middleware-covered path (accountService.DeleteAccount), exactly as item_cleanup.go's " +
 		"entry documents."},
