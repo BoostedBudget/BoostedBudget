@@ -1706,20 +1706,31 @@ jobs:
         #   FILES=$(grep -rl '^//go:build integration' --include='*_test.go' .)
         #   PKGS=$(printf '%s\n' "$FILES" | xargs -n1 dirname | sort -u)   # 11 packages
         #   COVERPKG=$(printf '%s\n' "$PKGS" | tr '\n' ',' | sed 's/,$//')
-        #   go test $PKGS -tags integration -p 1 -timeout 15m \
-        #     -coverprofile=/tmp/int.out -covermode=atomic -coverpkg="$COVERPKG" ./...
+        #   go test $PKGS -tags integration -p 1 -timeout 10m -v \
+        #     -coverprofile=/tmp/int.out -covermode=atomic -coverpkg="$COVERPKG"
         #   go tool cover -func=/tmp/int.out | tail -1
-        # reported 80.3%, reproduced twice. Floor set to 77% — a few points below the measured
-        # baseline, not a guess — so it ratchets against regression without failing on ordinary
-        # environment variance (Postgres/Redis timing, etc.). Confirmed the gate can still fail:
-        # locally, `check-coverage.sh coverage-integration.out 81` on this same profile FAILED
+        #
+        # ⚠ THE COMMAND ABOVE IS THE ONE THE STEP ABOVE RUNS, AND IT DID NOT USED TO BE
+        # (#1569 T9-FIX item 9). It said `-timeout 15m` and appended `./...` after $PKGS, which
+        # widens the TEST TARGET back to every package — the exact mistake the paragraph above it
+        # exists to describe having already fixed once, restated as the reproduction recipe. A
+        # "reproduce CI exactly" comment that does not is worse than none: it produces a number
+        # under a different run and files it against this floor.
+        #
+        # Re-measured 2026-08-27 with the CORRECTED command, same warm Postgres 17 on port 5434:
+        # 80.2% (11 packages, all green). The 80.3% the widened command reported happens to land
+        # within noise of the right one, so the floor below did not have to move — but that is a
+        # coincidence, not a validation, and the recipe is now the thing it claims to be.
+        #
+        # Floor set to 77% — a few points below the measured baseline, not a guess — so it
+        # ratchets against regression without failing on ordinary environment variance
+        # (Postgres/Redis timing, etc.). Confirmed the gate can still fail: locally,
+        # `check-coverage.sh coverage-integration.out 81` on this same profile FAILED
         # ("80.3% is below threshold 81%") and `... 77` PASSED — RED above the measured value,
         # GREEN at the floor.
-        # (Two unrelated, already-uncommitted-locally test failures in
-        # portfolio_snapshot_repository_integration_test.go — TestPortfolioSnapshot_Upsert_-
-        # SameDayRelink_CountsTheChainOnce and TestPortfolioRepair_SameDayRelink_-
-        # ReconstructsTheChainOnce — reproduced consistently during this measurement without
-        # affecting the coverage figure below; out of this task's scope, see report.)
+        # (The two portfolio-snapshot re-link failures this paragraph used to record as
+        # "already-uncommitted-locally" were the money-doubling fix mid-flight; both are green as
+        # of the run that produced the 80.2% above.)
         #
         # Runs even if the tests step failed or was cancelled-but-not-cancelled, so a real
         # coverage regression is never hidden behind an unrelated red test (Round 7: steps
