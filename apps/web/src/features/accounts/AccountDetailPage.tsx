@@ -107,6 +107,28 @@ export function AccountDetailPage() {
   // Issue #1591: the pair is resolved once, by the helper that owns the "both or neither" rule, so
   // the page never decides on its own whether a half-pair is renderable.
   const lastKnown = getAccountLastKnownBalance(account)
+  // Issue #1569 T7.8 — this gate also decides whether a CLOSED account can reach its retained
+  // holdings history, so it was re-derived rather than inherited. It stays type-based, and here is
+  // why, so the next reader does not have to re-derive it either:
+  //
+  //   - `accounts.type` is CHECK-constrained to five values — depository, credit, loan,
+  //     investment, other (migration 000007, `valid_account_type`, still the only definition).
+  //     `brokerage` is NOT one of them: that value belongs to `user_accounts.primary_type`, a
+  //     different column on a different table, which is what the purge-copy comment on
+  //     AccountsPage is about. So "some other type holds positions" is a narrower claim than it
+  //     looks.
+  //   - The column is write-once. It is set from Plaid at insert (account_service.go) and no
+  //     UPDATE in account_repository.go touches it, so a captured account cannot drift out of the
+  //     gate after its history was written.
+  //   - `holding_snapshots` rows come only from holdingRepository.ReplaceForAccount, whose only
+  //     caller is the /investments/holdings/get sync — and Plaid returns holdings only for
+  //     investment accounts. None of the other four types can carry a retained position.
+  //
+  // The alternative — gate on the retained data existing — was rejected on cost, not on taste: it
+  // would mount the history query on EVERY account detail page (a depository account included) to
+  // discover a row that provably is not there, and the investments route has 0.13 kB of its 7 kB
+  // gzip budget left. If accounts.type ever gains a value that can hold positions, this gate must
+  // be revisited — TestAccountTypeUniverseMatchesTheHoldingsGate (backend) fails when it does.
   const isInvestment = account.type === 'investment'
   const isClosed = isInactive(account)
 
