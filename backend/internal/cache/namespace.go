@@ -66,11 +66,37 @@ type namespaceConfig struct {
 // namespaceRegistry is the single source of truth for every namespace's TTL, schema version,
 // scope kind, and default enablement.
 var namespaceRegistry = map[Namespace]namespaceConfig{
+	// SchemaVersion 2 (#1569, round 11): two query-semantics changes landed in this namespace's
+	// underlying repositories without any generation bump (a deploy never touches the per-scope
+	// generation token — it is minted once and only Bump()'d by explicit invalidation), so a
+	// pre-fix Redis entry surviving a deploy would otherwise stay a valid hit under post-fix code
+	// until its own TTL expired:
+	//  1. balance_snapshot_repository.go's GetAggregatedHistory / GetAggregatedHistoryForHousehold
+	//     moved from chain-collapsed to per-physical-account grain (fixing a balance/net-worth
+	//     halving bug). GetNetWorthTrend is this namespace's only consumer of those two methods.
+	//  2. analytics_repository.go's household-scoped queries (getCashFlowAggregationHousehold,
+	//     getCashFlowGroupedHousehold, getSpendingByCategoryHousehold, getSpendingByMerchantHousehold,
+	//     getSpendingTrendsHousehold, getAverageMonthlySpendHousehold,
+	//     getSavingsRateForPeriodHousehold, getMonthOverMonthSpendingHousehold,
+	//     getIncomeSourceBreakdownHousehold) moved from householdAccountsCTE to
+	//     householdGrantsCTE, fixing a household spending/net-worth disagreement (#1569 T23) —
+	//     all of those methods are cached in this namespace via GetCashFlowSummary/History,
+	//     GetSpendingByCategory/Merchant/Trends, GetAverageMonthlySpend, GetSavingsRateForPeriod,
+	//     GetMonthOverMonthSpendingChange, and GetIncomeSourceBreakdown.
+	// See TestSchemaVersionBump_OrphansEntriesWrittenUnderThePriorVersion.
 	NamespaceAnalytics: {
-		TTL: 120 * time.Second, SchemaVersion: 1, ScopeKind: ScopeUser, DefaultEnabled: true,
+		TTL: 120 * time.Second, SchemaVersion: 2, ScopeKind: ScopeUser, DefaultEnabled: true,
 	},
+	// SchemaVersion 2 (#1569, round 11): analytics_repository.go added `t.deleted_at IS NULL` to
+	// the queries backing GetTopExpense, GetLargestTransactionsForPeriod,
+	// GetCategoryBreakdownForMerchant, and GetUnusualSpend — all cached in this namespace, all
+	// user-scoped only (none of these four has a household variant). That changes what those
+	// queries return for the same arguments (a soft-deleted transaction no longer counts), and —
+	// same as NamespaceAnalytics above — this namespace's generation token is not bumped by a
+	// deploy either, so the SchemaVersion bump is what actually makes the fix take effect for any
+	// entry a deploy finds already sitting in Redis.
 	NamespaceAnalyticsRows: {
-		TTL: 300 * time.Second, SchemaVersion: 1, ScopeKind: ScopeUser, DefaultEnabled: true,
+		TTL: 300 * time.Second, SchemaVersion: 2, ScopeKind: ScopeUser, DefaultEnabled: true,
 	},
 	NamespaceDashPrefs: {
 		TTL: 300 * time.Second, SchemaVersion: 1, ScopeKind: ScopeUser, DefaultEnabled: true,
