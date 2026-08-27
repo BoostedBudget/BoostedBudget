@@ -325,6 +325,12 @@ func personalLatestSnapshotSQL(cutoffClause string) string {
 		WHERE NOT EXISTS (
 		    SELECT 1 FROM superseded x WHERE x.account_id = l.account_id
 		)
+		-- A STABLE ORDER, restored deliberately. The pre-#1569-T10.2 form was a single DISTINCT ON,
+		-- whose ORDER BY also ordered the RESULT; splitting the statement in two dropped that, and an
+		-- unordered result is user-visible here — GetBalanceSummary appends to
+		-- AccountTypeBalance.Accounts in row order, so the account list under each type could have
+		-- reshuffled between two identical requests.
+		ORDER BY COALESCE(l.account_id::text, l.user_account_id::text, ''), l.id
 	`
 }
 
@@ -392,6 +398,9 @@ func (r *balanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Con
 		WHERE NOT EXISTS (
 		    SELECT 1 FROM superseded x WHERE x.account_id = l.account_id
 		)
+		-- Stable order, for the same reason as the personal read: the household balance loop appends
+		-- to its per-type account list in row order.
+		ORDER BY COALESCE(l.account_id::text, l.user_account_id::text, ''), l.id
 	`
 
 	args := householdScopeArgs(requestingUserID, scope)
