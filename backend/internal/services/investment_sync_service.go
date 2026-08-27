@@ -312,6 +312,10 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 	// gate is unchanged: Present is the same plain membership test the bare set gave.)
 	roster := PlaidAccountRosterFrom(resp.Accounts, nil)
 
+	// The UTC day the row-level captures filed under, read from the SERVER by
+	// ReplaceForAccount. Zero until the first account is replaced — see the fallback below.
+	var latestCapturedDay time.Time
+
 	// For each internal account, replace holdings atomically
 	for plaidAccountID, internalAccountID := range accountMap {
 		plaidHoldings := holdingsByAccount[plaidAccountID] // empty if liquidated OR response is partial for this account
@@ -374,8 +378,18 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 			continue
 		}
 
-		if err := s.holdingRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, domainHoldings); err != nil {
+		capturedDay, err := s.holdingRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, domainHoldings)
+		if err != nil {
 			return result, fmt.Errorf("failed to replace holdings for account %s: %w", internalAccountID, err)
+		}
+		// #1569 T9.1 item C: the aggregate below must be filed under the day the ROWS were filed
+		// under, and that day comes from Postgres. Keeping the LATEST is the choice for an item
+		// whose accounts straddle UTC midnight: both days then have partial coverage — which the
+		// repair reports honestly rather than silently rebuilding — and the aggregate names the
+		// more recent state, which is the one the next sync and the daily whole-user capture will
+		// complete.
+		if capturedDay.After(latestCapturedDay) {
+			latestCapturedDay = capturedDay
 		}
 		cacheBumpNeeded = true
 
@@ -410,7 +424,25 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 	// snapshot should be summing. Gating on SkippedIncomplete would suppress the snapshot forever
 	// for that account instead of just for one retriable sync.
 	if len(result.Errors) == 0 && s.portfolioSnapshotRepo != nil {
-		snapshotDate := time.Now().UTC().Truncate(24 * time.Hour)
+		// #1569 T9.1 item C: take the day from the capture, never from a second clock.
+		//
+		// The Go process and Postgres keep independent clocks, so a run that crosses UTC midnight
+		// while the other side has not files the holding_snapshots rows under day D and this
+		// aggregate under D+1 — an aggregate with nothing behind it, and a day of rows no
+		// aggregate names. portfolio_snapshot_repair.go excludes the current server day, so that
+		// orphan survives the next repair pass and is later refused for lack of coverage.
+		// portfolio_snapshot_worker.go already takes its day from CaptureForUser's return for
+		// exactly this reason; this path was the outlier.
+		//
+		// ⚠ The Go clock survives only as the no-capture fallback, and that case is not the bug:
+		// nothing was written this run, so there is no row-level day to agree with. Every path
+		// that DID write rows uses theirs. Do not "fix" the fallback by comparing the two clocks —
+		// the recorded skew between this host and the container is about a millisecond, so a
+		// comparison would be measuring noise.
+		snapshotDate := latestCapturedDay
+		if snapshotDate.IsZero() {
+			snapshotDate = time.Now().UTC().Truncate(24 * time.Hour)
+		}
 		if _, snapErr := s.portfolioSnapshotRepo.Upsert(ctx, linkedItem.UserID, snapshotDate); snapErr != nil {
 			s.logger.Warn("portfolio snapshot upsert failed (non-fatal)",
 				"user_id", linkedItem.UserID,

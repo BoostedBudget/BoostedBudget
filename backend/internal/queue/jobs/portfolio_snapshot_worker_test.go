@@ -27,7 +27,7 @@ func (m *mockHoldingRepo) GetDistinctUserIDsWithHoldings(ctx context.Context) ([
 	return ids, args.Error(1)
 }
 
-func (m *mockHoldingRepo) ReplaceForAccount(ctx context.Context, accountID, userID string, holdings []domain.Holding) error {
+func (m *mockHoldingRepo) ReplaceForAccount(ctx context.Context, accountID, userID string, holdings []domain.Holding) (time.Time, error) {
 	panic("not implemented")
 }
 

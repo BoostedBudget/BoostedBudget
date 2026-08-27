@@ -57,7 +57,7 @@ func TestHoldingHistoryRead_ClosedAccount_HistoryStaysReadableWhileCurrentStateI
 	userID, linkedItemID, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-read-closed")
 
 	holdingRepo := NewHoldingRepository(tx)
-	require.NoError(t, holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
+	require.NoError(t, holdingsReplaced(holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
 		UserID:           userID.String(),
 		AccountID:        accountID.String(),
 		SecurityID:       secID.String(),
@@ -65,7 +65,7 @@ func TestHoldingHistoryRead_ClosedAccount_HistoryStaysReadableWhileCurrentStateI
 		CostBasis:        f64(4000),
 		InstitutionValue: f64(5000),
 		InstitutionPrice: f64(500),
-	}}))
+	}})))
 
 	// The user disconnects the bank. Production path, with the cause stamped.
 	accountRepo := NewAccountRepository(tx, newTestFieldEncryptor(t))
@@ -122,10 +122,10 @@ func TestHoldingHistoryRead_ForeignUser_SeesNothing(t *testing.T) {
 	otherUserID, _, _, _ := seedInvestmentFixture(ctx, t, tx, "hist-read-ownerB")
 
 	holdingRepo := NewHoldingRepository(tx)
-	require.NoError(t, holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
+	require.NoError(t, holdingsReplaced(holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
 		UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(),
 		Quantity: 1, InstitutionValue: f64(100),
-	}}))
+	}})))
 
 	snapRepo := NewHoldingSnapshotRepository(tx)
 
@@ -162,15 +162,15 @@ func TestHoldingHistoryRead_LiquidatedPosition_IsExcludedFromTheDay(t *testing.T
 	require.NoError(t, err)
 
 	holdingRepo := NewHoldingRepository(tx)
-	require.NoError(t, holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
+	require.NoError(t, holdingsReplaced(holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secA.String(), Quantity: 1, InstitutionValue: f64(100)},
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secB.String(), Quantity: 2, InstitutionValue: f64(200)},
-	}))
+	})))
 
 	// Second sync the same day: secB was sold.
-	require.NoError(t, holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
+	require.NoError(t, holdingsReplaced(holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secA.String(), Quantity: 1, InstitutionValue: f64(100)},
-	}))
+	})))
 
 	snapRepo := NewHoldingSnapshotRepository(tx)
 	day := todayUTC(ctx, t, tx).Format("2006-01-02")
@@ -201,16 +201,16 @@ func TestHoldingHistoryRead_MultipleDays_AreListedNewestFirstAndReadIndependentl
 	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-read-days")
 	holdingRepo := NewHoldingRepository(tx)
 
-	require.NoError(t, holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
+	require.NoError(t, holdingsReplaced(holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
 		UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(),
 		Quantity: 10, InstitutionValue: f64(1000),
-	}}))
+	}})))
 	backdateCaptures(ctx, t, tx, accountID)
 
-	require.NoError(t, holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
+	require.NoError(t, holdingsReplaced(holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
 		UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(),
 		Quantity: 12, InstitutionValue: f64(1500),
-	}}))
+	}})))
 
 	snapRepo := NewHoldingSnapshotRepository(tx)
 	dates, err := snapRepo.ListHistoryDatesForAccount(ctx, userID.String(), accountID.String())
@@ -244,9 +244,9 @@ func TestHoldingHistoryRead_UnretainedDay_ReturnsEmptyFromTheRepository(t *testi
 
 	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-read-gap")
 	holdingRepo := NewHoldingRepository(tx)
-	require.NoError(t, holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
+	require.NoError(t, holdingsReplaced(holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
 		UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(), Quantity: 1,
-	}}))
+	}})))
 
 	snapRepo := NewHoldingSnapshotRepository(tx)
 	positions, err := snapRepo.GetHistoryForAccountOnDate(ctx, userID.String(), accountID.String(), "2001-01-01")
@@ -267,9 +267,9 @@ func TestHoldingHistoryRead_MissingValues_SurviveAsNullNotZero(t *testing.T) {
 
 	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-read-nulls")
 	holdingRepo := NewHoldingRepository(tx)
-	require.NoError(t, holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
+	require.NoError(t, holdingsReplaced(holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
 		UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(), Quantity: 7,
-	}}))
+	}})))
 
 	snapRepo := NewHoldingSnapshotRepository(tx)
 	day := todayUTC(ctx, t, tx).Format("2006-01-02")
@@ -315,10 +315,10 @@ func TestHoldingHistoryRead_SecondAccountOfSameUser_DoesNotBleedIn(t *testing.T)
 	require.NoError(t, err)
 
 	holdingRepo := NewHoldingRepository(tx)
-	require.NoError(t, holdingRepo.ReplaceForAccount(ctx, accountA.String(), userID.String(), []domain.Holding{{
+	require.NoError(t, holdingsReplaced(holdingRepo.ReplaceForAccount(ctx, accountA.String(), userID.String(), []domain.Holding{{
 		UserID: userID.String(), AccountID: accountA.String(), SecurityID: secA.String(),
 		Quantity: 1, InstitutionValue: f64(100),
-	}}))
+	}})))
 	// Account B gets TWO days, and the older one is a day account A does not have at all. Both
 	// halves are load-bearing:
 	//   - the backdated day catches a date listing that is not account-scoped (it would show up in
@@ -327,10 +327,10 @@ func TestHoldingHistoryRead_SecondAccountOfSameUser_DoesNotBleedIn(t *testing.T)
 	//     among A's positions). A backdated-only fixture proves only the first, and a mutant that
 	//     dropped the account filter from the position read survived exactly that gap.
 	replaceB := func(qty float64, value float64) {
-		require.NoError(t, holdingRepo.ReplaceForAccount(ctx, accountB.String(), userID.String(), []domain.Holding{{
+		require.NoError(t, holdingsReplaced(holdingRepo.ReplaceForAccount(ctx, accountB.String(), userID.String(), []domain.Holding{{
 			UserID: userID.String(), AccountID: accountB.String(), SecurityID: secB.String(),
 			Quantity: qty, InstitutionValue: f64(value),
-		}}))
+		}})))
 	}
 	replaceB(9, 900)
 	backdateCaptures(ctx, t, tx, accountB)
@@ -386,13 +386,13 @@ func TestHoldingHistoryRead_FullyLiquidatedDay_StaysInTheDateListingAndRendersEm
 	userID, linkedItemID, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-read-liquidated")
 
 	holdingRepo := NewHoldingRepository(tx)
-	require.NoError(t, holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
+	require.NoError(t, holdingsReplaced(holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{{
 		UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(),
 		Quantity: 10, CostBasis: f64(4000), InstitutionValue: f64(5000), InstitutionPrice: f64(500),
-	}}))
+	}})))
 
 	// The one holding is sold, confirmed complete: Plaid returned the account with no positions.
-	require.NoError(t, holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{}))
+	require.NoError(t, holdingsReplaced(holdingRepo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{})))
 
 	// Nothing was destroyed by the liquidation — the row is still there, marked absent.
 	var retained, present int
