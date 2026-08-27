@@ -14,7 +14,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
@@ -63,10 +62,11 @@ func (h *HoldingHistoryHandler) GetAccountHoldingsHistory(ctx context.Context, i
 	if _, err := uuid.Parse(input.AccountID); err != nil {
 		return nil, huma.Error400BadRequest("invalid account_id: must be a valid UUID")
 	}
-	if input.AsOf != "" {
-		if _, err := time.Parse(isoDateLayout, input.AsOf); err != nil {
-			return nil, huma.Error400BadRequest("invalid as_of: must be a valid UTC calendar day formatted YYYY-MM-DD")
-		}
+	// parseHistoryDay (account_balance_history.go) does the same time.Parse-based validation this
+	// endpoint needs; only its error is used here — the string form of AsOf, not the *time.Time,
+	// is what the service below takes.
+	if _, err := parseHistoryDay("as_of", input.AsOf); err != nil {
+		return nil, err
 	}
 
 	history, err := h.historyService.GetAccountHoldingsHistory(ctx, input.UserID, input.AccountID, input.AsOf)
