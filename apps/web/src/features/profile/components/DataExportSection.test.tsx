@@ -27,6 +27,9 @@ const sampleExport = {
 let createdObjectURLs: string[]
 let revokedObjectURLs: string[]
 let clickedAnchors: HTMLAnchorElement[]
+// Set by the deferred-revocation test to observe what has happened by the first microtask AFTER
+// click() returns. See that test for why a microtask is the discriminator.
+let onAnchorClick: (() => void) | null
 let originalCreate: typeof URL.createObjectURL
 let originalRevoke: typeof URL.revokeObjectURL
 let originalCreateElement: typeof document.createElement
@@ -38,6 +41,7 @@ beforeEach(() => {
   createdObjectURLs = []
   revokedObjectURLs = []
   clickedAnchors = []
+  onAnchorClick = null
 
   originalCreate = URL.createObjectURL
   originalRevoke = URL.revokeObjectURL
@@ -58,6 +62,7 @@ beforeEach(() => {
       const anchor = element as HTMLAnchorElement
       anchor.click = () => {
         clickedAnchors.push(anchor)
+        onAnchorClick?.()
       }
     }
     return element
@@ -100,6 +105,39 @@ describe('DataExportSection', () => {
 
     await waitFor(() => expect(revokedObjectURLs.length).toBe(1))
     expect(revokedObjectURLs).toEqual(createdObjectURLs)
+  })
+
+  it('does not revoke the object URL in the same task as the click, which aborts the download', async () => {
+    // ⚠ THE ONE ASSERTION THIS FILE COULD NOT MAKE BEFORE. The previous version stubbed both
+    // createObjectURL and click, so it could see THAT the URL was revoked but never WHEN — and
+    // "when" is the whole defect. Chrome holds the blob for an in-flight download; Firefox and
+    // Safari have historically aborted it when the URL is revoked before the download starts. On
+    // the GDPR Article 20 path, that is a silent failure to hand the user their data.
+    //
+    // A microtask is the discriminator, and it is deterministic rather than timing-dependent. The
+    // hook's body after `await getDataExport()` runs to completion synchronously: createObjectURL,
+    // click(), then the finally. A revoke inside that finally therefore lands BEFORE any microtask
+    // queued from within click() can run, so this reads 1. A revoke deferred to a macrotask lands
+    // after, so this reads 0.
+    // Held on an object rather than in a `let`: TypeScript's control-flow analysis cannot see the
+    // assignment inside the microtask and would narrow a plain local to `null` at the assertions.
+    const observed: { revokedByFirstMicrotaskAfterClick: number | null } = {
+      revokedByFirstMicrotaskAfterClick: null,
+    }
+    onAnchorClick = () => {
+      queueMicrotask(() => {
+        observed.revokedByFirstMicrotaskAfterClick = revokedObjectURLs.length
+      })
+    }
+
+    render(<DataExportSection />)
+    fireEvent.click(screen.getByRole('button', { name: /download my data/i }))
+
+    await waitFor(() => expect(observed.revokedByFirstMicrotaskAfterClick).not.toBeNull())
+    expect(observed.revokedByFirstMicrotaskAfterClick).toBe(0)
+
+    // And it still happens — deferring is not the same as leaking.
+    await waitFor(() => expect(revokedObjectURLs).toEqual(createdObjectURLs))
   })
 
   it('reports success in words and masks the record count', async () => {
