@@ -455,7 +455,7 @@ export function useGetDeletedSavingsGoals<TData = Awaited<ReturnType<typeof getD
 
 
 /**
- * Returns the contributions retained under a goal the user has DELETED, newest first, with their confirmed total (Issue #1569). Deleting a goal tombstones it and keeps every contribution logged against it — including amounts the user entered by hand, which no provider can supply again — and this is the only endpoint that can read them back; the live GET /savings-goals/{goalID}/contributions deliberately returns nothing for a deleted goal. Returns an empty list for a goal that is not deleted. Pair it with GET /savings-goals/deleted, and with POST /savings-goals/{id}/purge to destroy them for good.
+ * Returns the contributions retained under a goal the user has DELETED, newest first, with their confirmed total (Issue #1569). Deleting a goal tombstones it and keeps every contribution STILL logged against it — including amounts the user entered by hand, which no provider can supply again. A contribution the user explicitly deleted earlier via DELETE /savings-goals/{goalID}/contributions/{id} was destroyed then and is not listed here. This is the only endpoint that can read the retained ones back; the live GET /savings-goals/{goalID}/contributions deliberately returns nothing for a deleted goal. Returns an empty list for a goal that is not deleted. Pair it with GET /savings-goals/deleted, and with POST /savings-goals/{id}/purge to destroy them for good.
  * @summary List a deleted savings goal's retained contributions
  */
 export const listDeletedSavingsGoalContributions = (
@@ -641,7 +641,7 @@ export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof g
 
 
 /**
- * Returns all confirmed and proposed contributions for a savings goal, newest first. Returns an empty list for a goal the user has DELETED — those contributions are retained but are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).
+ * Returns all confirmed and proposed contributions for a savings goal, newest first. Returns an empty list for a goal the user has DELETED — the contributions still logged against it are retained and are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).
  * @summary List savings goal contributions
  */
 export const listSavingsGoalContributions = (
