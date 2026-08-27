@@ -974,12 +974,14 @@ func TestAccountRepository_GetByUserAccountAndStatus_Active(t *testing.T) {
 			now, now,
 		)
 
-	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status").
-		WithArgs(userAccountID, "active").
+	userID := uuid.New().String()
+
+	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status.*AND user_id").
+		WithArgs(userAccountID, "active", userID).
 		WillReturnRows(rows)
 
 	// Execute - this method should exist for stable queries across re-links
-	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "active")
+	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "active", userID)
 
 	// Assert
 	assert.NoError(t, err)
@@ -1020,12 +1022,14 @@ func TestAccountRepository_GetByUserAccountAndStatus_Replaced(t *testing.T) {
 			now, now,
 		)
 
-	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status").
-		WithArgs(userAccountID, "replaced").
+	userID := uuid.New().String()
+
+	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status.*AND user_id").
+		WithArgs(userAccountID, "replaced", userID).
 		WillReturnRows(rows)
 
 	// Execute
-	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "replaced")
+	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "replaced", userID)
 
 	// Assert
 	assert.NoError(t, err)
@@ -1054,16 +1058,53 @@ func TestAccountRepository_GetByUserAccountAndStatus_NotFound(t *testing.T) {
 		"created_at", "updated_at",
 	})
 
-	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status").
-		WithArgs(userAccountID, "active").
+	userID := uuid.New().String()
+
+	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status.*AND user_id").
+		WithArgs(userAccountID, "active", userID).
 		WillReturnRows(rows)
 
 	// Execute
-	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "active")
+	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "active", userID)
 
 	// Assert - should return empty slice (not an error) when no match found
 	assert.NoError(t, err)
 	assert.Empty(t, accounts)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_GetByUserAccountAndStatus_ScopesToUserID pins Issue #1569 R11 T2: this
+// query previously had NO user_id predicate at all, so any caller supplying a raw user_account_id
+// (a client-facing stable identifier) could read another user's accounts. Asserting the SQL text
+// contains "AND user_id" AND that the third bind parameter is the userID proves the predicate was
+// added, not merely that the query still runs.
+func TestAccountRepository_GetByUserAccountAndStatus_ScopesToUserID(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userAccountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"created_at", "updated_at",
+	})
+
+	// pgxmock.WithArgs matches positionally: if the implementation dropped the user_id bind
+	// parameter (or put it in the wrong position), this expectation would not match and the
+	// query would error — that failure IS the assertion.
+	mock.ExpectQuery(`SELECT.*FROM accounts.*WHERE user_account_id = \$1 AND status = \$2 AND user_id = \$3`).
+		WithArgs(userAccountID, "active", userID).
+		WillReturnRows(rows)
+
+	_, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "active", userID)
+
+	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

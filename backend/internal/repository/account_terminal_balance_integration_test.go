@@ -156,7 +156,7 @@ func TestAccountRepository_TerminalAccount_CarriesNoCurrentBalance_Integration(t
 	})
 
 	t.Run("GetByUserAccountAndStatus", func(t *testing.T) {
-		got, err := repo.GetByUserAccountAndStatus(ctx, userAccountID.String(), string(domain.AccountStatusRemoved))
+		got, err := repo.GetByUserAccountAndStatus(ctx, userAccountID.String(), string(domain.AccountStatusRemoved), userID.String())
 		require.NoError(t, err)
 		require.Len(t, got, 1)
 		assertNoBalance(t, "GetByUserAccountAndStatus", &got[0])

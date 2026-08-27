@@ -334,8 +334,8 @@ func (m *MockAccountRepository) GetAccountsWithInstitutionFiltered(ctx context.C
 
 // GetByUserAccountAndStatus retrieves accounts by user_account_id and status.
 // Issue #171 - Plaid Re-Link Handling
-func (m *MockAccountRepository) GetByUserAccountAndStatus(ctx context.Context, userAccountID, status string) ([]domain.Account, error) {
-	args := m.Called(ctx, userAccountID, status)
+func (m *MockAccountRepository) GetByUserAccountAndStatus(ctx context.Context, userAccountID, status, userID string) ([]domain.Account, error) {
+	args := m.Called(ctx, userAccountID, status, userID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -1785,7 +1785,7 @@ func TestDisconnectAccount_HidesUserAccountWhenLastAccount(t *testing.T) {
 		return job.Kind() == "item_cleanup"
 	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
 	// No remaining active accounts for this user_account
-	mockAccountRepo.On("GetByUserAccountAndStatus", ctx, userAccountID, string(domain.AccountStatusActive)).
+	mockAccountRepo.On("GetByUserAccountAndStatus", ctx, userAccountID, string(domain.AccountStatusActive), userID).
 		Return([]domain.Account{}, nil)
 	mockUserAccountSvc.On("SetHidden", ctx, userAccountID, userID, true).Return(nil)
 
@@ -1840,7 +1840,7 @@ func TestDisconnectAccount_DoesNotHideWhenOtherAccountsRemain(t *testing.T) {
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
 	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(1, nil)
-	mockAccountRepo.On("GetByUserAccountAndStatus", ctx, userAccountID, string(domain.AccountStatusActive)).
+	mockAccountRepo.On("GetByUserAccountAndStatus", ctx, userAccountID, string(domain.AccountStatusActive), userID).
 		Return([]domain.Account{remainingAccount}, nil)
 
 	err := svc.DisconnectAccount(ctx, accountID, userID)
@@ -1898,7 +1898,7 @@ func TestDisconnectAccount_SkipsHidingWhenUserAccountSvcNil(t *testing.T) {
 
 	require.NoError(t, err, "DeleteAccount should succeed even without userAccountSvc")
 	mockAccountRepo.AssertExpectations(t)
-	mockAccountRepo.AssertNotCalled(t, "GetByUserAccountAndStatus", mock.Anything, mock.Anything, mock.Anything)
+	mockAccountRepo.AssertNotCalled(t, "GetByUserAccountAndStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestDisconnectAccount_SkipsHidingWhenUserAccountIDNil tests that the hiding logic is skipped
@@ -1948,7 +1948,7 @@ func TestDisconnectAccount_SkipsHidingWhenUserAccountIDNil(t *testing.T) {
 	mockAccountRepo.AssertExpectations(t)
 	// SetHidden and GetByUserAccountAndStatus should NOT be called
 	mockUserAccountSvc.AssertNotCalled(t, "SetHidden", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-	mockAccountRepo.AssertNotCalled(t, "GetByUserAccountAndStatus", mock.Anything, mock.Anything, mock.Anything)
+	mockAccountRepo.AssertNotCalled(t, "GetByUserAccountAndStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestPurgeAccount_Success proves PurgeAccount fetches the account first (for linked_item_id /

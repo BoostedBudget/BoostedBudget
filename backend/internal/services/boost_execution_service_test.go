@@ -2790,6 +2790,71 @@ func TestExecuteSavingsGoal_RejectsMismatchedOwner(t *testing.T) {
 		"no suggestion must be created for a savings_goal boost referencing another user's goal")
 }
 
+// TestExecuteSavingsGoal_AmbiguousChain_UsesPhysicalAccount_NotGuess pins #1569 R11 T2's
+// deliberate site-3 decision: when the savings goal's chain has more than one live account
+// (ErrAmbiguousActiveAccount), executeSavingsGoal falls back to the goal's own physical
+// AccountID rather than guessing between the two live siblings — and, UNLIKE site 2 (the
+// transfer-suggestion source/destination), it still creates the suggestion, because the
+// physical row IS the account the goal was created against, not an unrelated guess.
+func TestExecuteSavingsGoal_AmbiguousChain_UsesPhysicalAccount_NotGuess(t *testing.T) {
+	ctx := context.Background()
+
+	userID := "user-1"
+	goalID := "goal-ambiguous-chain"
+	uaid := "uaid-ambiguous"
+
+	goalRepo := &mockSavingsGoalRepository{
+		goals: []*domain.SavingsGoal{
+			{
+				ID:            goalID,
+				UserID:        userID,
+				Name:          "Emergency Fund",
+				AccountID:     "physical-savings-account",
+				UserAccountID: &uaid,
+			},
+		},
+	}
+	execRepo := &mockBoostExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	boostRepo := &mockBoostsRepository{}
+
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetChainResolver(&stubChainResolver{resolveErr: ErrAmbiguousActiveAccount})
+
+	actionsJSON, _ := json.Marshal(map[string]interface{}{
+		"savings_goal_id": goalID,
+		"from_account_id": "from-account",
+		"amount_type":     "fixed",
+		"amount":          100.0,
+	})
+	boost := &domain.Boost{
+		ID:        "rule-savings-ambiguous",
+		UserID:    userID,
+		Name:      "Ambiguous chain savings boost",
+		Enabled:   true,
+		BoostType: domain.BoostTypeSavingsGoal,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Actions:        actionsJSON,
+		ConditionLogic: "AND",
+	}
+
+	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{
+		domain.EventDataKeyRemaining: 500.0,
+		domain.EventDataKeyAmount:    1000.0,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, suggestionRepo.suggestions, 1,
+		"an ambiguous chain must not block the savings-goal suggestion — the physical account is a safe fallback")
+	require.NotNil(t, suggestionRepo.suggestions[0].ToAccountID)
+	assert.Equal(t, "physical-savings-account", *suggestionRepo.suggestions[0].ToAccountID,
+		"must use the goal's own physical account, not guess between the two live siblings")
+}
+
 // ============================================================================
 // GAP AF — derived transfer types must return 0 when trigger key absent
 // ============================================================================
@@ -2859,7 +2924,7 @@ type stubChainResolver struct {
 func (s *stubChainResolver) ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error) {
 	return nil, nil
 }
-func (s *stubChainResolver) ResolveActiveID(_ context.Context, _ string) (string, error) {
+func (s *stubChainResolver) ResolveActiveID(_ context.Context, _, _ string) (string, error) {
 	return s.resolvedID, s.resolveErr
 }
 func (s *stubChainResolver) ChainAccountIDs(_ context.Context, _ string) ([]string, error) {
@@ -3051,6 +3116,28 @@ func TestResolveAndVerifyUserAccount_AccountRepoNilFailOpen(t *testing.T) {
 	assert.False(t, skip, "nil accountRepo must not skip the rule (fail-open)")
 	assert.Equal(t, "user-account-new", resolvedID,
 		"nil accountRepo must still apply the resolved ID (fail-open; ownership check skipped)")
+}
+
+// TestResolveAndVerifyUserAccount_AmbiguousChain_SkipsRule pins #1569 R11 T2's site-2
+// decision directly against resolveAndVerifyUserAccount: when the chain resolver reports
+// ErrAmbiguousActiveAccount (more than one live sibling shares the user_account_id), the
+// function must skip the rule (return true) and must NOT call onResolve — unlike
+// ErrNoActiveAccount, which does not skip and simply leaves the raw pinned id in place.
+func TestResolveAndVerifyUserAccount_AmbiguousChain_SkipsRule(t *testing.T) {
+	ctx := context.Background()
+
+	stubResolver := &stubChainResolver{resolveErr: ErrAmbiguousActiveAccount}
+	svc := &boostExecutionService{chainResolver: stubResolver}
+
+	onResolveCalled := false
+	skip, err := svc.resolveAndVerifyUserAccount(ctx, "user-account-ambiguous", "user-1", "rule-ambiguous",
+		func(id string) { onResolveCalled = true },
+		"from_user_account_id",
+	)
+
+	require.NoError(t, err)
+	assert.True(t, skip, "an ambiguous chain must skip the rule rather than guess between live siblings")
+	assert.False(t, onResolveCalled, "onResolve must not be called for an ambiguous chain")
 }
 
 // ============================================================================

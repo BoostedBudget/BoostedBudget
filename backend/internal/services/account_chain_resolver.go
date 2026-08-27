@@ -15,6 +15,20 @@ var (
 
 	// ErrEmptyUserAccountID is returned when an empty user_account_id is provided.
 	ErrEmptyUserAccountID = errors.New("user_account_id must not be empty")
+
+	// ErrAmbiguousActiveAccount is returned when MORE THAN ONE active account shares the given
+	// user_account_id (#1569 R11 T2). This is an ordinary Plaid shape, not an edge case: two
+	// maskless accounts at one institution are FORCED to share a user_account_id by migration
+	// 000100's NULLS NOT DISTINCT unique index (see dashboard_service.go's
+	// buildChainAwareAccountMap doc comment for the same collision documented elsewhere).
+	//
+	// Before this sentinel existed, ResolveActiveID returned accounts[0] from a query ordered
+	// `ORDER BY created_at ASC` — deterministically the OLDER of the two live siblings — and
+	// discarded the other with no signal. That silent pick is the defect. Every caller MUST
+	// treat this distinctly from ErrNoActiveAccount: the chain is not dead, it is ambiguous, and
+	// guessing which live sibling is "the" account is exactly the bug this sentinel exists to
+	// stop a caller from re-introducing.
+	ErrAmbiguousActiveAccount = errors.New("more than one active account found for user_account_id")
 )
 
 // AccountChainResolver resolves the re-link account chain for a user.
@@ -29,11 +43,16 @@ type AccountChainResolver interface {
 	ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error)
 
 	// ResolveActiveID returns the account.id where status='active' for the
-	// given user_account_id. Used by write paths (e.g. rule execution) that
-	// store a stable user_account_id and need the current live account.id.
+	// given user_account_id, SCOPED to userID (#1569 R11 T2 — the underlying
+	// query previously had no user_id predicate at all). Used by write paths
+	// (e.g. rule execution) that store a stable user_account_id and need the
+	// current live account.id.
 	// Returns ErrEmptyUserAccountID if userAccountID is empty.
 	// Returns ErrNoActiveAccount if no active account exists in the chain.
-	ResolveActiveID(ctx context.Context, userAccountID string) (string, error)
+	// Returns ErrAmbiguousActiveAccount if MORE THAN ONE active account shares
+	// this user_account_id — this resolver refuses to guess between them, and
+	// every caller must decide deliberately what to do with the ambiguity.
+	ResolveActiveID(ctx context.Context, userAccountID, userID string) (string, error)
 
 	// ChainAccountIDs returns ALL account.id values in the chain for the given
 	// user_account_id (both active and replaced). Needed for history queries
@@ -68,18 +87,26 @@ func (r *accountChainResolver) ListActiveByUser(ctx context.Context, userID stri
 	return active, nil
 }
 
-// ResolveActiveID returns the account.id for the active account in the given user_account_id chain.
-func (r *accountChainResolver) ResolveActiveID(ctx context.Context, userAccountID string) (string, error) {
+// ResolveActiveID returns the account.id for the active account in the given user_account_id chain,
+// scoped to userID. It refuses to guess when more than one active account shares the chain — see
+// ErrAmbiguousActiveAccount.
+func (r *accountChainResolver) ResolveActiveID(ctx context.Context, userAccountID, userID string) (string, error) {
 	if userAccountID == "" {
 		return "", ErrEmptyUserAccountID
 	}
 
-	accounts, err := r.accountRepo.GetByUserAccountAndStatus(ctx, userAccountID, string(domain.AccountStatusActive))
+	accounts, err := r.accountRepo.GetByUserAccountAndStatus(ctx, userAccountID, string(domain.AccountStatusActive), userID)
 	if err != nil {
 		return "", err
 	}
 	if len(accounts) == 0 {
 		return "", ErrNoActiveAccount
+	}
+	if len(accounts) > 1 {
+		// #1569 R11 T2: two live siblings sharing one user_account_id is an ordinary Plaid
+		// shape (masked accounts), not corruption. Silently returning accounts[0] here is
+		// exactly the defect this task fixes — surface the ambiguity instead.
+		return "", ErrAmbiguousActiveAccount
 	}
 	return accounts[0].ID, nil
 }

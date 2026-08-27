@@ -1054,7 +1054,7 @@ func (s *accountService) cleanupAfterAccountRemoval(ctx context.Context, account
 	// userAccountID is populated by the caller from GetByIDAndUser (Task 1 fix).
 	// This is best-effort: log on failure, never return an error.
 	if s.userAccountSvc != nil && userAccountID != nil {
-		remaining, err := s.accountRepo.GetByUserAccountAndStatus(ctx, *userAccountID, string(domain.AccountStatusActive))
+		remaining, err := s.accountRepo.GetByUserAccountAndStatus(ctx, *userAccountID, string(domain.AccountStatusActive), userID)
 		if err != nil {
 			if s.logger != nil {
 				s.logger.Warn("failed to check remaining accounts for user_account",

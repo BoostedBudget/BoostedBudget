@@ -275,7 +275,7 @@ func TestAccountRepository_NullCurrencyCode_GetByUserAccountAndStatus(t *testing
 	_, err := tx.Exec(ctx, `UPDATE accounts SET currency_code = NULL WHERE id = $1`, acct.ID)
 	require.NoError(t, err)
 
-	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, string(domain.AccountStatusActive))
+	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, string(domain.AccountStatusActive), userID)
 	require.NoError(t, err, "a NULL currency_code row must not fail the scan")
 	require.Len(t, accounts, 1)
 	assert.Equal(t, "USD", accounts[0].CurrencyCode, "NULL currency_code should surface as the 'USD' default")

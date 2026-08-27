@@ -327,7 +327,7 @@ func (s *savingsProgressService) resolveBasisAccount(ctx context.Context, reques
 	accountID := goal.AccountID
 
 	if s.chainResolver != nil && goal.UserAccountID != nil && *goal.UserAccountID != "" {
-		activeID, err := s.chainResolver.ResolveActiveID(ctx, *goal.UserAccountID)
+		activeID, err := s.chainResolver.ResolveActiveID(ctx, *goal.UserAccountID, requesterID)
 		switch {
 		case err == nil:
 			accountID = activeID
@@ -335,6 +335,17 @@ func (s *savingsProgressService) resolveBasisAccount(ctx context.Context, reques
 			// The chain exists but every member is retained — the user disconnected and did
 			// not re-link. Keep the physical row so the caller's guard freezes the goal.
 			s.logger.Warn("savings_progress: no live account in chain — falling back to the retained row",
+				slog.String("goal_id", goal.ID),
+				slog.String("user_account_id", *goal.UserAccountID),
+			)
+		case errors.Is(err, ErrAmbiguousActiveAccount):
+			// #1569 R11 T2: two live siblings share this user_account_id (an ordinary Plaid
+			// shape — see ErrAmbiguousActiveAccount's doc comment). We cannot tell which one
+			// the goal actually means, and guessing is exactly the bug being fixed. Follow the
+			// SAME degradation philosophy as ErrNoActiveAccount above: keep the physical row so
+			// the caller's isAccountDisconnected guard freezes the goal, rather than silently
+			// recomputing from an arbitrarily-chosen sibling's balance.
+			s.logger.Warn("savings_progress: chain has more than one live account — refusing to guess, falling back to the retained row",
 				slog.String("goal_id", goal.ID),
 				slog.String("user_account_id", *goal.UserAccountID),
 			)
