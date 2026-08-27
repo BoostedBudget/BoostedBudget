@@ -29,6 +29,7 @@ import {
 import type { SavingsGoalContribution } from '@boostedbudget/api-client/models'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
+import { ErrorState } from '@/components/ui/error-state'
 import { LogContributionDialog } from './LogContributionDialog'
 
 export interface GoalContributionsSheetProps {
@@ -174,7 +175,7 @@ export function GoalContributionsSheet({
   const trackEvent = useTrackEvent()
   const [logDialogOpen, setLogDialogOpen] = useState(false)
 
-  const { data: contributions, isLoading, refetch } = useListSavingsGoalContributions(goalId, {
+  const { data: contributions, isLoading, error, refetch } = useListSavingsGoalContributions(goalId, {
     query: { enabled: open },
   })
 
@@ -222,7 +223,22 @@ export function GoalContributionsSheet({
               </div>
             )}
 
-            {!isLoading && visibleContributions.length === 0 && (
+            {/*
+              Issue #1569 T9.5 — a failed read must not fall through to "No contributions yet".
+              This sheet's twin, DeletedGoalContributions, already refuses to; the live ledger
+              did not. The copy says the read failed and offers a retry — it makes no claim
+              either way about what the ledger holds, which the client cannot know.
+            */}
+            {!isLoading && error && (
+              <ErrorState
+                title="We couldn't load these contributions"
+                description="The request failed. Try again in a moment."
+                onRetry={() => void refetch()}
+                className="border-0 bg-transparent"
+              />
+            )}
+
+            {!isLoading && !error && visibleContributions.length === 0 && (
               <p className="py-8 text-center text-sm text-muted-foreground">
                 No contributions yet. Use "Log contribution" to record one manually,
                 or sync a linked account to detect transfers.
