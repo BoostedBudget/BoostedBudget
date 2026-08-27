@@ -27,6 +27,17 @@
  * have not fetched the live ones yet would be the same class of false statement this task exists
  * to remove.
  *
+ * ⚠ AND IF THE LIVE LIST FAILS, WE SAY SO RATHER THAN FAIL OPEN (T7-FIX, finding C). "Not loaded
+ * yet" and "could not be loaded" produce the same `liveBoostIds === null`, and treating the second
+ * one silently would render every retained execution WITHOUT the "Deleted boost" marker — the panel
+ * would look complete and be wrong, which is precisely the failure this whole panel exists to
+ * remove. Failing open on a "this data was retained" marker is the wrong direction for #1569.
+ *
+ * The rows are still SHOWN, deliberately: withholding retained history because a SECOND, decorative
+ * request failed would destroy more of the promise than it protects. What is withheld is the
+ * CLAIM — a notice says the markers may be missing, and the analytics event carries the degraded
+ * flag so "no deleted rows" in the data is never confused with "we could not tell".
+ *
  * COLLAPSED BY DEFAULT, mirroring DeletedGoalsPanel: this is a look-back surface, not part of the
  * boost workflow, and it should not compete with the user's live automations.
  */
@@ -57,16 +68,23 @@ export function BoostAutomationHistoryPanel() {
     limit: PAGE_SIZE,
     offset,
   })
-  const { data: liveBoosts, isLoading: liveBoostsLoading } = useGetBoosts()
+  const { data: liveBoosts, isLoading: liveBoostsLoading, error: liveBoostsError } = useGetBoosts()
 
   const executions = useMemo<BoostExecution[]>(() => data?.executions ?? [], [data])
   const total = data?.total ?? executions.length
 
-  /** `null` while the live list is unknown — see the header comment. */
+  /**
+   * `null` while the live list is unknown — still loading, or failed. Both mean "we cannot say
+   * which boosts are deleted"; only the second is worth telling the user about, and
+   * `markersUnavailable` is what distinguishes them.
+   */
   const liveBoostIds = useMemo<ReadonlySet<string> | null>(() => {
     if (liveBoostsLoading || !liveBoosts) return null
     return new Set(liveBoosts.map((b) => b.id))
   }, [liveBoosts, liveBoostsLoading])
+
+  /** The live-boost read failed, so no row can be honestly marked "Deleted boost". */
+  const markersUnavailable = !liveBoostsLoading && !!liveBoostsError
 
   const isFromDeletedBoost = (execution: BoostExecution): boolean => {
     if (liveBoostIds === null) return false
@@ -85,6 +103,10 @@ export function BoostAutomationHistoryPanel() {
     if (opening) {
       trackEvent(ANALYTICS_EVENTS.BOOST_EXECUTION_HISTORY_VIEWED, {
         has_deleted_boost_rows: deletedRowCount > 0,
+        // Without this, a degraded view is indistinguishable in the data from a view where nothing
+        // was deleted — the measurement would silently under-count the affordance it exists to
+        // measure.
+        deleted_markers_unavailable: markersUnavailable,
       })
     }
   }
@@ -140,6 +162,16 @@ export function BoostAutomationHistoryPanel() {
             is no longer in your list are marked &ldquo;Deleted boost&rdquo; and show the name it
             ran under.
           </p>
+
+          {!isLoading && !error && markersUnavailable && (
+            <div
+              role="status"
+              className="mx-1 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+            >
+              We could not check which of your boosts are still active, so rows from boosts you have
+              deleted are not marked below. Every run is still listed &mdash; nothing was deleted.
+            </div>
+          )}
 
           {isLoading && (
             <div role="status" className="px-4 py-6 text-xs text-muted-foreground">
