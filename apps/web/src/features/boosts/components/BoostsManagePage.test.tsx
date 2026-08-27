@@ -475,6 +475,25 @@ describe('BoostsManagePage', () => {
       expect(await screen.findByRole('button', { name: /automation history/i })).toBeInTheDocument()
     })
 
+    // #1569 R8 layer 2. The page's error branch returned before the panel, so a failed BOOSTS
+    // read also hid the retained execution history — even though the panel has its own query and
+    // its own degraded-mode handling. The boosts failure must remain visible.
+    it('still offers that history when the live boosts list fails to load', async () => {
+      withExecutions()
+      mockUseGetBoosts.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: new Error('Network failure'),
+        refetch: mockRefetchBoosts,
+      } as unknown as ReturnType<typeof mockUseGetBoosts>)
+      renderWithProviders(<BoostsManagePage />)
+
+      // The live-list failure is NOT swallowed.
+      expect(await screen.findByText(/error loading boosts/i)).toBeInTheDocument()
+      // ...and the retained history survives it.
+      expect(await screen.findByRole('button', { name: /automation history/i })).toBeInTheDocument()
+    })
+
     it('delete dialog says the run history is kept, without promising recovery', async () => {
       withExecutions()
       renderWithProviders(<BoostsManagePage />)
