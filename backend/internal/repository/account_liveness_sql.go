@@ -377,3 +377,69 @@ func lastKnownBalanceLateralSQL(alias string) string {
 // Kept beside it so the two cannot be added independently — a projection with no lateral is a
 // syntax error, and a lateral with no projection is dead weight nobody would notice.
 const lastKnownBalanceProjection = "lkb.amount AS last_known_balance, lkb.at AS last_known_balance_at"
+
+// ─── #1569 T9.1 item A: ONE ROW PER RE-LINK CHAIN, on the portfolio side too ─────────────────
+//
+// THE DEFECT RETENTION CREATED. accountLiveOnDateClause above answers "was this PHYSICAL account
+// live at any point during this day", and it is right to. But a re-link produces TWO physical
+// `accounts` rows for ONE logical account, sharing a `user_account_id`, and on the changeover day
+// BOTH are live: the predecessor until the switch, the successor after it. Summing "every account
+// live that day" therefore counts one $5,000 portfolio as $9,000 — a doubling on the single day a
+// user changes brokers, in a curve whose whole purpose is to be compared day to day.
+//
+// It was not a bug before this branch. The old re-link path DELETED the predecessor's holdings, so
+// "everything live that day" could only ever match one row's worth of money. Retaining them is what
+// made the aggregate double, which is why the fix belongs here and NOT in the liveness predicate —
+// narrowing liveness to "active right now" or "live at midnight" would re-break the two cases the
+// long comment above exists to protect.
+//
+// ⚠ THE BALANCE SIDE ALREADY SOLVED THIS, and reusing its rule matters more than inventing a
+// better one: two subtly different dedup rules over the same chains is its own defect.
+// balance_snapshot_repository.go dedups on `COALESCE(user_account_id::text, account_id::text)` —
+// the chain when there is one, the raw account id when the column is a legacy NULL, so NULLs land
+// in separate buckets instead of collapsing into one — and keeps the chain's LATEST row
+// (dashboard_service.go's baselineBalanceForComparison, pinned by
+// TestGetBalanceSummary_PeriodComparison_DedupKeepsLatestInChain). The key is copied verbatim.
+//
+// WHY THE ORDER IS NOT JUST "LATEST", and this is the one place the portfolio side must differ.
+// A balance_snapshot IS an observation, so "the chain's latest row" and "the chain's latest
+// observation" are the same sentence. `holdings` is not: it is one CURRENT-STATE row set per
+// physical account, and a re-link creates the successor BEFORE any investment sync has written a
+// single holding for it. Ordering on chain recency alone would hand that window an empty winner
+// and write ZERO for the day — a cliff in the curve on a day the user's money did not move, which
+// is the same retroactive rewrite the liveness predicate was written to prevent
+// (TestPortfolioSnapshot_Upsert_RelinkBeforeTheSuccessorHasSynced_KeepsThePredecessor pins it).
+// So observation comes first and recency breaks the tie among members that HAVE one:
+//
+//	1. has an observation (holdings rows / that day's holding_snapshots)  DESC
+//	2. a.status = 'active' DESC — the chain member the re-link left standing
+//	3. a.created_at DESC — the chain's latest member, i.e. the successor
+//	4. a.id DESC — determinism, never reached in practice
+//
+// ⚠ LEG 2 IS NOT REDUNDANT WITH LEG 3, and leg 3 is not redundant with leg 2. `created_at`
+// defaults to now(), which is the TRANSACTION timestamp: two accounts rows written in one
+// transaction tie on it exactly, and the tie then falls through to a random uuid. Leg 2 separates
+// the ordinary re-link (predecessor 'replaced', successor 'active') without depending on wall
+// clocks at all. Leg 3 is what separates the case leg 2 cannot: BOTH siblings still 'active',
+// which account_service's re-link produces whenever its UpdateStatus of the predecessor fails —
+// it logs and continues, so the failure is silent (item B of this task). The two legs cover
+// different failures and both are pinned by their own test.
+//
+// ⚠ NOT captured_at / updated_at, and the reason is measurable rather than stylistic: the daily
+// capture sweeps every live account in ONE pass, so on a re-link day both siblings are stamped
+// within the same instant and their relative order is a coin flip. Migration 000160 makes the same
+// point about captured_at at a different grain ("provenance, not a selection key").
+//
+// ⚠ "Absence of holdings is not evidence of an empty portfolio" is the deliberate reading of rule
+// 1, and it agrees with the repair's own ruling that a day with no rows is unreconstructable
+// rather than zero. A CONFIRMED empty successor is representable — that is what
+// holding_snapshots.present is for — and it reaches the repair through rule 1 being satisfied
+// (rows exist) with nothing present to sum.
+const accountChainKeyExpr = `COALESCE(a.user_account_id::text, a.id::text)`
+
+// accountChainWinnerOrderSQL renders the ORDER BY tail of a `DISTINCT ON (… chain key …)` that
+// keeps one accounts row per re-link chain. observedExpr is a boolean SQL expression that is true
+// when THIS caller has an observation for the account (see rule 1 above).
+func accountChainWinnerOrderSQL(observedExpr string) string {
+	return "(" + observedExpr + ") DESC, (a.status = 'active') DESC, a.created_at DESC, a.id DESC"
+}

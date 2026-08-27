@@ -89,11 +89,21 @@ WITH candidate AS (
 -- The accounts recorded as live on each candidate day. Same predicate Upsert applies, rendered
 -- from the same string (account_liveness_sql.go) — a rebuild that disagreed with Upsert about
 -- which accounts belong to a day would reintroduce task 10's Critical 1 from the other side.
+-- ⚠ ONE ROW PER (day, RE-LINK CHAIN), not per physical account — #1569 T9.1 item A. The capture
+-- applies the same liveness test, so on a changeover day it writes holding_snapshots for BOTH
+-- members of a chain; each row is a correct observation of a real account and summing the two
+-- doubles one logical portfolio. accountChainWinnerOrderSQL states the rule and why the
+-- has-an-observation leg comes first; here the observation is "rows exist for THIS day", so a
+-- sibling the capture never reached on a given day cannot win that day and drag it into
+-- refused_no_coverage. Deduping HERE and not further down is deliberate: expected, observed and
+-- rebuilt all read the live CTE, so the coverage verdict counts the same universe the reconstruction
+-- sums, and a chain can never be reported as two-thirds-covered.
 live AS (
-    SELECT c.snapshot_date, a.id AS account_id
+    SELECT DISTINCT ON (c.snapshot_date, $CHAINKEY) c.snapshot_date, a.id AS account_id
     FROM candidate c
     JOIN accounts a ON a.user_id = c.user_id
     WHERE $LIVENESS
+    ORDER BY c.snapshot_date, $CHAINKEY, $CHAINWINNER
 ),
 -- The accounts a complete day WOULD have a record for: live, and known to bear holdings. The
 -- evidence is either a history row on ANY day or a current holdings row. Current holdings decide
@@ -256,11 +266,16 @@ SELECT outcome, count(*)::int FROM final GROUP BY outcome
 func (r *portfolioSnapshotRepository) RepairUserFromHistory(ctx context.Context, userID string) (domain.PortfolioRepairSummary, error) {
 	var summary domain.PortfolioRepairSummary
 
-	// $LIVENESS is substituted from the one shared predicate (account_liveness_sql.go) — the same
-	// string Upsert and the holdings capture render. Both operands are compile-time constants; no
-	// user input reaches this substitution.
-	query := strings.ReplaceAll(repairSelectSQL, "$LIVENESS",
-		accountLiveOnDateSQL("a.id", "c.snapshot_date"))
+	// $LIVENESS, $CHAINKEY and $CHAINWINNER are substituted from the shared rules in
+	// account_liveness_sql.go — the same strings Upsert and the holdings capture render. Every
+	// operand is a compile-time constant; no user input reaches this substitution.
+	query := strings.NewReplacer(
+		"$LIVENESS", accountLiveOnDateSQL("a.id", "c.snapshot_date"),
+		"$CHAINKEY", accountChainKeyExpr,
+		"$CHAINWINNER", accountChainWinnerOrderSQL(
+			`EXISTS (SELECT 1 FROM holding_snapshots hw WHERE hw.account_id = a.id`+
+				` AND hw.as_of_date = c.snapshot_date AND hw.user_id = $1::uuid)`),
+	).Replace(repairSelectSQL)
 
 	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
