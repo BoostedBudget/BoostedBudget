@@ -3550,7 +3550,7 @@ components:
         account_id:
           type: string
         as_of_date:
-          description: UTC calendar day (YYYY-MM-DD) the positions describe; null when no history is retained
+          description: UTC calendar day (YYYY-MM-DD) the positions describe; omitted when no history is retained for this account
           type: string
         available_dates:
           description: Every UTC day (YYYY-MM-DD) with retained positions, newest first
@@ -12431,7 +12431,7 @@ paths:
         - Investments
   /api/v1/investments/holdings/history:
     get:
-      description: "Returns the investment positions retained for one account as they stood on a past UTC day, with the list of every other day that can be asked for and the day's pre-computed total value (Issue #1569). Removing a linked bank account retains its holdings history rather than erasing it, and this is the only endpoint that reads it back: GET /investments/holdings answers a CURRENT-STATE question and deliberately returns nothing for a closed account. Omit as_of for the most recent retained day; a day with no retained positions returns 404 rather than an empty list, because \"we kept nothing for that day\" is not \"the account held nothing that day\". ⚠ These are HISTORICAL figures. They carry no day-change, because day-change is measured against today's prior close, and they must never be presented as what the account holds now."
+      description: "Returns the investment positions retained for one account as they stood on a past UTC day, with the list of every other day that can be asked for and the day's pre-computed total value (Issue #1569). Removing a linked bank account retains its holdings history rather than erasing it, and this is the only endpoint that reads it back: GET /investments/holdings answers a CURRENT-STATE question and deliberately returns nothing for a closed account. Omit as_of for the most recent retained day. A day NOTHING was retained for returns 404 rather than an empty list, because \"we kept nothing for that day\" is not \"the account held nothing that day\" — and the second fact has its own answer: a day on which the account was observed holding nothing (a completed liquidation, whose rows are retained and marked absent) is listed in available_dates and returns 200 with an empty positions list. ⚠ These are HISTORICAL figures. They carry no day-change, because day-change is measured against today's prior close, and they must never be presented as what the account holds now."
       operationId: getAccountHoldingsHistory
       parameters:
         - description: Account whose retained holdings history to read. Required — this endpoint is per-account by design; there is no whole-portfolio historical read, because a portfolio total mixing live and closed accounts is a current-state figure.
@@ -12442,12 +12442,12 @@ paths:
           schema:
             description: Account whose retained holdings history to read. Required — this endpoint is per-account by design; there is no whole-portfolio historical read, because a portfolio total mixing live and closed accounts is a current-state figure.
             type: string
-        - description: UTC calendar day (YYYY-MM-DD) to read. Omit for the most recent retained day. A day with no retained positions returns 404 rather than an empty list.
+        - description: UTC calendar day (YYYY-MM-DD) to read. Omit for the most recent retained day. A day nothing was retained for returns 404 rather than an empty list; a day the account was observed holding nothing returns 200 with an empty position list, because those are different facts.
           explode: false
           in: query
           name: as_of
           schema:
-            description: UTC calendar day (YYYY-MM-DD) to read. Omit for the most recent retained day. A day with no retained positions returns 404 rather than an empty list.
+            description: UTC calendar day (YYYY-MM-DD) to read. Omit for the most recent retained day. A day nothing was retained for returns 404 rather than an empty list; a day the account was observed holding nothing returns 200 with an empty position list, because those are different facts.
             type: string
       responses:
         "200":

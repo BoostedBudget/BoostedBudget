@@ -37,7 +37,7 @@ export type GetAccountHoldingsHistoryParams = {
  */
 account_id: string;
 /**
- * UTC calendar day (YYYY-MM-DD) to read. Omit for the most recent retained day. A day with no retained positions returns 404 rather than an empty list.
+ * UTC calendar day (YYYY-MM-DD) to read. Omit for the most recent retained day. A day nothing was retained for returns 404 rather than an empty list; a day the account was observed holding nothing returns 200 with an empty position list, because those are different facts.
  */
 as_of?: string;
 };

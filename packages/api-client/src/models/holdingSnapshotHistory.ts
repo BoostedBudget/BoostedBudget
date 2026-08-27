@@ -36,7 +36,7 @@ export interface HoldingSnapshotHistory {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   account_id: string;
-  /** UTC calendar day (YYYY-MM-DD) the positions describe; null when no history is retained */
+  /** UTC calendar day (YYYY-MM-DD) the positions describe; omitted when no history is retained for this account */
   as_of_date?: string;
   /**
      * Every UTC day (YYYY-MM-DD) with retained positions, newest first
