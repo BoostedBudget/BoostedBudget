@@ -172,28 +172,44 @@ type AccountRepository interface {
 	CreateBatch(ctx context.Context, userID string, accounts []domain.Account) error
 
 	// GetByLinkedItemID retrieves all ACTIVE accounts for a specific linked item.
-	// Shared by holdings, liability, investment-transaction and balance-snapshot syncs
-	// (investment_sync_service.go, liability_sync_service.go, and
-	// transaction_sync_service.go's createBalanceSnapshots), all of which wipe-and-reinsert
-	// on every run. Widening this to include non-active statuses would feed a retained
-	// (removed/expired/replaced) account into those paths and let a later sync clear or
-	// replace its holdings/liabilities/snapshots — the exact destruction Issue #1569 exists
-	// to stop. If a caller needs non-active rows, add a separate method (see
+	// Its remaining wipe-and-reinsert callers are holdings and liability syncs
+	// (investment_sync_service.go's SyncHoldings, liability_sync_service.go), which write via
+	// ReplaceForAccount on every run. Widening this to include non-active statuses would feed
+	// a retained (removed/expired/replaced) account into those paths and let a later sync
+	// clear or replace its holdings/liabilities — the exact destruction Issue #1569 exists to
+	// stop. If a caller needs non-active rows, add a separate method (see
 	// GetByLinkedItemIDIncludingRetained) rather than widening this one.
+	//
+	// It is also used by account_service.go's re-link path to mark the PREDECESSOR item's
+	// still-active accounts 'replaced' — active-only there because an already-retained
+	// account needs no further status change.
+	//
+	// ⚠ investment-transaction sync does NOT belong in the wipe-and-reinsert group above:
+	// investment_transaction_repository.UpsertBatch is a pure INSERT ... ON CONFLICT DO
+	// UPDATE, so it reads GetByLinkedItemIDIncludingRetained instead (Issue #1569 round 11
+	// task 1 fixed a prior misclassification that grouped it here). Balance-snapshot sync
+	// (transaction_sync_service.go's createBalanceSnapshots) doesn't call this method at all —
+	// it reads GetByLinkedItemIDIncludingRetained for an unrelated reason (its account-restore
+	// pass needs to see removed rows) and filters to the active subset itself before writing
+	// any snapshot.
 	GetByLinkedItemID(ctx context.Context, linkedItemID string) ([]domain.Account, error)
 
 	// GetByLinkedItemIDIncludingRetained retrieves accounts for a specific linked item
-	// REGARDLESS of status (active, replaced, expired, removed). It exists solely for
-	// transaction_sync_service.buildAccountMaps (Issue #1569 Task 1b): a Plaid item keeps
-	// delivering transactions for an account after the user disconnects it (status
-	// 'removed'), or after the 90-day fingerprint TTL releases a hold (status 'expired'),
-	// and those transactions are real — the money moved — so they belong in transaction and
-	// spending views like any other. Transactions are stored against the account regardless
-	// of status; retained-account visibility in the unified feed is handled separately by
-	// retainedAccountVisibilityLeg (transaction_repository.go).
+	// REGARDLESS of status (active, replaced, expired, removed). Its callers are
+	// transaction_sync_service.buildAccountMaps and createBalanceSnapshots (Issue #1569 Task
+	// 1b and Task 5) and investment_sync_service.SyncInvestmentTransactions (Issue #1569
+	// round 11 task 1): a Plaid item keeps delivering transactions for an account after the
+	// user disconnects it (status 'removed'), or after the 90-day fingerprint TTL releases a
+	// hold (status 'expired'), and those transactions are real — the money moved — so they
+	// belong in transaction/investment-transaction and spending views like any other.
+	// Transactions are stored against the account regardless of status; retained-account
+	// visibility in the unified feed is handled separately by retainedAccountVisibilityLeg
+	// (transaction_repository.go). createBalanceSnapshots' use is narrower: it needs the
+	// non-active rows only to find restore candidates, and filters back down to active
+	// accounts before writing any snapshot.
 	//
-	// Do NOT use this for holdings/liability/investment-transaction/balance-snapshot syncs —
-	// see the warning on GetByLinkedItemID above.
+	// Do NOT use this for holdings/liability syncs — see the warning on GetByLinkedItemID
+	// above.
 	GetByLinkedItemIDIncludingRetained(ctx context.Context, linkedItemID string) ([]domain.Account, error)
 
 	// GetByUserID retrieves all accounts for a specific user
@@ -776,10 +792,11 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 
 // GetByLinkedItemIDIncludingRetained is GetByLinkedItemID with the `status = 'active'`
 // predicate removed. See the interface doc comment (AccountRepository) for why this is a
-// SEPARATE method rather than a widening of GetByLinkedItemID: those three other syncs
+// SEPARATE method rather than a widening of GetByLinkedItemID: holdings and liability syncs
 // wipe-and-reinsert on every run, and feeding them a retained account would let a later
-// sync destroy its holdings/liabilities/snapshots. This method's only caller is
-// transaction_sync_service.buildAccountMaps.
+// sync destroy its holdings/liabilities. Its callers are
+// transaction_sync_service.buildAccountMaps and
+// investment_sync_service.SyncInvestmentTransactions.
 func (r *accountRepository) GetByLinkedItemIDIncludingRetained(ctx context.Context, linkedItemID string) ([]domain.Account, error) {
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,

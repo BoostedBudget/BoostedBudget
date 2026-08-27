@@ -102,7 +102,7 @@ func TestSyncInvestmentTransactions_AccountOwnedByAnotherUser_IsSkipped(t *testi
 	ownedPlaid, ownedInternal := "plaid-acct-owned", uuid.New().String()
 	foreignPlaid, foreignInternal := "plaid-acct-foreign", uuid.New().String()
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: ownedInternal, PlaidAccountID: ownedPlaid, UserID: actorUserID},
 		{ID: foreignInternal, PlaidAccountID: foreignPlaid, UserID: strangerUserID},
 	}, nil)
