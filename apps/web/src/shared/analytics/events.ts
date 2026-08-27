@@ -30,6 +30,15 @@ export const ANALYTICS_EVENTS = {
   // #1569: the retained holdings history of a CLOSED account. Fired when the user switches which
   // recorded day they are looking at — the only interaction the surface has.
   ACCOUNT_HOLDINGS_HISTORY_DATE_CHANGED: 'account_holdings_history_date_changed',
+  // Issue #1569 T7.8: a user opened the day-by-day POSITIONS retained under a CLOSED account.
+  // DATE_CHANGED above cannot answer "did anyone actually go and look at the money we kept?" —
+  // the day picker only renders above ONE available day, so a recently-closed account with a
+  // single retained day fired no event at all, and ACCOUNT_DETAIL_VIEWED cannot tell this tab
+  // apart from any other. Same shape and same reasoning as ACCOUNT_BALANCE_HISTORY_VIEWED below.
+  // ⚠ COUNTS AND A FIXED TYPE DISCRIMINATOR ONLY — no amount, no security name, no date. Event
+  // properties are NOT covered by session-replay masking, and a security name is portfolio
+  // composition. It is a rate, not a record.
+  ACCOUNT_HOLDINGS_HISTORY_VIEWED: 'account_holdings_history_viewed',
   // Issue #1569: a user opened the day-by-day balances retained under a CLOSED account. A VIEW
   // event, not a change-only one, and that distinction is the whole point: the thesis of #1569 is
   // what the user can SEE, so the measurement that has to exist is the one answering "did anyone

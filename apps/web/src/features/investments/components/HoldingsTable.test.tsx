@@ -14,6 +14,8 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HoldingsTable } from './HoldingsTable'
 import { mockUseGetHoldings, mockUseGetAccountHoldingsHistory } from '@/test/mocks/investments-api'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import { mockUseUser, createMockClerkUser, mockClerkUser } from '@/test/mocks/clerk'
 import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
@@ -697,6 +699,84 @@ describe('HoldingsTable', () => {
       // causal claim C3 removed OUT — a regression that reintroduces it must fail here even though
       // it would still satisfy the two assertions above.
       expect(text).not.toMatch(/stopped syncing/i)
+    })
+
+    /**
+     * The view-event calls, typed.
+     *
+     * mockTrackEvent is `mock(() => {})`, so bun types its recorded calls as an empty tuple —
+     * indexing one is a type error even though the value is there at runtime. Widened in exactly
+     * one place rather than at every call site.
+     */
+    const viewEventCalls = (): Array<[string, Record<string, unknown>?]> =>
+      (mockTrackEvent.mock.calls as unknown as Array<[string, Record<string, unknown>?]>).filter(
+        (c) => c[0] === ANALYTICS_EVENTS.ACCOUNT_HOLDINGS_HISTORY_VIEWED,
+      )
+
+    // ── The day the account held NOTHING (#1569 T7.8) ────────────────────────────────────
+    //
+    // A confirmed-complete liquidation retains the whole day's rows and marks them absent. The
+    // backend now offers that day and answers it with zero positions, so this component is the
+    // last place the true fact ("on this day you held nothing") can still be turned back into a
+    // false one ("we recorded nothing / nothing exists"). It must not be.
+    it('says the account held nothing on a fully liquidated day, not that nothing was recorded', () => {
+      withHistory({ available_dates: ['2026-03-04'], positions: [], total_value: undefined })
+      const { container } = render(<HoldingsTable accountId="acct-closed" />)
+      const text = container.textContent ?? ''
+
+      // The retained day is still named — this is a DAY WE KEPT, shown like any other.
+      expect(text).toMatch(/Positions as of Mar 4, 2026/)
+      // And the no-history copy must NOT appear: it denies data we hold.
+      expect(text).not.toMatch(/no day-by-day positions were recorded/i)
+      // The empty table says what is actually true of that day.
+      expect(text).toMatch(/held no positions on this day/i)
+      // Not the old wording, which claims we recorded nothing for a day we did record.
+      expect(text).not.toMatch(/no positions were recorded for this day/i)
+    })
+
+    // ── The measurement (#1569 T7.8) ─────────────────────────────────────────────────────
+    //
+    // The branch's own written standard (ACCOUNT_BALANCE_HISTORY_VIEWED, one surface over) is that
+    // the question worth answering is "did anyone actually go and look at the money we kept?".
+    // DATE_CHANGED cannot answer it: the picker only renders above one available day, so a
+    // recently-closed account with a single retained day fired NOTHING at all.
+    it('fires a view event when the retained holdings resolve', () => {
+      mockTrackEvent.mockClear()
+      withHistory()
+      render(<HoldingsTable accountId="acct-closed" />)
+
+      expect(viewEventCalls().length).toBe(1)
+    })
+
+    // "The user opened it and we had nothing" is the more interesting half of the question, not a
+    // case to drop — same rule the balance-history sibling records.
+    it('fires the view event even when nothing was retained', () => {
+      mockTrackEvent.mockClear()
+      render(<HoldingsTable accountId="acct-closed" />)
+
+      const viewed = viewEventCalls()
+      expect(viewed.length).toBe(1)
+      expect(viewed[0]?.[1]?.retained_days).toBe(0)
+    })
+
+    // Counts only. A security name is a portfolio composition leak and an amount is money — the
+    // sibling event's warning comment says so, and PostHog properties are NOT masked by replay.
+    it('puts no amount and no security name in the view event properties', () => {
+      mockTrackEvent.mockClear()
+      withHistory({ available_dates: ['2026-03-04', '2026-03-03'] })
+      render(<HoldingsTable accountId="acct-closed" />)
+
+      const viewed = viewEventCalls()
+      expect(viewed.length).toBe(1)
+      const props = viewed[0]?.[1] ?? {}
+
+      // Counts, and a fixed type discriminator — nothing else.
+      expect(props.retained_days).toBe(2)
+      expect(props.positions_shown).toBe(1)
+      const serialized = JSON.stringify(props)
+      for (const leak of ['AAPL', 'Apple Inc', '5000', '4000', '1000', '2026-03-04']) {
+        expect(serialized).not.toContain(leak)
+      }
     })
 
     it('tells the user the history is kept rather than erased', () => {
