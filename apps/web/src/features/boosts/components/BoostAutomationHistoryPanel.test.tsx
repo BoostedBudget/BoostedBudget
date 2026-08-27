@@ -277,6 +277,29 @@ describe('BoostAutomationHistoryPanel when the live-boost list fails (#1569)', (
     )
   })
 
+  // #1569 T8-FIX, finding B. React Query keeps the last SUCCESSFUL live-boost list when a later
+  // refetch fails, so `data` and `error` are set at the same time. Every fixture above uses
+  // `data: undefined` — the never-succeeded case only — and with stale data the panel went on
+  // classifying rows from a set it had, two elements higher, told the user it could not check. A
+  // row could be marked deleted from a stale empty list, or stay unmarked after its boost had
+  // gone; either way the UI contradicted its own banner.
+  it('marks nothing from a STALE live list while the banner says markers are unavailable', () => {
+    setExecutions([liveExecution, tombstonedExecution, orphanedExecution])
+    mockUseGetBoosts.mockReturnValue({
+      data: [liveBoost],
+      isLoading: false,
+      error: new Error('boosts unavailable'),
+      refetch: () => Promise.resolve(),
+    } as unknown as ReturnType<typeof mockUseGetBoosts>)
+    renderPanel()
+    expand()
+
+    expect(
+      screen.getByText(/could not check which of your boosts are still active/i)
+    ).toBeInTheDocument()
+    expect(screen.queryAllByText(/^Deleted boost$/).length).toBe(0)
+  })
+
   it('shows no such notice while the live list is merely still loading', () => {
     mockUseGetBoosts.mockReturnValue({
       data: undefined,
