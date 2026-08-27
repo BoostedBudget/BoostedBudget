@@ -1,8 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import React from 'react'
 import { MemoryRouter } from 'react-router'
-import { mockUseGetSpendingByCategory, mockUseGetSpendingByMerchant } from '@/test/mocks/analytics-api'
+import {
+  mockUseGetSpendingByCategory,
+  mockUseGetSpendingByMerchant,
+  mockUseGetSpendingTrends,
+  mockUseGetIncomeSourceBreakdown,
+} from '@/test/mocks/analytics-api'
 import { mockUseGetUserCategories } from '@/test/mocks/categories-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
@@ -355,5 +360,68 @@ describe('SpendingReportsPage Sankey drilldown immunity (G3 — Codex fix #4 reg
 
     expect(hasSankeyTopLevelCall).toBe(true)
     expect(hasDrilldownCall).toBe(true)
+  })
+})
+
+// Issue #1569 T9.5 — a failed read must never be rendered as "there is nothing here".
+// Every section on this page reads financial data; when the read fails the page must say so
+// rather than fall through to the chart's own no-data copy, which asserts the user has no
+// spending in the period. All five hooks are wired through one shared render path.
+describe('SpendingReportsPage failed reads', () => {
+  // The mocks are typed from their default return value (`error: null`), so the failure value
+  // has to be widened at the call site; the runtime shape is what react-query really returns.
+  const READ_FAILED = new Error('network down') as unknown as null
+  const OK = { data: null, isLoading: false, error: null, refetch: mock(() => Promise.resolve({})) }
+  const FAILED = { ...OK, error: READ_FAILED }
+
+  const restoreDefaults = () => {
+    mockUseGetIncomeSourceBreakdown.mockReturnValue(OK)
+    mockUseGetSpendingByCategory.mockReturnValue(OK)
+    mockUseGetSpendingByMerchant.mockReturnValue(OK)
+    mockUseGetSpendingTrends.mockReturnValue(OK)
+  }
+
+  beforeEach(restoreDefaults)
+  afterEach(restoreDefaults)
+
+  it('reports a failed income read instead of "No cash flow data"', () => {
+    mockUseGetIncomeSourceBreakdown.mockReturnValue(FAILED)
+    renderPage()
+    expect(screen.getAllByRole('alert').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/No cash flow data/i)).toBeNull()
+    expect(screen.queryByTestId('sankey-chart')).toBeNull()
+  })
+
+  it('reports a failed category read instead of "No spending data"', () => {
+    mockUseGetSpendingByCategory.mockReturnValue(FAILED)
+    renderPage()
+    expect(screen.getAllByRole('alert').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/No spending data/i)).toBeNull()
+    expect(screen.queryByTestId('category-chart')).toBeNull()
+  })
+
+  it('reports a failed merchant read instead of "No merchant data"', () => {
+    mockUseGetSpendingByMerchant.mockReturnValue(FAILED)
+    renderPage()
+    expect(screen.getAllByRole('alert').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/No merchant data/i)).toBeNull()
+    expect(screen.queryByTestId('merchants-table')).toBeNull()
+  })
+
+  it('reports a failed trends read instead of "No trend data"', () => {
+    mockUseGetSpendingTrends.mockReturnValue(FAILED)
+    renderPage()
+    expect(screen.getAllByRole('alert').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/No trend data/i)).toBeNull()
+    expect(screen.queryByTestId('trends-chart')).toBeNull()
+  })
+
+  it('leaves the sections whose reads succeeded intact', () => {
+    mockUseGetSpendingTrends.mockReturnValue(FAILED)
+    renderPage()
+    // Only the trends section degrades; the others still render their own charts.
+    expect(screen.getByTestId('category-chart')).toBeDefined()
+    expect(screen.getByTestId('merchants-table')).toBeDefined()
+    expect(screen.getAllByRole('alert').length).toBe(1)
   })
 })
