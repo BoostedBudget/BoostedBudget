@@ -241,4 +241,15 @@ func TestBackfillUserAccountIDs_NoMatch_Integration(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM accounts WHERE id = $1", accID).Scan(&got))
 	require.NotNil(t, got, "an account with no matching user_account must have one minted, not be left NULL")
 	assert.NotEmpty(t, *got)
+
+	// #1569 round 11 task 3: the minted identity is not just non-NULL, it must carry the frozen
+	// identity_type/identity_subtype columns populated from the SAME founding account's own
+	// type/subtype (never from a later, mutable primary_type write).
+	var identityType, identitySubtype *string
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT identity_type, identity_subtype FROM user_accounts WHERE id = $1", *got,
+	).Scan(&identityType, &identitySubtype))
+	require.NotNil(t, identityType, "a synthesised identity must carry identity_type from the founding account")
+	assert.Equal(t, "depository", *identityType)
+	assert.Nil(t, identitySubtype, "the founding account had no subtype, so identity_subtype must stay NULL rather than inventing one")
 }

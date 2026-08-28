@@ -77,6 +77,12 @@ func (s *userAccountService) MatchOrCreate(
 	}
 
 	// Step 2: No match found - create new UserAccount
+	// #1569 round 11 task 3: IdentityType/IdentitySubtype are the FROZEN identity of this chain,
+	// set here from the founding account's own type/subtype and never touched again — no
+	// repository method updates them. PrimaryType/PrimarySubtype above are a SEPARATE,
+	// last-writer-wins pair that DOES get overwritten on every re-link
+	// (normalizeExistingUserAccount -> UpdatePrimaryTypeAndSubtype); do not conflate them. Nothing
+	// reads IdentityType/IdentitySubtype for matching yet — a future task changes the match key.
 	newUA := &domain.UserAccount{
 		UserID:          userID,
 		InstitutionID:   institutionID,
@@ -84,6 +90,8 @@ func (s *userAccountService) MatchOrCreate(
 		AccountNameHint: strPtrIfNotEmpty(accountName),
 		PrimaryType:     strPtrIfNotEmpty(accountType),
 		PrimarySubtype:  strPtrIfNotEmpty(accountSubtype),
+		IdentityType:    strPtrIfNotEmpty(accountType),
+		IdentitySubtype: strPtrIfNotEmpty(accountSubtype),
 		IsHidden:        false, // Default to visible
 	}
 

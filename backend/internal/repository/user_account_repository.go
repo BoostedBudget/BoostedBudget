@@ -142,11 +142,13 @@ func (r *userAccountRepository) Create(ctx context.Context, userAccount *domain.
 		INSERT INTO user_accounts
 		(id, user_id, institution_id, institution_id_blind_idx, mask, mask_blind_idx, account_name_hint,
 		 nickname, custom_color, custom_icon, custom_emoji,
-		 display_order, is_hidden, primary_type, primary_subtype,
+		 display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
 		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 	`
 
+	// identity_type/identity_subtype are written HERE, at mint, and never again (#1569 round 11
+	// task 3). See domain.UserAccount for the full reasoning and the guards that enforce it.
 	_, err := r.db.Exec(ctx, query,
 		userAccount.ID,
 		userAccount.UserID,
@@ -163,6 +165,8 @@ func (r *userAccountRepository) Create(ctx context.Context, userAccount *domain.
 		userAccount.IsHidden,
 		userAccount.PrimaryType,
 		userAccount.PrimarySubtype,
+		userAccount.IdentityType,
+		userAccount.IdentitySubtype,
 		userAccount.CreatedAt,
 		userAccount.UpdatedAt,
 	)
@@ -186,7 +190,7 @@ func (r *userAccountRepository) GetByID(ctx context.Context, id string) (*domain
 	query := `
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype,
+		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE id = $1
@@ -207,6 +211,8 @@ func (r *userAccountRepository) GetByID(ctx context.Context, id string) (*domain
 		&ua.IsHidden,
 		&ua.PrimaryType,
 		&ua.PrimarySubtype,
+		&ua.IdentityType,
+		&ua.IdentitySubtype,
 		&ua.CreatedAt,
 		&ua.UpdatedAt,
 	)
@@ -230,7 +236,7 @@ func (r *userAccountRepository) GetByIDAndUser(ctx context.Context, id, userID s
 	query := `
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype,
+		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE id = $1 AND user_id = $2
@@ -251,6 +257,8 @@ func (r *userAccountRepository) GetByIDAndUser(ctx context.Context, id, userID s
 		&ua.IsHidden,
 		&ua.PrimaryType,
 		&ua.PrimarySubtype,
+		&ua.IdentityType,
+		&ua.IdentitySubtype,
 		&ua.CreatedAt,
 		&ua.UpdatedAt,
 	)
@@ -274,7 +282,7 @@ func (r *userAccountRepository) GetByUserID(ctx context.Context, userID string) 
 	query := `
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype,
+		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE user_id = $1
@@ -304,6 +312,8 @@ func (r *userAccountRepository) GetByUserID(ctx context.Context, userID string) 
 			&ua.IsHidden,
 			&ua.PrimaryType,
 			&ua.PrimarySubtype,
+			&ua.IdentityType,
+			&ua.IdentitySubtype,
 			&ua.CreatedAt,
 			&ua.UpdatedAt,
 		)
@@ -339,7 +349,7 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 		query = `
 			SELECT id, user_id, institution_id, mask, account_name_hint,
 			       nickname, custom_color, custom_icon, custom_emoji,
-			       display_order, is_hidden, primary_type, primary_subtype,
+			       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
 			       created_at, updated_at
 			FROM user_accounts
 			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
@@ -352,7 +362,7 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 		query = `
 			SELECT id, user_id, institution_id, mask, account_name_hint,
 			       nickname, custom_color, custom_icon, custom_emoji,
-			       display_order, is_hidden, primary_type, primary_subtype,
+			       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
 			       created_at, updated_at
 			FROM user_accounts
 			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
@@ -377,6 +387,8 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 		&ua.IsHidden,
 		&ua.PrimaryType,
 		&ua.PrimarySubtype,
+		&ua.IdentityType,
+		&ua.IdentitySubtype,
 		&ua.CreatedAt,
 		&ua.UpdatedAt,
 	)
