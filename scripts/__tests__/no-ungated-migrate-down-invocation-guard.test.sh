@@ -48,6 +48,12 @@ cleanup() {
     fi
     git -C "$REPO_ROOT" rm -f --cached --quiet "scripts/__mutant_ungated_migrate_down.sh" > /dev/null 2>&1 || true
     rm -f "$REPO_ROOT/scripts/__mutant_ungated_migrate_down.sh"
+    git -C "$REPO_ROOT" rm -f --cached --quiet ".github/workflows/__mutant_reset.yml" > /dev/null 2>&1 || true
+    rm -f "$REPO_ROOT/.github/workflows/__mutant_reset.yml"
+    git -C "$REPO_ROOT" rm -f --cached --quiet "Dockerfile.__mutant" > /dev/null 2>&1 || true
+    rm -f "$REPO_ROOT/Dockerfile.__mutant"
+    git -C "$REPO_ROOT" rm -f --cached --quiet "scripts/__mutant_extensionless_script" > /dev/null 2>&1 || true
+    rm -f "$REPO_ROOT/scripts/__mutant_extensionless_script"
     rm -rf "$BACKUP_DIR"
 }
 trap cleanup EXIT
@@ -174,6 +180,70 @@ if [ "$STATUS" -eq 0 ] && ! echo "$OUT" | grep -qE "FAIL.*(\.PHONY|migrate-down:
     pass "no false positives on the real tree's prose/target-header lines"
 else
     fail "unexpected refusal on legitimate content — output: $OUT"
+fi
+
+# ── Tests 8-10 (mutants): the three universes added in fix round 1 after review found the FIRST
+# version of this guard only scanned *.sh/Makefile — a fourth, unenumerated bypass path identical
+# in shape to the three the guard exists to close (`migrate` is resident in the runtime image per
+# backend/Dockerfile, so a CI workflow step or a Dockerfile RUN/CMD/ENTRYPOINT is a real path). ──
+
+echo "Test 8 (mutant): an ungated 'migrate ... down' in a GitHub Actions workflow 'run:' step is caught"
+cat > "$REPO_ROOT/.github/workflows/__mutant_reset.yml" <<'EOF'
+name: test
+on: push
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    steps:
+      - name: reset staging db
+        run: |
+          migrate -database "$DATABASE_URL" -path migrations down -all
+EOF
+git -C "$REPO_ROOT" add ".github/workflows/__mutant_reset.yml"
+set +e
+OUT=$(bash "$GUARD" 2>&1); STATUS=$?
+set -e
+git -C "$REPO_ROOT" reset -- ".github/workflows/__mutant_reset.yml" > /dev/null 2>&1 || true
+rm -f "$REPO_ROOT/.github/workflows/__mutant_reset.yml"
+if [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -q "__mutant_reset.yml"; then
+    pass "workflow 'run:' invocation refused: $(echo "$OUT" | grep "__mutant_reset.yml" | head -1)"
+else
+    fail "an ungated invocation inside a GitHub Actions workflow was NOT caught (exit $STATUS) — output: $OUT"
+fi
+
+echo "Test 9 (mutant): an ungated 'migrate ... down' in a Dockerfile RUN line is caught"
+cat > "$REPO_ROOT/Dockerfile.__mutant" <<'EOF'
+FROM alpine
+RUN migrate -database "$DATABASE_URL" -path /app/migrations down -all
+EOF
+git -C "$REPO_ROOT" add "Dockerfile.__mutant"
+set +e
+OUT=$(bash "$GUARD" 2>&1); STATUS=$?
+set -e
+git -C "$REPO_ROOT" reset -- "Dockerfile.__mutant" > /dev/null 2>&1 || true
+rm -f "$REPO_ROOT/Dockerfile.__mutant"
+if [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -q "Dockerfile.__mutant"; then
+    pass "Dockerfile RUN invocation refused: $(echo "$OUT" | grep "Dockerfile.__mutant" | head -1)"
+else
+    fail "an ungated invocation inside a Dockerfile was NOT caught (exit $STATUS) — output: $OUT"
+fi
+
+echo "Test 10 (mutant): an ungated 'migrate ... down' in an extensionless shell-shebang script is caught"
+cat > "$REPO_ROOT/scripts/__mutant_extensionless_script" <<'EOF'
+#!/usr/bin/env bash
+migrate -database "$DATABASE_URL" -path migrations down -all
+EOF
+chmod +x "$REPO_ROOT/scripts/__mutant_extensionless_script"
+git -C "$REPO_ROOT" add "scripts/__mutant_extensionless_script"
+set +e
+OUT=$(bash "$GUARD" 2>&1); STATUS=$?
+set -e
+git -C "$REPO_ROOT" reset -- "scripts/__mutant_extensionless_script" > /dev/null 2>&1 || true
+rm -f "$REPO_ROOT/scripts/__mutant_extensionless_script"
+if [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -q "__mutant_extensionless_script"; then
+    pass "extensionless shebang script invocation refused: $(echo "$OUT" | grep "__mutant_extensionless_script" | head -1)"
+else
+    fail "an ungated invocation in an extensionless shell-shebang script was NOT caught (exit $STATUS) — output: $OUT"
 fi
 
 echo ""

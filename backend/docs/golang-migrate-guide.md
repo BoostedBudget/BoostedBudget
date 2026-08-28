@@ -132,12 +132,16 @@ willing to lose everything in):
 migrate -database "$DATABASE_URL" -path migrations down -all
 ```
 
-⚠ Both raw commands above, `make migrate-down`, `make migrate-reset`, and every other script or
-Makefile target in this repository that can invoke `migrate ... down` are checked automatically by
-`scripts/assert-no-ungated-migrate-down-invocation.sh` (part of `make test-scripts`) — it fails the
-build if a new ungated invocation is ever added anywhere in the tree, or if an existing gated one
-loses its gate call. It cannot reach a raw invocation typed directly at a shell, which is why the
-warnings above still matter.
+⚠ `scripts/assert-no-ungated-migrate-down-invocation.sh` (part of `make test-scripts`) checks every
+`.sh`/Makefile/GitHub Actions workflow/Dockerfile/extensionless shell-shebang script in this repo
+for an ungated `migrate ... down` invocation, and fails the build the moment a new one appears, or
+an existing gated one (both raw commands above, `make migrate-down`, `make migrate-reset`) loses
+its gate call. **It does NOT reach**: a raw invocation typed directly at a shell (why the warnings
+above still matter), a `.mjs`/`.js`/`.ts`/`.cjs` bun/npm script (a shell command there is
+necessarily inside a string literal, which the detector cannot distinguish from prose without
+risking false positives), or variable/`eval` indirection (`MIGRATE_BIN=migrate; "$MIGRATE_BIN"
+... down`) even within the scanned file types — see the script's own header comment for the full,
+current list of what is and is not covered.
 
 ### Force Version (Recovery)
 
