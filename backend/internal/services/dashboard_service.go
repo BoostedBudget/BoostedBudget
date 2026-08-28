@@ -6,9 +6,46 @@ import (
 	"sort"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
+
+// dashboardSFDo runs fn under sf, coalescing concurrent callers that share key onto one execution.
+//
+// #1569 round 11 item 1: `/dashboard/balance-summary` and `/dashboard/net-worth` are separate,
+// uncached HTTP endpoints that a single dashboard page load fires together, and in personal (and
+// household-current) scope they read byte-identical repository arguments — same userID, same
+// cutoff, same scope. singleflight.Group.Do coalesces the genuinely CONCURRENT overlap between the
+// two requests onto one repository call; it caches nothing past that window, so it introduces no
+// new invalidation surface (a prior reviewer specifically warned that caching account/liveness maps
+// is unattractive for exactly that reason — this is deliberately not a cache).
+//
+// ⚠ Deliberately NOT detached (unlike internal/cache.Cache.GetOrLoad's Issue #1531 M4 fix, whose
+// doc comment this package otherwise mirrors): only one goroutine's ctx actually reaches fn per
+// in-flight key, so a cancelled leader COULD hand a spurious error to a healthy concurrent
+// follower. That risk is accepted here, not overlooked, for three reasons this call's blast radius
+// doesn't share with the Redis cache's: (1) both concurrent callers are typically the SAME
+// client's own two widget requests for the SAME page load, so a leader's cancellation (navigation
+// away, tab close) usually means the follower is about to be cancelled too; (2) nothing is
+// persisted past the in-flight window — a spurious error costs one retry, never stale data; (3)
+// every call site here already degrades to "omit the comparison" or propagates the error to the
+// HTTP layer on ANY read failure, so an occasional extra error is within the existing failure
+// contract, not a new one. Detaching would also break every existing dashboard_service_test.go
+// mock expectation that asserts on the exact incoming ctx (e.g. `ctx := context.Background()`
+// passed straight to `.On(...)`), which is itself evidence those tests expect the real,
+// caller-supplied context to reach the repository unchanged.
+func dashboardSFDo[T any](sf *singleflight.Group, ctx context.Context, key string, fn func(context.Context) (T, error)) (T, error) {
+	var zero T
+	v, err, _ := sf.Do(key, func() (any, error) {
+		return fn(ctx)
+	})
+	if err != nil {
+		return zero, err
+	}
+	return v.(T), nil
+}
 
 // snapshotChainKey returns the preferred lookup key for a balance snapshot:
 // the stable user_account_id if present, otherwise the raw account_id.
@@ -550,6 +587,12 @@ type DashboardService interface {
 type dashboardService struct {
 	balanceSnapshotRepo repository.BalanceSnapshotRepository
 	accountRepo         repository.AccountRepository
+
+	// sf coalesces the repository reads GetBalanceSummary/GetNetWorth (and their household
+	// variants) duplicate — see dashboardSingleflightTimeout's doc comment. Zero value is ready to
+	// use; deliberately not constructor-injected, since it holds no state a test would ever need to
+	// seed.
+	sf singleflight.Group
 }
 
 // NewDashboardService creates a new DashboardService instance
@@ -561,6 +604,111 @@ func NewDashboardService(
 		balanceSnapshotRepo: balanceSnapshotRepo,
 		accountRepo:         accountRepo,
 	}
+}
+
+// sfSnapshotsAsOfForUser coalesces concurrent personal-scope snapshot reads for the same
+// (userID, cutoff) pair — GetBalanceSummary and GetNetWorth both call this with byte-identical
+// arguments for both the current cutoff and the previous-period cutoff (#1569 round 11 item 1).
+//
+// Returns a fresh copy of the singleflight-shared slice, never the shared backing array itself:
+// both callers sort.Slice their previousSnapshots result IN PLACE, and two goroutines sorting the
+// same backing array concurrently is a data race, not merely a correctness question.
+func (s *dashboardService) sfSnapshotsAsOfForUser(ctx context.Context, userID string, cutoff time.Time) ([]domain.BalanceSnapshot, error) {
+	key := fmt.Sprintf("snap:u:%s:%d", userID, cutoff.UnixNano())
+	shared, err := dashboardSFDo(&s.sf, ctx, key, func(c context.Context) ([]domain.BalanceSnapshot, error) {
+		return s.balanceSnapshotRepo.GetSnapshotsAsOfForUser(c, userID, cutoff)
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.BalanceSnapshot, len(shared))
+	copy(out, shared)
+	return out, nil
+}
+
+// sfAccountsByUserID coalesces concurrent personal-scope "current" account reads — both
+// GetBalanceSummary and GetNetWorth call accountRepo.GetByUserID(userID) with no other arguments.
+func (s *dashboardService) sfAccountsByUserID(ctx context.Context, userID string) ([]domain.Account, error) {
+	key := "acct:u:" + userID
+	shared, err := dashboardSFDo(&s.sf, ctx, key, func(c context.Context) ([]domain.Account, error) {
+		return s.accountRepo.GetByUserID(c, userID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.Account, len(shared))
+	copy(out, shared)
+	return out, nil
+}
+
+// sfAccountsAsOf coalesces concurrent personal-scope as-of-live account reads keyed by (userID,
+// asOf) — historicalAccountMap's fallback query, which both GetBalanceSummary's and GetNetWorth's
+// baseline legs (and, via augmentWithAsOfUniverse, their current legs for a historical
+// as_of_date) can call with an identical cutoff.
+func (s *dashboardService) sfAccountsAsOf(ctx context.Context, userID string, asOf time.Time) ([]domain.Account, error) {
+	key := fmt.Sprintf("acct:u:asof:%s:%d", userID, asOf.UnixNano())
+	shared, err := dashboardSFDo(&s.sf, ctx, key, func(c context.Context) ([]domain.Account, error) {
+		return s.accountRepo.GetAccountsWithInstitutionFiltered(c, userID, repository.AccountFilterOptions{
+			AsOf:          &asOf,
+			IncludeHidden: true,
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.Account, len(shared))
+	copy(out, shared)
+	return out, nil
+}
+
+// sfSnapshotsAsOfForHousehold is sfSnapshotsAsOfForUser for household scope — both
+// getBalanceSummaryHousehold and getNetWorthHousehold call GetSnapshotsAsOfForHousehold with the
+// same (requestingUserID, scope, cutoff) for both the current and previous cutoffs.
+func (s *dashboardService) sfSnapshotsAsOfForHousehold(ctx context.Context, userID string, scope *domain.HouseholdScope, cutoff time.Time) ([]domain.BalanceSnapshot, error) {
+	key := fmt.Sprintf("snap:hh:%s:%s:%d", userID, scope.HouseholdID, cutoff.UnixNano())
+	shared, err := dashboardSFDo(&s.sf, ctx, key, func(c context.Context) ([]domain.BalanceSnapshot, error) {
+		return s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(c, userID, scope, cutoff)
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.BalanceSnapshot, len(shared))
+	copy(out, shared)
+	return out, nil
+}
+
+// sfAccountsHouseholdActiveNow is sfAccountsByUserID for household scope — both
+// getBalanceSummaryHousehold and getNetWorthHousehold call GetForHouseholdScopeActiveNow with the
+// current cutoff; getNetWorthHousehold additionally calls it at the previous cutoff (a call the
+// balance-summary side does not make, so that particular call pays no dedup benefit but is
+// harmless to route through the same coalescing path).
+func (s *dashboardService) sfAccountsHouseholdActiveNow(ctx context.Context, userID string, scope *domain.HouseholdScope, cutoff time.Time) ([]domain.Account, error) {
+	key := fmt.Sprintf("acct:hh:active:%s:%s:%d", userID, scope.HouseholdID, cutoff.UnixNano())
+	shared, err := dashboardSFDo(&s.sf, ctx, key, func(c context.Context) ([]domain.Account, error) {
+		return s.accountRepo.GetForHouseholdScopeActiveNow(c, userID, scope, cutoff)
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.Account, len(shared))
+	copy(out, shared)
+	return out, nil
+}
+
+// sfAccountsHouseholdLiveAsOf is the household as-of-live fallback used by both
+// augmentHouseholdWithAsOfUniverse and both household baseline legs' historical fallback — all of
+// which can call GetForHouseholdScopeLiveAsOf with the identical (userID, scope, cutoff).
+func (s *dashboardService) sfAccountsHouseholdLiveAsOf(ctx context.Context, userID string, scope *domain.HouseholdScope, cutoff time.Time) ([]domain.Account, error) {
+	key := fmt.Sprintf("acct:hh:asof:%s:%s:%d", userID, scope.HouseholdID, cutoff.UnixNano())
+	shared, err := dashboardSFDo(&s.sf, ctx, key, func(c context.Context) ([]domain.Account, error) {
+		return s.accountRepo.GetForHouseholdScopeLiveAsOf(c, userID, scope, cutoff)
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.Account, len(shared))
+	copy(out, shared)
+	return out, nil
 }
 
 // GetBalanceSummary returns current balance overview with breakdown by account type
@@ -580,13 +728,17 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 	// GetLatestByUserID while only the baseline moved with as_of_date, so a request for a past
 	// date returned TODAY's total labelled with that date and compared it against a 30-days-before
 	// -that-date baseline — a change over an interval nobody asked for.
-	snapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForUser(ctx, userID, endOfDay(asOfDate))
+	// #1569 round 11 item 1: routed through sfSnapshotsAsOfForUser/sfAccountsByUserID rather than
+	// the repo directly — GetNetWorth issues this identical read for the identical (userID, cutoff),
+	// and a single dashboard page load fires both endpoints together. See
+	// dashboardSingleflightTimeout's doc comment for the mechanism and why it introduces no cache.
+	snapshots, err := s.sfSnapshotsAsOfForUser(ctx, userID, endOfDay(asOfDate))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get balance snapshots: %w", err)
 	}
 
 	// Get accounts to map account IDs to account details (GetByUserID filters to active only)
-	accounts, err := s.accountRepo.GetByUserID(ctx, userID)
+	accounts, err := s.sfAccountsByUserID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts: %w", err)
 	}
@@ -677,7 +829,9 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 	// accounts at another is a class of bug that has already been fixed twice in the household
 	// paths (#1369 G1, #1537 round 10); sharing the value makes it unrepresentable here.
 	previousCutoff := endOfDay(previousDate)
-	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForUser(ctx, userID, previousCutoff)
+	// #1569 round 11 item 1: GetNetWorth's baseline leg reads this identical (userID, previousCutoff)
+	// pair — see sfSnapshotsAsOfForUser.
+	previousSnapshots, err := s.sfSnapshotsAsOfForUser(ctx, userID, previousCutoff)
 	if err == nil && len(previousSnapshots) > 0 {
 		// Sort descending so the dedup below keeps the LATEST snapshot per sharing chain.
 		// ⚠ #1569 T10-FIX item 9: this said "the repo already returns one row per chain", which
@@ -734,8 +888,20 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 // snapshot belonging to a chain that has since been fully replaced, expired or removed can still
 // be attributed to an account type. It returns an empty (safe to read) map without querying when
 // every baseline snapshot already resolves in activeMap, which is the common case — a merely
-// re-linked chain resolves there through its user_account_id key. That short-circuit is why the
-// ordinary dashboard request still issues exactly one account query.
+// re-linked chain resolves there through its user_account_id key. That short-circuit avoids an
+// EXTRA account query on top of this call's caller's own read, but it does NOT bound the request
+// to one account query overall.
+//
+// ⚠ #1569 round 11 item 4: this used to say "the ordinary dashboard request still issues exactly
+// one account query" — false, in two ways this function's own callers now demonstrate. (1) This
+// function has TWO call sites per personal request that can each independently miss the
+// short-circuit: augmentWithAsOfUniverse (the CURRENT leg, for a historical as_of_date) and the
+// baseline leg below, each contributing its own extra query when its own snapshots don't already
+// resolve — a historical request can pay for both. (2) The short-circuit's own trigger,
+// "a merely re-linked chain," is exactly a disconnected-or-relinked account, i.e. NOT the common
+// case for the users this fallback exists to serve — so "ordinary" overstated how often it fires.
+// Say only what the gate's own condition guarantees: zero extra queries when it holds, one extra
+// query per call site when it does not.
 //
 // asOf MUST be the same cutoff the baseline snapshot read used. The two together are one question
 // ("what was the world holding on that day"); resolving the balances at one instant and the
@@ -814,7 +980,9 @@ func (s *dashboardService) augmentHouseholdWithAsOfUniverse(
 	if !asOfIsHistorical(asOfDate) || !hasSnapshotOutsideAccountMap(snapshots, accountMap) {
 		return nil
 	}
-	asOfAccounts, err := s.accountRepo.GetForHouseholdScopeLiveAsOf(ctx, userID, scope, cutoff)
+	// #1569 round 11 item 1: both endpoints' current legs (and both baseline legs' fallback, below)
+	// can call GetForHouseholdScopeLiveAsOf with an identical (userID, scope, cutoff) triple.
+	asOfAccounts, err := s.sfAccountsHouseholdLiveAsOf(ctx, userID, scope, cutoff)
 	if err != nil {
 		return fmt.Errorf("failed to resolve the as-of household account universe for %s: %w",
 			asOfDate.Format("2006-01-02"), err)
@@ -833,10 +1001,11 @@ func (s *dashboardService) historicalAccountMap(
 	if !hasSnapshotOutsideAccountMap(baselineSnapshots, activeMap) {
 		return map[string]domain.Account{}, nil
 	}
-	accounts, err := s.accountRepo.GetAccountsWithInstitutionFiltered(ctx, userID, repository.AccountFilterOptions{
-		AsOf:          &asOf,
-		IncludeHidden: true,
-	})
+	// #1569 round 11 item 1: this single function is called from BOTH GetBalanceSummary's and
+	// GetNetWorth's baseline legs (and, via augmentWithAsOfUniverse, both endpoints' current legs
+	// for a historical as_of_date) with an identical (userID, asOf) pair — sfAccountsAsOf coalesces
+	// the concurrent overlap.
+	accounts, err := s.sfAccountsAsOf(ctx, userID, asOf)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get as-of-live accounts for comparison baseline: %w", err)
 	}
@@ -871,7 +1040,9 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 	// fix itself). Deriving it from asOfDate makes the agreement structural rather than a
 	// convention one edit could break.
 	currentCutoff := endOfDay(asOfDate)
-	snapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, currentCutoff)
+	// #1569 round 11 item 1: getNetWorthHousehold reads this identical (userID, scope, currentCutoff)
+	// triple — see sfSnapshotsAsOfForHousehold.
+	snapshots, err := s.sfSnapshotsAsOfForHousehold(ctx, userID, scope, currentCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household balance snapshots: %w", err)
 	}
@@ -888,7 +1059,9 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 	// cutoff vanished from the baseline and a real decrease was reported as "no change" (#1537
 	// round 10). The baseline needs its OWN map, resolved at the previous cutoff and over all
 	// statuses — like getNetWorthHousehold, this path needs a map per point in time after all.
-	accounts, err := s.accountRepo.GetForHouseholdScopeActiveNow(ctx, userID, scope, currentCutoff)
+	// #1569 round 11 item 1: getNetWorthHousehold reads this identical (userID, scope, currentCutoff)
+	// triple — see sfAccountsHouseholdActiveNow.
+	accounts, err := s.sfAccountsHouseholdActiveNow(ctx, userID, scope, currentCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household accounts: %w", err)
 	}
@@ -970,11 +1143,16 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 	// endOfDay, not previousDate: `snapshot_at <= previousDate` would demand a snapshot before
 	// midnight and skip every one taken during the baseline day itself.
 	previousCutoff := endOfDay(previousDate)
-	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, previousCutoff)
+	// #1569 round 11 item 1: getNetWorthHousehold's baseline leg reads this identical
+	// (userID, scope, previousCutoff) triple — see sfSnapshotsAsOfForHousehold.
+	previousSnapshots, err := s.sfSnapshotsAsOfForHousehold(ctx, userID, scope, previousCutoff)
 	if err == nil && len(previousSnapshots) > 0 {
 		historicalMap := map[string]domain.Account{}
 		if hasSnapshotOutsideAccountMap(previousSnapshots, accountMap) {
-			historicalAccounts, histErr := s.accountRepo.GetForHouseholdScopeLiveAsOf(ctx, userID, scope, previousCutoff)
+			// #1569 round 11 item 1: getNetWorthHousehold's fallback can call
+			// GetForHouseholdScopeLiveAsOf with this identical triple too — see
+			// sfAccountsHouseholdLiveAsOf.
+			historicalAccounts, histErr := s.sfAccountsHouseholdLiveAsOf(ctx, userID, scope, previousCutoff)
 			if histErr != nil {
 				// Omit the comparison rather than compute it over the wrong universe — see the
 				// personal path's identical guard for why silence beats a false "no change".
@@ -1174,13 +1352,15 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 	}
 
 	// as_of_date anchors BOTH sides here too — see GetBalanceSummary's identical read.
-	snapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForUser(ctx, userID, endOfDay(asOfDate))
+	// #1569 round 11 item 1: GetBalanceSummary reads this identical (userID, cutoff) pair — see
+	// sfSnapshotsAsOfForUser/sfAccountsByUserID.
+	snapshots, err := s.sfSnapshotsAsOfForUser(ctx, userID, endOfDay(asOfDate))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get balance snapshots: %w", err)
 	}
 
 	// Get accounts to map account IDs to account details
-	accounts, err := s.accountRepo.GetByUserID(ctx, userID)
+	accounts, err := s.sfAccountsByUserID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts: %w", err)
 	}
@@ -1299,7 +1479,9 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 	// accounts at another is a class of bug that has already been fixed twice in the household
 	// paths (#1369 G1, #1537 round 10); sharing the value makes it unrepresentable here.
 	previousCutoff := endOfDay(previousDate)
-	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForUser(ctx, userID, previousCutoff)
+	// #1569 round 11 item 1: GetBalanceSummary's baseline leg reads this identical (userID,
+	// previousCutoff) pair — see sfSnapshotsAsOfForUser.
+	previousSnapshots, err := s.sfSnapshotsAsOfForUser(ctx, userID, previousCutoff)
 	if err == nil && len(previousSnapshots) > 0 {
 		// Sort descending so the dedup below keeps the LATEST snapshot per chain key.
 		sort.Slice(previousSnapshots, func(i, j int) bool {
@@ -1432,11 +1614,15 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 	// comment in getBalanceSummaryHousehold for why two independent time.Now().UTC() calls
 	// would be unsafe here (Codex adversarial review on the G1 fix).
 	currentCutoff := endOfDay(asOfDate)
-	snapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, currentCutoff)
+	// #1569 round 11 item 1: getBalanceSummaryHousehold reads this identical
+	// (userID, scope, currentCutoff) triple — see sfSnapshotsAsOfForHousehold.
+	snapshots, err := s.sfSnapshotsAsOfForHousehold(ctx, userID, scope, currentCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household balance snapshots: %w", err)
 	}
-	currentAccounts, err := s.accountRepo.GetForHouseholdScopeActiveNow(ctx, userID, scope, currentCutoff)
+	// #1569 round 11 item 1: getBalanceSummaryHousehold reads this identical
+	// (userID, scope, currentCutoff) triple — see sfAccountsHouseholdActiveNow.
+	currentAccounts, err := s.sfAccountsHouseholdActiveNow(ctx, userID, scope, currentCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household accounts: %w", err)
 	}
@@ -1528,7 +1714,9 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 	var periodComparison *domain.NetWorthPeriodComparison
 	previousDate := asOfDate.AddDate(0, 0, -30)
 	previousCutoff := endOfDay(previousDate)
-	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, previousCutoff)
+	// #1569 round 11 item 1: getBalanceSummaryHousehold's baseline leg reads this identical
+	// (userID, scope, previousCutoff) triple — see sfSnapshotsAsOfForHousehold.
+	previousSnapshots, err := s.sfSnapshotsAsOfForHousehold(ctx, userID, scope, previousCutoff)
 	if err == nil && len(previousSnapshots) > 0 {
 		// #1369 gap-closure G1: the previous-period account map MUST be built with the SAME
 		// asOf cutoff as previousSnapshots above, not reuse the "now"-asOf accountMap from
@@ -1550,7 +1738,10 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 		// Why it is user-visible: GetAggregatedHistory LEFT JOINs accounts with NO status predicate,
 		// so the net-worth history CHART already counts the since-expired account. Unfixed, the chart
 		// draws the drop while the KPI tile above it reads 0.00%.
-		previousAccounts, acctErr := s.accountRepo.GetForHouseholdScopeActiveNow(ctx, userID, scope, previousCutoff)
+		// Not duplicated by getBalanceSummaryHousehold's baseline leg (it reuses the CURRENT-cutoff
+		// accountMap here instead — see this function's own doc comment) so this particular call
+		// gets no cross-endpoint dedup benefit; routed through the same helper for consistency.
+		previousAccounts, acctErr := s.sfAccountsHouseholdActiveNow(ctx, userID, scope, previousCutoff)
 		if acctErr == nil {
 			previousAccountMap := buildChainAwareAccountMap(previousAccounts)
 			// Gated on the PREVIOUS-cutoff map, not the "now" map. ⚠ #1569 T10-FIX: the gate now
@@ -1559,7 +1750,10 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 			// why resolving the chain key was answering a question nobody asked.
 			historicalMap := map[string]domain.Account{}
 			if hasSnapshotOutsideAccountMap(previousSnapshots, previousAccountMap) {
-				historicalAccounts, histErr := s.accountRepo.GetForHouseholdScopeLiveAsOf(ctx, userID, scope, previousCutoff)
+				// #1569 round 11 item 1: getBalanceSummaryHousehold's fallback can call
+				// GetForHouseholdScopeLiveAsOf with this identical triple too — see
+				// sfAccountsHouseholdLiveAsOf.
+				historicalAccounts, histErr := s.sfAccountsHouseholdLiveAsOf(ctx, userID, scope, previousCutoff)
 				if histErr != nil {
 					// Omit the comparison rather than compute it over the wrong universe — see the
 					// personal path's identical guard.

@@ -6,12 +6,32 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/redisclient"
 )
+
+// flakySetClient wraps redisclient.Fake, failing the first failCount Set calls and succeeding on
+// every one after that — the shape a transient Redis blip actually takes, unlike Fake's own
+// SetErr (which fails every call uniformly and so cannot model "a retry that works"). Used
+// exclusively by the BumpWithRetry tests below, which drive it from a single goroutine.
+type flakySetClient struct {
+	*redisclient.Fake
+	failCount int
+	setCalls  int
+}
+
+func (c *flakySetClient) Set(ctx context.Context, key, value string, ttl time.Duration) error {
+	c.setCalls++
+	if c.failCount > 0 {
+		c.failCount--
+		return errors.New("redis: timeout")
+	}
+	return c.Fake.Set(ctx, key, value, ttl)
+}
 
 func TestGeneration_AbsentKeyMintsFreshToken(t *testing.T) {
 	fake := redisclient.NewFake("cache")
@@ -84,6 +104,90 @@ func TestGeneration_BumpSucceeds_ChangesTheToken(t *testing.T) {
 	tok2, err := g.Get(ctx, ScopeUser, "u1")
 	require.NoError(t, err)
 	assert.NotEqual(t, tok1, tok2)
+}
+
+// #1569 round 11 item 3 — BumpWithRetry tests.
+
+func TestGeneration_BumpWithRetry_SucceedsFirstTryChangesToken(t *testing.T) {
+	fake := redisclient.NewFake("cache")
+	g := NewGenerations(fake)
+	ctx := context.Background()
+
+	tok1, err := g.Get(ctx, ScopeHousehold, "hh1")
+	require.NoError(t, err)
+
+	ok := g.BumpWithRetry(ctx, ScopeHousehold, "hh1", "http_mutation", 2, time.Millisecond)
+	assert.True(t, ok)
+
+	tok2, err := g.Get(ctx, ScopeHousehold, "hh1")
+	require.NoError(t, err)
+	assert.NotEqual(t, tok1, tok2)
+}
+
+// TestGeneration_BumpWithRetry_RecoversAfterTransientFailure is the whole point of this method:
+// a Bump that would have silently failed once now survives because it tries again.
+func TestGeneration_BumpWithRetry_RecoversAfterTransientFailure(t *testing.T) {
+	client := &flakySetClient{Fake: redisclient.NewFake("cache"), failCount: 1}
+	g := NewGenerations(client)
+	ctx := context.Background()
+
+	tok1, err := g.Get(ctx, ScopeHousehold, "hh1")
+	require.NoError(t, err)
+
+	ok := g.BumpWithRetry(ctx, ScopeHousehold, "hh1", "http_mutation", 2, time.Millisecond)
+	assert.True(t, ok, "the second attempt must succeed after the first transient failure")
+	assert.Equal(t, 2, client.setCalls, "exactly two SET attempts: one failure, one success")
+
+	tok2, err := g.Get(ctx, ScopeHousehold, "hh1")
+	require.NoError(t, err)
+	assert.NotEqual(t, tok1, tok2, "the token must actually have changed — the recovered attempt wrote it")
+}
+
+// TestGeneration_BumpWithRetry_GivesUpAfterExhaustingAttempts documents the honest limit: this is
+// mitigation, not elimination. A permanently failing SET still leaves the scope un-bumped, exactly
+// like plain Bump — the difference is only how many tries it took to conclude that.
+func TestGeneration_BumpWithRetry_GivesUpAfterExhaustingAttempts(t *testing.T) {
+	client := &flakySetClient{Fake: redisclient.NewFake("cache"), failCount: 99}
+	g := NewGenerations(client)
+	ctx := context.Background()
+
+	tok1, err := g.Get(ctx, ScopeHousehold, "hh1")
+	require.NoError(t, err)
+
+	ok := g.BumpWithRetry(ctx, ScopeHousehold, "hh1", "http_mutation", 3, time.Millisecond)
+	assert.False(t, ok)
+	assert.Equal(t, 3, client.setCalls, "exactly `attempts` SET calls, no more")
+
+	tok2, err := g.Get(ctx, ScopeHousehold, "hh1")
+	require.NoError(t, err)
+	assert.Equal(t, tok1, tok2, "every attempt failed, so the token must be unchanged")
+}
+
+// TestGeneration_BumpWithRetry_ContextDoneAbandonsRemainingAttempts asserts the retry loop
+// respects ctx being done between attempts rather than sleeping through it — the same
+// caller-cannot-be-blocked-forever property Bump already has, extended to the backoff wait.
+func TestGeneration_BumpWithRetry_ContextDoneAbandonsRemainingAttempts(t *testing.T) {
+	client := &flakySetClient{Fake: redisclient.NewFake("cache"), failCount: 99}
+	g := NewGenerations(client)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already done before BumpWithRetry's first backoff wait
+
+	ok := g.BumpWithRetry(ctx, ScopeHousehold, "hh1", "http_mutation", 5, time.Hour)
+	assert.False(t, ok)
+	assert.Equal(t, 1, client.setCalls,
+		"the first attempt still runs (Set itself doesn't consult ctx.Done in the Fake), but an "+
+			"already-done context must abandon the loop before a second attempt's hour-long backoff")
+}
+
+// TestGeneration_BumpWithRetry_AttemptsFloorsAtOne documents the defensive floor on a
+// caller-supplied attempts <= 0 — this must still make ONE attempt, not zero.
+func TestGeneration_BumpWithRetry_AttemptsFloorsAtOne(t *testing.T) {
+	fake := redisclient.NewFake("cache")
+	g := NewGenerations(fake)
+
+	ok := g.BumpWithRetry(context.Background(), ScopeHousehold, "hh1", "http_mutation", 0, time.Millisecond)
+	assert.True(t, ok, "attempts <= 0 must still try at least once")
 }
 
 func TestGeneration_ConcurrentMintRace_LoserReadsWinnersToken(t *testing.T) {

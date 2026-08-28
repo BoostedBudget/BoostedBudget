@@ -55,11 +55,32 @@ import (
 // Mutation-checked: removing either augmentation call from dashboard_service.go turns this test
 // red naming the function and the unmatched cutoff — for the personal paths and for the household
 // paths independently. See task-21-report.md for the before/after output.
+//
+// #1569 round 11 item 1: GetBalanceSummary/GetNetWorth (and their household variants) now call
+// dashboardService's sfSnapshotsAsOfForUser/sfSnapshotsAsOfForHousehold/sfAccountsAsOf/
+// sfAccountsHouseholdLiveAsOf instead of the bare repository methods directly, to coalesce the
+// concurrent overlap between the two endpoints' identical reads (dashboard_service.go's
+// dashboardSFDo doc comment). Each sf* method is a 1:1 passthrough — singleflight plumbing around
+// exactly one repository call, no branching, no alternate universe logic — so it cannot itself
+// reintroduce the C2 defect; unlike historicalAccountMap/augmentWithAsOfUniverse, which contain
+// real decision logic and stay held to the per-function pairing check. sfWrapperExempt below
+// excludes those specific FuncDecls from being scored: a passthrough that only ever forwards its
+// own `cutoff` parameter is guaranteed a "read as of X, no universe at X" shape by construction,
+// which would make it a permanent false positive if scored on its own body. The names are ALSO
+// added to asOfSnapshotReads/asOfUniverseReads below, so a caller like GetBalanceSummary that
+// reaches the repository through one of these wrappers is still checked exactly as before.
+var sfWrapperExempt = map[string]bool{
+	"sfSnapshotsAsOfForUser":      true,
+	"sfSnapshotsAsOfForHousehold": true,
+}
 
 // asOfSnapshotReads are the point-in-time snapshot reads. Their LAST argument is the cutoff.
 var asOfSnapshotReads = map[string]bool{
 	"GetSnapshotsAsOfForUser":      true,
 	"GetSnapshotsAsOfForHousehold": true,
+	// dashboardService passthroughs — see the doc comment above sfWrapperExempt.
+	"sfSnapshotsAsOfForUser":      true,
+	"sfSnapshotsAsOfForHousehold": true,
 }
 
 // asOfUniverseReads resolve an account universe AT AN INSTANT. Every identifier among their
@@ -76,6 +97,13 @@ var asOfUniverseReads = map[string]bool{
 	"historicalAccountMap":               true,
 	"augmentWithAsOfUniverse":            true,
 	"augmentHouseholdWithAsOfUniverse":   true,
+	// dashboardService passthroughs — see the doc comment above sfWrapperExempt. sfAccountsAsOf
+	// wraps GetAccountsWithInstitutionFiltered; sfAccountsHouseholdLiveAsOf wraps
+	// GetForHouseholdScopeLiveAsOf. sfAccountsHouseholdActiveNow (GetForHouseholdScopeActiveNow) is
+	// deliberately absent, for the identical reason GetForHouseholdScopeActiveNow itself is absent
+	// above.
+	"sfAccountsAsOf":              true,
+	"sfAccountsHouseholdLiveAsOf": true,
 }
 
 // cutoffName normalizes a cutoff expression to the identifier that names the instant.
@@ -125,7 +153,7 @@ func TestAsOfSnapshotReadsHaveAMatchingAccountUniverse(t *testing.T) {
 
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
+			if !ok || fn.Body == nil || sfWrapperExempt[fn.Name.Name] {
 				continue
 			}
 			demanded := map[string]token.Pos{}
