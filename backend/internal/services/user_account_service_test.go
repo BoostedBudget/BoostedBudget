@@ -149,6 +149,13 @@ func TestUserAccountService_MatchOrCreate_NoMatch_CreatesNew(t *testing.T) {
 			assert.Equal(t, accountName, *ua.AccountNameHint)
 			assert.Equal(t, accountType, *ua.PrimaryType)
 			assert.Equal(t, accountSubtype, *ua.PrimarySubtype)
+			// #1569 round 11 task 3: identity_type/identity_subtype are written ONCE, at mint,
+			// from the SAME founding account that caused this mint — never from PrimaryType/
+			// PrimarySubtype, which are last-writer-wins and get rewritten on every re-link.
+			if assert.NotNil(t, ua.IdentityType) && assert.NotNil(t, ua.IdentitySubtype) {
+				assert.Equal(t, accountType, *ua.IdentityType)
+				assert.Equal(t, accountSubtype, *ua.IdentitySubtype)
+			}
 			assert.False(t, ua.IsHidden) // Default
 		}).Return(nil)
 

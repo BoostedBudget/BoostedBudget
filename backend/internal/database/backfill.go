@@ -516,12 +516,17 @@ func synthesiseUserAccountID(
 		encMask = &m
 	}
 
+	// identity_type/identity_subtype are the FROZEN identity of this chain (#1569 round 11 task 3),
+	// written HERE — at mint — from the SAME founding account's acctType/acctSubtype used for
+	// primary_type/primary_subtype below, and never again. Unlike primary_type/primary_subtype,
+	// which get overwritten on every re-link, nothing UPDATEs these columns; see
+	// domain.UserAccount for the full reasoning and the guards that enforce it.
 	newID := uuid.New().String()
 	if _, err := db.Exec(ctx, `
 		INSERT INTO user_accounts
 			(id, user_id, institution_id, mask, institution_id_blind_idx, mask_blind_idx,
-			 primary_type, primary_subtype)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			 primary_type, primary_subtype, identity_type, identity_subtype)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $7, $8)
 		-- unique_user_accounts_inst_mask_blind (000100) is a PARTIAL index
 		-- (WHERE institution_id_blind_idx IS NOT NULL), so the inference clause must repeat
 		-- that predicate or Postgres cannot match it (SQLSTATE 42P10).
