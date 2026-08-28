@@ -77,10 +77,6 @@
 --      ON DELETE SET NULL) is left untouched by this step, exactly like every other downstream
 --      table already leaves an orphaned account_id-less row untouched — not a new gap this task
 --      introduces.
---   6. Normalize EVERY household_account_shares.physical_account_blind_idx (the WHOLE table, not
---      just rows touched by this split) to include identity, so two independently-computed
---      fingerprints for the same real account always agree regardless of which side of a split
---      (if any) either owner's copy sits on. See the ⚠⚠ ROUND 3 FIX note on step 6 itself.
 --   5. Fan out any ACTIVE (revoked_at IS NULL) household_account_shares grant on a chain that
 --      split, so a household member does not silently lose visibility of an account they could
 --      already see. (Superseded in part by step 6 below — see the ⚠⚠ ROUND 2/ROUND 3 notes.)
@@ -113,6 +109,10 @@
 --      longer matches. This step's INSERT therefore no longer tries to compute the "right" value
 --      at all — see Step 6, which normalizes every row's fingerprint (this newly-inserted one
 --      included) in one pass, globally, after both this step and Step 2 have run.
+--   6. Normalize EVERY household_account_shares.physical_account_blind_idx (the WHOLE table, not
+--      just rows touched by this split) to include identity, so two independently-computed
+--      fingerprints for the same real account always agree regardless of which side of a split
+--      (if any) either owner's copy sits on. See the ⚠⚠ ROUND 3 FIX note on step 6 itself.
 --
 -- IDEMPOTENCY. Step 2's own WHERE clause is "a physical account disagrees with its
 -- user_accounts row's identity" — once a chain is split, every remaining physical account under
