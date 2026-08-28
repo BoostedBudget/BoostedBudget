@@ -79,6 +79,13 @@ migrate-reset: ## Rollback all database migrations
 		echo "Usage: DATABASE_URL=postgres://user:pass@host:port/db make migrate-reset"; \
 		exit 1; \
 	fi
+	@# #1569 round 12 task 7 — the entry-point guard. `migrate down -all` is the one command that
+	@# can run every down-migration in reverse, including the four foundational DROP TABLEs that
+	@# carry no per-file rollback guard, and Codex showed the per-file guards a prior round added
+	@# can be bypassed entirely by the reverse execution order (000152's unconditional DELETE runs
+	@# before 000151's row-count guard sees it). See
+	@# scripts/assert-migrate-reset-target-disposable.sh for the full refusal design.
+	DATABASE_URL="$$DATABASE_URL" ./scripts/assert-migrate-reset-target-disposable.sh
 	migrate -path migrations -database "$$DATABASE_URL" -verbose down -all
 
 .PHONY: migrate-status
