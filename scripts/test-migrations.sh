@@ -702,10 +702,19 @@ apply_migrations() {
 # (#1569; 000149 is the first file this branch's `git diff --diff-filter=A` against its merge-base
 # with staging shows as newly added, as of the commit this comment was written against). Replaying
 # them in their own original order against the final schema reproduces the exact preconditions
-# each one saw when it was first applied for real, AS LONG AS none of them contains DROP TABLE,
-# DROP COLUMN, or a RENAME — verified by direct inspection when this range was chosen, and
-# re-verified on every run by assert_replay_range_has_no_destructive_ddl below so the assumption
-# cannot rot silently into a false PASS if a future migration in range violates it.
+# each one saw when it was first applied for real, AS LONG AS none of them tears down or narrows
+# something an EARLIER in-range file created or relies on.
+#
+# ⚠ DROP TABLE / DROP COLUMN / RENAME are the hazards assert_replay_range_has_no_destructive_ddl
+# below actually checks for, NOT a claimed-exhaustive list of everything that could invalidate this
+# assumption. They are the ones found by direct inspection when this range was chosen (000149-000179,
+# checked #1569 round 12 fix round 1) and the ones this specific branch's migration style (additive:
+# new tables/columns/backfills) could plausibly produce. An in-range `ALTER COLUMN ... TYPE`, or a
+# new `NOT NULL`/`CHECK` added to a column an EARLIER in-range file already depends on, would equally
+# break the assumption and this guard does NOT catch it — none exists in 000149-000179 today, but
+# that is a fact about today's migrations, not a guarantee the guard enforces. Widen the guard (and
+# this comment) the day a real case like that appears, rather than trusting the list is complete.
+
 #
 # Migrations 000001-000148 are SKIPPED for this specific check, on purpose, for the reason above —
 # NOT silently: every run logs the exact skipped range so "covered everything" is never implied by
@@ -713,6 +722,29 @@ apply_migrations() {
 # idempotency path (`apply_migrations` called twice from a clean database) that this suite already
 # ran before #1569, via the initial no-op-detecting call in test_idempotency; what was missing was
 # ANY re-execution against non-empty state, which is what this section adds.
+#
+# ⚠⚠ WHAT THIS MECHANISM DOES NOT PROVE (#1569 round 12 fix round 1 — stated precisely so this gate
+# is never over-read the way the ORIGINAL no-op gate was). Both replay_migrations_up_sql_range call
+# sites detect non-idempotency ONLY when re-executing a migration's .up.sql a second time ERRORS.
+# They do NOT detect semantic non-idempotency that runs to completion without error:
+#   - test_idempotency's hash comparison is `pg_dump --schema-only` (get_schema_hash). DATA IS NEVER
+#     IN THE HASH. An unguarded `INSERT` that duplicates a row on replay, or an `UPDATE` that is not
+#     a no-op the second time (writes a DIFFERENT value, not the same one), changes zero DDL and
+#     therefore changes NOTHING this hash can see. It would pass silently.
+#   - test_data_integrity's row-count check (a few hundred lines below) covers exactly FIVE
+#     pre-branch tables: users, privacy_settings, linked_items, accounts, transactions. NONE of
+#     this branch's own migrations (000149-000179) INSERT into any of those five — they add
+#     columns/tables/triggers and backfill EXISTING rows in OTHER tables (account_status_history,
+#     holding_observations, household_account_shares, user_accounts, etc.). A duplicate-row defect
+#     introduced by one of THIS branch's own migrations would be invisible to that row-count check
+#     too, for the same reason it would be invisible to the schema hash: nobody counts those tables.
+#   - Both of this round's real findings (the 000178 CREATE-TEMP-TABLE replay artefact, and the real
+#     000177 trigger defect) happen to THROW on replay, which is exactly why this gate looked
+#     complete when it is not — a defect that silently duplicates or mis-updates a row without
+#     erroring would sail through both suites unnoticed.
+# Extending either suite to data-level assertions (row-content diffs, not just row-COUNT diffs; a
+# broader table list) is explicitly OUT OF SCOPE for this round — this comment names the limitation
+# so it is carried forward deliberately, not silently forgotten.
 REPLAY_RANGE_START_MIGRATION="000149"
 
 # Lists this run's ABS_MIGRATIONS_DIR *.up.sql files whose zero-padded numeric prefix is >=
@@ -741,18 +773,29 @@ list_replay_range_skipped_up_files() {
     done | sort
 }
 
-# Re-verifies, on every run, that no migration inside the replay range contains DDL that would
-# invalidate "replaying this range in order against the final schema reproduces original
-# preconditions" — see the big comment above for why that assumption is load-bearing. Strips
-# whole-line `--` comments before scanning so prose (e.g. 000164's "Never updated when the boost is
-# renamed", inside a COMMENT ON COLUMN string) cannot trip it; the keyword patterns additionally
-# require SQL-shaped adjacency (RENAME TO / RENAME COLUMN, not bare "renamed") so past-tense prose
-# on the same line as real SQL still cannot match.
+# Re-verifies, on every run, that no migration inside the replay range contains one of the KNOWN
+# hazard shapes for "replaying this range in order against the final schema reproduces original
+# preconditions" — see the big comment above for why that assumption is load-bearing, and for why
+# this list is a set of hazards FOUND, not a claimed-exhaustive enumeration of every way the
+# assumption could break. Strips whole-line `--` comments before scanning so prose (e.g. 000164's
+# "Never updated when the boost is renamed", inside a COMMENT ON COLUMN string) cannot trip it.
+#
+# The RENAME alternation covers all three legal PostgreSQL forms, checked by direct inspection of
+# `ALTER ... RENAME` syntax and confirmed by mutation testing (#1569 round 12 fix round 1: a scratch
+# in-range migration using each shorthand form was added, confirmed to trip this guard, then
+# removed):
+#   - `RENAME TO new_name`            (table/index/etc. rename)                 -> RENAME\s+TO\b
+#   - `RENAME COLUMN old TO new`      (explicit column rename)                  -> RENAME\s+COLUMN\b
+#   - `RENAME old_col TO new_col`     (column-rename shorthand — COLUMN is OPTIONAL per the
+#     PostgreSQL grammar; the FIRST regex draft here missed exactly this form) -> RENAME\s+<ident>\s+TO\b
+# All three require "RENAME" to be followed by whitespace, which "renamed" (as prose) never is
+# (immediately followed by "d"), so SQL-shaped adjacency still cannot fire on past-tense prose on
+# the same line as real SQL.
 assert_replay_range_has_no_destructive_ddl() {
     local f hits all_hits=""
     for f in $(list_replay_range_up_files); do
         hits=$(/usr/bin/grep -viE '^[[:space:]]*--' "$f" \
-            | /usr/bin/grep -inE 'DROP[[:space:]]+TABLE|DROP[[:space:]]+COLUMN|RENAME[[:space:]]+(TO|COLUMN)' || true)
+            | /usr/bin/grep -inE 'DROP[[:space:]]+TABLE|DROP[[:space:]]+COLUMN|RENAME[[:space:]]+(TO|COLUMN)[[:space:]]|RENAME[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+TO[[:space:]]' || true)
         if [ -n "$hits" ]; then
             all_hits="${all_hits}--- $f ---"$'\n'"${hits}"$'\n'
         fi
@@ -1330,6 +1373,12 @@ BACKFILL_SQL
     echo ""
     local data_preserved=true
 
+    # ⚠ These five tables are the ORIGINAL seed-data set (predating #1569's replay mechanism), not
+    # a table list chosen to cover this branch's own migrations. None of this branch's migrations
+    # (000149-000179) INSERT into any of these five — see the "WHAT THIS MECHANISM DOES NOT PROVE"
+    # comment above replay_migrations_up_sql_range for why that matters: a duplicate-row defect in
+    # one of THIS branch's migrations would show up in neither this row-count check nor the schema
+    # hash. Widening this list is out of scope for #1569 round 12 — named here as a carried gap.
     # Check each table
     local tables_before=("users" "privacy_settings" "linked_items" "accounts" "transactions")
     local counts_before=("$users_count_before" "$privacy_count_before" "$linked_items_count_before" "$accounts_count_before" "$transactions_count_before")
@@ -1722,12 +1771,28 @@ main() {
         exit 1
     fi
 
-    # Run all test suites
-    test_idempotency
-    test_performance
-    test_data_integrity
-    test_schema_constraints
-    test_rollback
+    # Run all test suites. Each is invoked as `suite || true` DELIBERATELY (#1569 round 12 fix
+    # round 1 — landing blocker). `set -euo pipefail` is active at the top of this script, and a
+    # bare sequential call (`test_idempotency; test_performance; ...`) means the FIRST suite whose
+    # own `return 1` (via fail_test) reaches `main()` aborts the WHOLE script right there — every
+    # suite after it silently never runs, AND the TEST SUMMARY below never prints. Confirmed live:
+    # once test_data_integrity's replay became a genuine check (this round) and it found a real
+    # defect, test_schema_constraints and test_rollback never ran and there was no summary — this
+    # round's own founding lesson ("a gate that does not run proves nothing") recurring inside
+    # main() itself, not just inside the tests it calls. `|| true` neutralises set -e for exactly
+    # an ORDINARY nonzero `return` from a test function (every `return 1` path in every test_*
+    # function above is preceded by its own `fail_test` call — confirmed by inspection — so
+    # TESTS_FAILED is already incremented correctly and nothing here needs to duplicate that
+    # bookkeeping). A test function that calls `exit` directly (the pre-flight/connectivity guards,
+    # and apply_migrations' own fail-closed exit on a real `migrate up` failure) still terminates
+    # the whole script immediately regardless of `|| true` — that is intentional and unchanged:
+    # those are genuinely fatal environment failures, not test assertions, and should still abort
+    # everything rather than produce a summary that pretends the run was meaningful.
+    test_idempotency || true
+    test_performance || true
+    test_data_integrity || true
+    test_schema_constraints || true
+    test_rollback || true
 
     # Summary
     log_section "TEST SUMMARY"
