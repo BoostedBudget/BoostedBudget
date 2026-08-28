@@ -11,6 +11,48 @@
 -- the explanatory comment.
 --
 -- Idempotent: IF EXISTS guards throughout; the orphan deletes are no-ops once there are no NULLs.
+--
+-- ⚠⚠ #1569 round 12 task 4 (Codex-cited example): "the information they lost is unrecoverable"
+-- was a comment, not a control. Same mechanism as this branch's other guards: REFUSE up front,
+-- before any statement below runs, rather than destroy an orphaned row or a definition snapshot
+-- that a purged rule/boost left behind on its way out. Two distinct hazards, both checked: (1) the
+-- DELETEs below remove rows this migration's SET NULL preserved after a rule/boost/budget was
+-- purged -- restoring NOT NULL has no parent left to re-point them at; (2) the column drops
+-- discard rule_name/boost_name/definition_snapshot for EVERY row, orphaned or not, which is
+-- exactly the information #1569 T7.5's audit trail exists to keep.
+
+DO $$
+DECLARE
+    n_rollover BIGINT;
+    n_boost_orphan BIGINT;
+    n_boost_snapshot BIGINT;
+    n_rule_orphan BIGINT;
+    n_rule_snapshot BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO n_rollover FROM rollover_history
+     WHERE budget_id IS NULL OR source_budget_category_id IS NULL;
+    SELECT COUNT(*) INTO n_boost_orphan FROM boost_executions WHERE boost_id IS NULL;
+    SELECT COUNT(*) INTO n_boost_snapshot FROM boost_executions
+     WHERE boost_name IS NOT NULL OR definition_snapshot IS NOT NULL;
+    SELECT COUNT(*) INTO n_rule_orphan FROM rule_execution_history WHERE rule_id IS NULL;
+    SELECT COUNT(*) INTO n_rule_snapshot FROM rule_execution_history
+     WHERE rule_name IS NOT NULL OR definition_snapshot IS NOT NULL;
+
+    IF n_rollover > 0 OR n_boost_orphan > 0 OR n_boost_snapshot > 0
+       OR n_rule_orphan > 0 OR n_rule_snapshot > 0 THEN
+        RAISE EXCEPTION
+            'refusing to roll back 000164: % rollover_history orphan row(s) (budget_id or '
+            'source_budget_category_id IS NULL), % boost_executions orphan row(s) (boost_id IS '
+            'NULL), % boost_executions row(s) carrying a boost_name/definition_snapshot, % '
+            'rule_execution_history orphan row(s) (rule_id IS NULL), and % rule_execution_history '
+            'row(s) carrying a rule_name/definition_snapshot. This rollback deletes every orphan '
+            'row outright (no parent survives to re-point them at) and drops the '
+            'name/definition_snapshot columns for ALL rows, orphaned or not -- exactly the audit '
+            'trail #1569 T7.5 exists to retain. Export what you need, or delete/clear it yourself '
+            'having decided that is acceptable, before retrying.',
+            n_rollover, n_boost_orphan, n_boost_snapshot, n_rule_orphan, n_rule_snapshot;
+    END IF;
+END $$;
 
 DELETE FROM rollover_history
  WHERE budget_id IS NULL OR source_budget_category_id IS NULL;

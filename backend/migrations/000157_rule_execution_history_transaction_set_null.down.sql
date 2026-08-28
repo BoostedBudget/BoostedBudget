@@ -6,6 +6,25 @@
 -- them in the first place. Nothing else can be done -- the information they lost is unrecoverable.
 --
 -- Idempotent: IF EXISTS guards, and the orphan delete is a no-op once there are no NULLs left.
+--
+-- ⚠⚠ #1569 round 12 task 4: "the information they lost is unrecoverable" was a comment, not a
+-- control. Same mechanism as this branch's other guards: REFUSE while there is an orphaned row to
+-- lose, rather than silently deleting the audit trail for a purged transaction.
+
+DO $$
+DECLARE
+    n BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO n FROM rule_execution_history WHERE transaction_id IS NULL;
+    IF n > 0 THEN
+        RAISE EXCEPTION
+            'refusing to roll back 000157: % rule_execution_history row(s) have transaction_id '
+            'IS NULL (the transaction they acted on has since been purged, and this migration is '
+            'the only reason they survived that). Restoring the NOT NULL constraint requires '
+            'deleting them, which is unrecoverable. Export them, or delete them yourself having '
+            'decided that is acceptable, before retrying.', n;
+    END IF;
+END $$;
 
 DELETE FROM rule_execution_history WHERE transaction_id IS NULL;
 
