@@ -557,11 +557,17 @@ func TestMigration000178_MaskedCollision_FanOutFingerprintDoesNotCollide(t *test
 		hh, iraUA).Scan(&newFP))
 	require.NotNil(t, originalFP)
 	require.NotNil(t, newFP)
-	assert.Equal(t, fingerprint, *originalFP, "the ORIGINAL (untouched) share must keep its fingerprint unchanged")
+	// #1569 round 11 task 4, coordinator round 3 fix: Step 6 normalizes EVERY share's fingerprint
+	// globally, including the original (surviving) row's — it no longer stays at its pre-split
+	// plain value. This is deliberate: leaving the original plain (round 2's design) is exactly
+	// what caused the cross-user double-count round 3 fixes (see
+	// TestJointAccountAcrossMaskedSplit_StillCountsOnce). Both must carry their OWN identity now.
+	assert.Equal(t, fingerprint+":investment:brokerage", *originalFP,
+		"the ORIGINAL row's share must be normalized to include ITS OWN identity too, not left plain")
 	assert.NotEqual(t, *originalFP, *newFP,
-		"the NEW chain's fanned-out share must NOT clone the original's fingerprint verbatim — "+
-			"a shared fingerprint makes the household dedup CTE treat the two split chains as one "+
-			"joint account and silently drop one of them from every total")
+		"the NEW chain's fanned-out share must NOT end up with the same fingerprint as the "+
+			"original — a shared fingerprint makes the household dedup CTE treat the two split "+
+			"chains as one joint account and silently drop one of them from every total")
 
 	// ─── The real production household query proves the practical consequence ────────────────
 	got, err := balRepo.GetSnapshotsAsOfForHousehold(ctx, owner, scope, now)
@@ -578,4 +584,152 @@ func TestMigration000178_MaskedCollision_FanOutFingerprintDoesNotCollide(t *test
 		`SELECT COUNT(*) FROM household_account_shares WHERE household_id = $1 AND revoked_at IS NULL`,
 		hh).Scan(&shareCount))
 	assert.Equal(t, 2, shareCount, "re-run must not fan out again")
+}
+
+// TestJointAccountAcrossMaskedSplit_StillCountsOnce is the coordinator's round 3 probe: a SECOND
+// user's genuine joint-account share, on the OTHER side of a masked collision split.
+//
+// Scenario: User A owns physical accounts Q (IRA, created earliest — becomes the surviving
+// original row's identity per migration 000177's backfill convention) and P (brokerage, created
+// later — moves to a NEW chain when 000178 splits them), sharing one institution+mask. User B
+// jointly co-owns the SAME real account P (their own, never-split user_accounts row) and has
+// shared it into the SAME household.
+//
+// The AsOf household balance CTE (householdAccountsCTEForBalancesAsOf) breaks a fingerprint tie
+// by FRESHEST SYNCED SNAPSHOT, not earliest share — re-derived here by reading the CTE directly
+// rather than assumed from the (different) tiebreak rule cash-flow reads use. B's copy is seeded
+// with the more recent snapshot on purpose, so B's copy is the (correct, deterministic) tiebreak
+// winner once the fingerprints agree — proving the fix works regardless of which side wins.
+//
+// Both of A's and B's household_account_shares rows are seeded with the OLD PLAIN
+// (institution+mask only, no identity) fingerprint format — exactly what a share created before
+// this round's fix would have stored, and exactly the shape migration 000178's Step 6 must
+// normalize.
+//
+// PROBED: with Step 6 removed, this test fails RED — not merely with the coordinator's predicted
+// double-count, but with an even more severe within-user collision this migration's current Step
+// 5 (a plain, unconditional copy since round 3 moved all disambiguation into Step 6) leaves
+// behind: A's OWN Q and P chains ALSO share the untouched plain fingerprint without Step 6, so
+// the household CTE collapses ALL THREE rows (A's Q, A's P, B's copy of P) into ONE group and
+// keeps only the single freshest snapshot (1500, B's), rather than the predicted 4500. Confirmed
+// by direct probe, not assumed — see the report's Round 3 addendum for the full probe output.
+// With Step 6 present, the fix is confirmed at 3500 (correct).
+func TestJointAccountAcrossMaskedSplit_StillCountsOnce(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	balRepo := repository.NewBalanceSnapshotRepository(pool)
+
+	userA := insertTestUser(t, pool)
+	userB := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, userB)
+	linkedItemA := insertTestLinkedItem(t, pool, userA)
+	linkedItemB := insertTestLinkedItem(t, pool, userB)
+
+	instBlindIdx := "blind_inst_joint_" + uuid.New().String()
+	maskBlindIdx := "blind_mask_joint_" + uuid.New().String()
+	plainFingerprint := instBlindIdx + maskBlindIdx
+
+	// A's merged chain: Q (IRA) is the row's OWN identity (the "earliest" representative);
+	// P (brokerage) disagrees and will move to a new chain when the migration runs.
+	var uaA string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO user_accounts
+			(user_id, institution_id, institution_id_blind_idx, mask, mask_blind_idx,
+			 primary_type, primary_subtype, identity_type, identity_subtype)
+		VALUES ($1, 'enc_inst_a', $2, 'enc_mask_a', $3, 'investment', 'ira', 'investment', 'ira')
+		RETURNING id::text
+	`, userA, instBlindIdx, maskBlindIdx).Scan(&uaA))
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, uaA) }) //nolint:errcheck
+
+	var acctQ, acctP string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type, subtype, mask, user_account_id, status, current_balance)
+		VALUES ($1, $2, 'plaid_'||gen_random_uuid()::text, 'IRA-Q', 'investment', 'ira', '1234', $3, 'active', 2000.00)
+		RETURNING id::text
+	`, linkedItemA, userA, uaA).Scan(&acctQ))
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM accounts WHERE id = $1`, acctQ) }) //nolint:errcheck
+
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type, subtype, mask, user_account_id, status, current_balance)
+		VALUES ($1, $2, 'plaid_'||gen_random_uuid()::text, 'Brokerage-P', 'investment', 'brokerage', '1234', $3, 'active', 1000.00)
+		RETURNING id::text
+	`, linkedItemA, userA, uaA).Scan(&acctP))
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM accounts WHERE id = $1`, acctP) }) //nolint:errcheck
+
+	// B's own, never-split copy of the SAME real account P — same institution+mask, same identity.
+	var uaB string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO user_accounts
+			(user_id, institution_id, institution_id_blind_idx, mask, mask_blind_idx,
+			 primary_type, primary_subtype, identity_type, identity_subtype)
+		VALUES ($1, 'enc_inst_b', $2, 'enc_mask_b', $3, 'investment', 'brokerage', 'investment', 'brokerage')
+		RETURNING id::text
+	`, userB, instBlindIdx, maskBlindIdx).Scan(&uaB))
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, uaB) }) //nolint:errcheck
+
+	var acctPCopy string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type, subtype, mask, user_account_id, status, current_balance)
+		VALUES ($1, $2, 'plaid_'||gen_random_uuid()::text, 'Brokerage-P-copy', 'investment', 'brokerage', '1234', $3, 'active', 1500.00)
+		RETURNING id::text
+	`, linkedItemB, userB, uaB).Scan(&acctPCopy))
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM accounts WHERE id = $1`, acctPCopy) }) //nolint:errcheck
+
+	now := time.Now().UTC()
+	// A's share of the merged chain: OLDEST (wins the tiebreak once fingerprints agree).
+	_, err := pool.Exec(ctx, `
+		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility, shared_at)
+		VALUES ($1, $2, $3, 'shared', $4)
+	`, hh, uaA, plainFingerprint, now.AddDate(0, 0, -3))
+	require.NoError(t, err)
+	// B's share of their own copy: newer, seeded with the SAME old-plain-format fingerprint —
+	// exactly what a real pre-existing share would look like before this round's fix.
+	_, err = pool.Exec(ctx, `
+		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility, shared_at)
+		VALUES ($1, $2, $3, 'shared', $4)
+	`, hh, uaB, plainFingerprint, now.AddDate(0, 0, -2))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM household_account_shares WHERE household_id = $1`, hh) //nolint:errcheck
+	})
+
+	insertBalanceSnapshot(t, pool, userA, acctQ, uaA, 2000, now.Add(-2*time.Hour))
+	insertBalanceSnapshot(t, pool, userA, acctP, uaA, 1000, now.Add(-2*time.Hour))
+	insertBalanceSnapshot(t, pool, userB, acctPCopy, uaB, 1500, now.Add(-1*time.Hour))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{userA, userB}}
+
+	_, err = pool.Exec(ctx, migration000178UpSQL(t))
+	require.NoError(t, err, "apply 000178 up migration")
+
+	// Confirm the split happened as designed: P moved off the original row, Q stayed.
+	qUA := accountUserAccountID(t, pool, acctQ)
+	pUA := accountUserAccountID(t, pool, acctP)
+	assert.Equal(t, uaA, qUA, "Q (IRA, earliest) stays on the original row")
+	assert.NotEqual(t, uaA, pUA, "P (brokerage, later) moves to a new chain")
+
+	// The critical assertion: A's (moved) P-chain and B's (untouched) P-copy must now carry the
+	// SAME fingerprint, because Step 6 normalizes both using the same identity-aware formula.
+	var aPFingerprint, bPFingerprint *string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT physical_account_blind_idx FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
+		hh, pUA).Scan(&aPFingerprint))
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT physical_account_blind_idx FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
+		hh, uaB).Scan(&bPFingerprint))
+	require.NotNil(t, aPFingerprint)
+	require.NotNil(t, bPFingerprint)
+	assert.Equal(t, *aPFingerprint, *bPFingerprint,
+		"A's moved P-chain and B's own copy of the SAME real account must agree on fingerprint "+
+			"post-split, or the household dedup CTE treats them as two different accounts and "+
+			"double-counts the joint account")
+
+	// The real production query is the practical proof: 4500 (2000+1000+1500) would mean the
+	// joint account was double-counted (A's P AND B's P both counted); 3500 (2000 Q + 1500 B's
+	// fresher-synced copy, the correct tiebreak winner) is correct. A's 1000 must be excluded —
+	// that is ordinary, correct joint-account dedup, not a bug.
+	got, err := balRepo.GetSnapshotsAsOfForHousehold(ctx, userB, scope, now)
+	require.NoError(t, err)
+	assert.InDelta(t, 3500.0, sumSnapshots(got), 0.01,
+		"4500 means the cross-user joint account was double-counted after the split; 3500 is correct")
 }

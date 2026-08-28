@@ -183,8 +183,8 @@ func TestHouseholdService_AcceptInvite_BumpsJoinerOwnerHouseholdAndExistingMembe
 		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-caller", now, now, now))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", "inst-1", &mask))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", "inst-1", &mask, nil, nil))
 	pool.ExpectQuery("INSERT INTO household_share_consents").
 		WithArgs("hh-1", "caller-1", domain.HouseholdShareConsentVersion, pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "consented_at", "created_at"}).AddRow("consent-1", now, now))
@@ -349,7 +349,9 @@ func TestHouseholdService_SetAccountShareVisibility_BumpsOtherMemberAndHousehold
 	now := time.Now()
 	instIdx := "inst-blind"
 	maskIdx := "mask-blind"
-	combined := instIdx + maskIdx
+	// #1569 round 11 task 4, coordinator round 3 fix: the fingerprint now includes identity
+	// (empty here since the mocked row's identity_type/identity_subtype are nil).
+	combined := instIdx + maskIdx + "::"
 
 	pool.ExpectBegin()
 	// #1569 T7 lock-ordering fix: households FOR UPDATE first (see the method's comment),
@@ -364,8 +366,8 @@ func TestHouseholdService_SetAccountShareVisibility_BumpsOtherMemberAndHousehold
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
 			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("FROM user_accounts WHERE user_id").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", instIdx, &maskIdx))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", instIdx, &maskIdx, nil, nil))
 	// #1569 T7: SetShareVisibility now opens a nested transaction (a SAVEPOINT here, since
 	// the service already holds one) to close the outgoing interval before opening the new one.
 	pool.ExpectBegin()

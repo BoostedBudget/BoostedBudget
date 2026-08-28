@@ -26,20 +26,28 @@ func TestHouseholdShareRepository_ListActiveUserAccountFingerprints(t *testing.T
 	defer mock.Close()
 
 	maskIdx := "mask-blind-1"
+	identityType := "investment"
+	identitySubtype := "brokerage"
+	// #1569 round 11 task 4, coordinator round 3 fix: identity_type/identity_subtype are now
+	// PART of the fingerprint (see AccountFingerprint's doc comment for why — two different real
+	// accounts belonging to the same user that share institution+mask must not compute the same
+	// fingerprint, and two DIFFERENT users' independently-computed fingerprints for the SAME real
+	// account must agree, which requires identity in the concat either way).
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, institution_id_blind_idx, mask_blind_idx FROM user_accounts WHERE user_id = $1
+		SELECT id, institution_id_blind_idx, mask_blind_idx, identity_type, identity_subtype
+		FROM user_accounts WHERE user_id = $1
 	`)).
 		WithArgs("user-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", "inst-blind-1", &maskIdx).
-			AddRow("acct-2", "inst-blind-2", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", "inst-blind-1", &maskIdx, &identityType, &identitySubtype).
+			AddRow("acct-2", "inst-blind-2", nil, nil, nil))
 
 	fps, err := repo.ListActiveUserAccountFingerprints(context.Background(), "user-1")
 	require.NoError(t, err)
 	require.Len(t, fps, 2)
 	assert.Equal(t, "acct-1", fps[0].UserAccountID)
 	require.NotNil(t, fps[0].PhysicalBlindIdx)
-	assert.Equal(t, "inst-blind-1"+maskIdx, *fps[0].PhysicalBlindIdx)
+	assert.Equal(t, "inst-blind-1"+maskIdx+":"+identityType+":"+identitySubtype, *fps[0].PhysicalBlindIdx)
 	assert.Nil(t, fps[1].PhysicalBlindIdx, "no mask -> nil physical fingerprint")
 }
 

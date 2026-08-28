@@ -7,10 +7,31 @@ import (
 )
 
 // AccountFingerprint is one of the accepting user's own user_accounts, projected for
-// the accept-transaction default-share fan-out. PhysicalBlindIdx is the concatenation
-// of institution_id_blind_idx + mask_blind_idx (nil when the account has no mask) —
-// this concat is a cross-phase contract with the Phase 5 (#1369) joint-account dedup
-// and must not change without updating that phase too.
+// the accept-transaction default-share fan-out. PhysicalBlindIdx is nil when the account has no
+// mask (maskless accounts have no cross-user joint-account dedup — never did, unaffected by this
+// note); otherwise it is institution_id_blind_idx + mask_blind_idx + ':' + identity_type + ':' +
+// identity_subtype (identity_subtype empty-string, never omitted, when the account has none).
+//
+// #1569 round 11 task 4, coordinator round 3 fix: identity was ADDED to this concat. Before this
+// fix it was institution_id_blind_idx + mask_blind_idx alone, and that omission was a real
+// cross-user money bug, not merely an inconsistency: TWO DIFFERENT real accounts belonging to the
+// SAME user that share an institution + mask (migration 000178's masked-collision split) must
+// mint DIFFERENT fingerprints from each other, but whichever of the two split siblings HAPPENED
+// to keep the plain (unsuffixed) format was an accident of which physical account was created
+// earliest — completely unrelated to which one (if either) a DIFFERENT household member
+// genuinely, jointly co-owns. Probed against real Postgres: when the co-owned sibling was not the
+// one that kept the plain format, its cross-user dedup partner (the other member's own,
+// never-split copy of the SAME real account, always computed via THIS SAME function) silently
+// stopped matching it, and the household total double-counted that account —
+// TestJointAccountAcrossMaskedSplit_StillCountsOnce pins the fix. Adding identity here — the same
+// narrowing already applied to the user_accounts match key itself — makes the fingerprint a pure,
+// deterministic function of the account's OWN (institution, mask, identity), so two independently
+// computed fingerprints for the literal same real account always agree, regardless of which side
+// of a split (if any) either owner's copy is on. This is a cross-phase contract with the Phase 5
+// (#1369) joint-account dedup (analytics_repository.go, balance_snapshot_repository.go) and must
+// not change again without updating those call sites' comments too. Migration 000178 rewrites
+// every EXISTING stored value to this same format in the same release that changes this function,
+// so no window exists where some shares use the old format and others use the new one.
 type AccountFingerprint struct {
 	UserAccountID    string
 	PhysicalBlindIdx *string
@@ -79,7 +100,8 @@ func NewHouseholdShareRepository(db DB) HouseholdShareRepository {
 
 func (r *householdShareRepository) ListActiveUserAccountFingerprints(ctx context.Context, userID string) ([]AccountFingerprint, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, institution_id_blind_idx, mask_blind_idx FROM user_accounts WHERE user_id = $1
+		SELECT id, institution_id_blind_idx, mask_blind_idx, identity_type, identity_subtype
+		FROM user_accounts WHERE user_id = $1
 	`, userID)
 	if err != nil {
 		return nil, err
@@ -91,11 +113,22 @@ func (r *householdShareRepository) ListActiveUserAccountFingerprints(ctx context
 		var fp AccountFingerprint
 		var instIdx string
 		var maskIdx *string
-		if err := rows.Scan(&fp.UserAccountID, &instIdx, &maskIdx); err != nil {
+		var identityType, identitySubtype *string
+		if err := rows.Scan(&fp.UserAccountID, &instIdx, &maskIdx, &identityType, &identitySubtype); err != nil {
 			return nil, err
 		}
+		// See AccountFingerprint's doc comment (#1569 round 11 task 4, coordinator round 3 fix)
+		// for why identity is part of this concat now, not just institution+mask.
 		if maskIdx != nil {
-			combined := instIdx + *maskIdx
+			it := ""
+			if identityType != nil {
+				it = *identityType
+			}
+			is := ""
+			if identitySubtype != nil {
+				is = *identitySubtype
+			}
+			combined := instIdx + *maskIdx + ":" + it + ":" + is
 			fp.PhysicalBlindIdx = &combined
 		}
 		fps = append(fps, fp)

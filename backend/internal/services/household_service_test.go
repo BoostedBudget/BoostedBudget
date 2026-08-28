@@ -2304,9 +2304,9 @@ func TestHouseholdService_AcceptInvite_Success(t *testing.T) {
 		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-1", time.Now(), time.Now(), time.Now()))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", "inst-1", &mask).
-			AddRow("acct-2", "inst-2", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", "inst-1", &mask, nil, nil).
+			AddRow("acct-2", "inst-2", nil, nil, nil))
 	pool.ExpectQuery("INSERT INTO household_share_consents").
 		WithArgs("hh-1", "caller-1", domain.HouseholdShareConsentVersion, pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "consented_at", "created_at"}).AddRow("consent-1", time.Now(), time.Now()))
@@ -2624,7 +2624,7 @@ func TestHouseholdService_AcceptInvite_HiddenAccountIDsForeignID_RollsBack(t *te
 		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-1", time.Now(), time.Now(), time.Now()))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).AddRow("acct-1", "inst-1", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).AddRow("acct-1", "inst-1", nil, nil, nil))
 	pool.ExpectRollback()
 
 	_, err := svc.AcceptInvite(context.Background(), "caller-1", "rawtoken", true, []string{"someone-elses-account"})
@@ -2671,9 +2671,9 @@ func TestHouseholdService_AcceptInvite_CompedOwnerRawInactive_SucceedsAndPersist
 		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-1", time.Now(), time.Now(), time.Now()))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", "inst-1", &mask).
-			AddRow("acct-2", "inst-2", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", "inst-1", &mask, nil, nil).
+			AddRow("acct-2", "inst-2", nil, nil, nil))
 	pool.ExpectQuery("INSERT INTO household_share_consents").
 		WithArgs("hh-1", "caller-1", domain.HouseholdShareConsentVersion, pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "consented_at", "created_at"}).AddRow("consent-1", time.Now(), time.Now()))
@@ -2736,9 +2736,9 @@ func TestHouseholdService_AcceptInvite_OwnerActiveRawStatus_MalformedOverride_Se
 		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-1", time.Now(), time.Now(), time.Now()))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", "inst-1", &mask).
-			AddRow("acct-2", "inst-2", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", "inst-1", &mask, nil, nil).
+			AddRow("acct-2", "inst-2", nil, nil, nil))
 	pool.ExpectQuery("INSERT INTO household_share_consents").
 		WithArgs("hh-1", "caller-1", domain.HouseholdShareConsentVersion, pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "consented_at", "created_at"}).AddRow("consent-1", time.Now(), time.Now()))
@@ -2801,9 +2801,9 @@ func TestHouseholdService_AcceptInvite_CallerMalformedOverride_PriorTierFallsBac
 		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, ptrStringEquals("premium"), ptrStringEquals("cancelled")).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-1", time.Now(), time.Now(), time.Now()))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", "inst-1", &mask).
-			AddRow("acct-2", "inst-2", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", "inst-1", &mask, nil, nil).
+			AddRow("acct-2", "inst-2", nil, nil, nil))
 	pool.ExpectQuery("INSERT INTO household_share_consents").
 		WithArgs("hh-1", "caller-1", domain.HouseholdShareConsentVersion, pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "consented_at", "created_at"}).AddRow("consent-1", time.Now(), time.Now()))
@@ -2875,7 +2875,7 @@ func TestHouseholdService_AcceptInvite_RestoresRemovedMember_Success(t *testing.
 	pool.ExpectQuery("UPDATE household_members SET status = 'active'").WithArgs("mem-1").
 		WillReturnRows(pgxmock.NewRows([]string{"updated_at"}).AddRow(freshUpdatedAt))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).AddRow("acct-1", "inst-1", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).AddRow("acct-1", "inst-1", nil, nil, nil))
 	pool.ExpectQuery("INSERT INTO household_share_consents").
 		WithArgs("hh-1", "caller-1", domain.HouseholdShareConsentVersion, pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "consented_at", "created_at"}).AddRow("consent-1", time.Now(), time.Now()))
