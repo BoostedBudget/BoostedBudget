@@ -64,6 +64,18 @@
 --      the seven single-column tables named above (step 4), household_account_shares.
 --      user_account_id (step 5, below), and transfer_suggestions' two columns
 --      (from_user_account_id, to_user_account_id — step 4a, just below).
+--      ⚠⚠ ROUND 4 FIX: this "ten tables, eleven columns" surface was STILL incomplete — a JSONB
+--      reference (boosts.actions.transfer.from_user_account_id / to_user_account_id) is invisible
+--      to BOTH information_schema queries above, since it lives inside a jsonb column's VALUE, not
+--      as a column of its own. Re-derived by cross-checking migration 000100 (which already
+--      rewrites this exact JSONB path on its own merge, proving it is a real, live reference —
+--      see 000100's Step 3) and boost_execution_service.go's chain resolver (confirms it is read,
+--      in preference to the raw physical id, at money-movement execution time). Repointed in
+--      step 4b, just below. boosts.trigger_config.filters.user_account_id and
+--      categorization_rules.conditions (type='account_id', value=a user_account_id) are ALSO
+--      JSONB-embedded stable references this surface search cannot see, and are addressed by an
+--      explicit, documented policy decision (leave unrepointed) rather than silently ignored —
+--      see step 4b's own comment for the reasoning.
 --   4a. transfer_suggestions is repointed the SAME self-correcting way as the plain-account_id
 --      tables, using from_account_id/to_account_id — NOT invalidated or skipped. This is
 --      deliberately NOT the same shape as task 2's ErrAmbiguousActiveAccount problem (resolving a
@@ -77,9 +89,11 @@
 --      ON DELETE SET NULL) is left untouched by this step, exactly like every other downstream
 --      table already leaves an orphaned account_id-less row untouched — not a new gap this task
 --      introduces.
---   5. Fan out any ACTIVE (revoked_at IS NULL) household_account_shares grant on a chain that
+--   5. Fan out EVERY household_account_shares grant — active AND closed — on a chain that
 --      split, so a household member does not silently lose visibility of an account they could
---      already see. (Superseded in part by step 6 below — see the ⚠⚠ ROUND 2/ROUND 3 notes.)
+--      already see, for any window that grant ever covered. (Round 4: closed grants are now
+--      included too — see the ⚠⚠ ROUND 4 FIX note on step 5 itself. Fingerprint value is
+--      superseded by step 6 below — see the ⚠⚠ ROUND 2/ROUND 3 notes.)
 --      ⚠⚠ ROUND 2 FIX — A REAL MONEY BUG, CAUGHT BEFORE MERGE, NOT BY ME. The first version of
 --      this step copied `physical_account_blind_idx` VERBATIM into the new share, reasoning
 --      (WRONGLY) that every chain this migration splits is "by construction maskless" so the
@@ -133,6 +147,9 @@
 -- user_accounts row when they disagree on identity_type or identity_subtype.
 -- =============================================================================
 DROP INDEX IF EXISTS unique_user_accounts_inst_mask_blind;
+-- Also drop the NON-unique fallback index the down migration creates (round 4 fix, item 1) — a
+-- down-then-up cycle must not leave it behind as stray, redundant index bloat.
+DROP INDEX IF EXISTS idx_user_accounts_inst_mask_blind;
 
 CREATE UNIQUE INDEX IF NOT EXISTS unique_user_accounts_inst_mask_identity_blind
     ON user_accounts (user_id, institution_id_blind_idx, mask_blind_idx, identity_type, identity_subtype)
@@ -232,6 +249,17 @@ WHERE a.user_account_id = sg.old_ua_id
 -- Step 4: Repoint every other table carrying account_id + user_account_id, deriving from the
 -- now-authoritative accounts.user_account_id (self-correcting: works whether the destination row
 -- currently holds the old chain, is NULL, or is already correct).
+-- ⚠ POLICY DECISION, DOCUMENTED (item 7): every one of these seven UPDATEs joins on
+-- `dst.account_id = a.id`, so a retained-history row with a NULL account_id (balance_snapshots
+-- and account_status_history both allow it — see balance_snapshot_repository.go's "THE THIRD
+-- COALESCE ARM IS THE TRAP" comment for a documented, real example of an orphaned snapshot) is
+-- NOT touched by this migration and CANNOT be, by any of these seven statements' own design: with
+-- no physical account_id to anchor to, there is no way to know which split sibling such a row
+-- "belongs" to — the physical anchor is genuinely irrecoverable, not merely unconsidered. Such a
+-- row keeps whatever user_account_id it already had (the OLD, pre-split chain id, which still
+-- names a real, valid row — the surviving original — so it does not point at nothing). This is
+-- the SAME shape as, and no worse than, transfer_suggestions' documented from_account_id-IS-NULL
+-- case below, and applies equally to every table in this step, not just one.
 -- =============================================================================
 UPDATE account_status_history dst
 SET user_account_id = a.user_account_id
@@ -299,27 +327,88 @@ WHERE dst.to_account_id = a.id
   AND a.user_account_id IS NOT NULL
   AND dst.to_user_account_id IS DISTINCT FROM a.user_account_id;
 
+-- Step 4b:
+-- ⚠⚠ ROUND 4 FIX (item 5) — boosts.actions.transfer JSONB carries the SAME shape as
+-- transfer_suggestions: a stable chain reference (from_user_account_id / to_user_account_id,
+-- Issue #1109, resolved at EXECUTION time by boost_execution_service.go's chain resolver in
+-- PREFERENCE to the raw physical id) alongside the physical account_id it was minted from
+-- (from_account_id / to_account_id). Migration 000100 already rewrote this exact JSONB path on a
+-- loser->survivor merge, which is direct evidence it is a real, live, money-movement-relevant
+-- reference — not a stale field. Left unrepointed, a transfer boost whose from_account_id names
+-- the sibling that MOVED would still carry the OLD merged chain's from_user_account_id; at
+-- execution the resolver would resolve that stale chain id to whatever is STILL live under it
+-- (the account that stayed, not the one that moved) — a money-movement suggestion computed
+-- against the WRONG source or destination account. Re-anchored the same self-correcting way as
+-- transfer_suggestions, using the SAME physical from_account_id/to_account_id already stored
+-- alongside each stable reference — this is not a guess, `accounts.user_account_id` is
+-- single-valued per physical account both before and after the split.
+UPDATE boosts b
+SET actions = jsonb_set(b.actions, '{transfer,from_user_account_id}', to_jsonb(a.user_account_id::text))
+FROM accounts a
+WHERE b.boost_type = 'transfer_suggestion'
+  AND b.actions->'transfer'->>'from_account_id' = a.id::text
+  AND a.user_account_id IS NOT NULL
+  AND b.actions->'transfer'->'from_user_account_id' IS DISTINCT FROM to_jsonb(a.user_account_id::text);
+
+UPDATE boosts b
+SET actions = jsonb_set(b.actions, '{transfer,to_user_account_id}', to_jsonb(a.user_account_id::text))
+FROM accounts a
+WHERE b.boost_type = 'transfer_suggestion'
+  AND b.actions->'transfer'->>'to_account_id' = a.id::text
+  AND a.user_account_id IS NOT NULL
+  AND b.actions->'transfer'->'to_user_account_id' IS DISTINCT FROM to_jsonb(a.user_account_id::text);
+
+-- ⚠ POLICY DECISION, DOCUMENTED RATHER THAN LEFT SILENT: boosts.trigger_config.filters.
+-- user_account_id (an event-trigger filter) and categorization_rules.conditions (type =
+-- 'account_id', whose `value` is actually a user_account_id — see AccountIDEvaluator in
+-- internal/rules/evaluator.go) are DELIBERATELY NOT repointed by this migration. Unlike the
+-- transfer action above, neither stores a companion PHYSICAL account_id alongside the stable
+-- chain reference: `filters` is an open `map[string]interface{}` with no guaranteed anchor key,
+-- and a categorization_rules condition's `value` IS the user_account_id itself, with nothing else
+-- to disambiguate which split sibling it meant. Guessing here would be exactly the kind of
+-- unscoped resolution task 2's ErrAmbiguousActiveAccount refuses to do for a chain with several
+-- live members — except worse, because there is no live-account signal to even attempt a guess
+-- from. The untouched value still names a REAL, existing user_accounts row (the surviving
+-- original) after the split, so it is not broken, only possibly narrower in scope than before:
+-- a categorization rule or event filter that used to match transactions from BOTH merged
+-- physical accounts now matches only the one that stayed on the original id. That is a
+-- behavior change a user may need to notice and re-create a second rule for, not a silent
+-- misdirection of money — the asymmetry that makes it acceptable to leave unfixed here, unlike
+-- the transfer action's from/to accounts.
+
 -- =============================================================================
--- Step 5: Fan out active household_account_shares grants on a split chain, so a household
--- member does not silently lose visibility of an account they could already see. Only ACTIVE
--- (revoked_at IS NULL) grants are fanned out — there is no way to retroactively reconstruct which
--- physical account a CLOSED historical grant was "really" about once its members were merged, so
--- past household reads over a closed grant period are not rewritten by this migration.
--- ON CONFLICT DO NOTHING makes this step idempotent against the partial unique index
--- uq_household_account_shares_active (household_id, user_account_id) WHERE revoked_at IS NULL —
--- a re-run finds the split already applied (tmp_1569_t4_split_groups would be empty) so this is
--- belt-and-braces, not load-bearing.
+-- Step 5: Fan out EVERY household_account_shares grant — ACTIVE AND CLOSED (revoked) — on a
+-- split chain, so a household member does not silently lose visibility of an account they could
+-- already see, for ANY time window the grant ever covered.
+-- ⚠⚠ ROUND 4 FIX (item 3, a policy call). The previous version of this step fanned out ONLY
+-- active (revoked_at IS NULL) grants, reasoning that a CLOSED grant's historical window "cannot
+-- be reconstructed" once its members were merged. That reasoning does not survive scrutiny: a
+-- closed grant names an interval [shared_at, revoked_at) during which the WHOLE merged chain —
+-- BOTH physical accounts — was visible to the household. Fanning that SAME interval onto both
+-- resulting chains is not a guess, it is the exact, faithful reconstruction: during that window,
+-- a household member who could see the chain could see both accounts behind it, so both accounts'
+-- history belongs in that window's household reads. Restricting the fan-out to active grants left
+-- a real historical undercount: a grant active in January and revoked in February leaves a
+-- January household read seeing only the sibling that happened to keep the surviving row, on a
+-- branch whose entire principle is that retained history stays queryable and correct. Fanning out
+-- every grant, not just the live one, is the fix, and it is symmetric with how the rest of this
+-- migration already treats history: repointing balances/transactions/holdings/snapshots
+-- unconditionally, regardless of whether the account is still active.
+-- ON CONFLICT DO NOTHING guards the (now much rarer) case of an exact duplicate — a closed
+-- grant has no unique constraint against duplicates at all (uq_household_account_shares_active
+-- only covers revoked_at IS NULL), so this is belt-and-braces for the active-grant sub-case, not
+-- load-bearing for the closed one.
 -- The fingerprint value inserted here is a throwaway placeholder (copied verbatim) — Step 6,
 -- immediately below, is the ONLY thing that decides every row's final physical_account_blind_idx,
 -- for every household_account_shares row in the table, not just the ones this step inserts.
 -- =============================================================================
 INSERT INTO household_account_shares
-    (household_id, user_account_id, physical_account_blind_idx, visibility, shared_at)
+    (household_id, user_account_id, physical_account_blind_idx, visibility, shared_at, revoked_at)
 SELECT DISTINCT
-    has.household_id, sg.new_ua_id, has.physical_account_blind_idx, has.visibility, has.shared_at
+    has.household_id, sg.new_ua_id, has.physical_account_blind_idx, has.visibility, has.shared_at,
+    has.revoked_at
 FROM household_account_shares has
 JOIN tmp_1569_t4_split_groups sg ON sg.old_ua_id = has.user_account_id
-WHERE has.revoked_at IS NULL
 ON CONFLICT DO NOTHING;
 
 -- =============================================================================
@@ -369,8 +458,30 @@ UPDATE household_account_shares has
 SET physical_account_blind_idx = CASE
     WHEN ua.mask_blind_idx IS NULL THEN NULL
     ELSE ua.institution_id_blind_idx || ua.mask_blind_idx || ':' ||
-         COALESCE(ua.identity_type, '') || ':' || COALESCE(ua.identity_subtype, '')
+         -- ⚠⚠ ROUND 4 FIX: COALESCE(x, '') is NOT injective — identity_subtype = NULL (no
+         -- subtype at all) and identity_subtype = '' (an empty-but-present subtype, which Step 2's
+         -- own grouping treats as a DIFFERENT identity via IS DISTINCT FROM) would COALESCE to the
+         -- SAME '' and collide onto the SAME fingerprint, silently dropping one from household
+         -- totals — the exact defect this migration exists to eliminate, reintroduced by an
+         -- encoding bug rather than a logic bug. Tagging each field with a presence marker ('N' =
+         -- SQL NULL, 'S' = a real, possibly-empty string) makes NULL and '' produce DIFFERENT
+         -- encoded values no matter what. Applied to both columns for symmetry (identity_type is
+         -- NOT NULL for any account-derived identity today, but an orphan row's identity_type can
+         -- independently be NULL — see the WHERE clause in Step 1 — so the same injectivity
+         -- concern applies there too, defensively).
+         (CASE WHEN ua.identity_type IS NULL THEN 'N' ELSE 'S' || ua.identity_type END) || ':' ||
+         (CASE WHEN ua.identity_subtype IS NULL THEN 'N' ELSE 'S' || ua.identity_subtype END)
 END
 FROM user_accounts ua
-WHERE ua.id = has.user_account_id;
+WHERE ua.id = has.user_account_id
+  -- ⚠⚠ ROUND 4 FIX (item 6): skip rows already at their target value, so a re-run does not
+  -- unconditionally rewrite every row in the table (and, via the shares table's own
+  -- updated_at-bumping trigger, mutate every row's audit timestamp) when nothing actually needs
+  -- to change. IS DISTINCT FROM handles the NULL-vs-NULL "unchanged" case correctly.
+  AND has.physical_account_blind_idx IS DISTINCT FROM (CASE
+        WHEN ua.mask_blind_idx IS NULL THEN NULL
+        ELSE ua.institution_id_blind_idx || ua.mask_blind_idx || ':' ||
+             (CASE WHEN ua.identity_type IS NULL THEN 'N' ELSE 'S' || ua.identity_type END) || ':' ||
+             (CASE WHEN ua.identity_subtype IS NULL THEN 'N' ELSE 'S' || ua.identity_subtype END)
+      END);
 

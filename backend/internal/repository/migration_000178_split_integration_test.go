@@ -26,6 +26,7 @@ package repository_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -334,6 +335,56 @@ func TestFindByInstitutionAndMask_OrphanRowMatchesAnyIdentity(t *testing.T) {
 	assert.Equal(t, 0, mismatchCount, "sanity: the orphan row's identity_type really is NULL, not 'investment'")
 }
 
+// TestFindByInstitutionAndMask_OrphanRowMatchesAnyIdentity_ThenRefusesADifferentIdentity proves
+// the BOUNDARY of the orphan wildcard (#1569 round 11 task 4, coordinator round 4 re-derivation),
+// not just the happy path TestFindByInstitutionAndMask_OrphanRowMatchesAnyIdentity already covers.
+// It uses the REAL UserAccountRepository.FindByInstitutionAndMask, not a raw SQL approximation:
+// a legacy orphan row is matched ONCE by a concrete identity (checking) — reproducing the
+// documented, accepted happy path — and then, because nothing can WRITE identity_type onto the
+// orphan afterward (trg_user_accounts_identity_immutable and TestNoUpdateOfUserAccountsIdentityColumns
+// both forbid it unconditionally), the SAME orphan row ALSO matches a SECOND, DIFFERENT identity
+// (investment/brokerage) at the same institution+mask. This is the accepted residual risk
+// documented on FindByInstitutionAndMask's doc comment, proven here rather than merely asserted:
+// two different real identities CAN end up sharing one chain through this one narrow path.
+func TestFindByInstitutionAndMask_OrphanRowMatchesAnyIdentity_ThenRefusesADifferentIdentity(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	userID := insertTestUser(t, pool)
+	enc := newTestFieldEncryptor(t)
+	repo := repository.NewUserAccountRepository(pool, enc)
+
+	institutionID := "orphan-boundary-inst-" + uuid.New().String()
+
+	// Seed a genuine orphan: a user_accounts row with real (encrypted) institution_id/mask,
+	// correct blind indexes, and NULL identity_type/identity_subtype — exactly the shape
+	// migration 000177's header describes (no physical account ever pointed at it).
+	instBlindIdx := enc.BlindIndex(institutionID)
+	var orphanID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO user_accounts (user_id, institution_id, institution_id_blind_idx)
+		VALUES ($1, $2, $3)
+		RETURNING id::text
+	`, userID, institutionID, instBlindIdx).Scan(&orphanID))
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, orphanID) }) //nolint:errcheck
+
+	checkingType, checkingSubtype := "depository", "checking"
+	first, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, nil, &checkingType, &checkingSubtype)
+	require.NoError(t, err)
+	require.NotNil(t, first, "the orphan must match the FIRST concrete identity to claim it")
+	assert.Equal(t, orphanID, first.ID)
+
+	// THE BOUNDARY: a second, DIFFERENT identity at the SAME institution+mask. If identity had
+	// been claimed (as it is for every other, non-orphan row in this system), this would find NO
+	// match and mint a separate chain. It does not — the SAME orphan row matches again.
+	investmentType, investmentSubtype := "investment", "brokerage"
+	second, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, nil, &investmentType, &investmentSubtype)
+	require.NoError(t, err)
+	require.NotNil(t, second, "documents the accepted residual risk: the orphan ALSO matches a different identity")
+	assert.Equal(t, orphanID, second.ID,
+		"both a checking account AND a brokerage account resolve to the SAME orphan chain — "+
+			"the accepted, documented boundary of the wildcard, not a new defect introduced now")
+}
+
 // TestMigration000178_UnaffectedChainsAreUntouched proves the migration is scoped: a user_accounts
 // row whose physical accounts already agree on identity (the ordinary, non-colliding case) is left
 // completely alone.
@@ -562,7 +613,7 @@ func TestMigration000178_MaskedCollision_FanOutFingerprintDoesNotCollide(t *test
 	// plain value. This is deliberate: leaving the original plain (round 2's design) is exactly
 	// what caused the cross-user double-count round 3 fixes (see
 	// TestJointAccountAcrossMaskedSplit_StillCountsOnce). Both must carry their OWN identity now.
-	assert.Equal(t, fingerprint+":investment:brokerage", *originalFP,
+	assert.Equal(t, fingerprint+":Sinvestment:Sbrokerage", *originalFP,
 		"the ORIGINAL row's share must be normalized to include ITS OWN identity too, not left plain")
 	assert.NotEqual(t, *originalFP, *newFP,
 		"the NEW chain's fanned-out share must NOT end up with the same fingerprint as the "+
@@ -732,4 +783,284 @@ func TestJointAccountAcrossMaskedSplit_StillCountsOnce(t *testing.T) {
 	require.NoError(t, err)
 	assert.InDelta(t, 3500.0, sumSnapshots(got), 0.01,
 		"4500 means the cross-user joint account was double-counted after the split; 3500 is correct")
+}
+
+// TestMigration000178_Step6_NullVsEmptySubtypeAreDistinctFingerprints is the coordinator's round 4
+// item 2: a plain COALESCE(identity_subtype, '') is NOT injective — identity_subtype = NULL and
+// identity_subtype = '' are DIFFERENT identities under Step 2's own IS DISTINCT FROM grouping, but
+// would encode to the SAME fingerprint suffix under a naive COALESCE, silently colliding two
+// unrelated chains' household totals. This does not even require a split to reproduce: two
+// ordinary, never-merged chains that happen to disagree only on NULL-vs-empty subtype exhibit it.
+func TestMigration000178_Step6_NullVsEmptySubtypeAreDistinctFingerprints(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	balRepo := repository.NewBalanceSnapshotRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	linkedItem := insertTestLinkedItem(t, pool, owner)
+
+	instBlindIdx := "blind_inst_nullvsempty_" + uuid.New().String()
+	maskBlindIdx := "blind_mask_nullvsempty_" + uuid.New().String()
+
+	// SAME institution+mask on purpose — the whole point is that identity_subtype = NULL vs
+	// identity_subtype = '' must be what tells these two chains apart (they legitimately coexist
+	// under the 5-column unique index precisely because NULL and '' are different values), so any
+	// difference in the resulting fingerprint must come from the identity encoding, not the mask.
+	var uaNull, uaEmpty string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO user_accounts (user_id, institution_id, institution_id_blind_idx, mask, mask_blind_idx,
+			primary_type, primary_subtype, identity_type, identity_subtype)
+		VALUES ($1, 'enc_inst', $2, 'enc_mask', $3, 'depository', 'checking', 'depository', NULL)
+		RETURNING id::text
+	`, owner, instBlindIdx, maskBlindIdx).Scan(&uaNull))
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, uaNull) }) //nolint:errcheck
+
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO user_accounts (user_id, institution_id, institution_id_blind_idx, mask, mask_blind_idx,
+			primary_type, primary_subtype, identity_type, identity_subtype)
+		VALUES ($1, 'enc_inst', $2, 'enc_mask', $3, 'depository', 'checking', 'depository', '')
+		RETURNING id::text
+	`, owner, instBlindIdx, maskBlindIdx).Scan(&uaEmpty))
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, uaEmpty) }) //nolint:errcheck
+
+	// The physical account's OWN subtype must agree with its chain's identity_subtype (NULL for
+	// uaNull, '' for uaEmpty) — otherwise Step 2's split-detection (which compares a.subtype to
+	// ua.identity_subtype via IS DISTINCT FROM) would think THIS fixture itself needs splitting,
+	// which is not what this test is about.
+	var acctNull, acctEmpty string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type, subtype, user_account_id, status, current_balance)
+		VALUES ($1, $2, 'plaid_'||gen_random_uuid()::text, 'Null-subtype', 'depository', NULL, $3, 'active', 1000.00)
+		RETURNING id::text
+	`, linkedItem, owner, uaNull).Scan(&acctNull))
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM accounts WHERE id = $1`, acctNull) }) //nolint:errcheck
+
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type, subtype, user_account_id, status, current_balance)
+		VALUES ($1, $2, 'plaid_'||gen_random_uuid()::text, 'Empty-subtype', 'depository', '', $3, 'active', 2500.00)
+		RETURNING id::text
+	`, linkedItem, owner, uaEmpty).Scan(&acctEmpty))
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM accounts WHERE id = $1`, acctEmpty) }) //nolint:errcheck
+
+	now := time.Now().UTC()
+	insertBalanceSnapshot(t, pool, owner, acctNull, uaNull, 1000, now.Add(-1*time.Hour))
+	insertBalanceSnapshot(t, pool, owner, acctEmpty, uaEmpty, 2500, now.Add(-1*time.Hour))
+
+	sharedAt := now.AddDate(0, -1, 0)
+	_, err := pool.Exec(ctx, `
+		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility, shared_at)
+		VALUES ($1, $2, $3, 'shared', $4), ($1, $5, $3, 'shared', $4)
+	`, hh, uaNull, instBlindIdx+"placeholder", sharedAt, uaEmpty)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM household_account_shares WHERE household_id = $1`, hh) //nolint:errcheck
+	})
+
+	_, err = pool.Exec(ctx, migration000178UpSQL(t))
+	require.NoError(t, err, "apply 000178 up migration (Step 6 normalizes both shares)")
+
+	var fpNull, fpEmpty *string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT physical_account_blind_idx FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
+		hh, uaNull).Scan(&fpNull))
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT physical_account_blind_idx FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
+		hh, uaEmpty).Scan(&fpEmpty))
+	require.NotNil(t, fpNull)
+	require.NotNil(t, fpEmpty)
+	assert.NotEqual(t, *fpNull, *fpEmpty,
+		"identity_subtype = NULL and identity_subtype = '' must encode to DIFFERENT fingerprints "+
+			"— a naive COALESCE(x,'') would make them collide")
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
+	got, err := balRepo.GetSnapshotsAsOfForHousehold(ctx, owner, scope, now)
+	require.NoError(t, err)
+	assert.InDelta(t, 3500.0, sumSnapshots(got), 0.01,
+		"1000 or 2500 alone would mean the NULL-vs-empty collision dropped one chain; 3500 is correct")
+}
+
+// TestMigration000178_Step6_IsANoOpWhenAlreadyNormalized is the coordinator's round 4 item 6: a
+// second run of the migration must not rewrite rows whose fingerprint already matches the
+// computed value — proven via updated_at, which household_account_shares' own
+// update_household_account_shares_updated_at trigger bumps on every UPDATE that actually touches
+// a row (confirmed via \d household_account_shares), so an unwanted rewrite is directly observable.
+func TestMigration000178_Step6_IsANoOpWhenAlreadyNormalized(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+
+	owner := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ua := insertTestUserAccount(t, pool, owner)
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility, shared_at)
+		VALUES ($1, $2, NULL, 'shared', now() - interval '1 day')
+	`, hh, ua)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM household_account_shares WHERE household_id = $1`, hh) //nolint:errcheck
+	})
+
+	// First run normalizes (a no-mask account's fingerprint is already correctly NULL, so even
+	// the FIRST run should be a no-op here — this test's fixture is deliberately already
+	// normalized from the start).
+	_, err = pool.Exec(ctx, migration000178UpSQL(t))
+	require.NoError(t, err)
+
+	var updatedAtBefore time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT updated_at FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
+		hh, ua).Scan(&updatedAtBefore))
+
+	_, err = pool.Exec(ctx, migration000178UpSQL(t))
+	require.NoError(t, err, "re-apply must be a no-op")
+
+	var updatedAtAfter time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT updated_at FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
+		hh, ua).Scan(&updatedAtAfter))
+
+	assert.Equal(t, updatedAtBefore, updatedAtAfter,
+		"a re-run must not touch a row whose fingerprint is already correct — updated_at bumping "+
+			"proves an UPDATE fired even though nothing needed to change")
+}
+
+// TestMigration000178_RevokedGrantsAreFannedOutToo is the coordinator's round 4 item 3 (a policy
+// decision, tested): a household share that was ACTIVE in the past but is REVOKED by the time
+// this migration runs must still fan out to the new chain, so a historical (as-of) household read
+// during the window it WAS active sees both resulting chains, not just the one that kept the
+// surviving row's identity.
+func TestMigration000178_RevokedGrantsAreFannedOutToo(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	linkedItem := insertTestLinkedItem(t, pool, member)
+
+	pair := seedMergedBrokerageIRA(t, pool, member, linkedItem)
+
+	sharedAt := time.Now().UTC().AddDate(0, -2, 0)
+	revokedAt := time.Now().UTC().AddDate(0, -1, 0)
+	_, err := pool.Exec(ctx, `
+		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility, shared_at, revoked_at)
+		VALUES ($1, $2, NULL, 'shared', $3, $4)
+	`, hh, pair.UserAccountID, sharedAt, revokedAt)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM household_account_shares WHERE household_id = $1`, hh) //nolint:errcheck
+	})
+
+	_, err = pool.Exec(ctx, migration000178UpSQL(t))
+	require.NoError(t, err)
+
+	iraUA := accountUserAccountID(t, pool, pair.IRAAcctID)
+	require.NotEqual(t, pair.UserAccountID, iraUA)
+
+	var fannedRevokedAt *time.Time
+	var fannedSharedAt time.Time
+	err = pool.QueryRow(ctx,
+		`SELECT shared_at, revoked_at FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
+		hh, iraUA).Scan(&fannedSharedAt, &fannedRevokedAt)
+	require.NoError(t, err, "the CLOSED grant must have been fanned out to the new (IRA) chain too")
+	require.NotNil(t, fannedRevokedAt, "the fanned-out grant must preserve the CLOSED interval, not reopen it")
+	assert.WithinDuration(t, revokedAt, *fannedRevokedAt, time.Second)
+	assert.WithinDuration(t, sharedAt, fannedSharedAt, time.Second)
+}
+
+// TestMigration000178_RepointsBoostTransferJSONB is the coordinator's round 4 item 5: a transfer
+// boost's actions JSONB carries a stable chain reference (from_user_account_id/to_user_account_id,
+// Issue #1109) that boost_execution_service.go resolves at EXECUTION time in PREFERENCE to the
+// raw physical id. Migration 000100 already proved this is a real, rewritten-on-merge reference.
+// Left unrepointed after a split, a transfer boost naming the sibling that MOVED would still
+// carry the OLD merged chain id — a money-movement suggestion computed against the wrong account.
+func TestMigration000178_RepointsBoostTransferJSONB(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+
+	member := insertTestUser(t, pool)
+	linkedItem := insertTestLinkedItem(t, pool, member)
+	pair := seedMergedBrokerageIRA(t, pool, member, linkedItem)
+
+	// A transfer boost whose from_account_id names the IRA leg (which will move) — seeded with
+	// the OLD, pre-split from_user_account_id (the merged chain).
+	actions := fmt.Sprintf(`{"transfer": {"from_account_id": "%s", "to_account_id": "%s", "from_user_account_id": "%s", "amount": 25}}`,
+		pair.IRAAcctID, pair.BrokerageAcctID, pair.UserAccountID)
+	var boostID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO boosts (user_id, name, boost_type, trigger_config, actions)
+		VALUES ($1, 'Test transfer boost', 'transfer_suggestion', '{"type":"manual"}'::jsonb, $2::jsonb)
+		RETURNING id::text
+	`, member, actions).Scan(&boostID))
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM boosts WHERE id = $1`, boostID) }) //nolint:errcheck
+
+	_, err := pool.Exec(ctx, migration000178UpSQL(t))
+	require.NoError(t, err)
+
+	iraUA := accountUserAccountID(t, pool, pair.IRAAcctID)
+	require.NotEqual(t, pair.UserAccountID, iraUA, "fixture sanity: IRA must have moved")
+
+	var gotFromUA string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT actions->'transfer'->>'from_user_account_id' FROM boosts WHERE id = $1`, boostID,
+	).Scan(&gotFromUA))
+	assert.Equal(t, iraUA, gotFromUA,
+		"the boost's stable from_user_account_id must follow the IRA leg to its NEW chain, or "+
+			"execution would resolve the transfer against the wrong (unmoved) account")
+}
+
+// migration000178DownSQL reads the real 000178 down-migration file.
+func migration000178DownSQL(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok, "runtime.Caller failed")
+	path := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations",
+		"000178_narrow_user_accounts_match_key_and_split_merged_chains.down.sql")
+	b, err := os.ReadFile(path)
+	require.NoError(t, err, "read 000178 down migration")
+	return string(b)
+}
+
+// TestMigration000178_DownMigrationRunsAfterARealSplit is the coordinator's round 4 item 1: the
+// down migration used to recreate the OLD three-column index as UNIQUE, which fails outright
+// (SQLSTATE 23505) once a real split exists, because two sibling rows then deliberately share
+// (user_id, institution_id_blind_idx, mask_blind_idx). ./scripts/test-migrations.sh's rollback
+// suite runs `down -all` against a ROW-FREE schema and could never see this — no rows, no
+// duplicate, a vacuously green suite. This test rigs a REAL split first, so the down migration is
+// tested against the exact shape that broke it.
+func TestMigration000178_DownMigrationRunsAfterARealSplit(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+
+	member := insertTestUser(t, pool)
+	linkedItem := insertTestLinkedItem(t, pool, member)
+	pair := seedMergedBrokerageIRA(t, pool, member, linkedItem)
+
+	_, err := pool.Exec(ctx, migration000178UpSQL(t))
+	require.NoError(t, err)
+
+	iraUA := accountUserAccountID(t, pool, pair.IRAAcctID)
+	require.NotEqual(t, pair.UserAccountID, iraUA, "fixture sanity: a real split must have happened")
+
+	// THE PROBE: both sibling rows now share (user_id, institution_id_blind_idx, mask_blind_idx)
+	// — exactly the shape that broke the old down migration's naive `CREATE UNIQUE INDEX`.
+	_, err = pool.Exec(ctx, migration000178DownSQL(t))
+	require.NoError(t, err, "the down migration must be able to run after a real split, even "+
+		"though it cannot undo the split's data — a rollback guaranteed to fail is worse than "+
+		"one that honestly gives up a guarantee it cannot keep")
+
+	// Confirm the restored index is non-unique — a duplicate must now be ACCEPTED, not rejected,
+	// which is the honest, disclosed trade-off this rollback makes.
+	var indexDef string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_user_accounts_inst_mask_blind'`,
+	).Scan(&indexDef))
+	assert.NotContains(t, indexDef, "UNIQUE", "the restored index must be non-unique")
+
+	// Re-apply up so t.Cleanup's deletes (registered against the ORIGINAL schema state) still
+	// work correctly against a schema shaped the way the rest of the suite expects.
+	_, err = pool.Exec(ctx, migration000178UpSQL(t))
+	require.NoError(t, err)
 }

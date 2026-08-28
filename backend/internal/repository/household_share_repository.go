@@ -9,8 +9,10 @@ import (
 // AccountFingerprint is one of the accepting user's own user_accounts, projected for
 // the accept-transaction default-share fan-out. PhysicalBlindIdx is nil when the account has no
 // mask (maskless accounts have no cross-user joint-account dedup — never did, unaffected by this
-// note); otherwise it is institution_id_blind_idx + mask_blind_idx + ':' + identity_type + ':' +
-// identity_subtype (identity_subtype empty-string, never omitted, when the account has none).
+// note); otherwise it is institution_id_blind_idx + mask_blind_idx + ':' +
+// encodeIdentityField(identity_type) + ':' + encodeIdentityField(identity_subtype) — see
+// encodeIdentityField's doc comment for why a plain COALESCE(x,'') is NOT used (coordinator round
+// 4 fix: it is not injective — NULL and '' would collide).
 //
 // #1569 round 11 task 4, coordinator round 3 fix: identity was ADDED to this concat. Before this
 // fix it was institution_id_blind_idx + mask_blind_idx alone, and that omission was a real
@@ -98,6 +100,22 @@ func NewHouseholdShareRepository(db DB) HouseholdShareRepository {
 	return &householdShareRepository{db: db}
 }
 
+// encodeIdentityField tags a nullable identity field (identity_type or identity_subtype) for use
+// in a fingerprint concat, so that SQL NULL and an empty-but-present string ('') never encode to
+// the same value. #1569 round 11 task 4, coordinator round 4 fix: a plain
+// `if p != nil { s = *p }` (COALESCE(x, '') in SQL) collapses NULL and '' to the identical ''
+// output — and Step 2 of migration 000178 treats identity_subtype = NULL and identity_subtype =
+// '' as DIFFERENT identities (`IS DISTINCT FROM`), so two chains that are genuinely different by
+// that rule would silently collide onto one fingerprint and drop one from every household total.
+// The 'N'/'S' prefix makes NULL and '' produce different strings no matter what either contains.
+// Migration 000178's Step 6 computes this SAME encoding in SQL — keep both in sync.
+func encodeIdentityField(p *string) string {
+	if p == nil {
+		return "N"
+	}
+	return "S" + *p
+}
+
 func (r *householdShareRepository) ListActiveUserAccountFingerprints(ctx context.Context, userID string) ([]AccountFingerprint, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, institution_id_blind_idx, mask_blind_idx, identity_type, identity_subtype
@@ -119,16 +137,13 @@ func (r *householdShareRepository) ListActiveUserAccountFingerprints(ctx context
 		}
 		// See AccountFingerprint's doc comment (#1569 round 11 task 4, coordinator round 3 fix)
 		// for why identity is part of this concat now, not just institution+mask.
+		//
+		// #1569 round 11 task 4, coordinator round 4 fix: encodeIdentityField tags NULL vs a real
+		// (possibly-empty) string so the two never collide — see its own doc comment, and
+		// migration 000178 Step 6, which computes this SAME formula in SQL and MUST be kept in
+		// sync with it.
 		if maskIdx != nil {
-			it := ""
-			if identityType != nil {
-				it = *identityType
-			}
-			is := ""
-			if identitySubtype != nil {
-				is = *identitySubtype
-			}
-			combined := instIdx + *maskIdx + ":" + it + ":" + is
+			combined := instIdx + *maskIdx + ":" + encodeIdentityField(identityType) + ":" + encodeIdentityField(identitySubtype)
 			fp.PhysicalBlindIdx = &combined
 		}
 		fps = append(fps, fp)
