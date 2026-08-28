@@ -55,14 +55,19 @@ import (
 // `fmt.Sprintf("SELECT to_jsonb(t)\nFROM %s t\nWHERE %s\nORDER BY %s", tbl.Table,
 // tbl.OwnershipPredicate, tbl.OrderBy)`, where `tbl.Table` (e.g. "savings_goals") is a struct
 // field literal from a WHOLLY SEPARATE statement (the `dataExportTables` slice literal) than the
-// one holding the `"FROM %s t"` format string. No single statement ever contains the literal
-// text `FROM savings_goals` (or `FROM boosts`, `FROM budgets`, `FROM budget_categories`,
-// `FROM transactions`, `FROM custom_categories`, or any other exported table) — this guard, its
-// three siblings (TestNoTransactionReadForgetsTheTombstoneFilter,
-// TestNoCustomCategoryReadForgetsTheTombstoneFilter,
-// TestNoSavingsContributionReadForgetsTheTombstoneFilter) and any future one built on this same
-// mechanism are ALL blind to the export call site, for every table the generic export mechanism
-// touches, not just the ones this file audits.
+// one holding the `"FROM %s t"` format string. So the PRIMARY-TABLE READ that DataExportRowQuery
+// builds is invisible to this guard, its three siblings
+// (TestNoTransactionReadForgetsTheTombstoneFilter, TestNoCustomCategoryReadForgetsTheTombstoneFilter,
+// TestNoSavingsContributionReadForgetsTheTombstoneFilter) and any future one on this mechanism —
+// for every table the generic export touches.
+//
+// ⚠ SCOPED DELIBERATELY, because the obvious wider claim is FALSE and was written here first
+// (#1569 round 12 task 5 review). It is NOT true that "no statement ever contains `FROM <exported
+// table>`": the `dataExportTables` slice literal itself contains `FROM budgets b` and
+// `FROM savings_goals g` inside the OwnershipPredicate SUBQUERIES for budget_categories,
+// budget_period_events, savings_goal_contributions and savings_goal_category_detach — that IS one
+// statement this scan walks, it DOES see those, and they already carry their own
+// `tombstone-exempt(...)` tokens. Only the Sprintf'd primary read is out of reach.
 //
 // This is deliberately left unaddressed rather than "fixed": the export's BEHAVIOUR is correct
 // as-is (a GDPR Article 15 export must include tombstoned rows — the ownership predicates set in
