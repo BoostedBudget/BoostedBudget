@@ -512,12 +512,16 @@ func (s *boostExecutionService) executeTransferSuggestion(ctx context.Context, b
 // which was a monotonicity bug: it made the objectively WORSE condition (no live account
 // anywhere in the chain) produce a suggestion off the stale pinned id, while the objectively
 // BETTER condition (a live account definitely exists, there are just two) produced none at all.
-// The pinned id (transfer.FromAccountID / ToAccountID) is not an unrelated guess — by the time
-// this function runs, executeTransferSuggestion has already verified it via
+// The pinned id (transfer.FromAccountID / ToAccountID) is not an unrelated guess. IF
+// s.accountRepo is configured (see SetAccountRepo — wired unconditionally in production at
+// main.go's boostExecutionService wiring block, but that is an operational assumption this
+// package does not enforce; nothing panics or errors if a future caller omits the setter),
+// executeTransferSuggestion has already verified the pinned id via
 // accountRepo.GetByIDAndUser(ctx, transfer.FromAccountID, boost.UserID) and pre-populated
 // suggestion.FromAccountID/ToAccountID with it — the exact same kind of pinned, ownership-scoped
 // reference executeSavingsGoal falls back to as goal.AccountID. Falling back to it here is not
-// weaker than the savings-goal site's fallback; it is the same fallback.
+// weaker than the savings-goal site's fallback; it is the same fallback, under the same
+// accountRepo-configured condition.
 func (s *boostExecutionService) resolveAndVerifyUserAccount(ctx context.Context, userAccountID, userID, boostID string,
 	onResolve func(string), fieldName string) (bool, error) {
 	if s.chainResolver == nil {
@@ -543,9 +547,13 @@ func (s *boostExecutionService) resolveAndVerifyUserAccount(ctx context.Context,
 
 	// Verify the resolved account belongs to this user before using it.
 	// If accountRepo is not configured, apply the resolved ID without an ownership check
-	// and log a warning — this is safe because (a) production always wires accountRepo
-	// (main.go:~1324) and (b) the service-layer validateBoostReferenceOwnership already
-	// validates from_user_account_id ownership at create/update time. Issue #972 GAP AE.
+	// and log a warning. This branch is expected to be dead in production because (a)
+	// main.go's boostExecutionService wiring block calls SetAccountRepo unconditionally
+	// (cmd/server/main.go, guarded only by db != nil && cfg.ClerkSecretKey != "") and (b)
+	// the service-layer validateBoostReferenceOwnership already validates
+	// from_user_account_id ownership at create/update time. Neither fact is enforced by
+	// this package — a non-nil accountRepo is an operational wiring assumption, not a
+	// guarded invariant. Issue #972 GAP AE.
 	if s.accountRepo != nil {
 		if _, ownerErr := s.accountRepo.GetByIDAndUser(ctx, activeID, userID); ownerErr != nil {
 			slog.Warn("chain resolve: resolved account belongs to different user; skipping boost",

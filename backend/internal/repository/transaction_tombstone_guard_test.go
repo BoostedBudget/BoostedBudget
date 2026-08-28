@@ -60,6 +60,13 @@ import (
 // Mutation-checked: deleting `AND t.deleted_at IS NULL` from any one of the audited queries turns
 // this test RED with that file and line named, and so does replacing it with another table's
 // qualified predicate.
+//
+// ⚠⚠ NAMED, PERMANENT BLIND SPOT (#1569 round 12 task 5): this guard's AST scan cannot see
+// data_export_repository.go's GDPR export, which assembles `FROM transactions` at RUNTIME via
+// fmt.Sprintf across two separate Go statements. Full reasoning lives on configTombstoneTables'
+// doc comment (config_tombstone_guard_test.go) — this is the same mechanism, same blind spot,
+// deliberately left unaddressed because the export's behaviour (returning tombstoned rows for
+// Article 15) is correct as-is.
 
 // tombstoneDeleteRef matches the FROM of a DELETE statement, which is a write and out of scope.
 var tombstoneDeleteRef = regexp.MustCompile(`(?is)\bDELETE\s+FROM\s+transactions\b`)

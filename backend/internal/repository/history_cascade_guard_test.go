@@ -187,16 +187,23 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 	{child: "investment_transactions", parent: "users", constraint: "fk_inv_txn_user_id", childCols: "user_id", parentCols: "id"}:                               "GDPR erasure path off users",
 
 	// ---- investment_transactions off accounts. -------------------------------------------------
-	// Re-derived for #1569 T8 rather than assumed. `accounts` is soft-removed, so this edge only
-	// fires when an accounts ROW is genuinely hard-deleted, and there is exactly one statement in
-	// the tree that does that: account_repository.go:1118, inside PurgeAccount — an explicit,
-	// user-invoked destruction with its own endpoint, its own audit row and a live-data
-	// precondition. (`DELETE FROM accounts` appears nowhere else in non-test Go.) Migration 000151's
-	// header anticipated this path and left the edge CASCADE deliberately: a purged account's
-	// investment transactions are precisely what the user asked to destroy, and leaving them behind
-	// orphaned would be the residue the purge exists to remove. The second route to this edge is
-	// the users cascade above, which reaches accounts first.
-	{child: "investment_transactions", parent: "accounts", constraint: "fk_inv_txn_account_id", childCols: "account_id", parentCols: "id"}: "explicit user-invoked PurgeAccount (account_repository.go:1118) is the only hard DELETE FROM accounts; the row is what the user asked to destroy",
+	// Re-derived for #1569 T8 rather than assumed, and corrected again in round 12 task 5:
+	// `accounts` is soft-removed, so this edge only fires when an accounts ROW is genuinely
+	// hard-deleted, and there are TWO explicit, user-invoked purge routes that do that, not one.
+	// (1) account_repository.go:1286 (`DELETE FROM accounts WHERE id = $1 AND user_id = $2`),
+	// inside PurgeAccount — its own endpoint, its own audit row, a live-data precondition. (2)
+	// linked_item_repository.go:899 (`DELETE FROM linked_items WHERE id = $1 AND user_id = $2`),
+	// inside PurgeLinkedItem — `fk_accounts_linked_item_id` (migrations/000007) is itself ON
+	// DELETE CASCADE, so purging the linked item hard-deletes its accounts rows too, one level up
+	// from this edge; PurgeLinkedItem has the same shape of own endpoint, own audit row and
+	// live-data precondition as PurgeAccount. Both are explicit purge paths, so this was a
+	// documentation defect, not a data-loss path: the CASCADE was already correct either way, and
+	// no third caller does a bare `DELETE FROM accounts` (checked: nowhere else in non-test Go).
+	// Migration 000151's header anticipated this path and left the edge CASCADE deliberately: a
+	// purged account's investment transactions are precisely what the user asked to destroy, and
+	// leaving them behind orphaned would be the residue the purge exists to remove. A third route
+	// to this edge is the users cascade above, which reaches accounts first.
+	{child: "investment_transactions", parent: "accounts", constraint: "fk_inv_txn_account_id", childCols: "account_id", parentCols: "id"}: "two explicit user-invoked purge routes hard-delete accounts rows — PurgeAccount (account_repository.go:1286, direct) and PurgeLinkedItem (linked_item_repository.go:899, via fk_accounts_linked_item_id CASCADE) — the row is what the user asked to destroy either way",
 
 	// ---- The three tables whose ONLY erasure route is this edge. -------------------------------
 	// None of these three has a foreign key to `users`, so `DELETE FROM users` reaches them only
