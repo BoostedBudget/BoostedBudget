@@ -2,8 +2,10 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -22,29 +24,87 @@ import (
 // new invalidation surface (a prior reviewer specifically warned that caching account/liveness maps
 // is unattractive for exactly that reason — this is deliberately not a cache).
 //
-// ⚠ Deliberately NOT detached (unlike internal/cache.Cache.GetOrLoad's Issue #1531 M4 fix, whose
-// doc comment this package otherwise mirrors): only one goroutine's ctx actually reaches fn per
-// in-flight key, so a cancelled leader COULD hand a spurious error to a healthy concurrent
-// follower. That risk is accepted here, not overlooked, for three reasons this call's blast radius
-// doesn't share with the Redis cache's: (1) both concurrent callers are typically the SAME
-// client's own two widget requests for the SAME page load, so a leader's cancellation (navigation
-// away, tab close) usually means the follower is about to be cancelled too; (2) nothing is
-// persisted past the in-flight window — a spurious error costs one retry, never stale data; (3)
-// every call site here already degrades to "omit the comparison" or propagates the error to the
-// HTTP layer on ANY read failure, so an occasional extra error is within the existing failure
-// contract, not a new one. Detaching would also break every existing dashboard_service_test.go
-// mock expectation that asserts on the exact incoming ctx (e.g. `ctx := context.Background()`
-// passed straight to `.On(...)`), which is itself evidence those tests expect the real,
-// caller-supplied context to reach the repository unchanged.
+// #1569 round 11 fix round 1, item 2 — LEADER-CONTEXT CANCELLATION. Only ONE goroutine's ctx
+// actually reaches fn per in-flight key: whichever caller's Do call first claims the key (the
+// "leader") runs fn(ctx) under ITS OWN context, and every other concurrent caller for that key (a
+// "follower") just waits on the leader's result. Because every key this package builds embeds
+// userID (see each sf* method), leader and follower are always the SAME user's two concurrent
+// widget requests, never a different user's — but within that they are still independent: an
+// AbortController per widget, a component unmount, or a tab navigation racing one fetch can cancel
+// the LEADER's context while the FOLLOWER's is perfectly healthy, and naively sharing the leader's
+// result would hand that follower a spurious context.Canceled for a request that would otherwise
+// have succeeded.
+//
+// Fixed WITHOUT detaching fn's context. A fully-detached context.WithoutCancel+WithTimeout, the
+// shape internal/cache.Cache.GetOrLoad uses for the identical class of problem, was tried first and
+// reverted: dashboard_service_test.go's mocks assert on the EXACT incoming ctx (e.g.
+// `mockRepo.On("GetSnapshotsAsOfForUser", ctx, ...)` with a literal `ctx := context.Background()`),
+// and a detached context is a different value by that comparison, so every such assertion panicked
+// with "Unexpected Method Call." Rewriting those sites to `mock.Anything` was the alternative and
+// was rejected here: those exact-ctx assertions are the only thing in that test file pinning that
+// the real, caller-supplied context reaches the repository at all — a behavioural property, not
+// merely an implementation detail, and not worth discarding for a fix with a narrower alternative.
+//
+// The narrower alternative: if the shared call's error is EXACTLY the shape a context abandonment
+// produces (context.Canceled or context.DeadlineExceeded) AND this caller's OWN context is NOT
+// done, the error cannot be this caller's — by construction, it can only have come from whichever
+// goroutine's context actually executed fn (the leader). In that specific, narrow case, this caller
+// retries fn directly ONCE, under its own still-healthy context, bypassing the singleflight group
+// entirely — so there is no risk of joining another in-flight call and inheriting the same problem
+// a second time. A caller whose own context IS done gets an honest reflection of that (the shared
+// error, or its own on the direct-retry path) exactly as before this fix.
 func dashboardSFDo[T any](sf *singleflight.Group, ctx context.Context, key string, fn func(context.Context) (T, error)) (T, error) {
 	var zero T
 	v, err, _ := sf.Do(key, func() (any, error) {
 		return fn(ctx)
 	})
 	if err != nil {
+		if ctx.Err() == nil && isContextAbandonmentErr(err) {
+			// This caller's context is healthy but the SHARED error is exactly the shape a
+			// cancellation/timeout produces — it belongs to the leader, not to us. Retry solo.
+			return fn(ctx)
+		}
 		return zero, err
 	}
 	return v.(T), nil
+}
+
+// isContextAbandonmentErr reports whether err is EXACTLY the shape a context being cancelled or
+// timing out produces (via errors.Is, so a wrapped context.Canceled/DeadlineExceeded still
+// matches) — never a coincidental data error that merely mentions cancellation in its text. Used
+// only to decide whether a shared singleflight error could belong to a DIFFERENT caller's context
+// than this one's (dashboardSFDo's doc comment, item 2).
+func isContextAbandonmentErr(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// householdScopeKeyFragment renders scope's household ID and member set into a singleflight key
+// fragment, so two requests naming the same household but a DIFFERENT member set can never
+// collapse onto one coalesced result.
+//
+// #1569 round 11 fix round 1, item 1: this was originally keyed on (userID, householdID, cutoff)
+// alone, which is unsound, not merely imprecise: household_service.go's ResolveScope re-derives
+// MemberUserIDs FRESH FROM THE DATABASE on every request (it is not stable per (userID,
+// householdID) — a membership change between two concurrent requests changes it), and
+// analytics_repository.go's householdScopeArgs binds MemberUserIDs as a literal SQL parameter into
+// every household CTE these three sf* methods' underlying repository calls use — the result
+// genuinely depends on the member set, not just the household ID. Two concurrent requests carrying
+// the same household ID but different member sets (a membership change racing a read) would have
+// keyed identically and shared the WRONG member's result. Mirrors
+// internal/cache.EncodeHouseholdScope's identical StringSetSorted precedent, which already folds
+// MemberUserIDs into its Redis arg hash for exactly this reason, one layer over.
+func householdScopeKeyFragment(scope *domain.HouseholdScope) string {
+	seen := make(map[string]struct{}, len(scope.MemberUserIDs))
+	members := make([]string, 0, len(scope.MemberUserIDs))
+	for _, id := range scope.MemberUserIDs {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		members = append(members, id)
+	}
+	sort.Strings(members)
+	return scope.HouseholdID + ":" + strings.Join(members, ",")
 }
 
 // snapshotChainKey returns the preferred lookup key for a balance snapshot:
@@ -589,7 +649,7 @@ type dashboardService struct {
 	accountRepo         repository.AccountRepository
 
 	// sf coalesces the repository reads GetBalanceSummary/GetNetWorth (and their household
-	// variants) duplicate — see dashboardSingleflightTimeout's doc comment. Zero value is ready to
+	// variants) duplicate — see dashboardSFDo's doc comment. Zero value is ready to
 	// use; deliberately not constructor-injected, since it holds no state a test would ever need to
 	// seed.
 	sf singleflight.Group
@@ -665,7 +725,7 @@ func (s *dashboardService) sfAccountsAsOf(ctx context.Context, userID string, as
 // getBalanceSummaryHousehold and getNetWorthHousehold call GetSnapshotsAsOfForHousehold with the
 // same (requestingUserID, scope, cutoff) for both the current and previous cutoffs.
 func (s *dashboardService) sfSnapshotsAsOfForHousehold(ctx context.Context, userID string, scope *domain.HouseholdScope, cutoff time.Time) ([]domain.BalanceSnapshot, error) {
-	key := fmt.Sprintf("snap:hh:%s:%s:%d", userID, scope.HouseholdID, cutoff.UnixNano())
+	key := fmt.Sprintf("snap:hh:%s:%s:%d", userID, householdScopeKeyFragment(scope), cutoff.UnixNano())
 	shared, err := dashboardSFDo(&s.sf, ctx, key, func(c context.Context) ([]domain.BalanceSnapshot, error) {
 		return s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(c, userID, scope, cutoff)
 	})
@@ -683,7 +743,7 @@ func (s *dashboardService) sfSnapshotsAsOfForHousehold(ctx context.Context, user
 // balance-summary side does not make, so that particular call pays no dedup benefit but is
 // harmless to route through the same coalescing path).
 func (s *dashboardService) sfAccountsHouseholdActiveNow(ctx context.Context, userID string, scope *domain.HouseholdScope, cutoff time.Time) ([]domain.Account, error) {
-	key := fmt.Sprintf("acct:hh:active:%s:%s:%d", userID, scope.HouseholdID, cutoff.UnixNano())
+	key := fmt.Sprintf("acct:hh:active:%s:%s:%d", userID, householdScopeKeyFragment(scope), cutoff.UnixNano())
 	shared, err := dashboardSFDo(&s.sf, ctx, key, func(c context.Context) ([]domain.Account, error) {
 		return s.accountRepo.GetForHouseholdScopeActiveNow(c, userID, scope, cutoff)
 	})
@@ -699,7 +759,7 @@ func (s *dashboardService) sfAccountsHouseholdActiveNow(ctx context.Context, use
 // augmentHouseholdWithAsOfUniverse and both household baseline legs' historical fallback — all of
 // which can call GetForHouseholdScopeLiveAsOf with the identical (userID, scope, cutoff).
 func (s *dashboardService) sfAccountsHouseholdLiveAsOf(ctx context.Context, userID string, scope *domain.HouseholdScope, cutoff time.Time) ([]domain.Account, error) {
-	key := fmt.Sprintf("acct:hh:asof:%s:%s:%d", userID, scope.HouseholdID, cutoff.UnixNano())
+	key := fmt.Sprintf("acct:hh:asof:%s:%s:%d", userID, householdScopeKeyFragment(scope), cutoff.UnixNano())
 	shared, err := dashboardSFDo(&s.sf, ctx, key, func(c context.Context) ([]domain.Account, error) {
 		return s.accountRepo.GetForHouseholdScopeLiveAsOf(c, userID, scope, cutoff)
 	})
@@ -730,8 +790,8 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 	// -that-date baseline — a change over an interval nobody asked for.
 	// #1569 round 11 item 1: routed through sfSnapshotsAsOfForUser/sfAccountsByUserID rather than
 	// the repo directly — GetNetWorth issues this identical read for the identical (userID, cutoff),
-	// and a single dashboard page load fires both endpoints together. See
-	// dashboardSingleflightTimeout's doc comment for the mechanism and why it introduces no cache.
+	// and a single dashboard page load fires both endpoints together. See dashboardSFDo's doc
+	// comment for the mechanism and why it introduces no cache.
 	snapshots, err := s.sfSnapshotsAsOfForUser(ctx, userID, endOfDay(asOfDate))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get balance snapshots: %w", err)
