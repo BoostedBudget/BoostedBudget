@@ -19,16 +19,23 @@
 -- from the `accounts` table directly (each physical account still carries its own type/subtype),
 -- never from user_accounts.primary_type/primary_subtype.
 --
--- A merged row can have physical accounts that DISAGREE on type (e.g. a brokerage and an IRA
--- sharing one user_accounts row because both had a NULL mask at the same institution). For such a
--- row, this backfill picks the EARLIEST-CREATED physical account (created_at ASC, id ASC — the same
--- deterministic tie-break migration 000100 and lookupUserAccountID already use to pick a survivor)
--- as the representative, and writes ITS type/subtype. This is a PROVISIONAL, NON-AUTHORITATIVE
--- value: it exists so the column is never NULL for a row that has at least one physical account, not
--- because the chosen account is "more correct" than its siblings. A future task that splits merged
--- chains back apart MUST re-derive each split's identity from `accounts` directly — never trust this
--- backfilled value on a pre-existing row as ground truth for which members belong together, since it
--- was never derived from a 1:1 mapping in the disagreeing case.
+-- A merged row can have physical accounts that DISAGREE on type OR subtype. Type disagreement is
+-- real: a `depository` checking account and an `investment` account can share one user_accounts row
+-- if both had a NULL mask at the same institution (there is no `brokerage` TYPE to illustrate with —
+-- `accounts.type` is constrained to `depository, credit, loan, investment, other` by
+-- `valid_account_type`, migration 000007; `brokerage` is a SUBTYPE that only ever pairs with
+-- `type = 'investment'`, e.g. a brokerage account and an IRA are BOTH `type = 'investment'` and
+-- disagree only on SUBTYPE). Subtype-only disagreement is exactly that brokerage/IRA case, and it is
+-- the one the later match-key change (task 4) turns on — a type-only key would not separate it. For
+-- either kind of disagreement, this backfill picks the EARLIEST-CREATED physical account
+-- (created_at ASC, id ASC — the same deterministic tie-break migration 000100 and
+-- lookupUserAccountID already use to pick a survivor) as the representative, and writes ITS
+-- type/subtype. This is a PROVISIONAL, NON-AUTHORITATIVE value: it exists so the column is never
+-- NULL for a row that has at least one physical account, not because the chosen account is "more
+-- correct" than its siblings. A future task that splits merged chains back apart MUST re-derive each
+-- split's identity from `accounts` directly — never trust this backfilled value on a pre-existing
+-- row as ground truth for which members belong together, since it was never derived from a 1:1
+-- mapping in the disagreeing case.
 --
 -- A user_accounts row with NO physical accounts pointing at it (an orphan customization row) gets
 -- no identity_type/identity_subtype from this backfill and stays NULL — there is nothing to derive
@@ -67,8 +74,15 @@ COMMENT ON COLUMN user_accounts.identity_type IS
 COMMENT ON COLUMN user_accounts.identity_subtype IS
     '#1569 round 11 task 3: see identity_type — same guarantee, for subtype.';
 
--- Mirrors user_accounts_valid_type's domain for primary_type (migration 000031); identity_type
--- carries the same valid Plaid account types.
+-- identity_type is ALWAYS sourced from accounts.type — never from primary_type — both at mint
+-- (MatchOrCreate's accountType parameter is `string(plaidAccount.GetType())`, the same call that
+-- fills accounts.type; see account_service.go) and in the backfill below (accounts.type directly).
+-- So its value domain must match accounts.type's own CHECK (`valid_account_type`, migration
+-- 000007: depository, credit, loan, investment, other), NOT primary_type's domain
+-- (user_accounts_valid_type, migration 000031), which additionally allows 'brokerage' — a value
+-- accounts.type can never hold (brokerage is a SUBTYPE that pairs with type='investment') and one
+-- identity_type can therefore never legitimately receive. Deliberately narrower than primary_type's
+-- CHECK for that reason.
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -77,7 +91,7 @@ BEGIN
         ALTER TABLE user_accounts
             ADD CONSTRAINT user_accounts_valid_identity_type
             CHECK (identity_type IS NULL OR identity_type IN
-                ('depository', 'credit', 'loan', 'investment', 'brokerage', 'other'));
+                ('depository', 'credit', 'loan', 'investment', 'other'));
     END IF;
 END $$;
 
