@@ -70,6 +70,12 @@ migrate-down: ## Rollback last database migration
 		echo "Usage: DATABASE_URL=postgres://user:pass@host:port/db make migrate-down"; \
 		exit 1; \
 	fi
+	@# #1569 round 13 task 1 — this target used to check only that DATABASE_URL was set, never the
+	@# disposability gate below. Repeated `make migrate-down` walks all the way back through every
+	@# down.sql in reverse, exactly like `migrate-reset`'s `down -all` does in one shot, so it needs
+	@# the identical disposability question answered. See
+	@# scripts/assert-migrate-reset-target-disposable.sh for the full refusal design.
+	DATABASE_URL="$$DATABASE_URL" ./scripts/assert-migrate-reset-target-disposable.sh migrate-down
 	migrate -path migrations -database "$$DATABASE_URL" -verbose down 1
 
 .PHONY: migrate-reset
@@ -85,7 +91,7 @@ migrate-reset: ## Rollback all database migrations
 	@# can be bypassed entirely by the reverse execution order (000152's unconditional DELETE runs
 	@# before 000151's row-count guard sees it). See
 	@# scripts/assert-migrate-reset-target-disposable.sh for the full refusal design.
-	DATABASE_URL="$$DATABASE_URL" ./scripts/assert-migrate-reset-target-disposable.sh
+	DATABASE_URL="$$DATABASE_URL" ./scripts/assert-migrate-reset-target-disposable.sh migrate-reset
 	migrate -path migrations -database "$$DATABASE_URL" -verbose down -all
 
 .PHONY: migrate-status

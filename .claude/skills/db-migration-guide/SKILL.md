@@ -479,8 +479,14 @@ migrate -database "$DATABASE_URL" -path migrations version
 
 ### Rollback Migrations
 
+**Rollback ONE migration: use `make migrate-down`, not the raw command below.**
+(#1569 round 13 task 1) `make migrate-down` runs the same
+`backend/scripts/assert-migrate-reset-target-disposable.sh` guard as `migrate-reset` before
+`down 1` — repeated `make migrate-down` walks all the way back through every `.down.sql` in
+reverse, exactly like `down -all` does in one shot. The raw command below bypasses that guard:
+
 ```bash
-# Rollback last migration
+# ⚠ BYPASSES the migrate-down disposability guard entirely. Prefer `make migrate-down`.
 migrate -database "$DATABASE_URL" -path migrations down 1
 ```
 
@@ -496,6 +502,12 @@ guard**:
 # ⚠ BYPASSES the migrate-reset disposability guard entirely. Prefer `make migrate-reset`.
 migrate -database "$DATABASE_URL" -path migrations down -all
 ```
+
+⚠ Every Makefile target or script in this repo that can invoke `migrate ... down` is checked
+automatically by `scripts/assert-no-ungated-migrate-down-invocation.sh` (part of `make
+test-scripts`) — a new ungated invocation, or an existing gated one losing its gate call, fails
+the build. It cannot reach a raw command typed directly at a shell, which is why the warnings
+above still matter.
 
 ### Force Version (Recovery)
 

@@ -46,12 +46,44 @@
 # unlikely, and a stale export naming an OLD database does nothing when DATABASE_URL now points
 # somewhere else.
 #
-# Usage: DATABASE_URL=... assert-migrate-reset-target-disposable.sh
+# Usage: DATABASE_URL=... assert-migrate-reset-target-disposable.sh [migrate-reset|migrate-down]
 # Exit 0: proceed. Exit 3: refused (distinct from 1 so a caller can tell "refused" from "could not
 # connect" or "psql missing", matching scripts/test-migrations.sh's GUARD_REFUSED_EXIT convention).
+#
+# ⚠ #1569 round 13 task 1: this guard now also covers `backend/Makefile`'s `migrate-down` target
+# (`migrate ... down 1`), not just `migrate-reset` (`migrate ... down -all`). The confirmed hole:
+# `migrate-down` checked only that DATABASE_URL was set and never called this script at all — a
+# developer (or a script) could roll all the way back to any migration, one `make migrate-down` at
+# a time, without ever touching the ONE command (`down -all`) this guard used to be scoped to. Since
+# a rollback to a specific version can land on a migration with an unconditional destructive
+# down.sql (e.g. 000035's unguarded `DELETE FROM transactions WHERE account_id IS NULL`) exactly as
+# easily via repeated `down 1` as via `down -all`, the same disposability question — "is this
+# database's data OK to lose?" — applies to both, so both share this one script rather than growing
+# a second copy of the same logic. The optional first argument selects which command's wording goes
+# in the refusal message and which confirmation environment variable unlocks a single run;
+# everything else (the marker, the emptiness check, the database-name derivation) is identical for
+# both and stays shared.
 set -euo pipefail
 
 GUARD_REFUSED_EXIT=3
+
+TARGET_MODE="${1:-migrate-reset}"
+case "$TARGET_MODE" in
+    migrate-reset)
+        MIGRATE_COMMAND_DESC="migrate down -all"
+        MAKE_TARGET_DESC="make migrate-reset"
+        CONFIRM_VAR_NAME="MIGRATE_RESET_CONFIRM"
+        ;;
+    migrate-down)
+        MIGRATE_COMMAND_DESC="migrate down 1"
+        MAKE_TARGET_DESC="make migrate-down"
+        CONFIRM_VAR_NAME="MIGRATE_DOWN_CONFIRM"
+        ;;
+    *)
+        echo "ERROR: unrecognized target mode '$TARGET_MODE' (expected 'migrate-reset' or 'migrate-down')" >&2
+        exit 1
+        ;;
+esac
 
 if [ -z "${DATABASE_URL:-}" ]; then
     echo "ERROR: DATABASE_URL environment variable is not set" >&2
@@ -109,7 +141,7 @@ fi
 comment=$(psql "$DATABASE_URL" -tAc \
     "SELECT coalesce(shobj_description(oid, 'pg_database'), '') FROM pg_database WHERE datname = current_database()" 2>/dev/null || true)
 if [[ "$comment" == *"$DISPOSABLE_DB_MARKER"* ]]; then
-    echo "migrate-reset target accepted: '$db' is stamped as a disposable migrate-reset target."
+    echo "$TARGET_MODE target accepted: '$db' is stamped as a disposable migrate-reset target."
     exit 0
 fi
 
@@ -146,32 +178,41 @@ user_relations="${user_relations//[[:space:]]/}"
 
 if [ "$user_relations" = "0" ]; then
     if psql "$DATABASE_URL" -c "COMMENT ON DATABASE \"$db\" IS '$DISPOSABLE_DB_MARKER'" > /dev/null 2>&1; then
-        echo "migrate-reset target accepted: '$db' was empty; stamped it as a disposable migrate-reset target."
+        echo "$TARGET_MODE target accepted: '$db' was empty; stamped it as a disposable migrate-reset target."
     else
-        echo "migrate-reset target accepted: '$db' is empty, but it could not be stamped (not the owner?). It will be re-checked for emptiness every run."
+        echo "$TARGET_MODE target accepted: '$db' is empty, but it could not be stamped (not the owner?). It will be re-checked for emptiness every run."
     fi
     exit 0
 fi
 
-if [ -n "${MIGRATE_RESET_CONFIRM:-}" ] && [ "$MIGRATE_RESET_CONFIRM" = "$db" ]; then
-    echo "migrate-reset target accepted: '$db' confirmed for this run via MIGRATE_RESET_CONFIRM."
+confirm_value="${!CONFIRM_VAR_NAME:-}"
+if [ -n "$confirm_value" ] && [ "$confirm_value" = "$db" ]; then
+    echo "$TARGET_MODE target accepted: '$db' confirmed for this run via $CONFIRM_VAR_NAME."
     exit 0
 fi
 
-echo "Refusing to run 'migrate down -all': '$db' holds $user_relations user relation(s) and carries no disposability marker." >&2
+echo "Refusing to run '$MIGRATE_COMMAND_DESC': '$db' holds $user_relations user relation(s) and carries no disposability marker." >&2
 echo "" >&2
-echo "This command rolls EVERY migration back, in reverse, including foundational DROP TABLEs" >&2
-echo "(accounts, transactions, and others) that carry no per-file rollback guard at all — the" >&2
-echo "guard has to live here, at the one command that can run the whole sequence." >&2
+if [ "$TARGET_MODE" = "migrate-reset" ]; then
+    echo "This command rolls EVERY migration back, in reverse, including foundational DROP TABLEs" >&2
+    echo "(accounts, transactions, and others) that carry no per-file rollback guard at all — the" >&2
+    echo "guard has to live here, at the one command that can run the whole sequence." >&2
+else
+    echo "This command rolls back the single most recently applied migration. Run it repeatedly and" >&2
+    echo "it walks all the way down through every down.sql in reverse, exactly like 'migrate down" >&2
+    echo "-all' does in one shot — including any down.sql with an unconditional, unguarded DELETE" >&2
+    echo "(e.g. 000035's). The same disposability question applies either way." >&2
+fi
 echo "" >&2
 echo "Two ways to proceed, both deliberate:" >&2
 echo "" >&2
 echo "  1. If '$db' really is a disposable local dev database you intend to keep resetting," >&2
-echo "     stamp it once and every future migrate-reset against it will run with no ceremony:" >&2
+echo "     stamp it once and every future migrate-down/migrate-reset against it will run with no" >&2
+echo "     ceremony (the marker is shared across both):" >&2
 echo "       psql \"\$DATABASE_URL\" -c \"COMMENT ON DATABASE \\\"$db\\\" IS '$DISPOSABLE_DB_MARKER'\"" >&2
 echo "" >&2
-echo "  2. If you want to destroy '$db' just this once, name it explicitly on this invocation:" >&2
-echo "       MIGRATE_RESET_CONFIRM=$db DATABASE_URL=\$DATABASE_URL make migrate-reset" >&2
+echo "  2. If you want to roll '$db' back just this once, name it explicitly on this invocation:" >&2
+echo "       $CONFIRM_VAR_NAME=$db DATABASE_URL=\$DATABASE_URL $MAKE_TARGET_DESC" >&2
 echo "" >&2
 echo "A plain on/off environment variable is deliberately not accepted here: one left exported in" >&2
 echo "a shell profile would silently disarm this guard forever, for every database that shell ever" >&2
