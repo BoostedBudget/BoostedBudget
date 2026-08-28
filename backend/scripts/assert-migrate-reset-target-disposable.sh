@@ -28,10 +28,15 @@
 #      Fly proxy or a shared database). Requiring the name forces the operator to look at what they
 #      are about to destroy on every single invocation.
 #
-# An EMPTY database (no relations that can hold rows — see the relkind enumeration below) is
-# auto-stamped and allowed through with no ceremony: there is nothing in it to lose, and refusing a
-# `migrate-reset` against a database that was just `createdb`'d would be the guard the next
-# engineer deletes out of frustration.
+# An EMPTY database (no relations that can hold rows — see the relkind enumeration below,
+# EXCLUDING golang-migrate's own schema_migrations bookkeeping table) is auto-stamped and allowed
+# through with no ceremony: there is nothing in it to lose, and refusing a `migrate-reset` against
+# a database that was just `createdb`'d — or one that just had every migration rolled back,
+# leaving only schema_migrations behind — would be the guard the next engineer deletes out of
+# frustration. ⚠ Re-derived and fixed in #1569 round 12 task 7 fix round 1: `down -all` does NOT
+# drop schema_migrations, so without excluding it BY NAME, this "no ceremony" path is unreachable
+# for any database that has ever run `migrate up` — which is every database this command is ever
+# actually run against. See the exclusion comment below for the empirical proof.
 #
 # ⚠ NOT overridable by a plain unqualified environment variable, and not read from any file the
 # guard itself did not write (the COMMENT ON DATABASE marker below) — a workalike env-var opt-out
@@ -58,12 +63,46 @@ fi
 # disposable for a human's interactive `make migrate-reset` — conflating them would let one round of
 # CI-only test tooling silently unlock a destructive command a developer runs by hand, or vice
 # versa.
+#
+# ⚠ THE STAMP DOES NOT EXPIRE OR RE-VALIDATE, AND THAT IS DELIBERATE (#1569 round 12 task 7 fix
+# round 1 — reviewed and decided, not an oversight). Once a database carries this marker, EVERY
+# future `migrate-reset` against it proceeds with no ceremony, forever, regardless of what gets
+# put into it later. A database stamped empty today, then seeded with real data tomorrow, is
+# silently exempt from every check this guard has.
+#
+# Two other shapes were considered and rejected:
+#   - Re-validate emptiness on every run even when the stamp is present: this makes the stamp
+#     meaningless — a stamped, ACTIVELY USED dev database (the normal case a developer keeps
+#     resetting) would fail the re-check the moment it holds anything, forcing
+#     MIGRATE_RESET_CONFIRM on every single reset. That is the exact "guard the next engineer
+#     deletes out of frustration" failure mode this file exists to avoid, just moved to a
+#     different trigger.
+#   - Expire the stamp after N days: adds real state (a timestamp embedded in the marker) for a
+#     narrower, harder-to-reason-about safety property — an operator who stamped a database six
+#     months ago and now has it silently start refusing gets a surprise refusal with no signal
+#     that anything about the database changed, which is its own "guard nobody can diagnose"
+#     failure per this file's own design note above.
+#
+# The stamp means exactly one thing: "I am telling this guard, permanently, that I will never put
+# anything into this database that I am not willing to lose to a rollback." That is the same
+# contract `scripts/test-migrations.sh`'s sibling marker has always made for its own automated
+# databases, and this guard makes the identical contract for a human's dev database, not a
+# stronger one. Putting real data into an already-stamped database is an operator error against a
+# promise the operator made, not a gap in this guard — the guard's job is to catch UNMARKED
+# databases, not to protect an operator from contradicting their own earlier declaration.
 DISPOSABLE_DB_MARKER='boostedbudget:disposable-migrate-reset-target'
 
-db="${DATABASE_URL%%\?*}"
-db="${db##*/}"
+# ⚠ Derived from the LIVE connection's own current_database(), not by string-splitting
+# DATABASE_URL (#1569 round 12 task 7 fix round 1, Codex finding). A string split trusts what the
+# operator typed as if it were what the server actually opened — the exact gap MIGRATE_RESET_CONFIRM
+# exists to close would reopen the moment the two disagree (a URL alias, a connection default, or
+# any other reason the path segment and the server's own idea of its name diverge). Asking the
+# server is one round-trip we already pay for the marker check immediately below, so there is no
+# cost to asking it first and reusing the answer everywhere else in this file.
+db=$(psql "$DATABASE_URL" -tAc "SELECT current_database()" 2>/dev/null || true)
+db="${db//[[:space:]]/}"
 if [ -z "$db" ]; then
-    echo "ERROR: could not extract a database name from DATABASE_URL" >&2
+    echo "ERROR: could not connect to the database named by DATABASE_URL to determine its actual name" >&2
     exit 1
 fi
 
@@ -89,8 +128,20 @@ fi
 #   i / I (index, part. index) — no data: derivable from the table it indexes.
 #   c (composite type)     — no data: a type definition.
 #   t (TOAST)               — excluded by the pg_toast namespace filter below regardless.
+#
+# ⚠ public.schema_migrations is EXCLUDED BY NAME, and this is load-bearing, not cosmetic
+# (#1569 round 12 task 7 fix round 1, Codex finding). golang-migrate creates it as an ordinary
+# 'r' table and `down -all` does NOT drop it — verified empirically: `migrate up` to 180 then
+# `migrate down -all` on a throwaway database leaves exactly one relation, `schema_migrations`,
+# with `version` reset to 0. Without this exclusion, EVERY database that has ever run `migrate
+# up` — including one this very guard just finished rolling back — reports >=1 user relation
+# FOREVER, so the "empty database, no ceremony" path this guard advertises as the common case is
+# actually unreachable for any database in the normal migrate-up/migrate-reset loop. It holds
+# golang-migrate's own bookkeeping (a version number and a dirty flag), never user data, so
+# excluding it is not a special case carved out of the "has user data" definition — it never
+# qualified for that definition in the first place.
 user_relations=$(psql "$DATABASE_URL" -tAc \
-    "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r','p','m') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_toast'" 2>/dev/null || true)
+    "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r','p','m') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_toast' AND NOT (n.nspname = 'public' AND c.relname = 'schema_migrations')" 2>/dev/null || true)
 user_relations="${user_relations//[[:space:]]/}"
 
 if [ "$user_relations" = "0" ]; then
