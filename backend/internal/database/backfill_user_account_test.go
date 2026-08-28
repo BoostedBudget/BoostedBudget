@@ -106,7 +106,7 @@ func TestBackfillUserAccountIDs_MultipleMatch_Warns(t *testing.T) {
 		AddRow(uaID1).
 		AddRow(uaID2)
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id FROM user_accounts`)).
-		WithArgs(userID, instBlind, maskBlind).
+		WithArgs(userID, instBlind, maskBlind, &acctType, &acctSubtype).
 		WillReturnRows(uaRows)
 
 	// Third mock: the UPDATE accounts exec — must use uaID1 (the first row).

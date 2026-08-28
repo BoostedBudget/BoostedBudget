@@ -404,15 +404,23 @@ const lastKnownBalanceProjection = "lkb.amount AS last_known_balance, lkb.at AS 
 // invariant this file's own household comment states as fact: that "two 'active' accounts rows
 // [sharing] one user_account_id ... the Plaid re-link handler guarantees never happens".
 //
-// THAT INVARIANT IS FALSE, and it was measured rather than argued. userAccountService.MatchOrCreate
-// keys on (user_id, institution_id, MASK) and nothing else, and accountRepository's lookup treats a
-// NULL mask as a value that matches every other NULL mask at that institution
-// (FindByInstitutionAndMask's `mask_blind_idx IS NULL` branch). Probed against real Postgres: two
-// MatchOrCreate calls for one institution with no mask — a brokerage and an IRA at the same broker,
-// an entirely ordinary Plaid shape — return the SAME user_accounts row, as do two accounts that
-// merely share a mask. Both accounts are then live, simultaneously, under one chain key. A
-// one-row-per-chain rule silently drops one of them, which HALVES that user's portfolio: a bigger
-// money error, in the opposite direction, than the doubling it was written to fix.
+// THAT INVARIANT WAS FALSE at the time this was written, and it was measured rather than argued.
+// userAccountService.MatchOrCreate keyed on (user_id, institution_id, MASK) and nothing else, and
+// accountRepository's lookup treats a NULL mask as a value that matches every other NULL mask at
+// that institution (FindByInstitutionAndMask's `mask_blind_idx IS NULL` branch). Probed against
+// real Postgres: two MatchOrCreate calls for one institution with no mask — a brokerage and an IRA
+// at the same broker, an entirely ordinary Plaid shape — returned the SAME user_accounts row, as
+// do two accounts that merely share a mask. Both accounts were then live, simultaneously, under
+// one chain key. A one-row-per-chain rule silently drops one of them, which HALVES that user's
+// portfolio: a bigger money error, in the opposite direction, than the doubling it was written to
+// fix.
+//
+// ⚠ #1569 round 11 task 4 narrowed MatchOrCreate's key to also include identity_type/identity_
+// subtype, so the brokerage/IRA example above no longer collides (they now mint separate chains).
+// The residual case task 4 explicitly does NOT close — two accounts agreeing on institution, mask
+// (both NULL), type, AND subtype (e.g. two checking accounts, no mask, at one bank) — still
+// produces two live accounts under one chain key, so this file's liveness predicate and the
+// dedup rule below remain necessary.
 //
 // ⚠ The balance side is dedup'ing these same accounts by the same key and therefore has the same
 // hole. That is NOT fixed here (out of scope, and its shape differs — it dedups snapshot rows, not

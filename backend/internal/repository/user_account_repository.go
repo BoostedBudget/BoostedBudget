@@ -40,11 +40,17 @@ type UserAccountRepository interface {
 	// Returns empty slice if user has no accounts.
 	GetByUserID(ctx context.Context, userID string) ([]domain.UserAccount, error)
 
-	// FindByInstitutionAndMask finds a user account by institution and mask.
-	// This is the core matching function for re-link detection.
-	// Returns nil, nil if no match found (not an error).
+	// FindByInstitutionAndMask finds a user account by institution, mask, AND identity
+	// (identity_type/identity_subtype — #1569 round 11 task 4). This is the core matching
+	// function for re-link detection. Returns nil, nil if no match found (not an error).
 	// Pass nil for mask to search for accounts with NULL mask.
-	FindByInstitutionAndMask(ctx context.Context, userID, institutionID string, mask *string) (*domain.UserAccount, error)
+	//
+	// identityType/identitySubtype narrow the match so a brokerage and an IRA at one institution
+	// (same institution, both maskless — the shape 000100's NULLS-NOT-DISTINCT index used to force
+	// onto one row) are no longer treated as the same chain. Matched with IS NOT DISTINCT FROM so
+	// a legacy orphan row with NULL identity (see migration 000177's header) can still be found by
+	// an equally-NULL lookup, though in practice callers always pass a concrete identityType.
+	FindByInstitutionAndMask(ctx context.Context, userID, institutionID string, mask *string, identityType, identitySubtype *string) (*domain.UserAccount, error)
 
 	// Update updates a user account's customization fields.
 	// Returns ErrUserAccountNotFound if not found or user doesn't own it.
@@ -176,7 +182,11 @@ func (r *userAccountRepository) Create(ctx context.Context, userAccount *domain.
 		if strings.Contains(err.Error(), "duplicate key") ||
 			strings.Contains(err.Error(), "unique constraint") ||
 			strings.Contains(err.Error(), "unique_user_account_identity") ||
-			strings.Contains(err.Error(), "unique_user_accounts_inst_mask_blind") {
+			// #1569 round 11 task 4: unique_user_accounts_inst_mask_blind (000100) was replaced by
+			// unique_user_accounts_inst_mask_identity_blind, which also narrows on
+			// identity_type/identity_subtype — see migration 000178.
+			strings.Contains(err.Error(), "unique_user_accounts_inst_mask_blind") ||
+			strings.Contains(err.Error(), "unique_user_accounts_inst_mask_identity_blind") {
 			return ErrDuplicateUserAccount
 		}
 		return err
@@ -333,10 +343,22 @@ func (r *userAccountRepository) GetByUserID(ctx context.Context, userID string) 
 	return accounts, nil
 }
 
-// FindByInstitutionAndMask finds a user account by institution and mask.
+// FindByInstitutionAndMask finds a user account by institution, mask, AND identity.
 // This is the core matching function for re-link detection.
 // Uses blind indexes for lookups on encrypted fields.
-func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, userID, institutionID string, mask *string) (*domain.UserAccount, error) {
+//
+// #1569 round 11 task 4: a row with a NON-NULL identity_type must match the incoming
+// identityType/identitySubtype exactly (IS NOT DISTINCT FROM, so a genuinely subtype-less
+// identity — type='other' with no subtype — still matches a NULL identitySubtype). A row with a
+// NULL identity_type is an ORPHAN (migration 000177's header: a user_accounts row with no
+// physical accounts ever pointing at it, so nothing could derive an identity for it) and matches
+// ANY incoming identity — it has not yet claimed one, so the first real link claims it, exactly
+// reproducing pre-task-4 behavior for this narrow legacy shape. ⚠ Nothing currently WRITES
+// identity_type onto an orphan row after this match, so a second, DIFFERENT-identity account
+// arriving later at the same institution+mask matches this same still-orphan row too — a known,
+// documented boundary of the narrowing, not a new defect (see TestFindByInstitutionAndMask_
+// OrphanRowMatchesAnyIdentity).
+func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, userID, institutionID string, mask *string, identityType, identitySubtype *string) (*domain.UserAccount, error) {
 	// Compute blind indexes for lookup
 	institutionIDBlindIdx := r.enc.BlindIndex(institutionID)
 	maskBlindIdx := r.enc.BlindIndexNullable(mask)
@@ -353,10 +375,12 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 			       created_at, updated_at
 			FROM user_accounts
 			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
+			  AND (identity_type IS NULL
+			       OR (identity_type = $3 AND identity_subtype IS NOT DISTINCT FROM $4))
 			ORDER BY created_at ASC, id ASC
 			LIMIT 1
 		`
-		args = []interface{}{userID, institutionIDBlindIdx}
+		args = []interface{}{userID, institutionIDBlindIdx, identityType, identitySubtype}
 	} else {
 		// Search for specific mask blind index
 		query = `
@@ -366,10 +390,12 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 			       created_at, updated_at
 			FROM user_accounts
 			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
+			  AND (identity_type IS NULL
+			       OR (identity_type = $4 AND identity_subtype IS NOT DISTINCT FROM $5))
 			ORDER BY created_at ASC, id ASC
 			LIMIT 1
 		`
-		args = []interface{}{userID, institutionIDBlindIdx, *maskBlindIdx}
+		args = []interface{}{userID, institutionIDBlindIdx, *maskBlindIdx, identityType, identitySubtype}
 	}
 
 	var ua domain.UserAccount

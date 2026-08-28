@@ -267,12 +267,19 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 // one re-link chain, and that change is the whole of the maskless-pair fix.
 //
 // Both reads used to say DISTINCT ON (COALESCE(user_account_id, account_id)) — one row per CHAIN.
-// Two maskless accounts at one institution are FORCED to share a user_accounts row (migration
+// Two maskless accounts at one institution were FORCED to share a user_accounts row (migration
 // 000100's `UNIQUE (user_id, institution_id_blind_idx, mask_blind_idx) NULLS NOT DISTINCT`, plus
 // FindByInstitutionAndMask's `mask_blind_idx IS NULL` branch), so a brokerage and an IRA at one
-// broker are one chain key with two live accounts, and the chain rule DELETED one of them from
+// broker were one chain key with two live accounts, and the chain rule DELETED one of them from
 // every total. Measured, not reasoned: $100 + $400 reported as $400
 // (TestMasklessPair_PersonalBalanceReads_CountBothAccounts).
+//
+// ⚠ #1569 round 11 task 4 narrowed FindByInstitutionAndMask's match key to also include
+// identity_type/identity_subtype, so a brokerage and an IRA (same type, different SUBTYPE) no
+// longer collide onto one chain — that SPECIFIC example above is now historical. The mechanism
+// this fix guards is still live for the residual case the narrowing does NOT close: two accounts
+// that agree on institution, mask (both NULL), type, AND subtype (e.g. two checking accounts at
+// one bank) still collide onto one chain, so snapshotIdentityKey stays load-bearing.
 //
 // ⚠ THE THREE COALESCE ARMS ARE EACH LOAD-BEARING, and the third one is the trap.
 // balance_snapshots.account_id is NULLABLE with ON DELETE SET NULL, so an orphaned snapshot is a
