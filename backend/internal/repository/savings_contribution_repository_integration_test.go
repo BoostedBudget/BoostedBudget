@@ -848,3 +848,122 @@ func TestInsertManualFromTransaction_Integration_RefusesToOverwriteAConfirmedRow
 	assert.Equal(t, "2026-01-05", occurredOn, "and so must the date they logged it on")
 	assert.Equal(t, "confirmed", status)
 }
+
+// TestUpsertFromTransaction_Integration_RefusesToOverwriteAUserConfirmedRow is the regression test
+// for #1569 round 12 task 3: an independent Codex audit found that UpsertFromTransaction (the
+// AUTOMATIC writer reached from transferCorrelationService.createBoostMatchContribution) had NO
+// predicate on its ON CONFLICT DO UPDATE, unlike InsertManualFromTransaction (the manual writer,
+// WHERE status = 'proposed') and UpsertProposedFromTransaction (WHERE status = 'proposed' AND
+// managed_by_reconciliation = true). A user confirms a contribution with an explicit amount, then a
+// later automatic correlation/boost-match pass silently overwrote it — no audit, no user action.
+//
+// The discriminator is confirmed_by_user, not status: a machine-confirmed row (this same method's
+// own INSERT sets status='confirmed', confirmed_by_user=false) must remain updatable by a later
+// automatic pass — that is legitimate machine-to-machine correction, not the defect. Only a row
+// with confirmed_by_user=true (set exclusively by InsertManualFromTransaction and
+// ConfirmContribution — both explicit user actions) may never be overwritten by this path.
+func TestUpsertFromTransaction_Integration_RefusesToOverwriteAUserConfirmedRow(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -100.0)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	// The user manually confirms a $40 contribution against this transaction/goal pair.
+	confirmed, err := repo.InsertManualFromTransaction(ctx, userID, goalID, txnID, 40.0, "2026-01-05")
+	require.NoError(t, err)
+	require.Equal(t, "confirmed", confirmed.Status)
+	require.True(t, confirmed.ConfirmedByUser, "fixture must be user-confirmed for this test to be meaningful")
+
+	// Automatic transfer correlation later "sees" a different amount ($80) for the same
+	// (transaction, goal) pair and tries to upsert it — this must NOT be treated as an error
+	// (it's an expected race between the user and the reconciler), and must NOT overwrite the
+	// user's ledger entry.
+	err = repo.UpsertFromTransaction(ctx, userID, goalID, txnID, 80.0, "boost_match")
+	require.NoError(t, err, "the automatic writer must not surface an error merely because a "+
+		"user-confirmed row already occupies the slot")
+
+	var amount float64
+	var source, status string
+	var confirmedByUser bool
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT amount, source, status, confirmed_by_user FROM savings_goal_contributions WHERE id = $1`,
+		confirmed.ID).Scan(&amount, &source, &status, &confirmedByUser))
+	assert.InDelta(t, 40.0, amount, 0.001, "the user-confirmed amount must survive the automatic upsert")
+	assert.Equal(t, "manual", source, "the automatic writer must not steal the row's source")
+	assert.Equal(t, "confirmed", status)
+	assert.True(t, confirmedByUser, "confirmed_by_user must remain true")
+
+	var rowCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM savings_goal_contributions WHERE transaction_id = $1 AND savings_goal_id = $2`,
+		txnID, goalID).Scan(&rowCount))
+	assert.Equal(t, 1, rowCount, "the automatic writer must not have inserted a second row either")
+}
+
+// TestUpsertFromTransaction_Integration_DoesNotResurrectARejectedRow proves the fix does not
+// merely swap one hole for another: confirmed_by_user is false on a REJECTED row too (nothing sets
+// it true on rejection), so a naive `WHERE confirmed_by_user = false` predicate would let the
+// automatic writer silently resurrect a row the user explicitly rejected back to 'confirmed' — the
+// same class of defect, laundered through a different status value. The fix must also exclude
+// status = 'rejected', matching the sibling automatic writer UpsertProposedFromTransaction's
+// established rule (R3-7) that rejected tombstones are never touched by automatic paths.
+func TestUpsertFromTransaction_Integration_DoesNotResurrectARejectedRow(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -100.0)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	// Sync proposes a contribution, then the user explicitly rejects it.
+	require.NoError(t, repo.UpsertProposedFromTransaction(ctx, userID, goalID, txnID, 30.0))
+	var proposedID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT id FROM savings_goal_contributions WHERE transaction_id = $1 AND savings_goal_id = $2`,
+		txnID, goalID).Scan(&proposedID))
+	rejected, err := repo.RejectContribution(ctx, userID, proposedID)
+	require.NoError(t, err)
+	require.Equal(t, "rejected", rejected.Status)
+	require.False(t, rejected.ConfirmedByUser, "rejection does not flip confirmed_by_user — this is exactly why status alone must also be checked")
+
+	// A later automatic pass tries to write the same slot.
+	err = repo.UpsertFromTransaction(ctx, userID, goalID, txnID, 30.0, "boost_match")
+	require.NoError(t, err)
+
+	var status string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT status FROM savings_goal_contributions WHERE id = $1`, proposedID).Scan(&status))
+	assert.Equal(t, "rejected", status, "the automatic writer must not resurrect an explicit user rejection")
+}
+
+// TestUpsertFromTransaction_Integration_StillOverwritesAMachineConfirmedRow pins that the fix does
+// not overcorrect: two automatic writers (e.g. a proposed row promoted by one correlation pass,
+// then re-touched by another) must still be able to update each other's rows. Only a USER's
+// confirmation is protected, not every confirmed row.
+func TestUpsertFromTransaction_Integration_StillOverwritesAMachineConfirmedRow(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -100.0)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	require.NoError(t, repo.UpsertFromTransaction(ctx, userID, goalID, txnID, 25.0, "confirmed_transfer"))
+	require.NoError(t, repo.UpsertFromTransaction(ctx, userID, goalID, txnID, 35.0, "boost_match"))
+
+	var amount float64
+	var source string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT amount, source FROM savings_goal_contributions WHERE transaction_id = $1 AND savings_goal_id = $2`,
+		txnID, goalID).Scan(&amount, &source))
+	assert.InDelta(t, 35.0, amount, 0.001, "a machine-confirmed row must remain updatable by a later automatic pass")
+	assert.Equal(t, "boost_match", source)
+}
