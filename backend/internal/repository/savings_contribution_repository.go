@@ -322,9 +322,14 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 	// status='confirmed' with confirmed_by_user=false, so a later automatic pass legitimately
 	// needs to keep updating rows this same (or a sibling automatic) writer produced — using
 	// status='confirmed' as the guard would freeze that machine-to-machine correction, which is
-	// not the defect being fixed here. confirmed_by_user is set to true ONLY by
-	// InsertManualFromTransaction and ConfirmContribution, both of which require an explicit user
-	// action — so it is the correct "did a human decide this" bit.
+	// not the defect being fixed here. On a TRANSACTION-LINKED row — the only kind this arbiter
+	// can reach — confirmed_by_user is set to true by exactly two paths,
+	// InsertManualFromTransaction and ConfirmContribution, both requiring an explicit user action,
+	// so it is the correct "did a human decide this" bit.
+	// ⚠ Deliberately NOT "the only writers in the codebase": savings_goal_service.go's
+	// handleBasisSwitch seed also inserts ConfirmedByUser=true via the generic Insert. It sets no
+	// TransactionID, so it can never occupy this partial index's slot (transaction_id IS NOT NULL)
+	// — which is why the scoped claim above is the true one and the unscoped one would be false.
 	//
 	// `status != 'rejected'` is a second, independent leg, not a status-based version of the same
 	// idea: RejectContribution never touches confirmed_by_user (a rejected row still reads

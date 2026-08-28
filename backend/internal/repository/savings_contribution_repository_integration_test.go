@@ -860,7 +860,7 @@ func TestInsertManualFromTransaction_Integration_RefusesToOverwriteAConfirmedRow
 // The discriminator is confirmed_by_user, not status: a machine-confirmed row (this same method's
 // own INSERT sets status='confirmed', confirmed_by_user=false) must remain updatable by a later
 // automatic pass — that is legitimate machine-to-machine correction, not the defect. Only a row
-// with confirmed_by_user=true (set exclusively by InsertManualFromTransaction and
+// with confirmed_by_user=true (on a transaction-linked row, set only by InsertManualFromTransaction and
 // ConfirmContribution — both explicit user actions) may never be overwritten by this path.
 func TestUpsertFromTransaction_Integration_RefusesToOverwriteAUserConfirmedRow(t *testing.T) {
 	pool := integrationDB(t)
