@@ -57,8 +57,8 @@ func TestHouseholdService_SetAccountShareVisibility_AccountNotOwned_RollsBack(t 
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
 			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("FROM user_accounts WHERE user_id").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-other", "inst-blind", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-other", "inst-blind", nil, nil, nil))
 	pool.ExpectRollback()
 
 	_, err := svc.SetAccountShareVisibility(context.Background(), "caller-1", "acct-not-mine", domain.ShareVisibilityHidden)
@@ -92,8 +92,8 @@ func TestHouseholdService_SetAccountShareVisibility_MalformedID_ReturnsAccountNo
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
 			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("FROM user_accounts WHERE user_id").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", "inst-blind", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", "inst-blind", nil, nil, nil))
 	pool.ExpectRollback()
 
 	_, err := svc.SetAccountShareVisibility(context.Background(), "caller-1", "not-a-uuid-at-all", domain.ShareVisibilityHidden)
@@ -108,7 +108,9 @@ func TestHouseholdService_SetAccountShareVisibility_Share_Success(t *testing.T) 
 	now := time.Now()
 	instIdx := "inst-blind"
 	maskIdx := "mask-blind"
-	combined := instIdx + maskIdx
+	// #1569 round 11 task 4, coordinator round 3 fix: the fingerprint now includes identity
+	// (empty here since the mocked row's identity_type/identity_subtype are nil).
+	combined := instIdx + maskIdx + "::"
 
 	pool.ExpectBegin()
 	// #1569 T7 lock-ordering fix: households FOR UPDATE first (see the method's comment),
@@ -123,8 +125,8 @@ func TestHouseholdService_SetAccountShareVisibility_Share_Success(t *testing.T) 
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
 			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("FROM user_accounts WHERE user_id").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", instIdx, &maskIdx))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", instIdx, &maskIdx, nil, nil))
 	// #1569 T7: SetShareVisibility now opens a nested transaction (a SAVEPOINT here, since
 	// the service already holds one) to close the outgoing interval before opening the new one.
 	pool.ExpectBegin()
@@ -166,8 +168,8 @@ func TestHouseholdService_SetAccountShareVisibility_Hide_Success(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
 			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("FROM user_accounts WHERE user_id").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", "inst-blind", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", "inst-blind", nil, nil, nil))
 	// #1569 T7: SetShareVisibility now opens a nested transaction (a SAVEPOINT here, since
 	// the service already holds one) to close the outgoing interval before opening the new one.
 	pool.ExpectBegin()

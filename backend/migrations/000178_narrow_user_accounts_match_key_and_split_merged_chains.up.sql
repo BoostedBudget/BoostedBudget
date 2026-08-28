@@ -77,9 +77,13 @@
 --      ON DELETE SET NULL) is left untouched by this step, exactly like every other downstream
 --      table already leaves an orphaned account_id-less row untouched — not a new gap this task
 --      introduces.
+--   6. Normalize EVERY household_account_shares.physical_account_blind_idx (the WHOLE table, not
+--      just rows touched by this split) to include identity, so two independently-computed
+--      fingerprints for the same real account always agree regardless of which side of a split
+--      (if any) either owner's copy sits on. See the ⚠⚠ ROUND 3 FIX note on step 6 itself.
 --   5. Fan out any ACTIVE (revoked_at IS NULL) household_account_shares grant on a chain that
 --      split, so a household member does not silently lose visibility of an account they could
---      already see.
+--      already see. (Superseded in part by step 6 below — see the ⚠⚠ ROUND 2/ROUND 3 notes.)
 --      ⚠⚠ ROUND 2 FIX — A REAL MONEY BUG, CAUGHT BEFORE MERGE, NOT BY ME. The first version of
 --      this step copied `physical_account_blind_idx` VERBATIM into the new share, reasoning
 --      (WRONGLY) that every chain this migration splits is "by construction maskless" so the
@@ -98,29 +102,25 @@
 --      fingerprint-contested tiebreak — silently keep only ONE of them in every household read,
 --      forever. That is exactly the $60 -> $0 class this branch exists to eliminate, reintroduced
 --      by this migration's own fan-out.
---      THE FIX: a fanned-out share gets a fingerprint DERIVED FOR ITS OWN CHAIN, never the
---      original's value, whenever that value is non-NULL. The derivation appends the new chain's
---      own (identity_type, identity_subtype) to the original fingerprint — the same information
---      that now distinguishes the siblings in user_accounts itself — so every resulting sibling's
---      fingerprint is pairwise distinct while the UNTOUCHED original share (still on the surviving
---      row, never rewritten by this step) keeps its original value unchanged, so an existing
---      genuine joint-account match against another owner's independently-computed (identity-blind)
---      fingerprint is not disturbed. This extended-format fingerprint is used ONLY for freshly
---      minted split rows here, never retrofitted onto pre-existing shares, and application code
---      (ListActiveUserAccountFingerprints) is deliberately NOT changed to compute this format
---      going forward — see the task report for why that asymmetry is safe and correct rather
---      than an oversight: after this migration runs once, MatchOrCreate's narrowed key (step 1)
---      makes this exact collision shape structurally impossible to form again, so there is no
---      future case that needs the extended format outside a migration's own one-time fan-out.
---      When the original value IS NULL (the maskless mechanism (a) case), the clone stays NULL —
---      unaffected by this fix, and covered by the pre-existing maskless integration test.
+--      ⚠⚠ ROUND 2's OWN FIX WAS ALSO INCOMPLETE, SUPERSEDED BY STEP 6 (ROUND 3). Round 2's first
+--      attempt: give the fanned-out (new) chain a fingerprint suffixed with its own identity,
+--      leave the surviving ORIGINAL row's share untouched (still plain). That keeps A's OWN two
+--      split siblings from colliding with each other, but does not survive a SECOND user: probed
+--      against real Postgres (two-user fixture — see Step 6's comment and the task report) and
+--      confirmed to DOUBLE-COUNT a jointly-shared account whenever the co-owned sibling is the one
+--      that happens to become the NEW (suffixed) chain, because the other owner's own,
+--      never-touched fingerprint for the SAME real account stays in the OLD plain format and no
+--      longer matches. This step's INSERT therefore no longer tries to compute the "right" value
+--      at all — see Step 6, which normalizes every row's fingerprint (this newly-inserted one
+--      included) in one pass, globally, after both this step and Step 2 have run.
 --
 -- IDEMPOTENCY. Step 2's own WHERE clause is "a physical account disagrees with its
 -- user_accounts row's identity" — once a chain is split, every remaining physical account under
 -- the original row agrees with that row's identity_type/identity_subtype by construction, and
 -- the new rows were minted with their own accounts' shared identity. So a second run of this
 -- migration finds nothing left to split, and steps 3-5 likewise touch zero rows. Step 1 uses
--- IF NOT EXISTS / DROP INDEX IF EXISTS.
+-- IF NOT EXISTS / DROP INDEX IF EXISTS. Step 6 is idempotent by construction (see its own
+-- comment) and runs unconditionally on every re-run regardless of whether anything else changed.
 --
 -- WHY NOT trg_user_accounts_identity_immutable. This migration only ever INSERTs new
 -- user_accounts rows (with identity_type/identity_subtype set once at INSERT time, exactly like
@@ -309,24 +309,68 @@ WHERE dst.to_account_id = a.id
 -- uq_household_account_shares_active (household_id, user_account_id) WHERE revoked_at IS NULL —
 -- a re-run finds the split already applied (tmp_1569_t4_split_groups would be empty) so this is
 -- belt-and-braces, not load-bearing.
+-- The fingerprint value inserted here is a throwaway placeholder (copied verbatim) — Step 6,
+-- immediately below, is the ONLY thing that decides every row's final physical_account_blind_idx,
+-- for every household_account_shares row in the table, not just the ones this step inserts.
 -- =============================================================================
 INSERT INTO household_account_shares
     (household_id, user_account_id, physical_account_blind_idx, visibility, shared_at)
 SELECT DISTINCT
-    has.household_id,
-    sg.new_ua_id,
-    -- Re-derive the fingerprint FOR THIS NEW CHAIN rather than cloning the original's value
-    -- (see the Step 5 comment above for the money bug that verbatim-copying caused). NULL stays
-    -- NULL (maskless mechanism); a non-NULL value is disambiguated by appending the new chain's
-    -- own identity, so it can never collide with the untouched original share's still-plain value.
-    CASE
-        WHEN has.physical_account_blind_idx IS NULL THEN NULL
-        ELSE has.physical_account_blind_idx || ':' || sg.g_type || ':' || COALESCE(sg.g_subtype, '')
-    END,
-    has.visibility,
-    has.shared_at
+    has.household_id, sg.new_ua_id, has.physical_account_blind_idx, has.visibility, has.shared_at
 FROM household_account_shares has
 JOIN tmp_1569_t4_split_groups sg ON sg.old_ua_id = has.user_account_id
 WHERE has.revoked_at IS NULL
 ON CONFLICT DO NOTHING;
+
+-- =============================================================================
+-- Step 6: Normalize EVERY household_account_shares.physical_account_blind_idx (the whole table,
+-- not just rows this migration's split touched) to a pure, deterministic function of its OWN
+-- chain's CURRENT (institution_id_blind_idx, mask_blind_idx, identity_type, identity_subtype).
+--
+-- ⚠⚠ ROUND 3 FIX — a SECOND cross-user money bug, found by probing a two-user scenario the
+-- coordinator described (not merely asserted): User A's own masked collision (accounts P and Q,
+-- same institution+mask) splits into two chains. WHICHEVER of P/Q happens to match the
+-- surviving/original row's identity (an accident of which physical account was created earliest
+-- — see Step 2) keeps a PLAIN, unsuffixed fingerprint; the other gets a suffixed one (Step 5's
+-- original design, round 2). That is sufficient to keep A's own two chains from colliding with
+-- EACH OTHER, but is NOT sufficient across users: if User B jointly co-owns the SAME physical
+-- account as the one that happened to become A's NEW (suffixed) chain, B's own, never-split
+-- fingerprint for that account — always computed as plain institution+mask by
+-- HouseholdShareRepository.ListActiveUserAccountFingerprints — no longer matches A's suffixed
+-- one, so the two real copies of ONE joint account stop deduping and are DOUBLE-COUNTED in every
+-- household total. Probed directly: rigged exactly this two-user fixture (A's P+Q masked
+-- collision, engineered so P is the sibling that moves to the new chain, plus B's own genuine
+-- joint share of P with a plain, pre-split-format fingerprint) and read the real
+-- GetSnapshotsAsOfForHousehold production query — it returned DOUBLE the correct total,
+-- confirming the coordinator's predicted failure mode exactly.
+-- (Both directions were probed: A's Q chain — which kept the ORIGINAL row's plain fingerprint —
+-- also collided with B's unrelated plain-fingerprint share for P, since plain format carries no
+-- identity at all, so two DIFFERENT real accounts (A's Q and B's P) could tie on it too.)
+--
+-- THE FIX: stop trying to keep exactly one sibling "plain" and hope it is the one some other
+-- user's share happens to need. Instead, ALWAYS include identity in the fingerprint, for every
+-- share, every chain, everywhere — the same narrowing already applied to the user_accounts match
+-- key itself (Step 1). Two independently-computed identity-aware fingerprints for the literal
+-- same real account always agree (Plaid reports the same type/subtype to whichever user links
+-- it), while A's own P and Q chains remain pairwise distinct because they disagree on identity by
+-- construction of the split. This is why the fix must be GLOBAL, not scoped to split-affected
+-- rows: for A's identity-aware P-fingerprint to match B's, B's PRE-EXISTING share must ALSO be
+-- rewritten to the identity-aware format in this same migration — leaving B's row in the old
+-- plain format would just move the mismatch, not close it. household_share_repository.go's
+-- ListActiveUserAccountFingerprints is updated in the SAME change to compute this identity-aware
+-- format for every future share, so no window exists where some shares use the old format and
+-- others the new one.
+--
+-- IDEMPOTENT BY CONSTRUCTION: this recomputes every value from its chain's current authoritative
+-- columns rather than mutating a stored value, so re-running it is a no-op (same inputs, same
+-- output) rather than needing a "already migrated" guard.
+-- =============================================================================
+UPDATE household_account_shares has
+SET physical_account_blind_idx = CASE
+    WHEN ua.mask_blind_idx IS NULL THEN NULL
+    ELSE ua.institution_id_blind_idx || ua.mask_blind_idx || ':' ||
+         COALESCE(ua.identity_type, '') || ':' || COALESCE(ua.identity_subtype, '')
+END
+FROM user_accounts ua
+WHERE ua.id = has.user_account_id;
 
