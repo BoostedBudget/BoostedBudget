@@ -417,10 +417,13 @@ const lastKnownBalanceProjection = "lkb.amount AS last_known_balance, lkb.at AS 
 //
 // ⚠ #1569 round 11 task 4 narrowed MatchOrCreate's key to also include identity_type/identity_
 // subtype, so the brokerage/IRA example above no longer collides (they now mint separate chains).
-// The residual case task 4 explicitly does NOT close — two accounts agreeing on institution, mask
-// (both NULL), type, AND subtype (e.g. two checking accounts, no mask, at one bank) — still
-// produces two live accounts under one chain key, so this file's liveness predicate and the
-// dedup rule below remain necessary.
+// ⚠ ROUND 2 CORRECTION: an earlier version of this note said the residual case required a NULL
+// mask ("both NULL"). That is wrong in the same way task 4's household fan-out bug was wrong —
+// the match key's mask comparison is a PLAIN equality for non-NULL masks, so two accounts sharing
+// institution, mask (NULL *or* the SAME non-NULL value), type, AND subtype still collide onto one
+// chain (e.g. two checking accounts at one bank, whether both maskless or both reporting the same
+// last-4 digits) — this file's liveness predicate and the dedup rule below remain necessary for
+// either shape.
 //
 // ⚠ The balance side is dedup'ing these same accounts by the same key and therefore has the same
 // hole. That is NOT fixed here (out of scope, and its shape differs — it dedups snapshot rows, not

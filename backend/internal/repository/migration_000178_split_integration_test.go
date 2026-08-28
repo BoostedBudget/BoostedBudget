@@ -32,6 +32,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -425,4 +426,156 @@ func transferSuggestionUserAccountIDs(t *testing.T, pool *pgxpool.Pool, id strin
 	`, id).Scan(&from, &to)
 	require.NoError(t, err)
 	return from, to
+}
+
+// seedMergedBrokerageIRAWithSameMask is the MASKED-collision counterpart to
+// seedMergedBrokerageIRA (#1569 round 11 task 4, coordinator round 2 fix). It rigs one
+// user_accounts row minted with a NON-NULL mask shared by BOTH physical accounts — the shape
+// mechanism (b) in migration 000178's header describes: two real accounts that happen to share
+// institution AND mask, which collide under 000100's PLAIN unique constraint with no NULL-
+// handling quirk involved at all. Balances are deliberately different (1000 vs 2500) so a test
+// cannot pass by accident if a value is dropped or swapped.
+func seedMergedBrokerageIRAWithSameMask(t *testing.T, pool *pgxpool.Pool, userID, linkedItemID string) mergedBrokerageIRAFixture {
+	t.Helper()
+	ctx := context.Background()
+
+	maskBlindIdx := "blind_mask_" + uuid.New().String()
+
+	var uaID string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO user_accounts
+			(user_id, institution_id, institution_id_blind_idx, mask, mask_blind_idx,
+			 primary_type, primary_subtype, identity_type, identity_subtype)
+		VALUES ($1, 'enc_inst', 'blind_inst_'||gen_random_uuid()::text, 'enc_mask', $2,
+		        'investment', 'brokerage', 'investment', 'brokerage')
+		RETURNING id::text
+	`, userID, maskBlindIdx).Scan(&uaID)
+	require.NoError(t, err, "seed masked merged user_accounts row")
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, uaID) //nolint:errcheck
+	})
+
+	var brokerageID string
+	err = pool.QueryRow(ctx, `
+		INSERT INTO accounts
+			(linked_item_id, user_id, plaid_account_id, name, type, subtype, mask, user_account_id,
+			 status, current_balance)
+		VALUES ($1, $2, 'plaid_'||gen_random_uuid()::text, 'Brokerage', 'investment', 'brokerage',
+		        '1234', $3, 'active', 1000.00)
+		RETURNING id::text
+	`, linkedItemID, userID, uaID).Scan(&brokerageID)
+	require.NoError(t, err, "seed masked brokerage account")
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM accounts WHERE id = $1`, brokerageID) //nolint:errcheck
+	})
+
+	var iraID string
+	err = pool.QueryRow(ctx, `
+		INSERT INTO accounts
+			(linked_item_id, user_id, plaid_account_id, name, type, subtype, mask, user_account_id,
+			 status, current_balance)
+		VALUES ($1, $2, 'plaid_'||gen_random_uuid()::text, 'IRA', 'investment', 'ira',
+		        '1234', $3, 'active', 2500.00)
+		RETURNING id::text
+	`, linkedItemID, userID, uaID).Scan(&iraID)
+	require.NoError(t, err, "seed masked IRA account")
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM accounts WHERE id = $1`, iraID) //nolint:errcheck
+	})
+
+	return mergedBrokerageIRAFixture{UserAccountID: uaID, BrokerageAcctID: brokerageID, IRAAcctID: iraID}
+}
+
+
+// TestMigration000178_MaskedCollision_FanOutFingerprintDoesNotCollide is the coordinator's round
+// 2 fix: proves that fanning out a household share for a MASKED collision split does not clone
+// physical_account_blind_idx verbatim (which would make the household dedup CTEs — keyed on
+// exactly that fingerprint, analytics_repository.go's COALESCE(physical_account_blind_idx,
+// user_account_id::text) — treat the two now-DIFFERENT resulting chains as duplicate copies of
+// ONE joint account and silently drop one from every household total, forever).
+//
+// seedMergedBrokerageIRA (the maskless fixture used elsewhere in this file) CANNOT see this bug:
+// physical_account_blind_idx is only ever populated when the account HAS a mask, so for a
+// maskless pair the fingerprint is already NULL and falls back to the (always-unique) ua.id —
+// this is exactly the "fixture chosen so the bug cannot be seen" failure mode flagged in review,
+// so this test uses a DELIBERATELY masked fixture instead.
+func TestMigration000178_MaskedCollision_FanOutFingerprintDoesNotCollide(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	balRepo := repository.NewBalanceSnapshotRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	linkedItemID := insertTestLinkedItem(t, pool, member)
+
+	pair := seedMergedBrokerageIRAWithSameMask(t, pool, member, linkedItemID)
+
+	require.Equal(t, pair.UserAccountID, accountUserAccountID(t, pool, pair.BrokerageAcctID))
+	require.Equal(t, pair.UserAccountID, accountUserAccountID(t, pool, pair.IRAAcctID))
+
+	// A REAL, non-NULL fingerprint — exactly what HouseholdShareRepository.
+	// ListActiveUserAccountFingerprints would have computed at share time: institution_id_blind_idx
+	// concatenated with mask_blind_idx.
+	var instBlindIdx, maskBlindIdx string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT institution_id_blind_idx, mask_blind_idx FROM user_accounts WHERE id = $1`, pair.UserAccountID,
+	).Scan(&instBlindIdx, &maskBlindIdx))
+	fingerprint := instBlindIdx + maskBlindIdx
+
+	sharedAt := time.Now().UTC().AddDate(0, -1, 0)
+	_, err := pool.Exec(ctx, `
+		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility, shared_at)
+		VALUES ($1, $2, $3, 'shared', $4)
+	`, hh, pair.UserAccountID, fingerprint, sharedAt)
+	require.NoError(t, err, "seed active masked household share")
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM household_account_shares WHERE household_id = $1`, hh) //nolint:errcheck
+	})
+
+	now := time.Now().UTC()
+	insertBalanceSnapshot(t, pool, member, pair.BrokerageAcctID, pair.UserAccountID, 1000, now.Add(-2*time.Hour))
+	insertBalanceSnapshot(t, pool, member, pair.IRAAcctID, pair.UserAccountID, 2500, now.Add(-1*time.Hour))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+
+	_, err = pool.Exec(ctx, migration000178UpSQL(t))
+	require.NoError(t, err, "apply 000178 up migration against a masked collision")
+
+	brokerageUA := accountUserAccountID(t, pool, pair.BrokerageAcctID)
+	iraUA := accountUserAccountID(t, pool, pair.IRAAcctID)
+	require.Equal(t, pair.UserAccountID, brokerageUA, "brokerage stays on the original chain")
+	require.NotEqual(t, pair.UserAccountID, iraUA, "IRA moves to a new chain")
+
+	// ─── THE FIX, ASSERTED DIRECTLY ────────────────────────────────────────────────────────────
+	var originalFP, newFP *string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT physical_account_blind_idx FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
+		hh, brokerageUA).Scan(&originalFP))
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT physical_account_blind_idx FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
+		hh, iraUA).Scan(&newFP))
+	require.NotNil(t, originalFP)
+	require.NotNil(t, newFP)
+	assert.Equal(t, fingerprint, *originalFP, "the ORIGINAL (untouched) share must keep its fingerprint unchanged")
+	assert.NotEqual(t, *originalFP, *newFP,
+		"the NEW chain's fanned-out share must NOT clone the original's fingerprint verbatim — "+
+			"a shared fingerprint makes the household dedup CTE treat the two split chains as one "+
+			"joint account and silently drop one of them from every total")
+
+	// ─── The real production household query proves the practical consequence ────────────────
+	got, err := balRepo.GetSnapshotsAsOfForHousehold(ctx, owner, scope, now)
+	require.NoError(t, err)
+	assert.InDelta(t, 3500.0, sumSnapshots(got), 0.01,
+		"1000 or 2500 alone would mean the fingerprint collision dropped one split chain from the "+
+			"household total — the exact $60->$0 class this branch exists to eliminate; 3500 is correct")
+
+	// ─── Idempotency ───────────────────────────────────────────────────────────────────────────
+	_, err = pool.Exec(ctx, migration000178UpSQL(t))
+	require.NoError(t, err, "re-apply must be a no-op")
+	var shareCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM household_account_shares WHERE household_id = $1 AND revoked_at IS NULL`,
+		hh).Scan(&shareCount))
+	assert.Equal(t, 2, shareCount, "re-run must not fan out again")
 }
