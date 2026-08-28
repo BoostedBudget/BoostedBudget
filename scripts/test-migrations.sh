@@ -667,6 +667,147 @@ apply_migrations() {
     echo "$duration"
 }
 
+# =============================================================================
+# Genuine second-execution replay (#1569 round 12 task 1)
+# =============================================================================
+#
+# THE HOLE THIS CLOSES: `apply_migrations` above calls `migrate ... up`. Once schema_migrations
+# is already at the latest version, that is a no-op ("no change", 0s) — golang-migrate only ever
+# runs a migration file whose version is not yet recorded as applied. Both test_idempotency's
+# "2nd time" application and test_data_integrity's "re-apply migrations with data present" step
+# called exactly that no-op as their entire idempotency check. Verified live on this branch before
+# writing this: both printed "no change" / "0s" and their hash/row-count comparisons therefore
+# compared two identical, unmodified snapshots — passing having executed zero migration SQL a
+# second time. CLAUDE.md's "Migrations MUST be idempotent" rule had no gate behind it.
+#
+# THE FIX: actually re-execute each targeted migration's .up.sql a second time, by running it
+# directly through psql — NOT through golang-migrate, which will never re-run a version it has
+# already recorded. This is not a new mechanism: test_data_integrity already does exactly this for
+# migration 000072 (`psql -f ".../000072_....up.sql"`, a few dozen lines below) specifically
+# because "golang-migrate marks them applied so the second apply_migrations won't re-run them."
+# What follows generalises that one-off call into a loop over a range of migrations instead of
+# inventing a parallel technique.
+#
+# WHY A BOUNDED RANGE, NOT ALL 178: replaying an old migration's .up.sql against TODAY's final
+# schema is only sound if nothing between that migration and HEAD renamed or dropped what it
+# depends on — otherwise a replay failure would mean "the schema evolved," not "this migration is
+# non-idempotent," which is a false positive, not a real finding. That failure mode is not
+# hypothetical: it already happened. Migration 000070 targeted the `rules` table, migration 000095
+# renamed it to `boosts`, and replaying 000070's own file against the current schema fails outright
+# — which is why test_data_integrity below hand-writes an "000070-equivalent" query instead of
+# replaying the file. Blindly replaying migrations 000001-000148 would reproduce that exact
+# failure dozens of times over, for schema-drift reasons that have nothing to do with idempotency.
+#
+# So this replays only REPLAY_RANGE_START_MIGRATION..HEAD: the migrations added on this branch
+# (#1569; 000149 is the first file this branch's `git diff --diff-filter=A` against its merge-base
+# with staging shows as newly added, as of the commit this comment was written against). Replaying
+# them in their own original order against the final schema reproduces the exact preconditions
+# each one saw when it was first applied for real, AS LONG AS none of them contains DROP TABLE,
+# DROP COLUMN, or a RENAME — verified by direct inspection when this range was chosen, and
+# re-verified on every run by assert_replay_range_has_no_destructive_ddl below so the assumption
+# cannot rot silently into a false PASS if a future migration in range violates it.
+#
+# Migrations 000001-000148 are SKIPPED for this specific check, on purpose, for the reason above —
+# NOT silently: every run logs the exact skipped range so "covered everything" is never implied by
+# omission. Older migrations are not left completely unchecked: they still go through the empty-DB
+# idempotency path (`apply_migrations` called twice from a clean database) that this suite already
+# ran before #1569, via the initial no-op-detecting call in test_idempotency; what was missing was
+# ANY re-execution against non-empty state, which is what this section adds.
+REPLAY_RANGE_START_MIGRATION="000149"
+
+# Lists this run's ABS_MIGRATIONS_DIR *.up.sql files whose zero-padded numeric prefix is >=
+# REPLAY_RANGE_START_MIGRATION, sorted ascending. String comparison (not arithmetic) deliberately:
+# these prefixes are fixed-width, zero-padded 6-digit strings, and bash arithmetic treats a
+# leading-zero literal like 000149 as octal, which would misparse a range boundary silently.
+list_replay_range_up_files() {
+    local f base num
+    for f in "$ABS_MIGRATIONS_DIR"/*.up.sql; do
+        base="$(basename "$f")"
+        num="${base%%_*}"
+        if [[ "$num" > "$REPLAY_RANGE_START_MIGRATION" || "$num" == "$REPLAY_RANGE_START_MIGRATION" ]]; then
+            printf '%s\n' "$f"
+        fi
+    done | sort
+}
+
+list_replay_range_skipped_up_files() {
+    local f base num
+    for f in "$ABS_MIGRATIONS_DIR"/*.up.sql; do
+        base="$(basename "$f")"
+        num="${base%%_*}"
+        if [[ "$num" < "$REPLAY_RANGE_START_MIGRATION" ]]; then
+            printf '%s\n' "$f"
+        fi
+    done | sort
+}
+
+# Re-verifies, on every run, that no migration inside the replay range contains DDL that would
+# invalidate "replaying this range in order against the final schema reproduces original
+# preconditions" — see the big comment above for why that assumption is load-bearing. Strips
+# whole-line `--` comments before scanning so prose (e.g. 000164's "Never updated when the boost is
+# renamed", inside a COMMENT ON COLUMN string) cannot trip it; the keyword patterns additionally
+# require SQL-shaped adjacency (RENAME TO / RENAME COLUMN, not bare "renamed") so past-tense prose
+# on the same line as real SQL still cannot match.
+assert_replay_range_has_no_destructive_ddl() {
+    local f hits all_hits=""
+    for f in $(list_replay_range_up_files); do
+        hits=$(/usr/bin/grep -viE '^[[:space:]]*--' "$f" \
+            | /usr/bin/grep -inE 'DROP[[:space:]]+TABLE|DROP[[:space:]]+COLUMN|RENAME[[:space:]]+(TO|COLUMN)' || true)
+        if [ -n "$hits" ]; then
+            all_hits="${all_hits}--- $f ---"$'\n'"${hits}"$'\n'
+        fi
+    done
+
+    if [ -n "$all_hits" ]; then
+        log_error "Replay-range safety assumption violated: a migration between $REPLAY_RANGE_START_MIGRATION and HEAD contains DROP TABLE / DROP COLUMN / RENAME DDL."
+        log_error "Replaying this range against the final schema is only sound because none of these files"
+        log_error "tear down what an earlier one in the SAME range created. That is no longer true:"
+        echo "$all_hits" >&2
+        log_error "Fix: either make the offending migration idempotent-and-driftless, or move"
+        log_error "REPLAY_RANGE_START_MIGRATION forward past it (and re-verify everything after the new"
+        log_error "start still has no destructive DDL) — do not silently ignore this."
+        return 1
+    fi
+    return 0
+}
+
+# Actually re-executes every .up.sql in the replay range, directly via psql (never through
+# golang-migrate — see the big comment above for why). ON_ERROR_STOP makes a real SQL error abort
+# immediately with a non-zero psql exit code instead of continuing past it silently. Logs every
+# file it runs and the skipped range, so a reader never has to guess what this call covered.
+#
+# ⚠ `-1` / `--single-transaction` is REQUIRED here, not optional. golang-migrate's postgres driver
+# wraps an entire .up.sql file in ONE transaction (confirmed by 000074's own header comment: "Plain
+# CREATE INDEX (not CONCURRENTLY) because golang-migrate wraps .up.sql in a transaction block").
+# Plain `psql -f` autocommits each statement separately. That difference is not cosmetic: replaying
+# 000178 without `-1` produced a false RED — `CREATE TEMP TABLE ... ON COMMIT DROP` autocommitted
+# immediately (dropping the temp table right after creating it) instead of staying alive until the
+# file's real end, so the very next statement's INSERT into that table failed with "relation does
+# not exist." That is a fidelity gap in THIS replay mechanism, not a defect in the migration: under
+# migrate's real single-transaction execution (both in production and in this suite's own first
+# `apply_migrations` pass) ON COMMIT DROP never fires until the migration's actual COMMIT, by which
+# point the temp table is no longer needed. `-1` reproduces that same single-transaction semantics
+# for the replay, closing the gap rather than papering over the symptom.
+replay_migrations_up_sql_range() {
+    local f
+    local skipped_count
+    skipped_count=$(list_replay_range_skipped_up_files | wc -l | tr -d ' ')
+
+    log_info "Re-executing migrations ${REPLAY_RANGE_START_MIGRATION} through HEAD directly via psql (genuine second execution, not golang-migrate no-op)..."
+    log_info "SKIPPED: $skipped_count migration(s) before ${REPLAY_RANGE_START_MIGRATION} — replaying them against the final schema is unsound (see assert_replay_range_has_no_destructive_ddl / the comment above replay_migrations_up_sql_range for why); they are still exercised by the empty-DB first+second apply_migrations pass."
+
+    for f in $(list_replay_range_up_files); do
+        log_info "  replaying $(basename "$f")"
+        if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f "$f" > /dev/null; then
+            log_error "Migration $(basename "$f") is NOT idempotent: re-executing its .up.sql (as a single transaction, matching golang-migrate's own execution semantics) against the current (already-migrated) schema failed."
+            return 1
+        fi
+    done
+
+    log_success "Replayed $(list_replay_range_up_files | wc -l | tr -d ' ') migration(s) a second time with no error"
+    return 0
+}
+
 # Rollback all migrations using golang-migrate
 # Returns: "duration:error_type" where error_type is "none" or "other"
 rollback_migrations() {
@@ -724,7 +865,15 @@ test_idempotency() {
     log_info "Schema hash (1st): $hash1"
 
     # Second application (idempotency test)
-    log_info "Applying migrations (2nd time - idempotency test)..."
+    #
+    # `apply_migrations` here is a golang-migrate no-op ("no change") once schema_migrations is
+    # already at the latest version — kept as a cheap sanity check that migrate itself still exits
+    # 0 against an up-to-date tracking table, but it executes ZERO migration SQL a second time, so
+    # it alone proves nothing about idempotency (confirmed live: "no change" / 0s, every run,
+    # regardless of whether any migration has an IF NOT EXISTS guard). The real second execution is
+    # replay_migrations_up_sql_range below, which runs each in-range migration's actual .up.sql a
+    # second time via psql directly.
+    log_info "Applying migrations (2nd time - golang-migrate no-op sanity check, NOT the idempotency test)..."
     # Same masked-local fix as duration1 above.
     local duration2
     if ! duration2=$(apply_migrations); then
@@ -733,7 +882,15 @@ test_idempotency() {
         log_error "See migrations 000013, 000015 for good idempotency patterns"
         return 1
     fi
-    log_success "Second application completed in ${duration2}s"
+    log_success "Second (no-op) application completed in ${duration2}s"
+
+    # This is the actual idempotency test: re-execute each in-range migration's .up.sql a second
+    # time, for real, via psql (see replay_migrations_up_sql_range's header comment for the full
+    # rationale and why the range is bounded).
+    if ! replay_migrations_up_sql_range; then
+        fail_test "IDEMPOTENCY TEST FAILED - a migration in the replay range is not safe to re-execute"
+        return 1
+    fi
 
     # Capture schema hash again
     log_info "Capturing schema hash (2nd)..."
@@ -1040,6 +1197,14 @@ EOF
     # them. We re-execute their SQL directly here so the JSONB assertions below have live data
     # to verify. Both migrations are idempotent (they check for missing keys before updating).
     #
+    # This hand-written re-execution is the ORIGINAL instance of the same technique that
+    # replay_migrations_up_sql_range (above, #1569 round 12 task 1) generalises into a loop over
+    # migrations 000149+: run a migration's real .up.sql (or, when that is not possible, an
+    # equivalent query) directly via psql because golang-migrate itself will never re-run a version
+    # it has already recorded as applied. 000070/000072 are handled by hand here, outside that
+    # loop, precisely because they demonstrate why the loop cannot start at 000001: see the NOTE
+    # immediately below.
+    #
     # NOTE (#1283): Migration 000070 originally targeted the `rules` table, which was renamed
     # to `boosts` (column rule_type → boost_type) by migration 000095. We cannot replay the
     # historical file against the renamed schema; instead we run an equivalent inline query.
@@ -1125,14 +1290,26 @@ BACKFILL_SQL
     log_info "  transactions: $transactions_count_before"
 
     # Re-apply migrations (idempotency test with data present)
+    #
+    # `apply_migrations` is a golang-migrate no-op here too, for the identical reason as
+    # test_idempotency's second application — schema_migrations is already at the latest version,
+    # so `migrate up` runs zero migration SQL. Kept as a cheap sanity check only. The real
+    # data-integrity check is replay_migrations_up_sql_range immediately below, which re-executes
+    # each in-range migration's actual .up.sql against THIS populated database, for real.
     echo ""
-    log_info "Re-applying migrations with data present (idempotency test)..."
+    log_info "Re-applying migrations with data present (golang-migrate no-op sanity check)..."
     # apply_migrations is called directly (no subshell): a `migrate up` failure calls its own
     # `exit 1` in THIS shell and the whole script aborts right there with its own diagnostic — the
     # `if [ $? -ne 0 ]` that used to follow this line could never run, so it has been removed.
     # Only stdout is discarded (`2>&1` previously sent the diagnostic to /dev/null too).
     apply_migrations > /dev/null
-    log_success "Migrations re-applied successfully"
+    log_success "Migrations re-applied (no-op) successfully"
+
+    log_info "Re-executing in-range migrations' .up.sql directly against the populated database (the real data-integrity idempotency check)..."
+    if ! replay_migrations_up_sql_range; then
+        fail_test "DATA INTEGRITY TEST FAILED - a migration in the replay range is not safe to re-execute against populated data"
+        return 1
+    fi
 
     # Check row counts after
     log_info "Verifying data integrity..."
@@ -1534,6 +1711,17 @@ main() {
 
     log_success "Prerequisites checked"
 
+    # Structural precondition for the genuine-second-execution replay used by test_idempotency and
+    # test_data_integrity (#1569 round 12 task 1): re-verify, on every run, that the assumption
+    # backing REPLAY_RANGE_START_MIGRATION still holds. See replay_migrations_up_sql_range's header
+    # comment for the full rationale. This is checked here, before any test runs, rather than
+    # inside the tests themselves, because a violation here means the entire mechanism those two
+    # tests rely on is unsound for this run — not a single test's finding.
+    if ! assert_replay_range_has_no_destructive_ddl; then
+        log_error "Aborting before running any test: the replay-range mechanism cannot be trusted this run."
+        exit 1
+    fi
+
     # Run all test suites
     test_idempotency
     test_performance
@@ -1570,6 +1758,12 @@ main() {
         # expected-table/index/FK/constraint presence, and rollback schema-neutrality (see
         # test_rollback's own comment for what that test explicitly does not prove — per-pair
         # .down.sql correctness, or that a rollback preserves REAL production data).
+        # Idempotency-via-genuine-re-execution is itself bounded: migrations
+        # $REPLAY_RANGE_START_MIGRATION+ were actually re-run a second time against a live schema
+        # (empty for test_idempotency, populated for test_data_integrity); migrations before that
+        # were only ever re-run via golang-migrate's own no-op against an empty database, which
+        # proves nothing about their idempotency against a populated one (see
+        # replay_migrations_up_sql_range's header comment for why the range is bounded there).
         log_success "All automated migration checks passed for this run"
         echo ""
         exit 0
