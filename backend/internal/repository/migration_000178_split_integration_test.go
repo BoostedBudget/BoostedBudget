@@ -191,6 +191,19 @@ func TestMigration000178_SplitsMergedChainAndRepointsHousehold(t *testing.T) {
 	insertBalanceSnapshot(t, pool, member, pair.BrokerageAcctID, pair.UserAccountID, 1000, now.Add(-2*time.Hour))
 	insertBalanceSnapshot(t, pool, member, pair.IRAAcctID, pair.UserAccountID, 2000, now.Add(-1*time.Hour))
 
+	// A third, unrelated physical account (never linked to any user_accounts chain) for the "to"
+	// leg of one transfer suggestion — proves a NULL-chain column is left alone, not repointed to
+	// something invented.
+	unrelatedAcctID := insertUnlinkedAccount(t, pool, linkedItemID, member, "Checking", "depository")
+
+	// Two transfer suggestions exercising BOTH columns independently, with DISTINGUISHABLE
+	// outcomes (#1569 round 11 task 4, coordinator round 1 fix): suggestion 1's from-leg (IRA)
+	// MOVES to the new chain while its to-leg (unrelated, no chain) stays NULL; suggestion 2's
+	// from-leg (brokerage) STAYS on the original chain while its to-leg (IRA) MOVES — so a test
+	// that swapped from/to repointing would be caught.
+	tsMovedFrom := insertTransferSuggestion(t, pool, member, pair.IRAAcctID, unrelatedAcctID, &pair.UserAccountID, nil)
+	tsMovedTo := insertTransferSuggestion(t, pool, member, pair.BrokerageAcctID, pair.IRAAcctID, &pair.UserAccountID, &pair.UserAccountID)
+
 	// Sanity: the pre-existing household balance read already counts both physical accounts
 	// (migration 000177's task 10.2 fix, unrelated to this migration) — establishes the baseline
 	// this migration must not regress.
@@ -222,6 +235,19 @@ func TestMigration000178_SplitsMergedChainAndRepointsHousehold(t *testing.T) {
 	assert.Equal(t, 1, countActiveAccountsForChain(t, pool, brokerageUA), "brokerage chain must resolve to exactly one live account")
 	assert.Equal(t, 1, countActiveAccountsForChain(t, pool, iraUA), "IRA chain must resolve to exactly one live account")
 
+	// ─── transfer_suggestions repoint (coordinator round 1 fix) ──────────────────────────────
+	// suggestion 1: from (IRA, moved) -> new chain; to (unrelated, never linked) -> stays NULL.
+	gotFrom1, gotTo1 := transferSuggestionUserAccountIDs(t, pool, tsMovedFrom)
+	require.NotNil(t, gotFrom1)
+	assert.Equal(t, iraUA, *gotFrom1, "from_user_account_id must follow the IRA account to its NEW chain")
+	assert.Nil(t, gotTo1, "to_user_account_id must stay NULL for an account never linked to any chain")
+	// suggestion 2: from (brokerage, unmoved) -> stays on ORIGINAL chain; to (IRA, moved) -> new chain.
+	gotFrom2, gotTo2 := transferSuggestionUserAccountIDs(t, pool, tsMovedTo)
+	require.NotNil(t, gotFrom2)
+	assert.Equal(t, brokerageUA, *gotFrom2, "from_user_account_id must stay on the ORIGINAL chain for the unmoved brokerage account")
+	require.NotNil(t, gotTo2)
+	assert.Equal(t, iraUA, *gotTo2, "to_user_account_id must independently follow the IRA account to its NEW chain")
+
 	// ─── household_account_shares fan-out ─────────────────────────────────────────────────────
 	assert.Equal(t, 2, countActiveSharesForHousehold(t, pool, hh), "the active share must fan out to both resulting chains")
 	var newShareRevokedAt *time.Time
@@ -252,6 +278,23 @@ func TestMigration000178_SplitsMergedChainAndRepointsHousehold(t *testing.T) {
 	require.NoError(t, err, "re-apply 000178 up migration must be a no-op, not an error")
 	assert.Equal(t, beforeCount, countUserAccountsForUser(t, pool, member), "re-run must not mint additional rows")
 	assert.Equal(t, beforeShares, countActiveSharesForHousehold(t, pool, hh), "re-run must not fan out again")
+
+	// Whole-migration consistency: after the re-run, EVERY repointed surface this test touched —
+	// accounts, balance_snapshots (via the household query above), household_account_shares, AND
+	// transfer_suggestions — must still agree with each other. A partial repoint (the specific
+	// failure mode the coordinator flagged) would show up here as one of these disagreeing with
+	// the accounts.user_account_id values re-read below.
+	assert.Equal(t, brokerageUA, accountUserAccountID(t, pool, pair.BrokerageAcctID))
+	assert.Equal(t, iraUA, accountUserAccountID(t, pool, pair.IRAAcctID))
+	gotFrom1Again, gotTo1Again := transferSuggestionUserAccountIDs(t, pool, tsMovedFrom)
+	require.NotNil(t, gotFrom1Again)
+	assert.Equal(t, iraUA, *gotFrom1Again, "transfer_suggestions must not drift from accounts on re-run")
+	assert.Nil(t, gotTo1Again)
+	gotFrom2Again, gotTo2Again := transferSuggestionUserAccountIDs(t, pool, tsMovedTo)
+	require.NotNil(t, gotFrom2Again)
+	assert.Equal(t, brokerageUA, *gotFrom2Again)
+	require.NotNil(t, gotTo2Again)
+	assert.Equal(t, iraUA, *gotTo2Again)
 }
 
 // TestFindByInstitutionAndMask_OrphanRowMatchesAnyIdentity proves the documented boundary of the
@@ -329,4 +372,57 @@ func TestMigration000178_UnaffectedChainsAreUntouched(t *testing.T) {
 
 	assert.Equal(t, beforeCount, countUserAccountsForUser(t, pool, user), "an agreeing chain must not be split")
 	assert.Equal(t, uaID, accountUserAccountID(t, pool, acctID), "the account must not move")
+}
+
+// insertUnlinkedAccount inserts a physical account that has NEVER been linked to any
+// user_accounts chain (user_account_id stays NULL) — used to prove a transfer suggestion's
+// column referencing such an account is left alone by the repoint, not repointed to something
+// invented.
+func insertUnlinkedAccount(t *testing.T, pool *pgxpool.Pool, linkedItemID, userID, name, acctType string) string {
+	t.Helper()
+	ctx := context.Background()
+	var id string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type, status)
+		VALUES ($1, $2, 'plaid_'||gen_random_uuid()::text, $3, $4, 'active')
+		RETURNING id::text
+	`, linkedItemID, userID, name, acctType).Scan(&id)
+	require.NoError(t, err, "insertUnlinkedAccount")
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM accounts WHERE id = $1`, id) //nolint:errcheck
+	})
+	return id
+}
+
+// insertTransferSuggestion seeds one transfer_suggestions row with an explicit (pre-split, or
+// deliberately stale) from_user_account_id/to_user_account_id — mirroring the shape a real row
+// would have BEFORE migration 000178 repoints it: from_account_id/to_account_id are the source of
+// truth, and the *_user_account_id columns carry whatever they were last written with.
+func insertTransferSuggestion(t *testing.T, pool *pgxpool.Pool, userID, fromAccountID, toAccountID string, fromUAID, toUAID *string) string {
+	t.Helper()
+	ctx := context.Background()
+	var id string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO transfer_suggestions
+			(user_id, from_account_id, to_account_id, amount, source, from_user_account_id, to_user_account_id)
+		VALUES ($1, $2, $3, 25.00, 'boost', $4, $5)
+		RETURNING id::text
+	`, userID, fromAccountID, toAccountID, fromUAID, toUAID).Scan(&id)
+	require.NoError(t, err, "insertTransferSuggestion")
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM transfer_suggestions WHERE id = $1`, id) //nolint:errcheck
+	})
+	return id
+}
+
+// transferSuggestionUserAccountIDs reads back one transfer_suggestions row's two
+// *_user_account_id columns.
+func transferSuggestionUserAccountIDs(t *testing.T, pool *pgxpool.Pool, id string) (from, to *string) {
+	t.Helper()
+	err := pool.QueryRow(context.Background(), `
+		SELECT from_user_account_id::text, to_user_account_id::text
+		FROM transfer_suggestions WHERE id = $1
+	`, id).Scan(&from, &to)
+	require.NoError(t, err)
+	return from, to
 }
