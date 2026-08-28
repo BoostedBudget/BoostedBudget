@@ -28,18 +28,45 @@
 --      earliest account never moves.
 --   3. Repoint every physical account in a moved group's `accounts.user_account_id` to its new
 --      row.
---   4. Repoint the seven other tables that carry a plain `account_id` column (so their
---      user_account_id can be re-derived FROM accounts, which is now authoritative):
---      account_status_history, balance_snapshots, holding_snapshots, holdings,
---      investment_transactions, savings_goals, transactions. This list — like `accounts` itself
---      and `household_account_shares` below — was re-enumerated directly from
---      information_schema.columns for column_name = 'user_account_id' (nine tables total: those
---      seven, plus accounts and household_account_shares), NOT grepped from migration text
---      (this round's standing instruction, after a text grep both missed tables and invented
---      one). `transfer_suggestions` was measured too and is OUT of this nine: its columns are
---      named `from_user_account_id` / `to_user_account_id`, a different column name, so it does
---      not match this exact enumeration — see the task report for why it is flagged rather than
---      fixed here.
+--   4. Repoint every other table that carries a `user_account_id`-shaped column, deriving each
+--      from accounts.user_account_id (now authoritative) via the PHYSICAL account_id/from_
+--      account_id/to_account_id it names:
+--      account_status_history.user_account_id, balance_snapshots.user_account_id,
+--      holding_snapshots.user_account_id, holdings.user_account_id,
+--      investment_transactions.user_account_id, savings_goals.user_account_id,
+--      transactions.user_account_id, and transfer_suggestions.from_user_account_id /
+--      transfer_suggestions.to_user_account_id.
+--      ⚠⚠ ROUND 1 FIX: this list was WRONG in the first version of this migration. Grepping
+--      information_schema.columns for column_name = 'user_account_id' misses TWO real referencing
+--      columns (transfer_suggestions.from_user_account_id / to_user_account_id, different names)
+--      and a SEPARATE FK-only enumeration misses TWO more (account_status_history.user_account_id
+--      and holding_snapshots.user_account_id, which carry the column with NO foreign key
+--      constraint at all). Neither method alone is complete; the TRUE surface is the UNION of
+--      both, re-measured against information_schema for this fix:
+--        SELECT table_name, column_name FROM information_schema.columns
+--        WHERE column_name ILIKE '%user_account_id%'
+--      UNION
+--        SELECT tc.table_name, kcu.column_name FROM information_schema.table_constraints tc
+--        JOIN information_schema.key_column_usage kcu USING (constraint_name, table_schema)
+--        JOIN information_schema.constraint_column_usage ccu USING (constraint_name, table_schema)
+--        WHERE tc.constraint_type = 'FOREIGN KEY' AND ccu.table_name = 'user_accounts';
+--      That union is TEN TABLES, ELEVEN COLUMNS total: accounts.user_account_id (step 3, above),
+--      the seven single-column tables named above (step 4), household_account_shares.
+--      user_account_id (step 5, below), and transfer_suggestions' two columns
+--      (from_user_account_id, to_user_account_id — step 4a, just below).
+--   4a. transfer_suggestions is repointed the SAME self-correcting way as the plain-account_id
+--      tables, using from_account_id/to_account_id — NOT invalidated or skipped. This is
+--      deliberately NOT the same shape as task 2's ErrAmbiguousActiveAccount problem (resolving a
+--      CHAIN key to ONE of several live physical accounts, which is genuinely ambiguous and where
+--      task 2 made the boost path fall back to a pinned, ownership-verified id rather than guess).
+--      Here the direction is the other way: from_account_id/to_account_id each already name ONE
+--      specific physical account, and accounts.user_account_id is single-valued per account row —
+--      there is exactly one correct chain for a suggestion's named account both before and after
+--      the split, so re-deriving it is not a guess. A transfer suggestion whose from_account_id
+--      IS NULL (the account was later removed; fk_transfer_suggestions_from_account_id is
+--      ON DELETE SET NULL) is left untouched by this step, exactly like every other downstream
+--      table already leaves an orphaned account_id-less row untouched — not a new gap this task
+--      introduces.
 --   5. Fan out any ACTIVE (revoked_at IS NULL) household_account_shares grant on a chain that
 --      split, so a household member does not silently lose visibility of an account they could
 --      already see. The clone copies physical_account_blind_idx verbatim — that column is only
@@ -203,6 +230,23 @@ FROM accounts a
 WHERE dst.account_id = a.id
   AND a.user_account_id IS NOT NULL
   AND dst.user_account_id IS DISTINCT FROM a.user_account_id;
+
+-- transfer_suggestions carries TWO user_account_id-shaped columns, each anchored to its OWN
+-- physical account column (from_account_id / to_account_id) — repointed independently, exactly
+-- like the tables above, per the ⚠⚠ ROUND 1 FIX note.
+UPDATE transfer_suggestions dst
+SET from_user_account_id = a.user_account_id
+FROM accounts a
+WHERE dst.from_account_id = a.id
+  AND a.user_account_id IS NOT NULL
+  AND dst.from_user_account_id IS DISTINCT FROM a.user_account_id;
+
+UPDATE transfer_suggestions dst
+SET to_user_account_id = a.user_account_id
+FROM accounts a
+WHERE dst.to_account_id = a.id
+  AND a.user_account_id IS NOT NULL
+  AND dst.to_user_account_id IS DISTINCT FROM a.user_account_id;
 
 -- =============================================================================
 -- Step 5: Fan out active household_account_shares grants on a split chain, so a household
