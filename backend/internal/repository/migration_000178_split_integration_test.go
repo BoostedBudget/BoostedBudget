@@ -1092,8 +1092,11 @@ func TestMigration000178_DownMigrationRunsAfterARealSplit(t *testing.T) {
 // identical institution/mask/identity — the exact tuple the narrowed key does NOT separate),
 // against real Postgres, through the REAL AccountRepository and AccountChainResolver production
 // code, and proves ResolveActiveID returns ErrAmbiguousActiveAccount rather than silently picking
-// one. The two siblings are seeded with DIFFERENT balances so a silent pick would be visibly wrong
-// if this regressed to returning one of them.
+// one. The two siblings carry DIFFERENT balances as fixture hygiene — ⚠ NOT because this test
+// reads them: the assertions are ErrorIs(ErrAmbiguousActiveAccount) and Empty(gotID), and a silent
+// pick fails Empty(gotID) whichever sibling it returned. The distinct values exist so that any
+// FUTURE assertion added here can tell the two apart (#1569 round 12 task 6 review corrected an
+// earlier version of this comment, which claimed the balances were what made the test discriminating).
 func TestAccountChainResolver_ResolveActiveID_ResidualIdentityCollision_ReturnsAmbiguous(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
@@ -1119,8 +1122,8 @@ func TestAccountChainResolver_ResolveActiveID_ResidualIdentityCollision_ReturnsA
 	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, uaID) }) //nolint:errcheck
 
 	// Two physical accounts, BOTH active, BOTH pointing at the same chain, BOTH depository/checking
-	// (identity agrees — the narrowed key does not separate these). Different balances so a silent
-	// pick is a visibly wrong result, not an undetectable one.
+	// (identity agrees — the narrowed key does not separate these). Different balances are fixture
+	// hygiene only; see the doc comment — Empty(gotID) is what catches a silent pick.
 	var acct1, acct2 string
 	require.NoError(t, pool.QueryRow(ctx, `
 		INSERT INTO accounts

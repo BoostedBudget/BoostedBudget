@@ -195,7 +195,12 @@ func TestSyncInvestmentTransactions_RetainedAndOwnedByAnotherUser_IsSkipped(t *t
 		mock.AnythingOfType("int32"), mock.AnythingOfType("int32"),
 	).Return(txnResp, nil)
 
-	deps.invTxnRepo.On("UpsertBatch", ctx, mock.Anything).Return(0, nil).Maybe()
+	// Return the batch's own length rather than a hardcoded 0: with a constant 0 the
+	// TransactionsInserted assertion below could never fail, mutant or not, and would be inert
+	// scaffolding dressed as a check (#1569 round 12 task 6 review).
+	deps.invTxnRepo.On("UpsertBatch", ctx, mock.Anything).
+		Return(func(_ context.Context, txns []domain.InvestmentTransaction) int { return len(txns) },
+			func(_ context.Context, _ []domain.InvestmentTransaction) error { return nil }).Maybe()
 	deps.linkedItemRepo.On("UpdateInvestmentsLastSyncedDate", ctx, linkedItem.ID, mock.Anything).Return(nil).Maybe()
 
 	result, err := svc.SyncInvestmentTransactions(ctx, linkedItem)
