@@ -114,8 +114,9 @@ type SyncCacheHouseholdLookup interface {
 // Defined here (not in savings packages) to avoid import cycles.
 // =============================================================================
 
-// SyncContributionCleaner removes auto-derived contribution rows before a transaction
-// is hard-deleted, preventing phantom progress from orphaned rows (Codex C4).
+// SyncContributionCleaner tombstones auto-derived contribution rows for a `removed` transaction,
+// preventing phantom progress from orphaned rows (Codex C4). #1569 round 12 task 2: this is a
+// tombstone (deleted_at/deleted_reason), not a hard delete — the row is retained.
 type SyncContributionCleaner interface {
 	DeleteManagedForTransaction(ctx context.Context, transactionID string) error
 }

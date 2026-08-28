@@ -23,7 +23,8 @@ import (
 // every `TRUNCATE <history-bearing table>` must appear in `allowedHistoryDeletes`, keyed by the
 // function that issues it, with the reason. There is deliberately NO in-comment escape hatch of the
 // kind the tombstone READ guards use. A read that forgets a filter is a slip and there are ~60 of
-// them; a hard delete of financial history is a decision, there are five of them, and every one
+// them; a hard delete of financial history is a decision, there are four of them (#1569 round 12
+// task 2 removed DeleteManagedForTransaction's entry — it is no longer a hard delete), and every one
 // should be visible in a single list that a reviewer can read in ten seconds.
 //
 // THE GAP IN THE FUNCTION KEY, precisely. The key is (function, TABLE), so a second delete of a
@@ -169,33 +170,19 @@ var allowedHistoryDeletes = map[string]historyDeleteAllowance{
 		reason:    "the user deleting one named contribution on a live goal of theirs — the narrowest possible explicit request. NOT necessarily a row they entered: the predicate keys on c.id alone, so a reconciler-created row is reachable by it",
 		predicate: []string{"c.id = $1", "c.savings_goal_id = g.id", "g.user_id = $2", "g.deleted_at IS NULL"},
 	},
-	// ⚠ RE-DERIVED in the #1569 whole-branch review (C1). The reason this entry USED to carry —
-	// "derived, regenerable, and not a record of anything the user did" — was FALSE, and false in
-	// the same way as four other reasons on this branch: true of MOST rows the predicate matches,
-	// asserted of ALL of them. UpsertFromTransaction INSERTS status='confirmed' with
-	// managed_by_reconciliation=true (source='boost_match', from
-	// transferCorrelationService.createBoostMatchContribution), and its ON CONFLICT DO UPDATE
-	// promotes a proposed row to confirmed without clearing the flag. Such a row IS a record of the
-	// user's money moving, and it is not regenerable once the boost that matched it is gone. Do not
-	// re-derive this reason from ConfirmContribution alone; enumerate all four writers of
-	// status='confirmed' (CreateContribution, UpsertFromTransaction, InsertManualFromTransaction,
-	// ConfirmContribution).
-	//
-	// What actually justifies the delete is the LIVE-goal scope the predicate now carries. A live
-	// contributions-basis goal recomputes progress from these rows, so a row derived from a
-	// transaction the bank has withdrawn would keep counting money that is no longer there —
-	// phantom progress, Codex C4. A TOMBSTONED goal recomputes nothing; its rows are only a ledger,
-	// and `g.deleted_at IS NULL` now excludes them (#1569 C1,
-	// TestDeleteManagedForTransaction_DeletedGoalLedgerSurvives_Integration). Hand-logged rows
-	// (managed_by_reconciliation = false) never matched and still do not.
-	//
-	// Both of those legs are pinned in `predicate` since #1569 T7.5, so dropping either one fails
-	// TestEveryAllowlistedHistoryDeleteStillCarriesItsPredicate with no database attached. What the
-	// legs MEAN is still held by that integration test, in both directions.
-	"repository/savings_contribution_repository.go#DeleteManagedForTransaction|savings_goal_contributions": {
-		reason:    "reconciler-owned rows (managed_by_reconciliation = true) for a transaction being removed, scoped to a LIVE goal: leaving them would show phantom progress against money the bank withdrew. A tombstoned goal's ledger is excluded, and hand-logged rows never match. See the re-derivation above — the previous reason was false.",
-		predicate: []string{"c.savings_goal_id = g.id", "c.transaction_id = $1", "c.managed_by_reconciliation = true", "g.deleted_at IS NULL"},
-	},
+	// ⚠ REMOVED (#1569 round 12 task 2), NOT REWORDED. DeleteManagedForTransaction used to be a real
+	// `DELETE FROM savings_goal_contributions` and carried a blessing here. An independent Codex
+	// audit of this branch's founding principle ("financial history is retained unless the user
+	// EXPLICITLY asks for it to be destroyed") named this exact call site as the headline finding
+	// that the principle was NOT satisfied: Plaid reporting a transaction as `removed` is the
+	// provider acting, not the user asking for a contribution to be destroyed ("the provider is not
+	// the user"). The method now UPDATEs deleted_at/deleted_reason instead — migration 000180 — so
+	// there is no hard DELETE left for this guard to see, and no entry belongs here. The old
+	// reason ("scoped to a LIVE goal...") justified WHY the destruction was safe, which was never
+	// the same question as WHETHER the user had authorised it; Codex's sharpest point was that a
+	// business-correctness reason is not a user-authorisation control. See
+	// TestSavingsContributionRepository_DeleteManagedForTransaction and
+	// TestDeleteManagedForTransaction_DeletedGoalLedgerSurvives_Integration for the new behaviour.
 }
 
 // historyDeleteRefRegexp matches a hard delete of one of the named tables. Alternatives are sorted

@@ -38,12 +38,17 @@ package repository
 // fixture the application could never produce proves nothing even when it inserts.
 //
 // Both directions are asserted: the tombstoned goal's confirmed row SURVIVES the sync cleanup, and
-// a LIVE goal's managed row is still removed (the fix must not turn the cleaner into a no-op —
-// phantom progress on a live goal, Codex C4, is what it exists to prevent).
+// a LIVE goal's managed row still leaves PROGRESS (Codex C4, phantom progress, is what the cleaner
+// exists to prevent). #1569 round 12 task 2 converted the cleaner itself from a hard DELETE to a
+// tombstone (migration 000180): the live goal's row is no longer physically removed, only
+// deleted_at/deleted_reason-stamped and excluded from every progress-facing read. Both directions
+// are still exercised — a deleted goal's ledger is untouched, a live goal's phantom row is hidden
+// from progress — but "removed from the table" is no longer the right description of either.
 
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -141,13 +146,139 @@ func TestDeleteManagedForTransaction_DeletedGoalLedgerSurvives_Integration(t *te
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "the itemised entry is still readable, not just the total")
 
-	// The other direction: a LIVE goal's managed row must still be cleaned up, or the fix trades
-	// C1 for the phantom-progress bug (Codex C4) the cleaner was written to prevent.
+	// The other direction: a LIVE goal's managed row must still leave PROGRESS, or the fix trades
+	// C1 for the phantom-progress bug (Codex C4) the cleaner was written to prevent. #1569 round 12
+	// task 2: it is no longer physically removed — it is TOMBSTONED, retained and permanently
+	// invisible, never a hard delete of financial history again.
 	require.NoError(t, repo.DeleteManagedForTransaction(ctx, liveTxnID))
-	var liveRemaining int
+
+	var liveRowCount int
+	var deletedAt *time.Time
+	var deletedReason *string
+	require.NoError(t, tx.QueryRow(ctx, `
+		SELECT deleted_at, deleted_reason FROM savings_goal_contributions
+		WHERE savings_goal_id = $1
+	`, liveGoalID).Scan(&deletedAt, &deletedReason))
 	require.NoError(t, tx.QueryRow(ctx, `
 		SELECT count(*) FROM savings_goal_contributions WHERE savings_goal_id = $1
-	`, liveGoalID).Scan(&liveRemaining))
-	assert.Equal(t, 0, liveRemaining,
-		"a live goal's reconciler-owned row is still removed when its transaction is removed")
+	`, liveGoalID).Scan(&liveRowCount))
+	assert.Equal(t, 1, liveRowCount,
+		"the row is RETAINED, not physically removed (#1569: the provider is not the user)")
+	require.NotNil(t, deletedAt, "the row must be tombstoned")
+	require.NotNil(t, deletedReason)
+	assert.Equal(t, "provider_removed_txn", *deletedReason)
+
+	liveTotal, err := repo.SumConfirmedByGoal(ctx, userID, liveGoalID)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.0, liveTotal, 0.001,
+		"a live goal's reconciler-owned row is excluded from progress once tombstoned — Codex C4 "+
+			"is still prevented even though the row itself now survives")
+
+	live, err := repo.ListByGoal(ctx, userID, liveGoalID)
+	require.NoError(t, err)
+	assert.Empty(t, live, "the tombstoned row is invisible to the live goal's own ledger view")
+}
+
+// TestDeleteManagedForTransaction_Integration_IdempotentAndRederivable pins two properties the
+// tombstone conversion (#1569 round 12 task 2) must not break, neither of which the DELETE it
+// replaced ever had to worry about:
+//
+//  1. IDEMPOTENT ON RE-DELIVERY. Plaid can and does re-send the same `removed` entry. A hard
+//     DELETE was naturally idempotent (a second DELETE of an already-gone row affects zero rows);
+//     an UPDATE is not, unless its own WHERE excludes rows already tombstoned. Without
+//     `c.deleted_at IS NULL`, a re-delivery would re-stamp deleted_at with a LATER timestamp every
+//     time, silently moving the row's recorded tombstone moment.
+//
+//  2. RE-DERIVABLE. Migration 000180 narrowed unique_contribution_per_goal_per_transaction to
+//     `... AND deleted_at IS NULL` specifically so a tombstoned (transaction_id, savings_goal_id)
+//     slot does not block a later, unrelated INSERT for the same key. Without that narrowing, the
+//     ON CONFLICT arbiter in UpsertFromTransaction would have nothing live to resolve against and
+//     Postgres would raise a duplicate-key violation instead of inserting.
+//
+// Deliberately NOT run inside one wrapping transaction (contrast the sibling test above): Postgres
+// evaluates `NOW()` once per TRANSACTION, not per statement, so two `DeleteManagedForTransaction`
+// calls sharing one transaction would see identical timestamps regardless of whether the
+// `c.deleted_at IS NULL` guard is present — the property this test exists to pin would be
+// unfalsifiable. Each repository call here runs against the pool directly, its own transaction,
+// exactly as production does (transactionSyncService never wraps this call in a caller-supplied
+// tx), and cleanup is an explicit `DELETE FROM users` cascade.
+func TestDeleteManagedForTransaction_Integration_IdempotentAndRederivable(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+	accountID := uuid.New().String()
+	goalID := uuid.New().String()
+	txnID := uuid.New().String()
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID) })
+
+	mustExec := func(what, sql string, args ...any) {
+		t.Helper()
+		_, execErr := pool.Exec(ctx, sql, args...)
+		require.NoError(t, execErr, "seed %s", what)
+	}
+
+	mustExec("user", `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "test|managed-del-rederive-"+userID, "managed-del-rederive-"+userID+"@example.com")
+	mustExec("linked_item", `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-test-token')
+	`, linkedItemID, userID, "managed-del-rederive-item-"+linkedItemID)
+	mustExec("account", `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
+		VALUES ($1, $2, $3, $4, 'Savings', 'depository', 'active')
+	`, accountID, linkedItemID, userID, "plaid-managed-del-rederive-"+accountID)
+	mustExec("savings_goal", `
+		INSERT INTO savings_goals (id, user_id, name, target_amount, current_amount, account_id, progress_basis)
+		VALUES ($1, $2, 'Still Saving', 1000, 300, $3, 'contributions')
+	`, goalID, userID, accountID)
+	mustExec("transaction", `
+		INSERT INTO transactions (id, user_id, account_id, linked_item_id, source, amount, name, date, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'plaid', -100, 'Transfer to savings', now()::date, now(), now())
+	`, txnID, userID, accountID, linkedItemID)
+
+	repo := NewSavingsContributionRepository(pool)
+
+	require.NoError(t, repo.UpsertFromTransaction(ctx, userID, goalID, txnID, 100, "boost_match"))
+	require.NoError(t, repo.DeleteManagedForTransaction(ctx, txnID))
+
+	var firstDeletedAt time.Time
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT deleted_at FROM savings_goal_contributions WHERE transaction_id = $1
+	`, txnID).Scan(&firstDeletedAt))
+
+	// Property 1: a re-delivered `removed` entry is a no-op, not a re-stamp. The sleep guarantees a
+	// real wall-clock gap between the two calls' own transactions, so an unguarded UPDATE would
+	// observably move deleted_at forward.
+	time.Sleep(20 * time.Millisecond)
+	require.NoError(t, repo.DeleteManagedForTransaction(ctx, txnID))
+	var secondDeletedAt time.Time
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT deleted_at FROM savings_goal_contributions WHERE transaction_id = $1
+	`, txnID).Scan(&secondDeletedAt))
+	assert.True(t, firstDeletedAt.Equal(secondDeletedAt),
+		"a re-delivered `removed` event must not re-stamp deleted_at: first=%v second=%v",
+		firstDeletedAt, secondDeletedAt)
+
+	// Property 2: the same (transaction, goal) key is re-derivable — a later boost match against
+	// the same pair must land as a NEW row, not collide with the tombstone.
+	require.NoError(t, repo.UpsertFromTransaction(ctx, userID, goalID, txnID, 100, "boost_match"))
+
+	var totalRows, liveRows int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT count(*) FROM savings_goal_contributions WHERE transaction_id = $1
+	`, txnID).Scan(&totalRows))
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT count(*) FROM savings_goal_contributions WHERE transaction_id = $1 AND deleted_at IS NULL
+	`, txnID).Scan(&liveRows))
+	assert.Equal(t, 2, totalRows, "the tombstoned row and the re-derived row both exist")
+	assert.Equal(t, 1, liveRows, "exactly one LIVE row for the key — the re-derivation, not the tombstone")
+
+	total, err := repo.SumConfirmedByGoal(ctx, userID, goalID)
+	require.NoError(t, err)
+	assert.InDelta(t, 100.0, total, 0.001,
+		"progress reflects only the re-derived row, not double-counted with the tombstone")
 }

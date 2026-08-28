@@ -222,6 +222,7 @@ var allTombstoneAuditedTables = func() []string {
 	var out []string
 	for _, group := range [][]string{
 		transactionTombstoneTables, configTombstoneTables, customCategoryTombstoneTables,
+		savingsContributionTombstoneTables,
 	} {
 		for _, tbl := range group {
 			if !seen[tbl] {
