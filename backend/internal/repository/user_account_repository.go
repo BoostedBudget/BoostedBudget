@@ -360,23 +360,28 @@ func (r *userAccountRepository) GetByUserID(ctx context.Context, userID string) 
 // NULL identity_type is an ORPHAN (migration 000177's header: a user_accounts row with no
 // physical accounts ever pointing at it, so nothing could derive an identity for it) and matches
 // ANY incoming identity — it has not yet claimed one, so the first real link claims it, exactly
-// reproducing pre-task-4 behavior for this narrow legacy shape. ⚠⚠ ROUND 4 RE-DERIVATION (item 4):
-// nothing currently WRITES identity_type onto an orphan row after this match — it cannot: both
-// trg_user_accounts_identity_immutable and TestNoUpdateOfUserAccountsIdentityColumns block EVERY
-// UPDATE of identity_type/identity_subtype unconditionally, including a NULL->value "claim" — so
-// a SECOND, DIFFERENT-identity account arriving later at the same institution+mask matches this
-// SAME still-orphan row too, putting two different real identities back on one chain and
-// defeating the narrowing this whole migration exists to enforce, for exactly this one row.
-// DECIDED, NOT ASSUMED: relaxing the immutability trigger/guard to allow a one-time NULL->value
-// "claim" transition would close this gap correctly, but was rejected THIS round as
-// disproportionate risk for a narrow, load-bearing, doubly-enforced invariant this branch treats
-// as a first-class guarantee (see domain.UserAccount and TestNoUpdateOfUserAccountsIdentityColumns
-// for how deliberately it is defended). The wildcard stays, accepted as a residual risk, for two
-// reasons: (1) an orphan with ZERO physical accounts ever attached is not reachable through any
-// normal write path today — MatchOrCreate and synthesiseUserAccountID both ALWAYS set identity at
-// INSERT time, so a true orphan can only exist from historical data corruption or manual
-// intervention, never from ordinary operation; (2) production currently has zero users, so the
-// cost of this residual gap is zero today and any real occurrence would be a data-integrity
+// reproducing pre-task-4 behavior for this narrow legacy shape. ⚠⚠ ROUND 12 TASK 1B UPDATE: a prior
+// version of this comment said the DB trigger (trg_user_accounts_identity_immutable) blocked EVERY
+// UPDATE of identity_type/identity_subtype unconditionally, including a NULL->value "claim". That
+// was itself the round-12 defect: `IS DISTINCT FROM` treated NULL->value the same as
+// value->different-value, which also made migration 000177's OWN backfill non-idempotent.
+// Migration 000179 replaced the trigger to allow NULL->value while still rejecting
+// value->different-value once identity_type is set (see that migration's header for the exact
+// semantic). So the DB-level obstacle described below is GONE — a claiming write is now possible
+// at the trigger level. ⚠ NOTHING ELSE CHANGED: TestNoUpdateOfUserAccountsIdentityColumns still
+// forbids EVERY `UPDATE user_accounts` touching these columns in backend/internal Go
+// unconditionally, and MatchOrCreate gained no new write path in round 12 task 1b — claiming an
+// orphan's identity is deliberately NOT implemented here. So today, in practice, a SECOND,
+// DIFFERENT-identity account arriving later at the same institution+mask still matches this SAME
+// still-orphan row, putting two different real identities back on one chain and defeating the
+// narrowing this whole migration exists to enforce, for exactly this one row — the residual risk
+// is unchanged, only the mechanism blocking a future repair is (structural impossibility at the DB
+// level, to a Go-application-code-only guard). Reasons (1) and (2) below for accepting the residual
+// risk stand unchanged: (1) an orphan with ZERO physical accounts ever attached is not reachable
+// through any normal write path today — MatchOrCreate and synthesiseUserAccountID both ALWAYS set
+// identity at INSERT time, so a true orphan can only exist from historical data corruption or
+// manual intervention, never from ordinary operation; (2) production currently has zero users, so
+// the cost of this residual gap is zero today and any real occurrence would be a data-integrity
 // anomaly worth investigating on its own, not a routine event. This is a decision to accept a
 // documented, narrow risk, not an oversight — TestFindByInstitutionAndMask_
 // OrphanRowMatchesAnyIdentity_ThenRefusesADifferentIdentity proves the BOUNDARY (a second,
