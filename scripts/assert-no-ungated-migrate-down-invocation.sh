@@ -13,22 +13,65 @@
 #      called the gate at all — it only checked that DATABASE_URL was set.
 #
 # The user's ruling: stop manually re-sweeping for the next bypass and build a guard that FAILS
-# the moment a new ungated invocation of `migrate ... down` appears anywhere in the tree — in a new
-# Makefile target, a new script, or an edit that quietly deletes a gate call from an existing one.
+# the moment a new ungated invocation of `migrate ... down` appears anywhere in the SCANNED
+# UNIVERSE (see below) — in a new Makefile target, a new script, a new CI workflow step, a new
+# Dockerfile RUN/CMD/ENTRYPOINT, or an edit that quietly deletes a gate call from an existing one.
 #
-# WHAT THIS SCRIPT DOES: scans every tracked Makefile and shell script in the repository (test
-# fixtures under __tests__/ and *.test.sh excluded — they legitimately drive the real `migrate`
-# binary to set up scenarios for the guards' own test suites, see the exclusion below) for lines
-# that actually INVOKE the `migrate` CLI binary with a `down` subcommand — as opposed to a comment
-# or a log/echo string that merely mentions "migrate down" as text. Every invocation found must be
-# one of a small, hardcoded, justified allowlist below, AND — this is what makes the allowlist not
-# a one-time rubber stamp — each allowlisted site is also checked STRUCTURALLY: the specific gate
-# call it relies on must still be present immediately ahead of it. Deleting the gate call (leaving
-# the invocation line itself untouched) fails this script exactly as loudly as adding a brand new
-# ungated invocation does.
+# ⚠⚠ ROUND 13 FIX ROUND 1 (Codex finding): the FIRST version of this script scanned only
+# `*.sh`/`Makefile` — a fourth, unenumerated bypass path, structurally identical to the three
+# above. `migrate` is a real binary resident in the runtime image (backend/Dockerfile builds it at
+# :65 and copies it into the final stage at :85), so a future CI workflow `run:` step or a
+# Dockerfile `RUN`/`CMD`/`ENTRYPOINT` line could invoke it with the old version of this script,
+# `make test-scripts`, AND CI all green. The scanned universe below was widened in response, and
+# the SCOPE CLAIM in this comment (and in the docs that cite this script) was cut back to match
+# what is actually scanned, rather than left broad — see "WHAT IS NOT SCANNED" at the bottom for
+# the residual this script does NOT cover, named explicitly rather than silently.
 #
-# Exit 0: every invocation found is allowlisted and still structurally gated.
+# WHAT THIS SCRIPT DOES: scans every tracked file in these categories (test fixtures under
+# __tests__/ and *.test.sh excluded — they legitimately drive the real `migrate` binary to set up
+# scenarios for the guards' own test suites, see the exclusion below):
+#   - `*.sh` and `Makefile` / `*/Makefile` (shell scripts and Makefiles, by extension/name)
+#   - `.github/workflows/*.yml` and `*.yaml` (a `run:` step is shell text embedded in YAML — the
+#     same line-based detector below applies to it unchanged)
+#   - `Dockerfile`, `Dockerfile.*`, `*/Dockerfile`, `*/Dockerfile.*` (a `RUN`/`CMD`/`ENTRYPOINT`
+#     line is shell text too, and `migrate` is resident in the runtime image per the finding above)
+#   - any OTHER tracked file with no extension in its basename that starts with a shell shebang
+#     (`#!.../bash`, `#!.../sh`, `#!.../dash`, `#!.../zsh`) — an extensionless script would
+#     otherwise slip past both the `*.sh` glob and the reader's expectation that "it's a script" is
+#     visible from its name
+# for lines that actually INVOKE the `migrate` CLI binary with a `down` subcommand — as opposed to
+# a comment or a log/echo string that merely mentions "migrate down" as text. Every invocation
+# found must be one of a small, hardcoded, justified allowlist below, AND — this is what makes the
+# allowlist not a one-time rubber stamp — each allowlisted site is also checked STRUCTURALLY: the
+# specific gate call it relies on must still be present immediately ahead of it. Deleting the gate
+# call (leaving the invocation line itself untouched) fails this script exactly as loudly as adding
+# a brand new ungated invocation does.
+#
+# Exit 0: every invocation found (in the scanned universe) is allowlisted and structurally gated.
 # Exit 1: a new (non-allowlisted) invocation was found, or an allowlisted one lost its gate call.
+#
+# ⚠⚠ WHAT IS NOT SCANNED — named explicitly rather than left as a silent gap in a broad claim:
+#   - `.mjs`/`.js`/`.ts`/`.cjs` (bun/npm scripts). A shell invocation from JS is necessarily inside
+#     a string literal argument to something like `execSync(...)` — there is no bare-word command
+#     position to anchor on the way there is in a shell script or a YAML `run:` block, so the
+#     command-position heuristic below (which deliberately excludes a quote-preceded "migrate" to
+#     avoid flagging prose like `log_error "...migrate down -all..."`) would have to accept
+#     virtually every quoted string, and would then flag ordinary comments and console.log/test
+#     strings mentioning "migrate down" as prose. A guard that fires on legitimate code gets
+#     deleted by the next engineer, so this is left unscanned rather than shipped as an unsound
+#     detector. No `.js`/`.mjs`/`.ts`/`.cjs` file in this repo currently mentions "migrate" and
+#     "down" together (checked by hand at the time of writing); this is a residual, not a proof it
+#     stays empty.
+#   - Variable/eval indirection even WITHIN the scanned universe — `MIGRATE_BIN=migrate` then
+#     `"$MIGRATE_BIN" ... down -all`, or `cmd="migrate ... down -all"` then `eval "$cmd"`. The first
+#     shape has no literal "migrate" token on the invoking line at all; the second starts with a
+#     quote, which the command-position class deliberately excludes for the same false-positive
+#     reason as the JS case above. Judged not soundly detectable without risking exactly that
+#     false-positive failure mode, so it is named here as a residual rather than left as an
+#     implicit gap behind a broader claim.
+#   - Anything in an UNTRACKED file (see the `git ls-files` note below) or in a multi-line
+#     shell/Dockerfile continuation split across physical lines in a way this line-based scanner
+#     does not reassemble.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -60,10 +103,35 @@ CANDIDATE_FILES=()
 while IFS= read -r f; do
     [ -n "$f" ] && CANDIDATE_FILES+=("$f")
 done < <(
-    git -C "$REPO_ROOT" ls-files -- '*.sh' 'Makefile' '*/Makefile' \
+    git -C "$REPO_ROOT" ls-files -- \
+        '*.sh' 'Makefile' '*/Makefile' \
+        '.github/workflows/*.yml' '.github/workflows/*.yaml' \
+        'Dockerfile' 'Dockerfile.*' '*/Dockerfile' '*/Dockerfile.*' \
         | grep -vE '(^|/)__tests__/' \
         | grep -vE '\.test\.sh$'
 )
+
+# Extensionless shell-shebang scripts: not reachable by an extension glob at all, so enumerated
+# separately by checking every OTHER tracked file's own first line. Restricted to files whose
+# basename has no '.' AND is not already one of the exact no-extension names handled above
+# (`Makefile`/`Dockerfile`, which would otherwise be re-added here as duplicates) — a cheap,
+# correct filter that avoids opening every one of the ~3,800 tracked files in this repo on every
+# run for a shebang check that only ever matters for the handful without one.
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    base="${f##*/}"
+    case "$base" in
+        *.*) continue ;; # has an extension; already covered by a glob above (or irrelevant)
+        Makefile|Dockerfile) continue ;; # already enumerated by name above
+    esac
+    case "$f" in
+        */__tests__/*|*.test.sh) continue ;;
+    esac
+    [ -f "$REPO_ROOT/$f" ] || continue
+    if head -c 64 "$REPO_ROOT/$f" 2>/dev/null | grep -qE '^#!.*(bash|/sh$|/sh[[:space:]]|dash|zsh)'; then
+        CANDIDATE_FILES+=("$f")
+    fi
+done < <(git -C "$REPO_ROOT" ls-files)
 
 # ── Step 2: within each candidate file, find lines that actually INVOKE `migrate ... down`, not
 # lines that merely mention it in a comment or in a log/echo message string. ──

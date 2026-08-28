@@ -503,11 +503,13 @@ guard**:
 migrate -database "$DATABASE_URL" -path migrations down -all
 ```
 
-⚠ Every Makefile target or script in this repo that can invoke `migrate ... down` is checked
-automatically by `scripts/assert-no-ungated-migrate-down-invocation.sh` (part of `make
-test-scripts`) — a new ungated invocation, or an existing gated one losing its gate call, fails
-the build. It cannot reach a raw command typed directly at a shell, which is why the warnings
-above still matter.
+⚠ `scripts/assert-no-ungated-migrate-down-invocation.sh` (part of `make test-scripts`) checks
+every `.sh`/Makefile/GitHub Actions workflow/Dockerfile/extensionless shell-shebang script in
+this repo for an ungated `migrate ... down` invocation — a new one, or an existing gated one
+losing its gate call, fails the build. **It does NOT reach**: a raw command typed directly at a
+shell (why the warnings above still matter), a `.mjs`/`.js`/`.ts`/`.cjs` bun/npm script (a shell
+command there is necessarily inside a string literal), or variable/`eval` indirection even within
+the scanned file types — see the script's own header comment for the full, current scope.
 
 ### Force Version (Recovery)
 
