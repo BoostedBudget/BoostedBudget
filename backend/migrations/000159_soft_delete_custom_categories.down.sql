@@ -1,5 +1,12 @@
 -- Rollback for 000159: reverse ONLY what the up migration added.
 --
+-- ⚠⚠ #1569 round 12 task 4 (fix round 1): same distinct hazard class as 000158's down.sql --
+-- see the note there. This file RESURRECTS tombstoned custom_categories rows (makes them
+-- indistinguishable from live ones) rather than DESTROYING anything; every row this migration
+-- would touch is still physically present afterward. That is a different failure mode from the
+-- REFUSE-while-rows-exist guards added elsewhere this round, and a plain row-count refusal is
+-- the wrong tool for it -- deliberately left uninstrumented here, not a gap in the sweep.
+--
 -- READ THIS BEFORE ROLLING BACK.
 --
 --   1. Dropping deleted_at makes every tombstoned custom category VISIBLE AGAIN, all at once,

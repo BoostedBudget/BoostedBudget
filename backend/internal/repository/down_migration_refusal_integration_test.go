@@ -180,3 +180,305 @@ func seedDownProbeFixture(t *testing.T, ctx context.Context, tx pgx.Tx, tag stri
 
 	return userID, itemID, accountID
 }
+
+type downGuardCase struct {
+	label           string
+	file            string
+	tables          []string
+	seedRefusingRow func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture)
+	wantMsgContains []string
+	// beforeProceed runs (if set) after tc.tables are emptied but before the "proceeds when
+	// empty" subtest executes down.sql. Only 000051 needs it: its down.sql runs sequentially
+	// AFTER 000160's (000160 > 000051), so by the time it really executes, 000160's down has
+	// already DROPped holding_snapshots/liability_statements — but this test always runs
+	// migration 180's full schema in isolation, where those two tables still exist and still
+	// hold an unrelated FK onto `securities`. Dropping them here reproduces the schema 000051
+	// actually sees on a genuine `down -all`, rather than a schema no real rollback order
+	// produces.
+	beforeProceed func(t *testing.T, ctx context.Context, tx pgx.Tx)
+}
+
+var downGuardCases = []downGuardCase{
+	{
+		label:  "000016_balance_snapshots",
+		file:   "000016_create_balance_snapshots_table.down.sql",
+		tables: []string{"balance_snapshots"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				INSERT INTO balance_snapshots (account_id, user_id, current_balance, currency_code, snapshot_at, source)
+				VALUES ($1, $2, 42.00, 'USD', now(), 'manual')`, f.accountID, f.userID)
+			require.NoError(t, err, "seed balance_snapshots")
+		},
+		wantMsgContains: []string{"refusing to roll back 000016", "balance_snapshots"},
+	},
+	{
+		label:  "000017_balance_snapshots_dedup",
+		file:   "000017_migrate_to_timestamp_snapshots.down.sql",
+		tables: []string{"balance_snapshots"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				INSERT INTO balance_snapshots (account_id, user_id, current_balance, currency_code, snapshot_at, source)
+				VALUES ($1, $2, 42.00, 'USD', now(), 'manual')`, f.accountID, f.userID)
+			require.NoError(t, err, "seed balance_snapshots (latest)")
+			_, err = tx.Exec(ctx, `
+				INSERT INTO balance_snapshots (account_id, user_id, current_balance, currency_code, snapshot_at, source)
+				VALUES ($1, $2, 10.00, 'USD', now() - interval '1 hour', 'manual')`, f.accountID, f.userID)
+			require.NoError(t, err, "seed balance_snapshots (earlier same day)")
+		},
+		wantMsgContains: []string{"refusing to roll back 000017", "permanently deleted", "snapshot_at"},
+	},
+	{
+		label:  "000020_rule_execution_history",
+		file:   "000020_create_categorization_rules.down.sql",
+		tables: []string{"rule_execution_history"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				INSERT INTO rule_execution_history (id, rule_id, transaction_id, action_type, result, user_id)
+				VALUES ($1, NULL, NULL, 'category', 'applied', $2)`, uuid.New().String(), f.userID)
+			require.NoError(t, err, "seed rule_execution_history")
+		},
+		wantMsgContains: []string{"refusing to roll back 000020", "rule_execution_history"},
+	},
+	{
+		label:  "000027_rollover_history",
+		file:   "000027_create_rollover_history_table.down.sql",
+		tables: []string{"rollover_history"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				INSERT INTO rollover_history (id, user_id, budget_id, source_budget_category_id, amount, rollover_type, budget_period_start, budget_period_end)
+				VALUES ($1, $2, $3, $4, 10, 'full', now() - interval '1 month', now())`,
+				uuid.New().String(), f.userID, f.budgetID, f.budgetCategoryID)
+			require.NoError(t, err, "seed rollover_history")
+		},
+		wantMsgContains: []string{"refusing to roll back 000027", "rollover_history"},
+	},
+	{
+		label:  "000051_investment_transactions",
+		file:   "000051_create_investment_tables.down.sql",
+		tables: []string{"investment_transactions"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				INSERT INTO investment_transactions (id, user_id, account_id, security_id, plaid_investment_transaction_id, type, name, amount, date)
+				VALUES ($1, $2, $3, $4, $5, 'buy', 'Probe Buy', 100.00, CURRENT_DATE)`,
+				uuid.New().String(), f.userID, f.accountID, f.securityID, "plaid-inv-"+uuid.New().String())
+			require.NoError(t, err, "seed investment_transactions")
+		},
+		wantMsgContains: []string{"refusing to roll back 000051", "investment_transactions"},
+		beforeProceed: func(t *testing.T, ctx context.Context, tx pgx.Tx) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `DROP TABLE IF EXISTS holding_snapshots CASCADE`)
+			require.NoError(t, err, "simulate 000160's down (holding_snapshots) having already run")
+			_, err = tx.Exec(ctx, `DROP TABLE IF EXISTS liability_statements CASCADE`)
+			require.NoError(t, err, "simulate 000160's down (liability_statements) having already run")
+		},
+	},
+	{
+		label:  "000096_portfolio_snapshots",
+		file:   "000096_create_portfolio_snapshots.down.sql",
+		tables: []string{"portfolio_snapshots"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				INSERT INTO portfolio_snapshots (id, user_id, snapshot_date, total_value, total_cost_basis, total_gain_loss)
+				VALUES ($1, $2, CURRENT_DATE, 100, 90, 10)`, uuid.New().String(), f.userID)
+			require.NoError(t, err, "seed portfolio_snapshots")
+		},
+		wantMsgContains: []string{"refusing to roll back 000096", "portfolio_snapshots"},
+	},
+	{
+		label:  "000097_savings_goal_contributions_live_row",
+		file:   "000097_savings_progress_and_budget_linkage.down.sql",
+		tables: []string{"savings_goal_contributions"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				INSERT INTO savings_goal_contributions (id, savings_goal_id, amount, source, occurred_on)
+				VALUES ($1, $2, 25.00, 'manual', CURRENT_DATE)`, uuid.New().String(), f.savingsGoalID)
+			require.NoError(t, err, "seed savings_goal_contributions")
+		},
+		wantMsgContains: []string{"refusing to roll back 000097", "savings_goal_contributions"},
+	},
+	{
+		label:  "000157_rule_execution_history_orphan",
+		file:   "000157_rule_execution_history_transaction_set_null.down.sql",
+		tables: []string{"rule_execution_history"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				INSERT INTO rule_execution_history (id, rule_id, transaction_id, action_type, result, user_id)
+				VALUES ($1, NULL, NULL, 'category', 'applied', $2)`, uuid.New().String(), f.userID)
+			require.NoError(t, err, "seed orphaned rule_execution_history")
+		},
+		wantMsgContains: []string{"refusing to roll back 000157", "transaction_id"},
+	},
+	{
+		label:  "000160_holding_and_liability_history",
+		file:   "000160_create_holding_and_liability_history.down.sql",
+		tables: []string{"holding_snapshots", "liability_statements"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				INSERT INTO holding_snapshots (id, user_id, account_id, security_id, as_of_date, quantity)
+				VALUES ($1, $2, $3, $4, CURRENT_DATE, 5)`, uuid.New().String(), f.userID, f.accountID, f.securityID)
+			require.NoError(t, err, "seed holding_snapshots")
+			_, err = tx.Exec(ctx, `
+				INSERT INTO liability_statements (id, user_id, account_id, liability_type, as_of_date, details)
+				VALUES ($1, $2, $3, 'credit', CURRENT_DATE, '{}')`, uuid.New().String(), f.userID, f.accountID)
+			require.NoError(t, err, "seed liability_statements")
+		},
+		wantMsgContains: []string{"refusing to roll back 000160", "holding_snapshots", "liability_statements"},
+	},
+	{
+		label:  "000163_portfolio_snapshot_repairs",
+		file:   "000163_portfolio_snapshot_repair_ledger.down.sql",
+		tables: []string{"portfolio_snapshot_repairs"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				INSERT INTO portfolio_snapshot_repairs
+					(id, user_id, snapshot_date, outcome, reason, expected_account_count, observed_account_count,
+					 previous_total_value, previous_total_cost_basis, previous_total_gain_loss)
+				VALUES ($1, $2, CURRENT_DATE, 'verified', 'probe', 1, 1, 100, 90, 10)`, uuid.New().String(), f.userID)
+			require.NoError(t, err, "seed portfolio_snapshot_repairs")
+		},
+		wantMsgContains: []string{"refusing to roll back 000163", "portfolio_snapshot_repairs"},
+	},
+	{
+		label:  "000164_definition_snapshot_columns",
+		file:   "000164_audit_trail_survives_definition_purge.down.sql",
+		tables: []string{"rollover_history", "boost_executions", "rule_execution_history"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				INSERT INTO boost_executions (id, boost_id, user_id, boost_name, definition_snapshot)
+				VALUES ($1, NULL, $2, 'Probe Boost', '{}')`, uuid.New().String(), f.userID)
+			require.NoError(t, err, "seed boost_executions with a definition_snapshot")
+		},
+		wantMsgContains: []string{"refusing to roll back 000164", "definition_snapshot"},
+	},
+	{
+		label:  "000169_transaction_annotation_history",
+		file:   "000169_record_the_prior_annotation.down.sql",
+		tables: []string{"transaction_annotation_history"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				INSERT INTO transaction_annotation_history (id, user_id, transaction_id, change_source, prior_reviewed, new_reviewed)
+				VALUES ($1, $2, $3, 'category', false, true)`, uuid.New().String(), f.userID, f.transactionID)
+			require.NoError(t, err, "seed transaction_annotation_history")
+		},
+		wantMsgContains: []string{"refusing to roll back 000169", "transaction_annotation_history"},
+	},
+}
+
+func TestDownMigrationGuards_RefuseWithRowsProceedWhenEmpty_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	for _, tc := range downGuardCases {
+		tc := tc
+		t.Run(tc.label, func(t *testing.T) {
+			down := readDownMigration(t, tc.file)
+
+			t.Run("refuses when rows exist", func(t *testing.T) {
+				tx, err := pool.Begin(ctx)
+				require.NoError(t, err)
+				defer tx.Rollback(ctx) //nolint:errcheck // always rolled back
+
+				f := seedDownGuardFixture(t, ctx, tx, tc.label+"-refuse")
+				tc.seedRefusingRow(t, ctx, tx, f)
+
+				_, err = tx.Exec(ctx, down)
+				require.Error(t, err, "%s must refuse while %v hold the row(s) it protects", tc.file, tc.tables)
+				for _, want := range tc.wantMsgContains {
+					assert.Contains(t, err.Error(), want,
+						"%s refusal message must name what it refused and why (missing %q)", tc.file, want)
+				}
+			})
+
+			t.Run("proceeds when empty", func(t *testing.T) {
+				tx, err := pool.Begin(ctx)
+				require.NoError(t, err)
+				defer tx.Rollback(ctx) //nolint:errcheck // always rolled back
+
+				_, err = tx.Exec(ctx, `SET LOCAL lock_timeout = '10s'`)
+				require.NoError(t, err)
+
+				for _, table := range tc.tables {
+					_, err = tx.Exec(ctx, `DELETE FROM `+table) //nolint:gosec // table is a fixed literal from downGuardCases, never user input
+					require.NoError(t, err, "empty %s before testing the proceed path", table)
+				}
+
+				if tc.beforeProceed != nil {
+					tc.beforeProceed(t, ctx, tx)
+				}
+
+				_, err = tx.Exec(ctx, down)
+				require.NoError(t, err, "%s must proceed once %v are empty", tc.file, tc.tables)
+			})
+		})
+	}
+}
+
+type downGuardFixture struct {
+	userID, itemID, accountID  string
+	securityID                 string
+	budgetID, budgetCategoryID string
+	savingsGoalID              string
+	transactionID              string
+}
+
+func seedDownGuardFixture(t *testing.T, ctx context.Context, tx pgx.Tx, tag string) downGuardFixture {
+	t.Helper()
+	userID, itemID, accountID := seedDownProbeFixture(t, ctx, tx, tag)
+
+	securityID := uuid.New().String()
+	_, err := tx.Exec(ctx, `
+		INSERT INTO securities (id, plaid_security_id, name, ticker_symbol, type)
+		VALUES ($1, $2, 'Probe Security', 'PRB', 'equity')`, securityID, "plaid-sec-"+tag+"-"+securityID)
+	require.NoError(t, err, "seed security")
+
+	budgetID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO budgets (id, user_id, name, amount, period, start_date, series_id)
+		VALUES ($1, $2, $3, 500, 'monthly', CURRENT_DATE, $1)`, budgetID, userID, tag+"-budget")
+	require.NoError(t, err, "seed budget")
+
+	customCategoryID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO custom_categories (id, user_id, name)
+		VALUES ($1, $2, $3)`, customCategoryID, userID, tag+"-cat")
+	require.NoError(t, err, "seed custom_category")
+
+	budgetCategoryID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO budget_categories (id, budget_id, category_kind, custom_category_id, allocated_amount)
+		VALUES ($1, $2, 'custom', $3, 100)`, budgetCategoryID, budgetID, customCategoryID)
+	require.NoError(t, err, "seed budget_category")
+
+	savingsGoalID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO savings_goals (id, user_id, name, target_amount, account_id, progress_basis)
+		VALUES ($1, $2, $3, 1000, $4, 'manual')`, savingsGoalID, userID, tag+"-goal", accountID)
+	require.NoError(t, err, "seed savings_goal")
+
+	transactionID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transactions (id, user_id, account_id, source, amount, date, name)
+		VALUES ($1, $2, $3, 'plaid', 42.00, CURRENT_DATE, $4)`, transactionID, userID, accountID, tag+"-txn")
+	require.NoError(t, err, "seed transaction")
+
+	return downGuardFixture{
+		userID: userID, itemID: itemID, accountID: accountID,
+		securityID:       securityID,
+		budgetID:         budgetID,
+		budgetCategoryID: budgetCategoryID,
+		savingsGoalID:    savingsGoalID,
+		transactionID:    transactionID,
+	}
+}
