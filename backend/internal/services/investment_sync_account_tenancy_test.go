@@ -147,3 +147,76 @@ func TestSyncInvestmentTransactions_AccountOwnedByAnotherUser_IsSkipped(t *testi
 		}
 	}
 }
+
+// TestSyncInvestmentTransactions_RetainedAndOwnedByAnotherUser_IsSkipped is the composite the
+// round-12 task-6 brief demanded: round 11 switched SyncInvestmentTransactions's account map to
+// GetByLinkedItemIDIncludingRetained (see TestInvestmentSyncService_SyncInvestmentTransactions_
+// RetainedAccount_StillStored, which uses the actor's OWN retained account) so a retained account's
+// transactions are no longer silently dropped. But cross-user protection on that same path is a Go
+// `if a.UserID != linkedItem.UserID` check (~:517-525), not a SQL predicate — the query has no
+// user_id filter. TestSyncInvestmentTransactions_AccountOwnedByAnotherUser_IsSkipped proves the
+// tenancy axis alone, using a zero-value ("") status. Neither existing test proves the guard still
+// fires once BOTH axes are true on the SAME account: retained AND foreign.
+//
+// If this ever regresses — e.g. the guard were rewritten to skip only accounts with
+// Status == AccountStatusActive && a.UserID != linkedItem.UserID, or reordered so a status check
+// short-circuits before the ownership check — a retained foreign account's transaction would be
+// written under the actor. Mutation-check: deleting the `if a.UserID != linkedItem.UserID`
+// continue block (or negating its condition) at investment_sync_service.go:~522 must turn this RED.
+func TestSyncInvestmentTransactions_RetainedAndOwnedByAnotherUser_IsSkipped(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	actorUserID := uuid.New().String()
+	strangerUserID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-inv-txn-retained-foreign", actorUserID)
+
+	// The foreign account is BOTH retained (status=removed) AND owned by a different user —
+	// the one composite the brief says was never falsified.
+	foreignPlaid, foreignInternal := "plaid-acct-retained-foreign", uuid.New().String()
+
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: foreignInternal, PlaidAccountID: foreignPlaid, UserID: strangerUserID, Status: domain.AccountStatusRemoved},
+	}, nil)
+
+	// A transaction Plaid still reports for the retained, foreign-owned account.
+	txn := makePlaidCashTxn("txn-retained-foreign", foreignPlaid, 750.0, "2024-01-15")
+	txnResp := plaid.NewInvestmentsTransactionsGetResponse(
+		makeMinimalPlaidItem(),
+		[]plaid.AccountBase{},
+		[]plaid.Security{},
+		[]plaid.InvestmentTransaction{txn},
+		1,
+		"req-retained-foreign",
+	)
+	deps.plaidSvc.On("InvestmentsTransactionsGet",
+		ctx, linkedItem.AccessToken,
+		mock.AnythingOfType("string"), mock.AnythingOfType("string"),
+		mock.AnythingOfType("int32"), mock.AnythingOfType("int32"),
+	).Return(txnResp, nil)
+
+	deps.invTxnRepo.On("UpsertBatch", ctx, mock.Anything).Return(0, nil).Maybe()
+	deps.linkedItemRepo.On("UpdateInvestmentsLastSyncedDate", ctx, linkedItem.ID, mock.Anything).Return(nil).Maybe()
+
+	result, err := svc.SyncInvestmentTransactions(ctx, linkedItem)
+	require.NoError(t, err, "a retained foreign account must not fail the whole sync")
+
+	assert.Equal(t, 0, result.TransactionsInserted,
+		"a retained account owned by another user must still be skipped, not stored")
+
+	for _, c := range deps.invTxnRepo.Calls {
+		if c.Method != "UpsertBatch" {
+			continue
+		}
+		txns, ok := c.Arguments.Get(1).([]domain.InvestmentTransaction)
+		if !ok {
+			continue
+		}
+		for _, tx := range txns {
+			assert.NotEqual(t, foreignInternal, tx.AccountID,
+				"an investment transaction was written for a RETAINED account %s, owned by user %s, "+
+					"under actor %s — the tenancy guard must fire even when the account is retained",
+					foreignInternal, strangerUserID, actorUserID)
+		}
+	}
+}

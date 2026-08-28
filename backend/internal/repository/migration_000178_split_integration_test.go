@@ -37,6 +37,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1069,4 +1070,86 @@ func TestMigration000178_DownMigrationRunsAfterARealSplit(t *testing.T) {
 	// work correctly against a schema shaped the way the rest of the suite expects.
 	_, err = pool.Exec(ctx, migration000178UpSQL(t))
 	require.NoError(t, err)
+}
+
+// TestAccountChainResolver_ResolveActiveID_ResidualIdentityCollision_ReturnsAmbiguous is round 12
+// task 6's closure of the second coverage hole in the brief: ErrAmbiguousActiveAccount (#1569 R11
+// T2) was added so ResolveActiveID refuses to guess when a chain names several live accounts, and
+// migration 000178 then narrowed the user_accounts match key to include identity_type/
+// identity_subtype specifically to make that ambiguity rarer. But narrowing the key does NOT
+// eliminate it: two accounts at the same institution, sharing (institution, mask) AND the SAME
+// identity_type/identity_subtype, still collide onto ONE user_accounts row under the narrowed
+// index's own NULLS NOT DISTINCT semantics — this is an ordinary Plaid shape (e.g. two checking
+// accounts Plaid reports with no mask at all), not a corrupted fixture. Neither existing test
+// proves the sentinel actually fires for this residual case end-to-end:
+//   - account_chain_resolver_test.go only hand-builds two mock Active accounts (no real Postgres,
+//     no real narrowed unique index to prove the collision is even reachable post-000178).
+//   - This file's migration replay tests never instantiate AccountChainResolver at all — they only
+//     assert on countActiveAccountsForChain, a raw COUNT(*) that mirrors the resolver's predicate
+//     without ever calling the resolver's actual code path.
+//
+// This test builds the residual shape directly (two active accounts, one user_accounts chain,
+// identical institution/mask/identity — the exact tuple the narrowed key does NOT separate),
+// against real Postgres, through the REAL AccountRepository and AccountChainResolver production
+// code, and proves ResolveActiveID returns ErrAmbiguousActiveAccount rather than silently picking
+// one. The two siblings are seeded with DIFFERENT balances so a silent pick would be visibly wrong
+// if this regressed to returning one of them.
+func TestAccountChainResolver_ResolveActiveID_ResidualIdentityCollision_ReturnsAmbiguous(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	accountRepo := repository.NewAccountRepository(pool, newTestFieldEncryptor(t))
+	resolver := services.NewAccountChainResolver(accountRepo)
+
+	userID := insertTestUser(t, pool)
+	linkedItemID := insertTestLinkedItem(t, pool, userID)
+
+	instBlindIdx := "blind_inst_residual_" + uuid.New().String()
+
+	// One user_accounts row: maskless, identity_type/subtype = depository/checking — the row two
+	// same-identity, maskless checking accounts at one institution would BOTH match onto via
+	// FindByInstitutionAndMask post-000178 (mask_blind_idx IS NULL for both, identity agrees).
+	var uaID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO user_accounts
+			(user_id, institution_id, institution_id_blind_idx, primary_type, primary_subtype,
+			 identity_type, identity_subtype)
+		VALUES ($1, 'enc_inst_residual', $2, 'depository', 'checking', 'depository', 'checking')
+		RETURNING id::text
+	`, userID, instBlindIdx).Scan(&uaID))
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, uaID) }) //nolint:errcheck
+
+	// Two physical accounts, BOTH active, BOTH pointing at the same chain, BOTH depository/checking
+	// (identity agrees — the narrowed key does not separate these). Different balances so a silent
+	// pick is a visibly wrong result, not an undetectable one.
+	var acct1, acct2 string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts
+			(linked_item_id, user_id, plaid_account_id, name, type, subtype, user_account_id,
+			 status, current_balance)
+		VALUES ($1, $2, 'plaid_'||gen_random_uuid()::text, 'Checking One', 'depository', 'checking',
+		        $3, 'active', 400.00)
+		RETURNING id::text
+	`, linkedItemID, userID, uaID).Scan(&acct1))
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM accounts WHERE id = $1`, acct1) }) //nolint:errcheck
+
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts
+			(linked_item_id, user_id, plaid_account_id, name, type, subtype, user_account_id,
+			 status, current_balance)
+		VALUES ($1, $2, 'plaid_'||gen_random_uuid()::text, 'Checking Two', 'depository', 'checking',
+		        $3, 'active', 900.00)
+		RETURNING id::text
+	`, linkedItemID, userID, uaID).Scan(&acct2))
+	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM accounts WHERE id = $1`, acct2) }) //nolint:errcheck
+
+	// Fixture sanity: confirm the residual shape actually landed — two active accounts on one
+	// chain, disagreeing on nothing the narrowed key checks.
+	require.Equal(t, 2, countActiveAccountsForChain(t, pool, uaID),
+		"fixture sanity: both same-identity accounts must land on ONE chain, both active")
+
+	gotID, err := resolver.ResolveActiveID(ctx, uaID, userID)
+
+	require.ErrorIs(t, err, services.ErrAmbiguousActiveAccount,
+		"a chain with two live, same-identity siblings must refuse to guess, not silently return one")
+	assert.Empty(t, gotID, "no account id may be returned when the chain is ambiguous")
 }
