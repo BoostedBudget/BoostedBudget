@@ -318,8 +318,15 @@ assert_target_cluster_is_disposable() {
     #   i / I (index, part. index) — NO DATA: derivable from the table it indexes, already counted.
     #   c (composite type)      — NO DATA: a type definition, not a row.
     #   t (TOAST table)         — excluded by the `nspname !~ '^pg_toast'` filter below regardless.
+    #
+    # ⚠ public.schema_migrations is EXCLUDED BY NAME (#1569 round 12 task 7 fix round 1, same
+    # Codex finding as the sibling guard in backend/scripts/assert-migrate-reset-target-disposable.sh):
+    # golang-migrate creates it as an ordinary 'r' table and neither `down -all` nor a failed run
+    # drops it, so without this exclusion a database that has EVER run `migrate up` reports >=1
+    # user relation forever and never qualifies for the auto-stamp path. It holds only a version
+    # number and a dirty flag — golang-migrate's own bookkeeping, never user data.
     user_tables=$(psql "$DATABASE_URL" -tAc \
-        "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r','p','m') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_toast'" 2>/dev/null || true)
+        "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r','p','m') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_toast' AND NOT (n.nspname = 'public' AND c.relname = 'schema_migrations')" 2>/dev/null || true)
     user_tables="${user_tables//[[:space:]]/}"
 
     if [ "$user_tables" = "0" ]; then

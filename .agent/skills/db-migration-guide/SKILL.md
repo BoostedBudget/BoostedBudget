@@ -216,8 +216,18 @@ migrate -database "$DATABASE_URL" -path migrations version
 ```bash
 # Rollback last migration
 migrate -database "$DATABASE_URL" -path migrations down 1
+```
 
-# Rollback all migrations
+**Rollback ALL migrations: use `make migrate-reset`, not the raw command below.**
+(#1569 round 12 task 7) `make migrate-reset` runs
+`backend/scripts/assert-migrate-reset-target-disposable.sh` first, refusing to run against a
+database holding real data that was not explicitly marked disposable — per-migration rollback
+refusal guards can be bypassed entirely by `down -all`'s reverse execution order, so this is the
+only place the protection actually lives. The raw command below **deliberately bypasses that
+guard**:
+
+```bash
+# ⚠ BYPASSES the migrate-reset disposability guard entirely. Prefer `make migrate-reset`.
 migrate -database "$DATABASE_URL" -path migrations down -all
 ```
 
