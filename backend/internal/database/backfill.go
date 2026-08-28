@@ -438,7 +438,7 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 		instBlind := enc.BlindIndex(plainInstID)
 		maskBlind := enc.BlindIndexNullable(plainMask)
 
-		uaID, found, err := lookupUserAccountID(ctx, db, r.id, r.userID, instBlind, maskBlind)
+		uaID, found, err := lookupUserAccountID(ctx, db, r.id, r.userID, instBlind, maskBlind, r.acctType, r.acctSubtype)
 		if err != nil {
 			return err
 		}
@@ -527,10 +527,13 @@ func synthesiseUserAccountID(
 			(id, user_id, institution_id, mask, institution_id_blind_idx, mask_blind_idx,
 			 primary_type, primary_subtype, identity_type, identity_subtype)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $7, $8)
-		-- unique_user_accounts_inst_mask_blind (000100) is a PARTIAL index
+		-- unique_user_accounts_inst_mask_identity_blind (#1569 round 11 task 4, replacing 000100's
+		-- unique_user_accounts_inst_mask_blind) is a PARTIAL index
 		-- (WHERE institution_id_blind_idx IS NOT NULL), so the inference clause must repeat
-		-- that predicate or Postgres cannot match it (SQLSTATE 42P10).
-		ON CONFLICT (user_id, institution_id_blind_idx, mask_blind_idx)
+		-- that predicate or Postgres cannot match it (SQLSTATE 42P10). identity_type/identity_subtype
+		-- are now part of the arbiter — see the task 4 migration header for why the match key was
+		-- narrowed.
+		ON CONFLICT (user_id, institution_id_blind_idx, mask_blind_idx, identity_type, identity_subtype)
 			WHERE institution_id_blind_idx IS NOT NULL
 			DO NOTHING
 	`, newID, userID, encInstID, encMask, instBlind, maskBlind, acctType, acctSubtype); err != nil {
@@ -539,7 +542,7 @@ func synthesiseUserAccountID(
 
 	// Re-read rather than trusting newID: on conflict the INSERT was a no-op and the winner is
 	// whichever row already held the triple (possibly one this same loop minted a moment ago).
-	existingID, found, err := lookupUserAccountID(ctx, db, "synthesised", userID, instBlind, maskBlind)
+	existingID, found, err := lookupUserAccountID(ctx, db, "synthesised", userID, instBlind, maskBlind, acctType, acctSubtype)
 	if err != nil {
 		return "", err
 	}
@@ -553,12 +556,22 @@ func synthesiseUserAccountID(
 // ordered deterministically (created_at ASC, id ASC). Returns the first row's ID when found.
 // When >1 row matches, emits a slog WARN (possible pre-migration duplicate) but continues
 // with the deterministic survivor — never returns an error in the multi-match case.
+// identityType/identitySubtype narrow the match to the #1569 round 11 task 4 key: two accounts
+// sharing (user_id, institution, mask) but disagreeing on identity_type/identity_subtype (the
+// brokerage/IRA shape) are DIFFERENT chains and must not be matched together. A row with a
+// NON-NULL identity_type must match exactly (IS NOT DISTINCT FROM on subtype, so a genuinely
+// subtype-less identity still matches). A row with a NULL identity_type is an ORPHAN — see
+// 000177's header, a user_accounts row with no physical accounts ever pointing at it, so nothing
+// could derive an identity for it — and matches ANY incoming identity, reproducing pre-task-4
+// behavior for that narrow legacy shape (mirrors user_account_repository.go's
+// FindByInstitutionAndMask; keep both in sync).
 func lookupUserAccountID(
 	ctx context.Context,
 	db backfillQuerier,
 	accountID, userID string,
 	instBlind string,
 	maskBlind *string,
+	identityType, identitySubtype *string,
 ) (uaID string, found bool, err error) {
 	var (
 		query string
@@ -568,16 +581,20 @@ func lookupUserAccountID(
 		query = `
 			SELECT id FROM user_accounts
 			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
+			  AND (identity_type IS NULL
+			       OR (identity_type = $3 AND identity_subtype IS NOT DISTINCT FROM $4))
 			ORDER BY created_at ASC, id ASC
 			LIMIT 2`
-		args = []any{userID, instBlind}
+		args = []any{userID, instBlind, identityType, identitySubtype}
 	} else {
 		query = `
 			SELECT id FROM user_accounts
 			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
+			  AND (identity_type IS NULL
+			       OR (identity_type = $4 AND identity_subtype IS NOT DISTINCT FROM $5))
 			ORDER BY created_at ASC, id ASC
 			LIMIT 2`
-		args = []any{userID, instBlind, *maskBlind}
+		args = []any{userID, instBlind, *maskBlind, identityType, identitySubtype}
 	}
 
 	rows, err := db.Query(ctx, query, args...)

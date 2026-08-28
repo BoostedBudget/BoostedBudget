@@ -65,8 +65,13 @@ func (s *userAccountService) MatchOrCreate(
 	mask *string,
 	accountName, accountType, accountSubtype string,
 ) (*domain.UserAccount, error) {
-	// Step 1: Try to find existing user account by (user_id, institution_id, mask)
-	existing, err := s.repo.FindByInstitutionAndMask(ctx, userID, institutionID, mask)
+	// Step 1: Try to find existing user account by (user_id, institution_id, mask, identity_type,
+	// identity_subtype). #1569 round 11 task 4: identity is now PART of the match key, so a
+	// brokerage and an IRA at one institution (same institution, both maskless) are no longer
+	// matched onto the same chain.
+	identityType := strPtrIfNotEmpty(accountType)
+	identitySubtype := strPtrIfNotEmpty(accountSubtype)
+	existing, err := s.repo.FindByInstitutionAndMask(ctx, userID, institutionID, mask, identityType, identitySubtype)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find existing user account: %w", err)
 	}
@@ -99,7 +104,7 @@ func (s *userAccountService) MatchOrCreate(
 	if err != nil {
 		if errors.Is(err, repository.ErrDuplicateUserAccount) {
 			// Lost a concurrent create race — re-find the winner's row and normalize it.
-			winner, findErr := s.repo.FindByInstitutionAndMask(ctx, userID, institutionID, mask)
+			winner, findErr := s.repo.FindByInstitutionAndMask(ctx, userID, institutionID, mask, identityType, identitySubtype)
 			if findErr != nil {
 				return nil, fmt.Errorf("failed to re-find user account after duplicate: %w", findErr)
 			}

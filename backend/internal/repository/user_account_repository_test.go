@@ -418,10 +418,12 @@ func TestUserAccountRepository_FindByInstitutionAndMask_ExactMatch(t *testing.T)
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
-	`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
+		  AND (identity_type IS NULL
+		       OR (identity_type = $4 AND identity_subtype IS NOT DISTINCT FROM $5))
+	`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
 
 	// Execute
-	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, &mask)
+	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, &mask, nil, nil)
 
 	// Assert
 	require.NoError(t, err)
@@ -448,10 +450,12 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NoMatch_DifferentInstitu
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
-	`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(pgx.ErrNoRows)
+		  AND (identity_type IS NULL
+		       OR (identity_type = $4 AND identity_subtype IS NOT DISTINCT FROM $5))
+	`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(pgx.ErrNoRows)
 
 	// Execute
-	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, &mask)
+	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, &mask, nil, nil)
 
 	// Assert
 	assert.Nil(t, ua)
@@ -476,10 +480,12 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NoMatch_DifferentMask(t 
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
-	`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(pgx.ErrNoRows)
+		  AND (identity_type IS NULL
+		       OR (identity_type = $4 AND identity_subtype IS NOT DISTINCT FROM $5))
+	`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(pgx.ErrNoRows)
 
 	// Execute
-	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, &mask)
+	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, &mask, nil, nil)
 
 	// Assert
 	assert.Nil(t, ua)
@@ -504,10 +510,12 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NullMask(t *testing.T) {
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
-	`)).WithArgs(userID, pgxmock.AnyArg()).WillReturnError(pgx.ErrNoRows)
+		  AND (identity_type IS NULL
+		       OR (identity_type = $3 AND identity_subtype IS NOT DISTINCT FROM $4))
+	`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(pgx.ErrNoRows)
 
 	// Execute
-	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, nil)
+	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, nil, nil, nil)
 
 	// Assert
 	assert.Nil(t, ua)
@@ -545,10 +553,12 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NullMask_Match(t *testin
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
-	`)).WithArgs(userID, pgxmock.AnyArg()).WillReturnRows(rows)
+		  AND (identity_type IS NULL
+		       OR (identity_type = $3 AND identity_subtype IS NOT DISTINCT FROM $4))
+	`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
 
 	// Execute
-	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, nil)
+	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, nil, nil, nil)
 
 	// Assert
 	require.NoError(t, err)
@@ -593,11 +603,13 @@ func TestUserAccountRepository_FindByInstitutionAndMask_Deterministic_NonNullMas
 			       created_at, updated_at
 			FROM user_accounts
 			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
+		  AND (identity_type IS NULL
+		       OR (identity_type = $4 AND identity_subtype IS NOT DISTINCT FROM $5))
 			ORDER BY created_at ASC, id ASC
 			LIMIT 1
-		`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
+		`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
 
-	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, &mask)
+	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, &mask, nil, nil)
 
 	require.NoError(t, err)
 	assert.NotNil(t, ua)
@@ -637,11 +649,13 @@ func TestUserAccountRepository_FindByInstitutionAndMask_Deterministic_NullMask(t
 			       created_at, updated_at
 			FROM user_accounts
 			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
+		  AND (identity_type IS NULL
+		       OR (identity_type = $3 AND identity_subtype IS NOT DISTINCT FROM $4))
 			ORDER BY created_at ASC, id ASC
 			LIMIT 1
-		`)).WithArgs(userID, pgxmock.AnyArg()).WillReturnRows(rows)
+		`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
 
-	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, nil)
+	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, nil, nil, nil)
 
 	require.NoError(t, err)
 	assert.NotNil(t, ua)
