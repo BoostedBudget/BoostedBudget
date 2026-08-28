@@ -340,12 +340,18 @@ func TestFindByInstitutionAndMask_OrphanRowMatchesAnyIdentity(t *testing.T) {
 // not just the happy path TestFindByInstitutionAndMask_OrphanRowMatchesAnyIdentity already covers.
 // It uses the REAL UserAccountRepository.FindByInstitutionAndMask, not a raw SQL approximation:
 // a legacy orphan row is matched ONCE by a concrete identity (checking) — reproducing the
-// documented, accepted happy path — and then, because nothing can WRITE identity_type onto the
-// orphan afterward (trg_user_accounts_identity_immutable and TestNoUpdateOfUserAccountsIdentityColumns
-// both forbid it unconditionally), the SAME orphan row ALSO matches a SECOND, DIFFERENT identity
-// (investment/brokerage) at the same institution+mask. This is the accepted residual risk
-// documented on FindByInstitutionAndMask's doc comment, proven here rather than merely asserted:
-// two different real identities CAN end up sharing one chain through this one narrow path.
+// documented, accepted happy path — and then, because nothing in Go APPLICATION CODE writes
+// identity_type onto the orphan afterward (TestNoUpdateOfUserAccountsIdentityColumns forbids it
+// unconditionally, and MatchOrCreate has no such write path — see round 12 task 1b), the SAME
+// orphan row ALSO matches a SECOND, DIFFERENT identity (investment/brokerage) at the same
+// institution+mask. ⚠ ROUND 12 TASK 1B: migration 000179 relaxed the DB trigger
+// (trg_user_accounts_identity_immutable) so it no longer blocks a NULL->value claim at the
+// database level — only the AST guard above still prevents Go code from making that write. This
+// test's own steps never attempt an UPDATE, so its assertions are unaffected either way; only the
+// REASON identity stays unclaimed changed (Go-guard-only, not also DB-enforced). This is the
+// accepted residual risk documented on FindByInstitutionAndMask's doc comment, proven here rather
+// than merely asserted: two different real identities CAN end up sharing one chain through this
+// one narrow path.
 func TestFindByInstitutionAndMask_OrphanRowMatchesAnyIdentity_ThenRefusesADifferentIdentity(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
