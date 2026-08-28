@@ -81,7 +81,20 @@ var jobFileDispositions = map[string]jobFileDisposition{
 	"webhook_processing.go": {dispositionBumps, "routes transactions/investments/liabilities " +
 		"webhooks to the same sync services as plaid_sync.go, investment_holdings_sync.go and " +
 		"investment_transactions_sync.go, all of which " +
-		"bump (see webhook_processing_cache_invalidation_test.go)."},
+		"bump (see webhook_processing_cache_invalidation_test.go). ⚠ #1569 Round 11 Task 5 " +
+		"CORRECTION: this enumeration silently OMITTED the ITEM branch (case \"ITEM\" routes to " +
+		"processItemWebhook -> itemErrorSvc.ProcessWebhook, reaching all four " +
+		"LinkedItemRepository.Update call sites in item_error_service.go) — verified with " +
+		"`/usr/bin/grep -n \"Bump|cacheGens\" webhook_processing.go`, which returns nothing, so the " +
+		"ITEM branch genuinely bumps NOTHING, unlike the three branches this entry did name. " +
+		"THE FILE-LEVEL VERDICT STILL HOLDS for the ITEM branch too, but not because of a bump: it " +
+		"rests on the same column-scoped argument now recorded on the repository guard's own " +
+		"LinkedItemRepository.Update entry (repository/cache_completeness_repo_test.go) — every " +
+		"handler this branch reaches loads the linked item first and writes only " +
+		"Status/StatusChangedAt/ErrorCode/ErrorMessage/LastErrorAt, never `replaced_by_id`, so no " +
+		"succession edge a cached read walks can move. This file-level entry cannot express a " +
+		"column-scoped exemption on its own (see the package doc comment's file-level-grain " +
+		"caveat); it is recorded here as a cross-reference, not re-derived independently."},
 	"scheduled_deletion_check.go": {dispositionBumps, "only enumerates users due for deletion and " +
 		"enqueues account_deletion.go's job; the actual write (and bump) happens there."},
 	"retention_cleanup_check.go": {dispositionBumps, "calls DeletionService.ExecuteDeletion for " +

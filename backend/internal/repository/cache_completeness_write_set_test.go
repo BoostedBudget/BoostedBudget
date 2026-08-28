@@ -199,10 +199,26 @@ func packageSQLFragments(t *testing.T, srcs map[string]string) map[string]string
 
 // fragmentsUsedIn returns the SQL fragment values whose identifiers appear in text as word boundaries.
 // Consolidates the common pattern of finding which fragments are referenced in a text blob.
+//
+// ⚠ #1569 Round 11 Task 5: a bare `\bname\b` match alone is NOT sufficient. This package follows a
+// real convention — a const `fooCTE` paired with a wrapper func `fooCTESQL(observedExpr string)
+// string` that call sites invoke as `fooCTESQL(...)` rather than referencing the bare const — and
+// `\b` does NOT fire between "CTE" and the immediately-following "SQL(" because both sides are word
+// characters. Before this fix, `accountChainSupersessionCTESQL("TRUE")`'s four real call sites in
+// balance_snapshot_repository.go never triggered fragment expansion at all; the CTE text reached the
+// corpus ONLY because three unrelated comments happened to spell the bare const name followed by a
+// non-word character ("accountChainSupersessionCTE." / "accountChainSupersessionCTE walks"), and
+// comments are not stripped on this read path. VALIDATED BY MUTATION: editing those three comments to
+// remove the bare name reproducibly turned TestCachedReadTableSetMatchesExpected red ("LOST 1
+// table(s): [linked_items]"); restoring them turned it green again. The second alternative below
+// closes that hole by also matching the `nameSQL(` call form directly, so the corpus no longer
+// depends on comment text at all.
 func fragmentsUsedIn(text string, frags map[string]string) []string {
 	var result []string
 	for name, val := range frags {
-		if regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`).MatchString(text) {
+		quoted := regexp.QuoteMeta(name)
+		pattern := `\b` + quoted + `\b|` + quoted + `SQL\(`
+		if regexp.MustCompile(pattern).MatchString(text) {
 			result = append(result, val)
 		}
 	}
