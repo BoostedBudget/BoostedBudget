@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -310,8 +311,34 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 
 	// Step 3: Upsert on the partial unique key.
 	now := time.Now()
-	// Step 3: Upsert as confirmed. Also promotes a pre-existing proposed row to confirmed
-	// so that a boost-match (M19) or user-confirm does not create a duplicate.
+	// Step 3: Upsert as confirmed. Promotes a pre-existing MACHINE row (proposed, or already
+	// auto-confirmed) to this call's amount/source, so a boost-match (M19) or a later automatic
+	// correlation pass does not create a duplicate. It does NOT overwrite a row a human has
+	// already decided about (#1569 round 12 task 3 — an independent Codex audit found this DO
+	// UPDATE had no predicate at all, so an automatic pass silently clobbered a user-confirmed
+	// amount with no audit trail and no user action).
+	//
+	// Discriminator: confirmed_by_user, not status. This method's OWN INSERT below sets
+	// status='confirmed' with confirmed_by_user=false, so a later automatic pass legitimately
+	// needs to keep updating rows this same (or a sibling automatic) writer produced — using
+	// status='confirmed' as the guard would freeze that machine-to-machine correction, which is
+	// not the defect being fixed here. confirmed_by_user is set to true ONLY by
+	// InsertManualFromTransaction and ConfirmContribution, both of which require an explicit user
+	// action — so it is the correct "did a human decide this" bit.
+	//
+	// `status != 'rejected'` is a second, independent leg, not a status-based version of the same
+	// idea: RejectContribution never touches confirmed_by_user (a rejected row still reads
+	// confirmed_by_user = false), so confirmed_by_user = false alone would let this automatic
+	// writer silently resurrect a row the user explicitly rejected back to 'confirmed' — the exact
+	// same class of bug, laundered through a different status value. This mirrors the sibling
+	// automatic writer UpsertProposedFromTransaction's established rule (R3-7) that rejected
+	// tombstones are never touched by an automatic path.
+	//
+	// When neither the INSERT nor the DO UPDATE fires (RowsAffected = 0), the slot is held by a
+	// row a human has decided about; this is treated as an expected, non-fatal race (the caller
+	// already treats UpsertFromTransaction errors as skip-and-log — see
+	// transferCorrelationService.createBoostMatchContribution) and is logged here for visibility.
+	//
 	// ON CONFLICT target: migration 000180 (#1569 round 12 task 2) narrowed
 	// unique_contribution_per_goal_per_transaction to `... AND deleted_at IS NULL`, so a
 	// tombstoned row (Plaid `removed` on the prior transaction) no longer occupies this
@@ -329,9 +356,18 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 			source     = EXCLUDED.source,
 			status     = 'confirmed',
 			updated_at = EXCLUDED.updated_at
+		WHERE savings_goal_contributions.confirmed_by_user = false
+		  AND savings_goal_contributions.status != 'rejected'
 	`
-	if _, err = tx.Exec(ctx, upsertQuery, goalID, transactionID, amount, source, now); err != nil {
+	tag, execErr := tx.Exec(ctx, upsertQuery, goalID, transactionID, amount, source, now)
+	if execErr != nil {
+		err = execErr
 		return err
+	}
+	if tag.RowsAffected() == 0 {
+		slog.WarnContext(ctx, "UpsertFromTransaction: skipped automatic contribution write — "+
+			"slot is held by a row a user already confirmed or rejected",
+			"goal_id", goalID, "transaction_id", transactionID, "amount", amount, "source", source)
 	}
 
 	if err = tx.Commit(ctx); err != nil {
@@ -410,8 +446,10 @@ func (r *savingsContributionRepository) InsertManualFromTransaction(
 	// proposed row that the user is now manually confirming with an explicit amount/date).
 	// Rows already in 'confirmed' status (boost_match, sync-confirmed, or a prior manual log)
 	// and 'rejected' tombstones are NOT overwritten — the WHERE predicate makes the DO UPDATE
-	// a no-op, which causes RETURNING to return NULL; the handler will return ErrContributionNotFound
-	// in that case. This guards against silent source/metadata corruption (Codex R4-1 follow-up).
+	// a no-op, which causes RETURNING to return no row (pgx.ErrNoRows); this repository method
+	// returns domain.ErrContributionAlreadyConfirmed in that case — not ErrContributionNotFound,
+	// which this comment previously and incorrectly claimed (see the scanErr handling below).
+	// This guards against silent source/metadata corruption (Codex R4-1 follow-up).
 	// ON CONFLICT target: matches migration 000180's narrowed
 	// unique_contribution_per_goal_per_transaction — see UpsertFromTransaction's comment above for
 	// why the `AND deleted_at IS NULL` leg must be here too.

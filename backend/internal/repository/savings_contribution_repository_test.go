@@ -194,6 +194,50 @@ func TestSavingsContributionRepository_UpsertFromTransaction_Success(t *testing.
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestSavingsContributionRepository_UpsertFromTransaction_ConfirmedRowSlotIsNoOp pins the #1569
+// round 12 task 3 fix at the SQL level: the ON CONFLICT DO UPDATE now carries a predicate
+// (confirmed_by_user = false AND status != 'rejected'), and when that predicate is false — the
+// conflict slot is held by a row a human already decided about — the upsert commits as a no-op
+// (0 rows affected) rather than erroring or overwriting. Commit still happens; this is an expected,
+// non-fatal race, not a failure.
+func TestSavingsContributionRepository_UpsertFromTransaction_ConfirmedRowSlotIsNoOp(t *testing.T) {
+	mock, repo := setupContributionMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	goalID := uuid.New().String()
+	txnID := uuid.New().String()
+	txnAmount := 1000.00
+	contribAmount := 400.00
+
+	mock.ExpectBegin()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
+		WithArgs(txnID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"abs"}).AddRow(txnAmount))
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(SUM(amount), 0)`)).
+		WithArgs(txnID, goalID).
+		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(0.0))
+
+	// The conflict slot is held by a user-confirmed row: neither the INSERT nor the DO UPDATE leg
+	// fires, so the driver reports zero rows affected.
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO savings_goal_contributions`)).
+		WithArgs(goalID, txnID, contribAmount, "boost_match", pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 0))
+
+	mock.ExpectCommit()
+
+	err := repo.UpsertFromTransaction(ctx, userID, goalID, txnID, contribAmount, "boost_match")
+	require.NoError(t, err, "a no-op upsert is an expected race, not an error")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestSavingsContributionRepository_UpsertFromTransaction_TransactionNotFound tests
 // that ErrContributionNotFound is returned when the transaction row does not exist for the user.
 func TestSavingsContributionRepository_UpsertFromTransaction_TransactionNotFound(t *testing.T) {
