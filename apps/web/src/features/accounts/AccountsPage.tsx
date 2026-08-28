@@ -265,9 +265,14 @@ export function AccountsPage() {
   //
   // ⚠ THE INVESTMENT SENTENCE IS UNCONDITIONAL, and that is a #1569 T8 correction, not sloppiness.
   // It used to be gated on `account.type === 'investment'`, while the thing it describes —
-  // fk_inv_txn_account_id, ON DELETE CASCADE — does not consult type at all. `brokerage` is a
-  // SEPARATE, valid account type in this domain (domain/user_account.go:84-88 accepts depository,
-  // credit, loan, investment, brokerage, other), so a brokerage account holding investment
+  // fk_inv_txn_account_id, ON DELETE CASCADE — does not consult type at all. `brokerage` is NOT
+  // a value of `accounts.type` (that enum, domain/account.go:~237-243, has no `brokerage` — only
+  // depository, credit, loan, investment, other). `brokerage` lives only on `user_accounts.
+  // primary_type` (domain/user_account.go:~100-111; :84-88 there is the unrelated hex-colour
+  // validator). The cascade this sentence describes is keyed off `accounts.type`, so the
+  // "brokerage account" example below is really about a `type: 'investment'` account carrying a
+  // `primary_type: 'brokerage'` subtype — still true, but not because `brokerage` is a value of
+  // the enum this sentence used to gate on. A brokerage-subtyped account holding investment
   // transactions got no warning that the purge would destroy them. Rather than enumerate which
   // types can hold them — a list that goes stale the next time Plaid adds one — the sentence now
   // says "any investment transactions recorded against it", which is true of every account and

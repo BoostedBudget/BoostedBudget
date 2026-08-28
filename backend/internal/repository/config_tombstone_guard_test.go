@@ -47,6 +47,31 @@ import (
 //
 // Mutation-checked: deleting `AND <alias>.deleted_at IS NULL` from any one of the audited queries
 // turns this test RED with that file, line and alias named.
+//
+// ⚠⚠ NAMED, PERMANENT BLIND SPOT (#1569 round 12 task 5): this AST scan joins the string
+// *ast.BasicLit literals found within a single Go statement (AssignStmt/ValueSpec/ReturnStmt/
+// ExprStmt) and pattern-matches the result. `data_export_repository.go`'s GDPR export builds its
+// SQL at RUNTIME instead: `DataExportRowQuery` does
+// `fmt.Sprintf("SELECT to_jsonb(t)\nFROM %s t\nWHERE %s\nORDER BY %s", tbl.Table,
+// tbl.OwnershipPredicate, tbl.OrderBy)`, where `tbl.Table` (e.g. "savings_goals") is a struct
+// field literal from a WHOLLY SEPARATE statement (the `dataExportTables` slice literal) than the
+// one holding the `"FROM %s t"` format string. No single statement ever contains the literal
+// text `FROM savings_goals` (or `FROM boosts`, `FROM budgets`, `FROM budget_categories`,
+// `FROM transactions`, `FROM custom_categories`, or any other exported table) — this guard, its
+// three siblings (TestNoTransactionReadForgetsTheTombstoneFilter,
+// TestNoCustomCategoryReadForgetsTheTombstoneFilter,
+// TestNoSavingsContributionReadForgetsTheTombstoneFilter) and any future one built on this same
+// mechanism are ALL blind to the export call site, for every table the generic export mechanism
+// touches, not just the ones this file audits.
+//
+// This is deliberately left unaddressed rather than "fixed": the export's BEHAVIOUR is correct
+// as-is (a GDPR Article 15 export must include tombstoned rows — the ownership predicates set in
+// `data_export_repository.go` carry no `deleted_at` filter for exactly that reason, and that is
+// intentional, not an oversight this guard should flag). Teaching this AST scan to reconstruct
+// runtime-assembled SQL is not soundly derivable from source text (the whole point of a static
+// guard), so the fix is to state the blind spot rather than to fake coverage of it. If
+// `DataExportRowQuery` or `dataExportTables` ever moves to a shape a static scan CAN see (e.g. a
+// literal query per table), this comment block should be deleted rather than carried forward.
 var configTombstoneTables = []string{
 	"savings_goals",
 	"boosts",

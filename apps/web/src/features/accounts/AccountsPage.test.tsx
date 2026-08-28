@@ -651,11 +651,15 @@ describe('AccountsPage', () => {
 
     // Issue #1569 T8: the investment-deletion sentence used to be gated on
     // `account.type === 'investment'`, while fk_inv_txn_account_id — ON DELETE CASCADE — does not
-    // consult type at all. `brokerage` is a SEPARATE valid type in this domain
-    // (backend/internal/domain/user_account.go:84-88 accepts depository, credit, loan, investment,
-    // brokerage, other), so a brokerage account holding investment transactions was warned about
-    // nothing. `closedAccount` above is type 'depository', which is exactly the shape that used to
-    // render the sentence away, so a regression to ANY type gate turns the first case red.
+    // consult type at all. `brokerage` is NOT a value of `accounts.type` (backend/internal/
+    // domain/account.go:~237-243 has no `brokerage` — only depository, credit, loan, investment,
+    // other); it lives only on `user_accounts.primary_type` (domain/user_account.go:~100-111).
+    // The 'brokerage' literal used for `type` below is a test-only stand-in exercising "any type
+    // string, including one that is not a real `accounts.type` value" — the sentence's cascade
+    // doesn't consult type at all, so a brokerage-subtyped account holding investment
+    // transactions was warned about nothing under the old gate. `closedAccount` above is type
+    // 'depository', which is exactly the shape that used to render the sentence away, so a
+    // regression to ANY type gate turns the first case red.
     it('warns that investment transactions are destroyed, whatever the account type', () => {
       const openPurgeDialog = () => {
         fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))

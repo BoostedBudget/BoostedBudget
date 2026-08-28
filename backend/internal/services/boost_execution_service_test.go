@@ -3088,8 +3088,11 @@ func TestCalculateTransferAmount_DerivedTypesReturnZeroOnMissingKey(t *testing.T
 // TestResolveAndVerifyUserAccount_AccountRepoNilFailOpen documents the intentional
 // behavior: when accountRepo is nil (e.g. in unit tests that don't set SetAccountRepo),
 // resolveAndVerifyUserAccount applies the resolved ID WITHOUT a DB ownership check and
-// logs a warning. This is safe because production always wires accountRepo (main.go:~1324)
-// and the service-layer create/update validation already runs ownership checks.
+// logs a warning. This is expected to be dead in production because main.go's
+// boostExecutionService wiring block calls SetAccountRepo unconditionally (guarded only
+// by db != nil && cfg.ClerkSecretKey != "") and the service-layer create/update
+// validation already runs ownership checks — but nothing enforces a non-nil accountRepo,
+// so this is an operational wiring assumption, not a guarded invariant.
 //
 // The test prevents future over-hardening (panicking or returning an error when nil)
 // while documenting why the fail-open is intentional. Issue #972 GAP AE + C12.

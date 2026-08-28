@@ -264,6 +264,14 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 	// Build plaid_account_id → internal account ID and user_account_id maps from our DB.
 	// userAccountMap is used to set user_account_id on each holding at insert time
 	// so the stable chain-expansion key is populated (Issue #1109).
+	//
+	// #1569 round 12 task 5: a round-11 commit message (4589ac99) called this
+	// GetByLinkedItemID call "the tenancy guard" — that framing is false. This query filters
+	// only linked_item_id and status='active'; it carries no user_id predicate at all. The
+	// real cross-user protection is the explicit `if a.UserID != linkedItem.UserID` check a
+	// few lines below (~:282-290), with a twin in SyncInvestmentTransactions (~:517-525).
+	// Harmless in effect either way — the real guard runs regardless of which fetch produced
+	// the row — but the description was wrong.
 	accounts, err := s.accountRepo.GetByLinkedItemID(ctx, linkedItem.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts for linked item: %w", err)

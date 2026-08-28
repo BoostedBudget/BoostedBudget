@@ -51,6 +51,13 @@ import (
 //
 // Mutation-checked: deleting `AND deleted_at IS NULL` from any one of the filtered queries turns
 // this test RED with that file, line and alias named.
+//
+// ⚠⚠ NAMED, PERMANENT BLIND SPOT (#1569 round 12 task 5): this guard's AST scan cannot see
+// data_export_repository.go's GDPR export, which assembles `FROM custom_categories` at RUNTIME
+// via fmt.Sprintf across two separate Go statements. Full reasoning lives on configTombstoneTables'
+// doc comment (config_tombstone_guard_test.go) — this is the same mechanism, same blind spot,
+// deliberately left unaddressed because the export's behaviour (returning tombstoned rows for
+// Article 15) is correct as-is.
 var customCategoryTombstoneTables = []string{"custom_categories"}
 
 func TestNoCustomCategoryReadForgetsTheTombstoneFilter(t *testing.T) {
