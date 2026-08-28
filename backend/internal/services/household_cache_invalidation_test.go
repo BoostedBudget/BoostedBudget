@@ -351,7 +351,7 @@ func TestHouseholdService_SetAccountShareVisibility_BumpsOtherMemberAndHousehold
 	maskIdx := "mask-blind"
 	// #1569 round 11 task 4, coordinator round 3 fix: the fingerprint now includes identity
 	// (empty here since the mocked row's identity_type/identity_subtype are nil).
-	combined := instIdx + maskIdx + "::"
+	combined := instIdx + maskIdx + ":N:N"
 
 	pool.ExpectBegin()
 	// #1569 T7 lock-ordering fix: households FOR UPDATE first (see the method's comment),

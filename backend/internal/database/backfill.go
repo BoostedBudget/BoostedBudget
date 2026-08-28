@@ -484,11 +484,15 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 // Two properties matter and are pinned by integration tests:
 //
 //   - It is IDEMPOTENT and chain-convergent. The INSERT carries ON CONFLICT DO NOTHING against
-//     unique_user_accounts_inst_mask_blind (user_id, institution_id_blind_idx, mask_blind_idx,
-//     NULLS NOT DISTINCT) and re-reads on conflict. So a second backfill run mints nothing, and
-//     two members of the same re-link chain — which share an institution and mask — converge on
-//     one identity instead of each getting its own. Minting per account would manufacture exactly
-//     the split chain this work exists to eliminate.
+//     unique_user_accounts_inst_mask_identity_blind (user_id, institution_id_blind_idx,
+//     mask_blind_idx, identity_type, identity_subtype, NULLS NOT DISTINCT — #1569 round 11 task 4
+//     replaced the three-column unique_user_accounts_inst_mask_blind with this five-column index)
+//     and re-reads on conflict. So a second backfill run mints nothing, and two members of the
+//     SAME real account — sharing institution, mask, AND identity — converge on one identity
+//     instead of each getting its own. Minting per account would manufacture exactly the split
+//     chain this work exists to eliminate. Two accounts sharing only institution+mask but
+//     DISAGREEING on identity now correctly mint DIFFERENT rows — that is the point of the
+//     narrowing, not a regression of this convergence guarantee.
 //   - The minted row is genuinely MATCHABLE: it stores the same blind indexes lookupUserAccountID
 //     computes, so the next real re-link finds it rather than minting a second one.
 //

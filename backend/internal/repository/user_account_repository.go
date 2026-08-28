@@ -25,7 +25,10 @@ var (
 // Issue #171 - Plaid Re-Link Handling
 type UserAccountRepository interface {
 	// Create creates a new user account in the database.
-	// Returns ErrDuplicateUserAccount if the (user_id, institution_id, mask) already exists.
+	// Returns ErrDuplicateUserAccount if (user_id, institution_id, mask, identity_type,
+	// identity_subtype) already exists — #1569 round 11 task 4 added identity to this key;
+	// unique_user_account_identity (the old plaintext-only (user_id, institution_id, mask)
+	// constraint) was DROPPED by migration 000178, superseded by the blind-index constraint.
 	Create(ctx context.Context, userAccount *domain.UserAccount) error
 
 	// GetByID retrieves a user account by its ID.
@@ -178,7 +181,11 @@ func (r *userAccountRepository) Create(ctx context.Context, userAccount *domain.
 	)
 
 	if err != nil {
-		// Check for unique constraint violation on (user_id, institution_id, mask)
+		// Check for unique constraint violation on (user_id, institution_id_blind_idx,
+		// mask_blind_idx, identity_type, identity_subtype) — #1569 round 11 task 4. The literal
+		// plaintext (user_id, institution_id, mask) constraint (unique_user_account_identity) no
+		// longer exists (dropped by migration 000178); the string check below is retained only
+		// because it is harmless if the constraint name ever appears in an error message again.
 		if strings.Contains(err.Error(), "duplicate key") ||
 			strings.Contains(err.Error(), "unique constraint") ||
 			strings.Contains(err.Error(), "unique_user_account_identity") ||
@@ -353,11 +360,27 @@ func (r *userAccountRepository) GetByUserID(ctx context.Context, userID string) 
 // NULL identity_type is an ORPHAN (migration 000177's header: a user_accounts row with no
 // physical accounts ever pointing at it, so nothing could derive an identity for it) and matches
 // ANY incoming identity — it has not yet claimed one, so the first real link claims it, exactly
-// reproducing pre-task-4 behavior for this narrow legacy shape. ⚠ Nothing currently WRITES
-// identity_type onto an orphan row after this match, so a second, DIFFERENT-identity account
-// arriving later at the same institution+mask matches this same still-orphan row too — a known,
-// documented boundary of the narrowing, not a new defect (see TestFindByInstitutionAndMask_
-// OrphanRowMatchesAnyIdentity).
+// reproducing pre-task-4 behavior for this narrow legacy shape. ⚠⚠ ROUND 4 RE-DERIVATION (item 4):
+// nothing currently WRITES identity_type onto an orphan row after this match — it cannot: both
+// trg_user_accounts_identity_immutable and TestNoUpdateOfUserAccountsIdentityColumns block EVERY
+// UPDATE of identity_type/identity_subtype unconditionally, including a NULL->value "claim" — so
+// a SECOND, DIFFERENT-identity account arriving later at the same institution+mask matches this
+// SAME still-orphan row too, putting two different real identities back on one chain and
+// defeating the narrowing this whole migration exists to enforce, for exactly this one row.
+// DECIDED, NOT ASSUMED: relaxing the immutability trigger/guard to allow a one-time NULL->value
+// "claim" transition would close this gap correctly, but was rejected THIS round as
+// disproportionate risk for a narrow, load-bearing, doubly-enforced invariant this branch treats
+// as a first-class guarantee (see domain.UserAccount and TestNoUpdateOfUserAccountsIdentityColumns
+// for how deliberately it is defended). The wildcard stays, accepted as a residual risk, for two
+// reasons: (1) an orphan with ZERO physical accounts ever attached is not reachable through any
+// normal write path today — MatchOrCreate and synthesiseUserAccountID both ALWAYS set identity at
+// INSERT time, so a true orphan can only exist from historical data corruption or manual
+// intervention, never from ordinary operation; (2) production currently has zero users, so the
+// cost of this residual gap is zero today and any real occurrence would be a data-integrity
+// anomaly worth investigating on its own, not a routine event. This is a decision to accept a
+// documented, narrow risk, not an oversight — TestFindByInstitutionAndMask_
+// OrphanRowMatchesAnyIdentity_ThenRefusesADifferentIdentity proves the BOUNDARY (a second,
+// different identity DOES re-merge) rather than only the happy path a prior test proved.
 func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, userID, institutionID string, mask *string, identityType, identitySubtype *string) (*domain.UserAccount, error) {
 	// Compute blind indexes for lookup
 	institutionIDBlindIdx := r.enc.BlindIndex(institutionID)

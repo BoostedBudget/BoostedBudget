@@ -47,7 +47,7 @@ func TestHouseholdShareRepository_ListActiveUserAccountFingerprints(t *testing.T
 	require.Len(t, fps, 2)
 	assert.Equal(t, "acct-1", fps[0].UserAccountID)
 	require.NotNil(t, fps[0].PhysicalBlindIdx)
-	assert.Equal(t, "inst-blind-1"+maskIdx+":"+identityType+":"+identitySubtype, *fps[0].PhysicalBlindIdx)
+	assert.Equal(t, "inst-blind-1"+maskIdx+":S"+identityType+":S"+identitySubtype, *fps[0].PhysicalBlindIdx)
 	assert.Nil(t, fps[1].PhysicalBlindIdx, "no mask -> nil physical fingerprint")
 }
 

@@ -7,20 +7,38 @@
 -- not possible once new rows have been minted with fresh IDs. This down migration therefore only
 -- reverses the SCHEMA change (the unique index swap) — it does not attempt to merge split rows
 -- back together, delete the rows this migration minted, or undo the household_account_shares
--- fan-out. Running this down migration leaves the split data in place under the OLD, wider match
--- key; if a subsequent Plaid re-link then hits the restored non-narrowed index, it can re-collide
--- two now-separate chains again exactly as before 000100 was narrowed — that is the pre-existing
--- (pre-#1569-task-4) behavior this rollback restores, not a new defect.
--- ⚠ ROUND 2 FIX: unique_user_account_identity (dropped by the up migration, Step 1) is
--- DELIBERATELY NOT RESTORED here. It is superseded by the blind-index constraint below and by
--- migration 000100's own documented finding that it is practically inert for real (independently
--- encrypted) inserts; restoring it could also fail outright if any split-minted row from the up
--- migration still shares byte-identical ciphertext with its origin row (the masked-collision
--- case), which this rollback has no way to undo. Consistent with the HONESTY NOTE above: this
--- down migration reverses schema, not the data changes the up migration made.
+-- fan-out.
+--
+-- ⚠⚠ ROUND 4 FIX — A REAL BUG, CONFIRMED BY THE COORDINATOR, NOT JUST DESCRIBED. The previous
+-- version of this file recreated the OLD index as UNIQUE (matching pre-000178 schema exactly).
+-- That is CORRECT only when nothing has actually split. After a real split, two sibling rows
+-- deliberately share (user_id, institution_id_blind_idx, mask_blind_idx) — that sharing is the
+-- entire point of the split — so `CREATE UNIQUE INDEX` on that triple fails outright with a
+-- duplicate-key error. `IF NOT EXISTS` does not help: the index genuinely does not exist yet, so
+-- Postgres attempts the CREATE and finds the duplicate. This was invisible to
+-- ./scripts/test-migrations.sh's rollback suite because that suite runs `down -all` against a
+-- ROW-FREE schema — no rows, no duplicate, a green run that proves nothing about this exact
+-- failure mode. Probed directly against rigged post-split data: the naive unique recreation
+-- reliably fails; the fix below reliably succeeds.
+--
+-- DECISION: recreate the restored index as NON-UNIQUE, not unique, and say so plainly rather than
+-- pretend this rollback restores 000100's exact guarantee. A rollback guaranteed to fail is worse
+-- than one that honestly gives up a guarantee it cannot keep. This mirrors 000100's OWN down
+-- migration, which restores a plain, non-unique `idx_user_accounts_inst_mask_blind` for the same
+-- reason (that migration's dedup is equally irreversible). Practical consequence: after this
+-- rollback, the DATABASE no longer rejects a duplicate (user_id, institution_id_blind_idx,
+-- mask_blind_idx) row at the constraint level — re-link matching is enforced purely by
+-- application code again (UserAccountRepository.FindByInstitutionAndMask), exactly as it was
+-- BEFORE migration 000100 ever added a unique index. That is a real reduction in the DB-level
+-- guarantee, disclosed here rather than hidden behind a rollback that simply cannot run.
+--
+-- ⚠ ROUND 2 FIX (unchanged): unique_user_account_identity (dropped by the up migration, Step 1)
+-- is DELIBERATELY NOT RESTORED here either. It is superseded by the blind-index index above and
+-- by migration 000100's own documented finding that it is practically inert for real
+-- (independently encrypted) inserts; restoring it could also fail outright if any split-minted
+-- row from the up migration still shares byte-identical ciphertext with its origin row (the
+-- masked-collision case), which this rollback has no way to undo.
 DROP INDEX IF EXISTS unique_user_accounts_inst_mask_identity_blind;
 
-CREATE UNIQUE INDEX IF NOT EXISTS unique_user_accounts_inst_mask_blind
-    ON user_accounts (user_id, institution_id_blind_idx, mask_blind_idx)
-    NULLS NOT DISTINCT
-    WHERE institution_id_blind_idx IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_user_accounts_inst_mask_blind
+    ON user_accounts (user_id, institution_id_blind_idx, mask_blind_idx);

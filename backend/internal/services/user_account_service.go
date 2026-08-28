@@ -18,7 +18,9 @@ import (
 // Issue #171 - Plaid Re-Link Handling
 type UserAccountService interface {
 	// MatchOrCreate finds an existing UserAccount or creates a new one.
-	// This is the core re-link matching logic: match on (user_id, institution_id, mask).
+	// This is the core re-link matching logic: match on (user_id, institution_id, mask,
+	// identity_type, identity_subtype) — #1569 round 11 task 4 narrowed this from
+	// (user_id, institution_id, mask) alone.
 	// If found, updates type/subtype if different and returns existing (preserving customizations).
 	// If not found, creates new UserAccount with provided details.
 	//
@@ -86,8 +88,10 @@ func (s *userAccountService) MatchOrCreate(
 	// set here from the founding account's own type/subtype and never touched again — no
 	// repository method updates them. PrimaryType/PrimarySubtype above are a SEPARATE,
 	// last-writer-wins pair that DOES get overwritten on every re-link
-	// (normalizeExistingUserAccount -> UpdatePrimaryTypeAndSubtype); do not conflate them. Nothing
-	// reads IdentityType/IdentitySubtype for matching yet — a future task changes the match key.
+	// (normalizeExistingUserAccount -> UpdatePrimaryTypeAndSubtype); do not conflate them.
+	// #1569 round 11 task 4: IdentityType/IdentitySubtype ARE now read for matching — they are
+	// PART of FindByInstitutionAndMask's key (passed as identityType/identitySubtype above), so
+	// the "future task" this comment used to defer to has already landed.
 	newUA := &domain.UserAccount{
 		UserID:          userID,
 		InstitutionID:   institutionID,
