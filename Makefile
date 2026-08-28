@@ -221,41 +221,41 @@ test-scripts:
 	@echo "Running shell script regression suites"
 	@echo "========================================"
 	@echo ""
-	@echo "1/13: check-frontend-coverage.test.sh (exercises the real lcov merger)"
+	@echo "1/14: check-frontend-coverage.test.sh (exercises the real lcov merger)"
 	@if command -v lcov &> /dev/null; then \
 		bash scripts/check-frontend-coverage.test.sh; \
 	else \
 		echo "⚠️  lcov not installed — skipping (install: brew install lcov). CI always has lcov."; \
 	fi
 	@echo ""
-	@echo "2/13: check-orphan-chunks.test.sh"
+	@echo "2/14: check-orphan-chunks.test.sh"
 	@bash scripts/__tests__/check-orphan-chunks.test.sh
 	@echo ""
-	@echo "3/13: rollback-residue.test.sh"
+	@echo "3/14: rollback-residue.test.sh"
 	@bash scripts/__tests__/rollback-residue.test.sh
 	@echo ""
-	@echo "4/13: pg_dump-via-docker.test.sh"
+	@echo "4/14: pg_dump-via-docker.test.sh"
 	@bash scripts/__tests__/pg_dump-via-docker.test.sh
 	@echo ""
-	@echo "5/13: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
+	@echo "5/14: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
 	@bash scripts/__tests__/check-e2e-storage-state.test.sh
 	@echo ""
-	@echo "6/13: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
+	@echo "6/14: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
 	@bash scripts/__tests__/check-mcp-job-triggers.test.sh
 	@echo ""
-	@echo "7/13: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
+	@echo "7/14: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
 	@bash scripts/__tests__/check-typographic-quotes.test.sh
 	@echo ""
-	@echo "8/13: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is not in effect; cause unestablished)"
+	@echo "8/14: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is not in effect; cause unestablished)"
 	@bash scripts/__tests__/check-frontend-test-timeout.test.sh
 	@echo ""
-	@echo "9/13: check-isolated-test-lists.test.sh (#1537 — the 23 process-isolated test paths must exist and stay in sync)"
+	@echo "9/14: check-isolated-test-lists.test.sh (#1537 — the 23 process-isolated test paths must exist and stay in sync)"
 	@bash scripts/__tests__/check-isolated-test-lists.test.sh
 	@echo ""
-	@echo "10/13: check-e2e-seed-fails-loudly.test.sh (#1569 A1 — the E2E seeder must not swallow a failed seed)"
+	@echo "10/14: check-e2e-seed-fails-loudly.test.sh (#1569 A1 — the E2E seeder must not swallow a failed seed)"
 	@bash scripts/__tests__/check-e2e-seed-fails-loudly.test.sh
 	@echo ""
-	@echo "11/13: test-migrations-target-guard.test.sh (#1589/#1569 — host + name + live-cluster gates on the DROP target; needs a live local Postgres)"
+	@echo "11/14: test-migrations-target-guard.test.sh (#1589/#1569 — host + name + live-cluster gates on the DROP target; needs a live local Postgres)"
 	@if [ -n "$$GUARD_TEST_ADMIN_URL" ] || [ -n "$$DATABASE_URL" ] || \
 	    (command -v pg_isready >/dev/null 2>&1 && \
 	     (pg_isready -h localhost -p 5434 >/dev/null 2>&1 || pg_isready -h localhost -p 5432 >/dev/null 2>&1)); then \
@@ -266,10 +266,21 @@ test-scripts:
 		echo "    CI always has a live Postgres and runs this suite unconditionally — this skip is local-only."; \
 	fi
 	@echo ""
-	@echo "12/13: root-migrate-delegation.test.sh (#1588 — one migration runner; schema_migrations cannot lie)"
+	@echo "12/14: migrate-reset-target-guard.test.sh (#1569 round 12 task 7 — entry-point guard on 'make migrate-reset'; needs a live local Postgres)"
+	@if [ -n "$$GUARD_TEST_ADMIN_URL" ] || [ -n "$$DATABASE_URL" ] || \
+	    (command -v pg_isready >/dev/null 2>&1 && \
+	     (pg_isready -h localhost -p 5434 >/dev/null 2>&1 || pg_isready -h localhost -p 5432 >/dev/null 2>&1)); then \
+		bash scripts/__tests__/migrate-reset-target-guard.test.sh; \
+	else \
+		echo "⚠️  SKIPPED — no live Postgres reachable (tried GUARD_TEST_ADMIN_URL, DATABASE_URL, localhost:5434, localhost:5432)."; \
+		echo "    Start the dev database (make dev) to run this suite locally."; \
+		echo "    CI always has a live Postgres and runs this suite unconditionally — this skip is local-only."; \
+	fi
+	@echo ""
+	@echo "13/14: root-migrate-delegation.test.sh (#1588 — one migration runner; schema_migrations cannot lie)"
 	@bash scripts/__tests__/root-migrate-delegation.test.sh
 	@echo ""
-	@echo "13/13: typecheck-tests-gate.test.sh (#1569 — the test typecheck gate must fail closed when tsc did not finish)"
+	@echo "14/14: typecheck-tests-gate.test.sh (#1569 — the test typecheck gate must fail closed when tsc did not finish)"
 	@bash apps/web/scripts/__tests__/typecheck-tests-gate.test.sh
 	@echo ""
 	@echo "✅ Shell script regression suites passed!"

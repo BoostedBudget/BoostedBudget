@@ -299,9 +299,27 @@ assert_target_cluster_is_disposable() {
     fi
 
     # No stamp. The ONE condition under which this suite stamps on the user's behalf is a database
-    # with no user tables at all: an empty database cannot be anybody's data.
+    # with no user DATA at all: an empty database cannot be anybody's data.
+    #
+    # ⚠ #1569 round 12 task 7 (Codex finding): this used to check relkind IN ('r','p') only —
+    # ordinary and partitioned tables. A database holding ONLY a materialized view ('m') has real,
+    # queryable, materialized ROWS (not a live query like a plain view) and was judged empty by that
+    # list, silently stamped disposable, and then destroyed by DROP SCHEMA public CASCADE /
+    # migrate down -all. Enumerated deliberately, not copied forward again:
+    #   r (ordinary table)      — HAS DATA: rows live here directly.
+    #   p (partitioned table)   — HAS DATA (parent): its partitions are relkind 'r' and are already
+    #                             counted on their own, but the parent is included too so a
+    #                             partitioned table with zero partitions still counts as user schema.
+    #   m (materialized view)   — HAS DATA: REFRESH writes real heap pages; this is the gap above.
+    #   v (plain view)          — NO DATA: a stored query, nothing to lose if dropped.
+    #   S (sequence)            — NO DATA: a counter, not user-authored content.
+    #   f (foreign table)       — NO LOCAL DATA: the rows live on the remote side; dropping the
+    #                             mapping here does not destroy them.
+    #   i / I (index, part. index) — NO DATA: derivable from the table it indexes, already counted.
+    #   c (composite type)      — NO DATA: a type definition, not a row.
+    #   t (TOAST table)         — excluded by the `nspname !~ '^pg_toast'` filter below regardless.
     user_tables=$(psql "$DATABASE_URL" -tAc \
-        "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r','p') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_toast'" 2>/dev/null || true)
+        "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r','p','m') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_toast'" 2>/dev/null || true)
     user_tables="${user_tables//[[:space:]]/}"
 
     if [ "$user_tables" = "0" ]; then
@@ -711,9 +729,12 @@ apply_migrations() {
 # checked #1569 round 12 fix round 1) and the ones this specific branch's migration style (additive:
 # new tables/columns/backfills) could plausibly produce. An in-range `ALTER COLUMN ... TYPE`, or a
 # new `NOT NULL`/`CHECK` added to a column an EARLIER in-range file already depends on, would equally
-# break the assumption and this guard does NOT catch it — none exists in 000149-000179 today, but
-# that is a fact about today's migrations, not a guarantee the guard enforces. Widen the guard (and
-# this comment) the day a real case like that appears, rather than trusting the list is complete.
+# break the assumption and this guard does NOT catch it — none exists in the migrations added on
+# this branch (000149 through 000180 as of #1569 round 12 task 7; REPLAY_RANGE_START_MIGRATION's
+# upper bound is UNBOUNDED — see list_replay_range_up_files — so this citation drifts as new
+# migrations land and MUST be re-derived, not trusted, on the next round that touches this file),
+# but that is a fact about today's migrations, not a guarantee the guard enforces. Widen the guard
+# (and this comment) the day a real case like that appears, rather than trusting the list is complete.
 
 #
 # Migrations 000001-000148 are SKIPPED for this specific check, on purpose, for the reason above —
@@ -733,8 +754,9 @@ apply_migrations() {
 #     therefore changes NOTHING this hash can see. It would pass silently.
 #   - test_data_integrity's row-count check (a few hundred lines below) covers exactly FIVE
 #     pre-branch tables: users, privacy_settings, linked_items, accounts, transactions. NONE of
-#     this branch's own migrations (000149-000179) INSERT into any of those five — they add
-#     columns/tables/triggers and backfill EXISTING rows in OTHER tables (account_status_history,
+#     this branch's own migrations (000149 through 000180 as of #1569 round 12 task 7 — re-derive
+#     this against the current migration set, do not trust the number) INSERT into any of those
+#     five — they add columns/tables/triggers and backfill EXISTING rows in OTHER tables (account_status_history,
 #     holding_observations, household_account_shares, user_accounts, etc.). A duplicate-row defect
 #     introduced by one of THIS branch's own migrations would be invisible to that row-count check
 #     too, for the same reason it would be invisible to the schema hash: nobody counts those tables.
@@ -1375,7 +1397,8 @@ BACKFILL_SQL
 
     # ⚠ These five tables are the ORIGINAL seed-data set (predating #1569's replay mechanism), not
     # a table list chosen to cover this branch's own migrations. None of this branch's migrations
-    # (000149-000179) INSERT into any of these five — see the "WHAT THIS MECHANISM DOES NOT PROVE"
+    # (000149 through 000180 as of #1569 round 12 task 7 — re-derive this against the current
+    # migration set, do not trust the number) INSERT into any of these five — see the "WHAT THIS MECHANISM DOES NOT PROVE"
     # comment above replay_migrations_up_sql_range for why that matters: a duplicate-row defect in
     # one of THIS branch's migrations would show up in neither this row-count check nor the schema
     # hash. Widening this list is out of scope for #1569 round 12 — named here as a carried gap.

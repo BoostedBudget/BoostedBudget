@@ -2299,6 +2299,18 @@ jobs:
           DATABASE_URL: ${{ env.DATABASE_URL }}
         run: bash scripts/__tests__/test-migrations-target-guard.test.sh
 
+      # #1569 round 12 task 7: the entry-point guard on `make migrate-reset`
+      # (backend/scripts/assert-migrate-reset-target-disposable.sh, wired into
+      # backend/Makefile's migrate-reset target). Filed here, beside the sibling
+      # test-migrations.sh guard above, for the same reason: half its cases need a LIVE cluster to
+      # observe the guard saying YES to a real (empty) database, not just refusing. It creates and
+      # drops its own mrguard_* databases on the container; it never touches DATABASE_URL's.
+      - name: Test migrate-reset entry-point guard
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: bash scripts/__tests__/migrate-reset-target-guard.test.sh
+
       # #1569 round 5 (G3): the LAST suite under scripts/__tests__ that no workflow ran. It was
       # reachable only through `make test-scripts`, which no job invokes — so its eight cases,
       # including its own mutant, proved nothing about any commit. A guard that exists but never
