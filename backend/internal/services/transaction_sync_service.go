@@ -285,6 +285,13 @@ func (s *transactionSyncService) SetAuditLogger(al AuditLogger) {
 // identical constant and reasoning (Issue #1531 Blocker 2 — see that file's package doc comment).
 const bumpCacheTimeout = 5 * time.Second
 
+// syncHouseholdBumpAttempts/syncHouseholdBumpBackoff mirror cache_invalidation.go's identical
+// constants — see that file's householdBumpAttempts doc comment (#1569 round 11 item 3).
+const (
+	syncHouseholdBumpAttempts = 2
+	syncHouseholdBumpBackoff  = 100 * time.Millisecond
+)
+
 func (s *transactionSyncService) bumpCacheForSync(ctx context.Context, userID string) {
 	if s.cacheGens == nil {
 		return
@@ -302,23 +309,27 @@ func (s *transactionSyncService) bumpCacheForSync(ctx context.Context, userID st
 	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
 	defer cancel()
 
-	s.cacheGens.Bump(bumpCtx, cache.ScopeUser, userID, "plaid_sync")
+	// #1569 round 11 item 3: household FIRST, with retry, then the user-scope bump — see
+	// cache_invalidation.go's identical reordering for the full reasoning. In short: the ORIGINAL
+	// "user, then household" order put the higher-blast-radius bump (another household member
+	// served stale money) behind a lookup that can independently fail, and a bare Bump's own
+	// silent Redis SET failure has the identical effect regardless of order — hence BOTH the
+	// reorder AND the switch to BumpWithRetry for the household half.
+	if s.cacheHousehold != nil {
+		household, _, found, err := s.cacheHousehold.GetHouseholdForUser(bumpCtx, userID)
+		if err != nil {
+			// Void by design: the sync already committed; a household lookup failure must never
+			// retroactively fail it. The user-scope bump below still runs regardless.
+			s.logger.Error("cache invalidation: household lookup failed after transaction sync; "+
+				"household-scoped cache may serve stale data until its namespace TTL",
+				"user_id", userID, "error", err)
+		} else if found && household != nil {
+			s.cacheGens.BumpWithRetry(bumpCtx, cache.ScopeHousehold, household.ID, "plaid_sync",
+				syncHouseholdBumpAttempts, syncHouseholdBumpBackoff)
+		}
+	}
 
-	if s.cacheHousehold == nil {
-		return
-	}
-	household, _, found, err := s.cacheHousehold.GetHouseholdForUser(bumpCtx, userID)
-	if err != nil {
-		// Void by design: the sync already committed and the user-scope bump above already ran;
-		// a household lookup failure must never retroactively fail it.
-		s.logger.Error("cache invalidation: household lookup failed after transaction sync; "+
-			"household-scoped cache may serve stale data until its namespace TTL",
-			"user_id", userID, "error", err)
-		return
-	}
-	if found && household != nil {
-		s.cacheGens.Bump(bumpCtx, cache.ScopeHousehold, household.ID, "plaid_sync")
-	}
+	s.cacheGens.Bump(bumpCtx, cache.ScopeUser, userID, "plaid_sync")
 }
 
 // ProcessWebhook processes a single TRANSACTIONS webhook event
