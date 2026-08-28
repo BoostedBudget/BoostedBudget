@@ -425,8 +425,9 @@ func TestSavingsContributionRepository_ListByGoal_Empty(t *testing.T) {
 }
 
 // TestSavingsContributionRepository_DeleteManagedForTransaction tests that only
-// managed_by_reconciliation rows on a LIVE goal are deleted (Codex C4 — user rows survive;
-// #1569 C1 — a tombstoned goal's retained ledger survives too).
+// managed_by_reconciliation rows on a LIVE goal are TOMBSTONED (Codex C4 — user rows survive;
+// #1569 C1 — a tombstoned goal's retained ledger survives too; #1569 round 12 task 2 — the
+// destructive method is now an UPDATE, not a DELETE, so the provider cannot hard-delete history).
 //
 // pgxmock matches the SQL as text, so this pins the SHAPE of the statement and nothing about its
 // semantics. The behaviour lives in
@@ -438,9 +439,9 @@ func TestSavingsContributionRepository_DeleteManagedForTransaction(t *testing.T)
 	ctx := context.Background()
 	txnID := uuid.New().String()
 
-	mock.ExpectExec(`DELETE FROM savings_goal_contributions c\s+USING savings_goals g[\s\S]*g\.deleted_at IS NULL`).
-		WithArgs(txnID).
-		WillReturnResult(pgxmock.NewResult("DELETE", 2))
+	mock.ExpectExec(`UPDATE savings_goal_contributions c\s+SET deleted_at = NOW\(\), deleted_reason = \$2[\s\S]*FROM savings_goals g[\s\S]*g\.deleted_at IS NULL[\s\S]*c\.deleted_at IS NULL`).
+		WithArgs(txnID, "provider_removed_txn").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
 
 	err := repo.DeleteManagedForTransaction(ctx, txnID)
 
@@ -449,7 +450,7 @@ func TestSavingsContributionRepository_DeleteManagedForTransaction(t *testing.T)
 }
 
 // TestSavingsContributionRepository_DeleteManagedForTransaction_NoRows tests that
-// deleting for a transaction with no managed rows is not an error.
+// tombstoning for a transaction with no managed rows is not an error.
 func TestSavingsContributionRepository_DeleteManagedForTransaction_NoRows(t *testing.T) {
 	mock, repo := setupContributionMockDB(t)
 	defer mock.Close()
@@ -457,9 +458,9 @@ func TestSavingsContributionRepository_DeleteManagedForTransaction_NoRows(t *tes
 	ctx := context.Background()
 	txnID := uuid.New().String()
 
-	mock.ExpectExec(`DELETE FROM savings_goal_contributions c\s+USING savings_goals g[\s\S]*g\.deleted_at IS NULL`).
-		WithArgs(txnID).
-		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectExec(`UPDATE savings_goal_contributions c\s+SET deleted_at = NOW\(\), deleted_reason = \$2[\s\S]*FROM savings_goals g[\s\S]*g\.deleted_at IS NULL[\s\S]*c\.deleted_at IS NULL`).
+		WithArgs(txnID, "provider_removed_txn").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.DeleteManagedForTransaction(ctx, txnID)
 

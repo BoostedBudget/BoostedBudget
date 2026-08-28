@@ -26,3 +26,16 @@ const (
 // "what kind of thing did this", the way transactions.deleted_by records "plaid_sync". A
 // user-initiated delete and a provider-initiated one must stay distinguishable at a glance.
 const SoftDeletedByUser = "user"
+
+// SavingsContributionDeletedReasonProviderRemovedTxn marks a savings_goal_contributions row
+// tombstoned because the transaction it was derived from came back in Plaid's `removed` array
+// (migration 000180, #1569 round 12 task 2). This is a THIRD vocabulary, distinct from both of the
+// above: SoftDeleteReasonUser/Parent classify a USER action on the four config parents, and
+// TxnDeletedProviderRemovedPending/Posted classify a provider action on transactions themselves
+// with two values because pending-vs-posted changes what is shown. This table has exactly one
+// destructive path today — DeleteManagedForTransaction, reached only from
+// transactionSyncService.processRemovedTransactions — so one value names it precisely. It is NOT
+// "user_deleted": the provider withdrawing a transaction is not the user asking for a contribution
+// to be destroyed ("the provider is not the user", #1569's founding corollary). DeleteContribution
+// (the user-facing endpoint) remains a real hard delete and does not write this column.
+const SavingsContributionDeletedReasonProviderRemovedTxn = "provider_removed_txn"

@@ -105,10 +105,13 @@ type SavingsContributionRepository interface {
 	// Returns ErrContributionNotFound if id does not exist or does not belong to userID.
 	DeleteContribution(ctx context.Context, userID, id string) error
 
-	// DeleteManagedForTransaction removes managed_by_reconciliation rows for a transaction whose
-	// goal is still LIVE. Called before removing a transaction to avoid phantom progress (Codex C4).
-	// Rows belonging to a TOMBSTONED goal are left alone: they are that goal's retained ledger and a
-	// provider re-statement is not a deletion request (#1569 C1).
+	// DeleteManagedForTransaction TOMBSTONES managed_by_reconciliation rows for a transaction whose
+	// goal is still LIVE, so a removed transaction cannot leave phantom progress behind (Codex C4).
+	// #1569 round 12 task 2: this is an UPDATE (deleted_at/deleted_reason), NOT a hard delete —
+	// Plaid reporting a transaction as `removed` is the provider acting, not the user asking for a
+	// contribution to be destroyed. Rows belonging to a TOMBSTONED goal are left alone entirely:
+	// they are that goal's retained ledger and a provider re-statement is not a deletion request
+	// (#1569 C1).
 	DeleteManagedForTransaction(ctx context.Context, transactionID string) error
 
 	// ArchiveByGoal clears managed_by_reconciliation on all rows for a goal so the
@@ -293,6 +296,7 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 		WHERE transaction_id = $1
 		  AND status = 'confirmed'
 		  AND savings_goal_id != $2
+		  AND deleted_at IS NULL
 	`
 	if err = tx.QueryRow(ctx, capQuery, transactionID, goalID).Scan(&allocatedElsewhere); err != nil {
 		return err
@@ -308,12 +312,18 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 	now := time.Now()
 	// Step 3: Upsert as confirmed. Also promotes a pre-existing proposed row to confirmed
 	// so that a boost-match (M19) or user-confirm does not create a duplicate.
+	// ON CONFLICT target: migration 000180 (#1569 round 12 task 2) narrowed
+	// unique_contribution_per_goal_per_transaction to `... AND deleted_at IS NULL`, so a
+	// tombstoned row (Plaid `removed` on the prior transaction) no longer occupies this
+	// (transaction_id, savings_goal_id) slot forever — a fresh INSERT for the same key lands as a
+	// NEW row, never resurrecting the tombstone. The arbiter clause below must match the index
+	// predicate exactly or Postgres rejects the ON CONFLICT target.
 	upsertQuery := `
 		INSERT INTO savings_goal_contributions (
 			id, savings_goal_id, transaction_id, amount, source, status,
 			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
 		) VALUES (gen_random_uuid(), $1, $2, $3, $4, 'confirmed', true, false, CURRENT_DATE, $5, $5)
-		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL
+		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL
 		DO UPDATE SET
 			amount     = EXCLUDED.amount,
 			source     = EXCLUDED.source,
@@ -382,6 +392,7 @@ func (r *savingsContributionRepository) InsertManualFromTransaction(
 		WHERE transaction_id = $1
 		  AND status = 'confirmed'
 		  AND savings_goal_id != $2
+		  AND deleted_at IS NULL
 	`
 	if err = tx.QueryRow(ctx, capQuery, transactionID, goalID).Scan(&allocatedElsewhere); err != nil {
 		return nil, err
@@ -401,13 +412,16 @@ func (r *savingsContributionRepository) InsertManualFromTransaction(
 	// and 'rejected' tombstones are NOT overwritten — the WHERE predicate makes the DO UPDATE
 	// a no-op, which causes RETURNING to return NULL; the handler will return ErrContributionNotFound
 	// in that case. This guards against silent source/metadata corruption (Codex R4-1 follow-up).
+	// ON CONFLICT target: matches migration 000180's narrowed
+	// unique_contribution_per_goal_per_transaction — see UpsertFromTransaction's comment above for
+	// why the `AND deleted_at IS NULL` leg must be here too.
 	now := time.Now()
 	upsertQuery := `
 		INSERT INTO savings_goal_contributions (
 			id, savings_goal_id, transaction_id, amount, source, status,
 			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
 		) VALUES (gen_random_uuid(), $1, $2, $3, 'manual', 'confirmed', false, true, $4, $5, $5)
-		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL
+		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL
 		DO UPDATE SET
 			amount                    = EXCLUDED.amount,
 			source                    = 'manual',
@@ -477,13 +491,16 @@ func (r *savingsContributionRepository) UpsertProposedFromTransaction(
 	// WHERE status='proposed' clause already excludes them.
 	// occurred_on=CURRENT_DATE — same Issue #1461 UTC-calendar-day decision as
 	// UpsertFromTransaction's own doc comment above; both auto-derived paths share it.
+	// ON CONFLICT target: matches migration 000180's narrowed
+	// unique_contribution_per_goal_per_transaction — see UpsertFromTransaction's comment for why
+	// the `AND deleted_at IS NULL` leg must be here too.
 	now := time.Now()
 	upsertQuery := `
 		INSERT INTO savings_goal_contributions (
 			id, savings_goal_id, transaction_id, amount, source, status,
 			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
 		) VALUES (gen_random_uuid(), $1, $2, $3, 'confirmed_transfer', 'proposed', true, false, CURRENT_DATE, $4, $4)
-		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL
+		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL
 		DO UPDATE SET
 			amount     = EXCLUDED.amount,
 			updated_at = EXCLUDED.updated_at
@@ -505,6 +522,7 @@ func (r *savingsContributionRepository) SumConfirmedByGoal(ctx context.Context, 
 		WHERE c.savings_goal_id = $1
 		  AND g.user_id = $2
 		  AND c.status = 'confirmed'
+		  AND c.deleted_at IS NULL
 	`
 	var total float64
 	if err := r.db.QueryRow(ctx, query, goalID, userID).Scan(&total); err != nil {
@@ -523,6 +541,7 @@ func (r *savingsContributionRepository) SumConfirmedByGoalInPeriod(ctx context.C
 		WHERE c.savings_goal_id = $1
 		  AND g.user_id = $2
 		  AND c.status = 'confirmed'
+		  AND c.deleted_at IS NULL
 		  AND c.occurred_on >= $3::date
 		  AND c.occurred_on <= $4::date
 	`
@@ -565,6 +584,7 @@ func (r *savingsContributionRepository) ListByGoal(ctx context.Context, userID, 
 		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
 		WHERE c.savings_goal_id = $1
 		  AND g.user_id = $2
+		  AND c.deleted_at IS NULL
 		ORDER BY c.occurred_on DESC, c.created_at DESC`
 
 	rows, err := r.db.Query(ctx, query, goalID, userID)
@@ -607,6 +627,13 @@ func (r *savingsContributionRepository) ListByDeletedGoal(ctx context.Context, u
 		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NOT NULL
 		WHERE c.savings_goal_id = $1
 		  AND g.user_id = $2
+		  -- c.deleted_at IS NULL (#1569 round 12 task 2): a contribution tombstoned by
+		  -- DeleteManagedForTransaction is retained but permanently invisible EVERYWHERE in the
+		  -- product, including this deleted-goal ledger view. This is a READ of the ledger, not the
+		  -- exemption ListByGoal's sibling JOIN documents above — that one deliberately inverts
+		  -- g.deleted_at to show a TOMBSTONED GOAL's history; this leg is the contribution row's
+		  -- OWN tombstone and is never inverted anywhere.
+		  AND c.deleted_at IS NULL
 		ORDER BY c.occurred_on DESC, c.created_at DESC`
 
 	rows, err := r.db.Query(ctx, query, goalID, userID)
@@ -643,6 +670,9 @@ func (r *savingsContributionRepository) SumConfirmedByDeletedGoal(ctx context.Co
 		WHERE c.savings_goal_id = $1
 		  AND g.user_id = $2
 		  AND c.status = 'confirmed'
+		  -- c.deleted_at IS NULL: same reasoning as ListByDeletedGoal's own comment above — this is
+		  -- the contribution row's OWN tombstone, never inverted.
+		  AND c.deleted_at IS NULL
 	`
 	var total float64
 	if err := r.db.QueryRow(ctx, query, goalID, userID).Scan(&total); err != nil {
@@ -670,7 +700,7 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 		SELECT ` + contributionSelectColsJoined + `
 		FROM savings_goal_contributions c
 		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
-		WHERE c.id = $1 AND g.user_id = $2
+		WHERE c.id = $1 AND g.user_id = $2 AND c.deleted_at IS NULL
 		FOR UPDATE OF c
 	`
 	contrib := &domain.SavingsGoalContribution{}
@@ -712,6 +742,7 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 			WHERE transaction_id = $1
 			  AND status = 'confirmed'
 			  AND savings_goal_id != $2
+			  AND deleted_at IS NULL
 		`
 		if err = tx.QueryRow(ctx, capQuery, *contrib.TransactionID, contrib.SavingsGoalID).Scan(&allocatedElsewhere); err != nil {
 			return nil, err
@@ -729,7 +760,7 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 	updateQuery := `
 		UPDATE savings_goal_contributions
 		SET status = 'confirmed', confirmed_by_user = true, managed_by_reconciliation = false, updated_at = $1
-		WHERE id = $2
+		WHERE id = $2 AND deleted_at IS NULL
 		RETURNING ` + contributionSelectCols
 	updatedRow := tx.QueryRow(ctx, updateQuery, now, id)
 	updated, scanErr := scanContribution(updatedRow)
@@ -746,9 +777,18 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 
 // DeleteContribution removes a contribution row owned by userID.
 // Returns ErrContributionNotFound if the row does not exist or is not owned by userID.
+//
+// This IS the real, explicit hard delete: the user named this one contribution and asked for it to
+// go away, the narrowest possible explicit request (see the G2 allowlist entry above). It is
+// deliberately UNCHANGED by #1569 round 12 task 2 — that task converted the PROVIDER-triggered path
+// (DeleteManagedForTransaction) to a tombstone; hardening this user-triggered path further (audit
+// row, live-data precondition) is out of scope this round.
 func (r *savingsContributionRepository) DeleteContribution(ctx context.Context, userID, id string) error {
 	query := `
 		DELETE FROM savings_goal_contributions c
+		-- tombstone-exempt(write:savings_goal_contributions c): the real, explicit hard delete
+		-- (see the doc comment above and the G2 allowlist entry) — deliberately out of scope for
+		-- #1569 round 12 task 2, which only converted the PROVIDER-triggered path.
 		USING savings_goals g
 		WHERE c.id = $1
 		  AND c.savings_goal_id = g.id
@@ -780,6 +820,7 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 		  AND g.user_id = $2
 		  AND g.deleted_at IS NULL
 		  AND c.status = 'proposed'
+		  AND c.deleted_at IS NULL
 		RETURNING c.id, c.savings_goal_id, c.transaction_id, c.amount, c.source, c.status,
 			c.managed_by_reconciliation, c.confirmed_by_user,
 			to_char(c.occurred_on, 'YYYY-MM-DD'), c.created_at, c.updated_at`
@@ -797,7 +838,7 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 			checkQuery := `
 				SELECT 1 FROM savings_goal_contributions c
 				JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
-				WHERE c.id = $1 AND g.user_id = $2
+				WHERE c.id = $1 AND g.user_id = $2 AND c.deleted_at IS NULL
 			`
 			if chkErr := r.db.QueryRow(ctx, checkQuery, id, userID).Scan(&exists); chkErr != nil {
 				// Row not found or wrong user.
@@ -811,8 +852,19 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 	return contrib, nil
 }
 
-// DeleteManagedForTransaction removes reconciler-owned contributions for a transaction whose
+// DeleteManagedForTransaction TOMBSTONES reconciler-owned contributions for a transaction whose
 // goal is still LIVE, so a removed transaction cannot leave phantom progress behind (Codex C4).
+//
+// ⚠ #1569 round 12 task 2 — same NAME, different MECHANISM. This used to be a real `DELETE FROM
+// savings_goal_contributions`, which was SIDE-EFFECT destruction: Plaid reporting a transaction as
+// `removed` is the provider acting, not the user asking for a contribution to be destroyed ("the
+// provider is not the user" — the branch's founding corollary, and an independent Codex audit
+// named this exact call site as the headline finding that the branch's principle was not yet
+// satisfied). The method keeps its name because every caller (transactionSyncService.
+// processRemovedTransactions) and every progress computation this feeds still describes the right
+// outcome — the row now leaves PROGRESS, not the table. See migration 000180 for the two tombstone
+// columns this UPDATE writes, and domain.SavingsContributionDeletedReasonProviderRemovedTxn for why
+// 'provider_removed_txn' is the one reason value this path ever writes.
 //
 // The `g.deleted_at IS NULL` join is load-bearing and is #1569 whole-branch review C1. Without it a
 // Plaid `removed` entry arriving weeks after the user deleted a goal silently shrank that goal's
@@ -824,17 +876,23 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 // ON CONFLICT DO UPDATE promotes a proposed row to confirmed without clearing the flag. So the rows
 // this predicate matches are NOT uniformly derived-and-regenerable. For a deleted goal there is no
 // progress left to keep honest (nothing reads it into progress), only a ledger to preserve.
+//
+// `c.deleted_at IS NULL` in the WHERE makes a re-delivery of the same `removed` entry a no-op
+// instead of re-stamping deleted_at with a later timestamp — this UPDATE, unlike the old DELETE,
+// is not naturally idempotent on its own.
 // Regression: TestDeleteManagedForTransaction_DeletedGoalLedgerSurvives_Integration.
 func (r *savingsContributionRepository) DeleteManagedForTransaction(ctx context.Context, transactionID string) error {
 	query := `
-		DELETE FROM savings_goal_contributions c
-		USING savings_goals g
+		UPDATE savings_goal_contributions c
+		SET deleted_at = NOW(), deleted_reason = $2, updated_at = NOW()
+		FROM savings_goals g
 		WHERE c.savings_goal_id = g.id
 		  AND c.transaction_id = $1
 		  AND c.managed_by_reconciliation = true
 		  AND g.deleted_at IS NULL
+		  AND c.deleted_at IS NULL
 	`
-	_, err := r.db.Exec(ctx, query, transactionID)
+	_, err := r.db.Exec(ctx, query, transactionID, domain.SavingsContributionDeletedReasonProviderRemovedTxn)
 	return err
 }
 
@@ -845,7 +903,7 @@ func (r *savingsContributionRepository) ArchiveByGoal(ctx context.Context, goalI
 	query := `
 		UPDATE savings_goal_contributions
 		SET managed_by_reconciliation = false, updated_at = NOW()
-		WHERE savings_goal_id = $1 AND managed_by_reconciliation = true
+		WHERE savings_goal_id = $1 AND managed_by_reconciliation = true AND deleted_at IS NULL
 	`
 	_, err := r.db.Exec(ctx, query, goalID)
 	return err
