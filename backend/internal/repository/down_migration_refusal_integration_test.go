@@ -153,6 +153,85 @@ func TestDownMigration000151_RefusesWhileStatusHistoryExists_Integration(t *test
 	})
 }
 
+// 000035.down.sql must refuse while any transaction retains a NULL account_id or NULL
+// linked_item_id — those NULLs are retained transaction history from a disconnected account or
+// linked_item (ON DELETE SET NULL, added by 000035's up migration specifically as a "safety net"
+// per its own header comment), not migration noise. Rolling 000035 back re-arms ON DELETE CASCADE
+// and, to get there, unconditionally deletes every row carrying either NULL — exactly the kind of
+// row #1569 requires this codebase to retain by default.
+func TestDownMigration000035_RefusesWhileOrphanedTransactionsExist_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	down := readDownMigration(t, "000035_change_cascade_to_set_null.down.sql")
+
+	insertOrphanTransaction := func(t *testing.T, ctx context.Context, tx pgx.Tx, userID string, accountID, itemID *string) {
+		t.Helper()
+		_, err := tx.Exec(ctx, `
+			INSERT INTO transactions (id, user_id, account_id, linked_item_id, source, amount, date, name)
+			VALUES ($1, $2, $3, $4, 'plaid', 42.00, CURRENT_DATE, 'Orphan Probe')`,
+			uuid.New().String(), userID, accountID, itemID)
+		require.NoError(t, err, "seed orphaned transaction")
+	}
+
+	t.Run("refuses when a transaction has a NULL account_id", func(t *testing.T) {
+		tx, err := pool.Begin(ctx)
+		require.NoError(t, err)
+		defer tx.Rollback(ctx) //nolint:errcheck // always rolled back
+
+		userID, itemID, _ := seedDownProbeFixture(t, ctx, tx, "n035-noacct")
+		insertOrphanTransaction(t, ctx, tx, userID, nil, &itemID)
+
+		var n int
+		require.NoError(t, tx.QueryRow(ctx, `SELECT COUNT(*) FROM transactions WHERE account_id IS NULL`).Scan(&n))
+		require.GreaterOrEqual(t, n, 1, "the fixture must exist or this test proves nothing")
+
+		_, err = tx.Exec(ctx, down)
+		require.Error(t, err, "000035.down.sql must refuse while a transaction retains a NULL account_id")
+		assert.Contains(t, err.Error(), "refusing to roll back 000035")
+	})
+
+	t.Run("refuses when a transaction has a NULL linked_item_id", func(t *testing.T) {
+		tx, err := pool.Begin(ctx)
+		require.NoError(t, err)
+		defer tx.Rollback(ctx) //nolint:errcheck // always rolled back
+
+		userID, _, accountID := seedDownProbeFixture(t, ctx, tx, "n035-noitem")
+		insertOrphanTransaction(t, ctx, tx, userID, &accountID, nil)
+
+		var n int
+		require.NoError(t, tx.QueryRow(ctx, `SELECT COUNT(*) FROM transactions WHERE linked_item_id IS NULL`).Scan(&n))
+		require.GreaterOrEqual(t, n, 1, "the fixture must exist or this test proves nothing")
+
+		_, err = tx.Exec(ctx, down)
+		require.Error(t, err, "000035.down.sql must refuse while a transaction retains a NULL linked_item_id")
+		assert.Contains(t, err.Error(), "refusing to roll back 000035")
+	})
+
+	t.Run("proceeds when no transaction is orphaned", func(t *testing.T) {
+		tx, err := pool.Begin(ctx)
+		require.NoError(t, err)
+		defer tx.Rollback(ctx) //nolint:errcheck // always rolled back
+
+		// The discriminating case, per feedback_validate_the_mutant_not_just_the_red: without it, a
+		// down migration that refused unconditionally would satisfy the two subtests above and would
+		// permanently break scripts/test-migrations.sh's rollback suite.
+		_, err = tx.Exec(ctx, `DELETE FROM transactions WHERE account_id IS NULL OR linked_item_id IS NULL`)
+		require.NoError(t, err)
+
+		// A normal, fully-linked transaction coexists fine — it is not what the guard is watching.
+		userID, itemID, accountID := seedDownProbeFixture(t, ctx, tx, "n035-clean")
+		_, err = tx.Exec(ctx, `
+			INSERT INTO transactions (id, user_id, account_id, linked_item_id, source, amount, date, name)
+			VALUES ($1, $2, $3, $4, 'plaid', 42.00, CURRENT_DATE, 'Clean Probe')`,
+			uuid.New().String(), userID, accountID, itemID)
+		require.NoError(t, err, "seed a normal, fully-linked transaction")
+
+		_, err = tx.Exec(ctx, down)
+		require.NoError(t, err, "with no orphaned transaction, the rollback must run — otherwise the "+
+			"migration suite's down -all cycle can never pass and the guard gets deleted")
+	})
+}
+
 // seedDownProbeFixture inserts a user, linked item and account inside tx and returns their ids.
 // Everything it writes is discarded when the caller rolls back.
 func seedDownProbeFixture(t *testing.T, ctx context.Context, tx pgx.Tx, tag string) (userID, itemID, accountID string) {
