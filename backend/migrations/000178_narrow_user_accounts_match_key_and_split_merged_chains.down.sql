@@ -11,6 +11,13 @@
 -- key; if a subsequent Plaid re-link then hits the restored non-narrowed index, it can re-collide
 -- two now-separate chains again exactly as before 000100 was narrowed — that is the pre-existing
 -- (pre-#1569-task-4) behavior this rollback restores, not a new defect.
+-- ⚠ ROUND 2 FIX: unique_user_account_identity (dropped by the up migration, Step 1) is
+-- DELIBERATELY NOT RESTORED here. It is superseded by the blind-index constraint below and by
+-- migration 000100's own documented finding that it is practically inert for real (independently
+-- encrypted) inserts; restoring it could also fail outright if any split-minted row from the up
+-- migration still shares byte-identical ciphertext with its origin row (the masked-collision
+-- case), which this rollback has no way to undo. Consistent with the HONESTY NOTE above: this
+-- down migration reverses schema, not the data changes the up migration made.
 DROP INDEX IF EXISTS unique_user_accounts_inst_mask_identity_blind;
 
 CREATE UNIQUE INDEX IF NOT EXISTS unique_user_accounts_inst_mask_blind

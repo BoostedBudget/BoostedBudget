@@ -278,8 +278,12 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 // identity_type/identity_subtype, so a brokerage and an IRA (same type, different SUBTYPE) no
 // longer collide onto one chain — that SPECIFIC example above is now historical. The mechanism
 // this fix guards is still live for the residual case the narrowing does NOT close: two accounts
-// that agree on institution, mask (both NULL), type, AND subtype (e.g. two checking accounts at
-// one bank) still collide onto one chain, so snapshotIdentityKey stays load-bearing.
+// that agree on institution, mask, type, AND subtype still collide onto one chain — this is NOT
+// limited to a NULL mask (an earlier version of this note said "both NULL"; that was wrong the
+// same way task 4's household share fan-out was initially wrong about masklessness — the match
+// key's mask comparison is a plain equality for non-NULL masks too, so two accounts sharing the
+// SAME non-NULL mask collide identically) — so snapshotIdentityKey stays load-bearing for either
+// shape.
 //
 // ⚠ THE THREE COALESCE ARMS ARE EACH LOAD-BEARING, and the third one is the trap.
 // balance_snapshots.account_id is NULLABLE with ON DELETE SET NULL, so an orphaned snapshot is a

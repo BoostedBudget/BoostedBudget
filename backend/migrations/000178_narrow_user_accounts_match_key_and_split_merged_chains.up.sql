@@ -3,22 +3,32 @@
 -- chain whose physical accounts disagree on that identity.
 --
 -- WHY. Migration 000100's unique index (`unique_user_accounts_inst_mask_blind`) keys re-link
--- matching on (user_id, institution_id_blind_idx, mask_blind_idx) alone, with
--- NULLS NOT DISTINCT. Two maskless accounts at one institution are therefore FORCED onto one
--- user_accounts row even when they are different real-world accounts — the textbook case is a
--- brokerage and an IRA at one broker (both `type = 'investment'`, differing only in
--- `subtype`; there is no `type = 'brokerage'`, see 000177's header and
--- TestAccountTypeUniverseMatchesTheHoldingsGate). That merge is the root cause behind the
--- recorded $60 -> $0 household rewrite this round exists to fix: two real accounts sharing one
--- chain key means only one of them can ever be "the" live account for that chain.
+-- matching on (user_id, institution_id_blind_idx, mask_blind_idx) alone. ⚠⚠ ROUND 2 FIX: this
+-- collision is NOT maskless-only, and treating it as such was itself a defect fixed this round
+-- (see the Step 5 note below for the money bug it caused). TWO SEPARATE mechanisms force two
+-- different real-world accounts onto one user_accounts row:
+--   (a) NULLS NOT DISTINCT makes the index treat two NULL mask_blind_idx values as equal, so two
+--       MASKLESS accounts at one institution collide — the textbook case is a brokerage and an
+--       IRA at one broker (both `type = 'investment'`, differing only in `subtype`; there is no
+--       `type = 'brokerage'`, see 000177's header and TestAccountTypeUniverseMatchesTheHoldingsGate).
+--   (b) The index is a PLAIN unique constraint on any NON-NULL mask_blind_idx too — two MASKED
+--       accounts that happen to share the same institution and mask (institutions do reuse an
+--       account-number suffix across products; this needs no NULL-handling quirk at all) collide
+--       exactly the same way, and FindByInstitutionAndMask's `mask_blind_idx = $3` exact-match
+--       branch reuses the existing row for it.
+-- Either shape is the root cause behind the recorded $60 -> $0 household rewrite this round exists
+-- to fix: two real accounts sharing one chain key means only one of them can ever be "the" live
+-- account for that chain, and — as this round's fix discovered — sharing one dedup FINGERPRINT
+-- after a naive split reintroduces the same defect in the household aggregate specifically.
 --
 -- WHAT THIS MIGRATION DOES, IN ORDER, IN ONE TRANSACTION:
 --   1. Swap the match-key unique index FIRST, for one that also includes
 --      identity_type/identity_subtype. This MUST happen before the split inserts below: the OLD
---      index (institution+mask only, NULLS NOT DISTINCT) is exactly what forced the merge in the
---      first place, so minting a second maskless row at the same institution while the old index
---      is still live fails with a duplicate-key error against the very index this migration
---      exists to replace. ✅ Probed against real Postgres — the first draft of this migration had
+--      index (institution+mask only) is exactly what forced the merge in the first place — for
+--      EITHER mechanism (a) or (b) above — so minting a second row at the same institution+mask
+--      while the old index is still live fails with a duplicate-key error against the very index
+--      this migration exists to replace, whether the colliding pair is maskless or shares a
+--      non-NULL mask. ✅ Probed against real Postgres — the first draft of this migration had
 --      the swap last and failed exactly this way when replayed against rigged merged data.
 --   2. For every already-merged user_accounts row whose physical accounts (`accounts` rows
 --      pointing at it) disagree with the row's OWN identity_type/identity_subtype, mint one new
@@ -69,15 +79,41 @@
 --      introduces.
 --   5. Fan out any ACTIVE (revoked_at IS NULL) household_account_shares grant on a chain that
 --      split, so a household member does not silently lose visibility of an account they could
---      already see. The clone copies physical_account_blind_idx verbatim — that column is only
---      ever populated when the underlying account HAS a mask (see
---      HouseholdShareRepository.ListActiveUserAccountFingerprints), and every chain this
---      migration splits is, by construction, maskless (mask_blind_idx IS NULL — that is the only
---      way 000100's NULLS-NOT-DISTINCT index could have merged them in the first place), so the
---      cloned value is always NULL and the household_grants CTE's
---      `COALESCE(physical_account_blind_idx, user_account_id::text)` fallback keys the new share
---      on its own (fresh) user_account_id. No two live siblings can therefore ever collide onto
---      one dedup fingerprint by this migration's own action.
+--      already see.
+--      ⚠⚠ ROUND 2 FIX — A REAL MONEY BUG, CAUGHT BEFORE MERGE, NOT BY ME. The first version of
+--      this step copied `physical_account_blind_idx` VERBATIM into the new share, reasoning
+--      (WRONGLY) that every chain this migration splits is "by construction maskless" so the
+--      column is always NULL anyway. That is false: mechanism (b) in the WHY section above (two
+--      MASKED accounts sharing institution+mask) is a real, ordinary collision shape, and for it
+--      `physical_account_blind_idx` is NON-NULL and — because it was computed from institution+
+--      mask alone, the exact two columns that made the pre-split accounts collide — IDENTICAL
+--      across every resulting sibling. `physical_account_blind_idx` is a claim that two
+--      user_accounts rows name the SAME real physical account (see
+--      HouseholdShareRepository.ListActiveUserAccountFingerprints and
+--      analytics_repository.go's `COALESCE(physical_account_blind_idx, user_account_id::text)`
+--      dedup fingerprint, e.g. lines ~608 and ~757). Copying it verbatim after a split makes that
+--      claim FALSE: the split's whole point is that the siblings are now DIFFERENT real accounts.
+--      The household CTEs would then treat the two new chains as duplicate copies of one joint
+--      account and — combined with cloning `shared_at` verbatim too, which ties the
+--      fingerprint-contested tiebreak — silently keep only ONE of them in every household read,
+--      forever. That is exactly the $60 -> $0 class this branch exists to eliminate, reintroduced
+--      by this migration's own fan-out.
+--      THE FIX: a fanned-out share gets a fingerprint DERIVED FOR ITS OWN CHAIN, never the
+--      original's value, whenever that value is non-NULL. The derivation appends the new chain's
+--      own (identity_type, identity_subtype) to the original fingerprint — the same information
+--      that now distinguishes the siblings in user_accounts itself — so every resulting sibling's
+--      fingerprint is pairwise distinct while the UNTOUCHED original share (still on the surviving
+--      row, never rewritten by this step) keeps its original value unchanged, so an existing
+--      genuine joint-account match against another owner's independently-computed (identity-blind)
+--      fingerprint is not disturbed. This extended-format fingerprint is used ONLY for freshly
+--      minted split rows here, never retrofitted onto pre-existing shares, and application code
+--      (ListActiveUserAccountFingerprints) is deliberately NOT changed to compute this format
+--      going forward — see the task report for why that asymmetry is safe and correct rather
+--      than an oversight: after this migration runs once, MatchOrCreate's narrowed key (step 1)
+--      makes this exact collision shape structurally impossible to form again, so there is no
+--      future case that needs the extended format outside a migration's own one-time fan-out.
+--      When the original value IS NULL (the maskless mechanism (a) case), the clone stays NULL —
+--      unaffected by this fix, and covered by the pre-existing maskless integration test.
 --
 -- IDEMPOTENCY. Step 2's own WHERE clause is "a physical account disagrees with its
 -- user_accounts row's identity" — once a chain is split, every remaining physical account under
@@ -93,8 +129,8 @@
 
 -- =============================================================================
 -- Step 1: Narrow the match key FIRST — see the header comment for why this must precede the
--- split. Two maskless accounts at one institution can no longer collide onto one user_accounts
--- row when they disagree on identity_type or identity_subtype.
+-- split. Two accounts at one institution (masked or maskless) can no longer collide onto one
+-- user_accounts row when they disagree on identity_type or identity_subtype.
 -- =============================================================================
 DROP INDEX IF EXISTS unique_user_accounts_inst_mask_blind;
 
@@ -102,6 +138,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS unique_user_accounts_inst_mask_identity_blind
     ON user_accounts (user_id, institution_id_blind_idx, mask_blind_idx, identity_type, identity_subtype)
     NULLS NOT DISTINCT
     WHERE institution_id_blind_idx IS NOT NULL;
+
+-- ⚠⚠ ROUND 2 FIX — a SECOND, independent constraint blocks a masked split, discovered probing
+-- this fix against real Postgres. unique_user_account_identity (migration 000031) is a PLAIN
+-- UNIQUE (user_id, institution_id, mask) predating encryption: institution_id/mask now store
+-- CIPHERTEXT, and — per migration 000100's own header — AES-GCM's random nonce means two
+-- INDEPENDENTLY ENCRYPTED rows for the same plaintext never produce equal ciphertext, so this
+-- constraint has been practically inert for real inserts since blind indexes took over as the
+-- actual dedup mechanism. Step 2 below is the one write path that is NOT an independent
+-- encryption: it mints a new row by copying the SURVIVING row's institution_id/mask ciphertext
+-- VERBATIM (a migration cannot re-encrypt — only the application holds the key), so for a MASKED
+-- collision (mask NOT NULL) the new row's ciphertext is BYTE-IDENTICAL to the original's, which
+-- this plain constraint (no NULLS NOT DISTINCT — that quirk only ever helped the maskless case)
+-- rejects outright. Dropped here, not worked around, because it is superseded and no longer
+-- guards anything the narrowed blind-index constraint above does not already guard correctly.
+ALTER TABLE user_accounts DROP CONSTRAINT IF EXISTS unique_user_account_identity;
 
 -- =============================================================================
 -- Step 2: Identify split groups and mint new user_accounts rows.
@@ -262,7 +313,18 @@ WHERE dst.to_account_id = a.id
 INSERT INTO household_account_shares
     (household_id, user_account_id, physical_account_blind_idx, visibility, shared_at)
 SELECT DISTINCT
-    has.household_id, sg.new_ua_id, has.physical_account_blind_idx, has.visibility, has.shared_at
+    has.household_id,
+    sg.new_ua_id,
+    -- Re-derive the fingerprint FOR THIS NEW CHAIN rather than cloning the original's value
+    -- (see the Step 5 comment above for the money bug that verbatim-copying caused). NULL stays
+    -- NULL (maskless mechanism); a non-NULL value is disambiguated by appending the new chain's
+    -- own identity, so it can never collide with the untouched original share's still-plain value.
+    CASE
+        WHEN has.physical_account_blind_idx IS NULL THEN NULL
+        ELSE has.physical_account_blind_idx || ':' || sg.g_type || ':' || COALESCE(sg.g_subtype, '')
+    END,
+    has.visibility,
+    has.shared_at
 FROM household_account_shares has
 JOIN tmp_1569_t4_split_groups sg ON sg.old_ua_id = has.user_account_id
 WHERE has.revoked_at IS NULL
