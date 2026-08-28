@@ -1,5 +1,22 @@
 -- Rollback for 000158: reverse ONLY what the up migration added.
 --
+-- ⚠⚠ #1569 round 12 task 4 (fix round 1): this file is a DIFFERENT hazard class from the
+-- REFUSE-while-rows-exist guards added elsewhere this round (000016/000017/000020/000027/
+-- 000051/000096/000097/000157/000160/000163/000164/000169, plus the earlier
+-- 000150/000151/000180). Those guards stop a DROP/DELETE from destroying rows that exist
+-- nowhere else. This file destroys nothing -- every tombstoned row is still physically present
+-- afterward. What it does is RESURRECT: dropping deleted_at makes a tombstoned row
+-- indistinguishable from a live one, so a user who deleted a goal finds it back, counting toward
+-- totals again, with no data actually missing. Destruction and resurrection want the same
+-- instinct ("don't run this on real data") but a different fix -- a row-count refusal guard is
+-- the wrong tool for "this data still exists, but the meaning of a column it depends on is about
+-- to disappear." That is why this file was deliberately left uninstrumented in
+-- round 12 task 4 rather than given the same DO-block treatment: the three numbered warnings
+-- below are the right shape of fix for THIS hazard, not a gap. If a future round wants this
+-- enforced rather than documented, it needs its own mechanism (e.g. detecting whether any row
+-- has deleted_at IS NOT NULL and refusing on THAT basis, which is closer to 000151's shape than
+-- to a plain row-count check) -- do not reach for the destruction-guard pattern unmodified.
+--
 -- READ THIS BEFORE ROLLING BACK.
 --
 --   1. Dropping deleted_at makes every tombstoned savings goal, boost, budget and budget category
