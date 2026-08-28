@@ -217,7 +217,7 @@ func fragmentsUsedIn(text string, frags map[string]string) []string {
 	var result []string
 	for name, val := range frags {
 		quoted := regexp.QuoteMeta(name)
-		pattern := `\b` + quoted + `\b|` + quoted + `SQL\(`
+		pattern := `\b` + quoted + `\b|\b` + quoted + `SQL\(`
 		if regexp.MustCompile(pattern).MatchString(text) {
 			result = append(result, val)
 		}
