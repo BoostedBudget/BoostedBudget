@@ -477,15 +477,29 @@ func (r *savingsGoalRepository) PurgeGoal(ctx context.Context, id, userID string
 
 	// This is the destruction the tombstone was deferring: ON DELETE CASCADE takes
 	// savings_goal_contributions, budget_categories and savings_goal_category_detach with it.
+	//
+	// `AND deleted_at IS NOT NULL` is repeated here on purpose (#1569 round 14, reversing the
+	// earlier "restating it only lets the two predicates disagree" reasoning). That reasoning was
+	// backwards: the SELECT ... FOR UPDATE's Go `if deletedAt == nil` is real protection today, but
+	// it is a fact about THIS FUNCTION'S CONTROL FLOW, not about the SQL text, and no guard can see
+	// it — TestEveryAllowlistedHistoryDeleteStillCarriesItsPredicate pins only the DELETE's own
+	// WHERE clause. A future edit that weakened or deleted the Go check while leaving this DELETE
+	// untouched would still hard-delete a live goal with every guard green. Restating the leg here
+	// means the two predicates CAN disagree — and when they do, this DELETE affects zero rows and
+	// fails closed (returns ErrSavingsGoalNotFound below) instead of destroying a live goal. The row
+	// lock from the SELECT above still prevents any concurrent write from doing the reverse: nothing
+	// can flip deleted_at back to NULL between that SELECT and this DELETE.
 	ct, err := tx.Exec(ctx, `
-		-- tombstone-exempt(write:savings_goals): the SELECT ... FOR UPDATE above has already asserted
-		-- deleted_at IS NOT NULL and refused a live goal, so re-stating it here would only make the
-		-- two predicates able to disagree (#1569 T8 write-target audit).
-		DELETE FROM savings_goals WHERE id = $1 AND user_id = $2`, id, userID)
+		-- tombstone-exempt(write:savings_goals): the predicate is deliberately narrow, not absent --
+		-- see the comment above (#1569 round 14 write-target audit).
+		DELETE FROM savings_goals WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL`, id, userID)
 	if err != nil {
 		return fmt.Errorf("purge savings goal %s: %w", id, err)
 	}
 	if ct.RowsAffected() == 0 {
+		// Either the goal does not exist / belongs to another user, or (should be unreachable given
+		// the FOR UPDATE check above) it was live after all. ErrSavingsGoalNotFound is imprecise for
+		// the second case, but the important property holds regardless: nothing was destroyed.
 		return domain.ErrSavingsGoalNotFound
 	}
 
