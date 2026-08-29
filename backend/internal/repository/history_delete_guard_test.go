@@ -2,6 +2,7 @@ package repository
 
 import (
 	"go/ast"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -208,9 +209,10 @@ var allowedHistoryDeletes = map[string]historyDeleteAllowance{
 // (`public /* x */ . transactions`) "is still missed, and the guard makes no claim about those".
 // That is FALSE, and understating a guard is the same defect as overstating it: a reader either
 // writes a redundant guard or works around a hole that is not there. Both call sites blank or strip
-// comments BEFORE this matcher runs — blankSQLComments (history_delete_sql_guard_test.go, comment
-// bytes → spaces, byte offsets preserved) and normaliseSQL (below) — so by the time the regexp sees
-// the text the comment is whitespace, and `(?:"?[a-z_][a-z0-9_]*"?\s*\.\s*)?` already tolerates
+// comments BEFORE this matcher runs — blankSQLCommentsAndLiterals (history_delete_sql_guard_test.go,
+// comment AND quoted-literal bytes → spaces, byte offsets preserved) and normaliseSQL (below) — so
+// by the time the regexp sees the text the comment is whitespace, and
+// `(?:"?[a-z_][a-z0-9_]*"?\s*\.\s*)?` already tolerates
 // whitespace on both sides of the dot. That example MATCHES. So does `DELETE -- c\n FROM
 // transactions`. Measured against this function, not reasoned about.
 //
@@ -335,7 +337,8 @@ func historyDeleteSites(sql string, tables map[string]string) []string {
 }
 
 // historyDeleteSiteFound is what the scan saw for one "<rel>#<func>|<table>" key: the line(s) the
-// enclosing function starts on, and the normalised text of each delete statement.
+// enclosing function (or, since #1569 round 14 finding 2, package-level const/var) starts on, and
+// the normalised text of each delete statement.
 type historyDeleteSiteFound struct {
 	lines      []string
 	statements []string
@@ -351,9 +354,43 @@ type historyDeleteSiteFound struct {
 // Only string LITERALS are inspected, so prose in a comment that quotes `DELETE FROM budgets` — and
 // four files do exactly that, explaining why they no longer do it — is correctly ignored. Literals
 // are grouped per assembly unit, never per function; see literalUnitsInFunc.
+//
+// ⚠ #1569 round 14 finding 2: PACKAGE-LEVEL const/var DECLARATIONS ARE SCANNED TOO, since this
+// round. Before this fix the walk inspected `*ast.FuncDecl` bodies only, so
+// `const purgeSQL = "DELETE FROM transactions"` sitting at package scope — never inside any
+// function body — was invisible to G2, and to every other guard in this file: G4
+// (history_delete_sql_guard_test.go) does not read Go at all, so nothing else would have caught
+// it either. Re-derived 2026-08-29 by running literalUnitsIn(pf.file) — the WHOLE-FILE walk the
+// four tombstone guards already exercise, per guard_ast_shared_test.go's doc comment — over every
+// production file under backend/internal and diffing its output against the FuncDecl-only walk:
+// TODAY'S TREE HAS ZERO package-level string literals that reference a history-bearing table,
+// hard-delete or otherwise, so this was a LATENT seam, not a live hole, and closing it changes no
+// existing allowlist key. See TestHistoryDeleteScan_SeesAPackageLevelConstant for the guard against
+// a future one going unseen the same way.
+//
+// The fix reuses literalUnitsIn (guard_ast_shared_test.go) — the same argument-aware partition the
+// FuncDecl loop already trusts — applied to each top-level `*ast.ValueSpec` directly (a ValueSpec
+// is itself an sqlAssemblyUnit boundary, so this cannot merge two unrelated top-level declarations
+// into one unit). It does NOT switch the FuncDecl loop to a single whole-file
+// `literalUnitsIn(pf.file)` call: that would require re-deriving, for every literal, WHICH
+// enclosing function owns it in order to preserve the `<rel>#<func>|<table>` key shape every
+// existing allowlist entry depends on — a large, hard-to-review diff for a change this round's own
+// verification found to be a no-op against the current tree. Extending the walk with a small,
+// additive loop is the same coverage gain with a much smaller blast radius.
 func scanHistoryDeletes(t *testing.T, root string, tables map[string]string) map[string]*historyDeleteSiteFound {
 	t.Helper()
 	found := map[string]*historyDeleteSiteFound{}
+
+	addUnit := func(pf goProductionFile, name string, line int, unit string) {
+		for tbl, stmts := range historyDeleteStatements(unit, tables) {
+			key := pf.rel + "#" + name + "|" + tbl
+			if found[key] == nil {
+				found[key] = &historyDeleteSiteFound{}
+			}
+			found[key].lines = append(found[key].lines, strconv.Itoa(line))
+			found[key].statements = append(found[key].statements, stmts...)
+		}
+	}
 
 	// skipTestdata=false: this scan never excluded testdata/ and today's testdata fixtures (built
 	// for annotation_capture_guard_test.go) contain no DELETE/TRUNCATE of a history table, so nothing
@@ -361,18 +398,44 @@ func scanHistoryDeletes(t *testing.T, root string, tables map[string]string) map
 	// silently adopting the tombstone guards' is the point (see goProductionFiles' doc comment).
 	for _, pf := range goProductionFiles(t, root, false, false) {
 		for _, decl := range pf.file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
-			}
-			for _, unit := range literalUnitsInFunc(pf.fset, fn.Body) {
-				for tbl, stmts := range historyDeleteStatements(unit, tables) {
-					key := pf.rel + "#" + fn.Name.Name + "|" + tbl
-					if found[key] == nil {
-						found[key] = &historyDeleteSiteFound{}
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Body == nil {
+					continue
+				}
+				for _, unit := range literalUnitsInFunc(pf.fset, d.Body) {
+					addUnit(pf, d.Name.Name, pf.fset.Position(d.Pos()).Line, unit)
+				}
+			case *ast.GenDecl:
+				// #1569 round 14 finding 2. Only CONST and VAR carry values worth scanning; IMPORT
+				// and TYPE declarations have no string literal that could assemble a query.
+				if d.Tok != token.CONST && d.Tok != token.VAR {
+					continue
+				}
+				for _, spec := range d.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
 					}
-					found[key].lines = append(found[key].lines, strconv.Itoa(pf.fset.Position(fn.Pos()).Line))
-					found[key].statements = append(found[key].statements, stmts...)
+					// ⚠ A ValueSpec IS the sqlAssemblyUnit boundary (sqlAssemblyUnit in
+					// guard_ast_shared_test.go), so `const a, b = "x", "y"` merges a's and b's
+					// literals into ONE unit — the same behaviour this primitive already has inside
+					// a function body (a multi-name `var` statement there merges identically). That
+					// is a property of the shared primitive, not something this walk introduces, so
+					// it is not re-litigated here; the key just names EVERY identifier the merged
+					// unit could belong to, rather than silently picking the first and mislabeling
+					// the rest.
+					names := make([]string, 0, len(vs.Names))
+					for _, n := range vs.Names {
+						names = append(names, n.Name)
+					}
+					name := "package"
+					if len(names) > 0 {
+						name = strings.Join(names, ",")
+					}
+					for _, unit := range literalUnitsIn(vs) {
+						addUnit(pf, name, pf.fset.Position(vs.Pos()).Line, unit.sql)
+					}
 				}
 			}
 		}
@@ -1001,6 +1064,55 @@ func TestHistoryDeleteScan_DoesNotLendAPredicateFromASiblingArgument(t *testing.
 		if missing := missingPredicateFragments(site.statements[0], entry.predicate); len(missing) > 0 {
 			t.Fatalf("splitting by argument broke a legitimately concatenated query, missing %v "+
 				"(statement: %s)", missing, site.statements[0])
+		}
+	})
+}
+
+// TestHistoryDeleteScan_SeesAPackageLevelConstant is the regression pin for #1569 round 14 finding
+// 2: before this round, scanHistoryDeletes walked `*ast.FuncDecl` bodies only, so a hard delete of
+// a history-bearing table assembled entirely in a package-level `const`/`var` — never inside any
+// function body — was invisible to G2, and (since G4 does not scan Go at all) invisible to every
+// guard in the tree. Re-derived 2026-08-29: today's tree has no such declaration (verified by
+// diffing literalUnitsIn(pf.file) against the FuncDecl-only walk across all of backend/internal),
+// so this was latent, not live — this test exists so it cannot become latent again silently.
+func TestHistoryDeleteScan_SeesAPackageLevelConstant(t *testing.T) {
+	t.Run("a single-name const at package scope is seen", func(t *testing.T) {
+		dir := t.TempDir()
+		src := "package fake\n\n" +
+			"const purgeSQL = `DELETE FROM savings_goals WHERE account_id = $1`\n\n" +
+			"func Purge(db any) { db.Exec(purgeSQL) }\n"
+		if err := os.WriteFile(filepath.Join(dir, "fake.go"), []byte(src), 0o600); err != nil {
+			t.Fatalf("writing fixture: %v", err)
+		}
+		found := scanHistoryDeletes(t, dir, historyBearingTables)
+		site := found["fake.go#purgeSQL|savings_goals"]
+		if site == nil {
+			t.Fatalf("the package-level const's DELETE was not seen at all; keys: %v", found)
+		}
+		if len(site.statements) != 1 {
+			t.Fatalf("expected exactly one statement, got %d: %q", len(site.statements), site.statements)
+		}
+	})
+
+	t.Run("a var block entry is seen, keyed by its own name, not a sibling's", func(t *testing.T) {
+		dir := t.TempDir()
+		src := "package fake\n\n" +
+			"var (\n" +
+			"\tunrelatedSQL = `SELECT 1`\n" +
+			"\tpurgeSQL     = `DELETE FROM boosts WHERE user_id = $1`\n" +
+			")\n\n" +
+			"func Purge(db any) { db.Exec(purgeSQL) }\n"
+		if err := os.WriteFile(filepath.Join(dir, "fake.go"), []byte(src), 0o600); err != nil {
+			t.Fatalf("writing fixture: %v", err)
+		}
+		found := scanHistoryDeletes(t, dir, historyBearingTables)
+		if _, ok := found["fake.go#unrelatedSQL|boosts"]; ok {
+			t.Fatalf("unrelatedSQL's own ValueSpec has no DELETE at all; it must not be attributed "+
+				"one via purgeSQL's separate declaration. keys: %v", found)
+		}
+		site := found["fake.go#purgeSQL|boosts"]
+		if site == nil {
+			t.Fatalf("purgeSQL's DELETE was not seen; keys: %v", found)
 		}
 	})
 }

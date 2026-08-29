@@ -281,10 +281,11 @@ func scanNonGoHistoryDeletes(t *testing.T, backendDir, sub string, ext string, s
 		if stripShellComments {
 			text = shellCommentLineRegexp.ReplaceAllString(text, "")
 		}
-		// Strip SQL comments before matching, so a comment quoting a delete is not a delete — and
-		// keep a line-number map by counting newlines in the ORIGINAL text up to the match, which
-		// requires matching on a comment-blanked copy of the SAME LENGTH.
-		blanked := blankSQLComments(text)
+		// Strip SQL comments AND quoted literals before matching, so a comment or a string
+		// quoting a delete is not a delete (#1569 round 14 finding 1) — and keep a line-number
+		// map by counting newlines in the ORIGINAL text up to the match, which requires matching
+		// on a blanked copy of the SAME LENGTH.
+		blanked := blankSQLCommentsAndLiterals(text)
 		rel, _ := filepath.Rel(backendDir, path)
 		rel = filepath.ToSlash(rel)
 
@@ -316,19 +317,112 @@ func scanNonGoHistoryDeletes(t *testing.T, backendDir, sub string, ext string, s
 	return out
 }
 
-// blankSQLComments replaces the contents of SQL comments with spaces, preserving byte offsets so
-// that line numbers computed against the original text stay correct.
-func blankSQLComments(s string) string {
-	blank := func(m string) string {
-		return strings.Map(func(r rune) rune {
-			if r == '\n' {
-				return r
+// blankSQLCommentsAndLiterals replaces the contents of SQL comments AND single-quoted string
+// literals with spaces, preserving byte offsets (and length) so that line numbers computed
+// against the original text stay correct and no downstream slice shifts.
+//
+// ⚠ #1569 round 14 finding 1. This used to blank only comments (as blankSQLComments), and the
+// history-delete MATCH ran against that comment-only-blanked text — before quoted literals were
+// stripped. normaliseSQL blanks literals too, but only AFTER the match already happened, on the
+// already-sliced-out statement substring. So a legitimate `SELECT 'DELETE FROM transactions';`
+// matched historyDeleteRefRegexp directly on the text inside the quotes, and a semicolon INSIDE a
+// literal could end a statement's slice early (a false statement boundary), truncating a real
+// delete before a predicate fragment past that point.
+//
+// ⚠ WHY THIS IS A HAND-WRITTEN SCANNER, NOT TWO SEQUENTIAL REGEXPS (the first draft of this fix,
+// and it was WRONG — caught by TestNoUnallowlistedMigrationHistoryDelete going from 5 qualified
+// down-deletes to 4, not by reasoning). Stripping comments first and THEN blanking literals — the
+// same order normaliseSQL uses on an already-extracted, single-statement slice — is unsound when
+// applied to a WHOLE FILE: 000164_audit_trail_survives_definition_purge.down.sql's RAISE EXCEPTION
+// message is a single-quoted literal that itself contains the text `-- exactly the audit` as
+// DATA. A comments-first pass sees that `--` before it ever learns it is inside a string, deletes
+// to end-of-line — INCLUDING the literal's own closing quote — and leaves the file with an odd
+// number of `'` for the regexp-based literal pass to pair up. Every quote from that point on pairs
+// with the WRONG partner, and the real `DELETE FROM rollover_history WHERE ...` several lines
+// later — a real down-migration delete of a history table — landed inside the resulting "literal"
+// and vanished from the scan entirely. That is a guard going BLIND on live, real SQL, which is far
+// worse than the false positive this fix set out to close.
+//
+// A single left-to-right pass avoids this because state has priority: once a `'` opens a string,
+// nothing inside it — not `--`, not `/*` — is examined as anything but string content until its
+// OWN closing `'` (respecting the `''` escape) is found. A `--` or `/*` is only recognised as a
+// comment starter when the scanner is not already inside a string.
+//
+// ⚠ DOLLAR-QUOTING IS DELIBERATELY LEFT ALONE, unlike normaliseSQL. `$$ ... $$` is Postgres's
+// quoting for a PROCEDURAL BODY (a DO block or a function body), not for opaque string data — and
+// apps/web/scripts/seed-e2e-data.sql, G4's frontend-fixture universe, is two `DO $$ ... $$;`
+// blocks wrapping every statement it runs, including the very DELETEs this guard exists to find.
+// Blanking dollar-quoted regions before matching — which is what normaliseSQL does, safely, to an
+// ALREADY-EXTRACTED delete statement — would blank the DELETEs themselves out of the scan here and
+// turn the whole file invisible to G4. A single-quoted literal never contains a DELETE this guard
+// needs to see (nothing writes SQL keywords as VALUES), so it is safe to blank; a dollar-quoted
+// block routinely does, so it is not. The scanner below therefore gives `$` no special meaning at
+// all — it is an ordinary character, and any comment/literal INSIDE a dollar-quoted block (like
+// 000164's RAISE EXCEPTION string) is still recognised and blanked normally, by the same pass.
+// TestNoUnallowlistedFrontendFixtureHistoryDelete is the regression pin for this half (fails closed
+// — finds zero deletes when three are allowlisted — if dollar-quoted regions stop being scanned);
+// TestG4Classification_QuotedLiteralIsNotAMatch and
+// TestG4Classification_CommentMarkerInsideALiteralDoesNotBlindTheScan are the pins for the
+// state-machine ordering.
+//
+// Block comments are treated as NON-NESTED, matching the regexp this replaces (`/\*.*?\*/`,
+// non-greedy) — Postgres itself nests them, but nothing in this tree does, and this is a text
+// scanner, not a parser. An unterminated block comment or string literal blanks to end of file
+// rather than panicking or looping; nothing in the corpus writes one, and either would still be a
+// scan the guard fails closed on (zero deletes found) rather than a crash.
+func blankSQLCommentsAndLiterals(s string) string {
+	out := make([]byte, len(s))
+	blank := func(from, to int) {
+		for k := from; k < to; k++ {
+			if s[k] == '\n' {
+				out[k] = '\n'
+			} else {
+				out[k] = ' '
 			}
-			return ' '
-		}, m)
+		}
 	}
-	s = sqlBlockCommentRegexp.ReplaceAllStringFunc(s, blank)
-	return sqlLineCommentRegexp.ReplaceAllStringFunc(s, blank)
+	n := len(s)
+	for i := 0; i < n; {
+		switch {
+		case i+1 < n && s[i] == '-' && s[i+1] == '-':
+			j := i
+			for j < n && s[j] != '\n' {
+				j++
+			}
+			blank(i, j)
+			i = j
+		case i+1 < n && s[i] == '/' && s[i+1] == '*':
+			j := i + 2
+			for j+1 < n && (s[j] != '*' || s[j+1] != '/') {
+				j++
+			}
+			end := j + 2
+			if end > n {
+				end = n
+			}
+			blank(i, end)
+			i = end
+		case s[i] == '\'':
+			j := i + 1
+			for j < n {
+				if s[j] == '\'' {
+					if j+1 < n && s[j+1] == '\'' {
+						j += 2
+						continue
+					}
+					j++
+					break
+				}
+				j++
+			}
+			blank(i, j)
+			i = j
+		default:
+			out[i] = s[i]
+			i++
+		}
+	}
+	return string(out)
 }
 
 // repoRootDir resolves the repository root, one level above backend/. G4's universe reaches
@@ -660,6 +754,115 @@ func TestG4Classification_SeesTheShapesThatMatter(t *testing.T) {
 	}
 }
 
+// TestG4Classification_QuotedLiteralIsNotAMatch is the two-direction proof for #1569 round 14
+// finding 1: G4 used to run historyDeleteRefRegexp against comment-only-blanked text, BEFORE
+// quoted literals were stripped, so a legitimate `SELECT 'DELETE FROM <table>';` could be
+// classified as a real history delete, and a semicolon inside a literal could end a real
+// statement's slice early. Both directions matter equally: fixing the false positive by blanking
+// too aggressively (or in the wrong order) could just as easily hide a REAL delete.
+func TestG4Classification_QuotedLiteralIsNotAMatch(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "migrations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, "migrations", name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Direction 1: a real delete of a history table must still be caught.
+	write("000910_real.up.sql", "DELETE FROM transactions WHERE user_id = '11111111-1111-1111-1111-111111111111';\n")
+
+	// Direction 2: a string literal that merely QUOTES a delete must not be classified as one, and
+	// a semicolon inside a literal must not manufacture a false statement boundary that truncates
+	// a later, real delete.
+	write("000911_quoted.up.sql", "SELECT 'DELETE FROM transactions';\n"+
+		"CREATE OR REPLACE FUNCTION f() RETURNS void AS $$\n"+
+		"BEGIN\n"+
+		"  RAISE NOTICE 'contains a fake terminator; right here';\n"+
+		"END;\n"+
+		"$$ LANGUAGE plpgsql;\n"+
+		"DELETE FROM balance_snapshots WHERE account_id = 'a';\n")
+
+	sites := scanNonGoHistoryDeletes(t, dir, "migrations", ".sql", false)
+
+	got := map[string]nonGoDeleteSite{}
+	for _, s := range sites {
+		got[s.file+"|"+s.table] = s
+	}
+
+	real, ok := got["migrations/000910_real.up.sql|transactions"]
+	if !ok {
+		t.Fatalf("the real DELETE in 000910 was not seen at all; sites: %+v", sites)
+	}
+	if !real.qualified {
+		t.Errorf("the real DELETE in 000910 should be qualified, got %+v", real)
+	}
+
+	if quoted, ok := got["migrations/000911_quoted.up.sql|transactions"]; ok {
+		t.Errorf("a DELETE spelled inside a string literal must not be classified as a delete of "+
+			"transactions, got %+v", quoted)
+	}
+	balance, ok := got["migrations/000911_quoted.up.sql|balance_snapshots"]
+	if !ok {
+		t.Fatalf("the real DELETE of balance_snapshots after the quoted noise was not seen; sites: %+v", sites)
+	}
+	if !balance.qualified {
+		t.Errorf("the real DELETE of balance_snapshots should still be qualified after the "+
+			"quoted-literal noise ahead of it, got %+v — a false statement boundary would have "+
+			"truncated its WHERE clause out of the slice", balance)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("expected exactly 2 sites (the two real deletes), got %d: %+v", len(got), sites)
+	}
+}
+
+// TestG4Classification_CommentMarkerInsideALiteralDoesNotBlindTheScan is the regression pin for
+// the bug the first draft of finding 1's fix actually shipped: a comments-first, THEN-literals
+// pass is unsound on a whole file, because a `--` living inside a string literal's own text gets
+// treated as a comment starter before the scanner knows it is inside a string, eating the
+// literal's closing quote and leaving every quote after it paired with the wrong partner. This is
+// exactly 000164_audit_trail_survives_definition_purge.down.sql's shape, reduced to a minimal
+// case: a RAISE EXCEPTION string containing `-- looks like a comment` sits BEFORE a real,
+// qualified DELETE of a history table. A sequential comments-then-literals pass loses the real
+// DELETE entirely (0 sites); the single-pass scanner must not.
+func TestG4Classification_CommentMarkerInsideALiteralDoesNotBlindTheScan(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "migrations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The trailing `ALTER TABLE ... 'some_constraint'` after the real DELETE is the piece a naive
+	// repro is missing: a sequential comments-then-literals pass eats the RAISE EXCEPTION
+	// literal's own closing quote as "comment", leaving its OPENING quote unpaired — and an
+	// unpaired quote does not fail to match, it pairs with the NEXT quote anywhere later in the
+	// file, blanking everything in between (the real DELETE included) as if it were all one string.
+	// Without a later quote to wrongly pair with, the orphaned quote just fails to match anything
+	// and the bug does not reproduce — which is exactly why the first version of this test passed
+	// against the very mutant it exists to catch.
+	body := "DO $$\n" +
+		"BEGIN\n" +
+		"    RAISE EXCEPTION 'this text contains -- looks like a comment but is DATA, not code';\n" +
+		"END $$;\n" +
+		"\n" +
+		"DELETE FROM rollover_history WHERE budget_id IS NULL;\n" +
+		"\n" +
+		"ALTER TABLE rollover_history DROP CONSTRAINT IF EXISTS 'unrelated_later_quote';\n"
+	if err := os.WriteFile(filepath.Join(dir, "migrations", "000920_v.down.sql"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sites := scanNonGoHistoryDeletes(t, dir, "migrations", ".sql", false)
+	if len(sites) != 1 {
+		t.Fatalf("expected the real DELETE to still be found despite the embedded `--` inside the "+
+			"RAISE EXCEPTION literal ahead of it; got %d sites: %+v", len(sites), sites)
+	}
+	if sites[0].table != "rollover_history" || !sites[0].qualified {
+		t.Fatalf("expected a qualified delete of rollover_history, got %+v", sites[0])
+	}
+}
+
 // TestG4Classification_ShellCommentIsNotADelete pins the one shell-specific rule: a `#` comment
 // line is not code, but a `#` inside a string is not a comment.
 func TestG4Classification_ShellCommentIsNotADelete(t *testing.T) {
@@ -761,7 +964,7 @@ func readMigrationDeleteStatement(t *testing.T, name, table string) string {
 	if err != nil {
 		t.Fatalf("reading %s: %v", name, err)
 	}
-	text := blankSQLComments(string(raw))
+	text := blankSQLCommentsAndLiterals(string(raw))
 	for _, m := range historyDeleteRefRegexp(historyBearingTables).FindAllStringSubmatchIndex(text, -1) {
 		if !strings.EqualFold(text[m[2]:m[3]], table) {
 			continue
