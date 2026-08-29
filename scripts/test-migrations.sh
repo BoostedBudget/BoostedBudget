@@ -94,6 +94,39 @@ run_psql() {
     psql "$DATABASE_URL" -t -c "$1" 2>/dev/null | tr -d ' \n' || echo ""
 }
 
+# capture_all_table_counts prints "<table> <rowcount>" for EVERY ordinary table in the public
+# schema, one per line, sorted by table name (#1569 round 14 task 8).
+#
+# WHY EVERY TABLE, NOT A LIST. test_data_integrity's original row-count check names five tables by
+# hand (users, privacy_settings, linked_items, accounts, transactions). Those five are the ORIGINAL
+# seed set and none of this branch's own migrations INSERT into any of them, so a duplicate-row or
+# mis-update defect introduced by a migration in the replay range was invisible to it — and equally
+# invisible to test_idempotency's schema hash, which is `pg_dump --schema-only` and never contains
+# data. A hand-maintained table list has no way to notice the table nobody added to it, which is the
+# exact failure mode that produced that gap; enumerating pg_class instead cannot go stale.
+#
+# query_to_xml is the standard way to run COUNT(*) over a dynamically-named table from plain SQL
+# (no PL/pgSQL block, no server-side function to create and clean up). `format('%I')` quotes the
+# identifier, so a table name needing quoting cannot break the query or inject into it.
+#
+# schema_migrations is excluded deliberately: it is golang-migrate's own tracking table, and a psql
+# replay never touches it (that is precisely why the replay mechanism exists). Partitions and views
+# are excluded by relkind='r'.
+capture_all_table_counts() {
+    psql "$DATABASE_URL" -At -F' ' -c "
+        SELECT c.relname,
+               (xpath('/row/cnt/text()',
+                      query_to_xml(format('SELECT COUNT(*) AS cnt FROM public.%I', c.relname),
+                                   false, true, '')))[1]::text::bigint
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relkind = 'r'
+          AND c.relname <> 'schema_migrations'
+        ORDER BY c.relname
+    " 2>/dev/null
+}
+
 # Get schema hash for idempotency comparison
 # Uses --schema=public to dump only application tables, excluding:
 #   - golang-migrate tracking table (schema_migrations)
@@ -759,21 +792,29 @@ apply_migrations() {
 #     IN THE HASH. An unguarded `INSERT` that duplicates a row on replay, or an `UPDATE` that is not
 #     a no-op the second time (writes a DIFFERENT value, not the same one), changes zero DDL and
 #     therefore changes NOTHING this hash can see. It would pass silently.
-#   - test_data_integrity's row-count check (a few hundred lines below) covers exactly FIVE
+#   - test_data_integrity's NAMED row-count check (a few hundred lines below) covers exactly FIVE
 #     pre-branch tables: users, privacy_settings, linked_items, accounts, transactions. NONE of
-#     this branch's own migrations (000149 through 000180 as of #1569 round 12 task 7 — re-derive
+#     this branch's own migrations (000149 through 000180 as of #1569 round 14 — re-derive
 #     this against the current migration set, do not trust the number) INSERT into any of those
-#     five — they add columns/tables/triggers and backfill EXISTING rows in OTHER tables (account_status_history,
-#     holding_observations, household_account_shares, user_accounts, etc.). A duplicate-row defect
-#     introduced by one of THIS branch's own migrations would be invisible to that row-count check
-#     too, for the same reason it would be invisible to the schema hash: nobody counts those tables.
-#   - Both of this round's real findings (the 000178 CREATE-TEMP-TABLE replay artefact, and the real
+#     five — they add columns/tables/triggers and backfill EXISTING rows in OTHER tables
+#     (account_status_history, household_account_shares, user_accounts, etc.). A duplicate-row
+#     defect introduced by one of THIS branch's own migrations was therefore invisible to that
+#     check too, for the same reason it is invisible to the schema hash: nobody counted those
+#     tables.
+#   - Both of round 12's real findings (the 000178 CREATE-TEMP-TABLE replay artefact, and the real
 #     000177 trigger defect) happen to THROW on replay, which is exactly why this gate looked
-#     complete when it is not — a defect that silently duplicates or mis-updates a row without
-#     erroring would sail through both suites unnoticed.
-# Extending either suite to data-level assertions (row-content diffs, not just row-COUNT diffs; a
-# broader table list) is explicitly OUT OF SCOPE for this round — this comment names the limitation
-# so it is carried forward deliberately, not silently forgotten.
+#     complete when it was not — a defect that silently duplicates a row without erroring sailed
+#     through both suites unnoticed.
+#
+# ✅ THE ROW-COUNT HALF OF THAT GAP IS CLOSED (#1569 round 14 task 8). test_data_integrity now also
+# runs a WHOLE-SCHEMA replay-stability check: it replays the in-range migrations a SECOND time and
+# compares COUNT(*) for every ordinary table in the public schema (enumerated from pg_class, not
+# from a hand-written list that could go stale) across that second replay. See
+# capture_all_table_counts and the block that calls it for why the comparison has to straddle the
+# SECOND replay rather than the first, and for a demonstration that it can actually go RED.
+# ⚠ STILL OUT OF SCOPE, and named so it stays deliberate rather than forgotten: row-CONTENT diffs.
+# An UPDATE that rewrites the same rows with a different value on each execution changes no counts
+# and passes every check in this file.
 REPLAY_RANGE_START_MIGRATION="000149"
 
 # Lists this run's ABS_MIGRATIONS_DIR *.up.sql files whose zero-padded numeric prefix is >=
@@ -1404,11 +1445,11 @@ BACKFILL_SQL
 
     # ⚠ These five tables are the ORIGINAL seed-data set (predating #1569's replay mechanism), not
     # a table list chosen to cover this branch's own migrations. None of this branch's migrations
-    # (000149 through 000180 as of #1569 round 12 task 7 — re-derive this against the current
-    # migration set, do not trust the number) INSERT into any of these five — see the "WHAT THIS MECHANISM DOES NOT PROVE"
-    # comment above replay_migrations_up_sql_range for why that matters: a duplicate-row defect in
-    # one of THIS branch's migrations would show up in neither this row-count check nor the schema
-    # hash. Widening this list is out of scope for #1569 round 12 — named here as a carried gap.
+    # INSERT into any of these five. That gap is no longer carried: the whole-schema
+    # replay-stability check immediately after this loop covers EVERY table in the public schema.
+    # This named list is kept because it asserts something the whole-schema check deliberately does
+    # not — that the seeded rows survive the FIRST replay, i.e. that an in-range migration does not
+    # destroy pre-existing data on its first real execution against a populated database.
     # Check each table
     local tables_before=("users" "privacy_settings" "linked_items" "accounts" "transactions")
     local counts_before=("$users_count_before" "$privacy_count_before" "$linked_items_count_before" "$accounts_count_before" "$transactions_count_before")
@@ -1420,6 +1461,55 @@ BACKFILL_SQL
             data_preserved=false
         fi
     done
+
+    # -------------------------------------------------------------------------------------------
+    # WHOLE-SCHEMA REPLAY-STABILITY CHECK (#1569 round 14 task 8 item 3)
+    #
+    # THE GAP THIS CLOSES. Everything above this point is blind to a data-level defect in one of
+    # THIS branch's own migrations: the schema hash is `pg_dump --schema-only` (no data at all), and
+    # the row-count comparison covers five tables none of the in-range migrations write to. A
+    # migration in the replay range that duplicated a row, or wrote a different value on a second
+    # execution, ran to completion without error and passed both.
+    #
+    # ⚠ WHY A **SECOND** REPLAY, AND WHY THE OBVIOUS EXTENSION WOULD HAVE BEEN A FALSE RED. The
+    # naive fix — add this branch's tables (account_status_history, user_accounts,
+    # household_account_shares, ...) to the five-table list above — is WRONG, and measurably so.
+    # Look at the order of this function: clean_database, apply_migrations against an EMPTY
+    # database (so every backfill in the range is a no-op), THEN seed, THEN count, THEN replay. The
+    # replay above is therefore the FIRST time those migrations execute against data, and a
+    # backfill legitimately inserting rows there would fail a before/after comparison for doing
+    # exactly its job. Idempotency is a property of the SECOND execution, so that is what this
+    # compares: counts after replay #1 vs counts after replay #2, over every table in the schema.
+    #
+    # WHAT A FAILURE HERE MEANS: some in-range migration is not row-count idempotent — an INSERT
+    # without ON CONFLICT / NOT EXISTS, or a trigger firing on a re-run UPDATE. It does NOT prove
+    # the converse: an UPDATE that rewrites the same rows with a DIFFERENT value on each execution
+    # changes no counts and still passes. Row CONTENT diffs remain out of scope; this is the
+    # count-level half, and it is named as such so it is never over-read the way the original
+    # no-op gate was.
+    echo ""
+    log_info "Capturing whole-schema row counts, then replaying the in-range migrations a SECOND time..."
+    local counts_after_first_replay counts_after_second_replay
+    counts_after_first_replay=$(capture_all_table_counts)
+    if [ -z "$counts_after_first_replay" ]; then
+        fail_test "capture_all_table_counts returned nothing — the whole-schema replay-stability check cannot run"
+        data_preserved=false
+    else
+        if ! replay_migrations_up_sql_range; then
+            fail_test "DATA INTEGRITY TEST FAILED - an in-range migration errored on its THIRD execution (second replay)"
+            data_preserved=false
+        else
+            counts_after_second_replay=$(capture_all_table_counts)
+            if [ "$counts_after_first_replay" != "$counts_after_second_replay" ]; then
+                fail_test "Replay-stability violation: re-executing the in-range migrations changed row counts. Diff (< after 1st replay, > after 2nd):"
+                diff <(printf '%s\n' "$counts_after_first_replay") \
+                     <(printf '%s\n' "$counts_after_second_replay") >&2 || true
+                data_preserved=false
+            else
+                log_success "Whole-schema row counts are stable across a second replay ($(printf '%s\n' "$counts_after_first_replay" | wc -l | tr -d ' ') tables compared)"
+            fi
+        fi
+    fi
 
     # Verify migrations 000070 and 000072 backfilled user_account_id into JSONB columns (#1109)
     echo ""
