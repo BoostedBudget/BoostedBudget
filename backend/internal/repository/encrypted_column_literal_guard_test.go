@@ -2,9 +2,7 @@ package repository
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -157,47 +155,36 @@ func TestNoEncryptedColumnComparedToALiteral(t *testing.T) {
 	var offenders []string
 	scanned := 0
 
-	walk := func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() || !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, 0)
-		if parseErr != nil {
-			return parseErr
-		}
-		scanned++
-		rel, _ := filepath.Rel(backendRoot, path)
-		// This file's own meta-test fixtures ARE the violation, deliberately. Excluding it is the
-		// same compromise the citation guard makes for its fabricated names: a guard whose
-		// examples trip itself gets its examples deleted, and then it has no examples.
-		if rel == "internal/repository/encrypted_column_literal_guard_test.go" {
-			return nil
-		}
-
-		ast.Inspect(file, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
-			}
-			s, e := strconv.Unquote(lit.Value)
-			if e != nil {
-				return true
-			}
-			for _, col := range encryptedColumnLiteralOffenders(s, cols) {
-				offenders = append(offenders,
-					rel+":"+strconv.Itoa(fset.Position(lit.Pos()).Line)+" ("+col+")")
-			}
-			return true
-		})
-		return nil
-	}
+	// #1569 round 14 task 2: shared parse-once cache instead of this test's own filepath.Walk +
+	// parser.ParseFile. skipTestdata=false and includeTests=true reproduce this test's ORIGINAL
+	// corpus exactly (it never excluded testdata, and it scans _test.go files on purpose — see the
+	// doc comment above).
 	for _, root := range roots {
-		if err := filepath.Walk(root, walk); err != nil {
-			t.Fatalf("walking %s: %v", root, err)
+		for _, pf := range goProductionFiles(t, root, false, true) {
+			rel := filepath.Join(filepath.Base(root), pf.rel)
+			scanned++
+			// This file's own meta-test fixtures ARE the violation, deliberately. Excluding it is
+			// the same compromise the citation guard makes for its fabricated names: a guard whose
+			// examples trip itself gets its examples deleted, and then it has no examples.
+			if rel == "internal/repository/encrypted_column_literal_guard_test.go" {
+				continue
+			}
+
+			ast.Inspect(pf.file, func(n ast.Node) bool {
+				lit, ok := n.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					return true
+				}
+				s, e := strconv.Unquote(lit.Value)
+				if e != nil {
+					return true
+				}
+				for _, col := range encryptedColumnLiteralOffenders(s, cols) {
+					offenders = append(offenders,
+						rel+":"+strconv.Itoa(pf.fset.Position(lit.Pos()).Line)+" ("+col+")")
+				}
+				return true
+			})
 		}
 	}
 	if scanned < 100 {
@@ -236,57 +223,42 @@ func TestEveryEncryptedLiteralExemptTokenNamesItsColumn(t *testing.T) {
 	var offenders []string
 	scanned := 0
 
-	walk := func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() && info.Name() == "testdata" {
-			return filepath.SkipDir
-		}
-		if info.IsDir() || !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, 0)
-		if parseErr != nil {
-			return parseErr
-		}
-		scanned++
-		rel, _ := filepath.Rel(backendRoot, path)
-		// Same self-exclusion as the corpus check above, and for the same reason: this file's
-		// fixtures are the malformed forms, deliberately.
-		if rel == "internal/repository/encrypted_column_literal_guard_test.go" {
-			return nil
-		}
-
-		ast.Inspect(file, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
-			}
-			text, unqErr := strconv.Unquote(lit.Value)
-			if unqErr != nil || !strings.Contains(text, "encrypted-literal-exempt") {
-				return true
-			}
-			at := rel + ":" + strconv.Itoa(fset.Position(lit.Pos()).Line)
-
-			if namedExemptIsBare(text, "encrypted-literal-exempt", encryptedLiteralExemptToken) {
-				offenders = append(offenders, at+" uses `encrypted-literal-exempt` in a form other "+
-					"than `encrypted-literal-exempt(<column>, ...):`, which excuses nothing")
-			}
-			for col := range namedExemptTargets(text, encryptedLiteralExemptToken) {
-				if _, isEncrypted := encryptedColumns[col]; !isEncrypted {
-					offenders = append(offenders, at+" exempts "+strconv.Quote(col)+
-						", which is not an encrypted column — the exemption is dead")
-				}
-			}
-			return true
-		})
-		return nil
-	}
+	// #1569 round 14 task 2: shared parse-once cache. skipTestdata=true and includeTests=true
+	// reproduce this test's ORIGINAL corpus exactly (it did skip testdata, unlike its sibling above,
+	// and it scans _test.go files on purpose).
 	for _, root := range roots {
-		if err := filepath.Walk(root, walk); err != nil {
-			t.Fatalf("walking %s: %v", root, err)
+		for _, pf := range goProductionFiles(t, root, true, true) {
+			rel := filepath.Join(filepath.Base(root), pf.rel)
+			scanned++
+			// Same self-exclusion as the corpus check above, and for the same reason: this file's
+			// fixtures are the malformed forms, deliberately.
+			if rel == "internal/repository/encrypted_column_literal_guard_test.go" {
+				continue
+			}
+
+			ast.Inspect(pf.file, func(n ast.Node) bool {
+				lit, ok := n.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					return true
+				}
+				text, unqErr := strconv.Unquote(lit.Value)
+				if unqErr != nil || !strings.Contains(text, "encrypted-literal-exempt") {
+					return true
+				}
+				at := rel + ":" + strconv.Itoa(pf.fset.Position(lit.Pos()).Line)
+
+				if namedExemptIsBare(text, "encrypted-literal-exempt", encryptedLiteralExemptToken) {
+					offenders = append(offenders, at+" uses `encrypted-literal-exempt` in a form other "+
+						"than `encrypted-literal-exempt(<column>, ...):`, which excuses nothing")
+				}
+				for col := range namedExemptTargets(text, encryptedLiteralExemptToken) {
+					if _, isEncrypted := encryptedColumns[col]; !isEncrypted {
+						offenders = append(offenders, at+" exempts "+strconv.Quote(col)+
+							", which is not an encrypted column — the exemption is dead")
+					}
+				}
+				return true
+			})
 		}
 	}
 	if scanned < 100 {

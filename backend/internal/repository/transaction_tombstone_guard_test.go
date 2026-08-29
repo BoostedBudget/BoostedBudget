@@ -1,9 +1,6 @@
 package repository
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -80,76 +77,31 @@ func TestNoTransactionReadForgetsTheTombstoneFilter(t *testing.T) {
 	root := repoInternalRoot(t)
 
 	var offenders []string
-	var filesScanned, refsSeen int
+	pfiles := goProductionFiles(t, root, true, false)
+	filesScanned := len(pfiles)
+	var refsSeen int
 
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() && info.Name() == "testdata" {
-			// Deliberately-broken samples for other guards; they are not production SQL.
-			return filepath.SkipDir
-		}
-		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, 0)
-		if parseErr != nil {
-			return parseErr
-		}
-		rel, _ := filepath.Rel(root, path)
-		filesScanned++
-
-		// A query is often assembled from several adjacent literals — `A` + helper + `B`, or a
-		// fmt.Sprintf whose format string and fragments are separate literals. Checking each
-		// literal alone would flag the half that names the table and miss the half that carries
-		// the WHERE. So the unit of audit is the STATEMENT (or the const/var spec), and every
-		// string literal in its subtree is concatenated before the check. Unrelated queries in
-		// the same function stay separate units, which is the point: a countQuery and its
-		// paginated sibling each have to carry the predicate themselves.
-		ast.Inspect(file, func(n ast.Node) bool {
-			switch n.(type) {
-			case *ast.AssignStmt, *ast.ValueSpec, *ast.ReturnStmt, *ast.ExprStmt:
-			default:
-				return true
-			}
-			unit := n
-
-			var sqlParts []string
-			line := fset.Position(unit.Pos()).Line
-			ast.Inspect(unit, func(m ast.Node) bool {
-				lit, ok := m.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					return true
-				}
-				if s, e := strconv.Unquote(lit.Value); e == nil {
-					sqlParts = append(sqlParts, s)
-				}
-				return true
-			})
-			sql := strings.Join(sqlParts, "\n")
+	// A query is often assembled from several adjacent literals — `A` + helper + `B`, or a
+	// fmt.Sprintf whose format string and fragments are separate literals. Checking each literal
+	// alone would flag the half that names the table and miss the half that carries the WHERE. So
+	// the unit of audit is the argument-aware assembly unit (literalUnitsIn,
+	// guard_ast_shared_test.go, #1569 round 14 task 2) and every string literal in its subtree is
+	// concatenated before the check. Unrelated queries in the same function — or in different
+	// arguments of the same call — stay separate units, which is the point: a countQuery and its
+	// paginated sibling each have to carry the predicate themselves, and a help-text argument next
+	// to a real query cannot lend it a predicate it lost.
+	for _, pf := range pfiles {
+		for _, u := range literalUnitsIn(pf.file) {
+			line := pf.fset.Position(u.pos).Line
+			sql := u.sql
 			refsSeen += tombstoneRefsSeen(sql, transactionTombstoneTables, tombstoneDeleteRef)
 
 			bad := tombstoneReadOffenders(sql, transactionTombstoneTables, tombstoneDeleteRef)
 			bad = append(bad, tombstoneWriteOffenders(sql, transactionTombstoneTables)...)
-			if len(bad) == 0 {
-				// Keep descending only if this unit did not itself match a read; otherwise the
-				// enclosing unit already accounts for every literal inside it and descending
-				// would report the same query again from a nested statement.
-				return !tombstoneReadRefRegexp(transactionTombstoneTables).MatchString(
-					tombstoneDeleteRef.ReplaceAllString(sql, ""))
-			}
 			for _, ref := range bad {
-				offenders = append(offenders, rel+":"+strconv.Itoa(line)+" ("+ref+")")
+				offenders = append(offenders, pf.rel+":"+strconv.Itoa(line)+" ("+ref+")")
 			}
-			return false
-		})
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walking internal/: %v", err)
+		}
 	}
 
 	requireTombstoneCorpus(t, "TestNoTransactionReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 300, 60, 362, 83)

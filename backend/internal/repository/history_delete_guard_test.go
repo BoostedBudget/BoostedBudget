@@ -2,8 +2,6 @@ package repository
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -334,106 +332,11 @@ type historyDeleteSiteFound struct {
 	statements []string
 }
 
-// sqlAssemblyUnit reports whether n is a statement-sized unit of SQL assembly: the node whose
-// string literals may legitimately be halves of ONE query (`A` + helper + `B`). It is the same unit
-// the tombstone read-guards use (transaction_tombstone_guard_test.go), deliberately — one notion of
-// "what counts as one query", not two.
-//
-// ⚠ IT IS NOT THE WHOLE STORY, AND SAYING SO WAS #1569 T8-FIX FINDING E. An ExprStmt is one CALL,
-// and a call carries SQL PARAMETER VALUES beside its query. literalUnitsInFunc therefore stops at a
-// call ARGUMENT before it reaches the enclosing statement; this predicate is what it falls back to.
-// The previous note claimed the unit covered "a fmt.Sprintf whose format string and fragments are
-// separate literals" — that was the hole, not a feature: a format argument and a value argument are
-// different arguments and must not lend each other predicates.
-func sqlAssemblyUnit(n ast.Node) bool {
-	switch n.(type) {
-	case *ast.AssignStmt, *ast.ValueSpec, *ast.ReturnStmt, *ast.ExprStmt:
-		return true
-	}
-	return false
-}
-
-// literalUnitsInFunc partitions every string literal in body by its NEAREST enclosing assembly
-// unit, and returns one joined SQL string per unit, ordered by position.
-//
-// ⚠ WHY A PARTITION AND NOT A JOIN (#1569 T8.2, Item B). scanHistoryDeletes used to concatenate
-// EVERY literal in a function before scanning, which meant an allowlisted DELETE was checked
-// against text it does not contain: a help string, an error message, or an unrelated second query
-// in the same function could supply a predicate fragment the DELETE had lost, and the T7.5
-// predicate pin passed while the destruction widened. Pinned by
-// TestHistoryDeleteScan_DoesNotLendAPredicateFromAnotherLiteral, in both directions — the second
-// subtest is the one that matters for keeping this guard alive, because a guard that fires on a
-// legitimately concatenated query gets deleted by the next engineer.
-//
-// ⚠ IT FAILS OPEN NOWHERE. A literal with no enclosing unit — a `case "..."` expression, a switch
-// tag, an `if` condition — is NOT dropped; it becomes a unit of its own, so a delete written there
-// is still seen. What it does not get is a sibling's text.
-//
-// ⚠ THE BOUNDARY IS THE ARGUMENT, NOT THE CALL (#1569 T8-FIX, finding E). The nearest enclosing
-// CALL ARGUMENT wins over the enclosing statement, so
-// `db.Exec(ctx, "DELETE FROM x WHERE user_id = $1", "help: deleted_at IS NOT NULL")` gives three
-// units, not one, and the unrelated parameter can no longer satisfy the delete's predicate pin. A
-// concatenation INSIDE one argument is still one unit. Pinned in both directions by
-// TestHistoryDeleteScan_DoesNotLendAPredicateFromASiblingArgument.
-// assemblyOwner returns the node whose literals lit may be joined with: the nearest enclosing CALL
-// ARGUMENT, else the nearest enclosing assembly statement, else lit itself. stack holds lit's
-// ancestors, outermost first.
-func assemblyOwner(lit ast.Node, stack []ast.Node) ast.Node {
-	child := lit
-	for i := len(stack) - 1; i >= 0; i-- {
-		if call, ok := stack[i].(*ast.CallExpr); ok {
-			for _, arg := range call.Args {
-				if ast.Node(arg) == child {
-					return child
-				}
-			}
-		}
-		if sqlAssemblyUnit(stack[i]) {
-			return stack[i]
-		}
-		child = stack[i]
-	}
-	return lit
-}
-
-func literalUnitsInFunc(fset *token.FileSet, body *ast.BlockStmt) []string {
-	type group struct {
-		pos   token.Pos
-		parts []string
-	}
-	groups := map[ast.Node]*group{}
-	var stack []ast.Node
-
-	ast.Inspect(body, func(n ast.Node) bool {
-		if n == nil {
-			stack = stack[:len(stack)-1]
-			return false
-		}
-		if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-			if str, e := strconv.Unquote(lit.Value); e == nil {
-				owner := assemblyOwner(lit, stack)
-				if groups[owner] == nil {
-					groups[owner] = &group{pos: owner.Pos()}
-				}
-				groups[owner].parts = append(groups[owner].parts, str)
-			}
-		}
-		stack = append(stack, n)
-		return true
-	})
-
-	ordered := make([]*group, 0, len(groups))
-	for _, g := range groups {
-		ordered = append(ordered, g)
-	}
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].pos < ordered[j].pos })
-
-	out := make([]string, 0, len(ordered))
-	for _, g := range ordered {
-		out = append(out, strings.Join(g.parts, "\n"))
-	}
-	return out
-}
+// sqlAssemblyUnit, assemblyOwner and literalUnitsInFunc — the argument-aware unit boundary this
+// guard's fixes (#1569 T8.2 Item B, #1569 T8-FIX finding E) were built on — now live in
+// guard_ast_shared_test.go (#1569 round 14 task 2), shared by every AST-based SQL guard in this
+// package rather than kept as five separately-maintained copies. Nothing about the boundary itself
+// changed; only its address did.
 
 // scanHistoryDeletes walks non-test Go under root and returns every "<rel>#<func>|<table>" key found.
 // Only string LITERALS are inspected, so prose in a comment that quotes `DELETE FROM budgets` — and
@@ -443,41 +346,27 @@ func scanHistoryDeletes(t *testing.T, root string, tables map[string]string) map
 	t.Helper()
 	found := map[string]*historyDeleteSiteFound{}
 
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, 0)
-		if parseErr != nil {
-			return parseErr
-		}
-		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
-
-		for _, decl := range file.Decls {
+	// skipTestdata=false: this scan never excluded testdata/ and today's testdata fixtures (built
+	// for annotation_capture_guard_test.go) contain no DELETE/TRUNCATE of a history table, so nothing
+	// currently found would be lost either way — but keeping the historical boundary rather than
+	// silently adopting the tombstone guards' is the point (see goProductionFiles' doc comment).
+	for _, pf := range goProductionFiles(t, root, false, false) {
+		for _, decl := range pf.file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
 				continue
 			}
-			for _, unit := range literalUnitsInFunc(fset, fn.Body) {
+			for _, unit := range literalUnitsInFunc(pf.fset, fn.Body) {
 				for tbl, stmts := range historyDeleteStatements(unit, tables) {
-					key := rel + "#" + fn.Name.Name + "|" + tbl
+					key := pf.rel + "#" + fn.Name.Name + "|" + tbl
 					if found[key] == nil {
 						found[key] = &historyDeleteSiteFound{}
 					}
-					found[key].lines = append(found[key].lines, strconv.Itoa(fset.Position(fn.Pos()).Line))
+					found[key].lines = append(found[key].lines, strconv.Itoa(pf.fset.Position(fn.Pos()).Line))
 					found[key].statements = append(found[key].statements, stmts...)
 				}
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walking internal/: %v", err)
 	}
 	return found
 }

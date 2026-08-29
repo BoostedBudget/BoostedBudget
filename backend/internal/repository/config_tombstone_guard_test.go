@@ -1,11 +1,6 @@
 package repository
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -255,68 +250,26 @@ func TestNoConfigReadForgetsTheTombstoneFilter(t *testing.T) {
 	deleteRef := regexp.MustCompile(`(?is)\bDELETE\s+FROM\s+(` + strings.Join(configTombstoneTables, "|") + `)\b`)
 
 	var offenders []string
-	var filesScanned, refsSeen int
+	pfiles := goProductionFiles(t, root, true, false)
+	filesScanned := len(pfiles)
+	var refsSeen int
 
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() && info.Name() == "testdata" {
-			// Deliberately-broken samples for other guards; they are not production SQL.
-			return filepath.SkipDir
-		}
-		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, 0)
-		if parseErr != nil {
-			return parseErr
-		}
-		rel, _ := filepath.Rel(root, path)
-		filesScanned++
-
-		ast.Inspect(file, func(n ast.Node) bool {
-			switch n.(type) {
-			case *ast.AssignStmt, *ast.ValueSpec, *ast.ReturnStmt, *ast.ExprStmt:
-			default:
-				return true
-			}
-			unit := n
-
-			var sqlParts []string
-			line := fset.Position(unit.Pos()).Line
-			ast.Inspect(unit, func(m ast.Node) bool {
-				lit, ok := m.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					return true
-				}
-				if s, e := strconv.Unquote(lit.Value); e == nil {
-					sqlParts = append(sqlParts, s)
-				}
-				return true
-			})
-			sql := strings.Join(sqlParts, "\n")
+	// #1569 round 14 task 2: literalUnitsIn partitions every string literal in the file by its
+	// argument-aware assembly owner (see guard_ast_shared_test.go) and returns each unit exactly
+	// once, so — unlike the per-file ast.Inspect this guard used to run — there is no double-count
+	// to guard against by stopping the descent early.
+	for _, pf := range pfiles {
+		for _, u := range literalUnitsIn(pf.file) {
+			line := pf.fset.Position(u.pos).Line
+			sql := u.sql
 			refsSeen += tombstoneRefsSeen(sql, configTombstoneTables, deleteRef)
 
 			bad := tombstoneReadOffenders(sql, configTombstoneTables, deleteRef)
 			bad = append(bad, tombstoneWriteOffenders(sql, configTombstoneTables)...)
-			if len(bad) == 0 {
-				// Nothing to report here, but a nested unit may still contain a read — unless this
-				// unit already matched a read, in which case descending would double-report it.
-				return !tombstoneReadRefRegexp(configTombstoneTables).MatchString(
-					deleteRef.ReplaceAllString(sql, ""))
-			}
 			for _, ref := range bad {
-				offenders = append(offenders, rel+":"+strconv.Itoa(line)+" ("+ref+")")
+				offenders = append(offenders, pf.rel+":"+strconv.Itoa(line)+" ("+ref+")")
 			}
-			return false
-		})
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walking internal/: %v", err)
+		}
 	}
 
 	requireTombstoneCorpus(t, "TestNoConfigReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 300, 60, 362, 84)
