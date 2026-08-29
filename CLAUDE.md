@@ -153,12 +153,18 @@ Before writing anything that removes a row, classify it:
 - **Explicit destruction** — the user asked for *this data*, in words, in the confirm dialog. Allowed.
   Anything NEW here needs its own endpoint/method distinct from the retaining one, an audit row in
   the SAME transaction, a precondition refusing live data, and an entry in `allowedHistoryDeletes`.
-  ⚠ Only the three purges (`PurgeAccount`, `PurgeLinkedItem`, `PurgeGoal`) meet all four today.
-  `DeleteContribution` meets 2/4 — own endpoint and an allowlist entry, but no audit row and no
-  live-data precondition. `DeleteManagedForTransaction` meets **1/4**: the allowlist entry only. It
-  has no audit row, no live-data precondition, and **no endpoint at all** — its sole production
-  caller is `transaction_sync_service.go:1520`, inside Plaid `removed`-array handling (known
-  deviation, see ADR § Classification Test). **Copy the purges.**
+  ⚠ `allowedHistoryDeletes` holds **7 entries across 4 functions** today (`PurgeAccount`,
+  `PurgeLinkedItem`, `PurgeGoal`, `DeleteContribution`) — re-derive before quoting either number.
+  Only the three purges meet all four controls. `DeleteContribution` meets 2/4 — own endpoint and
+  an allowlist entry, but no audit row and no live-data precondition (its predicate is *inverted*:
+  it requires a LIVE goal). It is the only remaining known deviation; see ADR § Classification Test.
+  ⚠ `DeleteManagedForTransaction` is **NO LONGER a delete at all**, and this paragraph claimed it
+  was until #1569 round 14. Round 12 converted it to a TOMBSTONE — `UPDATE … SET deleted_at,
+  deleted_reason = 'provider_removed_txn'` (migration `000180`) — and its `allowedHistoryDeletes`
+  entry was **REMOVED, not reworded**. The four controls no longer apply to it: it was side-effect
+  destruction, fixed the way the next bullet prescribes. It still has no endpoint — its sole
+  production caller is `transactionSyncService.processRemovedTransactions`, inside Plaid
+  `removed`-array handling. **Copy the purges.**
 - **Side-effect destruction** — the delete is a consequence of something else they asked for
   (disconnect, cancel, downgrade, sync). **Forbidden.** Tombstone instead (`deleted_at`, or
   `removed_at` for accounts) and teach every read to filter it.
@@ -170,8 +176,9 @@ Corollaries: the provider is not the user (Plaid removing an item is not a delet
 
 ⚠ **No user-initiated restore exists.** No endpoint restores anything
 (`grep -icE "restore|undelete|recover" api/openapi.yaml` → 0), and **nothing anywhere sets
-`deleted_at = NULL`** — the six `deleted_at` tombstones (`transactions`, `savings_goals`, `boosts`,
-`budgets`, `budget_categories`, `custom_categories`) mean **retained and permanently invisible**.
+`deleted_at = NULL`** — the seven `deleted_at` tombstones (`transactions`, `savings_goals`,
+`boosts`, `budgets`, `budget_categories`, `custom_categories`, and `savings_goal_contributions`,
+added by migration `000180`) mean **retained and permanently invisible**.
 Never write confirm copy promising the user they can restore it.
 
 ⚠ **The one exception is cause-scoped, and it is deliberate.** `accounts` records WHY it was removed:

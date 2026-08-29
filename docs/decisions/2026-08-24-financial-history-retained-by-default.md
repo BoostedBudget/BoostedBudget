@@ -66,61 +66,72 @@ Requirements for anything NEW in this bucket: a distinct endpoint and repository
 retaining path; an audit row written **in the same transaction** as the delete; a precondition that
 refuses to run on live data; and an entry in `allowedHistoryDeletes` (guard G2) giving the reason.
 
-Today this bucket has exactly five members — the five distinct functions keyed in
-`allowedHistoryDeletes` (`history_delete_guard_test.go:94-186`, eight `(function, table)` entries
-across them). ⚠ **They do not all meet the four requirements, and this document previously implied
-they did.** The strong form holds for the three purges only:
+Today this bucket has exactly **four** members — the four distinct functions keyed in
+`allowedHistoryDeletes` (`history_delete_guard_test.go`, **7** `(function, table)` entries across
+them; re-derive both numbers before quoting them, they have been stale twice). ⚠ **They do not all
+meet the four requirements, and this document previously implied they did.** The strong form holds
+for the three purges only:
 
-| | `PurgeAccount` | `PurgeLinkedItem` | `PurgeGoal` | `DeleteContribution` | `DeleteManagedForTransaction` |
-|---|---|---|---|---|---|
-| Own endpoint/method, distinct from the retaining path | yes | yes | yes | yes | no endpoint — reconciler-internal |
-| Audit row in the SAME transaction | yes | yes | yes | **no** | **no** |
-| Precondition refusing to run on live data | yes | yes | yes | **no — inverted**: its predicate requires a LIVE goal (`g.deleted_at IS NULL`) | **no** |
-| Entry in `allowedHistoryDeletes` with a reason | yes | yes | yes | yes | yes |
+| | `PurgeAccount` | `PurgeLinkedItem` | `PurgeGoal` | `DeleteContribution` |
+|---|---|---|---|---|
+| Own endpoint/method, distinct from the retaining path | yes | yes | yes | yes |
+| Audit row in the SAME transaction | yes | yes | yes | **no** |
+| Precondition refusing to run on live data | yes | yes | yes | **no — inverted**: its predicate requires a LIVE goal (`g.deleted_at IS NULL`) |
+| Entry in `allowedHistoryDeletes` with a reason | yes | yes | yes | yes |
 
 *Method:* the audit column is `/usr/bin/grep -n "LogInTx" backend/internal/repository/{account,linked_item,savings_goal,savings_contribution}_repository.go`
 — three `*.history_purged` calls, none in `savings_contribution_repository.go`. The precondition
 column is reading each method body; `DeleteContribution`
-(`savings_contribution_repository.go:749-766`) and `DeleteManagedForTransaction` (`:828-839`) are
-each a single bare `db.Exec` with no surrounding transaction.
+(`savings_contribution_repository.go`, function of that name) is a single bare `db.Exec` with no
+surrounding transaction.
 
-The two contribution deletes are recorded here as a **known deviation**, not as satisfying the
-list. `DeleteContribution` destroys exactly the one row the user is looking at and just asked to
-remove — though its predicate keys on `c.id` alone, so a row the *reconciler* created is reachable
-by it too (see the allowlist entry, which no longer claims the row is one the user entered).
+⚠ **`DeleteManagedForTransaction` USED TO BE THE FIFTH MEMBER OF THIS TABLE AND IS NO LONGER A
+DELETE AT ALL** (#1569 round 12; this section still listed it as a delete until round 14). Migration
+`000180` converted it to a TOMBSTONE — `UPDATE savings_goal_contributions … SET deleted_at = NOW(),
+deleted_reason = 'provider_removed_txn'` — and its `allowedHistoryDeletes` entry was **removed, not
+reworded** (the removal and its reasoning are recorded in `history_delete_guard_test.go`, where the
+entry used to be). It belongs to Decision 2 below, not to this bucket: Plaid reporting a transaction
+as `removed` is the provider acting, and "the provider is not the user". The rest of this section
+describes the ONE remaining deviation, `DeleteContribution`.
 
-⚠ **`DeleteManagedForTransaction` is NOT justified by the rows being derived and regenerable, and
-this document argued that it was until 2026-08-26.** The retracted reason — *"derived, regenerable
-rows the reconciler owns, which are not a record of anything the user did; a user-entered
-contribution does not match the predicate"* — is false in the way four other reasons on this branch
-were false: true of most rows the predicate matches, asserted of all of them.
+`DeleteContribution` is recorded here as a **known deviation**, not as satisfying the list. It
+destroys exactly the one row the user is looking at and just asked to remove — though its predicate
+keys on `c.id` alone, so a row the *reconciler* created is reachable by it too (see the allowlist
+entry, which no longer claims the row is one the user entered).
+
+⚠ **A retraction worth keeping, because it now applies to the tombstone's scope rather than to a
+delete.** Until 2026-08-26 this document argued that the provider-triggered path was justified by
+*"derived, regenerable rows the reconciler owns, which are not a record of anything the user did; a
+user-entered contribution does not match the predicate"*. That is false in the way four other
+reasons on this branch were false: true of most rows the predicate matches, asserted of all of them.
 `UpsertFromTransaction` INSERTs `status='confirmed'` with `managed_by_reconciliation = true`
-(`savings_contribution_repository.go:312-315`, reached from
-`transferCorrelationService.createBoostMatchContribution` with `source='boost_match'`), and its
-`ON CONFLICT DO UPDATE` (`:316-320`) promotes a proposed row to confirmed **without clearing the
-flag** — it rewrites `status`, `amount`, `source` and `updated_at`, and nothing else. Such a
-row *is* a record of the user's money moving, and it is not regenerable once the boost that matched
-it is gone. The retraction is recorded at
-`backend/internal/repository/history_delete_guard_test.go`, on the allowlist entry itself; this
-section now agrees with it.
+(reached from `transferCorrelationService.createBoostMatchContribution` with `source='boost_match'`),
+and its `ON CONFLICT DO UPDATE` promotes a proposed row to confirmed **without clearing the flag** —
+it rewrites `status`, `amount`, `source` and `updated_at`, and nothing else. Such a row *is* a record
+of the user's money moving, and it is not regenerable once the boost that matched it is gone. That is
+precisely why the path had to become a tombstone rather than keep a business-correctness excuse for
+destroying the row.
 
-What actually justifies the delete is the **LIVE-goal scope** the predicate carries:
+What the predicate still carries, and what it now scopes, is the **LIVE-goal** leg:
 
 ```sql
 WHERE c.savings_goal_id = g.id
   AND c.transaction_id = $1
   AND c.managed_by_reconciliation = true
   AND g.deleted_at IS NULL
+  AND c.deleted_at IS NULL
 ```
 
 A live contributions-basis goal recomputes progress from these rows, so a row derived from a
 transaction the bank has withdrawn would keep counting money that is no longer there — phantom
-progress. A **tombstoned** goal recomputes nothing; its rows are only a ledger, and
-`g.deleted_at IS NULL` excludes them (regression:
-`TestDeleteManagedForTransaction_DeletedGoalLedgerSurvives_Integration`). Hand-logged rows
-(`managed_by_reconciliation = false`) never matched and still do not. Note also that the predicate
-carries **no user scoping** — safe only because `transaction_id` is already user-scoped by its
-caller. **Copy the purges, not these two**, when adding a sixth member.
+progress; tombstoning it removes it from PROGRESS, not from the table. A **tombstoned** goal
+recomputes nothing; its rows are only a ledger, and `g.deleted_at IS NULL` excludes them
+(regression: `TestDeleteManagedForTransaction_DeletedGoalLedgerSurvives_Integration`). Hand-logged
+rows (`managed_by_reconciliation = false`) never matched and still do not. `c.deleted_at IS NULL`
+makes a re-delivery of the same `removed` entry a no-op instead of re-stamping a later timestamp —
+the UPDATE, unlike the old DELETE, is not naturally idempotent. Note also that the predicate carries
+**no user scoping** — safe only because `transaction_id` is already user-scoped by its caller.
+**Copy the purges, not `DeleteContribution`**, when adding a fifth member.
 
 ### 2. Side-effect destruction — forbidden; tombstone instead
 

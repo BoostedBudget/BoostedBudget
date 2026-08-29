@@ -238,7 +238,7 @@ func historyDeleteRefRegexp(tables map[string]string) *regexp.Regexp {
 // sqlBlockCommentRegexp, sqlLineCommentRegexp and sqlWhitespaceRegexp normalise SQL so that
 // re-wrapping a query, re-indenting it, or writing a comment inside it cannot flip a predicate
 // verdict. Comments are stripped BEFORE whitespace is collapsed, and stripped at all because four
-// of the eight blessed statements carry a `-- tombstone-exempt(...)` comment that quotes the very
+// of the SEVEN blessed statements carry a `-- tombstone-exempt(...)` comment that quotes the very
 // predicate legs the guard is looking for — leaving them in would let a comment satisfy the check
 // for SQL that no longer contains it.
 var (
