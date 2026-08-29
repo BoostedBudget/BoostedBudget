@@ -348,20 +348,35 @@ func scanNonGoHistoryDeletes(t *testing.T, backendDir, sub string, ext string, s
 // OWN closing `'` (respecting the `''` escape) is found. A `--` or `/*` is only recognised as a
 // comment starter when the scanner is not already inside a string.
 //
-// ⚠ DOLLAR-QUOTING IS DELIBERATELY LEFT ALONE, unlike normaliseSQL. `$$ ... $$` is Postgres's
-// quoting for a PROCEDURAL BODY (a DO block or a function body), not for opaque string data — and
-// apps/web/scripts/seed-e2e-data.sql, G4's frontend-fixture universe, is two `DO $$ ... $$;`
-// blocks wrapping every statement it runs, including the very DELETEs this guard exists to find.
-// Blanking dollar-quoted regions before matching — which is what normaliseSQL does, safely, to an
-// ALREADY-EXTRACTED delete statement — would blank the DELETEs themselves out of the scan here and
-// turn the whole file invisible to G4. A single-quoted literal never contains a DELETE this guard
-// needs to see (nothing writes SQL keywords as VALUES), so it is safe to blank; a dollar-quoted
-// block routinely does, so it is not. The scanner below therefore gives `$` no special meaning at
-// all — it is an ordinary character, and any comment/literal INSIDE a dollar-quoted block (like
-// 000164's RAISE EXCEPTION string) is still recognised and blanked normally, by the same pass.
-// TestNoUnallowlistedFrontendFixtureHistoryDelete is the regression pin for this half (fails closed
-// — finds zero deletes when three are allowlisted — if dollar-quoted regions stop being scanned);
-// TestG4Classification_QuotedLiteralIsNotAMatch and
+// ⚠ DOLLAR-QUOTING GETS ONE NARROW SPECIAL RULE, unlike normaliseSQL, and it is not "blank the
+// dollar-quoted body." `$$ ... $$` is Postgres's quoting for a PROCEDURAL BODY (a DO block or a
+// function body), not for opaque string data — and apps/web/scripts/seed-e2e-data.sql, G4's
+// frontend-fixture universe, is two `DO $$ ... $$;` blocks wrapping every statement it runs,
+// including the very DELETEs this guard exists to find. Blanking dollar-quoted regions before
+// matching — which is what normaliseSQL does, safely, to an ALREADY-EXTRACTED delete statement —
+// would blank the DELETEs themselves out of the scan here and turn the whole file invisible to G4.
+// A single-quoted literal never contains a DELETE this guard needs to see (nothing writes SQL
+// keywords as VALUES), so it is safe to blank; a dollar-quoted block routinely does, so it is not.
+// The scanner therefore keeps scanning NORMALLY inside a dollar-quoted region — a `$tag$` delimiter
+// is passed through unblanked as ordinary text, and any comment/literal INSIDE the region (like
+// 000164's RAISE EXCEPTION string) is still recognised and blanked by the very same pass.
+//
+// R14 task 6's fix: a `$tag$` delimiter also TERMINATES an already-open single-quote span. Dollar-
+// quoting is also used for PROSE, not just procedural bodies — e.g.
+// `COMMENT ON COLUMN x.y IS $COMMENT$This is the user's setting.$COMMENT$;` — and prose routinely
+// contains an ordinary English possessive apostrophe. Before this fix, that apostrophe opened a
+// "string" the scanner did not close until the NEXT literal `'` anywhere later in the file,
+// blanking every real statement — DELETEs included — in between. Now, a `$tag$` boundary resyncs
+// an open single-quote scan the same way EOF used to (fail closed on that one literal), without
+// giving up on the rest of the file. Tag NAMES are deliberately NOT matched against each other
+// (an opening `$a$` does not have to be closed by another `$a$` specifically): the scanner never
+// tracks "we are inside dollar-quoted region X" as a state to blank — it only uses a `$tag$` sighting
+// as a resync point to stop a runaway string, and content between any two dollar-tags is already
+// being scanned normally regardless of whether the names match. Requiring matched names would add
+// state without changing what gets blanked. TestG4Classification_DollarQuotedProseApostropheDoesNotBlindTheScan
+// is the regression pin for this. TestNoUnallowlistedFrontendFixtureHistoryDelete is the regression
+// pin for the original DO-block half (fails closed — finds zero deletes when three are allowlisted —
+// if dollar-quoted regions stop being scanned); TestG4Classification_QuotedLiteralIsNotAMatch and
 // TestG4Classification_CommentMarkerInsideALiteralDoesNotBlindTheScan are the pins for the
 // state-machine ordering.
 //
@@ -382,6 +397,22 @@ func blankSQLCommentsAndLiterals(s string) string {
 		}
 	}
 	n := len(s)
+	// dollarTagAt reports the length of a `$tag$` delimiter (e.g. `$$` or `$COMMENT$`) starting at
+	// i, or 0 if none starts there. Tag names are letters, digits, and underscore, matching
+	// Postgres's dollar-quote identifier rule closely enough for this scanner's purpose.
+	dollarTagAt := func(i int) int {
+		if s[i] != '$' {
+			return 0
+		}
+		j := i + 1
+		for j < n && (s[j] == '_' || (s[j] >= 'a' && s[j] <= 'z') || (s[j] >= 'A' && s[j] <= 'Z') || (s[j] >= '0' && s[j] <= '9')) {
+			j++
+		}
+		if j < n && s[j] == '$' {
+			return j - i + 1
+		}
+		return 0
+	}
 	for i := 0; i < n; {
 		switch {
 		case i+1 < n && s[i] == '-' && s[i+1] == '-':
@@ -402,6 +433,14 @@ func blankSQLCommentsAndLiterals(s string) string {
 			}
 			blank(i, end)
 			i = end
+		case dollarTagAt(i) > 0:
+			// Pass the delimiter through unblanked; scanning continues normally right after it, so
+			// a DO-block body (or anything else between two dollar-tags) stays fully visible to G4.
+			l := dollarTagAt(i)
+			for k := i; k < i+l; k++ {
+				out[k] = s[k]
+			}
+			i += l
 		case s[i] == '\'':
 			j := i + 1
 			for j < n {
@@ -411,6 +450,14 @@ func blankSQLCommentsAndLiterals(s string) string {
 						continue
 					}
 					j++
+					break
+				}
+				if dollarTagAt(j) > 0 {
+					// A dollar-tag boundary terminates the open string here rather than being
+					// consumed as string content — this is the fix: without it, a prose possessive
+					// apostrophe inside a $tag$...$tag$ block stays "open" until the next literal
+					// `'` anywhere later in the file, blanking everything (real DELETEs included)
+					// in between. The tag itself is left unblanked for the outer loop to process.
 					break
 				}
 				j++
@@ -860,6 +907,39 @@ func TestG4Classification_CommentMarkerInsideALiteralDoesNotBlindTheScan(t *test
 	}
 	if sites[0].table != "rollover_history" || !sites[0].qualified {
 		t.Fatalf("expected a qualified delete of rollover_history, got %+v", sites[0])
+	}
+}
+
+// TestG4Classification_DollarQuotedProseApostropheDoesNotBlindTheScan is the regression pin for
+// R14 task 6: `blankSQLCommentsAndLiterals` gave `$tag$` dollar-quoting no special meaning at all
+// (see the ⚠ DOLLAR-QUOTING comment above the function), which is correct for a `DO $$ ... $$`
+// procedural body but wrong for `COMMENT ON ... IS $COMMENT$ ... $COMMENT$` prose: ordinary English
+// possessive apostrophes inside that prose open a single-quote "string" the scanner does not close
+// until the next literal `'` — which can be many lines and several statements later — and
+// everything in between, including a real DELETE of a history table, gets blanked out of the scan.
+//
+// Measured against the pre-fix scanner: this file produces ZERO sites (the DELETE of transactions
+// is swallowed). The fix must find exactly one, qualified.
+func TestG4Classification_DollarQuotedProseApostropheDoesNotBlindTheScan(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "migrations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "COMMENT ON COLUMN x.y IS\n" +
+		"$COMMENT$This is the user's setting.$COMMENT$;\n" +
+		"\n" +
+		"DELETE FROM transactions WHERE user_id = '1';\n"
+	if err := os.WriteFile(filepath.Join(dir, "migrations", "000930_v.up.sql"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sites := scanNonGoHistoryDeletes(t, dir, "migrations", ".sql", false)
+	if len(sites) != 1 {
+		t.Fatalf("expected the real DELETE to still be found despite the unclosed prose apostrophe "+
+			"inside the preceding $COMMENT$ block; got %d sites: %+v", len(sites), sites)
+	}
+	if sites[0].table != "transactions" || !sites[0].qualified {
+		t.Fatalf("expected a qualified delete of transactions, got %+v", sites[0])
 	}
 }
 
