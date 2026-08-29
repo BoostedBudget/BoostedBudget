@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -251,4 +252,63 @@ func literalUnitsInFunc(_ *token.FileSet, body *ast.BlockStmt) []string {
 		out = append(out, u.sql)
 	}
 	return out
+}
+
+// TestTombstoneScan_DoesNotLendAPredicateFromASiblingArgument is #1569 round 14 task 2, fix round 1
+// finding 2.
+//
+// history_delete_guard_test.go's sibling-argument tests
+// (TestHistoryDeleteScan_DoesNotLendAPredicateFromAnotherLiteral,
+// TestHistoryDeleteScan_DoesNotLendAPredicateFromASiblingArgument) exercise literalUnitsInFunc — the
+// *ast.BlockStmt form, walking ONE function body. The four tombstone guards
+// (config/transaction/custom_category/savings_contribution) call literalUnitsIn on the WHOLE
+// *ast.File instead (package-level GenDecl/ValueSpec included, per goProductionFiles) — a shape
+// neither of those tests ever drove. assemblyOwner is written generically over ast.Node and SHOULD
+// behave identically regardless of the root, but "should" is exactly the standard six unfailable
+// guards on this branch were held to before they were found to be inert (see this file's own doc
+// comment above). This test drives the ACTUAL whole-file path the tombstone guards use — not a
+// stand-in for it — and proves the call-argument boundary holds there too: a help-text argument
+// sitting next to a real query in the SAME call must not lend that query a predicate it does not
+// carry.
+func TestTombstoneScan_DoesNotLendAPredicateFromASiblingArgument(t *testing.T) {
+	const src = "package fake\n" +
+		"\n" +
+		"func Lookalike(ctx, db any) error {\n" +
+		"\t_, err := db.Exec(ctx,\n" +
+		"\t\t`SELECT * FROM transactions t WHERE t.user_id = $1`,\n" +
+		"\t\t`help text: t.deleted_at IS NULL`)\n" +
+		"\treturn err\n" +
+		"}\n"
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "fake.go", src, 0)
+	if err != nil {
+		t.Fatalf("parsing fixture: %v", err)
+	}
+
+	units := literalUnitsIn(file)
+	if len(units) != 2 {
+		t.Fatalf("expected the query and the help text to land in SEPARATE units (they are separate "+
+			"call arguments to the same call) via the WHOLE-FILE literalUnitsIn path — got %d unit(s): %#v",
+			len(units), units)
+	}
+
+	deleteRef := regexp.MustCompile(`(?is)\bDELETE\s+FROM\s+transactions\b`)
+	sawQueryUnit := false
+	for _, u := range units {
+		if !tombstoneReadRefRegexp(transactionTombstoneTables).MatchString(deleteRef.ReplaceAllString(u.sql, "")) {
+			continue // the help-text unit: no read reference to `transactions` at all. Expected.
+		}
+		sawQueryUnit = true
+		bad := tombstoneReadOffenders(u.sql, transactionTombstoneTables, deleteRef)
+		if len(bad) != 1 || bad[0] != "transactions t" {
+			t.Fatalf("the query's OWN unit must be reported as missing ITS OWN predicate — the "+
+				"sibling argument's `deleted_at IS NULL` must not satisfy it via the whole-file scan "+
+				"path. Got offenders %v for unit %q", bad, u.sql)
+		}
+	}
+	if !sawQueryUnit {
+		t.Fatal("no unit containing the transactions read reference was found — the fixture or the " +
+			"partition is broken, and this test would pass vacuously")
+	}
 }
