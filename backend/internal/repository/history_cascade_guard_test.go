@@ -205,7 +205,7 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 	// purged account's investment transactions are precisely what the user asked to destroy, and
 	// leaving them behind orphaned would be the residue the purge exists to remove. A third route
 	// to this edge is the users cascade above, which reaches accounts first.
-	{child: "investment_transactions", parent: "accounts", constraint: "fk_inv_txn_account_id", childCols: "account_id", parentCols: "id"}: "two explicit user-invoked purge routes hard-delete accounts rows — PurgeAccount (account_repository.go:1286, direct) and PurgeLinkedItem (linked_item_repository.go:899, via fk_accounts_linked_item_id CASCADE) — the row is what the user asked to destroy either way",
+	{child: "investment_transactions", parent: "accounts", constraint: "fk_inv_txn_account_id", childCols: "account_id", parentCols: "id"}: "two explicit user-invoked purge routes hard-delete accounts rows — PurgeAccount (account_repository.go, direct) and PurgeLinkedItem (linked_item_repository.go, via fk_accounts_linked_item_id CASCADE) — the row is what the user asked to destroy either way",
 
 	// ---- The three tables whose ONLY erasure route is this edge. -------------------------------
 	// None of these three has a foreign key to `users`, so `DELETE FROM users` reaches them only
