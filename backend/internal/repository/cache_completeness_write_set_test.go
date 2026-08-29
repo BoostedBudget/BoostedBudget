@@ -34,6 +34,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -499,9 +500,45 @@ func nonTestRepoSources(t *testing.T) map[string]string {
 	return out
 }
 
+// resolveWriteSetsOnce/resolveWriteSetsCache memoize resolveWriteSets for the lifetime of the test
+// binary (#1569 round 14 task 2). Before this, TestCachedReadTableSetMatchesExpected,
+// TestEveryMutatingMethodWriteSetResolves and TestDerivedNoCacheImpactIsActuallyDisjoint each
+// recomputed the ENTIRE derivation independently — re-reading every non-test .go file in this
+// package, re-parsing every migration for schemaTables, and re-running the regex-based function-body
+// and interface-method extraction three times — 38.6s of the package's 126s under `go test -race`
+// for work that produces the identical answer every time within one run.
+//
+// This is a caching fix, not the AST-sharing fix: this file does not use go/ast at all (it works on
+// raw source text via regexp, unlike the tombstone/history-delete/encrypted-column guards), so there
+// is no argument-aware unit boundary to share here. The nil-check below is deliberate: if the first
+// call Fatals partway through resolveWriteSetsUncached (a t.Fatalf inside it Goexits the calling
+// test's goroutine, which still runs the deferred sync.Once bookkeeping and marks the Once "done"
+// without ever assigning the cache), a LATER caller must not read that as "computed, zero entries" —
+// that would manufacture exactly the "guard that cannot fail" failure mode this round exists to
+// close. It instead Fatals again, naming which corpus never got established.
+var (
+	resolveWriteSetsOnce       sync.Once
+	resolveWriteSetsWrites     map[string]map[string]bool
+	resolveWriteSetsResolved   map[string]bool
+	resolveWriteSetsReadTables map[string]bool
+)
+
 // resolveWriteSets returns, for every key in repoMethodDispositions, the tables it writes and
-// whether extraction resolved anything at all.
+// whether extraction resolved anything at all. Memoized — see resolveWriteSetsOnce above.
 func resolveWriteSets(t *testing.T) (map[string]map[string]bool, map[string]bool, map[string]bool) {
+	t.Helper()
+	resolveWriteSetsOnce.Do(func() {
+		resolveWriteSetsWrites, resolveWriteSetsResolved, resolveWriteSetsReadTables = resolveWriteSetsUncached(t)
+	})
+	if resolveWriteSetsWrites == nil {
+		t.Fatalf("resolveWriteSets' shared computation never completed (a prior call must have " +
+			"Fatal'd partway through) — this test cannot proceed without the shared corpus; see the " +
+			"first test in this binary run that failed")
+	}
+	return resolveWriteSetsWrites, resolveWriteSetsResolved, resolveWriteSetsReadTables
+}
+
+func resolveWriteSetsUncached(t *testing.T) (map[string]map[string]bool, map[string]bool, map[string]bool) {
 	t.Helper()
 	srcs := nonTestRepoSources(t)
 	frags := packageSQLFragments(t, srcs)
