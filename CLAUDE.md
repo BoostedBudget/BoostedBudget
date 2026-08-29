@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make dev                    # Docker-compose up
 make test-fast              # Backend+frontend tests, NO e2e (~2min)
 make test-all               # ALL tests including e2e (~4min)
-make test-scripts           # The 14 shell guard suites in scripts/__tests__/ and
+make test-scripts           # The 17 shell guard suites in scripts/__tests__/ and
                              # apps/web/scripts/__tests__/ — separate CI steps, NOT covered by
                              # test-fast/test-all/bun run test. Fails on the first red. Docker/
                              # Postgres-dependent suites skip with a visible warning if unavailable
@@ -36,6 +36,25 @@ make -C backend lint        # golangci-lint
 # entity — a convincing false failure. CI does this too: see the "Run integration tests"
 # step in .github/workflows/test.yml (referenced by step name, not line number — this
 # cross-reference has gone stale three times as the workflow grew).
+#
+# ⚠ #1569 round 14: DATABASE_URL alone is NOT the complete local command. CI's "Run
+# integration tests" step also requires CACHE_REDIS_TEST_URL and REDIS_TEST_URL — leaving
+# either unset makes 30 tests t.Skip() silently (they do NOT fail), which hid a real
+# regression for two rounds. The complete local command, against this repo's standing
+# Docker containers (boostedbudget-db on 5434, boostedbudget-redis-cache on 6380,
+# boostedbudget-redis-ratelimit on 6379):
+#   DATABASE_URL="postgres://devuser:devpass@localhost:5434/freshcheck?sslmode=disable" \
+#   CACHE_REDIS_TEST_URL="redis://localhost:6380" \
+#   REDIS_TEST_URL="redis://localhost:6379" \
+#   ./scripts/summarize-go-test.sh go test -tags integration -p 1 -count=1 ./internal/...
+# `freshcheck` is this repo's disposable scratch database (see scripts/test-migrations.sh) —
+# never point this at `boostedbudget`, the real local dev database.
+# `scripts/summarize-go-test.sh` prints a `PASS=.. FAIL=.. SKIP=..` line so a silent-skip
+# regression (the exact failure mode above) is visible instead of reading as a clean `ok`.
+# It also runs `scripts/check-ci-env-drift.sh` and prints a warning (non-fatal locally) if
+# any env var CI's integration-test guard step checks for is unset in the current shell —
+# see that script's own header comment for what it does and does not check, and
+# scripts/__tests__/check-ci-env-drift.test.sh for its guarantees.
 
 # Frontend (from /apps/web)
 bun run test                # Unit tests (bun:test)

@@ -76,14 +76,124 @@ func TestGetEffectiveSubscription_NoOverrides(t *testing.T) {
 	assert.Equal(t, 0, effective.ActiveOverridesCount, "Override count should be 0")
 }
 
+// mockSubscriptionOverrideRepository is a testify mock of
+// repository.SubscriptionOverrideRepository, used by the two tests below now that
+// the real repository exists and is wired into NewSubscriptionService — the stale
+// "will implement after repository is created" skip reason no longer holds.
+type mockSubscriptionOverrideRepository struct{ mock.Mock }
+
+func (m *mockSubscriptionOverrideRepository) CreateOverride(ctx context.Context, override *domain.UserSubscriptionOverride) error {
+	args := m.Called(ctx, override)
+	return args.Error(0)
+}
+
+func (m *mockSubscriptionOverrideRepository) GetActiveOverrides(ctx context.Context, userID string, asOf time.Time) ([]domain.UserSubscriptionOverride, error) {
+	args := m.Called(ctx, userID, asOf)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.UserSubscriptionOverride), args.Error(1)
+}
+
+func (m *mockSubscriptionOverrideRepository) DeleteOverride(ctx context.Context, userID, resourceType string) error {
+	args := m.Called(ctx, userID, resourceType)
+	return args.Error(0)
+}
+
+func (m *mockSubscriptionOverrideRepository) GetOverrideByID(ctx context.Context, id int64) (*domain.UserSubscriptionOverride, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.UserSubscriptionOverride), args.Error(1)
+}
+
+func (m *mockSubscriptionOverrideRepository) UpdateOverride(ctx context.Context, override *domain.UserSubscriptionOverride) error {
+	args := m.Called(ctx, override)
+	return args.Error(0)
+}
+
 // TestGetEffectiveSubscription_WithOverrides tests effective subscription with custom overrides
 func TestGetEffectiveSubscription_WithOverrides(t *testing.T) {
-	t.Skip("Requires database mock - will implement after repository is created")
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	overrideRepo := &mockSubscriptionOverrideRepository{}
+	service := NewSubscriptionService(tierConfig, overrideRepo)
+	ctx := context.Background()
+
+	user := &domain.User{
+		ID:               "user-123",
+		SubscriptionTier: string(domain.TierPremium),
+	}
+
+	overrideRepo.On("GetActiveOverrides", mock.Anything, user.ID, mock.Anything).Return(
+		[]domain.UserSubscriptionOverride{
+			{
+				UserID:       user.ID,
+				ResourceType: string(domain.ResourceTransactionHistoryDays),
+				LimitValue:   9999,
+			},
+		}, nil).Once()
+
+	effective, err := service.GetEffectiveSubscription(ctx, user)
+	require.NoError(t, err)
+	assert.Equal(t, domain.TierPremium, effective.Tier)
+	assert.True(t, effective.HasOverrides, "Should report that overrides are active")
+	assert.Equal(t, 1, effective.ActiveOverridesCount, "Should count the one active override")
+	assert.Equal(t, 9999, effective.Limits.TransactionHistoryDays, "Override value should replace the tier's base limit")
+	overrideRepo.AssertExpectations(t)
 }
 
 // TestApplyOverride tests applying a custom override for enterprise deals
 func TestApplyOverride(t *testing.T) {
-	t.Skip("Requires database mock - will implement after repository is created")
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	overrideRepo := &mockSubscriptionOverrideRepository{}
+	service := NewSubscriptionService(tierConfig, overrideRepo)
+	ctx := context.Background()
+
+	overrideRepo.On("CreateOverride", mock.Anything, mock.MatchedBy(func(o *domain.UserSubscriptionOverride) bool {
+		return o.UserID == "user-123" &&
+			o.ResourceType == string(domain.ResourceTransactionHistoryDays) &&
+			o.LimitValue == 9999 &&
+			o.Reason != nil && *o.Reason == "enterprise_deal"
+	})).Return(nil).Once()
+
+	err = service.ApplyOverride(ctx, "user-123", domain.ResourceTransactionHistoryDays, 9999, "enterprise_deal")
+	require.NoError(t, err)
+	overrideRepo.AssertExpectations(t)
+}
+
+// TestApplyOverride_RepositoryError verifies ApplyOverride surfaces a repository error
+// instead of swallowing it, and TestApplyOverride_NilRepository verifies the nil-repo
+// guard (s.overrideRepo == nil) that ApplyOverride falls back to when no repository is
+// wired — both are new coverage for a method that had none in any environment.
+func TestApplyOverride_RepositoryError(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	overrideRepo := &mockSubscriptionOverrideRepository{}
+	service := NewSubscriptionService(tierConfig, overrideRepo)
+	ctx := context.Background()
+
+	overrideRepo.On("CreateOverride", mock.Anything, mock.Anything).Return(errors.New("db unavailable")).Once()
+
+	err = service.ApplyOverride(ctx, "user-123", domain.ResourceTransactionHistoryDays, 9999, "enterprise_deal")
+	require.Error(t, err)
+	overrideRepo.AssertExpectations(t)
+}
+
+func TestApplyOverride_NilRepository(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	service := NewSubscriptionService(tierConfig, nil)
+	ctx := context.Background()
+
+	err = service.ApplyOverride(ctx, "user-123", domain.ResourceTransactionHistoryDays, 9999, "enterprise_deal")
+	require.Error(t, err, "ApplyOverride must fail loudly, not silently no-op, when no repository is wired")
 }
 
 // TestListAllTiers tests listing all available tiers
