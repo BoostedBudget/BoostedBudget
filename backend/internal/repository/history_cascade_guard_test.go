@@ -238,7 +238,21 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 	{child: "liability_statements", parent: "accounts", constraint: "fk_liability_statements_account_id", childCols: "account_id", parentCols: "id"}: "explicit account purge destroys derived history for that account",
 
 	// ---- Tombstoned-parent cascades that no ordinary delete can reach. -------------------------
-	{child: "accounts", parent: "linked_items", constraint: "fk_accounts_linked_item_id", childCols: "linked_item_id", parentCols: "id"}:                             "linked_items rows are themselves purged only by an explicit disconnect-and-purge; a disconnect soft-removes and keeps the row",
+	//
+	// ⚠ CORRECTED (#1569 round 14). The `accounts ← linked_items` reason said linked_items rows
+	// "are themselves purged ONLY by an explicit disconnect-and-purge". That word was false and
+	// dangerously so: `fk_linked_items_user_id` (migrations/000006) is itself ON DELETE CASCADE from
+	// `users`, so GDPR erasure's one real `DELETE FROM users` (profile_repository.go,
+	// DeleteUserCascade) hard-deletes linked_items too and fires this edge — reaching accounts and
+	// everything derived from them. An engineer trusting "only ... an explicit purge" could restrict
+	// this FK and STRAND erasure data, the one thing this branch may never do. What is true, and is
+	// the property worth relying on, is that no ORDINARY delete fires it: a disconnect soft-removes
+	// the linked item and keeps the row (`status`/`deleted_at`), so only PurgeLinkedItem's explicit
+	// hard delete and the users cascade reach it. Re-derived by reading migration 000006's
+	// `ALTER TABLE linked_items ADD CONSTRAINT fk_linked_items_user_id ... ON DELETE CASCADE`;
+	// no later migration alters or drops that constraint (`/usr/bin/grep -rn fk_linked_items_user_id
+	// migrations/` returns only 000006).
+	{child: "accounts", parent: "linked_items", constraint: "fk_accounts_linked_item_id", childCols: "linked_item_id", parentCols: "id"}:                             "no ORDINARY delete fires this: a disconnect soft-removes the linked item and keeps the row. Two hard-delete routes do — PurgeLinkedItem (the explicit disconnect-and-purge) and GDPR erasure, since fk_linked_items_user_id CASCADEs from users. NOT 'purge only': restricting this FK would strand erasure data",
 	{child: "budget_categories", parent: "custom_categories", constraint: "fk_budget_categories_custom_category", childCols: "custom_category_id", parentCols: "id"}: "custom_categories is tombstoned, so this cascade fires only under GDPR erasure",
 	{child: "budget_categories", parent: "savings_goals", constraint: "fk_budget_categories_savings_goal", childCols: "savings_goal_id", parentCols: "id"}:           "savings_goals is tombstoned by its ordinary delete, so no ordinary goal delete fires this; GDPR erasure and the three explicit purges that hard-delete a tombstoned goal (PurgeGoal, PurgeAccount, PurgeLinkedItem) all do",
 }
