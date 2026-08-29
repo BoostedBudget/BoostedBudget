@@ -267,37 +267,126 @@ func TestNewPaddleService_ProductionEnvironment(t *testing.T) {
 // that verify the service compiles and initializes correctly, and document
 // what unit tests would look like with proper dependency injection.
 
-// TestCreateCustomer_Integration is a placeholder for integration tests
-// In a real implementation, these would use the mock SDK
+// TestCreateCustomer_RequiredParameters exercises CreateCustomer directly (not through
+// EnsureCustomer's conflict-resolution wrapper, which TestEnsureCustomer_CreatesNewCustomer
+// already covers) — the request shape, the success return, and the error-wrapping path.
+// The stale "Requires Paddle SDK interface refactor for proper mocking" reason no longer
+// holds: mockPaddleSDK (above) is exactly that refactor, already used by a dozen other
+// tests in this file.
 func TestCreateCustomer_RequiredParameters(t *testing.T) {
-	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
 
-	// This test demonstrates what we would test with proper mocks:
-	// 1. CreateCustomer calls SDK.CreateCustomer with correct parameters
-	// 2. Returns customer ID on success
-	// 3. Handles API errors (rate limit, network, invalid email)
-	// 4. Logs appropriate messages
+	mockSDK.On("CreateCustomer", ctx, mock.MatchedBy(func(req *paddle.CreateCustomerRequest) bool {
+		return req.Email == "customer@example.com" && req.CustomData["user_id"] == "user_789"
+	})).Return(&paddle.Customer{ID: "ctm_created"}, nil).Once()
+
+	customerID, err := svc.CreateCustomer(ctx, "user_789", "customer@example.com")
+	require.NoError(t, err)
+	assert.Equal(t, "ctm_created", customerID)
+	mockSDK.AssertExpectations(t)
 }
 
+// TestCreateCustomer_RequiredParameters_APIError proves CreateCustomer wraps a raw SDK
+// failure with context instead of returning it bare — the sibling half of the
+// "handles API errors" claim the skipped test documented but never checked.
+func TestCreateCustomer_RequiredParameters_APIError(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateCustomer", ctx, mock.Anything).Return(nil, errors.New("paddle rate limited")).Once()
+
+	_, err := svc.CreateCustomer(ctx, "user_789", "customer@example.com")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create Paddle customer")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestGetCustomer_RequiredParameters covers the success path: GetCustomer calls the SDK
+// with the given ID and returns the customer on success.
+//
+// ⚠ It does NOT assert "Returns ErrCustomerNotFound for 404" — that was this skipped
+// test's ORIGINAL claim, but GetCustomer (paddle_service.go) never actually returns that
+// sentinel; it always wraps whatever the SDK returned in a generic
+// "failed to fetch Paddle customer: %w" error. services.ErrCustomerNotFound is defined
+// and IS switched on by internal/huma/errors/mapper.go, but nothing in the production
+// GetCustomer path ever produces it — a pre-existing dead-sentinel gap, not something to
+// paper over with a false-positive test. See TestGetCustomer_RequiredParameters_APIError
+// for what the code actually does today.
 func TestGetCustomer_RequiredParameters(t *testing.T) {
-	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
 
-	// Would test:
-	// 1. GetCustomer calls SDK.GetCustomer with correct ID
-	// 2. Returns customer data on success
-	// 3. Returns ErrCustomerNotFound for 404
-	// 4. Handles API errors
+	mockSDK.On("GetCustomer", ctx, &paddle.GetCustomerRequest{CustomerID: "ctm_555"}).
+		Return(&paddle.Customer{ID: "ctm_555"}, nil).Once()
+
+	customer, err := svc.GetCustomer(ctx, "ctm_555")
+	require.NoError(t, err)
+	assert.Equal(t, "ctm_555", customer.ID)
+	mockSDK.AssertExpectations(t)
 }
 
-func TestCreateCheckoutSession_RequiredParameters(t *testing.T) {
-	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
+// TestGetCustomer_RequiredParameters_APIError documents the current (generic-wrap, not
+// ErrCustomerNotFound) error behavior — see the doc comment above.
+func TestGetCustomer_RequiredParameters_APIError(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
 
-	// Would test:
-	// 1. Creates transaction with correct price ID and quantity
-	// 2. Includes customer ID if provided
-	// 3. Returns checkout URL and transaction ID
-	// 4. Handles missing checkout URL in response
-	// 5. Handles API errors
+	mockSDK.On("GetCustomer", ctx, mock.Anything).Return(nil, errors.New("not found")).Once()
+
+	_, err := svc.GetCustomer(ctx, "ctm_missing")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to fetch Paddle customer")
+	assert.NotErrorIs(t, err, ErrCustomerNotFound, "production code does not (yet) map this to the sentinel — see doc comment")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestCreateCheckoutSession_RequiredParameters covers the price/quantity/customer-ID
+// request shape and the success return (checkout URL + transaction ID) with the mock SDK.
+// TestCreateCheckoutSession_IncludesCustomData (below) exercises the same method but
+// against a REAL (unauthenticated) Paddle client and only checks the error path; this is
+// the mock-backed success-path coverage that was missing.
+func TestCreateCheckoutSession_RequiredParameters(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateTransaction", ctx, mock.MatchedBy(func(req *paddle.CreateTransactionRequest) bool {
+		if len(req.Items) != 1 || req.Items[0].TransactionItemFromCatalog == nil {
+			return false
+		}
+		item := req.Items[0].TransactionItemFromCatalog
+		return item.PriceID == "pri_999" && item.Quantity == 1 &&
+			req.CustomerID != nil && *req.CustomerID == "ctm_123" &&
+			req.CustomData["user_id"] == "user_123"
+	})).Return(&paddle.Transaction{
+		ID: "txn_abc",
+		Checkout: &paddle.TransactionCheckout{
+			URL: paddle.PtrTo("https://checkout.paddle.com/txn_abc"),
+		},
+	}, nil).Once()
+
+	checkoutURL, transactionID, err := svc.CreateCheckoutSession(ctx, "ctm_123", "pri_999", "test@example.com", "https://example.com/success", "user_123")
+	require.NoError(t, err)
+	assert.Equal(t, "https://checkout.paddle.com/txn_abc", checkoutURL)
+	assert.Equal(t, "txn_abc", transactionID)
+	mockSDK.AssertExpectations(t)
+}
+
+// TestCreateCheckoutSession_RequiredParameters_MissingCheckoutURL proves the "handles
+// missing checkout URL in response" claim the skipped test documented but never checked.
+func TestCreateCheckoutSession_RequiredParameters_MissingCheckoutURL(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("CreateTransaction", ctx, mock.Anything).Return(&paddle.Transaction{
+		ID:       "txn_no_checkout",
+		Checkout: nil,
+	}, nil).Once()
+
+	_, _, err := svc.CreateCheckoutSession(ctx, "ctm_123", "pri_999", "test@example.com", "https://example.com/success", "user_123")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing checkout URL")
+	mockSDK.AssertExpectations(t)
 }
 
 // TestCreateCheckoutSession_IncludesCustomData verifies that custom_data with user_id is set
@@ -333,36 +422,125 @@ func TestCreateCheckoutSession_IncludesCustomData(t *testing.T) {
 	// The integration test below verifies this in a real environment
 }
 
+// TestGetSubscription_RequiredParameters covers the success path.
+//
+// ⚠ Like TestGetCustomer_RequiredParameters above, this does NOT assert
+// "Returns ErrSubscriptionNotFound for 404" — GetSubscription (paddle_service.go) never
+// produces that sentinel either; see TestGetSubscription_RequiredParameters_APIError.
 func TestGetSubscription_RequiredParameters(t *testing.T) {
-	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
 
-	// Would test:
-	// 1. Calls SDK.GetSubscription with correct ID
-	// 2. Returns subscription data
-	// 3. Returns ErrSubscriptionNotFound for 404
-	// 4. Handles API errors
+	mockSDK.On("GetSubscription", ctx, &paddle.GetSubscriptionRequest{SubscriptionID: "sub_444"}).
+		Return(&paddle.Subscription{ID: "sub_444", Status: paddle.SubscriptionStatusActive}, nil).Once()
+
+	sub, err := svc.GetSubscription(ctx, "sub_444")
+	require.NoError(t, err)
+	assert.Equal(t, "sub_444", sub.ID)
+	mockSDK.AssertExpectations(t)
 }
 
+func TestGetSubscription_RequiredParameters_APIError(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("GetSubscription", ctx, mock.Anything).Return(nil, errors.New("not found")).Once()
+
+	_, err := svc.GetSubscription(ctx, "sub_missing")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to fetch subscription")
+	assert.NotErrorIs(t, err, ErrSubscriptionNotFound, "production code does not (yet) map this to the sentinel")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestUpdateSubscription_RequiredParameters covers all five claims the skipped test
+// documented but never checked: fetches current subscription first (so it can read the
+// existing item quantity via buildCatalogItem), builds the update with the new price ID,
+// applies the requested proration mode, and returns the updated subscription on success.
 func TestUpdateSubscription_RequiredParameters(t *testing.T) {
-	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_777"
 
-	// Would test:
-	// 1. Fetches current subscription first
-	// 2. Builds update request with new price ID
-	// 3. Applies correct proration mode
-	// 4. Returns updated subscription
-	// 5. Handles API errors
+	mockSDK.On("GetSubscription", ctx, &paddle.GetSubscriptionRequest{SubscriptionID: subscriptionID}).
+		Return(&paddle.Subscription{
+			ID:    subscriptionID,
+			Items: []paddle.SubscriptionItem{{Quantity: 2}},
+		}, nil).Once()
+
+	mockSDK.On("UpdateSubscription", ctx, mock.MatchedBy(func(req *paddle.UpdateSubscriptionRequest) bool {
+		if req.SubscriptionID != subscriptionID || req.Items == nil {
+			return false
+		}
+		items := req.Items.Value()
+		if items == nil || len(*items) != 1 || (*items)[0].SubscriptionUpdateItemFromCatalog == nil {
+			return false
+		}
+		item := (*items)[0].SubscriptionUpdateItemFromCatalog
+		if req.ProrationBillingMode == nil || req.ProrationBillingMode.Value() == nil {
+			return false
+		}
+		mode := *req.ProrationBillingMode.Value()
+		return item.PriceID == "pri_new" && item.Quantity == 2 &&
+			mode == paddle.ProrationBillingModeFullImmediately
+	})).Return(&paddle.Subscription{ID: subscriptionID, Status: paddle.SubscriptionStatusActive}, nil).Once()
+
+	updated, err := svc.UpdateSubscription(ctx, subscriptionID, "pri_new", "full_immediately")
+	require.NoError(t, err)
+	assert.Equal(t, subscriptionID, updated.ID)
+	mockSDK.AssertExpectations(t)
 }
 
-func TestCancelSubscription_RequiredParameters(t *testing.T) {
-	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
+// TestUpdateSubscription_RequiredParameters_FetchError proves UpdateSubscription surfaces
+// (rather than swallows) a failure to fetch the current subscription — the "handles API
+// errors" claim the skipped test documented but never checked. The GetSubscription failure
+// path is exercised directly above; this proves UpdateSubscription's own wrapping of it.
+func TestUpdateSubscription_RequiredParameters_FetchError(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
 
-	// Would test:
-	// 1. Calls SDK.CancelSubscription with correct ID
-	// 2. Sets effective_from to next_billing_period
-	// 3. Returns success on cancellation
-	// 4. Handles already cancelled (idempotent)
-	// 5. Handles API errors
+	mockSDK.On("GetSubscription", ctx, mock.Anything).Return(nil, errors.New("db unavailable")).Once()
+
+	_, err := svc.UpdateSubscription(ctx, "sub_777", "pri_new", "full_immediately")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to fetch current subscription")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestUpdateSubscription_RequiredParameters_UpdateError proves the SDK's own update call
+// failure is wrapped, not swallowed.
+func TestUpdateSubscription_RequiredParameters_UpdateError(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+
+	mockSDK.On("GetSubscription", ctx, mock.Anything).Return(&paddle.Subscription{ID: "sub_777"}, nil).Once()
+	mockSDK.On("UpdateSubscription", ctx, mock.Anything).Return(nil, errors.New("paddle rejected update")).Once()
+
+	_, err := svc.UpdateSubscription(ctx, "sub_777", "pri_new", "full_immediately")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to update Paddle subscription")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestCancelSubscription_RequiredParameters covers the success path: correct subscription
+// ID, effective_from pinned to next-billing-period (not immediate — that distinction is
+// the whole reason CancelSubscription and CancelSubscriptionImmediately are two methods),
+// and no error on success. The "already cancelled" and "API error" claims are covered by
+// TestCancelSubscription_AlreadyCancelled_MapsToErrPaddleAlreadyCancelled and
+// TestCancelSubscription_SDKError_NotConfusedWithAlreadyCancelled directly below.
+func TestCancelSubscription_RequiredParameters(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_888"
+
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID &&
+			req.EffectiveFrom != nil && *req.EffectiveFrom == paddle.EffectiveFromNextBillingPeriod
+	})).Return(&paddle.Subscription{ID: subscriptionID, Status: paddle.SubscriptionStatusCanceled}, nil).Once()
+
+	err := svc.CancelSubscription(ctx, subscriptionID)
+	require.NoError(t, err)
+	mockSDK.AssertExpectations(t)
 }
 
 // TestCancelSubscription_AlreadyCancelled_MapsToErrPaddleAlreadyCancelled proves the H2
@@ -413,15 +591,57 @@ func TestCancelSubscription_SDKError_NotConfusedWithAlreadyCancelled(t *testing.
 	mockSDK.AssertExpectations(t)
 }
 
+// TestPreviewUpdate_RequiredParameters covers all five claims from the skipped test:
+// fetches the current subscription first (buildCatalogItem needs its item quantity),
+// builds the preview request for the new price, and returns proration amount, currency,
+// and next charge date on success.
 func TestPreviewUpdate_RequiredParameters(t *testing.T) {
-	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_222"
 
-	// Would test:
-	// 1. Fetches current subscription
-	// 2. Builds preview request with new price
-	// 3. Returns proration amount and currency
-	// 4. Returns next charge date
-	// 5. Handles API errors
+	mockSDK.On("GetSubscription", ctx, &paddle.GetSubscriptionRequest{SubscriptionID: subscriptionID}).
+		Return(&paddle.Subscription{
+			ID:    subscriptionID,
+			Items: []paddle.SubscriptionItem{{Quantity: 1}},
+		}, nil).Once()
+
+	mockSDK.On("PreviewSubscriptionUpdate", ctx, mock.MatchedBy(func(req *paddle.PreviewSubscriptionUpdateRequest) bool {
+		return req.SubscriptionID == subscriptionID
+	})).Return(&paddle.SubscriptionPreview{
+		CurrencyCode: paddle.CurrencyCodeUSD,
+		ImmediateTransaction: &paddle.NextTransaction{
+			Details: paddle.TransactionDetailsPreview{
+				Totals: paddle.TransactionTotals{Total: "1234"},
+			},
+		},
+		NextTransaction: &paddle.NextTransaction{
+			BillingPeriod: paddle.TimePeriod{StartsAt: "2027-01-01T00:00:00Z"},
+		},
+	}, nil).Once()
+
+	amount, currency, nextCharge, err := svc.PreviewUpdate(ctx, subscriptionID, "pri_new")
+	require.NoError(t, err)
+	assert.Equal(t, "1234", amount)
+	assert.Equal(t, string(paddle.CurrencyCodeUSD), currency)
+	assert.Equal(t, "2027-01-01T00:00:00Z", nextCharge)
+	mockSDK.AssertExpectations(t)
+}
+
+// TestPreviewUpdate_RequiredParameters_APIError proves the "handles API errors" claim:
+// a preview-call failure is wrapped, not swallowed.
+func TestPreviewUpdate_RequiredParameters_APIError(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_222"
+
+	mockSDK.On("GetSubscription", ctx, mock.Anything).Return(&paddle.Subscription{ID: subscriptionID}, nil).Once()
+	mockSDK.On("PreviewSubscriptionUpdate", ctx, mock.Anything).Return(nil, errors.New("paddle preview failed")).Once()
+
+	_, _, _, err := svc.PreviewUpdate(ctx, subscriptionID, "pri_new")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to preview subscription update")
+	mockSDK.AssertExpectations(t)
 }
 
 // TestGetClient tests that GetClient returns the SDK instance
@@ -621,10 +841,15 @@ func TestPaddleService_ContextCancellation(t *testing.T) {
 
 // Test proration mode parsing in UpdateSubscription
 
+// TestUpdateSubscription_ProrationModes verifies each proration-mode string flows through
+// UpdateSubscription into the actual request the SDK receives.
+//
+// ⚠ The pure string→enum mapping this skipped test's table originally described is already
+// covered unconditionally by TestParseProrationMode (parseProrationMode directly, below in
+// this file) — re-asserting that table here would be a duplicate. What was NOT covered is
+// the wiring: that UpdateSubscription actually calls parseProrationMode and puts the result
+// on the request, which is what this now checks with the mock SDK.
 func TestUpdateSubscription_ProrationModes(t *testing.T) {
-	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
-
-	// Would test that these proration modes are correctly parsed:
 	testCases := []struct {
 		input    string
 		expected paddle.ProrationBillingMode
@@ -637,7 +862,23 @@ func TestUpdateSubscription_ProrationModes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.input, func(t *testing.T) {
-			// Would verify the correct mode is used in the SDK call
+			svc, mockSDK := setupPaddleServiceWithMock(t)
+			ctx := context.Background()
+			subscriptionID := "sub_proration"
+
+			mockSDK.On("GetSubscription", ctx, mock.Anything).
+				Return(&paddle.Subscription{ID: subscriptionID, Items: []paddle.SubscriptionItem{{Quantity: 1}}}, nil).Once()
+
+			mockSDK.On("UpdateSubscription", ctx, mock.MatchedBy(func(req *paddle.UpdateSubscriptionRequest) bool {
+				if req.ProrationBillingMode == nil || req.ProrationBillingMode.Value() == nil {
+					return false
+				}
+				return *req.ProrationBillingMode.Value() == tc.expected
+			})).Return(&paddle.Subscription{ID: subscriptionID}, nil).Once()
+
+			_, err := svc.UpdateSubscription(ctx, subscriptionID, "pri_x", tc.input)
+			require.NoError(t, err)
+			mockSDK.AssertExpectations(t)
 		})
 	}
 }
@@ -702,22 +943,58 @@ func TestPaddleService_ImplementsInterface(t *testing.T) {
 
 // Test that custom_data is included when creating customers
 
+// TestCreateCustomer_IncludesCustomData verifies CreateCustomerRequest carries the email
+// and custom_data.user_id fields, calling CreateCustomer directly — distinct from
+// TestEnsureCustomer_CreatesNewCustomer, which asserts the same request shape but through
+// EnsureCustomer's higher-level conflict-resolution wrapper.
 func TestCreateCustomer_IncludesCustomData(t *testing.T) {
-	t.Skip("Requires Paddle SDK interface refactor to verify request payload")
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
 
-	// Would verify that CreateCustomerRequest includes:
-	// - Email field
-	// - CustomData with user_id field
+	mockSDK.On("CreateCustomer", ctx, mock.MatchedBy(func(req *paddle.CreateCustomerRequest) bool {
+		return req.Email == "custom-data@example.com" && req.CustomData["user_id"] == "user_custom_data"
+	})).Return(&paddle.Customer{ID: "ctm_custom_data"}, nil).Once()
+
+	_, err := svc.CreateCustomer(ctx, "user_custom_data", "custom-data@example.com")
+	require.NoError(t, err)
+	mockSDK.AssertExpectations(t)
 }
 
-// Test checkout session with and without customer ID
-
+// TestCreateCheckoutSession_WithAndWithoutCustomer covers both claims the skipped test
+// documented: with a customer ID the request carries it, without one it's guest checkout
+// (nil CustomerID field on the request).
 func TestCreateCheckoutSession_WithAndWithoutCustomer(t *testing.T) {
-	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
+	t.Run("with customer ID", func(t *testing.T) {
+		svc, mockSDK := setupPaddleServiceWithMock(t)
+		ctx := context.Background()
 
-	// Would test:
-	// 1. With customer ID: request includes CustomerID field
-	// 2. Without customer ID: request has nil/empty CustomerID (guest checkout)
+		mockSDK.On("CreateTransaction", ctx, mock.MatchedBy(func(req *paddle.CreateTransactionRequest) bool {
+			return req.CustomerID != nil && *req.CustomerID == "ctm_present"
+		})).Return(&paddle.Transaction{
+			ID:       "txn_with_customer",
+			Checkout: &paddle.TransactionCheckout{URL: paddle.PtrTo("https://checkout.paddle.com/txn_with_customer")},
+		}, nil).Once()
+
+		_, _, err := svc.CreateCheckoutSession(ctx, "ctm_present", "pri_1", "test@example.com", "https://example.com", "user_1")
+		require.NoError(t, err)
+		mockSDK.AssertExpectations(t)
+	})
+
+	t.Run("without customer ID (guest checkout)", func(t *testing.T) {
+		svc, mockSDK := setupPaddleServiceWithMock(t)
+		ctx := context.Background()
+
+		mockSDK.On("CreateTransaction", ctx, mock.MatchedBy(func(req *paddle.CreateTransactionRequest) bool {
+			return req.CustomerID == nil
+		})).Return(&paddle.Transaction{
+			ID:       "txn_guest",
+			Checkout: &paddle.TransactionCheckout{URL: paddle.PtrTo("https://checkout.paddle.com/txn_guest")},
+		}, nil).Once()
+
+		_, _, err := svc.CreateCheckoutSession(ctx, "", "pri_1", "test@example.com", "https://example.com", "user_1")
+		require.NoError(t, err)
+		mockSDK.AssertExpectations(t)
+	})
 }
 
 // Test that errors from Paddle API are wrapped appropriately
@@ -734,33 +1011,73 @@ func TestPaddleService_ErrorWrapping(t *testing.T) {
 }
 
 // TestGetBillingPortalURL_Success tests successful billing portal URL generation
+// TestGetBillingPortalURL_Success covers both the sandbox and production URL selection —
+// GetBillingPortalURL validates the customer exists (via GetCustomer) then returns a
+// static, environment-selected portal URL; there's no SDK "create billing portal session"
+// call to mock (see GetBillingPortalURL's own doc comment: Paddle SDK v4 has no such
+// endpoint), so the SDK interaction under test is the customer-validation GetCustomer call.
 func TestGetBillingPortalURL_Success(t *testing.T) {
-	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
+	t.Run("sandbox", func(t *testing.T) {
+		svc, mockSDK := setupPaddleServiceWithMock(t)
+		ctx := context.Background()
 
-	// Would test:
-	// 1. Calls Paddle SDK to create billing portal session
-	// 2. Returns valid URL for customer to access billing portal
-	// 3. Logs appropriate messages
+		mockSDK.On("GetCustomer", ctx, &paddle.GetCustomerRequest{CustomerID: "ctm_portal"}).
+			Return(&paddle.Customer{ID: "ctm_portal"}, nil).Once()
+
+		url, err := svc.GetBillingPortalURL(ctx, "ctm_portal")
+		require.NoError(t, err)
+		assert.Equal(t, "https://sandbox-buy.paddle.com/customer/portal", url)
+		mockSDK.AssertExpectations(t)
+	})
+
+	t.Run("production", func(t *testing.T) {
+		svc, mockSDK := setupPaddleServiceWithMock(t)
+		svc.config.PaddleEnvironment = "production"
+		ctx := context.Background()
+
+		mockSDK.On("GetCustomer", ctx, &paddle.GetCustomerRequest{CustomerID: "ctm_portal"}).
+			Return(&paddle.Customer{ID: "ctm_portal"}, nil).Once()
+
+		url, err := svc.GetBillingPortalURL(ctx, "ctm_portal")
+		require.NoError(t, err)
+		assert.Equal(t, "https://buy.paddle.com/customer/portal", url)
+		mockSDK.AssertExpectations(t)
+	})
 }
 
-// TestGetBillingPortalURL_InvalidCustomer tests with non-existent customer ID
+// TestGetBillingPortalURL_InvalidCustomer covers a customer-lookup failure (e.g. the
+// customer ID doesn't exist). ⚠ Like the GetCustomer/GetSubscription tests above, this
+// does NOT assert "Returns ErrCustomerNotFound" — GetBillingPortalURL's only failure path
+// is GetCustomer's own generic wrap, which never produces that sentinel.
 func TestGetBillingPortalURL_InvalidCustomer(t *testing.T) {
-	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
 
-	// Would test:
-	// 1. Calls Paddle SDK with invalid customer ID
-	// 2. Returns ErrCustomerNotFound error
-	// 3. Wraps error with appropriate message
+	mockSDK.On("GetCustomer", ctx, mock.Anything).Return(nil, errors.New("not found")).Once()
+
+	_, err := svc.GetBillingPortalURL(ctx, "ctm_missing")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to validate customer")
+	mockSDK.AssertExpectations(t)
 }
 
-// TestGetBillingPortalURL_PaddleAPIError tests Paddle API failure
+// TestGetBillingPortalURL_PaddleAPIError covers a non-"not found" SDK failure (rate limit,
+// network error) during the customer-validation call. Per GetBillingPortalURL's
+// implementation this is the SAME code path as TestGetBillingPortalURL_InvalidCustomer —
+// the current method doesn't distinguish "customer not found" from "Paddle API error" when
+// validating; both simply propagate GetCustomer's wrapped error. Kept as a separate test
+// (matching the skipped test's original name and intent) with a distinct simulated error to
+// document that non-distinction rather than assert a difference that doesn't exist.
 func TestGetBillingPortalURL_PaddleAPIError(t *testing.T) {
-	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
 
-	// Would test:
-	// 1. Simulates Paddle API failure (network error, rate limit, etc.)
-	// 2. Returns wrapped error with context
-	// 3. Logs error appropriately
+	mockSDK.On("GetCustomer", ctx, mock.Anything).Return(nil, errors.New("paddle rate limited")).Once()
+
+	_, err := svc.GetBillingPortalURL(ctx, "ctm_rate_limited")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to validate customer")
+	mockSDK.AssertExpectations(t)
 }
 
 // TestCancelSubscriptionImmediately_Success verifies the subscription is cancelled
