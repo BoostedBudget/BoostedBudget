@@ -361,22 +361,80 @@ func scanNonGoHistoryDeletes(t *testing.T, backendDir, sub string, ext string, s
 // is passed through unblanked as ordinary text, and any comment/literal INSIDE the region (like
 // 000164's RAISE EXCEPTION string) is still recognised and blanked by the very same pass.
 //
-// R14 task 6's fix: a `$tag$` delimiter also TERMINATES an already-open single-quote span. Dollar-
-// quoting is also used for PROSE, not just procedural bodies — e.g.
-// `COMMENT ON COLUMN x.y IS $COMMENT$This is the user's setting.$COMMENT$;` — and prose routinely
-// contains an ordinary English possessive apostrophe. Before this fix, that apostrophe opened a
-// "string" the scanner did not close until the NEXT literal `'` anywhere later in the file,
-// blanking every real statement — DELETEs included — in between. Now, a `$tag$` boundary resyncs
-// an open single-quote scan the same way EOF used to (fail closed on that one literal), without
-// giving up on the rest of the file. Tag NAMES are deliberately NOT matched against each other
-// (an opening `$a$` does not have to be closed by another `$a$` specifically): the scanner never
-// tracks "we are inside dollar-quoted region X" as a state to blank — it only uses a `$tag$` sighting
-// as a resync point to stop a runaway string, and content between any two dollar-tags is already
-// being scanned normally regardless of whether the names match. Requiring matched names would add
-// state without changing what gets blanked. TestG4Classification_DollarQuotedProseApostropheDoesNotBlindTheScan
-// is the regression pin for this. TestNoUnallowlistedFrontendFixtureHistoryDelete is the regression
-// pin for the original DO-block half (fails closed — finds zero deletes when three are allowlisted —
-// if dollar-quoted regions stop being scanned); TestG4Classification_QuotedLiteralIsNotAMatch and
+// R14 task 6, round 1's fix (SUPERSEDED, see round 2 below): a `$tag$` delimiter also TERMINATED
+// an already-open single-quote span, UNCONDITIONALLY — fixing the dollar-quoted-PROSE hole
+// (`COMMENT ON COLUMN x.y IS $COMMENT$This is the user's setting.$COMMENT$;`) but opening a THIRD
+// hole: an ordinary `'...'` string literal containing a `$..$`-SHAPED SUBSTRING AS DATA — a
+// positional-parameter-shaped placeholder like `'...$1$...'`, an arbitrary word like `'...$word$...'`,
+// or bare `'...$$...'` — terminated the string early too, flipping quote parity for the rest of the
+// file and swallowing the next real statement, DELETEs included.
+// TestG4Classification_DollarShapedSubstringInsideAnOrdinaryStringIsNotATagBoundary is the
+// regression pin for this hole; it is a mutant of round 1's own fix, not of the original scanner.
+//
+// R14 task 6, round 2's fix — BOUNDED-REGION LEXING, not a special case inside the quote scanner.
+// The root cause of BOTH the round-1 hole and the fix for it is the same: giving `$` any meaning
+// while ALREADY INSIDE a string. The round-2 rule removes that entirely: a `$tag$` delimiter is
+// only ever recognised in DEFAULT STATE (never while a `'` span is open — inside a string, `$` is
+// always ordinary data and can never resync anything), and once a dollar-quoted region opens, its
+// INTERIOR IS LEXED INDEPENDENTLY AND BOUNDED — comments and strings inside it are recognised and
+// blanked by a recursive call scoped to exactly `[body, matching-close-tag)`, so quote state can
+// never cross the region's boundary in EITHER direction. That one property fixes all three known
+// holes together: a prose apostrophe inside `$COMMENT$...$COMMENT$` cannot swallow anything past
+// the region's own closing tag (bounded); a `DO $$ ... DELETE ... $$` interior is still scanned,
+// which is the constraint that forced dollar-quoting to be given any meaning at all; and a
+// `$..$`-shaped substring inside an ORDINARY string is never even inspected as a possible tag,
+// because tag recognition never happens mid-string.
+//
+// Tag matching is STRICT here, unlike round 1: a region opened by `$a$` closes only at the next
+// literal occurrence of the exact substring `$a$`, found by `indexOfDollarTag`, never at a
+// differently-named tag. This is also what makes correctly-nested, differently-tagged regions work
+// (an inner `$b$...$b$` inside an outer `$a$...$a$` body does not prematurely end the outer region,
+// because the outer region's own bound is anchored to `$a$` specifically) — Postgres does not allow
+// the SAME tag to nest, so a region ending at the first literal recurrence of its own tag matches
+// real Postgres semantics, not just this scanner's convenience. `dollarQuoteTagAt` additionally
+// requires the tag's first character (if any) to be a letter or underscore, never a digit, matching
+// Postgres's own dollar-quote identifier rule — this alone would have closed the `$1$` case, but
+// NOT `$word$` or bare `$$`, which is why banishing digit-led tags was rejected as a root-cause fix
+// on its own (see the T6 round-2 brief); it is included here as a correctness match to Postgres, not
+// as the mechanism that makes strings safe (that mechanism is "never look inside a string" above).
+//
+// An unterminated dollar-quoted region — no matching close tag before the enclosing bound — is
+// still lexed NORMALLY (comments/strings inside it still recognised and blanked) out to that
+// bound, and then the scan simply stops; unlike an unterminated STRING LITERAL, it does not blank
+// its own content. This is deliberate and in the guard's favour: a truncated or still-being-edited
+// `.sql` file with no closing tag must not become a way to hide a real DELETE from G4 — see
+// TestG4Classification_UnterminatedDollarRegionStillScansItsContent.
+//
+// ⚠ #1569 round 14 task 6, "what would a fourth hole look like" (asked explicitly by the round-2
+// brief) — ONE SHAPE WAS FOUND AND DELIBERATELY NOT FIXED: reusing the ENCLOSING region's own tag
+// literally inside a nested string within that same region (e.g. `DO $$ BEGIN RAISE NOTICE
+// 'contains $$ inside'; ... END $$;`) makes `indexOfDollarTag` find the closing tag at the
+// occurrence INSIDE the string, ending the region early and corrupting everything until the
+// scanner happens to resync on a later quote — in the worst case swallowing a later, unrelated
+// statement's own DELETE too. This is NOT a scanner defect: real Postgres's dollar-quote lexer
+// finds a region's end by the exact same naive verbatim scan for the tag substring, with NO regard
+// for nested quotes or comments (the Postgres manual's own nesting guidance is "choose DIFFERENT
+// tags at each nesting level" for exactly this reason) — so a file with this shape would itself
+// fail to apply as valid SQL against real Postgres, via a syntax error, before this guard is ever
+// consulted. It therefore cannot appear as a real, applied migration in this repo's corpus.
+// Making the closing-tag search quote/comment-aware to "fix" it WAS attempted and measured to
+// REOPEN the round-2 prose-apostrophe hole: the only way to make the search ignore an embedded tag
+// inside a nested string is to let that nested string's own scan run unbounded (since the region's
+// end isn't known until the string is skipped), and an unbounded nested-quote scan is exactly what
+// let a runaway prose apostrophe swallow the rest of the file. Given a choice between defending a
+// syntactically-invalid input that cannot exist in an applied migration, and reopening a confirmed,
+// twice-shipped hole in valid input, this scanner accepts the former as out of scope. If Postgres's
+// own dollar-quote lexing rule is ever misremembered here, re-derive it before "fixing" this again.
+//
+// TestG4Classification_DollarQuotedProseApostropheDoesNotBlindTheScan and
+// TestG4Classification_DollarShapedSubstringInsideAnOrdinaryStringIsNotATagBoundary are the
+// regression pins for the two dollar-quoting holes actually fixed.
+// TestG4Classification_NestedDifferentlyTaggedDollarRegionsAreBothScanned and
+// TestG4Classification_UnterminatedDollarRegionStillScansItsContent are constructed pins for two
+// other fourth-hole candidates that were checked and found NOT to be holes.
+// TestNoUnallowlistedFrontendFixtureHistoryDelete is the regression pin for the original DO-block
+// half (fails closed — finds zero deletes when three are allowlisted — if dollar-quoted regions
+// stop being scanned); TestG4Classification_QuotedLiteralIsNotAMatch and
 // TestG4Classification_CommentMarkerInsideALiteralDoesNotBlindTheScan are the pins for the
 // state-machine ordering.
 //
@@ -386,90 +444,118 @@ func scanNonGoHistoryDeletes(t *testing.T, backendDir, sub string, ext string, s
 // rather than panicking or looping; nothing in the corpus writes one, and either would still be a
 // scan the guard fails closed on (zero deletes found) rather than a crash.
 func blankSQLCommentsAndLiterals(s string) string {
-	out := make([]byte, len(s))
+	out := []byte(s)
+	blankSQLRange(out, s, 0, len(s))
+	return string(out)
+}
+
+// dollarQuoteIdentStart / dollarQuoteIdentCont classify the bytes a dollar-quote tag NAME may
+// start and continue with, matching Postgres's own rule: the first character (if any) must be a
+// letter or underscore, never a digit; later characters may also be digits.
+func dollarQuoteIdentStart(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+func dollarQuoteIdentCont(c byte) bool {
+	return dollarQuoteIdentStart(c) || (c >= '0' && c <= '9')
+}
+
+// dollarQuoteTagAt returns the full `$tag$` delimiter (e.g. `$$` or `$COMMENT$`) starting at i, or
+// "" if none starts there. Only called from DEFAULT scanning state (never from inside an open
+// string) — that restriction, not anything in this function, is what keeps a `$..$`-shaped
+// substring inside an ordinary string literal from ever being treated as a tag.
+func dollarQuoteTagAt(s string, i int) string {
+	n := len(s)
+	if i >= n || s[i] != '$' {
+		return ""
+	}
+	j := i + 1
+	if j < n && dollarQuoteIdentStart(s[j]) {
+		for j < n && dollarQuoteIdentCont(s[j]) {
+			j++
+		}
+	}
+	if j < n && s[j] == '$' {
+		return s[i : j+1]
+	}
+	return ""
+}
+
+// indexOfDollarTag returns the index of the first occurrence of the literal substring tag in
+// s[from:hi], or -1 if none exists before hi. Bounded to hi so a match past the enclosing region's
+// own boundary is never found.
+func indexOfDollarTag(s, tag string, from, hi int) int {
+	for k := from; k+len(tag) <= hi; k++ {
+		if s[k:k+len(tag)] == tag {
+			return k
+		}
+	}
+	return -1
+}
+
+// blankSQLRange blanks comments and string literals within s[lo:hi] into out, recursing into any
+// dollar-quoted region's interior with a bound bounded to that region's own matching close tag (or
+// to hi, if unterminated) — see the R14 task 6 round-2 doc comment on blankSQLCommentsAndLiterals
+// for why this boundedness is the fix.
+func blankSQLRange(out []byte, s string, lo, hi int) {
 	blank := func(from, to int) {
 		for k := from; k < to; k++ {
-			if s[k] == '\n' {
-				out[k] = '\n'
-			} else {
+			if s[k] != '\n' {
 				out[k] = ' '
 			}
 		}
 	}
-	n := len(s)
-	// dollarTagAt reports the length of a `$tag$` delimiter (e.g. `$$` or `$COMMENT$`) starting at
-	// i, or 0 if none starts there. Tag names are letters, digits, and underscore, matching
-	// Postgres's dollar-quote identifier rule closely enough for this scanner's purpose.
-	dollarTagAt := func(i int) int {
-		if s[i] != '$' {
-			return 0
-		}
-		j := i + 1
-		for j < n && (s[j] == '_' || (s[j] >= 'a' && s[j] <= 'z') || (s[j] >= 'A' && s[j] <= 'Z') || (s[j] >= '0' && s[j] <= '9')) {
-			j++
-		}
-		if j < n && s[j] == '$' {
-			return j - i + 1
-		}
-		return 0
-	}
-	for i := 0; i < n; {
+	for i := lo; i < hi; {
 		switch {
-		case i+1 < n && s[i] == '-' && s[i+1] == '-':
+		case i+1 < hi && s[i] == '-' && s[i+1] == '-':
 			j := i
-			for j < n && s[j] != '\n' {
+			for j < hi && s[j] != '\n' {
 				j++
 			}
 			blank(i, j)
 			i = j
-		case i+1 < n && s[i] == '/' && s[i+1] == '*':
+		case i+1 < hi && s[i] == '/' && s[i+1] == '*':
 			j := i + 2
-			for j+1 < n && (s[j] != '*' || s[j+1] != '/') {
+			for j+1 < hi && (s[j] != '*' || s[j+1] != '/') {
 				j++
 			}
 			end := j + 2
-			if end > n {
-				end = n
+			if end > hi {
+				end = hi
 			}
 			blank(i, end)
 			i = end
-		case dollarTagAt(i) > 0:
-			// Pass the delimiter through unblanked; scanning continues normally right after it, so
-			// a DO-block body (or anything else between two dollar-tags) stays fully visible to G4.
-			l := dollarTagAt(i)
-			for k := i; k < i+l; k++ {
-				out[k] = s[k]
+		case dollarQuoteTagAt(s, i) != "":
+			tag := dollarQuoteTagAt(s, i)
+			body := i + len(tag)
+			end := indexOfDollarTag(s, tag, body, hi)
+			if end < 0 {
+				// Unterminated region: blank its interior to the enclosing bound and stop, the
+				// same fail-closed convention as an unterminated comment or literal.
+				blankSQLRange(out, s, body, hi)
+				return
 			}
-			i += l
+			blankSQLRange(out, s, body, end) // interior lexed INDEPENDENTLY AND BOUNDED
+			i = end + len(tag)
 		case s[i] == '\'':
 			j := i + 1
-			for j < n {
+			for j < hi {
 				if s[j] == '\'' {
-					if j+1 < n && s[j+1] == '\'' {
+					if j+1 < hi && s[j+1] == '\'' {
 						j += 2
 						continue
 					}
 					j++
 					break
 				}
-				if dollarTagAt(j) > 0 {
-					// A dollar-tag boundary terminates the open string here rather than being
-					// consumed as string content — this is the fix: without it, a prose possessive
-					// apostrophe inside a $tag$...$tag$ block stays "open" until the next literal
-					// `'` anywhere later in the file, blanking everything (real DELETEs included)
-					// in between. The tag itself is left unblanked for the outer loop to process.
-					break
-				}
-				j++
+				j++ // a `$` in here is DATA — never inspected as a possible tag. This is the fix.
 			}
 			blank(i, j)
 			i = j
 		default:
-			out[i] = s[i]
 			i++
 		}
 	}
-	return string(out)
 }
 
 // repoRootDir resolves the repository root, one level above backend/. G4's universe reaches
@@ -940,6 +1026,107 @@ func TestG4Classification_DollarQuotedProseApostropheDoesNotBlindTheScan(t *test
 	}
 	if sites[0].table != "transactions" || !sites[0].qualified {
 		t.Fatalf("expected a qualified delete of transactions, got %+v", sites[0])
+	}
+}
+
+// TestG4Classification_DollarShapedSubstringInsideAnOrdinaryStringIsNotATagBoundary is the
+// regression pin for R14 task 6 fix round 1's third hole in blankSQLCommentsAndLiterals.
+//
+// The round-1 fix made a `$tag$` delimiter terminate an open single-quote span UNCONDITIONALLY —
+// which correctly stops a dollar-quoted PROSE block's apostrophe from swallowing the rest of the
+// file (TestG4Classification_DollarQuotedProseApostropheDoesNotBlindTheScan), but the same
+// unconditional check also fires on a `$..$`-shaped SUBSTRING that merely appears as DATA inside an
+// ORDINARY `'...'` string literal — a positional-parameter-shaped placeholder like `$1$`, an
+// arbitrary word between dollar signs like `$word$`, or bare `$$`. Any of those inside a real
+// string terminates the string early, flips quote parity for the rest of the file, and swallows the
+// next real statement — including a DELETE of a history table.
+//
+// Measured against the round-1 scanner: all three shapes below made the following
+// `DELETE FROM transactions` invisible (0 sites). The fix must find it, qualified, in every case.
+func TestG4Classification_DollarShapedSubstringInsideAnOrdinaryStringIsNotATagBoundary(t *testing.T) {
+	cases := []struct {
+		name    string
+		literal string
+	}{
+		{"positional-parameter-shaped", "Uses format like $1$ for placeholders."},
+		{"word-tag-shaped", "see $word$ here now."},
+		{"empty-tag-shaped", "cost $$ here now."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "migrations"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			body := "COMMENT ON COLUMN x.y IS '" + tc.literal + "';\n" +
+				"DELETE FROM transactions WHERE user_id = '1';\n"
+			if err := os.WriteFile(filepath.Join(dir, "migrations", "000931_v.up.sql"), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			sites := scanNonGoHistoryDeletes(t, dir, "migrations", ".sql", false)
+			if len(sites) != 1 {
+				t.Fatalf("expected the real DELETE to still be found despite the %q-shaped "+
+					"substring inside an ordinary string ahead of it; got %d sites: %+v",
+					tc.literal, len(sites), sites)
+			}
+			if sites[0].table != "transactions" || !sites[0].qualified {
+				t.Fatalf("expected a qualified delete of transactions, got %+v", sites[0])
+			}
+		})
+	}
+}
+
+// TestG4Classification_NestedDifferentlyTaggedDollarRegionsAreBothScanned is a constructed pin for
+// "what would a fourth hole look like" (R14 task 6 round 2's brief, item 5): a dollar-quoted region
+// nested INSIDE another dollar-quoted region, using a DIFFERENT tag (`$outer$` containing
+// `$inner$...$inner$`), which is valid, real Postgres (the manual: "it is possible to nest
+// dollar-quoted string constants by choosing different tags at each nesting level"). The outer
+// region's own close search is anchored to the literal substring "$outer$" specifically, so the
+// inner region's `$inner$` delimiters never confuse it, and a real DELETE after the inner region
+// closes — but still inside the outer one — must stay visible (the interior-lexed-independently
+// property applies at every nesting depth, not just one).
+func TestG4Classification_NestedDifferentlyTaggedDollarRegionsAreBothScanned(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "migrations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "DO $outer$\n" +
+		"BEGIN\n" +
+		"  x := $inner$something's here$inner$;\n" +
+		"  DELETE FROM transactions WHERE user_id = '1';\n" +
+		"END;\n" +
+		"$outer$;\n"
+	if err := os.WriteFile(filepath.Join(dir, "migrations", "000932_v.up.sql"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sites := scanNonGoHistoryDeletes(t, dir, "migrations", ".sql", false)
+	if len(sites) != 1 || sites[0].table != "transactions" || !sites[0].qualified {
+		t.Fatalf("expected exactly one qualified delete of transactions inside the nested "+
+			"differently-tagged dollar regions, got %+v", sites)
+	}
+}
+
+// TestG4Classification_UnterminatedDollarRegionStillScansItsContent pins a second "fourth hole"
+// candidate: a `.sql` file that ends mid-`DO $$ ... ` block, with no closing tag at all (a
+// truncated file, or a migration someone is still editing). blankSQLRange's fail-closed convention
+// for this is deliberately NOT "blank the unterminated interior" — it keeps scanning the interior
+// NORMALLY out to the enclosing bound, the same as an unterminated comment or literal elsewhere in
+// this scanner. That is the SAFE direction for a guard whose failure mode to avoid is a false
+// negative: an unterminated region must not become a way to hide a DELETE from G4.
+func TestG4Classification_UnterminatedDollarRegionStillScansItsContent(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "migrations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "DO $$ BEGIN NULL; DELETE FROM transactions WHERE user_id='1';"
+	if err := os.WriteFile(filepath.Join(dir, "migrations", "000933_v.up.sql"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sites := scanNonGoHistoryDeletes(t, dir, "migrations", ".sql", false)
+	if len(sites) != 1 || sites[0].table != "transactions" || !sites[0].qualified {
+		t.Fatalf("expected the DELETE inside the unterminated dollar-quoted region to still be "+
+			"found, got %+v", sites)
 	}
 }
 
