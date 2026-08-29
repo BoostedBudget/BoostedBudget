@@ -116,6 +116,29 @@ type deliberatelyUnguardedDestructiveDownMigration struct {
 // entries are flagged there as needing a human decision, not endorsed as correct by this guard's
 // existence.
 //
+// ⚠ #1569 round 14 task 6, finding 5 — PRECISELY WHAT THIS KEY DOES AND DOES NOT COVER. The map is
+// keyed by FILENAME ONLY, not by which tables/statements were found destructive in it. The
+// staleness check in TestNoUndiscoveredDestructiveDownMigration (destructiveUnguardedByFile,
+// below) is correspondingly by-file: it re-derives whether the NAMED FILE still scans as
+// destructive-and-unguarded at all, and complains if it stops — but it does NOT re-check that the
+// file still destroys the SAME tables this entry's reason was written about. Concretely: if
+// 000007_create_accounts_table.down.sql (today: `DROP TABLE accounts CASCADE`, reasoned about
+// exactly that) later ALSO gained an unrelated `DROP TABLE some_other_history_table`, this test
+// would keep passing on the strength of the existing filename-only entry, and the entry's own
+// reason text — written about `accounts` — would silently understate the file's real blast radius.
+// Nothing here re-derives "does the reason's prose still match the tables found" the way G2's
+// TestEveryAllowlistedHistoryDeleteStillCarriesItsPredicate re-derives a delete's SQL predicate
+// against its allowlist fragment.
+//
+// This was deliberately NOT tightened to key by file+tables (e.g. "file|sorted,table,list") in this
+// round: migration files are immutable by convention in this repo (a shipped migration is not
+// edited after the fact — a schema change ships as a NEW migration), so the scenario above requires
+// someone to violate that convention on one of exactly four already-flagged files. Widening the key
+// right after fixing a scanner that has already blinded itself once this task (see
+// blankSQLCommentsAndLiterals's doc comment) trades a low-probability, convention-guarded gap for
+// real new surface area in the very mechanism just repaired. If migration immutability ever stops
+// being reliably true in this repo, key by file+tables instead of adding more prose here.
+//
 // ⚠ WHY THESE ARE NOT SIMPLY GIVEN A RUNTIME GUARD IN THIS ROUND, THE WAY 000035 WAS IN ROUND 13.
 // 000035/000150/000151's guards protect a NARROWING migration mid-table-lifetime: the table already
 // existed, held real rows, and the down migration's destructive act is a SIDE EFFECT of reversing an
