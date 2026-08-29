@@ -297,13 +297,29 @@ var downGuardCases = []downGuardCase{
 		tables: []string{"balance_snapshots"},
 		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
 			t.Helper()
-			_, err := tx.Exec(ctx, `
+			// 000017's guard fires on DATE(bs2.snapshot_at) = DATE(bs1.snapshot_at) -- a calendar-day
+			// comparison. Anchoring both rows off now() (as this fixture originally did) fails for
+			// roughly one hour a day: in the hour after local midnight, now() - interval '1 hour'
+			// falls on the PREVIOUS calendar date, the DATE()-equality predicate can never match,
+			// the guard correctly finds nothing to protect, and this test's assertion that it
+			// refuses goes red -- even though the guard itself is correct (its predicate is
+			// byte-identical to the DELETE it protects). Fix: pin the session to UTC for this
+			// transaction and anchor both rows on a fixed, arbitrary, nowhere-near-midnight literal
+			// (noon) instead of the real wall clock, so the two rows are guaranteed same-day
+			// regardless of when this test actually runs. Verified directly against the failure
+			// mode: with the session TimeZone forced so real now() lands at local 00:00 -- the
+			// exact condition that broke this fixture -- DATE(now()) = DATE(now() - interval
+			// '1 hour') evaluates false, reproducing the bug, while this fixed-anchor pair still
+			// evaluates same-day true under the same forced TimeZone.
+			_, err := tx.Exec(ctx, `SET LOCAL TIME ZONE 'UTC'`)
+			require.NoError(t, err, "pin session TimeZone to UTC for this fixture")
+			_, err = tx.Exec(ctx, `
 				INSERT INTO balance_snapshots (account_id, user_id, current_balance, currency_code, snapshot_at, source)
-				VALUES ($1, $2, 42.00, 'USD', now(), 'manual')`, f.accountID, f.userID)
+				VALUES ($1, $2, 42.00, 'USD', TIMESTAMPTZ '2026-01-15 12:00:00+00', 'manual')`, f.accountID, f.userID)
 			require.NoError(t, err, "seed balance_snapshots (latest)")
 			_, err = tx.Exec(ctx, `
 				INSERT INTO balance_snapshots (account_id, user_id, current_balance, currency_code, snapshot_at, source)
-				VALUES ($1, $2, 10.00, 'USD', now() - interval '1 hour', 'manual')`, f.accountID, f.userID)
+				VALUES ($1, $2, 10.00, 'USD', TIMESTAMPTZ '2026-01-15 12:00:00+00' - interval '1 hour', 'manual')`, f.accountID, f.userID)
 			require.NoError(t, err, "seed balance_snapshots (earlier same day)")
 		},
 		wantMsgContains: []string{"refusing to roll back 000017", "permanently deleted", "snapshot_at"},
