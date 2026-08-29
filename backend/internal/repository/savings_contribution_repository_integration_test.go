@@ -685,13 +685,20 @@ func tombstoneTransaction(t *testing.T, pool *pgxpool.Pool, txnID string) {
 // Why the effect and not the SQL text: dropping the `AND managed_by_reconciliation = true` leg is
 // nearly harmless (rows already false stay false; only updated_at is bumped). The mutation that
 // matters is inverting the SET to `= true` — that stamps USER-ENTERED contributions as
-// reconciler-managed, and DeleteManagedForTransaction HARD-DELETES rows carrying that flag. So
-// this test seeds one user-entered row alongside one reconciler row and asserts where each lands.
+// reconciler-managed, and DeleteManagedForTransaction TOMBSTONES rows carrying that flag. So this
+// test seeds one user-entered row alongside one reconciler row and asserts where each lands.
+//
+// ⚠ CORRECTED (#1569 round 14). These three sentences said "HARD-DELETES" / "the hard delete",
+// which stopped being true in round 12: migration 000180 turned that method into an
+// `UPDATE … SET deleted_at, deleted_reason = 'provider_removed_txn'`. The stakes are LOWER than
+// the old wording implied but not zero — a tombstoned contribution is retained and permanently
+// invisible EVERYWHERE in the product (including the deleted-goal ledger), so wrongly stamping a
+// user-entered row still makes the user's own money vanish from every surface they can reach.
 //
 // Mutants this goes RED on (both validated):
 //   - SET managed_by_reconciliation = true  → the reconciler row is never archived.
 //   - that SET plus dropping the WHERE leg  → the user's own row is marked reconciler-managed and
-//     becomes eligible for the hard delete.
+//     becomes eligible for the provider-triggered tombstone.
 func TestArchiveByGoal_Integration_LeavesUserEnteredRowsAlone(t *testing.T) {
 	pool := integrationDB(t)
 	ctx := context.Background()
@@ -731,7 +738,7 @@ func TestArchiveByGoal_Integration_LeavesUserEnteredRowsAlone(t *testing.T) {
 	// The user's row is untouched — still theirs, still present, still the same money.
 	assertManagedFlag(t, pool, userRow.ID, false,
 		"ArchiveByGoal must never stamp a user-entered contribution as reconciler-managed: "+
-			"DeleteManagedForTransaction hard-deletes rows carrying that flag")
+			"DeleteManagedForTransaction tombstones rows carrying that flag")
 	var amount float64
 	var status, source string
 	require.NoError(t, pool.QueryRow(ctx,
