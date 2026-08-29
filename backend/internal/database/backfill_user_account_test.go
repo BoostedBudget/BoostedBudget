@@ -96,7 +96,10 @@ func TestBackfillUserAccountIDs_MultipleMatch_Warns(t *testing.T) {
 	acctType, acctSubtype := "depository", "checking"
 	accountRows := pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id", "type", "subtype"}).
 		AddRow(accountID, userID, encMaskPtr, encInstIDPtr, &acctType, &acctSubtype)
+	// #1569 round 14: the scan is keyset-paged, so it carries (cursor, limit). One row comes back,
+	// which is a SHORT page, so the run ends without a second query.
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT a.id, a.user_id, a.mask, li.institution_id`)).
+		WithArgs(backfillAccountsCursorStart, backfillAccountsPageSize).
 		WillReturnRows(accountRows)
 
 	// Second mock: the user_accounts lookup — returns TWO rows (the multiple-match scenario).

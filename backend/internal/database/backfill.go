@@ -360,51 +360,154 @@ func backfillAccountsUserAccountIDs(ctx context.Context, db *pgxpool.Pool, enc *
 // backfillAccountsUserAccountIDsWithDB is the testable implementation of
 // backfillAccountsUserAccountIDs. It accepts a backfillQuerier so that unit
 // tests can inject a pgxmock without needing a live database.
-func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerier, enc *appcrypto.FieldEncryptor) error {
+// backfillAccountsPageSize and backfillAccountsMaxRowsPerRun bound the accounts leg of the startup
+// backfill (#1569 round 14). They are `var`, not `const`, ONLY so the paging tests can express "a
+// full page" in two rows; nothing in production reassigns them.
+//
+// WHY A BOUND AT ALL. This function is called synchronously from cmd/server/main.go before the
+// process accepts traffic, and main.go calls os.Exit(1) if it returns an error. Its scan was
+// unbounded: it materialised every `a.user_account_id IS NULL` row and then did a decrypt + lookup
+// (+ sometimes an INSERT) + UPDATE per row, serially. Steady state is a cheap indexed no-op — zero
+// rows — but this backfill exists precisely because the write-path bug it repairs (#1306) has
+// recurred, so a large backlog is a state the system is known to be able to reach. At that point
+// every rolling restart reprocessed the whole backlog before serving, and failed CLOSED.
+//
+// THE SHAPE IS COPIED FROM THE RETENTION SWEEP (queue/jobs/retention_cleanup_check.go:
+// expiredRetentionPageSize=500, maxUsersPerRetentionSweep=1000), which solved the same problem —
+// a page size bounding one query's materialisation, and a separate per-run total bounding how much
+// work one invocation does. Same numbers, for the same reason: a page's cost is a row fetch either
+// way, and 1,000 per boot is far above any plausible steady-state backlog for a product whose
+// steady state here is zero rows.
+//
+// ⚠ WHAT THIS DOES **NOT** CHANGE: failure semantics. An error still propagates and main.go still
+// exits — bounding the work per boot and degrading instead of exiting are two different decisions,
+// and only the first was taken.
+//
+// ⚠ WHAT THIS DOES **NOT** GUARANTEE: freedom from starvation, and it must not be described as
+// though it does (the retention sweep's own comment makes the same disclaimer about its cursor).
+// The cursor is keyset and per-RUN, not persisted: each boot restarts at
+// backfillAccountsCursorStart. Within a run the cursor advances past rows that were SKIPPED
+// (no institution_id, undecryptable), so a run always terminates. Across runs, rows that are
+// repairable leave the predicate — the scan is self-consuming — but rows that are permanently
+// unrepairable do NOT, so if their number ever exceeded backfillAccountsMaxRowsPerRun they would
+// consume every future boot's budget and nothing past them would be reached. The WARN emitted at
+// the cap is what makes that state visible; the fix, should it ever occur, is a persisted cursor
+// like sweep_cursors, not a bigger number.
+var (
+	backfillAccountsPageSize      = 500
+	backfillAccountsMaxRowsPerRun = 1000
+)
+
+// backfillAccountsCursorStart is the keyset cursor's zero value: the all-zero UUID sorts before
+// every real uuid, so `a.id > $1::uuid` on the first page selects everything.
+const backfillAccountsCursorStart = "00000000-0000-0000-0000-000000000000"
+
+// backfillAccountRow is one page row of the accounts scan.
+type backfillAccountRow struct {
+	id          string
+	userID      string
+	mask        *string
+	instID      *string // nullable on linked_items
+	acctType    *string // #1569: carried so a synthesised identity is not typeless
+	acctSubtype *string
+}
+
+// fetchBackfillAccountPage reads one keyset page of accounts still missing user_account_id,
+// strictly after `cursor`, ordered by id so the caller can advance the cursor deterministically.
+func fetchBackfillAccountPage(ctx context.Context, db backfillQuerier, cursor string, limit int) ([]backfillAccountRow, error) {
 	rows, err := db.Query(ctx, `
 		SELECT a.id, a.user_id, a.mask, li.institution_id, a.type, a.subtype
 		FROM accounts a
 		JOIN linked_items li ON a.linked_item_id = li.id
 		WHERE a.user_account_id IS NULL
-	`)
+		  AND a.id > $1::uuid
+		ORDER BY a.id
+		LIMIT $2
+	`, cursor, limit)
 	if err != nil {
-		return fmt.Errorf("query accounts with null user_account_id: %w", err)
+		return nil, fmt.Errorf("query accounts with null user_account_id: %w", err)
 	}
 	defer rows.Close()
 
-	type accountRow struct {
-		id          string
-		userID      string
-		mask        *string
-		instID      *string // nullable on linked_items
-		acctType    *string // #1569: carried so a synthesised identity is not typeless
-		acctSubtype *string
-	}
-	var accs []accountRow
+	var page []backfillAccountRow
 	for rows.Next() {
-		var r accountRow
+		var r backfillAccountRow
 		if err := rows.Scan(&r.id, &r.userID, &r.mask, &r.instID, &r.acctType, &r.acctSubtype); err != nil {
-			return fmt.Errorf("scan account row: %w", err)
+			return nil, fmt.Errorf("scan account row: %w", err)
 		}
-		accs = append(accs, r)
+		page = append(page, r)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate account rows: %w", err)
+		return nil, fmt.Errorf("iterate account rows: %w", err)
 	}
-	if len(accs) == 0 {
-		return nil // fast path — nothing to repair
-	}
+	return page, nil
+}
 
-	slog.WarnContext(ctx, "#1306 P2: found accounts with null user_account_id, backfilling at startup",
-		"count", len(accs))
-
+func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerier, enc *appcrypto.FieldEncryptor) error {
+	cursor := backfillAccountsCursorStart
+	processed := 0
 	repaired, skippedNoMatch, skippedDecrypt, synthesised := 0, 0, 0, 0
+	cappedEarly := false
+
+	for {
+		accs, err := fetchBackfillAccountPage(ctx, db, cursor, backfillAccountsPageSize)
+		if err != nil {
+			return err
+		}
+		if len(accs) == 0 {
+			break // fast path on the first page — nothing to repair
+		}
+
+		slog.WarnContext(ctx, "#1306 P2: found accounts with null user_account_id, backfilling at startup",
+			"page_count", len(accs), "processed_so_far", processed)
+
+		if err := repairBackfillAccountPage(ctx, db, enc, accs,
+			&repaired, &synthesised, &skippedNoMatch, &skippedDecrypt); err != nil {
+			return err
+		}
+
+		cursor = accs[len(accs)-1].id
+		processed += len(accs)
+
+		if processed >= backfillAccountsMaxRowsPerRun {
+			cappedEarly = true
+			break
+		}
+		if len(accs) < backfillAccountsPageSize {
+			break // short page: the scan is exhausted
+		}
+	}
+
+	if processed == 0 {
+		return nil
+	}
+
+	if cappedEarly {
+		slog.WarnContext(ctx, "#1306 P2: accounts backfill stopped at its per-run cap; the next boot resumes from the start of the scan",
+			"processed", processed, "cap", backfillAccountsMaxRowsPerRun)
+	}
+
+	slog.InfoContext(ctx, "#1306 P2: accounts backfill complete",
+		"repaired", repaired, "synthesised", synthesised,
+		"skipped_no_match", skippedNoMatch, "skipped_decrypt", skippedDecrypt)
+	return nil
+}
+
+// repairBackfillAccountPage runs the per-row repair for one page. The counters are pointers so
+// they accumulate across pages and the single completion log stays truthful about the whole run.
+func repairBackfillAccountPage(
+	ctx context.Context,
+	db backfillQuerier,
+	enc *appcrypto.FieldEncryptor,
+	accs []backfillAccountRow,
+	repaired, synthesised, skippedNoMatch, skippedDecrypt *int,
+) error {
 	for _, r := range accs {
 		if r.instID == nil {
 			// linked_item has no institution_id — cannot compute blind index.
 			slog.WarnContext(ctx, "#1306 P2: skipping account — linked_item has no institution_id",
 				"account_id", r.id)
-			skippedNoMatch++
+			*skippedNoMatch++
 			continue
 		}
 
@@ -413,7 +516,7 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 		if err != nil {
 			slog.WarnContext(ctx, "#1306 P2: skipping account — cannot decrypt institution_id",
 				"account_id", r.id, "error", err)
-			skippedDecrypt++
+			*skippedDecrypt++
 			continue
 		}
 
@@ -424,7 +527,7 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 			if err != nil {
 				slog.WarnContext(ctx, "#1306 P2: skipping account — cannot decrypt mask",
 					"account_id", r.id, "error", err)
-				skippedDecrypt++
+				*skippedDecrypt++
 				continue
 			}
 			plainMask = &m // handles both ENC$ ciphertext and legacy plaintext (handled by DecryptString)
@@ -458,7 +561,7 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 			if err != nil {
 				return fmt.Errorf("synthesise user_account for account %s: %w", r.id, err)
 			}
-			synthesised++
+			*synthesised++
 			slog.WarnContext(ctx, "#1569: minted a stable identity for an account that had none",
 				"account_id", r.id, "user_account_id", uaID)
 		}
@@ -469,12 +572,8 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 		); err != nil {
 			return fmt.Errorf("update account %s: %w", r.id, err)
 		}
-		repaired++
+		*repaired++
 	}
-
-	slog.InfoContext(ctx, "#1306 P2: accounts backfill complete",
-		"repaired", repaired, "synthesised", synthesised,
-		"skipped_no_match", skippedNoMatch, "skipped_decrypt", skippedDecrypt)
 	return nil
 }
 
