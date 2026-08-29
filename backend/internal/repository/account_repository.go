@@ -1283,7 +1283,17 @@ func (r *accountRepository) PurgeAccount(ctx context.Context, accountID, userID 
 	// 000151's header, which anticipated exactly this explicit-purge path). transactions.account_id
 	// is ON DELETE SET NULL and is untouched: those rows survive, orphaned, and remain visible via
 	// the unified feed's NULL-account_id leg.
-	ct, err := tx.Exec(ctx, `DELETE FROM accounts WHERE id = $1 AND user_id = $2`, accountID, userID)
+	//
+	// `AND status <> $3` restates the SELECT ... FOR UPDATE's `status == active -> refuse` check
+	// (#1569 round 14) so it is mechanically pinned by
+	// TestEveryAllowlistedHistoryDeleteStillCarriesItsPredicate, not just enforced by a Go `if` no
+	// guard can see. The row lock above still prevents any concurrent write from flipping status
+	// back to active between that SELECT and this DELETE; restating the leg here is defense against
+	// a future EDIT of this function removing the Go check, not against a race. If it ever
+	// disagreed with the Go check, this DELETE would affect zero rows and fail closed below rather
+	// than destroying a live account.
+	ct, err := tx.Exec(ctx, `DELETE FROM accounts WHERE id = $1 AND user_id = $2 AND status <> $3`,
+		accountID, userID, string(domain.AccountStatusActive))
 	if err != nil {
 		if isForeignKeyViolation(err, "fk_savings_goals_account_id") {
 			return ErrPurgeBlockedBySavingsGoal

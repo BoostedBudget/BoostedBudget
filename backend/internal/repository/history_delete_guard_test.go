@@ -111,9 +111,13 @@ var allowedHistoryDeletes = map[string]historyDeleteAllowance{
 		reason:    "explicit account purge: balance_snapshots has ON DELETE SET NULL from accounts, so the cascade would orphan rather than remove them",
 		predicate: []string{"WHERE account_id = $1"},
 	},
+	// `status <> $3` (bound to 'active') restates the SELECT ... FOR UPDATE precondition above it
+	// in this DELETE's own WHERE (#1569 round 14) so the precondition that makes the purge safe is
+	// pinned here, not just in a Go `if` this guard cannot see. See account_repository.go's inline
+	// comment at the DELETE for the full reasoning.
 	"repository/account_repository.go#PurgeAccount|accounts": {
-		reason:    "explicit account purge: this IS the purge",
-		predicate: []string{"WHERE id = $1 AND user_id = $2"},
+		reason:    "explicit account purge: this IS the purge, and it now refuses in its own WHERE — not only via the preceding Go check — to run against a live (status = active) account",
+		predicate: []string{"WHERE id = $1 AND user_id = $2 AND status <> $3"},
 	},
 	// Scoped to `deleted_at IS NOT NULL` — the user has ALREADY deleted the goal, which is exactly
 	// PurgeGoal's own precondition. A live goal is not matched and still blocks the purge via
@@ -148,13 +152,18 @@ var allowedHistoryDeletes = map[string]historyDeleteAllowance{
 	// SERVICE verb (services/savings_goal_service.go:499); there is no repository method by that
 	// name, and this reason used to claim there was.
 	//
-	// The `deleted_at IS NOT NULL` precondition is deliberately NOT in this statement — the
-	// SELECT ... FOR UPDATE above it already asserted it and refused a live goal, and re-stating it
-	// here would only let the two predicates disagree. So `predicate` pins the ownership legs only;
-	// the precondition is guarded where it lives.
+	// ⚠ REVERSED (#1569 round 14). This entry used to say `deleted_at IS NOT NULL` was "deliberately
+	// NOT in this statement" because the SELECT ... FOR UPDATE above it already asserted it, and
+	// restating it "would only let the two predicates disagree". An independent Codex audit found
+	// that reasoning backwards: the Go `if` is real protection today, but it is invisible to this
+	// very guard, so a future edit could weaken or delete it while leaving this DELETE's fragments
+	// (and this test) green, and the purge would then hard-delete a LIVE goal. The predicate is now
+	// restated in the DELETE's own WHERE precisely so the two CAN disagree — and when they do, this
+	// statement affects zero rows and fails closed instead of destroying anything. See
+	// savings_goal_repository.go's inline comment at the DELETE for the full reasoning.
 	"repository/savings_goal_repository.go#PurgeGoal|savings_goals": {
-		reason:    "explicit goal purge; the ordinary Delete path on this repository (service verb: DeleteGoal) tombstones instead",
-		predicate: []string{"WHERE id = $1 AND user_id = $2"},
+		reason:    "explicit goal purge; the ordinary Delete path on this repository (service verb: DeleteGoal) tombstones instead. The DELETE now also refuses in its own WHERE — not only via the preceding Go check — to run against a live goal",
+		predicate: []string{"WHERE id = $1 AND user_id = $2", "deleted_at IS NOT NULL"},
 	},
 
 	// Contributions.
@@ -424,14 +433,65 @@ func TestNoUnallowlistedHistoryDelete(t *testing.T) {
 // missingPredicateFragments returns the fragments of predicate that are NOT present in statement.
 // statement is expected to be normalised already; each fragment is normalised here so that an entry
 // can be written in ordinary, readable SQL casing and spacing.
+//
+// ⚠ ALIAS-SCOPED, NOT A BARE SUBSTRING MATCH (#1569 round 14). A fragment that already names its own
+// qualifier (contains a `.`, e.g. `g.deleted_at IS NULL`) is trusted as written: its author scoped it
+// to a specific alias, and an ordinary substring match is enough. A BARE fragment — no `.`, e.g.
+// `deleted_at IS NOT NULL` — is different: `strings.Contains` alone would also match `BC.DELETED_AT
+// IS NOT NULL` for ANY alias BC, so a statement that widened into a JOIN and moved the real
+// narrowing predicate onto a DIFFERENT table's same-named column would still read as satisfying the
+// blessing. A bare fragment is therefore only accepted at an occurrence that is NOT itself
+// alias-qualified in statement — see fragmentHasUnqualifiedOccurrence.
 func missingPredicateFragments(statement string, predicate []string) []string {
 	var missing []string
 	for _, frag := range predicate {
-		if !strings.Contains(statement, normaliseSQL(frag)) {
+		if !fragmentHasUnqualifiedOccurrence(statement, normaliseSQL(frag)) {
 			missing = append(missing, frag)
 		}
 	}
 	return missing
+}
+
+// fragmentHasUnqualifiedOccurrence reports whether normalised needle genuinely satisfies normalised
+// statement: either needle itself already carries a `.` qualifier (author-scoped, trusted as-is), or
+// some occurrence of needle in statement is not immediately preceded by "<identifier>." — i.e. is not
+// bound to any table alias at all, and so cannot be the wrong one's column.
+func fragmentHasUnqualifiedOccurrence(statement, needle string) bool {
+	if needle == "" {
+		return true
+	}
+	if strings.Contains(needle, ".") {
+		return strings.Contains(statement, needle)
+	}
+	from := 0
+	for {
+		idx := strings.Index(statement[from:], needle)
+		if idx == -1 {
+			return false
+		}
+		pos := from + idx
+		if !precededByAliasQualifier(statement, pos) {
+			return true
+		}
+		from = pos + 1 // keep scanning past this occurrence for another, unqualified one
+	}
+}
+
+// precededByAliasQualifier reports whether the byte at statement[pos] is immediately preceded by
+// "<identifier>." — i.e. whatever starts there is qualified by some table alias, whichever one it is.
+func precededByAliasQualifier(statement string, pos int) bool {
+	if pos == 0 || statement[pos-1] != '.' {
+		return false
+	}
+	j := pos - 2
+	for j >= 0 && isSQLIdentByte(statement[j]) {
+		j--
+	}
+	return j < pos-2 // at least one identifier byte precedes the dot
+}
+
+func isSQLIdentByte(b byte) bool {
+	return b == '_' || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
 }
 
 // TestEveryAllowlistedHistoryDeleteStillCarriesItsPredicate is the second half of guard G2: an
@@ -592,6 +652,58 @@ func TestHistoryDeletePredicate_FlagsAWidenedStatement(t *testing.T) {
 	if len(missing) != 1 || missing[0] != "deleted_at IS NOT NULL" {
 		t.Fatalf("dropping the tombstone scope must be reported as exactly that fragment; got %v "+
 			"(statement: %s)", missing, widened[0])
+	}
+}
+
+// TestHistoryDeletePredicate_BareFragmentIsAliasScoped is the two-direction mutation proof for
+// #1569 round 14's alias scoping. `missingPredicateFragments` used to be a bare `strings.Contains`:
+// a fragment like `deleted_at IS NOT NULL` would be satisfied by ANY alias's `deleted_at` column,
+// not just the target table's. If a blessed statement were later widened into a JOIN and the real
+// narrowing predicate moved onto the joined table's own `deleted_at`, the guard would stay green.
+func TestHistoryDeletePredicate_BareFragmentIsAliasScoped(t *testing.T) {
+	entry := allowedHistoryDeletes["repository/account_repository.go#PurgeAccount|savings_goals"]
+
+	// Direction 1: every statement this entry is actually blessing today must still be accepted.
+	// This is "run it and show that" for the real corpus, not a synthetic stand-in.
+	found := scanHistoryDeletes(t, repoInternalRoot(t), historyBearingTables)
+	site, ok := found["repository/account_repository.go#PurgeAccount|savings_goals"]
+	if !ok {
+		t.Fatal("expected PurgeAccount's savings_goals delete to be found in the real source")
+	}
+	for _, stmt := range site.statements {
+		if missing := missingPredicateFragments(stmt, entry.predicate); len(missing) > 0 {
+			t.Fatalf("the real, unmodified statement must satisfy its own bare-fragment predicate; "+
+				"missing %v (statement: %s)", missing, stmt)
+		}
+	}
+
+	// Direction 2: a JOIN that introduces a second table under an alias, carrying its OWN
+	// deleted_at column, must not let that alias's column satisfy the bare `deleted_at IS NOT
+	// NULL` fragment meant for savings_goals' own (unaliased) column. Before the alias-scoping fix
+	// this was accepted — `strings.Contains` cannot tell "BC.DELETED_AT" from an unqualified
+	// occurrence — even though the real narrowing predicate on savings_goals itself is gone.
+	wrongAlias := historyDeleteStatements(`
+		DELETE FROM savings_goals
+		USING budget_categories bc
+		WHERE account_id = $1 AND user_id = $2
+		  AND bc.deleted_at IS NOT NULL
+	`, historyBearingTables)["savings_goals"]
+	if len(wrongAlias) != 1 {
+		t.Fatalf("expected one statement, got %d", len(wrongAlias))
+	}
+	missing := missingPredicateFragments(wrongAlias[0], entry.predicate)
+	if len(missing) != 1 || missing[0] != "deleted_at IS NOT NULL" {
+		t.Fatalf("a bare fragment satisfied only by a DIFFERENT alias's same-named column must be "+
+			"reported as missing; got %v (statement: %s)", missing, wrongAlias[0])
+	}
+
+	// Sanity check on the mechanism itself, independent of any real allowlist entry: an
+	// already-alias-qualified fragment (the author explicitly scoped it) is unaffected by any of
+	// this and still matches an ordinary substring.
+	qualified := []string{"g.deleted_at IS NULL"}
+	stmt := normaliseSQL("DELETE FROM savings_goal_contributions c USING savings_goals g WHERE g.deleted_at IS NULL")
+	if missing := missingPredicateFragments(stmt, qualified); len(missing) > 0 {
+		t.Fatalf("an author-qualified fragment must still match as a plain substring; missing %v", missing)
 	}
 }
 

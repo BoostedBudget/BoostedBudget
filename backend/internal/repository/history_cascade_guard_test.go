@@ -190,10 +190,12 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 	// Re-derived for #1569 T8 rather than assumed, and corrected again in round 12 task 5:
 	// `accounts` is soft-removed, so this edge only fires when an accounts ROW is genuinely
 	// hard-deleted, and there are TWO explicit, user-invoked purge routes that do that, not one.
-	// (1) account_repository.go:1286 (`DELETE FROM accounts WHERE id = $1 AND user_id = $2`),
-	// inside PurgeAccount — its own endpoint, its own audit row, a live-data precondition. (2)
-	// linked_item_repository.go:899 (`DELETE FROM linked_items WHERE id = $1 AND user_id = $2`),
-	// inside PurgeLinkedItem — `fk_accounts_linked_item_id` (migrations/000007) is itself ON
+	// (1) account_repository.go:1295 (`DELETE FROM accounts WHERE id = $1 AND user_id = $2 AND
+	// status <> $3`), inside PurgeAccount — its own endpoint, its own audit row, a live-data
+	// precondition now restated in the DELETE's own WHERE as well as the preceding Go check
+	// (#1569 round 14). (2) linked_item_repository.go:911 (`DELETE FROM linked_items WHERE id = $1
+	// AND user_id = $2 AND plaid_removed_at IS NOT NULL AND NOT EXISTS (...)`), inside
+	// PurgeLinkedItem — `fk_accounts_linked_item_id` (migrations/000007) is itself ON
 	// DELETE CASCADE, so purging the linked item hard-deletes its accounts rows too, one level up
 	// from this edge; PurgeLinkedItem has the same shape of own endpoint, own audit row and
 	// live-data precondition as PurgeAccount. Both are explicit purge paths, so this was a

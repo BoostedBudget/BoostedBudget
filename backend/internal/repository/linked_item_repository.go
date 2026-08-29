@@ -896,7 +896,23 @@ func (r *linkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID
 		return fmt.Errorf("purge linked item %s: deleting tombstoned savings goals: %w", linkedItemID, err)
 	}
 
-	ct, err := tx.Exec(ctx, `DELETE FROM linked_items WHERE id = $1 AND user_id = $2`, linkedItemID, userID)
+	// Both legs of this function's precondition are restated here (#1569 round 14) so they are
+	// mechanically pinned by TestEveryAllowlistedHistoryDeleteStillCarriesItsPredicate rather than
+	// living only in the Go `if`s above, which no guard can see. `plaid_removed_at IS NOT NULL`
+	// mirrors the SELECT ... FOR UPDATE's check; the NOT EXISTS mirrors the live-accounts count
+	// check. The FOR UPDATE lock on linked_items already prevents any concurrent write from
+	// un-removing this item between that SELECT and this DELETE (a concurrent account going live
+	// under it is the one race the doc comment above already calls out as merely turning a
+	// permitted purge into a refused one, never the reverse) — restating the legs here is defense
+	// against a future edit removing a Go check, not against a race. If either leg ever disagreed
+	// with its Go counterpart, this DELETE would affect zero rows and fail closed below rather than
+	// destroying a live institution's history.
+	ct, err := tx.Exec(ctx, `
+		DELETE FROM linked_items
+		WHERE id = $1 AND user_id = $2 AND plaid_removed_at IS NOT NULL
+		  AND NOT EXISTS (
+		      SELECT 1 FROM accounts WHERE linked_item_id = linked_items.id AND status = 'active'
+		  )`, linkedItemID, userID)
 	if err != nil {
 		if isForeignKeyViolation(err, "fk_savings_goals_account_id") {
 			return ErrPurgeBlockedBySavingsGoal
