@@ -380,6 +380,47 @@ func backfillAccountsUserAccountIDs(ctx context.Context, db *pgxpool.Pool, enc *
 // way, and 1,000 per boot is far above any plausible steady-state backlog for a product whose
 // steady state here is zero rows.
 //
+// ⚠ WHAT THIS DOES **NOT** BOUND: THE DATABASE'S WORK AT BOOT (#1569 round 16 task 9, D-2). The cap
+// is a GO-SIDE bound — it limits how many rows this process fetches, decrypts and updates — and it
+// must not be quoted as "boot does at most 1000 rows of work". A RESUMED run's first page carries
+// `OFFSET k` (fetchBackfillAccountPage), and PostgreSQL genuinely discards k rows before returning
+// that page. Measured on postgres:17.11, 300k accounts of which 100k are candidates ALL SHARING ONE
+// created_at (the worst shape ts1_offset exists for), one page of 500:
+//
+//	offset       0  ->    506 buffers,  2.2 ms   Index Scan using idx_accounts_user_account_backfill
+//	offset   1,000  ->  1,512 buffers,  2.8 ms   same plan
+//	offset  10,000  -> 10,562 buffers,  7.0 ms   same plan
+//	offset  50,000  -> 50,781 buffers, 23.6 ms   same plan
+//	offset  99,500  ->  2,205 buffers, 55.0 ms   PLAN FLIPS: Gather Merge + external merge sort
+//	                                             (2.7 MB temp) — the whole-candidate-set sort that
+//	                                             migration 000182's index exists to prevent.
+//
+// So the cost is linear in k, and past a planner crossover it stops using the ordered partial index
+// at all. That is the honest statement; 55 ms of synchronous boot at a 100k single-timestamp group
+// is the measured price, against a run that then does 1000 serial decrypt+lookup+UPDATE rows.
+//
+// ⚠ THIS WAS WEIGHED AND ACCEPTED, not overlooked. The two alternatives are both worse:
+//   - Remove the OFFSET with a keyset predicate. That needs a stored ROW IDENTITY, which
+//     sweep_cursors forbids by design (migration 000140: the table must outlive users erased by the
+//     sweep that advanced it) and which is the exact shape that produced the all-zero-uuid hole
+//     twice. Rejected on the ADR, not on cost.
+//   - Cap k. If a tie group is larger than the cap and its head is permanently unrepairable, every
+//     boot re-reads the same capped prefix and NEVER reaches past it — the permanent skip this
+//     whole cursor exists to remove, reintroduced at one timestamp. Strictly worse than the cost.
+//
+// WHAT MAKES IT ANALYSABLE: k is a count of rows sharing ONE created_at, never a count of rows
+// scanned — advanceBackfillTail resets it at every timestamp boundary. k is therefore bounded by
+// one tie group's size, and a tie group requires accounts inserted in ONE transaction (created_at
+// defaults to now(), which is the transaction timestamp), i.e. one Plaid item's accounts. The
+// existing WARN on the capped path already prints resume_offset every time k grows, so growth is
+// observable without a new signal. TestBackfillAccounts_StoredOffsetResetsAtATimestampBoundary pins
+// the reset; TestBackfillAccounts_StoredOffsetAccumulatesAcrossRuns pins the accumulation.
+//
+// ⚠ WHAT IT STILL DOES NOT GUARANTEE: nothing bounds a tie group's size a priori. A single
+// transaction inserting a million accounts would make k a million and the resumed boot would sort
+// the candidate set on disk. This is accepted as implausible for the write path that produces these
+// rows, not as impossible.
+//
 // ⚠ WHAT THIS DOES **NOT** CHANGE: failure semantics. An error still propagates and main.go still
 // exits — bounding the work per boot and degrading instead of exiting are two different decisions,
 // and only the first was taken.
