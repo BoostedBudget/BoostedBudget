@@ -903,21 +903,25 @@ assert_replay_range_has_no_destructive_ddl() {
 # for the replay, closing the gap rather than papering over the symptom.
 replay_migrations_up_sql_range() {
     local f
-    local skipped_count
+    local skipped_count replay_files replayed_count
     skipped_count=$(list_replay_range_skipped_up_files | wc -l | tr -d ' ')
+    replay_files=$(list_replay_range_up_files)
 
     log_info "Re-executing migrations ${REPLAY_RANGE_START_MIGRATION} through HEAD directly via psql (genuine second execution, not golang-migrate no-op)..."
     log_info "SKIPPED: $skipped_count migration(s) before ${REPLAY_RANGE_START_MIGRATION} — replaying them against the final schema is unsound (see assert_replay_range_has_no_destructive_ddl / the comment above replay_migrations_up_sql_range for why); they are still exercised by the empty-DB first+second apply_migrations pass."
 
-    for f in $(list_replay_range_up_files); do
+    replayed_count=0
+    while IFS= read -r f; do
+        [ -z "$f" ] && continue
         log_info "  replaying $(basename "$f")"
         if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f "$f" > /dev/null; then
             log_error "Migration $(basename "$f") is NOT idempotent: re-executing its .up.sql (as a single transaction, matching golang-migrate's own execution semantics) against the current (already-migrated) schema failed."
             return 1
         fi
-    done
+        ((replayed_count++))
+    done <<< "$replay_files"
 
-    log_success "Replayed $(list_replay_range_up_files | wc -l | tr -d ' ') migration(s) a second time with no error"
+    log_success "Replayed $replayed_count migration(s) a second time with no error"
     return 0
 }
 
