@@ -155,8 +155,19 @@ import (
 // "within one cycle", not to "always promptly" and not to "always".
 
 // SweepCursorName identifies one sweep's row in sweep_cursors. Declared as a named string type so
-// a caller cannot accidentally pass an arbitrary string, and so the four legal values are
-// enumerable and greppable from one place.
+// a caller cannot accidentally pass an arbitrary string, and so these four values are enumerable
+// and greppable from one place.
+//
+// ⚠ THESE FOUR ARE NO LONGER EVERY USER OF THE TABLE, and this comment used to imply they were.
+// #1569 round 14 task 9 added a FIFTH row, "accounts_user_account_backfill", written by
+// database.backfillAccountsUserAccountIDsWithDB — the startup accounts backfill, which acquired
+// exactly this defect when it was capped per run. It does not use this type or this repository
+// because internal/repository's own integration tests import internal/database, so the reverse
+// import is a cycle in that test binary; internal/database/backfill_accounts_cursor.go restates the
+// contract locally against the same table and cross-references this file for the design. It also
+// differs in two ways worth knowing before reading the guarantee below as if it covered five
+// sweeps: its cadence is BOOTS rather than a periodic schedule, and two servers can run it
+// simultaneously, which no River-scheduled sweep here can.
 type SweepCursorName string
 
 const (
