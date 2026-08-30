@@ -8,7 +8,13 @@
 -- is the RETRY: `IF NOT EXISTS` matches on the NAME, not on validity, so re-running the build
 -- reports success and leaves the index invalid — measured and written up in 000143, which had to
 -- repair exactly that on idx_audit_logs_deletion_residue after the fact. Doing it in the right order
--- here means a re-run after an interrupted build self-heals instead of silently succeeding.
+-- here means an operator's re-run genuinely repairs the state instead of silently succeeding.
+--
+-- ⚠ THE RE-RUN IS NOT AUTOMATIC, and an earlier version of this file's sibling claimed otherwise.
+-- An interrupted 000182 also leaves golang-migrate's version DIRTY at 182, and
+-- backend/scripts/docker-entrypoint.sh only retries `migrate up`, which refuses to run while dirty.
+-- The repair is `migrate force 180` followed by `migrate up` — force to 180, NOT 181, or 000182's
+-- IF NOT EXISTS skips the rebuild and the index stays invalid. See 000182's own SAFETY section.
 --
 -- The conditional DROP needs a DO block and CREATE INDEX CONCURRENTLY cannot run inside a
 -- transaction block, and golang-migrate sends a multi-statement file as ONE simple query (which

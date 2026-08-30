@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make dev                    # Docker-compose up
 make test-fast              # Backend+frontend tests, NO e2e (~2min)
 make test-all               # ALL tests including e2e (~4min)
-make test-scripts           # The 17 shell guard suites in scripts/__tests__/ and
+make test-scripts           # The 18 shell guard suites in scripts/__tests__/ and
                              # apps/web/scripts/__tests__/ — separate CI steps, NOT covered by
                              # test-fast/test-all/bun run test. Fails on the first red. Docker/
                              # Postgres-dependent suites skip with a visible warning if unavailable

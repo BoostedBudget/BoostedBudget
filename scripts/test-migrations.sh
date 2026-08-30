@@ -901,6 +901,36 @@ assert_replay_range_has_no_destructive_ddl() {
 # `apply_migrations` pass) ON COMMIT DROP never fires until the migration's actual COMMIT, by which
 # point the temp table is no longer needed. `-1` reproduces that same single-transaction semantics
 # for the replay, closing the gap rather than papering over the symptom.
+# replay_file_runs_outside_a_transaction: does this .up.sql have to be replayed WITHOUT `-1`?
+#
+# ⚠ THIS EXISTS BECAUSE `-1` IS FIDELITY FOR MULTI-STATEMENT FILES AND INFIDELITY FOR THIS ONE CASE,
+# and the composition was never tested until #1569 round 15 task 9 fix 1 put the branch's first
+# CONCURRENTLY migration inside the replay range. golang-migrate's postgres driver sends a file's
+# whole contents as ONE simple query. Postgres wraps a MULTI-statement simple query in an implicit
+# transaction (which is what `-1` above reproduces, and what 000178's ON COMMIT DROP finding is
+# about) but does NOT wrap a SINGLE-statement one — which is the only reason
+# `CREATE INDEX CONCURRENTLY`, illegal inside any transaction block, can be a migration at all.
+# 000077/000082/000138/000144 have relied on that since long before this range existed.
+#
+# So for a file whose statement is CONCURRENTLY, `-1` does not reproduce golang-migrate — it
+# contradicts it, and deterministically:
+#
+#     ERROR:  CREATE INDEX CONCURRENTLY cannot run inside a transaction block
+#
+# Verified by running `psql -1 -f` against a migrated database, on both the up and the down file.
+# Dropping `-1` for exactly these files makes the replay MATCH production instead of failing it.
+#
+# WHY MATCHING ON THE KEYWORD IS SOUND rather than a heuristic: a file containing CONCURRENTLY
+# cannot be a multi-statement file in the first place — golang-migrate would send it as a
+# multi-statement simple query, Postgres would wrap it, and the migration would fail in PRODUCTION
+# with the same error. Single-statement is therefore not an assumption this makes about such a file;
+# it is a property the file must already have to work at all. Comment lines are stripped first so
+# that a file merely DISCUSSING the keyword (000074 and 000143 both do) is not misread.
+replay_file_runs_outside_a_transaction() {
+    local f="$1"
+    /usr/bin/grep -viE '^[[:space:]]*--' "$f" | /usr/bin/grep -qiE '\bCONCURRENTLY\b'
+}
+
 replay_migrations_up_sql_range() {
     local f
     local skipped_count replay_files replayed_count
@@ -913,9 +943,15 @@ replay_migrations_up_sql_range() {
     replayed_count=0
     while IFS= read -r f; do
         [ -z "$f" ] && continue
-        log_info "  replaying $(basename "$f")"
-        if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f "$f" > /dev/null; then
-            log_error "Migration $(basename "$f") is NOT idempotent: re-executing its .up.sql (as a single transaction, matching golang-migrate's own execution semantics) against the current (already-migrated) schema failed."
+        local txn_flag="-1" txn_desc="as a single transaction"
+        if replay_file_runs_outside_a_transaction "$f"; then
+            txn_flag=""
+            txn_desc="outside a transaction, because it uses CONCURRENTLY"
+        fi
+        log_info "  replaying $(basename "$f") ($txn_desc)"
+        # shellcheck disable=SC2086 # $txn_flag is deliberately word-split: it is a flag or nothing.
+        if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 $txn_flag -f "$f" > /dev/null; then
+            log_error "Migration $(basename "$f") is NOT idempotent: re-executing its .up.sql ($txn_desc, matching golang-migrate's own execution semantics) against the current (already-migrated) schema failed."
             return 1
         fi
         ((replayed_count++))

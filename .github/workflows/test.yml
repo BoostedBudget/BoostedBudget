@@ -2128,6 +2128,15 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/pg_dump-via-docker.test.sh
 
+      # #1569 round 15 task 9: the replay loop must execute a CONCURRENTLY migration the way
+      # golang-migrate does (no transaction). Its static half needs nothing; its live half is
+      # skipped here because this step runs BEFORE the Postgres container is started, exactly like
+      # the two above — the live half is covered by "Run comprehensive migration tests" below,
+      # which now replays 000182 for real.
+      - name: Test migration replay transaction semantics
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/replay-concurrently-transaction.test.sh
+
       - name: Configure PostgreSQL client tools
         run: |
           echo "::group::Configuring PostgreSQL client"

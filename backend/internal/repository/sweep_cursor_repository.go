@@ -165,9 +165,18 @@ import (
 // because internal/repository's own integration tests import internal/database, so the reverse
 // import is a cycle in that test binary; internal/database/backfill_accounts_cursor.go restates the
 // contract locally against the same table and cross-references this file for the design. It also
-// differs in two ways worth knowing before reading the guarantee below as if it covered five
-// sweeps: its cadence is BOOTS rather than a periodic schedule, and two servers can run it
-// simultaneously, which no River-scheduled sweep here can.
+// differs in THREE ways worth knowing before reading the guarantee below as if it covered five
+// sweeps: its cadence is BOOTS rather than a periodic schedule; two servers can run it
+// simultaneously, which no River-scheduled sweep here can; and since #1569 round 15 it does not use
+// `exclusive` at all.
+//
+// ⚠ THAT THIRD DIFFERENCE IS A KNOWN GAP IN THE FOUR SWEEPS BELOW, not a quirk of the fifth. The
+// exclusive advance escapes an over-cap tie group by stepping PAST it, so the rows of that group the
+// run never looked at are reached on no later run — 000140's own column comment says so. The
+// accounts backfill could not ship that (its rows are financial history a recurring write-path bug
+// keeps damaging), so it stores a COUNT of rows consumed at ts1 instead — sweep_cursors.ts1_offset,
+// migration 000183 — which resumes INSIDE the group without naming a row. The same substitution
+// would close the same gap for these four; doing it is #1477's, and nothing here depends on it.
 type SweepCursorName string
 
 const (
