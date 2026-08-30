@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -385,22 +386,25 @@ func backfillAccountsUserAccountIDs(ctx context.Context, db *pgxpool.Pool, enc *
 //
 // ⚠ WHAT THIS DOES **NOT** GUARANTEE: freedom from starvation, and it must not be described as
 // though it does (the retention sweep's own comment makes the same disclaimer about its cursor).
-// The cursor is keyset and per-RUN, not persisted: each boot restarts at
-// backfillAccountsCursorStart. Within a run the cursor advances past rows that were SKIPPED
-// (no institution_id, undecryptable), so a run always terminates. Across runs, rows that are
-// repairable leave the predicate — the scan is self-consuming — but rows that are permanently
-// unrepairable do NOT, so if their number ever exceeded backfillAccountsMaxRowsPerRun they would
-// consume every future boot's budget and nothing past them would be reached. The WARN emitted at
-// the cap is what makes that state visible; the fix, should it ever occur, is a persisted cursor
-// like sweep_cursors, not a bigger number.
+// Within a run the cursor advances past rows that were SKIPPED (no institution_id, undecryptable),
+// so a run always terminates. Across runs, rows that are repairable leave the predicate — the scan
+// is self-consuming — but rows that are permanently unrepairable do NOT.
+//
+// ⚠ #1569 ROUND 14 TASK 9 CLOSED THE CONSEQUENCE OF THAT, and this paragraph replaces the
+// prediction that used to stand here. Through task 8 the cursor was per-RUN: every boot restarted
+// at the beginning, so more than backfillAccountsMaxRowsPerRun permanently-unrepairable rows
+// sorting ahead of a repairable one consumed every future boot's budget and the repairable row was
+// reached NEVER — a liveness regression against the unbounded original, which reached row 1001.
+// The cursor is now PERSISTED across boots in sweep_cursors, following #1477's mechanism rather
+// than a new one, and it WRAPS to the beginning when the scan is exhausted so a row arriving behind
+// the watermark is not starved at the other end. backfill_accounts_cursor.go states that design,
+// what a race between two simultaneous boots does to the shared row, and the one residual it keeps
+// (an over-cap tie group on a single created_at). The WARN at the cap remains: it is what makes a
+// persistent backlog visible, and it now names where the next boot will resume.
 var (
 	backfillAccountsPageSize      = 500
 	backfillAccountsMaxRowsPerRun = 1000
 )
-
-// backfillAccountsCursorStart is the keyset cursor's zero value: the all-zero UUID sorts before
-// every real uuid, so `a.id > $1::uuid` on the first page selects everything.
-const backfillAccountsCursorStart = "00000000-0000-0000-0000-000000000000"
 
 // backfillAccountRow is one page row of the accounts scan.
 type backfillAccountRow struct {
@@ -410,20 +414,41 @@ type backfillAccountRow struct {
 	instID      *string // nullable on linked_items
 	acctType    *string // #1569: carried so a synthesised identity is not typeless
 	acctSubtype *string
+	// createdAt is the scan's leading sort key (#1569 task 9) and the only part of the position
+	// that is ever persisted — see backfill_accounts_cursor.go on why the stored position may not
+	// be a row identity.
+	createdAt time.Time
 }
 
 // fetchBackfillAccountPage reads one keyset page of accounts still missing user_account_id,
-// strictly after `cursor`, ordered by id so the caller can advance the cursor deterministically.
-func fetchBackfillAccountPage(ctx context.Context, db backfillQuerier, cursor string, limit int) ([]backfillAccountRow, error) {
+// strictly after `cursor`, ordered by (created_at, id) so the caller can advance the cursor
+// deterministically.
+//
+// A nil cursor means "from the beginning" and carries NO position predicate at all. That is not a
+// tidiness point: the previous spelling started at the all-zero uuid and filtered `a.id > $1`, so an
+// account whose id IS the all-zero uuid — which PostgreSQL permits as an explicitly inserted PK, and
+// which AccountRepository.CreateBatch would preserve — could never satisfy `>` and was invisible on
+// every run. `$1::timestamptz IS NULL OR …` is evaluated per row rather than in Go so the query text
+// stays single-form; the planner folds the constant-null test away.
+func fetchBackfillAccountPage(ctx context.Context, db backfillQuerier, cursor *backfillAccountsCursor, limit int) ([]backfillAccountRow, error) {
+	var (
+		cursorTS *time.Time
+		cursorID = minBackfillSentinelID // unused when cursorTS is nil; never a real id
+	)
+	if cursor != nil {
+		ts := cursor.createdAt
+		cursorTS, cursorID = &ts, cursor.id
+	}
 	rows, err := db.Query(ctx, `
-		SELECT a.id, a.user_id, a.mask, li.institution_id, a.type, a.subtype
+		SELECT a.id, a.user_id, a.mask, li.institution_id, a.type, a.subtype, a.created_at
 		FROM accounts a
 		JOIN linked_items li ON a.linked_item_id = li.id
 		WHERE a.user_account_id IS NULL
-		  AND a.id > $1::uuid
-		ORDER BY a.id
-		LIMIT $2
-	`, cursor, limit)
+		  AND ($1::timestamptz IS NULL
+		       OR (a.created_at, a.id) > ($1::timestamptz, $2::uuid))
+		ORDER BY a.created_at, a.id
+		LIMIT $3
+	`, cursorTS, cursorID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query accounts with null user_account_id: %w", err)
 	}
@@ -432,7 +457,7 @@ func fetchBackfillAccountPage(ctx context.Context, db backfillQuerier, cursor st
 	var page []backfillAccountRow
 	for rows.Next() {
 		var r backfillAccountRow
-		if err := rows.Scan(&r.id, &r.userID, &r.mask, &r.instID, &r.acctType, &r.acctSubtype); err != nil {
+		if err := rows.Scan(&r.id, &r.userID, &r.mask, &r.instID, &r.acctType, &r.acctSubtype, &r.createdAt); err != nil {
 			return nil, fmt.Errorf("scan account row: %w", err)
 		}
 		page = append(page, r)
@@ -444,10 +469,16 @@ func fetchBackfillAccountPage(ctx context.Context, db backfillQuerier, cursor st
 }
 
 func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerier, enc *appcrypto.FieldEncryptor) error {
-	cursor := backfillAccountsCursorStart
+	// start is where this run RESUMED from (nil = the beginning); cursor is the exact in-memory
+	// (created_at, id) position, which is always strictly forward of the last row processed, so the
+	// loop terminates regardless of what is stored.
+	start := loadBackfillAccountsCursor(ctx, db)
+	cursor := start
+	wrapped := false
 	processed := 0
 	repaired, skippedNoMatch, skippedDecrypt, synthesised := 0, 0, 0, 0
 	cappedEarly := false
+	var reached *backfillAccountsCursor
 
 	for {
 		accs, err := fetchBackfillAccountPage(ctx, db, cursor, backfillAccountsPageSize)
@@ -455,7 +486,25 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 			return err
 		}
 		if len(accs) == 0 {
-			break // fast path on the first page — nothing to repair
+			// A stored watermark that returns nothing is a STALE watermark, not "no work to do":
+			// the rows it pointed past have since been repaired or deleted. Clear it and re-ask
+			// from the beginning WITHIN THIS RUN — the wrap.
+			//
+			// ⚠ WHAT THIS BRANCH IS AND IS NOT WORTH, stated precisely because it is easy to
+			// over-credit. It is NOT what prevents a forward-only cursor from sitting past the end
+			// forever — the clear on the exhausted path below already does that, and without this
+			// branch the same clear would run one line later. What it buys is ONE BOOT of latency:
+			// rows sorting behind the stale watermark are repaired on THIS boot instead of the
+			// next, which matters because this scan's clock is restarts, not a periodic schedule.
+			// Bounded to once per run by `wrapped`, so it cannot loop.
+			if cursor != nil && !wrapped {
+				wrapped = true
+				slog.InfoContext(ctx, "#1306 P2: accounts backfill resume position is past the end of the scan; wrapping to the start")
+				clearBackfillAccountsCursor(ctx, db)
+				start, cursor = nil, nil
+				continue
+			}
+			break // the scan is genuinely exhausted
 		}
 
 		slog.WarnContext(ctx, "#1306 P2: found accounts with null user_account_id, backfilling at startup",
@@ -466,7 +515,9 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 			return err
 		}
 
-		cursor = accs[len(accs)-1].id
+		last := accs[len(accs)-1]
+		cursor = &backfillAccountsCursor{createdAt: last.createdAt, id: last.id}
+		reached = cursor
 		processed += len(accs)
 
 		if processed >= backfillAccountsMaxRowsPerRun {
@@ -478,13 +529,21 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 		}
 	}
 
-	if processed == 0 {
-		return nil
+	// Persist ONLY on the capped path; a run that exhausted its scan clears instead. That asymmetry
+	// is what makes "we stopped mid-scan at T" the only state ever stored, so a past-the-end
+	// watermark is transient (the wrap above) rather than a permanent silent stall.
+	if cappedEarly {
+		saveBackfillAccountsCursor(ctx, db, *reached, nextBackfillCursorExclusive(start, reached))
+		slog.WarnContext(ctx, "#1306 P2: accounts backfill stopped at its per-run cap; the next boot resumes from where this run stopped",
+			"processed", processed, "cap", backfillAccountsMaxRowsPerRun)
+	} else if start != nil || processed > 0 {
+		// Nothing stored and nothing processed means the steady state (zero rows, no cursor row):
+		// skip the DELETE so a healthy boot costs two queries, not three.
+		clearBackfillAccountsCursor(ctx, db)
 	}
 
-	if cappedEarly {
-		slog.WarnContext(ctx, "#1306 P2: accounts backfill stopped at its per-run cap; the next boot resumes from the start of the scan",
-			"processed", processed, "cap", backfillAccountsMaxRowsPerRun)
+	if processed == 0 {
+		return nil
 	}
 
 	slog.InfoContext(ctx, "#1306 P2: accounts backfill complete",
