@@ -19,12 +19,13 @@
 -- existing index provides is the ORDERING, so every page pays a sort of the WHOLE candidate set —
 -- which is free at five rows and is the entire problem at a backlog, and a backlog is the only
 -- condition under which this backfill does anything at all. Measured on postgres:17 at 300k accounts
--- of which 100k are candidates, one page:
+-- of which 100k are candidates, running this file's query verbatim for one page:
 --
---   without this index:  Parallel Seq Scan + top-N heapsort over 100000 rows, 4922 buffers, 13.8 ms
---   with this index:     Index Scan, 507 buffers, 0.8 ms
+--   without this index:  Seq Scan + top-N heapsort over all 100000 candidates, 3688 shared buffers
+--   with this index:     Index Scan, 13 shared buffers
 --
--- and that cost is per PAGE, at boot, before the server serves anything.
+-- and that cost is per PAGE, at boot, before the server serves anything. The resumed shape pays for
+-- its OFFSET inside the index too: `created_at >= T` with OFFSET 1000 reads 20 shared buffers.
 --
 -- WHY PARTIAL. The steady state of the candidate set is EMPTY — the backfill exists to repair a
 -- recurring write-path bug (#1306), not to run continuously — so a full index on (created_at, id)
@@ -37,15 +38,47 @@
 -- fetchBackfillAccountPage must stay the same expression; a rewrite of either (say to a NOT EXISTS
 -- against user_accounts) silently returns boot to the sequential scan above.
 --
--- SAFETY. CONCURRENTLY as this file's SOLE statement (mirrors 000077/000082/000138/000144 —
--- golang-migrate does not wrap a single-statement file in a transaction, which CONCURRENTLY
--- requires). accounts is written by every Plaid sync, so a plain CREATE INDEX would hold a
--- write-blocking ShareLock on it for the whole build. Squawk's require-concurrent-index-creation is
--- in .squawk.toml's excluded_rules, so the linter would not have caught a non-concurrent form;
+-- WHY (created_at, id) IN THAT ORDER. It is the scan's ORDER BY, and both of the query's position
+-- shapes are range bounds on its leading column: a resumed page is `created_at >= T` with an OFFSET
+-- into the tie group, and an in-run page is `(created_at, id) > (T, id)`. The id column earns its
+-- place by making the in-run bound an index condition rather than a filter, and by keeping the sort
+-- exact within a timestamp — which is what makes the OFFSET a stable position at all.
+--
+-- SAFETY. CONCURRENTLY as this file's SOLE statement (mirrors 000077/000082/000138/000144).
+-- accounts is written by every Plaid sync, so a plain CREATE INDEX would hold a write-blocking
+-- ShareLock on it for the whole build. Squawk's require-concurrent-index-creation is in
+-- .squawk.toml's excluded_rules, so the linter would not have caught a non-concurrent form;
 -- CONCURRENTLY is used here on the merits. IF NOT EXISTS keeps it idempotent.
 --
--- ⚠ THE RESIDUAL, STATED PLAINLY: if THIS build is interrupted it leaves an invalid index, which is
--- inherent to CONCURRENTLY and which no migration can prevent. What 000181 buys is that re-running
--- the pair REPAIRS that state instead of hiding it behind a successful-looking IF NOT EXISTS.
+-- ⚠ "SOLE STATEMENT" IS ABOUT golang-migrate, AND IT IS NOT THE WHOLE EXECUTION STORY — an earlier
+-- version of this comment stopped there and was therefore a FALSE claim about this file's own
+-- execution (#1569 round 15 task 9 fix 1). golang-migrate sends a file as one simple query, which
+-- Postgres wraps in an implicit transaction only when it holds MORE than one statement; that is why
+-- a lone CONCURRENTLY works in production. But this repo ALSO re-executes every migration from
+-- 000149 to HEAD through scripts/test-migrations.sh's replay, and that replay passed `psql -1`
+-- unconditionally, which wraps even a single statement:
+--
+--     ERROR:  CREATE INDEX CONCURRENTLY cannot run inside a transaction block
+--
+-- No CONCURRENTLY migration had ever been inside that range before this one, so the composition had
+-- never run. The replay now decides per file (replay_file_runs_outside_a_transaction), which makes
+-- it match golang-migrate instead of contradicting it, and
+-- scripts/__tests__/replay-concurrently-transaction.test.sh executes both halves of that against a
+-- real database. If you add another CONCURRENTLY migration, you inherit that support; if you make
+-- this one non-concurrent, you take a write lock on accounts instead.
+--
+-- ⚠ THE RESIDUAL, STATED PLAINLY AND WITHOUT THE OVERCLAIM IT ORIGINALLY CARRIED: if THIS build is
+-- interrupted it leaves an INVALID index (inherent to CONCURRENTLY; no migration can prevent it),
+-- and golang-migrate additionally marks the database DIRTY at version 182. It does NOT self-heal:
+-- backend/scripts/docker-entrypoint.sh only retries `migrate up`, which refuses to run at all while
+-- the version is dirty, so the container fails to start rather than silently continuing. The repair
+-- is an operator action and it must go back to 180, not 181:
+--
+--     migrate -database "$DATABASE_URL" -path migrations force 180
+--     migrate -database "$DATABASE_URL" -path migrations up
+--
+-- Forcing to 181 instead would re-run only THIS file, whose IF NOT EXISTS matches on the NAME and
+-- would leave the invalid index in place reporting success. What 000181 buys is that the re-run
+-- from 180 genuinely repairs the state instead of hiding it — not that the repair is automatic.
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_accounts_user_account_backfill
     ON accounts (created_at, id) WHERE user_account_id IS NULL;

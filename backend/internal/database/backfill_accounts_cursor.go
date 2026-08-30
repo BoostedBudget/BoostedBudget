@@ -21,11 +21,18 @@ import (
 //
 // THE SHAPE IS THE ONE #1477 ALREADY BUILT, deliberately reused rather than reinvented: the
 // sweep_cursors table (migration 000140), one row per sweep, holding ONLY the sort-key TIMESTAMP
-// of the position and never a row identity, plus an `exclusive` flag that turns the timestamp back
-// into an exact keyset position by pairing it with a synthesized min/max uuid sentinel.
-// repository/sweep_cursor_repository.go states that design, its two reset rules and its bounded
-// starvation guarantee in full; this file does not restate them and must not be read as a second,
-// competing statement of them. What follows is only what is DIFFERENT here.
+// of the position and never a row identity. repository/sweep_cursor_repository.go states that
+// design, its two reset rules and its bounded starvation guarantee in full; this file does not
+// restate them and must not be read as a second, competing statement of them. What follows is only
+// what is DIFFERENT here.
+//
+// ⚠ ONE THING IS DIFFERENT IN THE PERSISTED SHAPE, and it is #1569 round 15 task 9 fix 1. The four
+// #1477 sweeps turn a stored timestamp back into a keyset position by pairing it with a synthesized
+// min/max uuid sentinel and an `exclusive` flag, which can only express "all of T" or "none of T".
+// This sweep instead stores a COUNT of rows already consumed at T (sweep_cursors.ts1_offset,
+// migration 000183) and ignores `exclusive`. See backfillAccountsCursor below for why the sentinel
+// form could not ship here: "none of T" loses rows permanently and "all of T" starves. The four
+// sweeps keep the sentinel form and its residual; changing them is #1477's to do, not this file's.
 //
 // ⚠ WHY THE SORT KEY CHANGED FROM `a.id` TO `(a.created_at, a.id)`. The bounded scan ordered by
 // `a.id` alone, so its position was a row identity — an accounts.id, which is user-scoped and
@@ -34,8 +41,9 @@ import (
 // (migration 000140's header; the same no-FK/no-user_id rationale as plaid_orphaned_items). So the
 // scan now sorts on a NON-identity leading column, accounts.created_at (NOT NULL since migration
 // 000007), tie-broken on a.id. In memory the cursor is the exact (created_at, id) pair, so a run
-// always makes strict forward progress and always terminates; only the timestamp is ever written
-// to the database, and the id component is reconstituted from a sentinel on resume.
+// always makes strict forward progress and always terminates; only the timestamp (and a count of
+// rows consumed at it) is ever written to the database, and no id component is reconstituted on
+// resume at all.
 //
 // ⚠ WHY IT IS NOT repository.SweepCursorRepository. internal/repository's own integration tests
 // import internal/database (transaction_repository_explain_test.go, in package repository), so
@@ -67,31 +75,51 @@ import (
 // sweep_name column is TEXT with no CHECK constraint, so no migration is needed to add a name.
 const backfillAccountsSweepCursorName = "accounts_user_account_backfill"
 
-// The two synthesized uuid sentinels that turn a timestamp-only watermark back into an exact
-// keyset position. PostgreSQL orders uuid by its 16 raw bytes, so pairing a stored timestamp T
-// with the MINIMUM makes `(created_at, id) > (T, sentinel)` mean "created_at >= T, ties included",
-// and pairing it with the MAXIMUM makes the same predicate mean "created_at > T". These mirror
-// repository.MinSweepSentinelID / MaxSweepSentinelID; they are NOT row identities.
-const (
-	minBackfillSentinelID = "00000000-0000-0000-0000-000000000000"
-	maxBackfillSentinelID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
-)
-
-// backfillAccountsCursor is an EXACT keyset position in the `ORDER BY a.created_at, a.id` scan.
-// A nil *backfillAccountsCursor means "start from the beginning" — and it means it literally: the
-// page query then carries NO position predicate at all, which is what makes an account whose id is
-// the all-zero uuid reachable (the old `a.id > '00000000-…'` first page excluded it forever).
+// backfillAccountsCursor is a position in the `ORDER BY a.created_at, a.id` scan, and it has TWO
+// shapes. The distinction is the whole of #1569 round 15 task 9 fix 1 and must not be collapsed:
+//
+//   - an EXACT ROW position (id != ""), used only WITHIN a run. It is the (created_at, id) pair of
+//     the last row processed, so the next page is `> (created_at, id)` and the loop always makes
+//     strict forward progress and always terminates.
+//   - a RESUME position (id == ""), the only shape that is ever persisted or loaded. It means "at or
+//     after createdAt, having already consumed the first `offset` candidate rows of that timestamp".
+//     It carries NO row identity, which is the invariant sweep_cursors exists to keep.
+//
+// ⚠ WHY THE RESUME SHAPE IS A COUNT AND NOT A SYNTHESIZED UUID SENTINEL, which is what it was until
+// this fix. A sentinel can only say "all of T" or "none of T". "All of T" replays the same page on
+// every boot when T's group is larger than the run's cap (the starvation this cursor exists to
+// remove, reintroduced at one timestamp); "none of T" steps over rows the run never looked at, and
+// nothing ever comes back for them. A count says "the first k of T", which is neither — and it is
+// still not a row identity, so the GDPR property is untouched. See migration 000183.
+//
+// ⚠ AND IT CLOSED A SECOND DEFECT THE SENTINEL HAD. The inclusive sentinel was the all-zero uuid
+// paired with `>`, so an account whose id IS the all-zero uuid was invisible at the resume boundary
+// while every other id at the same timestamp was visible. PostgreSQL permits that id and
+// AccountRepository.CreateBatch preserves a caller-supplied one; round 14 had already fixed the same
+// asymmetry on the cold path, and the sentinel reintroduced it on the resumed one. The resume
+// predicate no longer mentions an id at all, so no id can be special.
 type backfillAccountsCursor struct {
 	createdAt time.Time
-	id        string
+	// id is the exact row identity of an in-run position, and "" for a resume position. It is never
+	// persisted in either shape.
+	id string
+	// offset is meaningful only when id == "": how many candidate rows sharing createdAt this
+	// position has already consumed.
+	offset int
 }
 
 // loadBackfillAccountsCursor returns the stored resume position, or nil for "start from the
 // beginning". Absence of the row is the encoding for "no watermark", matching #1477: a run that
 // reaches the end of its scan DELETEs its row rather than storing a past-the-end position.
+//
+// ⚠ `exclusive` IS DELIBERATELY NOT READ. This sweep no longer writes it (it always writes FALSE),
+// but a row written by the PREVIOUS code may still carry TRUE on the first boot after a deploy.
+// Honouring it would skip the remainder of that tie group — the exact defect this fix removes — so
+// it is ignored, which degrades that one row to "resume at the start of T": rows are re-read, never
+// skipped. Re-reading is free (every per-row action is idempotent); skipping is permanent.
 func loadBackfillAccountsCursor(ctx context.Context, db backfillQuerier) *backfillAccountsCursor {
 	rows, err := db.Query(ctx,
-		`SELECT ts1, exclusive FROM sweep_cursors WHERE sweep_name = $1`,
+		`SELECT ts1, ts1_offset FROM sweep_cursors WHERE sweep_name = $1`,
 		backfillAccountsSweepCursorName)
 	if err != nil {
 		slog.WarnContext(ctx, "#1569: cannot read the accounts backfill resume position; starting from the beginning",
@@ -104,10 +132,10 @@ func loadBackfillAccountsCursor(ctx context.Context, db backfillQuerier) *backfi
 		return nil // no stored position
 	}
 	var (
-		ts        *time.Time
-		exclusive bool
+		ts     *time.Time
+		offset *int32
 	)
-	if err := rows.Scan(&ts, &exclusive); err != nil {
+	if err := rows.Scan(&ts, &offset); err != nil {
 		slog.WarnContext(ctx, "#1569: cannot scan the accounts backfill resume position; starting from the beginning",
 			"error", err)
 		return nil
@@ -125,20 +153,23 @@ func loadBackfillAccountsCursor(ctx context.Context, db backfillQuerier) *backfi
 		return nil
 	}
 
-	id := minBackfillSentinelID
-	if exclusive {
-		id = maxBackfillSentinelID
+	// A NULL offset is a row written before migration 000183, or by another sweep; a negative one is
+	// a hand edit. Both mean "the start of this timestamp's group", which re-reads rather than skips.
+	pos := &backfillAccountsCursor{createdAt: *ts}
+	if offset != nil && *offset > 0 {
+		pos.offset = int(*offset)
 	}
-	return &backfillAccountsCursor{createdAt: *ts, id: id}
+	return pos
 }
 
 // saveBackfillAccountsCursor persists where a CAPPED run stopped. Called only on the capped path —
 // a run that exhausts its scan clears instead, which is what makes a past-the-end watermark
 // impossible to store and the wrap unnecessary in the common case.
 //
-// `exclusive` is passed by the caller and is true in exactly one case: the run started from a
-// stored position and spent its whole cap on rows sharing that ONE created_at, so an inclusive
-// save would hand the next boot the identical page forever. See nextBackfillCursorExclusive.
+// `pos` must be a RESUME position (id == ""): the timestamp of the last row processed, and how many
+// rows of that timestamp the run has consumed. `exclusive` is written FALSE unconditionally — the
+// column belongs to the four #1477 sweeps and this sweep expresses the same idea with ts1_offset,
+// which is strictly more precise. See loadBackfillAccountsCursor on why a legacy TRUE is ignored.
 //
 // ⚠ WHAT TWO SIMULTANEOUS BOOTS DO TO THIS ROW. The upsert is last-writer-wins and takes no lock
 // beyond the row's own. Every outcome is safe, and none is a skip:
@@ -152,16 +183,17 @@ func loadBackfillAccountsCursor(ctx context.Context, db backfillQuerier) *backfi
 //     is the same one-cycle bound #1477 already documents for every sweep.
 //   - the repairs themselves are unaffected: the UPDATE is `WHERE id = $2 AND user_account_id IS
 //     NULL` and the mint is ON CONFLICT DO NOTHING plus a re-read, so both boots converge.
-func saveBackfillAccountsCursor(ctx context.Context, db backfillQuerier, pos backfillAccountsCursor, exclusive bool) {
+func saveBackfillAccountsCursor(ctx context.Context, db backfillQuerier, pos backfillAccountsCursor) {
 	if _, err := db.Exec(ctx, `
-		INSERT INTO sweep_cursors (sweep_name, ts1, ts2, exclusive, updated_at)
-		VALUES ($1, $2, NULL, $3, NOW())
+		INSERT INTO sweep_cursors (sweep_name, ts1, ts2, exclusive, ts1_offset, updated_at)
+		VALUES ($1, $2, NULL, FALSE, $3, NOW())
 		ON CONFLICT (sweep_name) DO UPDATE
 		SET ts1 = EXCLUDED.ts1,
 		    ts2 = EXCLUDED.ts2,
 		    exclusive = EXCLUDED.exclusive,
+		    ts1_offset = EXCLUDED.ts1_offset,
 		    updated_at = NOW()
-	`, backfillAccountsSweepCursorName, pos.createdAt, exclusive); err != nil {
+	`, backfillAccountsSweepCursorName, pos.createdAt, pos.offset); err != nil {
 		slog.WarnContext(ctx, "#1569: cannot persist the accounts backfill resume position; the next boot will restart from the beginning",
 			"error", err)
 	}
@@ -177,6 +209,14 @@ func saveBackfillAccountsCursor(ctx context.Context, db backfillQuerier, pos bac
 // user_account_id is dropped again by the recurring write-path bug this backfill exists to repair
 // (#1306) — would be starved at the tail instead of the head. Trading one starvation for the other
 // is not a fix.
+//
+// ⚠ IT IS ALSO WHAT BOUNDS THE ONE IMPRECISION IN ts1_offset. The offset counts rows CONSUMED, and
+// a row that was repaired leaves the candidate set, so between two boots the prefix it points past
+// can shrink and the offset then overshoots — skipping that many rows the next boot has not visited.
+// Those rows are not lost: this clear runs whenever the scan is exhausted, the boot after it starts
+// from the beginning, and the offset is smaller because repairs only ever shrink the set. The rows
+// that make an over-cap group STICKY are the ones no run can repair, and those never leave the
+// prefix, so in the case that actually matters the offset is exact.
 func clearBackfillAccountsCursor(ctx context.Context, db backfillQuerier) {
 	if _, err := db.Exec(ctx,
 		`DELETE FROM sweep_cursors WHERE sweep_name = $1`, backfillAccountsSweepCursorName); err != nil {
@@ -185,43 +225,20 @@ func clearBackfillAccountsCursor(ctx context.Context, db backfillQuerier) {
 	}
 }
 
-// nextBackfillCursorExclusive decides whether a capped run's saved position must be EXCLUSIVE.
+// advanceBackfillTail folds one processed page into the RESUME position a capped run would persist:
+// the timestamp of the last row it processed, and how many rows of that timestamp have been consumed
+// since the group's start — including the ones consumed by EARLIER runs, which is why it starts from
+// the loaded position rather than from zero.
 //
-// It is inclusive in every normal case: resuming at the boundary timestamp re-visits the handful of
-// rows tied on it, which is harmless (every per-row action is idempotent) and is the only spelling
-// that cannot SKIP a tied row. It is exclusive in exactly one case — the run resumed at a stored
-// key and stopped with the scan still inside that SAME created_at — because an inclusive save there
-// replays the identical page on every future boot forever.
-//
-// ⚠ THAT CASE IS NOW UNREACHABLE BELOW THE DRAIN CEILING, and this comment said the opposite until
-// #1569 round 15 task 9. The same predicate is the drain condition (mustDrainResumedTieGroup
-// below): a run that reaches its cap while still inside the tie group it resumed at keeps paging
-// instead of stopping, so by the time it does stop the scan has LEFT that created_at and this
-// function returns false. The exclusive advance therefore survives only as the escape from a tie
-// group too large to drain within backfillAccountsTieGroupCeiling.
-//
-// ⚠ THE PRICE, STATED EXACTLY, AND IT IS NOW A CEILING PRICE RATHER THAN A CAP PRICE. When the
-// exclusive advance IS taken, the rows of that tie group past the point the run stopped are reached
-// on NO run, including after a wrap (a wrap restarts at the beginning and re-reads the group's
-// head, not its tail). They may be perfectly repairable and are skipped without being looked at.
-// The alternative is worse and is why the escape is kept: without it, an over-ceiling group whose
-// head is permanently unrepairable stalls the scan completely and NOTHING behind it is ever
-// reached. What it would take in production: more than backfillAccountsTieGroupCeiling (5000)
-// accounts sharing ONE created_at. accounts.created_at is stamped once per
-// AccountRepository.CreateBatch — `now := time.Now()` outside the insert loop, assigned to every
-// account in the batch, with no batch-size limit — so a tie group is one Plaid Item's account
-// count. Above the ceiling this is logged at ERROR by the caller; it is not silent.
-// Pinned by TestBackfillAccountsCursor_OverCapTieGroupIsDrainedRatherThanSkipped and
-// TestBackfillAccountsCursor_TieGroupBeyondTheCeilingIsSkippedAndAlarmed.
-func nextBackfillCursorExclusive(start, reached *backfillAccountsCursor) bool {
-	return start != nil && reached != nil && start.createdAt.Equal(reached.createdAt)
-}
-
-// mustDrainResumedTieGroup answers the one question the paging loop asks at its cap: may this run
-// keep going? It may, and must, in exactly the situation that would otherwise force an exclusive
-// save — deliberately the SAME predicate, so "we stopped inside the tie group we resumed at" and
-// "we are about to skip rows" cannot drift apart — and only while the run is still under the
-// ceiling that bounds boot latency.
-func mustDrainResumedTieGroup(start, reached *backfillAccountsCursor, processed int) bool {
-	return processed < backfillAccountsTieGroupCeiling && nextBackfillCursorExclusive(start, reached)
+// It is a fold over rows rather than a page-level calculation on purpose: a page may straddle any
+// number of timestamps, and the count must reset at each boundary.
+func advanceBackfillTail(tail *backfillAccountsCursor, page []backfillAccountRow) *backfillAccountsCursor {
+	for _, r := range page {
+		if tail != nil && tail.createdAt.Equal(r.createdAt) {
+			tail.offset++
+			continue
+		}
+		tail = &backfillAccountsCursor{createdAt: r.createdAt, offset: 1}
+	}
+	return tail
 }

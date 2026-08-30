@@ -101,12 +101,13 @@ func TestBackfillUserAccountIDs_MultipleMatch_Warns(t *testing.T) {
 	accountRows := pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id", "type", "subtype", "created_at"}).
 		AddRow(accountID, userID, encMaskPtr, encInstIDPtr, &acctType, &acctSubtype, createdAt)
 	// #1569 round 14: the run first LOADS its persisted resume position (absent here), then the scan
-	// is keyset-paged, so it carries (cursor timestamp, cursor id, limit). A nil timestamp is "from
-	// the beginning" and carries no position predicate. One row comes back, which is a SHORT page,
-	// so the run ends without a second page query — and CLEARS the cursor, the scan being exhausted.
-	expectCursorLoad(mock, nil, false)
+	// is paged, so it carries (cursor timestamp, cursor id, offset, limit). A nil timestamp AND a nil
+	// id are "from the beginning" and carry no position predicate at all. One row comes back, which
+	// is a SHORT page, so the run ends without a second page query — and CLEARS the cursor, the scan
+	// being exhausted.
+	expectCursorLoad(mock, nil, nil)
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT a.id, a.user_id, a.mask, li.institution_id`)).
-		WithArgs((*time.Time)(nil), minBackfillSentinelID, backfillAccountsPageSize).
+		WithArgs((*time.Time)(nil), (*string)(nil), 0, backfillAccountsPageSize).
 		WillReturnRows(accountRows)
 
 	// Second mock: the user_accounts lookup — returns TWO rows (the multiple-match scenario).
