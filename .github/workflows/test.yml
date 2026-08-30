@@ -175,6 +175,35 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-mcp-job-triggers.test.sh
 
+      # #1569 round 15 task 1. scripts/assert-no-ungated-migrate-down-invocation.sh was built on an
+      # explicit user ruling — "make bypass structurally hard" — after the `migrate-reset`
+      # disposability gate was defeated three separate ways in three rounds. It ran in NO CI job at
+      # all: a new ungated `migrate ... down` could have been added anywhere in the tree and nothing
+      # would have caught it. Its regression suite was likewise unrun.
+      #
+      # Hosted HERE, not in migration-tests, on purpose. The guard's candidate set is every tracked
+      # *.sh, Makefile, workflow, Dockerfile and extensionless shell-shebang script in the tree (63
+      # files today) — so a violation can be introduced in the root Makefile, infra/Dockerfile or
+      # apps/web/scripts/*.sh, none of which match the `migrations`/`backend` paths-filters that gate
+      # migration-tests and backend-test. A guard whose whole purpose is "structurally hard to
+      # bypass" must not itself be bypassable by choosing which file you put the invocation in. This
+      # job has no `needs:`/paths-filter gate at all (`if: always() && !cancelled()` reacts only to
+      # prior job outcomes), so it runs on every PR — the same argument the two steps above make.
+      # Both steps are pure shell against the checked-out tree: no Postgres, no `migrate` binary, no
+      # browser, so they need none of the setup below and cost ~1s each on an already-loaded runner.
+      #
+      # Regression suite first (proves the guard itself can still reject a fixture), then the real
+      # scan against this checked-out tree — the same two-step shape as the typographic-quote guard
+      # in backend-test. The suite mutates tracked files in THIS WORKSPACE only and restores every
+      # one through an explicit backup copy in its own EXIT trap (never `git stash`/`git checkout`).
+      - name: Test ungated-migrate-down guard (#1569 regression suite)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/no-ungated-migrate-down-invocation-guard.test.sh
+
+      - name: Guard — no ungated 'migrate ... down' anywhere in the tree (#1569)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/assert-no-ungated-migrate-down-invocation.sh
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -1390,12 +1419,45 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
+      # #1569 round 15 task 1. Round 14 added two pieces of anti-vacuity tooling —
+      # scripts/check-ci-env-drift.sh and scripts/summarize-go-test.sh — after a real regression hid
+      # for two rounds inside 30 integration tests that t.Skip()'d silently for want of
+      # CACHE_REDIS_TEST_URL/REDIS_TEST_URL. Both had falsification suites; neither suite ran in any
+      # CI job, because they were reachable only through `make test-scripts`, which no job invokes.
+      # The things that exist to stop a silent-skip regression were themselves unrun.
+      #
+      # Filed in THIS job because this is the job they are about: check-ci-env-drift.sh derives its
+      # list of load-bearing vars by parsing this job's own "Guard — DATABASE_URL,
+      # CACHE_REDIS_TEST_URL, REDIS_TEST_URL must be set" step out of this file, so the suite is a
+      # real cross-file guard on the workflow, not just on the script — renaming or restructuring
+      # that step turns five of its seven cases red. This job's `if:` covers both inputs the suite
+      # depends on (`backend` matches scripts/**; `workflow` matches .github/workflows/**).
+      #
+      # Runs before "Set up Go" deliberately: it is pure shell + awk over a YAML file and needs no
+      # toolchain, so it reports a drifted guard step in seconds rather than after the Go module
+      # download. It sets its own env vars per case under `env -i`, so it neither reads nor depends
+      # on this job's DATABASE_URL/Redis URLs, and it starts nothing.
+      - name: Test CI-env-drift checker (#1569 falsification suite)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/check-ci-env-drift.test.sh
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
         # Note: go clean -cache is intentionally omitted — it is destructive on
         # a shared self-hosted runner when backend-test runs concurrently.
+
+      # Sibling of the step above, and the reason it is on THIS side of "Set up Go": this suite
+      # drives scripts/summarize-go-test.sh against a throwaway two-file Go module in a temp dir
+      # (module summarizetestfixture — never the backend module), so it needs a Go toolchain. It
+      # runs in well under a second, touches no database and no network, and asserts the wrapper
+      # really does tally PASS/FAIL/SKIP so a skipped test can never read as an indistinguishable
+      # clean `ok`. #1569 round 15 task 1 also made its "go not on PATH" branch fail closed when
+      # $CI is set, so wiring it here cannot degrade into a step that silently exits 0.
+      - name: Test go-test skip summarizer (#1569 falsification suite)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/summarize-go-test.test.sh
 
       - name: Configure job-local Go build cache
         # runner context is unavailable in job-level env blocks (GitHub Actions limitation),
@@ -2311,7 +2373,13 @@ jobs:
           DATABASE_URL: ${{ env.DATABASE_URL }}
         run: bash scripts/__tests__/migrate-reset-target-guard.test.sh
 
-      # #1569 round 5 (G3): the LAST suite under scripts/__tests__ that no workflow ran. It was
+      # #1569 round 5 (G3). This comment used to call this "the LAST suite under scripts/__tests__
+      # that no workflow ran"; that was FALSE when written and stayed false for nine rounds —
+      # no-ungated-migrate-down-invocation-guard.test.sh, check-ci-env-drift.test.sh and
+      # summarize-go-test.test.sh were all still unwired, and round 15 task 1 wired them. As of
+      # that commit all 17 suites in `make test-scripts` do have an individual CI step, but
+      # `make test-scripts` itself still runs in no CI job, so the per-suite wiring below and in
+      # frontend-test remains the only thing that executes them. It was
       # reachable only through `make test-scripts`, which no job invokes — so its eight cases,
       # including its own mutant, proved nothing about any commit. A guard that exists but never
       # runs is the same as no guard, and this was the third instance of that class on this branch.
