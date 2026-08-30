@@ -404,6 +404,21 @@ func backfillAccountsUserAccountIDs(ctx context.Context, db *pgxpool.Pool, enc *
 var (
 	backfillAccountsPageSize      = 500
 	backfillAccountsMaxRowsPerRun = 1000
+
+	// backfillAccountsTieGroupCeiling bounds the ONE case in which a run is allowed past its
+	// per-run cap: finishing the `created_at` tie group it resumed inside. See
+	// backfill_accounts_cursor.go's nextBackfillCursorExclusive for why leaving such a group
+	// half-walked is the only way this scan can permanently skip a reachable row, and
+	// backfillAccountsUserAccountIDsWithDB's loop for the drain itself.
+	//
+	// WHY 5000, AND WHAT IT COSTS. It is the boot-latency bound: a run does at most this many rows
+	// plus one page, all synchronously, before main.go continues. Five times the cap is generous
+	// against a real tie group — accounts.created_at is stamped ONCE per
+	// AccountRepository.CreateBatch (one `now := time.Now()` outside the insert loop), so a tie
+	// group is one Plaid Item's account count — while still refusing to make boot time unbounded in
+	// a shape nobody has measured. A group larger than this is escaped exclusively, losing its
+	// tail, and says so at ERROR.
+	backfillAccountsTieGroupCeiling = 5000
 )
 
 // backfillAccountRow is one page row of the accounts scan.
@@ -496,8 +511,23 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 			// branch the same clear would run one line later. What it buys is ONE BOOT of latency:
 			// rows sorting behind the stale watermark are repaired on THIS boot instead of the
 			// next, which matters because this scan's clock is restarts, not a periodic schedule.
+			//
+			// ⚠ THE GATE IS `start`, NOT `cursor`, AND `processed == 0` IS HALF OF IT (#1569 round
+			// 15, defect C1). `cursor` is reassigned after EVERY non-empty page, so gating on it
+			// wrapped a run that began at the BEGINNING and merely happened to end on an exact
+			// page boundary — and that wrap is not free: it nils `start`, replays the rows just
+			// processed, reaches the per-run cap on the replay and therefore STORES an inclusive
+			// watermark for a scan it had already exhausted, which every later boot then resumes,
+			// replays, wraps and re-stores forever. The condition below is deliberately identical
+			// to jobs.sweepResume.WrapNow's (`r.start == nil || r.wrapped || processed > 0`): wrap
+			// only when this run RESUMED FROM A STORED POSITION and has processed ZERO rows.
+			// Sharing the primitive itself is not possible — sweepResume lives in
+			// internal/queue/jobs, which imports internal/repository, whose own integration tests
+			// import internal/database (see backfill_accounts_cursor.go on that cycle) — so the
+			// condition is mirrored here and pinned by
+			// TestBackfillAccountsCursor_ExhaustionOnAPageBoundaryNeitherWrapsNorPingPongs.
 			// Bounded to once per run by `wrapped`, so it cannot loop.
-			if cursor != nil && !wrapped {
+			if start != nil && !wrapped && processed == 0 {
 				wrapped = true
 				slog.InfoContext(ctx, "#1306 P2: accounts backfill resume position is past the end of the scan; wrapping to the start")
 				clearBackfillAccountsCursor(ctx, db)
@@ -521,8 +551,22 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 		processed += len(accs)
 
 		if processed >= backfillAccountsMaxRowsPerRun {
-			cappedEarly = true
-			break
+			// ⚠ THE ONE REASON A RUN MAY EXCEED ITS CAP (#1569 round 15, defect C2). Stopping HERE
+			// while still inside the created_at tie group this run resumed at is the single shape
+			// that makes a timestamp-only watermark lose a row: the next boot cannot be told
+			// "resume in the middle of T" (the position may not carry a row id — see
+			// backfill_accounts_cursor.go), so it must either replay T forever or step past T
+			// entirely, skipping every row of the group it never looked at. Draining the group
+			// first removes the dilemma: once the scan has left T, an ordinary INCLUSIVE save is
+			// both safe and strictly forward.
+			//
+			// The drain is bounded by backfillAccountsTieGroupCeiling because this runs
+			// synchronously at boot. Above that ceiling the old dilemma returns and is resolved the
+			// old way — escape exclusively, lose the tail — but loudly; see the save below.
+			if !mustDrainResumedTieGroup(start, reached, processed) {
+				cappedEarly = true
+				break
+			}
 		}
 		if len(accs) < backfillAccountsPageSize {
 			break // short page: the scan is exhausted
@@ -533,9 +577,19 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 	// is what makes "we stopped mid-scan at T" the only state ever stored, so a past-the-end
 	// watermark is transient (the wrap above) rather than a permanent silent stall.
 	if cappedEarly {
-		saveBackfillAccountsCursor(ctx, db, *reached, nextBackfillCursorExclusive(start, reached))
+		exclusive := nextBackfillCursorExclusive(start, reached)
+		if exclusive {
+			// Reachable ONLY above the drain ceiling now, and it is the one outcome of this scan
+			// that can permanently skip a repairable row, so it is an alarm rather than a WARN
+			// among WARNs. Nothing automated recovers from it: the skipped rows keep their NULL
+			// user_account_id and no later boot revisits them.
+			slog.ErrorContext(ctx, "#1306 P2: accounts backfill could not drain a created_at tie group within its ceiling; "+
+				"advancing PAST the whole group, which permanently skips its unvisited rows",
+				"created_at", reached.createdAt, "ceiling", backfillAccountsTieGroupCeiling, "processed", processed)
+		}
+		saveBackfillAccountsCursor(ctx, db, *reached, exclusive)
 		slog.WarnContext(ctx, "#1306 P2: accounts backfill stopped at its per-run cap; the next boot resumes from where this run stopped",
-			"processed", processed, "cap", backfillAccountsMaxRowsPerRun)
+			"processed", processed, "cap", backfillAccountsMaxRowsPerRun, "exclusive", exclusive)
 	} else if start != nil || processed > 0 {
 		// Nothing stored and nothing processed means the steady state (zero rows, no cursor row):
 		// skip the DELETE so a healthy boot costs two queries, not three.

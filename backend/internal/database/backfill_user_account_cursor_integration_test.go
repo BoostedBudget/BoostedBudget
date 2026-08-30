@@ -18,25 +18,34 @@ package database
 // lesson, and the reason backfill_user_account_paging_test.go's second page could not prove
 // forward progress). Everything asserted here is asserted against real PostgreSQL.
 //
-// The three properties, one test each:
+// The properties, one test each. Items 5 and 6 are #1569 round 15 task 9, and items 2 and 3 were
+// REWRITTEN by it: the wrap test did not exercise the wrap at all (verified by mutation — the whole
+// branch could be deleted and it still passed) and the tie-group test pinned a skip that has since
+// been narrowed to the ceiling.
 //  1. across boots the run RESUMES, so a repairable row behind an over-cap wall of unrepairable
 //     rows is reached (the starvation fix);
-//  2. the persisted cursor WRAPS when the scan is exhausted, so a row created BEHIND the watermark
-//     is still repaired — otherwise the fix trades head-of-line starvation for tail starvation;
-//  3. an OVER-CAP tie group on one created_at advances rather than replaying forever, and the tail
-//     it sacrifices to do so is pinned as the documented price rather than left implicit;
-//  4. two boots racing on the shared cursor converge and never lose a repairable row.
+//  2. the persisted cursor WRAPS on the SAME boot that finds its watermark stale, so a row created
+//     BEHIND the watermark is repaired then rather than one boot later;
+//  3. an OVER-CAP tie group on one created_at is DRAINED rather than stepped over, so no reachable
+//     row inside it is skipped;
+//  4. a tie group too large to drain within the ceiling is still escaped — the residual, pinned as
+//     the documented price rather than left implicit;
+//  5. a run that starts at the beginning and exhausts its scan on an exact page boundary neither
+//     wraps nor stores a watermark (the ping-pong);
+//  6. two boots racing on the shared cursor converge and never lose a repairable row.
 //
-// A fifth test covers the separate all-zero-uuid defect: see
+// A further test covers the separate all-zero-uuid defect: see
 // TestBackfillAccountsCursor_AllZeroUUIDAccountIsReached.
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
@@ -173,10 +182,23 @@ func TestBackfillAccountsCursor_ResumesAcrossBootsPastAnUnrepairableWall(t *test
 		"a per-run cursor that restarts at the beginning starves it forever", bound)
 }
 
-// TestBackfillAccountsCursor_WrapsSoARowBehindTheWatermarkIsRepaired pins the OTHER starvation —
-// the one the fix would introduce if the persisted cursor only ever moved forward. A row created
-// with a created_at BEHIND the stored watermark sorts before it and would never be selected again.
-func TestBackfillAccountsCursor_WrapsSoARowBehindTheWatermarkIsRepaired(t *testing.T) {
+// TestBackfillAccountsCursor_WrapsSoARowBehindTheWatermarkIsRepairedOnTheSameBoot pins the OTHER
+// starvation — the one the persisted cursor would introduce if it only ever moved forward. A row
+// created with a created_at BEHIND the stored watermark sorts before it and would never be selected
+// again.
+//
+// ⚠ THIS TEST DID NOT DISCRIMINATE UNTIL #1569 ROUND 15 TASK 9, and it was reported as
+// mutant-validated when it was not. Its previous fixture left a row AHEAD of the watermark, so
+// boot 2 took the ordinary "found rows, then exhausted the scan, so clear" path and the wrap branch
+// was never entered; the row behind the watermark was then repaired on boot 3 by the clear, and the
+// test — which allowed three boots — passed. Verified by mutation: with the wrap branch disabled
+// outright the old test still passed.
+//
+// What makes this version a discriminator is that the wrap's ONLY observable effect is timing —
+// it repairs, on THIS boot, rows that the clear-on-exhaustion path would leave to the NEXT one — so
+// the fixture must make the resumed page genuinely EMPTY and the assertion must allow exactly ONE
+// boot. Nothing here depends on scheduling or on generated ids.
+func TestBackfillAccountsCursor_WrapsSoARowBehindTheWatermarkIsRepairedOnTheSameBoot(t *testing.T) {
 	pool := connectBackfillTestDB(t)
 	enc := newBackfillTestEnc(t)
 	ctx := context.Background()
@@ -186,43 +208,54 @@ func TestBackfillAccountsCursor_WrapsSoARowBehindTheWatermarkIsRepaired(t *testi
 	f.cleanupSynthesised(t)
 
 	base := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 3; i++ {
-		f.seedAccount(t, f.badItemID, base.Add(time.Duration(i)*time.Minute))
-	}
-	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, pool, enc)) // caps, saves a watermark
+	f.seedAccountWithID(t, "bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb", f.badItemID, base.Add(time.Minute))
+	last := f.seedAccountWithID(t, "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", f.badItemID, base.Add(2*time.Minute))
 
-	// A row that becomes eligible BEHIND the watermark.
+	// Boot 1 spends its whole cap and therefore STORES a watermark at the last row it reached.
+	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, pool, enc))
+	stored := backfillCursorRowTS(t, pool)
+	require.NotNil(t, stored, "boot 1 must stop at its cap and store a watermark; without one there is no wrap to test")
+	require.True(t, stored.Equal(base.Add(2*time.Minute)), "the watermark must be the last row boot 1 reached")
+
+	// Make the watermark STALE: the row it points at leaves the candidate set (repaired elsewhere,
+	// or the account deleted), so a resumed page finds NOTHING at or after it. This is the only
+	// state in which the wrap branch is reachable at all.
+	_, err := pool.Exec(ctx, "DELETE FROM accounts WHERE id = $1", last)
+	require.NoError(t, err)
+
+	// And a repairable row appears BEHIND the watermark.
 	behind := f.seedAccount(t, f.goodItemID, base.Add(-time.Hour))
 
-	// Boot 2 finishes the wall and stores nothing (scan exhausted); boot 3 starts from the
-	// beginning and finds the row behind the watermark.
-	for i := 0; i < 3; i++ {
-		require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, pool, enc))
-		if f.userAccountID(t, behind) != nil {
-			return
-		}
-	}
-	t.Fatal("a row sorting behind the persisted watermark was never repaired: the cursor must wrap " +
-		"back to the start when the scan is exhausted, or the fix trades head starvation for tail starvation")
+	// ONE boot. It must find its resume page empty, recognise the watermark as past the end, clear
+	// it and re-ask FROM THE BEGINNING within this same run.
+	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, pool, enc))
+
+	require.NotNil(t, f.userAccountID(t, behind),
+		"a row sorting behind a STALE persisted watermark must be repaired on the very boot that finds "+
+			"the watermark empty: the run has to clear it and re-query from the start within the same "+
+			"run. Leaving it to the next boot is the tail-starvation half of the trade, and this scan's "+
+			"clock is restarts, not a schedule")
 }
 
-// TestBackfillAccountsCursor_OverCapTieGroupAdvancesAndSacrificesItsTail constructs the one
-// degenerate case an inclusive resume cannot survive, and pins BOTH halves of the trade made for it.
+// TestBackfillAccountsCursor_OverCapTieGroupIsDrainedRatherThanSkipped is defect C2.
 //
-// The case: more than a cap's worth of rows share ONE created_at, and the first cap-worth are
-// permanently unrepairable. An inclusive resume re-reads that same first cap-worth on every boot
-// forever — the identical starvation the persisted cursor exists to remove, reintroduced at a single
-// timestamp. nextBackfillCursorExclusive detects "resumed at a key and made no progress along the
-// created_at axis" and saves the position EXCLUSIVE, which steps past the whole group.
+// THE BUG IT FAILS AGAINST, which is the CURRENT committed code. The persisted position is a
+// TIMESTAMP only (never a row id — see backfill_accounts_cursor.go on why that is a GDPR
+// invariant), so a resumed run that spends its whole cap inside ONE created_at could not say
+// "resume in the middle of this tie group". It advanced EXCLUSIVELY past the whole group instead,
+// and the group's rows past the first cap-worth were then reached on no boot, ever — including
+// after a wrap, which restarts at the beginning and re-reads the same first cap-worth. The rows
+// lost that way may be perfectly repairable; they are skipped without ever being looked at.
 //
-// The price, asserted rather than merely described: the group's rows past the first cap-worth are
-// reached on NO boot, including after a wrap (a wrap restarts at the beginning and re-reads the same
-// first cap-worth). The tail row here is fully REPAIRABLE and is skipped anyway, because the
-// exclusive advance is taken without ever looking at it. This is #1477's residual, accepted for its
-// reason: without the advance the group stalls the scan completely and nothing behind it is reached
-// either. In production it needs >1000 accounts sharing one created_at whose first 1000 are all
-// unrepairable — one Plaid Item's CreateBatch, so single digits. Not reachable.
-func TestBackfillAccountsCursor_OverCapTieGroupAdvancesAndSacrificesItsTail(t *testing.T) {
+// THE FIX ASSERTED HERE: the exclusive advance is now conditional on having actually EXHAUSTED the
+// tie group. A run that reaches its cap inside the group it resumed at keeps paging — past the cap,
+// bounded by backfillAccountsTieGroupCeiling — until it leaves that created_at, at which point an
+// ordinary inclusive save is both safe and forward. See the sibling test for what happens when a
+// group is bigger than the ceiling.
+//
+// RED against the committed code on the `sacrificed` assertion: that row is repairable, sorts last
+// inside the tie group, and the exclusive advance steps over it permanently.
+func TestBackfillAccountsCursor_OverCapTieGroupIsDrainedRatherThanSkipped(t *testing.T) {
 	pool := connectBackfillTestDB(t)
 	enc := newBackfillTestEnc(t)
 	ctx := context.Background()
@@ -237,24 +270,66 @@ func TestBackfillAccountsCursor_OverCapTieGroupAdvancesAndSacrificesItsTail(t *t
 	f.seedAccountWithID(t, "11111111-1111-4111-8111-111111111111", f.badItemID, tie)
 	f.seedAccountWithID(t, "22222222-2222-4222-8222-222222222222", f.badItemID, tie)
 	sacrificed := f.seedAccountWithID(t, "33333333-3333-4333-8333-333333333333", f.goodItemID, tie)
-	behind := f.seedAccount(t, f.goodItemID, tie.Add(10*time.Minute))
+	ahead := f.seedAccount(t, f.goodItemID, tie.Add(10*time.Minute))
+
+	// Boot 1 spends its cap on the wall from a cold start; boot 2 resumes INSIDE the tie group and
+	// must drain it. Six boots is far more headroom than either needs.
+	for boot := 1; boot <= 6; boot++ {
+		require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, pool, enc))
+		if f.userAccountID(t, sacrificed) != nil && f.userAccountID(t, ahead) != nil {
+			return
+		}
+	}
+	require.NotNil(t, f.userAccountID(t, sacrificed),
+		"a repairable row inside an over-cap tie group must be REACHED: the exclusive advance may only "+
+			"be taken once the group has actually been exhausted, never as a way to escape it")
+	require.NotNil(t, f.userAccountID(t, ahead),
+		"draining the tie group must not cost forward progress: the row after it must still be reached")
+}
+
+// TestBackfillAccountsCursor_TieGroupBeyondTheCeilingIsSkippedAndAlarmed pins the RESIDUAL the
+// drain above deliberately keeps, so it is a written, tested trade rather than a silent one.
+//
+// The drain cannot be unbounded: this backfill runs SYNCHRONOUSLY at boot, and a tie group of
+// arbitrary size would put arbitrary latency in front of the server starting. So it is bounded by
+// backfillAccountsTieGroupCeiling, and a group larger than that is escaped exclusively — losing its
+// tail, exactly as the pre-fix code did for every over-cap group. The two things that changed are
+// that the threshold moved from the per-run cap to the (much larger) ceiling, and that crossing it
+// is logged at ERROR with the timestamp, so it is an alarm instead of a silent loss.
+//
+// Here the ceiling is lowered to the cap, which switches the drain off entirely and reproduces the
+// pre-fix behaviour on purpose.
+func TestBackfillAccountsCursor_TieGroupBeyondTheCeilingIsSkippedAndAlarmed(t *testing.T) {
+	pool := connectBackfillTestDB(t)
+	enc := newBackfillTestEnc(t)
+	ctx := context.Background()
+	withBackfillPageBounds(t, 2, 2)
+	withBackfillTieGroupCeiling(t, 2)
+
+	f := newBackfillCursorFixture(t, pool, enc)
+	f.cleanupSynthesised(t)
+
+	tie := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	f.seedAccountWithID(t, "44444444-1111-4111-8111-444444444444", f.badItemID, tie)
+	f.seedAccountWithID(t, "44444444-2222-4222-8222-444444444444", f.badItemID, tie)
+	sacrificed := f.seedAccountWithID(t, "44444444-3333-4333-8333-444444444444", f.goodItemID, tie)
+	ahead := f.seedAccount(t, f.goodItemID, tie.Add(10*time.Minute))
 
 	reached := false
 	for boot := 1; boot <= 6; boot++ {
 		require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, pool, enc))
-		if f.userAccountID(t, behind) != nil {
+		if f.userAccountID(t, ahead) != nil {
 			reached = true
 			break
 		}
 	}
 	require.True(t, reached,
-		"a run whose whole cap was consumed by ONE created_at must save an EXCLUSIVE position; "+
-			"an inclusive save replays the identical page on every boot forever")
-
+		"a tie group that cannot be drained within the ceiling must still be ESCAPED; leaving it in "+
+			"place would stall the scan and starve everything behind it, which is worse than the skip")
 	require.Nil(t, f.userAccountID(t, sacrificed),
-		"the documented price of the exclusive advance: the over-cap tie group's tail is reached on no "+
-			"boot, even though it is repairable. If this ever starts passing, the trade changed and both "+
-			"nextBackfillCursorExclusive's comment and this test must be re-derived together")
+		"the documented price, above the ceiling only: the group's tail is reached on no boot. If this "+
+			"ever starts passing, the trade changed and nextBackfillCursorExclusive's comment, "+
+			"backfillAccountsTieGroupCeiling's comment and this test must be re-derived together")
 }
 
 // TestBackfillAccountsCursor_AllZeroUUIDAccountIsReached covers the second defect. The old scan's
@@ -299,16 +374,31 @@ func TestBackfillAccountsCursor_ConcurrentBootsConverge(t *testing.T) {
 	}
 	repairable := f.seedAccount(t, f.goodItemID, base.Add(10*time.Minute))
 
+	const boots = 2
 	for round := 0; round < 8; round++ {
-		var wg sync.WaitGroup
-		errs := make([]error, 2)
-		for i := 0; i < 2; i++ {
+		// ⚠ THE BARRIER IS THE TEST (#1569 round 15 task 9). Without it the goroutines were merely
+		// STARTED in a loop, and a run of this fixture takes microseconds, so the first could — and
+		// on a busy machine routinely did — finish before the second was scheduled. The test then
+		// asserted nothing about concurrency at all. `ready` is closed only after every goroutine
+		// is parked on it, so all of them leave the starting line together. That guarantees genuine
+		// OVERLAP; it cannot guarantee any particular interleaving, and no test can. The interleaving
+		// that matters is argued structurally in saveBackfillAccountsCursor's comment and is
+		// exercised here under -race across eight rounds.
+		var wg, atLine sync.WaitGroup
+		ready := make(chan struct{})
+		errs := make([]error, boots)
+		for i := 0; i < boots; i++ {
 			wg.Add(1)
+			atLine.Add(1)
 			go func(i int) {
 				defer wg.Done()
+				atLine.Done()
+				<-ready
 				errs[i] = backfillAccountsUserAccountIDsWithDB(ctx, pool, enc)
 			}(i)
 		}
+		atLine.Wait()
+		close(ready)
 		wg.Wait()
 		require.NoError(t, errs[0])
 		require.NoError(t, errs[1])
@@ -317,4 +407,87 @@ func TestBackfillAccountsCursor_ConcurrentBootsConverge(t *testing.T) {
 		}
 	}
 	t.Fatal("two concurrent boots never reached the repairable row behind the unrepairable wall")
+}
+
+// countingBackfillDB counts the PAGE queries a single run issues, so a test can assert that a run
+// visited each row once rather than inferring it from the rows' end state. It is a thin decorator
+// over the pool — every statement still reaches real PostgreSQL.
+type countingBackfillDB struct {
+	backfillQuerier
+	pageQueries int
+}
+
+func (c *countingBackfillDB) Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
+	if strings.Contains(sql, "FROM accounts a") {
+		c.pageQueries++
+	}
+	return c.backfillQuerier.Query(ctx, sql, args...)
+}
+
+// backfillCursorRowTS returns the stored watermark for this sweep, or nil when no row is stored.
+func backfillCursorRowTS(t *testing.T, pool *pgxpool.Pool) *time.Time {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		"SELECT ts1 FROM sweep_cursors WHERE sweep_name = $1", backfillAccountsSweepCursorName)
+	require.NoError(t, err)
+	defer rows.Close()
+	if !rows.Next() {
+		return nil
+	}
+	var ts *time.Time
+	require.NoError(t, rows.Scan(&ts))
+	require.NoError(t, rows.Err())
+	return ts
+}
+
+// TestBackfillAccountsCursor_ExhaustionOnAPageBoundaryNeitherWrapsNorPingPongs is defect C1.
+//
+// THE BUG IT FAILS AGAINST, which is the CURRENT committed code. The empty-page branch wrapped on
+// `cursor != nil && !wrapped`, and `cursor` is assigned after EVERY non-empty page — so a run that
+// started from the BEGINNING and whose final page happened to be exactly backfillAccountsPageSize
+// long reached the empty page with a non-nil cursor and wrapped when it should simply have stopped.
+//
+// The consequence is not merely wasted work. The wrap resets `start` to nil, so the run re-reads the
+// very rows it just processed, reaches its per-run CAP on the replay, and therefore takes the
+// cappedEarly branch — storing an INCLUSIVE watermark for a scan it had in fact exhausted. Every
+// later boot then resumes at that watermark, replays the same full page, wraps again, caps again and
+// re-stores it: a permanent ping-pong on a database whose real work is finished.
+//
+// The discriminator is the one sweepResume.WrapNow already uses (queue/jobs/sweep_resume.go): wrap
+// only when the run RESUMED FROM A STORED POSITION and has processed ZERO rows.
+//
+// Both assertions are deterministic: the fixture is exactly one full page of permanently
+// unrepairable rows sharing one created_at, and nothing here depends on scheduling or on ids.
+func TestBackfillAccountsCursor_ExhaustionOnAPageBoundaryNeitherWrapsNorPingPongs(t *testing.T) {
+	pool := connectBackfillTestDB(t)
+	enc := newBackfillTestEnc(t)
+	ctx := context.Background()
+	withBackfillPageBounds(t, 2, 4) // cap deliberately ABOVE the row count: only a replay can reach it
+
+	f := newBackfillCursorFixture(t, pool, enc)
+
+	tie := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	// Exactly one FULL page, all permanently unrepairable so they stay in the predicate and a
+	// replay is observable. Sharing one created_at makes the replayed page identical, which is what
+	// makes the ping-pong permanent rather than self-correcting.
+	f.seedAccountWithID(t, "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa", f.badItemID, tie)
+	f.seedAccountWithID(t, "aaaaaaaa-2222-4222-8222-aaaaaaaaaaaa", f.badItemID, tie)
+
+	counting := &countingBackfillDB{backfillQuerier: pool}
+	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, counting, enc))
+
+	require.Equal(t, 2, counting.pageQueries,
+		"a run that started from the beginning and exhausted its scan must issue one full page and one "+
+			"empty page and then STOP; a third page query means it wrapped and re-read rows it had just "+
+			"processed")
+	require.Nil(t, backfillCursorRowTS(t, pool),
+		"a run that exhausted its scan must leave NO stored watermark; storing one here is the "+
+			"ping-pong: every later boot resumes at it, replays the same full page, wraps, caps and "+
+			"re-stores it forever")
+
+	// And the second boot must be identical, not a resumption: the state above is genuinely terminal.
+	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, pool, enc))
+	require.Nil(t, backfillCursorRowTS(t, pool),
+		"the second boot must also leave no watermark; a watermark appearing here is the ping-pong "+
+			"re-establishing itself")
 }
