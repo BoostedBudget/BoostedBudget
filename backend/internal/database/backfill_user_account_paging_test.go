@@ -321,6 +321,49 @@ func TestBackfillAccounts_StoredOffsetAccumulatesAcrossRuns(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestBackfillAccounts_StoredOffsetResetsAtATimestampBoundary is the BOUND on the mechanism the
+// test above pins the accumulation of, and it is what makes the OFFSET's database-side cost
+// analysable at all (#1569 round 16 task 9, D-2).
+//
+// The persisted position is `created_at >= T` plus `OFFSET k`, and the database really does discard
+// k index entries before returning the resumed run's first page — the per-run cap of 1000 bounds
+// the GO-side work only. The reason that is acceptable rather than unbounded is precisely this
+// reset: `advanceBackfillTail` restarts the count at 1 the moment a row's created_at differs, so k
+// is never a count of rows SCANNED, only a count of rows sharing ONE timestamp. k is therefore
+// bounded by the size of a single tie group, and a run that walks past a timestamp pays nothing for
+// the rows before it.
+//
+// A refactor that folded the page into the tail without the reset — accumulating across timestamps
+// — would keep every assertion in the accumulation test above green while making k grow without
+// limit across boots, which is the one shape that turns a documented residual into an unbounded
+// synchronous boot cost. Mutating the `continue`/reset branch out of advanceBackfillTail fails this
+// test (saved offset 6 instead of 1) and nothing else in the package.
+func TestBackfillAccounts_StoredOffsetResetsAtATimestampBoundary(t *testing.T) {
+	enc := newBackfillTestEnc2(t)
+	ctx := context.Background()
+	withBackfillPageBounds(t, 2, 2)
+
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	stored := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	next := stored.Add(time.Second)
+	storedOffset := int32(4)
+	// The page STRADDLES the boundary: the last row of T's group, then the first row of the next
+	// timestamp. The saved offset must describe the NEW timestamp's group (1), not 4+2.
+	straddling := []backfillPageRow{
+		{id: "00000000-0000-4000-8000-000000000005", createdAt: stored},
+		{id: "00000000-0000-4000-8000-000000000006", createdAt: next},
+	}
+	expectCursorLoad(mock, &stored, &storedOffset)
+	expectRepairablePage(t, mock, enc, &backfillAccountsCursor{createdAt: stored, offset: 4}, straddling)
+	expectCursorSave(mock, next, 1)
+
+	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, mock, enc))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestBackfillAccounts_LegacyExclusiveRowResumesAtTheStartOfItsGroup pins the deploy path. A cursor
 // row written by the PREVIOUS code carries `exclusive` and no ts1_offset. This sweep no longer reads
 // `exclusive` at all, and a NULL offset reads as 0 — so such a row resumes at the START of its

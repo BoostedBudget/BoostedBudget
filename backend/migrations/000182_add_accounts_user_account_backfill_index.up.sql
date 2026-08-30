@@ -6,11 +6,20 @@
 --
 --   SELECT ... FROM accounts a JOIN linked_items li ON a.linked_item_id = li.id
 --   WHERE a.user_account_id IS NULL
---     AND ($1::timestamptz IS NULL OR (a.created_at, a.id) > ($1::timestamptz, $2::uuid))
+--     AND ($1::timestamptz IS NULL OR a.created_at >= $1::timestamptz)
+--     AND ($2::uuid IS NULL OR (a.created_at, a.id) > ($1::timestamptz, $2::uuid))
 --   ORDER BY a.created_at, a.id
---   LIMIT 500
+--   OFFSET $3
+--   LIMIT $4
 --
 -- It runs SYNCHRONOUSLY at every boot, from cmd/server/main.go, which os.Exit(1)s on error.
+--
+-- ⚠ THIS BLOCK WAS STALE UNTIL #1569 ROUND 16 TASK 9 (D-3) — it still showed the single
+-- tuple-comparison predicate, which THIS MIGRATION'S OWN FIX had already replaced with the
+-- three-state form above (cold start: no position predicate; resume: `created_at >= T` with an
+-- OFFSET into the tie group; in-run: the exact keyset). The migration documented the shape the fix
+-- removed. THE INDEX ITSELF WAS RE-DERIVED AGAINST THE CURRENT SHAPE AND STILL SERVES IT — that was
+-- the correctness question, and the numbers below are the re-measurement, not the old ones.
 --
 -- WHY IT IS NEEDED, MEASURED RATHER THAN ARGUED — and the nuance matters, because the naive
 -- statement of this defect is wrong. In the STEADY STATE (a handful of candidate rows) there is
@@ -18,14 +27,30 @@
 -- user_account_id, btrees index NULLs, and `IS NULL` is an ordinary index condition. What no
 -- existing index provides is the ORDERING, so every page pays a sort of the WHOLE candidate set —
 -- which is free at five rows and is the entire problem at a backlog, and a backlog is the only
--- condition under which this backfill does anything at all. Measured on postgres:17 at 300k accounts
--- of which 100k are candidates, running this file's query verbatim for one page:
+-- condition under which this backfill does anything at all.
 --
---   without this index:  Seq Scan + top-N heapsort over all 100000 candidates, 3688 shared buffers
---   with this index:     Index Scan, 13 shared buffers
+-- RE-MEASURED FOR THE CURRENT QUERY SHAPE (#1569 round 16 task 9), postgres:17.11, 300k accounts of
+-- which 100k are candidates all sharing ONE created_at, EXPLAIN (ANALYZE, BUFFERS) on this file's
+-- query verbatim, one page of 500:
 --
--- and that cost is per PAGE, at boot, before the server serves anything. The resumed shape pays for
--- its OFFSET inside the index too: `created_at >= T` with OFFSET 1000 reads 20 shared buffers.
+--   cold start, no index:  Seq Scan + top-N heapsort over all 100000 candidates, 2210 buffers
+--   cold start, WITH it:   Index Scan using this index,                            506 buffers
+--   resume, OFFSET  1000:  Index Scan, Index Cond `created_at >= T`,              1512 buffers
+--   resume, OFFSET 50000:  same plan,                                            50781 buffers
+--   resume, OFFSET 99500:  PLAN FLIPS to Gather Merge + external merge sort (2.7 MB temp)
+--   in-run keyset page:    Index Cond carries the ROW(created_at, id) > ROW(...) comparison
+--
+-- ⚠ THE PREVIOUS THREE NUMBERS HERE (3688 / 13 / "OFFSET 1000 reads 20 shared buffers") DID NOT
+-- REPRODUCE and have been replaced. 13 or 20 buffers cannot be right for a 500-row page at all:
+-- Postgres counts buffer ACCESSES, and an Index Scan returning 500 heap rows costs at least 500 of
+-- them (measured: 506). Do not restore them.
+--
+-- The index's justification survives the re-measurement intact — it is still the difference between
+-- an ordered Index Scan and a sort of the whole candidate set, per PAGE, at boot, before the server
+-- serves anything. What the re-measurement ADDS is the OFFSET's own cost, which is linear in the
+-- offset and past a planner crossover abandons this index for the very sort it exists to prevent.
+-- That residual is stated, weighed and accepted in backfill.go ("WHAT THIS DOES NOT BOUND"); it is a
+-- property of the resume position's shape, not a reason to drop this index.
 --
 -- WHY PARTIAL. The steady state of the candidate set is EMPTY — the backfill exists to repair a
 -- recurring write-path bug (#1306), not to run continuously — so a full index on (created_at, id)
