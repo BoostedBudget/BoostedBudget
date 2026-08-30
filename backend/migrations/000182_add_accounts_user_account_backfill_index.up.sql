@@ -1,0 +1,51 @@
+-- #1569 round 15 task 9, defect C3 — the partial index that serves the accounts leg of
+-- BackfillUserAccountIDs. Second half of a two-file addition; see 000181 for why the conditional
+-- drop of an invalid leftover cannot share this file.
+--
+-- THE QUERY. backend/internal/database/backfill.go's fetchBackfillAccountPage:
+--
+--   SELECT ... FROM accounts a JOIN linked_items li ON a.linked_item_id = li.id
+--   WHERE a.user_account_id IS NULL
+--     AND ($1::timestamptz IS NULL OR (a.created_at, a.id) > ($1::timestamptz, $2::uuid))
+--   ORDER BY a.created_at, a.id
+--   LIMIT 500
+--
+-- It runs SYNCHRONOUSLY at every boot, from cmd/server/main.go, which os.Exit(1)s on error.
+--
+-- WHY IT IS NEEDED, MEASURED RATHER THAN ARGUED — and the nuance matters, because the naive
+-- statement of this defect is wrong. In the STEADY STATE (a handful of candidate rows) there is
+-- already no sequential scan: idx_accounts_user_account (migration 000033) is a plain btree on
+-- user_account_id, btrees index NULLs, and `IS NULL` is an ordinary index condition. What no
+-- existing index provides is the ORDERING, so every page pays a sort of the WHOLE candidate set —
+-- which is free at five rows and is the entire problem at a backlog, and a backlog is the only
+-- condition under which this backfill does anything at all. Measured on postgres:17 at 300k accounts
+-- of which 100k are candidates, one page:
+--
+--   without this index:  Parallel Seq Scan + top-N heapsort over 100000 rows, 4922 buffers, 13.8 ms
+--   with this index:     Index Scan, 507 buffers, 0.8 ms
+--
+-- and that cost is per PAGE, at boot, before the server serves anything.
+--
+-- WHY PARTIAL. The steady state of the candidate set is EMPTY — the backfill exists to repair a
+-- recurring write-path bug (#1306), not to run continuously — so a full index on (created_at, id)
+-- would be a large index on a large table maintained by every account write to serve a query whose
+-- answer is almost always nothing. The partial index holds only the candidate rows and shrinks to
+-- nothing as they are repaired.
+--
+-- WHY THE PREDICATE IS SPELLED EXACTLY LIKE THE QUERY'S. Postgres uses a partial index only when it
+-- can PROVE the query's WHERE implies the index's predicate. `a.user_account_id IS NULL` here and in
+-- fetchBackfillAccountPage must stay the same expression; a rewrite of either (say to a NOT EXISTS
+-- against user_accounts) silently returns boot to the sequential scan above.
+--
+-- SAFETY. CONCURRENTLY as this file's SOLE statement (mirrors 000077/000082/000138/000144 —
+-- golang-migrate does not wrap a single-statement file in a transaction, which CONCURRENTLY
+-- requires). accounts is written by every Plaid sync, so a plain CREATE INDEX would hold a
+-- write-blocking ShareLock on it for the whole build. Squawk's require-concurrent-index-creation is
+-- in .squawk.toml's excluded_rules, so the linter would not have caught a non-concurrent form;
+-- CONCURRENTLY is used here on the merits. IF NOT EXISTS keeps it idempotent.
+--
+-- ⚠ THE RESIDUAL, STATED PLAINLY: if THIS build is interrupted it leaves an invalid index, which is
+-- inherent to CONCURRENTLY and which no migration can prevent. What 000181 buys is that re-running
+-- the pair REPAIRS that state instead of hiding it behind a successful-looking IF NOT EXISTS.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_accounts_user_account_backfill
+    ON accounts (created_at, id) WHERE user_account_id IS NULL;

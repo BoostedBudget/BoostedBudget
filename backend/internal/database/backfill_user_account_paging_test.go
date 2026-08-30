@@ -58,6 +58,17 @@ func withBackfillPageBounds(t *testing.T, pageSize, maxRows int) {
 	})
 }
 
+// withBackfillTieGroupCeiling temporarily lowers the drain ceiling — the bound on how far past its
+// per-run cap a run may go to finish the created_at tie group it resumed inside (#1569 round 15
+// task 9, defect C2). Lowering it to the cap switches the drain off, which is how a test reproduces
+// the pre-drain behaviour deliberately.
+func withBackfillTieGroupCeiling(t *testing.T, ceiling int) {
+	t.Helper()
+	orig := backfillAccountsTieGroupCeiling
+	backfillAccountsTieGroupCeiling = ceiling
+	t.Cleanup(func() { backfillAccountsTieGroupCeiling = orig })
+}
+
 // backfillPageRow is one seeded row of a mocked page: an EXPLICIT (created_at, id) pair, because
 // (created_at, id) is the scan's sort key and therefore its cursor. Both components are pinned
 // rather than random — the previous version of this file generated the second page's id randomly,
@@ -247,17 +258,59 @@ func TestBackfillAccounts_ResumesFromTheStoredPosition(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestBackfillAccounts_CapReachedOnOneTimestampSavesExclusive pins the one case where an inclusive
-// save would be unbounded: the run RESUMED at a stored key and spent its entire cap on rows sharing
-// that key, so saving it inclusively would hand the next boot the identical page forever. The saved
-// position goes exclusive instead, which guarantees forward progress along the created_at axis.
+// TestBackfillAccounts_CapReachedInsideTheResumedTieGroupDrainsPastIt pins #1569 round 15 task 9's
+// answer to defect C2, at the query level.
 //
-// ⚠ The price is stated in nextBackfillCursorExclusive: the rest of that one over-cap tie group is
-// then reached on no run. It is the same residual #1477 accepted, for the same reason.
-func TestBackfillAccounts_CapReachedOnOneTimestampSavesExclusive(t *testing.T) {
+// The case: the run RESUMED at a stored key and reached its per-run cap with the scan still inside
+// that same created_at. Stopping there is the one shape a timestamp-only watermark cannot express —
+// the next boot can only be told "T inclusive" (replay the same page forever) or "T exclusive"
+// (step over every row of the group it never looked at). So the run does neither: it keeps paging
+// past its cap until the scan LEAVES that timestamp, after which an ordinary INCLUSIVE save is both
+// safe and strictly forward. Note the saved position below is the drain page's timestamp and
+// exclusive=false — before this change it was the tie timestamp with exclusive=true.
+func TestBackfillAccounts_CapReachedInsideTheResumedTieGroupDrainsPastIt(t *testing.T) {
 	enc := newBackfillTestEnc2(t)
 	ctx := context.Background()
 	withBackfillPageBounds(t, 2, 2)
+
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	stored := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	tie := []backfillPageRow{
+		{id: "00000000-0000-4000-8000-000000000001", createdAt: stored},
+		{id: "00000000-0000-4000-8000-000000000002", createdAt: stored},
+	}
+	expectCursorLoad(mock, &stored, false)
+	expectRepairablePage(t, mock, enc, &backfillAccountsCursor{createdAt: stored, id: minBackfillSentinelID}, tie)
+	// THE DRAIN: the cap is already spent, and the run asks for another page anyway because the
+	// last row it saw still shares the resumed timestamp. This page leaves that timestamp.
+	beyond := time.Date(2026, 7, 1, 13, 0, 0, 0, time.UTC)
+	expectRepairablePage(t, mock, enc,
+		&backfillAccountsCursor{createdAt: stored, id: "00000000-0000-4000-8000-000000000002"},
+		[]backfillPageRow{{id: "00000000-0000-4000-8000-000000000003", createdAt: beyond}})
+	expectCursorSave(mock, beyond, false)
+
+	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, mock, enc))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBackfillAccounts_TieGroupAboveTheCeilingStillSavesExclusive pins the RESIDUAL of that drain.
+// The drain cannot be unbounded — this backfill runs synchronously at boot — so above
+// backfillAccountsTieGroupCeiling the old dilemma returns and is resolved the old way: save
+// EXCLUSIVE, step over the group's unvisited rows, and (in the caller) log it at ERROR. Lowering
+// the ceiling to the cap switches the drain off, which is how this test reproduces the condition
+// deliberately.
+//
+// ⚠ The price is stated in nextBackfillCursorExclusive: the rest of that one over-ceiling tie group
+// is then reached on no run. It is the same residual #1477 accepted, for the same reason — without
+// the advance the group stalls the scan and nothing behind it is reached either.
+func TestBackfillAccounts_TieGroupAboveTheCeilingStillSavesExclusive(t *testing.T) {
+	enc := newBackfillTestEnc2(t)
+	ctx := context.Background()
+	withBackfillPageBounds(t, 2, 2)
+	withBackfillTieGroupCeiling(t, 2)
 
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)

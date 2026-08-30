@@ -189,21 +189,39 @@ func clearBackfillAccountsCursor(ctx context.Context, db backfillQuerier) {
 //
 // It is inclusive in every normal case: resuming at the boundary timestamp re-visits the handful of
 // rows tied on it, which is harmless (every per-row action is idempotent) and is the only spelling
-// that cannot SKIP a tied row. It goes exclusive in the one degenerate case that would otherwise be
-// unbounded — the run resumed at a stored key and made no progress along the created_at axis at
-// all, so an inclusive save replays the identical page on every future boot.
+// that cannot SKIP a tied row. It is exclusive in exactly one case — the run resumed at a stored
+// key and stopped with the scan still inside that SAME created_at — because an inclusive save there
+// replays the identical page on every future boot forever.
 //
-// ⚠ THE PRICE, STATED EXACTLY. The rows of such an over-cap tie group past the first cap-worth are
-// then reached on NO run, including after a wrap (a wrap restarts at the beginning and re-reads the
-// same first cap-worth). Only the group's first cap-worth need be permanently unrepairable for this
-// to bite; the rows behind them may be perfectly repairable and are skipped without being looked at.
-// This is the identical residual #1477 documents for the four sweeps, and it is accepted for the
-// identical reason: the alternative is that such a group stalls the scan completely and NOTHING
-// behind it is ever reached. What it would take in production: more than backfillAccountsMaxRowsPerRun
-// (1000) accounts sharing ONE created_at, whose first 1000 are all permanently unrepairable. Accounts
-// are inserted by AccountRepository.CreateBatch, one Plaid Item's accounts per transaction, and
-// created_at defaults to NOW() — the transaction timestamp — so a tie group is one Item's account
-// count. A single Item with more than 1000 accounts is not a reachable state.
+// ⚠ THAT CASE IS NOW UNREACHABLE BELOW THE DRAIN CEILING, and this comment said the opposite until
+// #1569 round 15 task 9. The same predicate is the drain condition (mustDrainResumedTieGroup
+// below): a run that reaches its cap while still inside the tie group it resumed at keeps paging
+// instead of stopping, so by the time it does stop the scan has LEFT that created_at and this
+// function returns false. The exclusive advance therefore survives only as the escape from a tie
+// group too large to drain within backfillAccountsTieGroupCeiling.
+//
+// ⚠ THE PRICE, STATED EXACTLY, AND IT IS NOW A CEILING PRICE RATHER THAN A CAP PRICE. When the
+// exclusive advance IS taken, the rows of that tie group past the point the run stopped are reached
+// on NO run, including after a wrap (a wrap restarts at the beginning and re-reads the group's
+// head, not its tail). They may be perfectly repairable and are skipped without being looked at.
+// The alternative is worse and is why the escape is kept: without it, an over-ceiling group whose
+// head is permanently unrepairable stalls the scan completely and NOTHING behind it is ever
+// reached. What it would take in production: more than backfillAccountsTieGroupCeiling (5000)
+// accounts sharing ONE created_at. accounts.created_at is stamped once per
+// AccountRepository.CreateBatch — `now := time.Now()` outside the insert loop, assigned to every
+// account in the batch, with no batch-size limit — so a tie group is one Plaid Item's account
+// count. Above the ceiling this is logged at ERROR by the caller; it is not silent.
+// Pinned by TestBackfillAccountsCursor_OverCapTieGroupIsDrainedRatherThanSkipped and
+// TestBackfillAccountsCursor_TieGroupBeyondTheCeilingIsSkippedAndAlarmed.
 func nextBackfillCursorExclusive(start, reached *backfillAccountsCursor) bool {
 	return start != nil && reached != nil && start.createdAt.Equal(reached.createdAt)
+}
+
+// mustDrainResumedTieGroup answers the one question the paging loop asks at its cap: may this run
+// keep going? It may, and must, in exactly the situation that would otherwise force an exclusive
+// save — deliberately the SAME predicate, so "we stopped inside the tie group we resumed at" and
+// "we are about to skip rows" cannot drift apart — and only while the run is still under the
+// ceiling that bounds boot latency.
+func mustDrainResumedTieGroup(start, reached *backfillAccountsCursor, processed int) bool {
+	return processed < backfillAccountsTieGroupCeiling && nextBackfillCursorExclusive(start, reached)
 }
