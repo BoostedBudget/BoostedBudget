@@ -530,8 +530,15 @@ func blankSQLRange(out []byte, s string, lo, hi int) {
 			body := i + len(tag)
 			end := indexOfDollarTag(s, tag, body, hi)
 			if end < 0 {
-				// Unterminated region: blank its interior to the enclosing bound and stop, the
-				// same fail-closed convention as an unterminated comment or literal.
+				// Unterminated region: still LEXED NORMALLY (via blankSQLRange, not the local
+				// `blank` closure) out to the enclosing bound, then the scan stops — fail-OPEN,
+				// deliberately, unlike the unterminated string-literal case below (which DOES use
+				// `blank` and genuinely blanks to EOF). A truncated or still-being-edited file with
+				// no closing tag must not become a way to HIDE a real DELETE from G4; it is safer
+				// for the guard to keep scanning normally than to blank an unterminated region on
+				// the assumption it is untrustworthy. See
+				// TestG4Classification_UnterminatedDollarRegionStillScansItsContent, whose
+				// assertion REQUIRES the delete inside such a region to still be found.
 				blankSQLRange(out, s, body, hi)
 				return
 			}
@@ -1086,6 +1093,11 @@ func TestG4Classification_DollarShapedSubstringInsideAnOrdinaryStringIsNotATagBo
 // inner region's `$inner$` delimiters never confuse it, and a real DELETE after the inner region
 // closes — but still inside the outer one — must stay visible (the interior-lexed-independently
 // property applies at every nesting depth, not just one).
+//
+// ⚠ #1569 round 14 task 6, fix round 2, item 2: this test does NOT differentiate the round-2 fix
+// from the round-1 (broken) scanner — measured by running this exact input through both: the
+// round-1 scanner also finds the DELETE here (nested, differently-tagged regions were never the
+// bug). It pins the bounded-region DESIGN in general, not this round's regression specifically.
 func TestG4Classification_NestedDifferentlyTaggedDollarRegionsAreBothScanned(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "migrations"), 0o755); err != nil {
@@ -1114,6 +1126,11 @@ func TestG4Classification_NestedDifferentlyTaggedDollarRegionsAreBothScanned(t *
 // NORMALLY out to the enclosing bound, the same as an unterminated comment or literal elsewhere in
 // this scanner. That is the SAFE direction for a guard whose failure mode to avoid is a false
 // negative: an unterminated region must not become a way to hide a DELETE from G4.
+//
+// ⚠ #1569 round 14 task 6, fix round 2, item 2: this test does NOT differentiate the round-2 fix
+// from the round-1 (broken) scanner either — measured the same way: the round-1 scanner also finds
+// the DELETE here (an unterminated region was never the bug). It pins the bounded-region DESIGN in
+// general, not this round's regression specifically.
 func TestG4Classification_UnterminatedDollarRegionStillScansItsContent(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "migrations"), 0o755); err != nil {
