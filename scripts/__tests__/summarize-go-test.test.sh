@@ -19,8 +19,17 @@ FAIL=0
 pass() { echo "  ✅ PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  ❌ FAIL: $1"; FAIL=$((FAIL + 1)); }
 
+# A skip is not a pass — the very defect scripts/summarize-go-test.sh exists to make visible, so
+# this suite must not commit it either. Locally a missing Go toolchain is a legitimate reason to
+# skip; under CI it is not, because this suite is now wired into a CI job (#1569 round 15 task 1)
+# and a silent exit 0 there would manufacture the appearance of coverage. GitHub Actions always
+# sets CI=true, so CI fails closed while a local run keeps the courtesy skip.
 if ! command -v go >/dev/null 2>&1; then
-  echo "⚠️  go not installed — skipping (CI always has go)."
+  if [ -n "${CI:-}" ]; then
+    echo "❌ go not found on PATH, but CI is set — this suite must not silently pass in CI." >&2
+    exit 1
+  fi
+  echo "⚠️  go not installed — skipping locally (CI fails closed instead)."
   exit 0
 fi
 
