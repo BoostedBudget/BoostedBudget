@@ -25,11 +25,13 @@ make test-scripts           # The 18 shell guard suites in scripts/__tests__/ an
                              # this target existed but every local gate stayed green while CI's
                              # shell-guard steps were red — run this before trusting a green local run.
                              # ⚠ #1569 round 15: `make test-scripts` itself runs in NO CI job, and CI
-                             # never has. Each of the 17 suites is wired as its OWN step instead —
-                             # verified: all 17 now have one (three did not until round 15:
+                             # never has. Each of the 18 suites is wired as its OWN step instead —
+                             # verified: all 18 now have one (three did not until round 15:
                              # no-ungated-migrate-down-invocation, check-ci-env-drift,
-                             # summarize-go-test). Adding a suite to this target therefore does NOT
-                             # put it in CI; add a step too. **CI is the ONLY authoritative gate** —
+                             # summarize-go-test; the 18th, replay-concurrently-transaction, was
+                             # added with its step in round 15 task 9 fix 1, in Migration Tests).
+                             # Adding a suite to this target therefore does NOT put it in CI; add a
+                             # step too. **CI is the ONLY authoritative gate** —
                              # there is no pre-push hook in this repo (`core.hooksPath` is
                              # `.git/hooks`, `.sample` files only; no husky, no lefthook), and none
                              # should be the sole home of a guard: a hook is bypassable with
