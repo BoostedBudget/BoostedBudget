@@ -924,11 +924,137 @@ assert_replay_range_has_no_destructive_ddl() {
 # cannot be a multi-statement file in the first place — golang-migrate would send it as a
 # multi-statement simple query, Postgres would wrap it, and the migration would fail in PRODUCTION
 # with the same error. Single-statement is therefore not an assumption this makes about such a file;
-# it is a property the file must already have to work at all. Comment lines are stripped first so
-# that a file merely DISCUSSING the keyword (000074 and 000143 both do) is not misread.
+# it is a property the file must already have to work at all.
+#
+# ⚠ "THE KEYWORD" MEANS THE KEYWORD IN EXECUTABLE SQL, AND GETTING THAT WRONG IS UNSAFE IN THE
+# DIRECTION THAT MATTERS (#1569 round 16 task 9, D-1). This used to be
+#
+#     /usr/bin/grep -viE '^[[:space:]]*--' "$f" | /usr/bin/grep -qiE '\bCONCURRENTLY\b'
+#
+# which strips only FULL-LINE comments. A file whose only occurrence of the word is a TRAILING
+# comment, a /* block comment */, or SQL string data was classified as needing no transaction, and
+# was then replayed WITHOUT `-1` — silently removing single-transaction semantics from an unrelated
+# MULTI-statement migration, which is exactly the 000178 ON COMMIT DROP class of false RED (or worse,
+# a false GREEN) the `-1` above exists to prevent. No file in the tree has that shape today, so this
+# is a latent defect, not an active one; it is fixed because the shape is one comment away.
+#
+# ⚠⚠ THE RULE BELOW IS A PORT, NOT A NEW REGEX. This is the same lexical class that
+# blankSQLCommentsAndLiterals (backend/internal/repository/history_delete_sql_guard_test.go) was
+# rewritten FOUR times to get right for the G4 guards, and each rewrite was forced by a hole a fresh
+# regex had. The awk below is a line-for-line port of that Go scanner's state machine — read its doc
+# comment there for WHY each rule is what it is; the summary is:
+#
+#   * ONE left-to-right pass, state has priority. Once a `'` opens a string, `--` and `/*` inside it
+#     are data, not comment starts (000164's RAISE EXCEPTION message contains a literal `--`).
+#   * `''` inside a string is an escape, not a close.
+#   * A `$tag$` dollar-quoted region's INTERIOR is lexed independently and BOUNDED to its own
+#     matching close tag, so a prose apostrophe inside it cannot swallow the rest of the file, and a
+#     `$1$`/`$word$`-shaped substring inside an ORDINARY string is never inspected as a tag at all
+#     (tags are only ever recognised in default state). Dollar-quoted bodies are NOT blanked — they
+#     are procedural code, and a CONCURRENTLY inside one would be real.
+#   * A tag name may not start with a digit (Postgres's own rule).
+#   * Block comments are non-nested; an unterminated string blanks to EOF, an unterminated dollar
+#     region keeps being scanned normally (fail toward SEEING more, not less).
+#
+# Blanked bytes become SPACES, never nothing, so `CONCURR/*x*/ENTLY` cannot be spliced into a false
+# match. The keyword test then runs per line (the keyword cannot span one) with explicit
+# non-word-character boundaries, awk having no \b.
+#
+# scripts/__tests__/replay-concurrently-transaction.test.sh exercises every one of these cases and
+# pins the whole migrations corpus's classification explicitly.
 replay_file_runs_outside_a_transaction() {
     local f="$1"
-    /usr/bin/grep -viE '^[[:space:]]*--' "$f" | /usr/bin/grep -qiE '\bCONCURRENTLY\b'
+    /usr/bin/awk '
+        function isIdentStart(c) { return c != "" && index(ALPHA, c) > 0 }
+        function isIdentCont(c)  { return c != "" && (index(ALPHA, c) > 0 || index(DIGIT, c) > 0) }
+
+        # The full `$tag$` delimiter starting at i, or "" if none starts there. Only ever called
+        # from default state — that restriction, not anything here, is what keeps a $..$-shaped
+        # substring inside an ordinary string from being treated as a tag.
+        function dollarTagAt(i,   j) {
+            if (i > N || substr(S, i, 1) != "$") return ""
+            j = i + 1
+            if (j <= N && isIdentStart(substr(S, j, 1)))
+                while (j <= N && isIdentCont(substr(S, j, 1))) j++
+            if (j <= N && substr(S, j, 1) == "$") return substr(S, i, j - i + 1)
+            return ""
+        }
+
+        # First literal occurrence of tag in S[from, hi), or -1. Bounded to hi so a match past the
+        # enclosing region is never found.
+        function indexOfTag(tag, from, hi,   k, L) {
+            L = length(tag)
+            for (k = from; k + L <= hi; k++)
+                if (substr(S, k, L) == tag) return k
+            return -1
+        }
+
+        function blank(from, to,   k) {
+            for (k = from; k < to; k++)
+                if (substr(S, k, 1) != "\n") BL[k] = 1
+        }
+
+        # The port of blankSQLRange: hi is EXCLUSIVE.
+        function scanRange(lo, hi,   i, j, e, c, c2, tag, body, endTag) {
+            i = lo
+            while (i < hi) {
+                c  = substr(S, i, 1)
+                c2 = (i + 1 < hi) ? substr(S, i + 1, 1) : ""
+                if (i + 1 < hi && c == "-" && c2 == "-") {
+                    j = i
+                    while (j < hi && substr(S, j, 1) != "\n") j++
+                    blank(i, j); i = j
+                } else if (i + 1 < hi && c == "/" && c2 == "*") {
+                    j = i + 2
+                    while (j + 1 < hi && (substr(S, j, 1) != "*" || substr(S, j + 1, 1) != "/")) j++
+                    e = j + 2
+                    if (e > hi) e = hi
+                    blank(i, e); i = e
+                } else if ((tag = dollarTagAt(i)) != "") {
+                    body = i + length(tag)
+                    endTag = indexOfTag(tag, body, hi)
+                    if (endTag < 0) { scanRange(body, hi); return }
+                    scanRange(body, endTag)     # interior lexed INDEPENDENTLY AND BOUNDED
+                    i = endTag + length(tag)
+                } else if (c == "'"'"'") {
+                    j = i + 1
+                    while (j < hi) {
+                        if (substr(S, j, 1) == "'"'"'") {
+                            if (j + 1 < hi && substr(S, j + 1, 1) == "'"'"'") { j += 2; continue }
+                            j++; break
+                        }
+                        j++   # a $ in here is DATA — never inspected as a possible tag
+                    }
+                    blank(i, j); i = j
+                } else {
+                    i++
+                }
+            }
+        }
+
+        BEGIN {
+            ALPHA = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
+            DIGIT = "0123456789"
+            S = ""
+        }
+        { S = S $0 "\n" }
+        END {
+            N = length(S)
+            scanRange(1, N + 1)
+            line = ""
+            for (k = 1; k <= N; k++) {
+                c = substr(S, k, 1)
+                if (c == "\n") {
+                    if (tolower(line) ~ /(^|[^a-z0-9_])concurrently([^a-z0-9_]|$)/) exit 0
+                    line = ""
+                } else {
+                    line = line (BL[k] ? " " : c)
+                }
+            }
+            if (tolower(line) ~ /(^|[^a-z0-9_])concurrently([^a-z0-9_]|$)/) exit 0
+            exit 1
+        }
+    ' "$f"
 }
 
 replay_migrations_up_sql_range() {

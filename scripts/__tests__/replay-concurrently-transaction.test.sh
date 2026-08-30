@@ -86,6 +86,112 @@ else
     fail "the match must be case-insensitive: Postgres accepts lowercase DDL"
 fi
 
+
+# --- the lexical cases (#1569 round 16 task 9, D-1). The classifier used to strip only FULL-LINE
+# comments, so CONCURRENTLY appearing anywhere else that is not executable SQL — an inline comment,
+# a block comment, a string literal — falsely classified the file and stripped `-1` from an
+# unrelated MULTI-statement migration's replay, silently removing transaction semantics. The rule
+# is ported from blankSQLCommentsAndLiterals (backend/internal/repository/history_delete_sql_guard_test.go).
+
+cat > "$TMP/inline_comment.up.sql" <<'EOF'
+CREATE TABLE IF NOT EXISTS probe (a INT); -- deliberately NOT built CONCURRENTLY
+INSERT INTO probe (a) VALUES (1);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/inline_comment.up.sql"; then
+    fail "CONCURRENTLY in a TRAILING (inline) comment must not strip -1"
+else
+    pass "CONCURRENTLY in a trailing inline comment keeps -1"
+fi
+
+cat > "$TMP/block_comment.up.sql" <<'EOF'
+/* this index could have been built CONCURRENTLY, but the file has two statements */
+CREATE TABLE IF NOT EXISTS probe (a INT);
+INSERT INTO probe (a) VALUES (1);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/block_comment.up.sql"; then
+    fail "CONCURRENTLY inside a /* block comment */ must not strip -1"
+else
+    pass "CONCURRENTLY inside a block comment keeps -1"
+fi
+
+cat > "$TMP/block_comment_midline.up.sql" <<'EOF'
+CREATE TABLE IF NOT EXISTS probe (a INT); /* not
+   CONCURRENTLY, on purpose */
+INSERT INTO probe (a) VALUES (1);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/block_comment_midline.up.sql"; then
+    fail "CONCURRENTLY inside a MULTI-LINE block comment must not strip -1"
+else
+    pass "CONCURRENTLY inside a multi-line block comment keeps -1"
+fi
+
+cat > "$TMP/string_literal.up.sql" <<'EOF'
+INSERT INTO notes (body) VALUES ('rebuilt without CONCURRENTLY');
+INSERT INTO notes (body) VALUES ('second statement');
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/string_literal.up.sql"; then
+    fail "CONCURRENTLY inside a single-quoted string literal must not strip -1"
+else
+    pass "CONCURRENTLY inside a string literal keeps -1"
+fi
+
+cat > "$TMP/dollar_body.up.sql" <<'EOF'
+DO $$
+BEGIN
+    RAISE NOTICE 'we did not use CONCURRENTLY here';
+END $$;
+CREATE TABLE IF NOT EXISTS probe (a INT);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/dollar_body.up.sql"; then
+    fail "CONCURRENTLY inside a string nested in a DO \$\$ block must not strip -1"
+else
+    pass "CONCURRENTLY inside a string nested in a DO block keeps -1"
+fi
+
+# The other polarity: a comment/string must never HIDE a real CONCURRENTLY statement either. A
+# scanner that fails closed the wrong way (blanking too much) would re-introduce the psql -1 error
+# this whole mechanism exists to avoid.
+cat > "$TMP/comment_then_real.up.sql" <<'EOF'
+-- prose mentioning CONCURRENTLY, plus an apostrophe: the migration's own note
+/* and a block comment */
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_probe ON probe (a);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/comment_then_real.up.sql"; then
+    pass "a real CONCURRENTLY statement is still found after comments and an apostrophe"
+else
+    fail "a real CONCURRENTLY statement must still be found after comments containing an apostrophe"
+fi
+
+cat > "$TMP/dollar_shaped_substring.up.sql" <<'EOF'
+INSERT INTO notes (body) VALUES ('placeholder $1$ and $word$ as data');
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_probe ON probe (a);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/dollar_shaped_substring.up.sql"; then
+    pass "a \$..\$-shaped substring inside an ordinary string does not flip quote parity"
+else
+    fail "a \$..\$-shaped substring inside an ordinary string must not hide the real CONCURRENTLY that follows"
+fi
+
+cat > "$TMP/doubled_quote.up.sql" <<'EOF'
+INSERT INTO notes (body) VALUES ('the migration''s note about CONCURRENTLY');
+INSERT INTO notes (body) VALUES ('second');
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/doubled_quote.up.sql"; then
+    fail "a doubled-quote escape must not end the literal early"
+else
+    pass "a '' escape inside a literal keeps the whole literal blanked"
+fi
+
+cat > "$TMP/comment_marker_in_literal.up.sql" <<'EOF'
+INSERT INTO notes (body) VALUES ('a -- marker inside data');
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_probe ON probe (a);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/comment_marker_in_literal.up.sql"; then
+    pass "a -- inside a string literal is data, not a comment start"
+else
+    fail "a -- inside a string literal must not blank the rest of the file"
+fi
+
 echo ""
 echo "--- 2. the classifier, on the REAL migration files (the composition that was missed) ---"
 
@@ -103,17 +209,58 @@ assert_real_file() {
     fi
 }
 
-# Every CONCURRENTLY file in the tree, so a new one added outside the replay range is still covered
-# the day the range moves forward.
-for f in "$REPO_ROOT"/backend/migrations/*.up.sql; do
-    if /usr/bin/grep -viE '^[[:space:]]*--' "$f" | /usr/bin/grep -qiE '\bCONCURRENTLY\b'; then
-        assert_real_file "$(basename "$f")" "no-txn" "$(basename "$f") (real CONCURRENTLY statement) is replayed without -1"
-    fi
+# THE WHOLE CORPUS, PARTITIONED EXPLICITLY (#1569 round 16 task 9). This used to derive the
+# expected set by re-running the classifier's own (then-buggy) full-line-comment grep, which meant
+# the assertion could never disagree with the implementation. The expected set is now written down,
+# and every .up.sql that MENTIONS the keyword at all — in code or in prose — must appear in exactly
+# one of the two lists below. A new migration that mentions CONCURRENTLY anywhere fails this suite
+# until someone classifies it by hand, which is the point.
+REAL_CONCURRENTLY_UP_FILES=(
+    000077_add_idx_transactions_effective_pfc_detailed.up.sql
+    000079_add_custom_category_parent_indexes.up.sql
+    000080_add_custom_category_parent_pfc_index.up.sql
+    000082_add_transaction_reviewed_index.up.sql
+    000138_add_audit_logs_deletion_residue_index.up.sql
+    000144_rebuild_deletion_residue_index.up.sql
+    000182_add_accounts_user_account_backfill_index.up.sql
+)
+# Files whose ONLY occurrences of the keyword are prose (comments) or SQL string data. Every one of
+# these is a file the old full-line-only strip happened to get right; they stay listed because the
+# new scanner must keep getting them right.
+PROSE_ONLY_CONCURRENTLY_UP_FILES=(
+    000074_add_transactions_keyset_indexes.up.sql
+    000078_add_custom_category_parent_id.up.sql
+    000081_add_transaction_reviewed.up.sql
+    000116_add_work_claims_side_effect_actions.up.sql
+    000143_drop_invalid_deletion_residue_index.up.sql
+    000163_portfolio_snapshot_repair_ledger.up.sql
+    000168_transactions_pending_twin_pointer.up.sql
+    000181_drop_invalid_accounts_backfill_index.up.sql
+)
+
+for file in "${REAL_CONCURRENTLY_UP_FILES[@]}"; do
+    assert_real_file "$file" "no-txn" "$file (real CONCURRENTLY statement) is replayed without -1"
 done
-assert_real_file "000143_drop_invalid_deletion_residue_index.up.sql" "txn" \
-    "000143 (discusses CONCURRENTLY in prose, DO block in SQL) keeps -1"
-assert_real_file "000074_add_transactions_keyset_indexes.up.sql" "txn" \
-    "000074 (comment explains why it is NOT concurrent) keeps -1"
+for file in "${PROSE_ONLY_CONCURRENTLY_UP_FILES[@]}"; do
+    assert_real_file "$file" "txn" "$file (mentions CONCURRENTLY only in prose/data) keeps -1"
+done
+
+# Exhaustiveness: no .up.sql mentioning the keyword may be absent from both lists.
+UNCLASSIFIED=""
+for f in "$REPO_ROOT"/backend/migrations/*.up.sql; do
+    /usr/bin/grep -qie 'concurrently' "$f" || continue
+    base="$(basename "$f")"
+    found=""
+    for known in "${REAL_CONCURRENTLY_UP_FILES[@]}" "${PROSE_ONLY_CONCURRENTLY_UP_FILES[@]}"; do
+        [ "$known" = "$base" ] && found="yes" && break
+    done
+    [ -z "$found" ] && UNCLASSIFIED="$UNCLASSIFIED $base"
+done
+if [ -n "$UNCLASSIFIED" ]; then
+    fail "these .up.sql files mention CONCURRENTLY but are in neither list — classify them by hand:$UNCLASSIFIED"
+else
+    pass "every .up.sql mentioning CONCURRENTLY is explicitly classified"
+fi
 
 echo ""
 echo "--- 3. the composition, against real PostgreSQL ---"
