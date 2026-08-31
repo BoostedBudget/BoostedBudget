@@ -36,6 +36,7 @@ package repository
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -54,14 +55,34 @@ func shiftUserHistoryBackOneDay(ctx context.Context, t *testing.T, db DB, userID
 	require.Positive(t, hs.RowsAffected(),
 		"the real capture must have written rows, or there is nothing for the repair to read")
 
-	_, err = db.Exec(ctx,
+	ho, err := db.Exec(ctx,
 		`UPDATE holding_observations SET as_of_date = as_of_date - 1 WHERE user_id = $1`, userID)
 	require.NoError(t, err)
+	require.Positive(t, ho.RowsAffected(),
+		"the per-account capture must have recorded the looking itself, or a row left behind on "+
+			"today's date silently changes which day the repair sees coverage for")
 
 	ps, err := db.Exec(ctx,
 		`UPDATE portfolio_snapshots SET snapshot_date = snapshot_date - 1 WHERE user_id = $1`, userID)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, ps.RowsAffected(), "the real Upsert must have written exactly one aggregate")
+}
+
+// readPortfolioSnapshotCTID returns the row's physical tuple pointer.
+//
+// It exists because updated_at CANNOT witness "the repair rewrote nothing" from inside a single
+// transaction, and the assertion that tried to was vacuous twice over: portfolio_snapshots has a
+// BEFORE UPDATE trigger setting updated_at = NOW(), NOW() is transaction_timestamp() and so is
+// frozen for this whole test, and in the verified case the repair's IS DISTINCT FROM guard means
+// no UPDATE executes at all. ctid is observable in both directions here: any UPDATE writes a new
+// tuple version and moves it, whether or not it changed a single column value.
+func readPortfolioSnapshotCTID(ctx context.Context, t *testing.T, db DB, userID uuid.UUID, day time.Time) string {
+	t.Helper()
+	var ctid string
+	require.NoError(t, db.QueryRow(ctx, `
+		SELECT ctid::text FROM portfolio_snapshots
+		WHERE user_id = $1 AND snapshot_date = $2::date`, userID, day).Scan(&ctid))
+	return ctid
 }
 
 // closeActiveIntervalInThePast rewrites an account's 'active' interval to [today-from, today-to),
@@ -192,6 +213,7 @@ func TestPortfolioSyncThenRepair_RealCaptureAndRealUpsertAgree_Integration(t *te
 	shiftUserHistoryBackOneDay(ctx, t, tx, userID)
 	pastDay := day.AddDate(0, 0, -1)
 	before := readPortfolioSnapshot(ctx, t, tx, userID, pastDay)
+	beforeCTID := readPortfolioSnapshotCTID(ctx, t, tx, userID, pastDay)
 	require.InDelta(t, 10000.0, before.totalValue, 0.001, "the relabel must not have touched any value")
 
 	// ── The REAL repair ──────────────────────────────────────────────────────────────────────
@@ -219,9 +241,9 @@ func TestPortfolioSyncThenRepair_RealCaptureAndRealUpsertAgree_Integration(t *te
 	assert.InDelta(t, *before.totalGainLossPct, *after.totalGainLossPct, 0.00001,
 		"3000/7000 does not terminate: Upsert stores the raw quotient and the repair rounds to 4 "+
 			"decimals, so a divergence in that rounding would show up as a spurious rewrite")
-	assert.Equal(t, before.updatedAt, after.updatedAt,
-		"a verified day must come out byte-identical, updated_at included — the IS DISTINCT FROM "+
-			"guard is what makes 'the repair changed nothing' observable")
+	assert.Equal(t, beforeCTID, readPortfolioSnapshotCTID(ctx, t, tx, userID, pastDay),
+		"a verified day must not be rewritten at all: the IS DISTINCT FROM guard in the repair's "+
+			"UPDATE must exclude it, so the row keeps the tuple the Upsert wrote")
 
 	l, ok := readLedger(ctx, t, tx, userID, pastDay)
 	require.True(t, ok, "every examined day is recorded")
