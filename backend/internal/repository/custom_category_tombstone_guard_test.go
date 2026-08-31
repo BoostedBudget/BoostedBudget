@@ -80,7 +80,7 @@ func TestNoCustomCategoryReadForgetsTheTombstoneFilter(t *testing.T) {
 		}
 	}
 
-	requireTombstoneCorpus(t, "TestNoCustomCategoryReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 300, 20, 362, 28)
+	requireTombstoneCorpus(t, "TestNoCustomCategoryReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 336, 26, 374, 29)
 
 	if len(offenders) > 0 {
 		t.Fatalf(

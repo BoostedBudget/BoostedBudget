@@ -83,7 +83,7 @@ func TestNoSavingsContributionReadForgetsTheTombstoneFilter(t *testing.T) {
 	// savings_contribution_repository.go. Below this the walk or the reference pattern is broken and
 	// a pass here would be vacuous (#1569 whole-branch review I3's lesson, applied up front rather
 	// than learned the same way a fourth time).
-	requireTombstoneCorpus(t, "TestNoSavingsContributionReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 300, 11, 362, 11)
+	requireTombstoneCorpus(t, "TestNoSavingsContributionReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 336, 13, 374, 15)
 
 	if len(offenders) > 0 {
 		t.Fatalf(
