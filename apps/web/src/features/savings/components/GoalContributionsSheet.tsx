@@ -5,7 +5,10 @@
  * Displays all contributions (proposed + confirmed) for a goal in a slide-over sheet.
  * Proposed contributions show Confirm + Reject actions (D6 source-b/c user review).
  *   Reject sets status='rejected' (sticky tombstone — R3-7: prevents re-proposal on sync).
- * Confirmed contributions show a Delete action only.
+ * Confirmed contributions show a Delete action only, behind a confirmation dialog: Delete is a
+ *   PERMANENT hard delete (repository DeleteContribution — `DELETE FROM
+ *   savings_goal_contributions`, no tombstone), and #1569 R18 T1 found it was the only
+ *   explicit-destruction path on this branch reachable in a single click with no confirmation.
  * Rejected contributions are not shown (tombstone is server-side only).
  * All amounts are masked with data-ph-mask (PII policy).
  */
@@ -29,6 +32,7 @@ import {
 import type { SavingsGoalContribution } from '@boostedbudget/api-client/models'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { ErrorState } from '@/components/ui/error-state'
 import { LogContributionDialog } from './LogContributionDialog'
 
@@ -87,6 +91,7 @@ interface ContributionRowProps {
 
 function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDeleted, disarmed }: ContributionRowProps) {
   const trackEvent = useTrackEvent()
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
   const { mutateAsync: confirmMutate, isPending: confirming } = useConfirmSavingsGoalContribution()
   const { mutateAsync: rejectMutate, isPending: rejecting } = useRejectSavingsGoalContribution()
   const { mutateAsync: deleteMutate, isPending: deleting } = useDeleteSavingsGoalContribution()
@@ -109,6 +114,7 @@ function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDele
   const handleDelete = useCallback(async () => {
     await deleteMutate({ goalID: goalId, id: contribution.id })
     trackEvent(ANALYTICS_EVENTS.SAVINGS_CONTRIBUTION_DELETED, { goal_id: goalId, contribution_id: contribution.id })
+    setConfirmingDelete(false)
     onDeleted()
   }, [goalId, contribution.id, deleteMutate, trackEvent, onDeleted])
 
@@ -159,7 +165,7 @@ function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDele
           <Button
             size="sm"
             variant="destructive"
-            onClick={() => void handleDelete()}
+            onClick={() => setConfirmingDelete(true)}
             disabled={busy}
             aria-label="Delete"
             className="h-auto px-2 py-1 text-xs"
@@ -169,6 +175,37 @@ function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDele
           </Button>
         )}
       </div>
+
+      {/*
+        `&& !disarmed` is the second half of the existing disarm, and leaving it out is the hole
+        DeletedGoalsPanel's first draft left behind: the dialog can already be OPEN when the
+        refetch fails, and its confirm button is not the one the row's `disabled` prop touches.
+
+        The copy names the amount and the date and says only what the endpoint does. It must NOT
+        say the contribution can be restored — nothing on this branch restores one, and a false
+        retention claim is the exact class #1569 keeps having to remove. It also must not
+        editorialise about knock-on effects (goal progress, other contributions) that have not
+        been verified here.
+      */}
+      <ConfirmationDialog
+        open={confirmingDelete && !disarmed}
+        onOpenChange={(open) => {
+          if (!open) setConfirmingDelete(false)
+        }}
+        onConfirm={() => void handleDelete()}
+        title="Delete this contribution?"
+        description={
+          <span>
+            This permanently deletes the{' '}
+            <strong data-ph-mask>{formatCurrency(contribution.amount)}</strong> contribution
+            recorded on {formatDate(contribution.occurred_on)}. The amount is not kept anywhere
+            afterwards, and there is no way to bring it back.
+          </span>
+        }
+        variant="destructive"
+        confirmButtonText="Delete forever"
+        loading={deleting}
+      />
     </li>
   )
 }
