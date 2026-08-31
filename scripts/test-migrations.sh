@@ -111,8 +111,10 @@ run_psql() {
 # identifier, so a table name needing quoting cannot break the query or inject into it.
 #
 # schema_migrations is excluded deliberately: it is golang-migrate's own tracking table, and a psql
-# replay never touches it (that is precisely why the replay mechanism exists). Partitions and views
-# are excluded by relkind='r'.
+# replay never touches it (that is precisely why the replay mechanism exists). relkind='r' excludes
+# views; it does NOT exclude partitions — a LEAF partition is itself relkind 'r' and is counted,
+# and only the partitioned PARENT is 'p' and left out. That is the behaviour we want: the parent's
+# rows all live in its leaves, so counting both would double-count them.
 capture_all_table_counts() {
     psql "$DATABASE_URL" -At -F' ' -c "
         SELECT c.relname,
@@ -1732,7 +1734,7 @@ BACKFILL_SQL
                      <(printf '%s\n' "$counts_after_second_replay") >&2 || true
                 data_preserved=false
             else
-                log_success "Whole-schema row counts are stable across a second replay ($(printf '%s\n' "$counts_after_first_replay" | wc -l | tr -d ' ') tables compared)"
+                log_success "Whole-schema row counts are stable across a second replay ($(printf '%s\n' "$counts_after_first_replay" | wc -l | tr -d ' ') tables enumerated — that is every table in the public schema, not a count of tables holding rows: a table the seed never populates compares 0 == 0 and proves nothing about it)"
             fi
         fi
     fi

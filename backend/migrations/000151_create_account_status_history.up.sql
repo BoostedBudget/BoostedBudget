@@ -18,9 +18,13 @@
 -- so the migration is safe to re-run.
 --
 --   account_id -> accounts(id) ON DELETE CASCADE
---     Safe now that Task 2 (#1569) stopped hard-deleting accounts outside an explicit purge —
---     a CASCADE here only fires on that explicit purge path, exactly like every other
---     account-scoped history table.
+--     Safe now that Task 2 (#1569) stopped hard-deleting accounts outside an explicit purge.
+--     THREE paths delete an accounts row and therefore fire this CASCADE, not one:
+--       - PurgeAccount (the explicit per-account purge, account_repository.go);
+--       - PurgeLinkedItem, which ends in DELETE FROM linked_items and reaches accounts through
+--         fk_accounts_linked_item_id ON DELETE CASCADE (000007);
+--       - GDPR erasure, which is DELETE FROM users and reaches accounts through
+--         fk_accounts_user_id ON DELETE CASCADE (000007).
 --
 --   user_id -> users(id) ON DELETE CASCADE
 --     Required, not optional. GDPR erasure in this codebase runs entirely off the FK graph

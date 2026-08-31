@@ -712,7 +712,7 @@ the code, which is the failure mode a decision record is most likely to hide.
 
 ## How This Is Enforced
 
-Writing a principle down does not keep it. Four mechanisms do:
+Writing a principle down does not keep it. These mechanisms do:
 
 | Guard | What it catches | Where |
 |---|---|---|
@@ -723,6 +723,8 @@ Writing a principle down does not keep it. Four mechanisms do:
 | Universe completeness | A live table named like history that is in neither classification map — the hole a hand-maintained list produces | `TestEveryHistoryShapedTableIsClassified` |
 | Account status projection | An account-shaped `SELECT` that omits `status`, which makes `isAccountDisconnected` read a removed account as live | `TestNoAccountProjectionOmitsStatus` |
 | Household universe parity | A household spending read drifting from the balance reads about the same shared period, or a retained grant double-counting money | `TestAnalyticsRepository_Household_BalanceAndSpendingUniversesAgreeOverSharedPeriod`, `TestAnalyticsRepository_GetSpendingByCategory_Household_RefingerprintedClosedGrantsCountedOnce` |
+| CI hosting of whole-tree guards | A whole-tree guard step hosted in a paths-filtered CI job, so it does not run on the one PR that violates it | `scripts/check-ungated-guard-steps.py`, itself tested by `scripts/__tests__/check-ungated-guard-steps.test.sh` |
+| Audit-sink wiring | A type declaring `SetAuditLogRepository` that `cmd/server/main.go` never constructs or never wires — which turns the same-transaction audit control off in production only, where no unit test injects the dependency | `backend/cmd/server/issue1569_audit_sink_wiring_drift_test.go` (`TestExplicitDestructionAuditSinkIsWiredInMain`) |
 
 Both G1 and G2 fail in **two** directions: an unallowlisted violation, and an allowlist entry whose
 target no longer exists. Stale entries are how the next violation gets justified — they make a

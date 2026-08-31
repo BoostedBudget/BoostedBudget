@@ -23,7 +23,7 @@ import (
 // Processes TRANSACTIONS webhooks by:
 // 1. Fetching unprocessed webhooks from webhook_events table
 // 2. Calling Plaid TransactionsSync API with cursor-based pagination
-// 3. Storing Added/Modified transactions, deleting Removed transactions
+// 3. Storing Added/Modified transactions, tombstoning Removed transactions
 // 4. Updating cursor after successful sync
 // 5. Handling retries with exponential backoff on errors
 type TransactionSyncService interface {
@@ -701,7 +701,7 @@ func (s *transactionSyncService) SyncTransactions(
 
 	// ========================================================================
 	// Issue #261: Transaction Storage Logic
-	// Store Added/Modified transactions, delete Removed transactions
+	// Store Added/Modified transactions, tombstone Removed transactions
 	// ========================================================================
 
 	// Issue #1531 Task 10b-2a-ii / #1537 T92: bump the cache on the way out (via defer) whenever
@@ -771,7 +771,7 @@ func (s *transactionSyncService) SyncTransactions(
 		}
 	}
 
-	// Step 8: Process Removed transactions (hard delete)
+	// Step 8: Process Removed transactions (tombstone)
 	if len(result.Removed) > 0 {
 		// #1537 T92: arm BEFORE the write, not after it succeeds — see the defer above.
 		cacheBumpNeeded = true
