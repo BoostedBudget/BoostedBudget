@@ -17,6 +17,23 @@ package main
 // backend/internal that declares a SetAuditLogRepository method must be constructed and wired in
 // main.go. A new service or handler that takes an audit sink is therefore covered the day it is
 // written, with no allowlist to forget.
+//
+// ⚠ WHAT IT CHECKS ABOUT THE ARGUMENT, since #1569 round 17 (Codex defect 4). It used to check only
+// that the setter was CALLED, so `svc.SetAuditLogRepository(nil)` — a one-token edit — satisfied it
+// while leaving the field nil and every purge endpoint returning a 500. A literal nil is now
+// rejected. That is the whole of the argument check: it still does NOT verify that the value passed
+// is the real repository (a no-op implementation, or a variable that is nil at runtime, passes), nor
+// that anything is ever written.
+//
+// ⚠ AND THE LIMIT THAT NO AMOUNT OF STRENGTHENING FIXES, left acknowledged deliberately. The
+// derivation key is "declares SetAuditLogRepository". A brand-new service that destroys financial
+// history and never declares that setter — because it takes its sink as a constructor parameter, or
+// reads it from a package-level var, or writes no audit row at all — is INVISIBLE to this guard. It
+// is not invisible to every guard: the hard DELETE itself would be reported by G2
+// (TestNoUnallowlistedHistoryDelete, backend/internal/repository), which is derived from the SQL
+// rather than from a wiring convention and is the reason this one does not need to close that hole.
+// If you are adding a destruction path, copy an existing service's setter shape so this guard can
+// see it; G2 will make you notice either way.
 
 import (
 	"go/ast"
@@ -41,7 +58,7 @@ func TestExplicitDestructionAuditSinkIsWiredInMain(t *testing.T) {
 	}
 
 	mainSrc := parseMainGo(t)
-	wired := varsWithAuditSinkSetterCall(mainSrc)
+	wired, wiredWithNil := varsWithAuditSinkSetterCall(mainSrc)
 	constructed := varsByConstructor(mainSrc)
 
 	var failures []string
@@ -55,6 +72,15 @@ func TestExplicitDestructionAuditSinkIsWiredInMain(t *testing.T) {
 			continue
 		}
 		if !anyWired(vars, wired) {
+			if anyWired(vars, wiredWithNil) {
+				// #1569 round 17, Codex defect 4. Reported separately from MISSING WIRING because
+				// the remedy is different and the diff that produced it looks wired.
+				failures = append(failures, "NIL WIRING: "+strings.Join(vars, "/")+" (from "+ctor+
+					") has ."+auditSinkSetter+"(nil) called on it in main.go, which is the same as "+
+					"not wiring it: "+typeName+"'s history-destroying paths would return "+
+					"repository.ErrAuditLogRepositoryNotWired. Pass the real repository.")
+				continue
+			}
 			failures = append(failures, "MISSING WIRING: "+strings.Join(vars, "/")+" (from "+ctor+
 				") never has ."+auditSinkSetter+"(...) called on it in main.go — "+typeName+
 				" would run with a nil audit sink, and its history-destroying paths would refuse.")
@@ -164,10 +190,13 @@ func varsByConstructor(file *ast.File) map[string][]string {
 	return out
 }
 
-// varsWithAuditSinkSetterCall returns the set of main.go variable names on which
-// SetAuditLogRepository is called.
-func varsWithAuditSinkSetterCall(file *ast.File) map[string]bool {
-	out := map[string]bool{}
+// varsWithAuditSinkSetterCall returns two sets of main.go variable names: those on which
+// SetAuditLogRepository is called with a real argument, and those on which it is called with the
+// literal `nil`. A variable appearing in both — wired properly somewhere and with nil elsewhere —
+// counts as wired, because the last call wins at runtime and the guard cannot order them; that is
+// a shape nothing in main.go writes and a reviewer would reject on sight.
+func varsWithAuditSinkSetterCall(file *ast.File) (wired, wiredWithNil map[string]bool) {
+	wired, wiredWithNil = map[string]bool{}, map[string]bool{}
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -177,12 +206,20 @@ func varsWithAuditSinkSetterCall(file *ast.File) map[string]bool {
 		if !ok || sel.Sel.Name != auditSinkSetter {
 			return true
 		}
-		if recv, ok := sel.X.(*ast.Ident); ok {
-			out[recv.Name] = true
+		recv, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
 		}
+		if len(call.Args) == 1 {
+			if ident, ok := call.Args[0].(*ast.Ident); ok && ident.Name == "nil" {
+				wiredWithNil[recv.Name] = true
+				return true
+			}
+		}
+		wired[recv.Name] = true
 		return true
 	})
-	return out
+	return wired, wiredWithNil
 }
 
 func calleeName(fun ast.Expr) string {

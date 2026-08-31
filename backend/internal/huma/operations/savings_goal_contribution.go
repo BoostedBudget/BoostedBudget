@@ -48,9 +48,19 @@ type ContributionHandler struct {
 
 	// auditLogRepo records the savings_goal_contribution.history_purged entry INSIDE
 	// DeleteContribution's own transaction (#1569 round 17 task 6, ADR explicit-destruction
-	// control 2). Optional dependency wired by SetAuditLogRepository rather than a fourth
-	// constructor parameter — same setter pattern as savingsGoalService.auditLogRepo, and it keeps
-	// the ~25 existing NewContributionHandler call sites untouched. nil = no audit row.
+	// control 2). Wired by SetAuditLogRepository rather than a fourth constructor parameter — same
+	// setter pattern as savingsGoalService.auditLogRepo, and it keeps the ~25 existing
+	// NewContributionHandler call sites untouched.
+	//
+	// ⚠ REQUIRED FOR DeleteContribution, and this comment said "nil = no audit row" until #1569
+	// round 17 corrected it. Since round 17 task 11 the handler REFUSES — repository.
+	// ErrAuditLogRepositoryNotWired, mapped to a 500 — rather than destroying a contribution with
+	// no trail. Every OTHER handler method is unaffected and still works with this nil, which is
+	// why the ~25 constructor call sites did not have to change.
+	//
+	// ⚠ contribRepo.DeleteContribution is STILL nil-tolerant one layer down: it skips the audit
+	// write when the sink is nil, so the hardening integration tests can pass nil. The check in
+	// this handler is the only thing that makes the control mandatory.
 	auditLogRepo repository.AuditLogRepository
 }
 

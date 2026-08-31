@@ -93,8 +93,25 @@ the trail was simply never written, and no test anywhere noticed. Two things now
 - `TestExplicitDestructionAuditSinkIsWiredInMain` (`cmd/server`) fails in CI if the wiring is
   dropped. Its list is DERIVED — every concrete type under `backend/internal` declaring a
   `SetAuditLogRepository` method must be constructed and wired in `main.go` — so there is no
-  allowlist to forget. It does NOT check that the sink passed in is the real repository, nor that a
-  new destruction path calls `LogInTx` at all.
+  allowlist to forget. Since #1569 round 17 it also rejects `SetAuditLogRepository(nil)`, which
+  previously satisfied it while leaving the field nil. It still does NOT check that the sink passed
+  in is the real repository (a no-op implementation, or a variable nil at runtime, passes), nor that
+  a new destruction path calls `LogInTx` at all, nor — the limit left acknowledged on purpose — that
+  a new destruction service exists at all: a service that never declares the setter is invisible to
+  it. G2 (`TestNoUnallowlistedHistoryDelete`), derived from the SQL rather than from a wiring
+  convention, is what covers that case.
+
+⚠ **The repository boundary is still nil-tolerant, deliberately.** All four destruction repository
+methods take the sink as a parameter and skip the audit write when it is `nil`, so 19 integration
+tests can exercise the destruction with no audit fixture (measured 2026-08-31). The refusal above
+lives in the four SERVICE/HANDLER callers only. Closing the boundary itself would mean replacing
+that affordance with 19 fixtures; instead, #1569 round 17 added
+`TestNoProductionCallerPassesANilAuditSinkToADestructionMethod`
+(`backend/internal/repository/history_destruction_nil_sink_guard_test.go`), which fails if any
+non-test file under `backend/internal` passes a literal `nil` sink to one of the four. What that
+does NOT protect: a non-literal nil (a field or parameter that happens to be nil), a no-op
+`AuditLogRepository`, a call written in `cmd/`, and a destruction method added under a name not on
+its list.
 
 ⚠ Also note what "audit row in the same transaction" is *tested* by. A test that counts an
 `audit_logs` row after the call returns is satisfied equally by a second, independent write, so it
@@ -724,15 +741,25 @@ Writing a principle down does not keep it. These mechanisms do:
 | Account status projection | An account-shaped `SELECT` that omits `status`, which makes `isAccountDisconnected` read a removed account as live | `TestNoAccountProjectionOmitsStatus` |
 | Household universe parity | A household spending read drifting from the balance reads about the same shared period, or a retained grant double-counting money | `TestAnalyticsRepository_Household_BalanceAndSpendingUniversesAgreeOverSharedPeriod`, `TestAnalyticsRepository_GetSpendingByCategory_Household_RefingerprintedClosedGrantsCountedOnce` |
 | CI hosting of whole-tree guards | A whole-tree guard step hosted in a paths-filtered CI job, so it does not run on the one PR that violates it | `scripts/check-ungated-guard-steps.py`, itself tested by `scripts/__tests__/check-ungated-guard-steps.test.sh` |
-| Audit-sink wiring | A type declaring `SetAuditLogRepository` that `cmd/server/main.go` never constructs or never wires — which turns the same-transaction audit control off in production only, where no unit test injects the dependency | `backend/cmd/server/issue1569_audit_sink_wiring_drift_test.go` (`TestExplicitDestructionAuditSinkIsWiredInMain`) |
+| Audit-sink wiring | A type declaring `SetAuditLogRepository` that `cmd/server/main.go` never constructs, never wires, or wires with a literal `nil` — which turns the same-transaction audit control off in production only, where no unit test injects the dependency | `backend/cmd/server/issue1569_audit_sink_wiring_drift_test.go` (`TestExplicitDestructionAuditSinkIsWiredInMain`) |
+| Audit-sink call sites | A production caller reaching one of the four destruction repository methods directly with a literal `nil` sink, exploiting the nil-tolerance that exists for integration tests | `backend/internal/repository/history_destruction_nil_sink_guard_test.go` (`TestNoProductionCallerPassesANilAuditSinkToADestructionMethod`) |
+| Blessed-predicate value and shape | A blessed hard delete kept green while neutered — the Go value behind a bound parameter edited, or the pinned fragment wrapped in a disjunction | `TestEveryPinnedBoundParameterStillCarriesItsValue`, `TestNoAllowlistedHistoryDeleteWidensItselfWithADisjunction` (`history_delete_guard_test.go`) |
 
 Both G1 and G2 fail in **two** directions: an unallowlisted violation, and an allowlist entry whose
 target no longer exists. Stale entries are how the next violation gets justified — they make a
 decision read as current when the schema has already moved on.
 
 ⚠ **No guard checks that an allowlist REASON is true.** The reason strings are prose for the next
-reader, and G1's key is `(child, parent, constraint)` while G2's is `(function, table)` — neither
-carries a predicate, so an entry keeps its blessing when the SQL under it is widened. Two G1
+reader, and G1's key is `(child, parent, constraint)`, which carries no predicate at all — so a G1
+entry keeps its blessing when the SQL under it is widened. ⚠ This paragraph said the same of G2
+until #1569 round 17, and it had been false since T7.5: G2's entries DO carry a `predicate`, and
+`TestEveryAllowlistedHistoryDeleteStillCarriesItsPredicate` fails when a blessed statement loses a
+named leg. What G2's predicate still cannot prove is semantics — round 17 demonstrated two green
+bypasses, a bound parameter's Go VALUE edited under an unchanged fragment and the fragment wrapped
+in `(... OR TRUE)`, and closed both with `TestEveryPinnedBoundParameterStillCarriesItsValue` and
+`TestNoAllowlistedHistoryDeleteWidensItselfWithADisjunction`. Widenings expressed without the `OR`
+keyword remain uncatchable by a text scanner; see the "G2, third half" section of
+`history_delete_guard_test.go`. Two G1
 reasons shipped false in this issue, both saying a `savings_goals`-parented cascade "fires only
 under GDPR erasure" eleven lines from `savings_goal_repository.go`'s own comment that a purge is
 "the destruction the tombstone was deferring". Re-derive a reason before relying on it; do not

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
 // Issue #1569 Task 19 — Guard G2: every hard DELETE of history is on a list, with a reason.
@@ -90,8 +92,13 @@ import (
 //
 //   - Polarity must be named. `deleted_at IS NULL` flipped to `IS NOT NULL` is caught only because
 //     the fragment spells out which one it blesses. Write the whole leg, never just the column.
-//   - A fragment is not a proof of narrowness. `WHERE c.id = $1` can still sit next to a new `OR`.
-//     The behavioural integration tests remain the authority on what the statement DOES; this is
+//   - A fragment is not a proof of narrowness, and saying so is not the same as defending against
+//     it. Two demonstrated bypasses kept this check green while neutering the predicate — a bound
+//     parameter's VALUE edited in Go, and the blessed fragment wrapped in `(... OR TRUE)`. Both are
+//     now closed by separate mechanisms, because neither is visible in the SQL text this matcher
+//     reads: see "G2, third half" at the bottom of this file, which also states the widenings that
+//     remain uncatchable.
+//   - The behavioural integration tests remain the authority on what the statement DOES; this is
 //     the cheap, always-runs half that stops a leg from silently disappearing.
 type historyDeleteAllowance struct {
 	// reason is why this destruction is allowed at all. It describes intent and is NOT checked
@@ -1126,4 +1133,206 @@ func TestHistoryDeleteScan_SeesAPackageLevelConstant(t *testing.T) {
 			t.Fatalf("purgeSQL's DELETE was not seen; keys: %v", found)
 		}
 	})
+}
+
+// ---- G2, third half: what a FRAGMENT MATCH can never prove. -------------------------------------
+//
+// #1569 round 17 (independent Codex review of 473c17c2/8cee1042). `predicate` closed the shape
+// where a leg silently disappears. It did not close either of these, and both were MEASURED green
+// against the unmodified guard before this section was written:
+//
+//   - THE VALUE BEHIND A BOUND PARAMETER. `c.status <> $3` is text. Editing
+//     `contributionStatusRejected` from "rejected" to "confirmed" leaves that text byte-identical
+//     and makes every rejected sticky tombstone deletable. Same for PurgeAccount's `status <> $3`
+//     and `domain.AccountStatusActive`. A guard that reads SQL source can never see the Go value,
+//     so the value has to be pinned separately — see pinnedPredicateBoundValues.
+//   - A DISJUNCTION AROUND THE LEG. `AND (c.status <> $3 OR TRUE)` CONTAINS the blessed fragment
+//     verbatim; substring matching cannot distinguish a narrowing leg from a decorative one. The
+//     doc on historyDeleteAllowance already said "a fragment is not a proof of narrowness"; that
+//     was true and did nothing. See TestNoAllowlistedHistoryDeleteWidensItselfWithADisjunction.
+//
+// ⚠ AND THE HONEST LIMIT, WHICH NEITHER OF THE TWO TESTS BELOW MOVES. These are text and value
+// pins, not a proof of semantics. A blessed statement can still be widened in ways no scanner will
+// catch: `AND c.status IS DISTINCT FROM $3` reads as narrowing and is not the same predicate;
+// `AND c.status <> $3 AND TRUE` is a no-op decoration these tests permit; a fourth parameter could
+// be introduced and mis-bound; and nothing here proves that $3 is the parameter the fragment's
+// position implies — the pins below assert the CONSTANT's value, and it is a human reading of the
+// call site that ties that constant to $3. The behavioural integration tests remain the only
+// authority on what a statement DOES. What this file buys is that the cheap, always-runs half now
+// covers the two bypasses that were actually demonstrated, instead of implying it covers more.
+
+// boundValuePin ties one predicate fragment's bound parameter to the Go value that reaches it.
+type boundValuePin struct {
+	// key is the allowedHistoryDeletes entry this pin belongs to. Checked to exist, so a renamed
+	// or removed entry fails here too rather than leaving an orphan pin that can never fire.
+	key string
+	// fragment is the predicate fragment naming the parameter. Checked to still be listed in the
+	// entry's predicate, so dropping the leg cannot silently orphan this pin either.
+	fragment string
+	// got is the Go value actually bound at the call site; want is the value the blessing assumes.
+	got, want string
+	// why is what breaks if got drifts from want.
+	why string
+}
+
+// pinnedPredicateBoundValues is the value half of G2's predicate blessing. One entry per bound
+// parameter whose VALUE the narrowness of a blessed delete depends on.
+//
+// ⚠ These are the only two. A fragment binding a parameter whose value does not decide what is
+// destroyed (`WHERE c.id = $1`) needs no pin: $1 is the row the user named, and pinning it would
+// mean pinning a caller's argument, not a constant.
+var pinnedPredicateBoundValues = []boundValuePin{
+	{
+		key:      "repository/account_repository.go#PurgeAccount|accounts",
+		fragment: "WHERE id = $1 AND user_id = $2 AND status <> $3",
+		got:      string(domain.AccountStatusActive),
+		want:     "active",
+		why: "the purge's own WHERE refuses a LIVE account. If $3 stopped meaning 'active', the " +
+			"DELETE would refuse some other status instead and destroy live accounts, with the " +
+			"fragment unchanged and this guard green",
+	},
+	{
+		key:      "repository/savings_contribution_repository.go#DeleteContribution|savings_goal_contributions",
+		fragment: "c.status <> $3",
+		got:      contributionStatusRejected,
+		want:     "rejected",
+		why: "a 'rejected' contribution is R3-7's sticky tombstone, retained on purpose and hidden " +
+			"from the ledger UI. If $3 stopped meaning 'rejected', DeleteContribution would destroy " +
+			"those retained rows — the exact regression the leg was added to prevent",
+	},
+}
+
+// TestEveryPinnedBoundParameterStillCarriesItsValue is #1569 round 17, Codex defect 1, bypass one.
+//
+// ⚠ MEASURED, NOT REASONED: with `contributionStatusRejected` edited to "confirmed", both
+// TestNoUnallowlistedHistoryDelete and TestEveryAllowlistedHistoryDeleteStillCarriesItsPredicate
+// stayed GREEN, and rejected rows became deletable. The SQL text does not change, so no text guard
+// can see it.
+func TestEveryPinnedBoundParameterStillCarriesItsValue(t *testing.T) {
+	if len(pinnedPredicateBoundValues) == 0 {
+		t.Fatal("pinnedPredicateBoundValues is empty; if the last pin was legitimately removed, " +
+			"delete this test with it rather than leaving a check that cannot fail")
+	}
+	for _, pin := range pinnedPredicateBoundValues {
+		allowance, ok := allowedHistoryDeletes[pin.key]
+		if !ok {
+			t.Errorf("bound-value pin names allowlist key %q, which does not exist. The pin is "+
+				"orphaned and can never fire; re-point it or remove it.", pin.key)
+			continue
+		}
+		var listed bool
+		for _, frag := range allowance.predicate {
+			if frag == pin.fragment {
+				listed = true
+				break
+			}
+		}
+		if !listed {
+			t.Errorf("bound-value pin for %q names fragment %q, which is no longer in that entry's "+
+				"predicate. Either the leg was dropped (TestEveryAllowlistedHistoryDeleteStillCarries"+
+				"ItsPredicate should also be red) or it was reworded; update both together.",
+				pin.key, pin.fragment)
+			continue
+		}
+		if pin.got != pin.want {
+			t.Errorf("the value bound by %q in %s is now %q, was %q.\n%s\n"+
+				"⚠ No SQL-text guard can catch this: the fragment is byte-identical either way.",
+				pin.fragment, pin.key, pin.got, pin.want, pin.why)
+		}
+	}
+}
+
+// sqlDisjunctionRegexp matches a standalone SQL `OR` keyword in normalised (upper-cased,
+// literal-blanked, comment-stripped) text. Word-bounded, so ORDER BY, FOR UPDATE and a column
+// named `origin` are not matches.
+var sqlDisjunctionRegexp = regexp.MustCompile(`\bOR\b`)
+
+// TestNoAllowlistedHistoryDeleteWidensItselfWithADisjunction is #1569 round 17, Codex defect 1,
+// bypass two.
+//
+// ⚠ MEASURED, NOT REASONED: rewriting DeleteContribution's leg as `AND (c.status <> $3 OR TRUE)`
+// left both existing G2 tests GREEN — the blessed fragment is still there, verbatim, inside a
+// disjunction that makes it decide nothing.
+//
+// The rule is blunt on purpose: NO blessed hard delete of history may contain a disjunction at all.
+// All seven statements satisfy it today, an `OR` is never necessary to express "destroy exactly
+// this row", and a blunt rule is one a reviewer can apply without parsing SQL. If a future purge
+// genuinely needs one, this test is the right place to argue for it — in the open, with a reason,
+// the same way allowedHistoryDeletes makes the destruction itself argue for itself.
+//
+// ⚠ It does NOT make a fragment a proof of narrowness. `AND c.status <> $3 AND TRUE` passes, and so
+// does any widening expressed without the `OR` keyword. See this section's header.
+func TestNoAllowlistedHistoryDeleteWidensItselfWithADisjunction(t *testing.T) {
+	found := scanHistoryDeletes(t, repoInternalRoot(t), historyBearingTables)
+
+	var checked int
+	var offenders []string
+	for key := range allowedHistoryDeletes {
+		site, ok := found[key]
+		if !ok {
+			continue // TestNoUnallowlistedHistoryDelete reports this as a stale entry.
+		}
+		for _, stmt := range site.statements {
+			checked++
+			if loc := sqlDisjunctionRegexp.FindStringIndex(stmt); loc != nil {
+				offenders = append(offenders, key+"\n        statement: "+stmt)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatalf("no allowlisted delete statement was inspected at all (%d entries allowlisted) — "+
+			"the scan is broken and this test would pass vacuously", len(allowedHistoryDeletes))
+	}
+	sort.Strings(offenders)
+
+	if len(offenders) > 0 {
+		t.Errorf("%d allowlisted history delete(s) contain a disjunction (#1569 round 17).\n"+
+			"A blessed predicate fragment inside an OR still MATCHES the allowlist while deciding "+
+			"nothing: `AND c.status <> $3 OR TRUE` keeps the blessing and destroys everything the "+
+			"leg was added to protect. Express the destruction as a conjunction of legs, or change "+
+			"this test deliberately and say why.\n    %s",
+			len(offenders), strings.Join(offenders, "\n    "))
+	}
+}
+
+// TestDisjunctionGuard_FlagsTheConstructedBypass is the meta-test: the guard's rule, applied to the
+// exact text that motivated it, in both directions.
+func TestDisjunctionGuard_FlagsTheConstructedBypass(t *testing.T) {
+	intact := historyDeleteStatements(
+		"DELETE FROM savings_goal_contributions c USING savings_goals g "+
+			"WHERE c.id = $1 AND c.savings_goal_id = g.id AND g.user_id = $2 "+
+			"AND g.deleted_at IS NULL AND c.deleted_at IS NULL AND c.status <> $3",
+		historyBearingTables)["savings_goal_contributions"]
+	if len(intact) != 1 || sqlDisjunctionRegexp.MatchString(intact[0]) {
+		t.Fatalf("the real statement must not read as a disjunction: %q", intact)
+	}
+
+	neutered := historyDeleteStatements(
+		"DELETE FROM savings_goal_contributions c USING savings_goals g "+
+			"WHERE c.id = $1 AND c.savings_goal_id = g.id AND g.user_id = $2 "+
+			"AND g.deleted_at IS NULL AND c.deleted_at IS NULL AND (c.status <> $3 OR TRUE)",
+		historyBearingTables)["savings_goal_contributions"]
+	if len(neutered) != 1 {
+		t.Fatalf("expected one statement, got %d", len(neutered))
+	}
+	entry := allowedHistoryDeletes["repository/savings_contribution_repository.go#DeleteContribution|savings_goal_contributions"]
+	if missing := missingPredicateFragments(neutered[0], entry.predicate); len(missing) > 0 {
+		t.Fatalf("the point of this guard is that the fragment pin does NOT catch the disjunction; "+
+			"if it now does, re-derive before trusting either. missing %v", missing)
+	}
+	if !sqlDisjunctionRegexp.MatchString(neutered[0]) {
+		t.Fatalf("the disjunction guard must flag the neutered statement: %q", neutered[0])
+	}
+
+	// The false-positive direction, which is what would get this blunt rule deleted: words that
+	// merely contain "or" are not disjunctions.
+	for _, s := range []string{
+		"DELETE FROM boosts WHERE user_id = $1 ORDER BY created_at",
+		"DELETE FROM boosts WHERE origin = $1",
+		"DELETE FROM boosts WHERE id IN (SELECT id FROM boosts FOR UPDATE)",
+	} {
+		if sqlDisjunctionRegexp.MatchString(normaliseSQL(s)) {
+			t.Errorf("word-bounded OR must not match %q", s)
+		}
+	}
 }

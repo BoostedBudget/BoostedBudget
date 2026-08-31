@@ -72,8 +72,19 @@ type SavingsGoalService interface {
 
 	// SetAuditLogRepository wires the savings_goal.deleted / savings_goal.history_purged audit
 	// entries, which are written INSIDE the repository's own transaction via LogInTx so the entry
-	// and the state change commit or roll back together. Nil-safe optional dependency: when unset,
-	// the deletes still work and simply write no entry. Issue #1569, Task 8.
+	// and the state change commit or roll back together. Issue #1569, Task 8.
+	//
+	// ⚠ THE TWO PATHS DIFFER SINCE #1569 ROUND 17 TASK 11, and this comment claimed a blanket
+	// "nil-safe optional dependency: when unset, the deletes still work and simply write no entry"
+	// until round 17 corrected it. That is now true of exactly one of them:
+	//   - DeleteGoal (TOMBSTONE, savings_goal.deleted) — still nil-tolerant. It runs with no sink
+	//     and writes no entry, because nothing is destroyed.
+	//   - PurgeGoal (DESTRUCTION, savings_goal.history_purged) — REFUSES with
+	//     repository.ErrAuditLogRepositoryNotWired, a 500, rather than destroying un-audited.
+	// So leaving this unwired does not silently downgrade the trail; it disables the purge endpoint.
+	//
+	// ⚠ goalRepo.PurgeGoal itself is STILL nil-tolerant (it skips the audit write on a nil sink so
+	// integration tests need no audit fixture). PurgeGoal's own nil check is the only barrier.
 	SetAuditLogRepository(ar repository.AuditLogRepository)
 
 	// SetBudgetRepo wires the optional budget repository for auto-creating savings categories
@@ -112,9 +123,12 @@ type savingsGoalService struct {
 	// (Issue #1300 M14). Nil-safe: guard with "if s.analytics != nil".
 	analytics phclient.Analytics
 	// auditLogRepo records savings_goal.deleted / savings_goal.history_purged entries INSIDE the
-	// repository's own transaction (Issue #1569 Task 8), via LogInTx. Nil-safe optional
-	// dependency, wired by SetAuditLogRepository — same pattern as accountService.auditLogRepo,
-	// and safe for the same reason: neither transaction locks a users row.
+	// repository's own transaction (Issue #1569 Task 8), via LogInTx. Wired by
+	// SetAuditLogRepository — same pattern as accountService.auditLogRepo, and safe for the same
+	// reason: neither transaction locks a users row.
+	//
+	// ⚠ Optional for DeleteGoal (tombstone), REQUIRED for PurgeGoal (destruction), which returns
+	// repository.ErrAuditLogRepositoryNotWired while this is nil. See the setter's doc.
 	auditLogRepo repository.AuditLogRepository
 }
 
