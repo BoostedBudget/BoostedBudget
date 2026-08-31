@@ -1957,10 +1957,14 @@ func TestDisconnectAccount_SkipsHidingWhenUserAccountIDNil(t *testing.T) {
 // no-job-queue behavior. Issue #1569, Task 6.
 func TestPurgeAccount_Success(t *testing.T) {
 	mockAccountRepo := &MockAccountRepository{}
+	// #1569 r17 t11: PurgeAccount now refuses outright when the audit sink is unwired, so every
+	// success-path test must wire one. See TestPurgeAccount_RefusesWithoutAuditSink.
+	mockAuditLogRepo := &MockAuditLogRepository{}
 
 	service := &accountService{
-		accountRepo: mockAccountRepo,
-		jobQueue:    nil,
+		accountRepo:  mockAccountRepo,
+		auditLogRepo: mockAuditLogRepo,
+		jobQueue:     nil,
 	}
 
 	ctx := context.Background()
@@ -1975,7 +1979,7 @@ func TestPurgeAccount_Success(t *testing.T) {
 	}
 
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
-	mockAccountRepo.On("PurgeAccount", ctx, accountID, userID, repository.AuditLogRepository(nil)).Return(nil)
+	mockAccountRepo.On("PurgeAccount", ctx, accountID, userID, repository.AuditLogRepository(mockAuditLogRepo)).Return(nil)
 
 	err := service.PurgeAccount(ctx, accountID, userID)
 
@@ -2014,8 +2018,9 @@ func TestPurgeAccount_PassesAuditLogRepository(t *testing.T) {
 // that no post-purge cleanup runs when the purge itself failed.
 func TestPurgeAccount_BlockedBySavingsGoal(t *testing.T) {
 	mockAccountRepo := &MockAccountRepository{}
+	mockAuditLogRepo := &MockAuditLogRepository{}
 
-	service := &accountService{accountRepo: mockAccountRepo}
+	service := &accountService{accountRepo: mockAccountRepo, auditLogRepo: mockAuditLogRepo}
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
@@ -2023,7 +2028,7 @@ func TestPurgeAccount_BlockedBySavingsGoal(t *testing.T) {
 	account := &domain.Account{ID: accountID, LinkedItemID: uuid.New().String(), UserID: userID}
 
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
-	mockAccountRepo.On("PurgeAccount", ctx, accountID, userID, repository.AuditLogRepository(nil)).
+	mockAccountRepo.On("PurgeAccount", ctx, accountID, userID, repository.AuditLogRepository(mockAuditLogRepo)).
 		Return(repository.ErrPurgeBlockedBySavingsGoal)
 
 	err := service.PurgeAccount(ctx, accountID, userID)
@@ -2037,7 +2042,7 @@ func TestPurgeAccount_BlockedBySavingsGoal(t *testing.T) {
 // ever calling the destructive PurgeAccount repository method.
 func TestPurgeAccount_AccountNotFound(t *testing.T) {
 	mockAccountRepo := &MockAccountRepository{}
-	service := &accountService{accountRepo: mockAccountRepo}
+	service := &accountService{accountRepo: mockAccountRepo, auditLogRepo: &MockAuditLogRepository{}}
 
 	ctx := context.Background()
 	accountID := uuid.New().String()
@@ -2060,9 +2065,11 @@ func TestPurgeAccount_RunsZeroAccountCleanupWhenLastAccount(t *testing.T) {
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockLinkedItemRepo.On("MarkForCleanup", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
+	mockAuditLogRepo := &MockAuditLogRepository{}
 	service := &accountService{
 		accountRepo:    mockAccountRepo,
 		linkedItemRepo: mockLinkedItemRepo,
+		auditLogRepo:   mockAuditLogRepo,
 		jobQueue:       mockJobQueue,
 	}
 
@@ -2073,7 +2080,7 @@ func TestPurgeAccount_RunsZeroAccountCleanupWhenLastAccount(t *testing.T) {
 
 	account := &domain.Account{ID: accountID, LinkedItemID: linkedItemID, UserID: userID}
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
-	mockAccountRepo.On("PurgeAccount", ctx, accountID, userID, repository.AuditLogRepository(nil)).Return(nil)
+	mockAccountRepo.On("PurgeAccount", ctx, accountID, userID, repository.AuditLogRepository(mockAuditLogRepo)).Return(nil)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
 	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
 		return job.Kind() == "item_cleanup"
@@ -2434,13 +2441,14 @@ func TestDisconnectInstitution_MarkAccountsRemovedError_Propagates(t *testing.T)
 // linkedItemRepo.PurgeLinkedItem, forwarding the wired auditLogRepo. Issue #1569, Task 6.
 func TestPurgeInstitution_Success(t *testing.T) {
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
-	service := &accountService{linkedItemRepo: mockLinkedItemRepo}
+	mockAuditLogRepo := &MockAuditLogRepository{}
+	service := &accountService{linkedItemRepo: mockLinkedItemRepo, auditLogRepo: mockAuditLogRepo}
 
 	ctx := context.Background()
 	linkedItemID := uuid.New().String()
 	userID := uuid.New().String()
 
-	mockLinkedItemRepo.On("PurgeLinkedItem", ctx, linkedItemID, userID, repository.AuditLogRepository(nil)).Return(nil)
+	mockLinkedItemRepo.On("PurgeLinkedItem", ctx, linkedItemID, userID, repository.AuditLogRepository(mockAuditLogRepo)).Return(nil)
 
 	err := service.PurgeInstitution(ctx, linkedItemID, userID)
 
@@ -2452,13 +2460,14 @@ func TestPurgeInstitution_Success(t *testing.T) {
 // disconnected (Plaid billing already stopped) before it can be purged — propagates unchanged.
 func TestPurgeInstitution_NotDisconnected(t *testing.T) {
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
-	service := &accountService{linkedItemRepo: mockLinkedItemRepo}
+	mockAuditLogRepo := &MockAuditLogRepository{}
+	service := &accountService{linkedItemRepo: mockLinkedItemRepo, auditLogRepo: mockAuditLogRepo}
 
 	ctx := context.Background()
 	linkedItemID := uuid.New().String()
 	userID := uuid.New().String()
 
-	mockLinkedItemRepo.On("PurgeLinkedItem", ctx, linkedItemID, userID, repository.AuditLogRepository(nil)).
+	mockLinkedItemRepo.On("PurgeLinkedItem", ctx, linkedItemID, userID, repository.AuditLogRepository(mockAuditLogRepo)).
 		Return(repository.ErrLinkedItemNotDisconnected)
 
 	err := service.PurgeInstitution(ctx, linkedItemID, userID)

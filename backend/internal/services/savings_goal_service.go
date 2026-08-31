@@ -538,6 +538,12 @@ func (s *savingsGoalService) DeleteGoal(ctx context.Context, userID, goalID stri
 // a read-then-check in this method: DeleteGoal's GetByID-then-compare cannot be reused here
 // because every read excludes tombstoned goals, and a purge acts only on tombstoned goals.
 func (s *savingsGoalService) PurgeGoal(ctx context.Context, userID, goalID string) error {
+	// Control 2 is not optional: refuse rather than destroy un-audited. See
+	// repository.ErrAuditLogRepositoryNotWired.
+	if s.auditLogRepo == nil {
+		return repository.ErrAuditLogRepositoryNotWired
+	}
+
 	s.logger.Info("purging savings goal",
 		slog.String("user_id", userID),
 		slog.String("goal_id", goalID),

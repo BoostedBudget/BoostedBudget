@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -159,3 +160,22 @@ func writeAuditLogEntry(ctx context.Context, db DB, action, resourceType, resour
 	}
 	return nil
 }
+
+// ErrAuditLogRepositoryNotWired is returned by an explicit-destruction path whose audit sink is
+// missing, INSTEAD of destroying the row un-audited. Issue #1569 round 17 task 11.
+//
+// The ADR's control 2 for explicit destruction of financial history is "an audit row written in
+// the SAME transaction". Every repository method that implements it takes the AuditLogRepository
+// as a parameter and skips the write when it is nil — deliberately, so that the many tests which
+// exercise the destruction itself do not each need an audit fixture. In production that parameter
+// comes from a field set by a SetAuditLogRepository call in cmd/server/main.go. Dropping that one
+// line therefore used to turn control 2 OFF silently: the purge still succeeded, the trail was
+// simply never written, and no test anywhere noticed.
+//
+// The four callers of those methods (accountService.PurgeAccount, accountService.PurgeInstitution,
+// savingsGoalService.PurgeGoal and operations.ContributionHandler.DeleteContribution) now refuse
+// to proceed with a nil sink and return this error. It is a misconfiguration, not a user error:
+// it maps to a 500, and it can only be reached by a build whose wiring is broken — which
+// TestExplicitDestructionAuditSinkIsWiredInMain also fails on in CI.
+var ErrAuditLogRepositoryNotWired = errors.New(
+	"audit log repository not wired: refusing to destroy financial history without an audit trail")

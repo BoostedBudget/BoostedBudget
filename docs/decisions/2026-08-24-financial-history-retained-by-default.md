@@ -79,6 +79,30 @@ and before that it wrongly implied they all did; re-derive rather than trusting 
 | Precondition refusing to run on live data | yes | yes | yes | yes — **in the mirrored form**, see below |
 | Entry in `allowedHistoryDeletes` with a reason | yes | yes | yes | yes |
 
+⚠ **Control 2 was, until #1569 round 17 task 11, only as strong as one line in `cmd/server/main.go`.**
+Every repository method implementing it takes the `AuditLogRepository` as a parameter and skips the
+write when it is `nil` — deliberately, so the many tests exercising the destruction itself need no
+audit fixture. In production that parameter comes from a field set by a `SetAuditLogRepository`
+call in `main.go`. Dropping that call turned the control OFF silently: the purge still succeeded,
+the trail was simply never written, and no test anywhere noticed. Two things now stop that:
+
+- The four callers refuse to run with a nil sink, returning `repository.ErrAuditLogRepositoryNotWired`
+  instead of destroying un-audited (`TestPurgeAccount_RefusesWithoutAuditSink` and its three
+  siblings). This is a **500 on a user-facing path** in a misconfigured build — deliberately, because
+  destroying financial history without a trail is the worse outcome.
+- `TestExplicitDestructionAuditSinkIsWiredInMain` (`cmd/server`) fails in CI if the wiring is
+  dropped. Its list is DERIVED — every concrete type under `backend/internal` declaring a
+  `SetAuditLogRepository` method must be constructed and wired in `main.go` — so there is no
+  allowlist to forget. It does NOT check that the sink passed in is the real repository, nor that a
+  new destruction path calls `LogInTx` at all.
+
+⚠ Also note what "audit row in the same transaction" is *tested* by. A test that counts an
+`audit_logs` row after the call returns is satisfied equally by a second, independent write, so it
+stays green when `LogInTx` is swapped for `Log` — measured for all three purges in round 17 task 11.
+The tests that actually refuse the swap are the four
+`*_AuditRowSharesThe(Purges|Deletes)Transaction_Integration` spies, which assert `LogInTx` was the
+method used *and* that the destroyed row is already invisible from inside the transaction handed to it.
+
 *Method:* the audit column is `/usr/bin/grep -n "LogInTx" backend/internal/repository/{account,linked_item,savings_goal,savings_contribution}_repository.go`
 — four `*.history_purged` calls, one per function. The precondition column is reading each method
 body.

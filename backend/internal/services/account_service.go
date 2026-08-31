@@ -897,6 +897,12 @@ func (s *accountService) DisconnectAccount(ctx context.Context, accountID, userI
 // Returns repository.ErrAccountNotFound if account doesn't exist or user doesn't own it, or
 // repository.ErrPurgeBlockedBySavingsGoal if a savings goal still references it.
 func (s *accountService) PurgeAccount(ctx context.Context, accountID, userID string) error {
+	// Control 2 is not optional: refuse rather than destroy un-audited. See
+	// repository.ErrAuditLogRepositoryNotWired for why a nil sink is reachable at all.
+	if s.auditLogRepo == nil {
+		return repository.ErrAuditLogRepositoryNotWired
+	}
+
 	// Step 1: Get the account to retrieve linked_item_id/user_account_id BEFORE it is destroyed.
 	account, err := s.accountRepo.GetByIDAndUser(ctx, accountID, userID)
 	if err != nil {
@@ -1239,6 +1245,10 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 // repository.ErrLinkedItemNotDisconnected unless the item was already disconnected first, or
 // repository.ErrPurgeBlockedBySavingsGoal if a savings goal still references one of its accounts.
 func (s *accountService) PurgeInstitution(ctx context.Context, linkedItemID, userID string) error {
+	// See PurgeAccount's identical refusal.
+	if s.auditLogRepo == nil {
+		return repository.ErrAuditLogRepositoryNotWired
+	}
 	return s.linkedItemRepo.PurgeLinkedItem(ctx, linkedItemID, userID, s.auditLogRepo)
 }
 
