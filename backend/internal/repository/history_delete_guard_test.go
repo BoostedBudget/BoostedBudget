@@ -174,9 +174,20 @@ var allowedHistoryDeletes = map[string]historyDeleteAllowance{
 	// alone — no `source` leg, no `managed_by_reconciliation` leg — so a row the RECONCILER created
 	// is reachable by it too. "One contribution" and "explicit request" survive; "they entered"
 	// does not.
+	//
+	// ⚠ WIDENED PIN (#1569 round 17 task 6). Two legs were ADDED to the statement and are pinned
+	// here: `c.deleted_at IS NULL` (it could hard-destroy a contribution the system had ALREADY
+	// tombstoned and retained — the undocumented fifth finding) and `c.status <> $3`, bound to
+	// 'rejected' (a rejected row is R3-7's sticky tombstone, kept on purpose and hidden from the
+	// ledger UI). The status value is a BOUND PARAMETER, not an inline literal, because normaliseSQL
+	// blanks SQL string literals before matching — an inlined 'rejected' would be invisible to the
+	// very fragment meant to pin it. Same precedent, and same limitation, as PurgeAccount's
+	// `status <> $3`: this guard proves the LEG is present, never that $3 still carries 'rejected'.
+	// The behavioural authority for the value is
+	// TestDeleteContribution_RefusesARejectedContribution_Integration.
 	"repository/savings_contribution_repository.go#DeleteContribution|savings_goal_contributions": {
-		reason:    "the user deleting one named contribution on a live goal of theirs — the narrowest possible explicit request. NOT necessarily a row they entered: the predicate keys on c.id alone, so a reconciler-created row is reachable by it",
-		predicate: []string{"c.id = $1", "c.savings_goal_id = g.id", "g.user_id = $2", "g.deleted_at IS NULL"},
+		reason:    "the user deleting one named contribution that is still on their live ledger — the narrowest possible explicit request. NOT necessarily a row they entered: the predicate keys on c.id alone, so a reconciler-created row is reachable by it. It now refuses every row the product has already retired from that ledger: a tombstoned goal, a tombstoned contribution, and a 'rejected' sticky tombstone",
+		predicate: []string{"c.id = $1", "c.savings_goal_id = g.id", "g.user_id = $2", "g.deleted_at IS NULL", "c.deleted_at IS NULL", "c.status <> $3"},
 	},
 	// ⚠ REMOVED (#1569 round 12 task 2), NOT REWORDED. DeleteManagedForTransaction used to be a real
 	// `DELETE FROM savings_goal_contributions` and carried a blessing here. An independent Codex

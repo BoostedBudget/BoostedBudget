@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -102,9 +103,15 @@ type SavingsContributionRepository interface {
 	// Returns ErrContributionNotProposed if the row is not in 'proposed' status.
 	RejectContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error)
 
-	// DeleteContribution removes a contribution. userID is required for ownership verification.
-	// Returns ErrContributionNotFound if id does not exist or does not belong to userID.
-	DeleteContribution(ctx context.Context, userID, id string) error
+	// DeleteContribution PERMANENTLY DESTROYS one contribution the user named. It is the single
+	// deliberate, user-facing hard delete of financial history on this branch — see the
+	// implementation's doc comment for the four ADR controls it carries and what they do not cover.
+	// userID is required for ownership verification.
+	// auditLog, when non-nil, writes a "savings_goal_contribution.history_purged" entry INSIDE the
+	// same transaction as the delete, mirroring PurgeAccount/PurgeLinkedItem/PurgeGoal.
+	// Returns ErrContributionNotFound if id does not exist, does not belong to userID, sits under a
+	// tombstoned goal, is itself tombstoned, or is a 'rejected' sticky tombstone.
+	DeleteContribution(ctx context.Context, userID, id string, auditLog AuditLogRepository) error
 
 	// DeleteManagedForTransaction TOMBSTONES managed_by_reconciliation rows for a transaction whose
 	// goal is still LIVE, so a removed transaction cannot leave phantom progress behind (Codex C4).
@@ -159,6 +166,13 @@ const contributionSelectColsJoined = `
 	c.id, c.savings_goal_id, c.transaction_id, c.amount, c.source, c.status,
 	c.managed_by_reconciliation, c.confirmed_by_user, c.occurred_on::text, c.created_at, c.updated_at
 `
+
+// contributionStatusRejected is the 'rejected' sticky-tombstone status (R3-7). It is bound as a
+// query PARAMETER rather than inlined as a literal in DeleteContribution's WHERE on purpose: the G2
+// predicate guard blanks SQL string literals before matching, so an inlined 'rejected' would be
+// invisible to the fragment it is supposed to pin, while `c.status <> $3` is not. Same precedent as
+// PurgeAccount's `status <> $3` (bound to 'active').
+const contributionStatusRejected = "rejected"
 
 // savingsContributionRepository implements SavingsContributionRepository using PostgreSQL.
 type savingsContributionRepository struct {
@@ -818,34 +832,97 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 	return updated, nil
 }
 
-// DeleteContribution removes a contribution row owned by userID.
-// Returns ErrContributionNotFound if the row does not exist or is not owned by userID.
+// DeleteContribution permanently destroys one contribution row owned by userID.
+// Returns ErrContributionNotFound if the row does not exist, is not owned by userID, or is one of
+// the rows this path refuses (below).
 //
-// This IS the real, explicit hard delete: the user named this one contribution and asked for it to
-// go away, the narrowest possible explicit request (see the G2 allowlist entry above). It is
-// deliberately UNCHANGED by #1569 round 12 task 2 — that task converted the PROVIDER-triggered path
-// (DeleteManagedForTransaction) to a tombstone; hardening this user-triggered path further (audit
-// row, live-data precondition) is out of scope this round.
-func (r *savingsContributionRepository) DeleteContribution(ctx context.Context, userID, id string) error {
-	query := `
+// THIS IS THE ONE DELIBERATE, USER-FACING HARD DELETE OF FINANCIAL HISTORY ON THIS BRANCH: the user
+// named this one contribution, in the UI, and asked for it to go away — the narrowest possible
+// explicit request. #1569 round 17 task 6 brought it from 2 of the ADR's 4 explicit-destruction
+// controls to 4 of 4 (docs/decisions/2026-08-24-financial-history-retained-by-default.md
+// § Classification Test); the earlier version of this comment deferred two of them and never
+// mentioned the third problem at all.
+//
+//  1. OWN ENDPOINT, distinct from the retaining path. DELETE
+//     /savings-goals/{goalID}/contributions/{id}. Deleting the GOAL tombstones and retains every
+//     contribution; rejecting a proposal retains it too.
+//  2. AUDIT ROW IN THE SAME TRANSACTION. "savings_goal_contribution.history_purged", via
+//     auditLog.LogInTx, committed or rolled back with the DELETE. The HTTP layer's slog line is
+//     NOT this control — it survives a rolled-back transaction and it is not queryable as a trail.
+//     Same shape as PurgeAccount/PurgeLinkedItem/PurgeGoal, and like them auditLog may be nil
+//     (tests, and only tests — main.go wires it).
+//  3. A PRECONDITION REFUSING DATA THE USER DID NOT NAME — the leg that needed judgement, because
+//     the purges' form ("the parent is already tombstoned") INVERTS here. A contribution under a
+//     LIVE goal is exactly what this endpoint exists to destroy, so refusing live data verbatim
+//     would delete the feature. What the purges' precondition actually buys is that the
+//     destruction cannot surprise anyone: the resource has already left every live surface. For a
+//     per-row delete the same guarantee reads the other way round — destruction is permitted ONLY
+//     for a row that is still ON the surface the user was looking at, and refused for every row
+//     the product has already retired from it. There are exactly three such retirements, and all
+//     three are now in the WHERE:
+//     • `g.deleted_at IS NULL` — the goal is tombstoned, so its ledger is retained history read
+//     through ListByDeletedGoal, not a live sheet. (Pre-existing; PurgeGoal is the path that
+//     destroys those, and it has its own confirm copy.)
+//     • `c.deleted_at IS NULL` — the row itself is tombstoned. This is the leg that was MISSING
+//     and undocumented, and it is the one that destroyed retained data: a reconciler row
+//     tombstoned by DeleteManagedForTransaction when Plaid reported the transaction as
+//     `removed` ("the provider is not the user") is invisible in every product surface, so the
+//     user cannot have seen it in a confirm dialog — yet its id was still reachable here.
+//     • `c.status <> $3` (bound to 'rejected') — a rejected row is a STICKY TOMBSTONE kept on
+//     purpose so UpsertProposedFromTransaction cannot re-propose the same transfer-in (R3-7),
+//     and GoalContributionsSheet.tsx filters it out of the ledger. The endpoint's own
+//     description promises to destroy a contribution "(proposed or confirmed)"; rejected was
+//     never in its contract, and destroying one both erases a deliberate retention and
+//     regresses R3-7 into a re-proposal loop.
+//     ⚠ WHAT THIS PRECONDITION DOES NOT PROTECT, stated plainly:
+//     • It does not protect the row the user DID name. A live, visible, confirmed contribution —
+//     including hand-typed money no provider can supply again — is destroyed, irrecoverably.
+//     That is the point of the endpoint, and there is no restore path anywhere on this branch.
+//     • It does not check that the user was shown honest confirm copy. That lives in the UI.
+//     • It does not distinguish a row the user entered from one the reconciler created: the
+//     predicate keys on c.id alone (see the G2 allowlist entry, which says the same).
+//     • It refuses with ErrContributionNotFound rather than a distinct conflict error, because
+//     all three refused shapes are rows the caller cannot see; "not found" is the honest answer
+//     and leaks nothing. The cost is that a refusal is indistinguishable from a wrong id.
+//  4. ALLOWLIST ENTRY — allowedHistoryDeletes in history_delete_guard_test.go, whose `predicate`
+//     pins these WHERE fragments. Widening this statement fails that guard with no DB attached.
+//
+// The three legs are in the DELETE's OWN WHERE rather than in a preceding Go check, for the reason
+// #1569 round 14 reversed itself over on PurgeGoal: a Go `if` is invisible to the guard, so an edit
+// could remove it while the guard stayed green. Here they are the only check, so there is no pair
+// that can disagree and no check-then-act window to race.
+func (r *savingsContributionRepository) DeleteContribution(ctx context.Context, userID, id string, auditLog AuditLogRepository) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
+
+	result, err := tx.Exec(ctx, `
 		DELETE FROM savings_goal_contributions c
-		-- tombstone-exempt(write:savings_goal_contributions c): the real, explicit hard delete
-		-- (see the doc comment above and the G2 allowlist entry) — deliberately out of scope for
-		-- #1569 round 12 task 2, which only converted the PROVIDER-triggered path.
 		USING savings_goals g
 		WHERE c.id = $1
 		  AND c.savings_goal_id = g.id
 		  AND g.user_id = $2
 		  AND g.deleted_at IS NULL
-	`
-	result, err := r.db.Exec(ctx, query, id, userID)
+		  AND c.deleted_at IS NULL
+		  AND c.status <> $3
+	`, id, userID, contributionStatusRejected)
 	if err != nil {
 		return err
 	}
 	if result.RowsAffected() == 0 {
 		return domain.ErrContributionNotFound
 	}
-	return nil
+
+	if auditLog != nil {
+		if err := auditLog.LogInTx(ctx, tx, "savings_goal_contribution.history_purged",
+			"savings_goal_contribution", id); err != nil {
+			return fmt.Errorf("delete contribution %s: audit log: %w", id, err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 // RejectContribution sets a proposed contribution to 'rejected' status (sticky tombstone).

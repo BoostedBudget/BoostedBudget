@@ -2315,6 +2315,11 @@ func main() {
 			savingsProgressService, // ContributionProgressRecomputer: RecomputeGoalByID (R3-2)
 			savingsGoalRepo,        // ContributionGoalReader: GetByIDForUser (R3-3 C8 basis gate)
 		)
+		// Issue #1569 round 17 task 6: DeleteContribution is the one deliberate user-facing hard
+		// delete of financial history; its audit row must be written INSIDE the delete's own
+		// transaction. Same construction as savingsGoalService's wiring above — a fresh
+		// AuditLogRepository, because `auditLogger` is scoped to a different block.
+		humaContributionHandler.SetAuditLogRepository(repository.NewAuditLogRepository(db))
 		operations.RegisterContributionRoutes(humaAPI, humaContributionHandler)
 		appLogger.Info("Huma savings goal contribution routes registered (M20 D6 source-a)")
 

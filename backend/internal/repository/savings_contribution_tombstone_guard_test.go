@@ -29,14 +29,16 @@ import (
 // naming it. Every UPDATE/DELETE write TARGET on this table must carry the same, in the separate
 // `write:` key space.
 //
-// THIS TABLE HAS EXACTLY ONE EXEMPTION, AND IT IS DELIBERATE: DeleteContribution
-// (savings_contribution_repository.go) is the pre-existing, user-facing, explicit hard delete
-// (G2-allowlisted) that this round's brief named out of scope -- "Do NOT change DeleteContribution".
-// Its own DELETE target carries a `tombstone-exempt(write:savings_goal_contributions c)` token
-// rather than a predicate, because adding one would be exactly the kind of quiet SQL change the
-// brief forbade, not because the target is unconsidered.
+// THIS TABLE NOW HAS NO EXEMPTION AT ALL (#1569 round 17 task 6). It used to have exactly one:
+// DeleteContribution's own DELETE target carried a `tombstone-exempt(write:savings_goal_contributions c)`
+// token rather than a predicate, because round 12's brief named that function out of scope. The
+// token was doing real damage, not just documenting a deferral -- without `c.deleted_at IS NULL`
+// the user-facing hard delete could destroy a contribution DeleteManagedForTransaction had already
+// tombstoned and retained, which is precisely the row the user cannot see and therefore cannot have
+// named. Round 17 task 6 added the predicate and deleted the token, so this guard now covers every
+// reference and every write target on this table with no exception.
 //
-// Every other reference and write target on this table is FILTERED, not exempted: the sums that
+// Every reference and write target on this table is FILTERED, not exempted: the sums that
 // feed goal progress, the lists a user sees, the ownership/confirm/reject probes, and the tombstone
 // write itself (idempotency: DeleteManagedForTransaction's own `c.deleted_at IS NULL` stops a
 // re-delivered Plaid `removed` event from re-stamping the timestamp).
@@ -89,7 +91,8 @@ func TestNoSavingsContributionReadForgetsTheTombstoneFilter(t *testing.T) {
 				"round 12 task 2).\n"+
 				"Add `AND <that reference's alias>.deleted_at IS NULL` -- another table's predicate "+
 				"in the same statement does NOT count -- or, if the reference must deliberately see "+
-				"or leave alone a tombstoned contribution (only DeleteContribution qualifies today), "+
+				"or leave alone a tombstoned contribution (nothing qualifies today -- see the "+
+				"doc comment), "+
 				"an SQL comment naming THIS reference inside the literal:\n"+
 				"  -- tombstone-exempt(savings_goal_contributions[ <alias>]): <why>            "+
 				"(excuses a READ reference)\n"+
