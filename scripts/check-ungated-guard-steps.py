@@ -96,6 +96,12 @@ REQUIRED_UNGATED_STEPS = [
         "this guard; it must not be able to skip itself",
     ),
     (
+        "Test smoke-test deploy-gate failure paths (#1569)",
+        "scripts/smoke-test.sh is the production/staging deploy gate; its regression suite's "
+        "corpus spans scripts/**, the two deploy workflows that invoke it and "
+        "apps/mcp-server/wrangler.toml, which no single paths filter covers",
+    ),
+    (
         "Guard — whole-tree corpus guards (#1569 R17 T1)",
         "TestNoUnallowlistedFrontendFixtureHistoryDelete scans apps/web/scripts/**, and the three "
         "Markdown citation guards plus TestCitedLineNumbersAreInRange scan docs/** and root *.md "
