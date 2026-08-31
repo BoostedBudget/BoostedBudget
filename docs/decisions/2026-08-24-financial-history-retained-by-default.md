@@ -68,22 +68,48 @@ refuses to run on live data; and an entry in `allowedHistoryDeletes` (guard G2) 
 
 Today this bucket has exactly **four** members — the four distinct functions keyed in
 `allowedHistoryDeletes` (`history_delete_guard_test.go`, **7** `(function, table)` entries across
-them; re-derive both numbers before quoting them, they have been stale twice). ⚠ **They do not all
-meet the four requirements, and this document previously implied they did.** The strong form holds
-for the three purges only:
+them; re-derive both numbers before quoting them, they have been stale twice). ⚠ **As of #1569
+round 17 task 6 all four meet all four requirements.** This table said otherwise for three rounds,
+and before that it wrongly implied they all did; re-derive rather than trusting either version.
 
 | | `PurgeAccount` | `PurgeLinkedItem` | `PurgeGoal` | `DeleteContribution` |
 |---|---|---|---|---|
 | Own endpoint/method, distinct from the retaining path | yes | yes | yes | yes |
-| Audit row in the SAME transaction | yes | yes | yes | **no** |
-| Precondition refusing to run on live data | yes | yes | yes | **no — inverted**: its predicate requires a LIVE goal (`g.deleted_at IS NULL`) |
+| Audit row in the SAME transaction | yes | yes | yes | yes (`savings_goal_contribution.history_purged`, r17 T6) |
+| Precondition refusing to run on live data | yes | yes | yes | yes — **in the mirrored form**, see below |
 | Entry in `allowedHistoryDeletes` with a reason | yes | yes | yes | yes |
 
 *Method:* the audit column is `/usr/bin/grep -n "LogInTx" backend/internal/repository/{account,linked_item,savings_goal,savings_contribution}_repository.go`
-— three `*.history_purged` calls, none in `savings_contribution_repository.go`. The precondition
-column is reading each method body; `DeleteContribution`
-(`savings_contribution_repository.go`, function of that name) is a single bare `db.Exec` with no
-surrounding transaction.
+— four `*.history_purged` calls, one per function. The precondition column is reading each method
+body.
+
+### The precondition MIRRORS for a per-row delete, and that is not a loophole
+
+`DeleteContribution` is the only member whose precondition could not copy the purges verbatim, and
+the reason is structural rather than a concession. A purge acts on a PARENT the user retired in a
+separate, earlier, non-destructive step, so "refuse unless the parent is already tombstoned" is
+available. A contribution has no such two-step: the row under a LIVE goal is exactly what the
+endpoint exists to destroy, so the literal rule would delete the feature, not harden it.
+
+What the purges' precondition actually buys is that the destruction **cannot surprise anyone** — the
+resource has already left every live surface. For a per-row delete the same guarantee reads the
+other way round: destruction is permitted only for a row still ON the surface the user was looking
+at, and refused for every row the product has already retired from it. `DeleteContribution` now
+refuses all three retirements, in the DELETE's own `WHERE` (so guard G2 can see them):
+
+| retirement | leg | why the row is not the user's to destroy here |
+|---|---|---|
+| the goal is tombstoned | `g.deleted_at IS NULL` | its ledger is retained history read through `ListByDeletedGoal`; `PurgeGoal` is the path that destroys it, with its own confirm copy |
+| the contribution is tombstoned | `c.deleted_at IS NULL` | `DeleteManagedForTransaction` tombstoned it when Plaid withdrew the transaction; invisible everywhere, so the user cannot have named it |
+| the contribution is `rejected` | `c.status <> $3` | R3-7's sticky tombstone, kept on purpose and filtered out of the ledger UI; destroying it also re-opens the re-proposal loop |
+
+⚠ **What this does NOT cover.** It does not protect the row the user DID name: a live, visible,
+hand-typed contribution is destroyed irrecoverably, and there is no restore path anywhere on this
+branch. It does not check the confirm copy the user was shown (that lives in the UI). It does not
+distinguish a row the user entered from one the reconciler created — the predicate keys on `c.id`
+alone. And all three refusals return `ErrContributionNotFound`, so a refusal is indistinguishable
+from a wrong id; that is deliberate (all three shapes are invisible to the caller, so "not found" is
+the honest answer) but it does mean the API cannot explain itself.
 
 ⚠ **`DeleteManagedForTransaction` USED TO BE THE FIFTH MEMBER OF THIS TABLE AND IS NO LONGER A
 DELETE AT ALL** (#1569 round 12; this section still listed it as a delete until round 14). Migration
@@ -94,10 +120,13 @@ entry used to be). It belongs to Decision 2 below, not to this bucket: Plaid rep
 as `removed` is the provider acting, and "the provider is not the user". The rest of this section
 describes the ONE remaining deviation, `DeleteContribution`.
 
-`DeleteContribution` is recorded here as a **known deviation**, not as satisfying the list. It
-destroys exactly the one row the user is looking at and just asked to remove — though its predicate
-keys on `c.id` alone, so a row the *reconciler* created is reachable by it too (see the allowlist
-entry, which no longer claims the row is one the user entered).
+`DeleteContribution` **was** recorded here as a known deviation until #1569 round 17 task 6, and the
+deviation had a leg nobody had written down: the DELETE carried no `c.deleted_at IS NULL`, so the
+one sanctioned user-facing destruction path could reach a contribution the system had ALREADY
+tombstoned and retained. Of the three findings, the undocumented one was the only one that destroyed
+retained data. It destroys exactly the one row the user is looking at and just asked to remove —
+though its predicate keys on `c.id` alone, so a row the *reconciler* created is reachable by it too
+(see the allowlist entry, which no longer claims the row is one the user entered).
 
 ⚠ **A retraction worth keeping, because it now applies to the tombstone's scope rather than to a
 delete.** Until 2026-08-26 this document argued that the provider-triggered path was justified by

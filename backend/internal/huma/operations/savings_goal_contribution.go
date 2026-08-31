@@ -45,6 +45,18 @@ type ContributionHandler struct {
 	contribRepo     repository.SavingsContributionRepository
 	progressService ContributionProgressRecomputer // optional; nil = skip goal recompute after write
 	goalReader      ContributionGoalReader         // optional; nil = skip basis gate (tests only)
+
+	// auditLogRepo records the savings_goal_contribution.history_purged entry INSIDE
+	// DeleteContribution's own transaction (#1569 round 17 task 6, ADR explicit-destruction
+	// control 2). Optional dependency wired by SetAuditLogRepository rather than a fourth
+	// constructor parameter — same setter pattern as savingsGoalService.auditLogRepo, and it keeps
+	// the ~25 existing NewContributionHandler call sites untouched. nil = no audit row.
+	auditLogRepo repository.AuditLogRepository
+}
+
+// SetAuditLogRepository wires the audit-log repository used by DeleteContribution. See the field.
+func (h *ContributionHandler) SetAuditLogRepository(ar repository.AuditLogRepository) {
+	h.auditLogRepo = ar
 }
 
 // NewContributionHandler creates a new ContributionHandler.
@@ -343,9 +355,14 @@ func (h *ContributionHandler) RejectContribution(ctx context.Context, input *Rej
 }
 
 // DeleteContribution handles DELETE /api/v1/savings-goals/{goalID}/contributions/{id}.
-// Removes a contribution row. The user may delete both proposed and confirmed rows.
+// PERMANENTLY DESTROYS a contribution row: the user may delete proposed and confirmed rows.
+//
+// 404 now also covers three deliberate refusals — a tombstoned goal, a tombstoned contribution and
+// a 'rejected' sticky tombstone — none of which the caller can see in any product surface. See the
+// repository method's doc comment (#1569 round 17 task 6) for why "not found" is the honest answer
+// for all three and what the refusal does NOT protect.
 func (h *ContributionHandler) DeleteContribution(ctx context.Context, input *DeleteContributionInput) (*struct{}, error) {
-	if err := h.contribRepo.DeleteContribution(ctx, input.UserID, input.ID); err != nil {
+	if err := h.contribRepo.DeleteContribution(ctx, input.UserID, input.ID, h.auditLogRepo); err != nil {
 		if err == domain.ErrContributionNotFound {
 			return nil, huma.Error404NotFound("contribution not found")
 		}

@@ -14,6 +14,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -98,8 +99,8 @@ func (m *mockSavingsContributionRepo) RejectContribution(ctx context.Context, us
 	return args.Get(0).(*domain.SavingsGoalContribution), args.Error(1)
 }
 
-func (m *mockSavingsContributionRepo) DeleteContribution(ctx context.Context, userID, id string) error {
-	args := m.Called(ctx, userID, id)
+func (m *mockSavingsContributionRepo) DeleteContribution(ctx context.Context, userID, id string, auditLog repository.AuditLogRepository) error {
+	args := m.Called(ctx, userID, id, auditLog)
 	return args.Error(0)
 }
 
@@ -461,7 +462,7 @@ func TestDeleteContribution_Success(t *testing.T) {
 	progress := new(mockContributionProgressRecomputer)
 	handler := NewContributionHandler(contribRepo, progress, nil)
 
-	contribRepo.On("DeleteContribution", mock.Anything, userID, contribID).
+	contribRepo.On("DeleteContribution", mock.Anything, userID, contribID, mock.Anything).
 		Return(nil)
 	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
 
@@ -489,7 +490,7 @@ func TestDeleteContribution_NotFound_Returns404(t *testing.T) {
 	contribRepo := new(mockSavingsContributionRepo)
 	handler := NewContributionHandler(contribRepo, nil, nil)
 
-	contribRepo.On("DeleteContribution", mock.Anything, userID, contribID).
+	contribRepo.On("DeleteContribution", mock.Anything, userID, contribID, mock.Anything).
 		Return(domain.ErrContributionNotFound)
 
 	ctx := context.Background()

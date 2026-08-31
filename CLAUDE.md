@@ -167,9 +167,13 @@ Before writing anything that removes a row, classify it:
   the SAME transaction, a precondition refusing live data, and an entry in `allowedHistoryDeletes`.
   ⚠ `allowedHistoryDeletes` holds **7 entries across 4 functions** today (`PurgeAccount`,
   `PurgeLinkedItem`, `PurgeGoal`, `DeleteContribution`) — re-derive before quoting either number.
-  Only the three purges meet all four controls. `DeleteContribution` meets 2/4 — own endpoint and
-  an allowlist entry, but no audit row and no live-data precondition (its predicate is *inverted*:
-  it requires a LIVE goal). It is the only remaining known deviation; see ADR § Classification Test.
+  ⚠ **All four now meet all four controls** (#1569 r17 T6 — this said `DeleteContribution` met 2/4
+  until then). Its audit row is `savings_goal_contribution.history_purged` via `LogInTx`, and its
+  precondition is the MIRRORED form the ADR now spells out: a per-row delete cannot demand a
+  tombstoned parent (that is the row it exists to destroy), so it instead refuses every row the
+  product has already retired from the live ledger — `g.deleted_at IS NULL`, `c.deleted_at IS NULL`
+  and `c.status <> $3` (bound to `'rejected'`, R3-7's sticky tombstone). It protects nothing about
+  the row the user DID name: that is destroyed irrecoverably. See ADR § Classification Test.
   ⚠ `DeleteManagedForTransaction` is **NO LONGER a delete at all**, and this paragraph claimed it
   was until #1569 round 14. Round 12 converted it to a TOMBSTONE — `UPDATE … SET deleted_at,
   deleted_reason = 'provider_removed_txn'` (migration `000180`) — and its `allowedHistoryDeletes`
