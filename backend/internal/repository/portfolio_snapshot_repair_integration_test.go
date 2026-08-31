@@ -264,7 +264,7 @@ func TestPortfolioRepair_DayWithNoHistoryRows_IsLeftAloneAndNeverZeroed(t *testi
 
 	day := dayUTC(ctx, t, tx, 4)
 	seedPortfolioSnapshot(ctx, t, tx, userID, day, 777, 700, 77, f64(11))
-	before := readPortfolioSnapshot(ctx, t, tx, userID, day)
+	beforeCTID := readPortfolioSnapshotCTID(ctx, t, tx, userID, day)
 
 	repo := NewPortfolioSnapshotRepository(tx)
 	sum, err := repo.RepairUserFromHistory(ctx, userID.String())
@@ -279,8 +279,17 @@ func TestPortfolioRepair_DayWithNoHistoryRows_IsLeftAloneAndNeverZeroed(t *testi
 	assert.InDelta(t, 77.0, after.totalGainLoss, 0.001)
 	require.NotNil(t, after.totalGainLossPct)
 	assert.InDelta(t, 11.0, *after.totalGainLossPct, 0.001)
-	assert.True(t, before.updatedAt.Equal(after.updatedAt),
-		"a refusal must not even touch updated_at — an untouched row must read as untouched")
+	// #1569 T8 (r17): ctid, not updated_at. The updated_at form of this assertion was VACUOUS and
+	// was proven so rather than assumed: with the production UPDATE mutated to rewrite every
+	// candidate day (verdict filter and IS DISTINCT FROM guard removed), the row's ctid moved
+	// (0,30) -> (0,31) and the updated_at assertion still passed. portfolio_snapshots has a
+	// BEFORE UPDATE trigger setting updated_at = NOW(), NOW() is transaction_timestamp(), and this
+	// whole test is one transaction — so updated_at is frozen and cannot witness a rewrite here.
+	// ⚠ ctid depends on Postgres moving the tuple pointer on UPDATE (heap MVCC writes a new tuple
+	// version even when no column value changes); empirically confirmed above, but it is a
+	// storage-engine dependency. Same fix and same limit as readPortfolioSnapshotCTID's own header.
+	assert.Equal(t, beforeCTID, readPortfolioSnapshotCTID(ctx, t, tx, userID, day),
+		"a refusal must not even rewrite the row — an untouched row must read as untouched")
 
 	l, ok := readLedger(ctx, t, tx, userID, day)
 	require.True(t, ok, "a refusal must be recorded, or 'left alone' is indistinguishable from 'never examined'")
@@ -368,8 +377,10 @@ func TestPortfolioRepair_SecondRunChangesNothing(t *testing.T) {
 	assert.Equal(t, 1, first.RefusedPartialCoverage)
 
 	afterFirst := map[string]storedSnapshot{}
+	afterFirstCTID := map[string]string{}
 	for _, d := range []time.Time{full, none, partial} {
 		afterFirst[d.Format("2006-01-02")] = readPortfolioSnapshot(ctx, t, tx, userID, d)
+		afterFirstCTID[d.Format("2006-01-02")] = readPortfolioSnapshotCTID(ctx, t, tx, userID, d)
 	}
 	require.Equal(t, 3, ledgerCount(ctx, t, tx, userID))
 
@@ -382,8 +393,11 @@ func TestPortfolioRepair_SecondRunChangesNothing(t *testing.T) {
 		got := readPortfolioSnapshot(ctx, t, tx, userID, d)
 		want := afterFirst[d.Format("2006-01-02")]
 		assert.InDelta(t, want.totalValue, got.totalValue, 0.001)
-		assert.True(t, want.updatedAt.Equal(got.updatedAt),
-			"a second run must not touch updated_at on %s", d.Format("2006-01-02"))
+		// #1569 T8 (r17): ctid, for the same reason and with the same proof as test 3 above — under
+		// the mutated UPDATE all three rows moved ((0,35)->(0,38), (0,36)->(0,39), (0,37)->(0,40))
+		// and the updated_at form stayed green. Storage-engine dependency noted there applies here.
+		assert.Equal(t, afterFirstCTID[d.Format("2006-01-02")], readPortfolioSnapshotCTID(ctx, t, tx, userID, d),
+			"a second run must not rewrite the row on %s", d.Format("2006-01-02"))
 	}
 }
 
