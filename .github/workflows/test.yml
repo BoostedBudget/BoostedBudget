@@ -204,6 +204,23 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/assert-no-ungated-migrate-down-invocation.sh
 
+      # #1569 round 17 task 1. Every step above, and the "whole-tree corpus guards" step further
+      # down, is correct ONLY because this job has no `needs:`/paths-filter gate. That property is
+      # load-bearing and invisible: adding `needs: detect-changes` and an `if:` here would silently
+      # unwire five history/citation guards plus three shell guards, and every one of them would
+      # keep passing locally. This checks it, naming the steps that depend on it.
+      #
+      # Regression suite first (proves the guard can still reject a gated fixture), then the real
+      # scan — the same two-step shape as the three guards above. Pure Python against the
+      # checked-out workflow file: no Go, no Bun, no browser, ~1s.
+      - name: Test ungated-guard-step wiring guard (#1569 regression suite)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/check-ungated-guard-steps.test.sh
+
+      - name: Guard — whole-tree guard steps must live in an ungated job (#1569)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: python3 scripts/check-ungated-guard-steps.py
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -244,6 +261,52 @@ jobs:
 
       - name: Make backend binary executable
         run: chmod +x $GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
+
+      # #1569 round 17 task 1. FIVE Go guards scan corpora that live OUTSIDE the paths-filters of
+      # the only job that ran them (backend-test, gated `backend || api || workflow || config`,
+      # where `backend` is backend/**, go.mod, go.sum, scripts/**):
+      #
+      #   TestNoUnallowlistedFrontendFixtureHistoryDelete  scans apps/web/scripts/**
+      #   TestMarkdownCitedTestNamesResolve                scans docs/** + root *.md
+      #   TestMarkdownDecisionCrossReferencesResolve       scans docs/** + root *.md
+      #   TestMarkdownCitedPathsResolve                    scans docs/** + root *.md
+      #   TestCitedLineNumbersAreInRange                   adds docs/**, CLAUDE.md, apps/**, packages/**
+      #
+      # `apps/web/**` matches only the `frontend` filter and `docs/**` + root `*.md` match NO filter
+      # at all, so a PR confined to any of those corpora skipped backend-test and ran none of them.
+      # The severe case: an unallowlisted `DELETE FROM <history table>` added to
+      # apps/web/scripts/seed-e2e-data.sql — a file deliberately brought INTO G4's universe in
+      # #1569 task 7.9 — touched nothing the gate could see, so the guard never executed and the
+      # delete shipped. A guard extension that cannot execute is indistinguishable from one that
+      # was never written.
+      #
+      # Hosted HERE for the same reason as the three steps at the top of this job: e2e-test has no
+      # `needs:`/paths-filter gate at all (`if: always() && !cancelled()` reacts only to prior job
+      # outcomes), so it runs on EVERY pull request. That makes the trigger unconditional rather
+      # than merely wider — there is no changed-path set that can evade it, which is strictly
+      # stronger than adding `docs/**`/`apps/web/scripts/**` to backend-test's `if:`. It was chosen
+      # over the two alternatives on cost: widening backend-test would run the entire -race +
+      # coverage backend suite on every docs-only PR, and a dedicated job would take one of the
+      # four self-hosted Mac Mini runner slots on every PR — the saturation that has already caused
+      # job failures on this pool. This step takes a runner slot from nobody: it is ~15s appended to
+      # a job that is already running, reusing the Go toolchain and GOCACHE set up just above for
+      # the backend binary. The duplicate execution on backend PRs (backend-test runs `./...`) is
+      # accepted as the price of an ungated trigger.
+      #
+      # ⚠ Whole packages, NOT `-run '<regex>'`: an `-run` pattern that matches nothing exits 0, so a
+      # renamed test would silently turn this step into a no-op — the same "green but not running"
+      # failure this step exists to fix. `internal/repository` additionally carries G1/G2/G4's other
+      # halves and `internal/testsupport/citations` is entirely corpus guards, so nothing here is
+      # off-topic. Kept BEFORE the E2E run so a corpus violation fails in seconds instead of after
+      # a 15-minute browser suite.
+      #
+      # ⚠ The "this job is ungated" property this step depends on is itself enforced, by
+      # scripts/check-ungated-guard-steps.py (run below, and by `make test-scripts`). Adding
+      # `needs: detect-changes` + an `if:` to this job would otherwise silently unwire all five
+      # guards again, which is exactly how they came to be unwired in the first place.
+      - name: Guard — whole-tree corpus guards (#1569 R17 T1)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: go test -count=1 ./internal/repository/ ./internal/testsupport/citations/
 
       - name: Install golang-migrate
         env:
