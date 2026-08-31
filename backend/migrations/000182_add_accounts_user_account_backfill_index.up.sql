@@ -19,31 +19,51 @@
 -- three-state form above (cold start: no position predicate; resume: `created_at >= T` with an
 -- OFFSET into the tie group; in-run: the exact keyset). The migration documented the shape the fix
 -- removed. THE INDEX ITSELF WAS RE-DERIVED AGAINST THE CURRENT SHAPE AND STILL SERVES IT — that was
--- the correctness question, and the numbers below are the re-measurement, not the old ones.
+-- the correctness question.
 --
--- WHY IT IS NEEDED, MEASURED RATHER THAN ARGUED — and the nuance matters, because the naive
--- statement of this defect is wrong. In the STEADY STATE (a handful of candidate rows) there is
+-- WHY IT IS NEEDED — and the nuance matters, because the naive statement of this defect is wrong. In the STEADY STATE (a handful of candidate rows) there is
 -- already no sequential scan: idx_accounts_user_account (migration 000033) is a plain btree on
 -- user_account_id, btrees index NULLs, and `IS NULL` is an ordinary index condition. What no
 -- existing index provides is the ORDERING, so every page pays a sort of the WHOLE candidate set —
 -- which is free at five rows and is the entire problem at a backlog, and a backlog is the only
 -- condition under which this backfill does anything at all.
 --
--- RE-MEASURED FOR THE CURRENT QUERY SHAPE (#1569 round 16 task 9), postgres:17.11, 300k accounts of
--- which 100k are candidates all sharing ONE created_at, EXPLAIN (ANALYZE, BUFFERS) on this file's
--- query verbatim, one page of 500:
+-- THE SHAPE, NOT A TABLE OF NUMBERS — AND THAT IS DELIBERATE (#1569 round 17 task 10, B-2). This
+-- comment used to carry a table of EXPLAIN (ANALYZE, BUFFERS) figures. They were re-measured on
+-- postgres:17.11 (this repo's own container) against a rebuilt worst-case dataset — the real
+-- schema, 300k accounts of which 100k are candidates ALL SHARING ONE created_at, ids random
+-- uuids, this file's query verbatim, one page of 500 — and only the SHAPE reproduced. The
+-- small-offset per-page counts landed within a buffer of the old ones; the no-index figure and the
+-- offset at which the plan flips did NOT reproduce at all. They cannot: a buffer count is a
+-- function of row width, heap correlation, shared_buffers, work_mem and
+-- max_parallel_workers_per_gather, none of which this file controls, so a number written here is a
+-- number that silently rots. What is stable, and is the whole justification:
 --
---   cold start, no index:  Seq Scan + top-N heapsort over all 100000 candidates, 2210 buffers
---   cold start, WITH it:   Index Scan using this index,                            506 buffers
---   resume, OFFSET  1000:  Index Scan, Index Cond `created_at >= T`,              1512 buffers
---   resume, OFFSET 50000:  same plan,                                            50781 buffers
---   resume, OFFSET 99500:  PLAN FLIPS to Gather Merge + external merge sort (2.7 MB temp)
---   in-run keyset page:    Index Cond carries the ROW(created_at, id) > ROW(...) comparison
+--   cold start, no index:  Parallel Seq Scan over the WHOLE table + top-N heapsort — a cost in the
+--                          table's total block count, paid again for EVERY page.
+--   cold start, with it:   Index Scan in (created_at, id) order, roughly one buffer access per row
+--                          RETURNED (see the warning below for why that is a property of this
+--                          dataset, not a law). Bounded by the page, not by the table.
+--   resume, OFFSET k:      same plan, cost linear in k — Postgres genuinely walks and discards the
+--                          first k rows before returning anything.
+--   large enough k:        the planner ABANDONS this index for a bitmap scan of the whole candidate
+--                          set plus an external merge sort — the very sort the index exists to
+--                          prevent. Where that crossover sits is a planner decision against the
+--                          live statistics and settings, not a constant. Do not write it down.
+--   in-run keyset page:    Index Cond carries the ROW(created_at, id) > ROW(...) comparison, so the
+--                          page costs what the cold start's does.
 --
--- ⚠ THE PREVIOUS THREE NUMBERS HERE (3688 / 13 / "OFFSET 1000 reads 20 shared buffers") DID NOT
--- REPRODUCE and have been replaced. 13 or 20 buffers cannot be right for a 500-row page at all:
--- Postgres counts buffer ACCESSES, and an Index Scan returning 500 heap rows costs at least 500 of
--- them (measured: 506). Do not restore them.
+-- ⚠ THE REASON THE ORIGINAL FIGURES WERE REPLACED IN ROUND 16 WAS ITSELF FALSE, and that is why
+-- there is no table here now. Round 16 declared an "OFFSET 1000 reads 20 shared buffers" reading
+-- impossible, on the grounds that "an Index Scan returning 500 heap rows costs at least 500 buffer
+-- accesses". IT DOES NOT, and the counter-example is one query on postgres:17.11: a 100k-row table
+-- whose ids ascend with physical order, `SELECT id, pad ... ORDER BY created_at, id OFFSET 1000
+-- LIMIT 500`, plan `Index Scan`, actual rows 1500 — 39 buffers. EXPLAIN (BUFFERS) counts
+-- accesses to 8 KB BLOCKS, many tuples share a block, and a heap block that is already the one the
+-- scan holds is not counted again. So the round-16 refutation was arithmetic on the wrong unit, and
+-- the original figures it discarded were never shown to be wrong. The roughly-one-per-row figure
+-- above is what THIS dataset's random-uuid ordering produces — an upper end for an uncorrelated
+-- heap, not a floor. Never re-derive a buffer count from a row count.
 --
 -- The index's justification survives the re-measurement intact — it is still the difference between
 -- an ordered Index Scan and a sort of the whole candidate set, per PAGE, at boot, before the server
