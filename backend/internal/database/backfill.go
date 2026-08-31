@@ -448,6 +448,20 @@ func backfillAccountsUserAccountIDs(ctx context.Context, db *pgxpool.Pool, enc *
 // the candidate set on disk. This is accepted as implausible for the write path that produces these
 // rows, not as impossible.
 //
+// ⚠ AND "IMPLAUSIBLE FOR THE WRITE PATH" IS NOT A PROPERTY OF THIS CODE — #1569 round 17 task 8
+// corrects the note that read as though it were. The write path is AccountRepository.CreateBatch
+// (repository/account_repository.go): it opens ONE transaction, binds ONE `now := time.Now()`, and
+// stamps it as created_at on every element of an `accounts` slice whose length it never checks. So
+// a tie group is exactly one CreateBatch call's slice, and its size is whatever Plaid returned for
+// that Item — bounded by the provider, by nothing here. The judgement that a >1000-account
+// institution does not occur is EMPIRICAL, about the outside world; it is not enforced, not
+// asserted, and must not be quoted as "the write path cannot produce one".
+//
+// What keeps that from being a data-loss risk is a different mechanism, and it is the one to rely
+// on: this scan resumes INSIDE a tie group via ts1_offset (migration 000183), so an over-cap group
+// is walked through across boots rather than sacrificed. The cost of a large group is a sort, not a
+// skipped row.
+//
 // ⚠ WHAT THIS DOES **NOT** CHANGE: failure semantics. An error still propagates and main.go still
 // exits — bounding the work per boot and degrading instead of exiting are two different decisions,
 // and only the first was taken.
