@@ -223,8 +223,23 @@ type AccountService interface {
 	SetAuditLogger(al AuditLogger)
 
 	// SetAuditLogRepository wires the account.history_purged / linked_item.history_purged audit
-	// entries written by PurgeAccount/PurgeInstitution (Issue #1569, Task 6). Nil-safe optional
-	// dependency. Distinct from SetAuditLogger: those two writes MUST land inside the same
+	// entries written by PurgeAccount/PurgeInstitution (Issue #1569, Task 6).
+	//
+	// ⚠ NOT OPTIONAL SINCE #1569 ROUND 17 TASK 11, and this comment said "nil-safe optional
+	// dependency" until round 17 corrected it. PurgeAccount and PurgeInstitution now REFUSE with
+	// repository.ErrAuditLogRepositoryNotWired — a 500 — when this has not been called, rather
+	// than destroying financial history with no trail. Leaving it unwired does not degrade the
+	// audit trail; it disables both purge endpoints. Every other Set* on this interface really is
+	// optional; this one is a construction requirement, and
+	// TestExplicitDestructionAuditSinkIsWiredInMain fails in CI if main.go stops calling it.
+	//
+	// ⚠ THE REPOSITORY LAYER IS STILL NIL-TOLERANT, deliberately. accountRepo.PurgeAccount and
+	// linkedItemRepo.PurgeLinkedItem take the sink as a parameter and skip the audit write when it
+	// is nil, so ~19 integration tests can exercise the destruction without an audit fixture. The
+	// refusal above is the ONLY thing standing between a nil sink and an unaudited destroy, which
+	// is why it lives in every service-layer caller and not in one place.
+	//
+	// Distinct from SetAuditLogger: those two writes MUST land inside the same
 	// transaction as the destruction they describe (repository.AuditLogRepository.LogInTx), which
 	// requires the full repository interface rather than the plain Log-only AuditLogger — see
 	// LogInTx's own doc comment for why that is safe here (this transaction never takes FOR UPDATE
@@ -264,8 +279,11 @@ type accountService struct {
 
 	// auditLogRepo records account.history_purged / linked_item.history_purged entries INSIDE
 	// PurgeAccount/PurgeInstitution's own transaction (Issue #1569, Task 6), via LogInTx — unlike
-	// auditLogger above, which is intentionally the non-transactional Log. Nil-safe optional
-	// dependency, wired by SetAuditLogRepository.
+	// auditLogger above, which is intentionally the non-transactional Log.
+	//
+	// ⚠ REQUIRED, not optional: while this is nil both PurgeAccount and PurgeInstitution return
+	// repository.ErrAuditLogRepositoryNotWired instead of running (#1569 round 17 task 11). Wired
+	// by SetAuditLogRepository — see that method's doc for what is still nil-tolerant below it.
 	auditLogRepo repository.AuditLogRepository
 
 	// Issue #1531 Blocker 1: cache invalidation for the dispossessed owner on fingerprint release
