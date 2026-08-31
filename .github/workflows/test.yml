@@ -232,6 +232,18 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/schema-constraint-history-fks.test.sh
 
+      # #1569 round 17 task 3. scripts/smoke-test.sh is the hard gate on real production and
+      # staging deploys, and until this round it could not fail on a lost HTTPS redirect, absent
+      # CORS, or an RFC 9728 OAuth `resource` mismatch. This suite runs the real script against a
+      # stubbed curl and asserts both directions: the fatal checks exit non-zero, and the
+      # unreliable-probe variant of each still exits 0 so a network flake cannot block a release.
+      # Hosted HERE because its corpus spans scripts/**, .github/workflows/** (the deploy
+      # workflows that invoke it) and apps/mcp-server/wrangler.toml, which no single paths filter
+      # covers. No network, no Postgres, no Bun: ~1s.
+      - name: Test smoke-test deploy-gate failure paths (#1569)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/smoke-test-failure-paths.test.sh
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
