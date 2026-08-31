@@ -112,10 +112,16 @@ BEGIN
     END IF;
 END $$;
 
+-- #1569 T8 (r17): the existence guard is qualified by conrelid. Name-only (`conname = '...'`)
+-- would let a same-named constraint on ANY table suppress this ADD, and here the VALIDATE is inside
+-- the same IF, so the CASCADE would simply never exist -- silently. Verified against pg_constraint
+-- that the edge landed on the intended table before qualifying it.
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'fk_rule_execution_history_user_id'
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_rule_execution_history_user_id'
+          AND conrelid = 'rule_execution_history'::regclass
     ) THEN
         ALTER TABLE rule_execution_history
             ADD CONSTRAINT fk_rule_execution_history_user_id
@@ -251,10 +257,16 @@ BEGIN
     END IF;
 END $$;
 
+-- #1569 T8 (r17): the existence guard is qualified by conrelid. Name-only (`conname = '...'`)
+-- would let a same-named constraint on ANY table suppress this ADD, and here the VALIDATE is inside
+-- the same IF, so the CASCADE would simply never exist -- silently. Verified against pg_constraint
+-- that the edge landed on the intended table before qualifying it.
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'fk_boost_executions_user_id'
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_boost_executions_user_id'
+          AND conrelid = 'boost_executions'::regclass
     ) THEN
         ALTER TABLE boost_executions
             ADD CONSTRAINT fk_boost_executions_user_id
