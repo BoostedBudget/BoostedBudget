@@ -112,16 +112,20 @@ BEGIN
     END IF;
 END $$;
 
--- #1569 T8 (r17): the existence guard is qualified by conrelid. Name-only (`conname = '...'`)
--- would let a same-named constraint on ANY table suppress this ADD, and here the VALIDATE is inside
--- the same IF, so the CASCADE would simply never exist -- silently. Verified against pg_constraint
--- that the edge landed on the intended table before qualifying it.
+-- #1569 T8 (r17) / T2 (r18): the existence guard is qualified by conrelid AND contype = 'f'.
+-- pg_constraint is database-wide and holds every constraint type, so name-only (`conname = '...'`)
+-- would let a same-named constraint on ANY table suppress this ADD, and conrelid alone still lets a
+-- same-named CHECK on THIS table suppress it. Either way the VALIDATE is inside the same IF, so the
+-- CASCADE would simply never exist -- silently, with the migration reporting success. The CHECK
+-- variant was reproduced in r18 against a scratch copy of the migrated schema: exit 0, no FK.
+-- Pinned by TestMigrationFKGuards_SameNamedNonForeignKeyMustNotSuppressTheCascade.
 DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint
         WHERE conname = 'fk_rule_execution_history_user_id'
           AND conrelid = 'rule_execution_history'::regclass
+          AND contype = 'f'
     ) THEN
         ALTER TABLE rule_execution_history
             ADD CONSTRAINT fk_rule_execution_history_user_id
@@ -257,16 +261,20 @@ BEGIN
     END IF;
 END $$;
 
--- #1569 T8 (r17): the existence guard is qualified by conrelid. Name-only (`conname = '...'`)
--- would let a same-named constraint on ANY table suppress this ADD, and here the VALIDATE is inside
--- the same IF, so the CASCADE would simply never exist -- silently. Verified against pg_constraint
--- that the edge landed on the intended table before qualifying it.
+-- #1569 T8 (r17) / T2 (r18): the existence guard is qualified by conrelid AND contype = 'f'.
+-- pg_constraint is database-wide and holds every constraint type, so name-only (`conname = '...'`)
+-- would let a same-named constraint on ANY table suppress this ADD, and conrelid alone still lets a
+-- same-named CHECK on THIS table suppress it. Either way the VALIDATE is inside the same IF, so the
+-- CASCADE would simply never exist -- silently, with the migration reporting success. The CHECK
+-- variant was reproduced in r18 against a scratch copy of the migrated schema: exit 0, no FK.
+-- Pinned by TestMigrationFKGuards_SameNamedNonForeignKeyMustNotSuppressTheCascade.
 DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint
         WHERE conname = 'fk_boost_executions_user_id'
           AND conrelid = 'boost_executions'::regclass
+          AND contype = 'f'
     ) THEN
         ALTER TABLE boost_executions
             ADD CONSTRAINT fk_boost_executions_user_id
