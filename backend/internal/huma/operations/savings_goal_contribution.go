@@ -362,6 +362,12 @@ func (h *ContributionHandler) RejectContribution(ctx context.Context, input *Rej
 // repository method's doc comment (#1569 round 17 task 6) for why "not found" is the honest answer
 // for all three and what the refusal does NOT protect.
 func (h *ContributionHandler) DeleteContribution(ctx context.Context, input *DeleteContributionInput) (*struct{}, error) {
+	// Control 2 is not optional: refuse rather than destroy un-audited. See
+	// repository.ErrAuditLogRepositoryNotWired.
+	if h.auditLogRepo == nil {
+		return nil, humaerrors.LoggingMapError(ctx, repository.ErrAuditLogRepositoryNotWired)
+	}
+
 	if err := h.contribRepo.DeleteContribution(ctx, input.UserID, input.ID, h.auditLogRepo); err != nil {
 		if err == domain.ErrContributionNotFound {
 			return nil, huma.Error404NotFound("contribution not found")
