@@ -192,6 +192,192 @@ else
     fail "a -- inside a string literal must not blank the rest of the file"
 fi
 
+# --- #1569 round 17 task 10 (B-1): the classifier's OWN dollar-quote semantics, plus three more
+# lexical classes. The rule here was previously described as a port of blankSQLCommentsAndLiterals
+# (backend/internal/repository/history_delete_sql_guard_test.go). That was wrong in ONE respect and
+# the tests below are what pins the difference: that Go lexer deliberately lexes INSIDE a
+# dollar-quoted region so the G4 guards can still see `DO $$ ... DELETE ... $$`. For THIS consumer a
+# dollar-quoted region is opaque DATA — nothing inside it is executable SQL that psql's transaction
+# flag could ever apply to. One shared idea, two consumers, opposite semantics; do NOT re-port.
+
+cat > "$TMP/dollar_quoted_prose.up.sql" <<'EOF'
+COMMENT ON TABLE probe IS $$this index was NOT built CONCURRENTLY$$;
+CREATE TABLE IF NOT EXISTS probe (a INT);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/dollar_quoted_prose.up.sql"; then
+    fail "CONCURRENTLY inside a \$\$dollar-quoted\$\$ literal must not strip -1"
+else
+    pass "CONCURRENTLY inside a \$\$dollar-quoted\$\$ literal keeps -1"
+fi
+
+cat > "$TMP/dollar_quoted_named_tag.up.sql" <<'EOF'
+COMMENT ON TABLE probe IS $note$rebuilt, though not CONCURRENTLY$note$;
+CREATE TABLE IF NOT EXISTS probe (a INT);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/dollar_quoted_named_tag.up.sql"; then
+    fail "CONCURRENTLY inside a \$tag\$-delimited literal must not strip -1"
+else
+    pass "CONCURRENTLY inside a \$tag\$-delimited literal keeps -1"
+fi
+
+cat > "$TMP/dollar_body_procedural.up.sql" <<'EOF'
+DO $$
+BEGIN
+    EXECUTE 'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_probe ON probe (a)';
+END $$;
+CREATE TABLE IF NOT EXISTS probe (a INT);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/dollar_body_procedural.up.sql"; then
+    fail "CONCURRENTLY inside a DO block body must not strip -1 (Postgres refuses it there anyway)"
+else
+    pass "CONCURRENTLY inside a DO block body keeps -1"
+fi
+
+cat > "$TMP/unterminated_dollar.up.sql" <<'EOF'
+CREATE TABLE IF NOT EXISTS probe (a INT);
+COMMENT ON TABLE probe IS $$ an unterminated region mentioning CONCURRENTLY
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/unterminated_dollar.up.sql"; then
+    fail "an UNTERMINATED dollar region must fail toward keeping -1, not toward dropping it"
+else
+    pass "an unterminated dollar region fails toward keeping -1 (the safe direction)"
+fi
+
+cat > "$TMP/nested_block_comment.up.sql" <<'EOF'
+/* outer /* inner */ and the outer comment continues: not CONCURRENTLY */
+CREATE TABLE IF NOT EXISTS probe (a INT);
+INSERT INTO probe (a) VALUES (1);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/nested_block_comment.up.sql"; then
+    fail "PostgreSQL nests /* */; text after an INNER close is still comment and must not strip -1"
+else
+    pass "a NESTED block comment is comment all the way to its outer close, and keeps -1"
+fi
+
+cat > "$TMP/quoted_identifier.up.sql" <<'EOF'
+CREATE TABLE IF NOT EXISTS "not built CONCURRENTLY" (a INT);
+INSERT INTO probe (a) VALUES (1);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/quoted_identifier.up.sql"; then
+    fail "CONCURRENTLY inside a \"quoted identifier\" is a name, not the keyword, and must not strip -1"
+else
+    pass "CONCURRENTLY inside a quoted identifier keeps -1"
+fi
+
+cat > "$TMP/quoted_identifier_doubled.up.sql" <<'EOF'
+CREATE TABLE IF NOT EXISTS "a "" quoted CONCURRENTLY name" (a INT);
+INSERT INTO probe (a) VALUES (1);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/quoted_identifier_doubled.up.sql"; then
+    fail "a \"\" escape must not end a quoted identifier early"
+else
+    pass "a \"\" escape inside a quoted identifier keeps the whole name blanked"
+fi
+
+cat > "$TMP/e_string_backslash.up.sql" <<'EOF'
+INSERT INTO notes (body) VALUES (E'the migration\'s note about CONCURRENTLY');
+INSERT INTO notes (body) VALUES ('second');
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/e_string_backslash.up.sql"; then
+    fail "a backslash escape inside an E'...' literal must not end it early"
+else
+    pass "a backslash escape inside an E'...' literal keeps the whole literal blanked"
+fi
+
+cat > "$TMP/non_ascii_identifier.up.sql" <<'EOF'
+CREATE TABLE IF NOT EXISTS éCONCURRENTLYé (a INT);
+INSERT INTO probe (a) VALUES (1);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/non_ascii_identifier.up.sql"; then
+    fail "a non-ASCII letter is an identifier character in Postgres: éCONCURRENTLYé is a name, not the keyword"
+else
+    pass "non-ASCII identifier characters count as word characters at the keyword boundary"
+fi
+
+# The other polarity for every new class: none of them may HIDE a real CONCURRENTLY that follows.
+cat > "$TMP/dollar_then_real.up.sql" <<'EOF'
+COMMENT ON TABLE probe IS $$prose with an apostrophe: the migration's note$$;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_probe ON probe (a);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/dollar_then_real.up.sql"; then
+    pass "a real CONCURRENTLY statement is still found after a dollar-quoted literal"
+else
+    fail "a dollar-quoted literal must not swallow the real CONCURRENTLY that follows it"
+fi
+
+cat > "$TMP/quoted_ident_then_real.up.sql" <<'EOF'
+CREATE TABLE IF NOT EXISTS "probe's table" (a INT);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_probe ON probe (a);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/quoted_ident_then_real.up.sql"; then
+    pass "a real CONCURRENTLY statement is still found after a quoted identifier containing an apostrophe"
+else
+    fail "a quoted identifier must not swallow the real CONCURRENTLY that follows it"
+fi
+
+cat > "$TMP/e_string_then_real.up.sql" <<'EOF'
+INSERT INTO notes (body) VALUES (E'ends with a literal backslash \\');
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_probe ON probe (a);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/e_string_then_real.up.sql"; then
+    pass "a real CONCURRENTLY statement is still found after an E'...' literal ending in \\\\"
+else
+    fail "an E'...' literal ending in an escaped backslash must not swallow the CONCURRENTLY that follows"
+fi
+
+cat > "$TMP/nested_comment_then_real.up.sql" <<'EOF'
+/* outer /* inner */ still outer */
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_probe ON probe (a);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/nested_comment_then_real.up.sql"; then
+    pass "a real CONCURRENTLY statement is still found after a nested block comment"
+else
+    fail "a nested block comment must not swallow the real CONCURRENTLY that follows it"
+fi
+
+# standard_conforming_strings is ON by default in PostgreSQL 17, so a backslash in an ORDINARY
+# '...' literal escapes nothing — only E'...' gives it that power. Treating every literal as
+# backslash-escaped would run this one past its closing quote and hide the statement below.
+cat > "$TMP/standard_backslash_literal.up.sql" <<'EOF'
+INSERT INTO notes (body) VALUES ('ends with a backslash \');
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_probe ON probe (a);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/standard_backslash_literal.up.sql"; then
+    pass "a backslash in a STANDARD literal does not escape the closing quote"
+else
+    fail "a backslash in a standard-conforming literal must not extend the literal past its close"
+fi
+
+# ...and the E must be a token of its own. A trailing e on an identifier immediately followed by
+# a quote is an ordinary literal, not an escape-string. (Lexically synthetic on purpose: the point
+# is the boundary rule, and a fixture that is also idiomatic SQL cannot exhibit it.)
+cat > "$TMP/trailing_e_is_not_estring.up.sql" <<'EOF'
+INSERT INTO notes (body) VALUES (probe'ends with a backslash \');
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_probe ON probe (a);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/trailing_e_is_not_estring.up.sql"; then
+    pass "an e ending an identifier does not turn the following literal into an E-string"
+else
+    fail "an e that is part of an identifier must not be read as the E-string prefix"
+fi
+
+# ⚠ THE KEYWORD AT COLUMN 1. `CREATE INDEX` on one line and `CONCURRENTLY IF NOT EXISTS ...` on the
+# next is ordinary formatting, and it puts the keyword at offset 1 of its line — where the
+# left-hand boundary check has no preceding byte to look at. awk implementations DISAGREE about
+# substr(s, 0, 1): gawk returns "", the BWK awk that ships on macOS returns the FIRST character,
+# which reads as a word byte and suppresses the match. Found by an edge sweep of this classifier's
+# own rewrite (#1569 round 17 task 10) — it was live, and it failed toward a spurious `-1`, i.e.
+# toward a loud psql error rather than a silent one.
+cat > "$TMP/keyword_at_column_one.up.sql" <<'EOF'
+CREATE INDEX
+CONCURRENTLY IF NOT EXISTS idx_probe ON probe (a);
+EOF
+if replay_file_runs_outside_a_transaction "$TMP/keyword_at_column_one.up.sql"; then
+    pass "a CONCURRENTLY that starts its line (column 1) is still found"
+else
+    fail "a CONCURRENTLY at column 1 must be found: there is no preceding byte, not a word byte"
+fi
+
 echo ""
 echo "--- 2. the classifier, on the REAL migration files (the composition that was missed) ---"
 

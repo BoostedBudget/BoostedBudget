@@ -938,53 +938,69 @@ assert_replay_range_has_no_destructive_ddl() {
 # a false GREEN) the `-1` above exists to prevent. No file in the tree has that shape today, so this
 # is a latent defect, not an active one; it is fixed because the shape is one comment away.
 #
-# ⚠⚠ THE RULE BELOW IS A PORT, NOT A NEW REGEX. This is the same lexical class that
-# blankSQLCommentsAndLiterals (backend/internal/repository/history_delete_sql_guard_test.go) was
-# rewritten FOUR times to get right for the G4 guards, and each rewrite was forced by a hole a fresh
-# regex had. The awk below is a line-for-line port of that Go scanner's state machine — read its doc
-# comment there for WHY each rule is what it is; the summary is:
+# ⚠⚠ THE RULE BELOW IS THIS CLASSIFIER'S OWN, AND DELIBERATELY *DIFFERS* FROM THE GO ONE IT WAS
+# ONCE DESCRIBED AS A PORT OF (#1569 round 17 task 10, B-1). blankSQLCommentsAndLiterals
+# (backend/internal/repository/history_delete_sql_guard_test.go) exists so the G4 guards can see a
+# `DELETE` written inside `DO $$ … $$`, so it deliberately lexes the INTERIOR of a dollar-quoted
+# region as SQL. That is right for G4 and exactly INVERTED here: this classifier is asking "does
+# psql have an executable CONCURRENTLY statement to run in this file", and a `$tag$…$tag$` region is
+# opaque DATA — even a genuine CREATE INDEX CONCURRENTLY inside a DO body is not one, because
+# Postgres refuses it there regardless. ONE IDEA, TWO CONSUMERS, OPPOSITE SEMANTICS. Do not "fix"
+# this by re-porting the Go lexer, and do not change the Go lexer to match this: G4 depends on its
+# current behaviour and it took four rewrites to reach it.
 #
-#   * ONE left-to-right pass, state has priority. Once a `'` opens a string, `--` and `/*` inside it
-#     are data, not comment starts (000164's RAISE EXCEPTION message contains a literal `--`).
-#   * `''` inside a string is an escape, not a close.
-#   * A `$tag$` dollar-quoted region's INTERIOR is lexed independently and BOUNDED to its own
-#     matching close tag, so a prose apostrophe inside it cannot swallow the rest of the file, and a
-#     `$1$`/`$word$`-shaped substring inside an ORDINARY string is never inspected as a tag at all
-#     (tags are only ever recognised in default state). Dollar-quoted bodies are NOT blanked — they
-#     are procedural code, and a CONCURRENTLY inside one would be real.
-#   * A tag name may not start with a digit (Postgres's own rule).
-#   * Block comments are non-nested; an unterminated string blanks to EOF, an unterminated dollar
-#     region keeps being scanned normally (fail toward SEEING more, not less).
+# One left-to-right pass, state has priority; whatever opens first consumes to its own close:
+#
+#   * `--` to end of line, and `/* … */` WITH NESTING (PostgreSQL nests block comments, so a `*/`
+#     only ends the comment when it closes the outermost `/*`).
+#   * `'…'` — a standard-conforming literal (the PG 17 default): `''` is the only escape, a
+#     backslash escapes NOTHING. `E'…'` — recognised only when the `e`/`E` is not itself the tail of
+#     an identifier — additionally honours `\x` escapes, so a trailing `\'` does not close it.
+#   * `"…"` quoted identifiers, with `""` as the escape. A name is not the keyword, and an
+#     apostrophe inside one must not open a string.
+#   * `$tag$…$tag$` regions are blanked WHOLE, interior included (see above). A tag name may not
+#     start with a digit (Postgres's own rule), so `$1$` is a parameter, not a tag; and tags are
+#     only ever recognised in default state, so a `$…$`-shaped substring inside a string or comment
+#     is never inspected as one.
+#   * EVERY unterminated construct — string, identifier, block comment, dollar region — blanks to
+#     EOF. That fails toward NOT seeing the keyword, i.e. toward KEEPING `-1`, which is the safe
+#     direction: a spurious `-1` makes a CONCURRENTLY replay fail loudly, while a spuriously
+#     dropped `-1` silently removes transaction semantics from a multi-statement migration.
 #
 # Blanked bytes become SPACES, never nothing, so `CONCURR/*x*/ENTLY` cannot be spliced into a false
-# match. The keyword test then runs per line (the keyword cannot span one) with explicit
-# non-word-character boundaries, awk having no \b.
+# match. The keyword test then runs per line (the keyword cannot span one) with explicit word
+# boundaries — awk has no \b — and a byte ≥ 0x80 counts as a WORD byte, because a non-ASCII letter
+# is an identifier character in Postgres and `éCONCURRENTLYé` is a name. `LC_ALL=C` pins awk to
+# byte semantics so that rule means the same thing under every awk and locale.
 #
-# scripts/__tests__/replay-concurrently-transaction.test.sh exercises every one of these cases and
-# pins the whole migrations corpus's classification explicitly.
+# scripts/__tests__/replay-concurrently-transaction.test.sh exercises every one of these cases, in
+# both polarities, and pins the whole migrations corpus's classification explicitly.
 replay_file_runs_outside_a_transaction() {
     local f="$1"
-    /usr/bin/awk '
+    LC_ALL=C /usr/bin/awk '
         function isIdentStart(c) { return c != "" && index(ALPHA, c) > 0 }
         function isIdentCont(c)  { return c != "" && (index(ALPHA, c) > 0 || index(DIGIT, c) > 0) }
+        # Word byte for KEYWORD-BOUNDARY purposes only: ASCII identifier characters plus every byte
+        # >= 0x80, so a UTF-8 letter adjacent to the keyword suppresses the match.
+        function isWordByte(c)   { return c != "" && (index(ALPHA, c) > 0 || index(DIGIT, c) > 0 || (c in HIGH)) }
+        function at(i)           { return (i >= 1 && i <= N) ? substr(S, i, 1) : "" }
 
         # The full `$tag$` delimiter starting at i, or "" if none starts there. Only ever called
         # from default state — that restriction, not anything here, is what keeps a $..$-shaped
-        # substring inside an ordinary string from being treated as a tag.
+        # substring inside a string or comment from being treated as a tag.
         function dollarTagAt(i,   j) {
-            if (i > N || substr(S, i, 1) != "$") return ""
+            if (at(i) != "$") return ""
             j = i + 1
-            if (j <= N && isIdentStart(substr(S, j, 1)))
-                while (j <= N && isIdentCont(substr(S, j, 1))) j++
-            if (j <= N && substr(S, j, 1) == "$") return substr(S, i, j - i + 1)
+            if (isIdentStart(at(j)))
+                while (isIdentCont(at(j))) j++
+            if (at(j) == "$") return substr(S, i, j - i + 1)
             return ""
         }
 
-        # First literal occurrence of tag in S[from, hi), or -1. Bounded to hi so a match past the
-        # enclosing region is never found.
-        function indexOfTag(tag, from, hi,   k, L) {
+        # First literal occurrence of tag at or after `from`, or -1.
+        function indexOfTag(tag, from,   k, L) {
             L = length(tag)
-            for (k = from; k + L <= hi; k++)
+            for (k = from; k + L - 1 <= N; k++)
                 if (substr(S, k, L) == tag) return k
             return -1
         }
@@ -994,37 +1010,57 @@ replay_file_runs_outside_a_transaction() {
                 if (substr(S, k, 1) != "\n") BL[k] = 1
         }
 
-        # The port of blankSQLRange: hi is EXCLUSIVE.
-        function scanRange(lo, hi,   i, j, e, c, c2, tag, body, endTag) {
-            i = lo
-            while (i < hi) {
-                c  = substr(S, i, 1)
-                c2 = (i + 1 < hi) ? substr(S, i + 1, 1) : ""
-                if (i + 1 < hi && c == "-" && c2 == "-") {
+        # Consumes a quoted run opening at i with delimiter q, where qq is its own escape and
+        # backslash escapes only when esc is true. Returns the index one past the close, or N+1
+        # if the run is unterminated.
+        function endOfQuoted(i, q, esc,   j) {
+            j = i + 1
+            while (j <= N) {
+                if (esc && at(j) == "\\") { j += 2; continue }
+                if (at(j) == q) {
+                    if (at(j + 1) == q) { j += 2; continue }
+                    return j + 1
+                }
+                j++
+            }
+            return N + 1
+        }
+
+        function endOfBlockComment(i,   j, depth) {
+            depth = 1
+            j = i + 2
+            while (j <= N && depth > 0) {
+                if (at(j) == "/" && at(j + 1) == "*")      { depth++; j += 2 }
+                else if (at(j) == "*" && at(j + 1) == "/") { depth--; j += 2 }
+                else                                        { j++ }
+            }
+            return (depth > 0) ? N + 1 : j
+        }
+
+        function scan(   i, j, c, c2, tag, endTag) {
+            i = 1
+            while (i <= N) {
+                c  = at(i)
+                c2 = at(i + 1)
+                if (c == "-" && c2 == "-") {
                     j = i
-                    while (j < hi && substr(S, j, 1) != "\n") j++
+                    while (j <= N && at(j) != "\n") j++
                     blank(i, j); i = j
-                } else if (i + 1 < hi && c == "/" && c2 == "*") {
-                    j = i + 2
-                    while (j + 1 < hi && (substr(S, j, 1) != "*" || substr(S, j + 1, 1) != "/")) j++
-                    e = j + 2
-                    if (e > hi) e = hi
-                    blank(i, e); i = e
+                } else if (c == "/" && c2 == "*") {
+                    j = endOfBlockComment(i)
+                    blank(i, j); i = j
                 } else if ((tag = dollarTagAt(i)) != "") {
-                    body = i + length(tag)
-                    endTag = indexOfTag(tag, body, hi)
-                    if (endTag < 0) { scanRange(body, hi); return }
-                    scanRange(body, endTag)     # interior lexed INDEPENDENTLY AND BOUNDED
-                    i = endTag + length(tag)
+                    endTag = indexOfTag(tag, i + length(tag))
+                    j = (endTag < 0) ? N + 1 : endTag + length(tag)
+                    blank(i, j); i = j          # interior is opaque DATA — blanked, not lexed
+                } else if (c == "\"") {
+                    j = endOfQuoted(i, "\"", 0)
+                    blank(i, j); i = j
+                } else if ((c == "e" || c == "E") && c2 == "'"'"'" && !isWordByte(at(i - 1))) {
+                    j = endOfQuoted(i + 1, "'"'"'", 1)
+                    blank(i, j); i = j
                 } else if (c == "'"'"'") {
-                    j = i + 1
-                    while (j < hi) {
-                        if (substr(S, j, 1) == "'"'"'") {
-                            if (j + 1 < hi && substr(S, j + 1, 1) == "'"'"'") { j += 2; continue }
-                            j++; break
-                        }
-                        j++   # a $ in here is DATA — never inspected as a possible tag
-                    }
+                    j = endOfQuoted(i, "'"'"'", 0)
                     blank(i, j); i = j
                 } else {
                     i++
@@ -1032,26 +1068,49 @@ replay_file_runs_outside_a_transaction() {
             }
         }
 
+        # The keyword, on a blanked line, with non-word bytes (or nothing) on both sides.
+        #
+        # ⚠ The p > 1 guard is load-bearing, not defensive. `CREATE INDEX` / `CONCURRENTLY IF NOT
+        # EXISTS ...` split over two lines puts the keyword at offset 1, and awks DISAGREE about
+        # substr(t, 0, 1): gawk yields "", the BWK awk on macOS yields the FIRST character, which
+        # reads as a word byte and suppresses a real match.
+        function lineHasKeyword(t,   p, off, L, prev, nxt) {
+            L = length(KW)
+            off = 1
+            while (off <= length(t)) {
+                p = index(substr(t, off), KW)
+                if (p == 0) return 0
+                p = off + p - 1
+                prev = (p > 1) ? substr(t, p - 1, 1) : ""
+                nxt  = (p + L <= length(t)) ? substr(t, p + L, 1) : ""
+                if (!isWordByte(prev) && !isWordByte(nxt)) return 1
+                off = p + 1
+            }
+            return 0
+        }
+
         BEGIN {
             ALPHA = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
             DIGIT = "0123456789"
+            KW    = "concurrently"
+            for (b = 128; b < 256; b++) HIGH[sprintf("%c", b)] = 1
             S = ""
         }
         { S = S $0 "\n" }
         END {
             N = length(S)
-            scanRange(1, N + 1)
+            scan()
             line = ""
             for (k = 1; k <= N; k++) {
                 c = substr(S, k, 1)
                 if (c == "\n") {
-                    if (tolower(line) ~ /(^|[^a-z0-9_])concurrently([^a-z0-9_]|$)/) exit 0
+                    if (lineHasKeyword(tolower(line))) exit 0
                     line = ""
                 } else {
                     line = line (BL[k] ? " " : c)
                 }
             }
-            if (tolower(line) ~ /(^|[^a-z0-9_])concurrently([^a-z0-9_]|$)/) exit 0
+            if (lineHasKeyword(tolower(line))) exit 0
             exit 1
         }
     ' "$f"
