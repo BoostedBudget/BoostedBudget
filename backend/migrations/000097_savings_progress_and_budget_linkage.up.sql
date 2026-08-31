@@ -200,15 +200,29 @@ BEGIN
 END $$;
 
 -- 2d. FK: savings_goal_id → savings_goals(id) ON DELETE CASCADE
--- #1569 T8 (r17): qualified by table_name. information_schema.table_constraints is keyed by
--- (schema, name) only, so a same-named constraint on another table would suppress this ADD; the
--- unconditional VALIDATE below would then error rather than pass, but the guard is still wrong.
+-- #1569 T8 (r17) / T2 (r18): the guard is qualified by table_name, table_schema AND
+-- constraint_type. information_schema.table_constraints lists every constraint type and is keyed
+-- by (constraint_schema, constraint_name), so all three predicates are load-bearing:
+--   * without table_name, a same-named constraint on another table answers the guard;
+--   * without table_schema, a same-named constraint on a same-named table in another visible
+--     schema answers it while the unqualified ALTER TABLE below targets the search_path table --
+--     reproduced in r18: the ADD is skipped and the VALIDATE below then errors (loud, not silent);
+--   * without constraint_type, a same-named CHECK on THIS table answers it -- and because
+--     VALIDATE CONSTRAINT accepts a CHECK, the VALIDATE below passes and the migration SUCCEEDS
+--     with the foreign key silently absent. Reproduced in r18 against a scratch copy of the
+--     migrated schema.
+-- Constraint names are unique per table, so with constraint_type in place a same-named non-FK
+-- decoy on this table makes the ADD fail loudly instead of being skipped. Pinned by
+-- TestMigrationFKGuards_SameNamedNonForeignKeyMustNotSuppressTheCascade and
+-- TestMigrationFKGuards_SameNamedConstraintInAnotherSchemaMustNotSuppressTheCascade.
 DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.table_constraints
         WHERE constraint_name = 'fk_contributions_savings_goal'
           AND table_name = 'savings_goal_contributions'
+          AND table_schema = current_schema()
+          AND constraint_type = 'FOREIGN KEY'
     ) THEN
         ALTER TABLE savings_goal_contributions
             ADD CONSTRAINT fk_contributions_savings_goal
@@ -358,15 +372,29 @@ BEGIN
 END $$;
 
 -- 4d. FK: savings_goal_id → savings_goals(id) ON DELETE CASCADE
--- #1569 T8 (r17): qualified by table_name. information_schema.table_constraints is keyed by
--- (schema, name) only, so a same-named constraint on another table would suppress this ADD; the
--- unconditional VALIDATE below would then error rather than pass, but the guard is still wrong.
+-- #1569 T8 (r17) / T2 (r18): the guard is qualified by table_name, table_schema AND
+-- constraint_type. information_schema.table_constraints lists every constraint type and is keyed
+-- by (constraint_schema, constraint_name), so all three predicates are load-bearing:
+--   * without table_name, a same-named constraint on another table answers the guard;
+--   * without table_schema, a same-named constraint on a same-named table in another visible
+--     schema answers it while the unqualified ALTER TABLE below targets the search_path table --
+--     reproduced in r18: the ADD is skipped and the VALIDATE below then errors (loud, not silent);
+--   * without constraint_type, a same-named CHECK on THIS table answers it -- and because
+--     VALIDATE CONSTRAINT accepts a CHECK, the VALIDATE below passes and the migration SUCCEEDS
+--     with the foreign key silently absent. Reproduced in r18 against a scratch copy of the
+--     migrated schema.
+-- Constraint names are unique per table, so with constraint_type in place a same-named non-FK
+-- decoy on this table makes the ADD fail loudly instead of being skipped. Pinned by
+-- TestMigrationFKGuards_SameNamedNonForeignKeyMustNotSuppressTheCascade and
+-- TestMigrationFKGuards_SameNamedConstraintInAnotherSchemaMustNotSuppressTheCascade.
 DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.table_constraints
         WHERE constraint_name = 'fk_budget_categories_savings_goal'
           AND table_name = 'budget_categories'
+          AND table_schema = current_schema()
+          AND constraint_type = 'FOREIGN KEY'
     ) THEN
         ALTER TABLE budget_categories
             ADD CONSTRAINT fk_budget_categories_savings_goal

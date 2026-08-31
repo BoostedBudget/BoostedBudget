@@ -1813,10 +1813,25 @@ BACKFILL_SQL
 # authoritative allowlist of CASCADE edges into them, already exist in
 # backend/internal/repository/history_cascade_guard_test.go as `historyBearingTables` and
 # `allowedHistoryCascades` (guard G1). This script does NOT keep a second copy: it PARSES those two
-# map literals out of the Go source at run time, so there is exactly one list and it cannot drift.
-# The parse itself is the new risk — a silently empty extraction would restore the vacuous pass —
-# so the caller runs `missing_sentinels` over the result and fails the test if the extractor stops
-# finding table and constraint names it is known to contain.
+# map literals out of the Go source at run time, so there is exactly one AUTHORED list.
+#
+# ⚠ #1569 r18 corrected this paragraph: it used to say the lists therefore "cannot drift", and that
+# is false. What the parser actually guarantees is narrower, in both directions:
+#   * GUARANTEED — nobody has to edit a second copy here, so the two files cannot disagree about an
+#     entry that the extractor does see; and a WHOLESALE extraction failure (the Go file renamed or
+#     moved, either map renamed, or a reformat that breaks every line) is caught by
+#     `missing_sentinels`, which fails the test rather than letting an empty list compare equal to
+#     everything. That was the vacuous-pass shape r17 removed, and it stays removed.
+#   * NOT GUARANTEED — per-entry fidelity. The extractors are AWK, not a Go parser, and they
+#     recognise exact declaration shapes only: a table key must be a `^\t"lower_snake":` line, an
+#     edge must be a `^\t{child: "` line with all five fields on it. An entry that is reformatted,
+#     wrapped across lines, or written with a character the pattern does not cover is skipped in
+#     silence, and the comparisons below then simply never ask about it. `missing_sentinels` does
+#     not catch that: it checks four table names and two edges, so any NON-sentinel entry can
+#     vanish with the switch still satisfied.
+# Measured at r18: 19 of 19 table keys and 26 of 26 edge records extract, so nothing is being lost
+# today — but that is an observation, not a property the script enforces. Replacing the AWK
+# extractors with a real parse is out of scope here (ruled a #1569 residual).
 #
 # WHY DUPLICATE G1 AT ALL, given the Go integration guard already queries the live schema: this
 # suite is the one that runs the migrations from zero and is a SEPARATE CI step from the Go tests.
