@@ -242,11 +242,15 @@ END $$;
 
 -- 2f. FK: budget_categories.custom_category_id → custom_categories(id)
 --     ON DELETE CASCADE: removing a custom_category removes the budget entry targeting it.
+-- #1569 T8 (r17): qualified by table_name. information_schema.table_constraints is keyed by
+-- (schema, name) only, so a same-named constraint on another table would suppress this ADD; the
+-- unconditional VALIDATE below would then error rather than pass, but the guard is still wrong.
 DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.table_constraints
         WHERE constraint_name = 'fk_budget_categories_custom_category'
+          AND table_name = 'budget_categories'
     ) THEN
         ALTER TABLE budget_categories
             ADD CONSTRAINT fk_budget_categories_custom_category

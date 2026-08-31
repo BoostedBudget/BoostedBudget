@@ -200,11 +200,15 @@ BEGIN
 END $$;
 
 -- 2d. FK: savings_goal_id → savings_goals(id) ON DELETE CASCADE
+-- #1569 T8 (r17): qualified by table_name. information_schema.table_constraints is keyed by
+-- (schema, name) only, so a same-named constraint on another table would suppress this ADD; the
+-- unconditional VALIDATE below would then error rather than pass, but the guard is still wrong.
 DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.table_constraints
         WHERE constraint_name = 'fk_contributions_savings_goal'
+          AND table_name = 'savings_goal_contributions'
     ) THEN
         ALTER TABLE savings_goal_contributions
             ADD CONSTRAINT fk_contributions_savings_goal
@@ -354,11 +358,15 @@ BEGIN
 END $$;
 
 -- 4d. FK: savings_goal_id → savings_goals(id) ON DELETE CASCADE
+-- #1569 T8 (r17): qualified by table_name. information_schema.table_constraints is keyed by
+-- (schema, name) only, so a same-named constraint on another table would suppress this ADD; the
+-- unconditional VALIDATE below would then error rather than pass, but the guard is still wrong.
 DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.table_constraints
         WHERE constraint_name = 'fk_budget_categories_savings_goal'
+          AND table_name = 'budget_categories'
     ) THEN
         ALTER TABLE budget_categories
             ADD CONSTRAINT fk_budget_categories_savings_goal
