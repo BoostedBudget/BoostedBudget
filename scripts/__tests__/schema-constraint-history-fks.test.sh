@@ -17,6 +17,20 @@
 # foreign keys into the history-bearing tables, derived from the Go guard that already owns that
 # set (backend/internal/repository/history_cascade_guard_test.go).
 #
+# ⚠ SCOPE CORRECTION (#1569 r17 task 8). The motivating finding was recorded as
+# "`test_schema_constraints` CANNOT GO RED AT ALL". That was OVERSTATED and is corrected here
+# rather than deleted, because the overstatement is what made the task look bigger than it was.
+# The function has always had one path that fails: the `expected_tables` loop calls `fail_test`
+# and `return 1` on a missing table. What was true is narrower and still worth the task — that
+# loop names TEN hardcoded tables (users, privacy_settings, audit_logs,
+# user_subscription_overrides, linked_items, accounts, user_identities, transactions,
+# webhook_events, notifications), every one of them PRE-BRANCH, so it says nothing about any
+# constraint, any ON DELETE action, or any table #1569 added; and the CONSTRAINT half of the
+# function — the half named in the section header — was the part that could not go red.
+# Both statements describe the function as it is TODAY: that loop is still present and still the
+# only pre-existing failing path, and everything after it is the named assertions this suite
+# covers.
+#
 # This file sources scripts/test-migrations.sh (which has a BASH_SOURCE guard at its bottom so
 # main() does not run on source) and calls the PURE functions directly. No Docker, no Postgres,
 # no migrate CLI. The live-schema half is exercised by the real suite; what is tested here is the
@@ -306,7 +320,8 @@ echo ""
 
 # A string check, deliberately: the defect was structural (three log_warning gates falling through
 # into one unconditional pass_test), and the cheapest durable guard against it coming back is to
-# assert the shape of the function body.
+# assert the shape of the function body. Scoped as the header's correction says: the three gates
+# that fell through were the CONSTRAINT gates, not the whole function.
 body="$(awk '/^test_schema_constraints\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$SCRIPT")"
 if [ -n "$body" ]; then
   pass "located the test_schema_constraints body"
