@@ -384,20 +384,31 @@ func backfillAccountsUserAccountIDs(ctx context.Context, db *pgxpool.Pool, enc *
 // is a GO-SIDE bound — it limits how many rows this process fetches, decrypts and updates — and it
 // must not be quoted as "boot does at most 1000 rows of work". A RESUMED run's first page carries
 // `OFFSET k` (fetchBackfillAccountPage), and PostgreSQL genuinely discards k rows before returning
-// that page. Measured on postgres:17.11, 300k accounts of which 100k are candidates ALL SHARING ONE
-// created_at (the worst shape ts1_offset exists for), one page of 500:
+// that page.
 //
-//	offset       0  ->    506 buffers,  2.2 ms   Index Scan using idx_accounts_user_account_backfill
-//	offset   1,000  ->  1,512 buffers,  2.8 ms   same plan
-//	offset  10,000  -> 10,562 buffers,  7.0 ms   same plan
-//	offset  50,000  -> 50,781 buffers, 23.6 ms   same plan
-//	offset  99,500  ->  2,205 buffers, 55.0 ms   PLAN FLIPS: Gather Merge + external merge sort
-//	                                             (2.7 MB temp) — the whole-candidate-set sort that
-//	                                             migration 000182's index exists to prevent.
+// ⚠ THE SHAPE IS STATED HERE, NOT A TABLE OF BUFFER COUNTS, AND THAT IS DELIBERATE (#1569 round 17
+// task 10, B-2). A table of EXPLAIN (ANALYZE, BUFFERS) figures used to stand here and in migration
+// 000182. Re-measuring it on postgres:17.11 against a rebuilt worst-case dataset (the real schema,
+// 300k accounts of which 100k are candidates ALL SHARING ONE created_at — the worst shape
+// ts1_offset exists for — random-uuid ids, this query verbatim, one page of 500) reproduced the
+// SHAPE and only the shape: the small-offset per-page counts matched to within a buffer, while the
+// no-index figure and the offset at which the plan flips did not reproduce at all. They cannot,
+// because a buffer count is a function of row width, heap correlation, shared_buffers, work_mem and
+// max_parallel_workers_per_gather. What holds:
+//
+//	offset 0 or an in-run keyset page   Index Scan using idx_accounts_user_account_backfill,
+//	                                    cost bounded by the PAGE.
+//	offset k                            same plan, cost LINEAR IN k — Postgres genuinely walks and
+//	                                    discards k rows first.
+//	k large enough                      the planner ABANDONS the ordered partial index for a bitmap
+//	                                    scan of the whole candidate set plus an external merge sort
+//	                                    — the sort migration 000182's index exists to prevent. The
+//	                                    crossover is a planner decision, not a constant.
 //
 // So the cost is linear in k, and past a planner crossover it stops using the ordered partial index
-// at all. That is the honest statement; 55 ms of synchronous boot at a 100k single-timestamp group
-// is the measured price, against a run that then does 1000 serial decrypt+lookup+UPDATE rows.
+// at all. That is the honest statement: tens of milliseconds of synchronous boot at a 100k
+// single-timestamp group, against a run that then does 1000 serial decrypt+lookup+UPDATE rows.
+// See migration 000182 for why a row count is not a buffer count.
 //
 // ⚠ THIS WAS WEIGHED AND ACCEPTED, not overlooked. The two alternatives are both worse:
 //   - Remove the OFFSET with a keyset predicate. That needs a stored ROW IDENTITY, which
@@ -410,11 +421,27 @@ func backfillAccountsUserAccountIDs(ctx context.Context, db *pgxpool.Pool, enc *
 //
 // WHAT MAKES IT ANALYSABLE: k is a count of rows sharing ONE created_at, never a count of rows
 // scanned — advanceBackfillTail resets it at every timestamp boundary. k is therefore bounded by
-// one tie group's size, and a tie group requires accounts inserted in ONE transaction (created_at
-// defaults to now(), which is the transaction timestamp), i.e. one Plaid item's accounts. The
-// existing WARN on the capped path already prints resume_offset every time k grows, so growth is
-// observable without a new signal. TestBackfillAccounts_StoredOffsetResetsAtATimestampBoundary pins
-// the reset; TestBackfillAccounts_StoredOffsetAccumulatesAcrossRuns pins the accumulation.
+// one tie group's size.
+//
+// ⚠ TWO CLAIMS THAT USED TO STAND HERE WERE FALSE AND ARE CORRECTED (#1569 round 17 task 10, B-3).
+//
+//  1. It said a tie group NECESSARILY comes from one transaction, "created_at defaults to now(),
+//     which is the transaction timestamp", i.e. one Plaid item's accounts. Neither half holds. The
+//     production write path does not use the column default at all: AccountRepository.CreateBatch
+//     takes ONE Go-side time.Now() and binds it as created_at for every row in the batch. So equal
+//     timestamps are evidence of one BATCH, not one transaction — and not even that, since two
+//     CreateBatch calls whose time.Now() falls in the same microsecond (timestamptz's resolution)
+//     tie, and any writer that supplies created_at explicitly can tie arbitrarily. What survives is
+//     the weaker, still-useful statement: the DOMINANT source of a tie group is a single
+//     CreateBatch, i.e. one Plaid item's accounts, because that call stamps the whole batch alike.
+//  2. It said the WARN on the capped path "prints resume_offset every time k grows". It does not:
+//     it is logged ONCE per capped run, after the loop, and only when the run hit its cap. What
+//     that actually buys is that every run which STORES a nonzero offset also logs the offset it
+//     stored, so growth is observable across consecutive capped boots — not at each increment, and
+//     not at all on a run that finishes its scan.
+//
+// TestBackfillAccounts_StoredOffsetResetsAtATimestampBoundary pins the reset;
+// TestBackfillAccounts_StoredOffsetAccumulatesAcrossRuns pins the accumulation.
 //
 // ⚠ WHAT IT STILL DOES NOT GUARANTEE: nothing bounds a tie group's size a priori. A single
 // transaction inserting a million accounts would make k a million and the resumed boot would sort
