@@ -229,6 +229,28 @@ func tombstoneRefsSeen(sql string, tables []string, deleteRef *regexp.Regexp) in
 // requireTombstoneCorpus fails the guard closed when its corpus has collapsed. `was` records what
 // was measured when the floor was set, so a future reader can tell a deliberate shrink from a
 // broken walk instead of guessing at the constant.
+//
+// ---- FLOOR POLICY (#1569 round 17 task 5) — read this before you change a number ----------------
+//
+// `minFiles`/`minRefs` are the durable artefact; `wasFiles`/`wasRefs` are only the measurement the
+// floor was derived from and WILL drift upward as Go files are added. Drift in `was*` is expected
+// and is not a defect. What matters is that `min*` still detects a MEANINGFUL shrink.
+//
+// The policy, applied identically to all four callers:
+//
+//	min = floor(0.9 * live)        // a corpus may shed up to 10%; more than that is "broken"
+//
+// So when a caller red-lines, DO NOT just lower the number to whatever makes it green. Re-measure
+// the live corpus (each guard t.Logf()s it), then set `was* = live` and `min* = floor(0.9*live)`.
+// That keeps the detection band constant instead of letting it widen one panicked edit at a time.
+//
+// Why 10% and not 0% or 30%: a floor set AT live is brittle — the next legitimate refactor that
+// deletes one repository file red-lines a guard that is working correctly. A floor far below live
+// is half-vacated: savings_goal_contributions sat at min=11 against 15 live references, so the
+// corpus could have shed 27% of its references and still passed. Every real vacuity failure mode
+// this floor exists for (a narrowed walk root, a reference regexp that stops matching, a guard
+// pointed at the wrong directory) collapses the corpus by far more than 10%, so a 10% band is
+// wide enough to absorb honest churn and tight enough to catch all of them.
 func requireTombstoneCorpus(t *testing.T, guard string, files, refs, minFiles, minRefs, wasFiles, wasRefs int) {
 	t.Helper()
 	t.Logf("%s corpus: %d production Go files scanned, %d reference(s) to the audited table(s)",
@@ -272,7 +294,7 @@ func TestNoConfigReadForgetsTheTombstoneFilter(t *testing.T) {
 		}
 	}
 
-	requireTombstoneCorpus(t, "TestNoConfigReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 300, 60, 362, 84)
+	requireTombstoneCorpus(t, "TestNoConfigReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 336, 79, 374, 88)
 
 	if len(offenders) > 0 {
 		t.Fatalf(

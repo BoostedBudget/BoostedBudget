@@ -104,7 +104,7 @@ func TestNoTransactionReadForgetsTheTombstoneFilter(t *testing.T) {
 		}
 	}
 
-	requireTombstoneCorpus(t, "TestNoTransactionReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 300, 60, 362, 83)
+	requireTombstoneCorpus(t, "TestNoTransactionReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 336, 80, 374, 89)
 
 	if len(offenders) > 0 {
 		t.Fatalf(
