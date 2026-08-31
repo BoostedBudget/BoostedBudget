@@ -221,41 +221,41 @@ test-scripts:
 	@echo "Running shell script regression suites"
 	@echo "========================================"
 	@echo ""
-	@echo "1/19: check-frontend-coverage.test.sh (exercises the real lcov merger)"
+	@echo "1/20: check-frontend-coverage.test.sh (exercises the real lcov merger)"
 	@if command -v lcov &> /dev/null; then \
 		bash scripts/check-frontend-coverage.test.sh; \
 	else \
 		echo "⚠️  lcov not installed — skipping (install: brew install lcov). CI always has lcov."; \
 	fi
 	@echo ""
-	@echo "2/19: check-orphan-chunks.test.sh"
+	@echo "2/20: check-orphan-chunks.test.sh"
 	@bash scripts/__tests__/check-orphan-chunks.test.sh
 	@echo ""
-	@echo "3/19: rollback-residue.test.sh"
+	@echo "3/20: rollback-residue.test.sh"
 	@bash scripts/__tests__/rollback-residue.test.sh
 	@echo ""
-	@echo "4/19: pg_dump-via-docker.test.sh"
+	@echo "4/20: pg_dump-via-docker.test.sh"
 	@bash scripts/__tests__/pg_dump-via-docker.test.sh
 	@echo ""
-	@echo "5/19: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
+	@echo "5/20: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
 	@bash scripts/__tests__/check-e2e-storage-state.test.sh
 	@echo ""
-	@echo "6/19: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
+	@echo "6/20: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
 	@bash scripts/__tests__/check-mcp-job-triggers.test.sh
 	@echo ""
-	@echo "7/19: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
+	@echo "7/20: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
 	@bash scripts/__tests__/check-typographic-quotes.test.sh
 	@echo ""
-	@echo "8/19: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is not in effect; cause unestablished)"
+	@echo "8/20: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is not in effect; cause unestablished)"
 	@bash scripts/__tests__/check-frontend-test-timeout.test.sh
 	@echo ""
-	@echo "9/19: check-isolated-test-lists.test.sh (#1537 — the 23 process-isolated test paths must exist and stay in sync)"
+	@echo "9/20: check-isolated-test-lists.test.sh (#1537 — the 23 process-isolated test paths must exist and stay in sync)"
 	@bash scripts/__tests__/check-isolated-test-lists.test.sh
 	@echo ""
-	@echo "10/19: check-e2e-seed-fails-loudly.test.sh (#1569 A1 — the E2E seeder must not swallow a failed seed)"
+	@echo "10/20: check-e2e-seed-fails-loudly.test.sh (#1569 A1 — the E2E seeder must not swallow a failed seed)"
 	@bash scripts/__tests__/check-e2e-seed-fails-loudly.test.sh
 	@echo ""
-	@echo "11/19: test-migrations-target-guard.test.sh (#1589/#1569 — host + name + live-cluster gates on the DROP target; needs a live local Postgres)"
+	@echo "11/20: test-migrations-target-guard.test.sh (#1589/#1569 — host + name + live-cluster gates on the DROP target; needs a live local Postgres)"
 	@if [ -n "$$GUARD_TEST_ADMIN_URL" ] || [ -n "$$DATABASE_URL" ] || \
 	    (command -v pg_isready >/dev/null 2>&1 && \
 	     (pg_isready -h localhost -p 5434 >/dev/null 2>&1 || pg_isready -h localhost -p 5432 >/dev/null 2>&1)); then \
@@ -266,7 +266,7 @@ test-scripts:
 		echo "    CI always has a live Postgres and runs this suite unconditionally — this skip is local-only."; \
 	fi
 	@echo ""
-	@echo "12/19: migrate-reset-target-guard.test.sh (#1569 round 12 task 7 — entry-point guard on 'make migrate-reset'; needs a live local Postgres)"
+	@echo "12/20: migrate-reset-target-guard.test.sh (#1569 round 12 task 7 — entry-point guard on 'make migrate-reset'; needs a live local Postgres)"
 	@if [ -n "$$GUARD_TEST_ADMIN_URL" ] || [ -n "$$DATABASE_URL" ] || \
 	    (command -v pg_isready >/dev/null 2>&1 && \
 	     (pg_isready -h localhost -p 5434 >/dev/null 2>&1 || pg_isready -h localhost -p 5432 >/dev/null 2>&1)); then \
@@ -277,26 +277,29 @@ test-scripts:
 		echo "    CI always has a live Postgres and runs this suite unconditionally — this skip is local-only."; \
 	fi
 	@echo ""
-	@echo "13/19: no-ungated-migrate-down-invocation-guard.test.sh (#1569 round 13 task 1 — mechanical guard: no new ungated 'migrate ... down' invocation anywhere in the tree; pure static analysis, never skips)"
+	@echo "13/20: no-ungated-migrate-down-invocation-guard.test.sh (#1569 round 13 task 1 — mechanical guard: no new ungated 'migrate ... down' invocation anywhere in the tree; pure static analysis, never skips)"
 	@bash scripts/__tests__/no-ungated-migrate-down-invocation-guard.test.sh
 	@echo ""
-	@echo "14/19: root-migrate-delegation.test.sh (#1588 — one migration runner; schema_migrations cannot lie)"
+	@echo "14/20: root-migrate-delegation.test.sh (#1588 — one migration runner; schema_migrations cannot lie)"
 	@bash scripts/__tests__/root-migrate-delegation.test.sh
 	@echo ""
-	@echo "15/19: typecheck-tests-gate.test.sh (#1569 — the test typecheck gate must fail closed when tsc did not finish)"
+	@echo "15/20: typecheck-tests-gate.test.sh (#1569 — the test typecheck gate must fail closed when tsc did not finish)"
 	@bash apps/web/scripts/__tests__/typecheck-tests-gate.test.sh
 	@echo ""
-	@echo "16/19: check-ci-env-drift.test.sh (#1569 round 14 task 3 — local integration-test env vars must not silently drift from what CI's own guard step requires; pure static analysis, never skips)"
+	@echo "16/20: check-ci-env-drift.test.sh (#1569 round 14 task 3 — local integration-test env vars must not silently drift from what CI's own guard step requires; pure static analysis, never skips)"
 	@bash scripts/__tests__/check-ci-env-drift.test.sh
 	@echo ""
-	@echo "17/19: summarize-go-test.test.sh (#1569 round 14 task 3 — a skipped test must never read as an indistinguishable clean pass; pure static analysis against a throwaway fixture module, never skips)"
+	@echo "17/20: summarize-go-test.test.sh (#1569 round 14 task 3 — a skipped test must never read as an indistinguishable clean pass; pure static analysis against a throwaway fixture module, never skips)"
 	@bash scripts/__tests__/summarize-go-test.test.sh
 	@echo ""
-	@echo "18/19: replay-concurrently-transaction.test.sh (#1569 round 15 task 9 — the migration replay must run a CONCURRENTLY file the way golang-migrate does, i.e. NOT inside a transaction; static half never skips, live half needs a reachable DATABASE_URL)"
+	@echo "18/20: replay-concurrently-transaction.test.sh (#1569 round 15 task 9 — the migration replay must run a CONCURRENTLY file the way golang-migrate does, i.e. NOT inside a transaction; static half never skips, live half needs a reachable DATABASE_URL)"
 	@bash scripts/__tests__/replay-concurrently-transaction.test.sh
 	@echo ""
-	@echo "19/19: check-ungated-guard-steps.test.sh (#1569 round 17 task 1 — every whole-tree guard step must live in a CI job no paths-filter can skip; pure static analysis against a mutated copy of the workflow, never skips)"
+	@echo "19/20: check-ungated-guard-steps.test.sh (#1569 round 17 task 1 — every whole-tree guard step must live in a CI job no paths-filter can skip; pure static analysis against a mutated copy of the workflow, never skips)"
 	@bash scripts/__tests__/check-ungated-guard-steps.test.sh
+	@echo ""
+	@echo "20/20: schema-constraint-history-fks.test.sh (#1569 round 17 task 2 — the migration suite's schema-constraint check must be able to FAIL on the history tables' ON DELETE behaviour; pure shell against synthetic fixtures + the real Go guard, never skips)"
+	@bash scripts/__tests__/schema-constraint-history-fks.test.sh
 	@echo ""
 	@echo "✅ Shell script regression suites passed!"
 

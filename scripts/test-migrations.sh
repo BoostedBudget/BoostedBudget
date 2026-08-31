@@ -8,7 +8,8 @@
 #   1. Idempotency (migrations can be run multiple times safely)
 #   2. Performance (migrations complete within acceptable timeframes)
 #   3. Data Integrity (migrations preserve existing data)
-#   4. Schema Constraints (foreign keys, indexes, constraints exist)
+#   4. Schema Constraints (history-bearing tables exist; their ON DELETE CASCADE edges match the
+#      Go guard exactly; every one has a primary key; CASCADE index-coverage ratchet)
 #   5. Rollback Testing (up→down→up cycle produces identical schema)
 
 set -euo pipefail
@@ -1795,6 +1796,164 @@ BACKFILL_SQL
 }
 
 # =============================================================================
+# History-FK assertions used by Test 4 (#1569 r17 task 2)
+# =============================================================================
+# Test 4 used to gate on three count floors — foreign keys `-lt 5`, indexes `-lt 10`, unique
+# constraints `-lt 3`. The migrations declare roughly 152 REFERENCES, 327 CREATE INDEX and 254
+# UNIQUE, so the floors sat ~30x below reality: more than 96% of every foreign key in the schema
+# had to disappear before the FK floor even noticed. And noticing was all it did — each floor
+# called `log_warning` and fell through into an UNCONDITIONAL `pass_test`, so a migration that
+# dropped the whole ON DELETE protection surface off the history tables left this suite printing
+# PASSED. The floors are gone. What replaced them are named assertions about the thing #1569
+# actually protects: the ON DELETE behaviour of the foreign keys INTO the history-bearing tables.
+#
+# HOW THIS STAYS IN STEP WITH GO. The authoritative set of history-bearing tables, and the
+# authoritative allowlist of CASCADE edges into them, already exist in
+# backend/internal/repository/history_cascade_guard_test.go as `historyBearingTables` and
+# `allowedHistoryCascades` (guard G1). This script does NOT keep a second copy: it PARSES those two
+# map literals out of the Go source at run time, so there is exactly one list and it cannot drift.
+# The parse itself is the new risk — a silently empty extraction would restore the vacuous pass —
+# so the caller runs `missing_sentinels` over the result and fails the test if the extractor stops
+# finding table and constraint names it is known to contain.
+#
+# WHY DUPLICATE G1 AT ALL, given the Go integration guard already queries the live schema: this
+# suite is the one that runs the migrations from zero and is a SEPARATE CI step from the Go tests.
+# The overlap is deliberate — a migration-level change should be caught by the migration suite —
+# and the shared source of truth means the two cannot disagree about WHAT is protected, only about
+# when they notice.
+
+# Path to the Go guard that OWNS the history-table set. Overridable for testing.
+HISTORY_GUARD_GO="${HISTORY_GUARD_GO:-$PROJECT_ROOT/backend/internal/repository/history_cascade_guard_test.go}"
+
+# history_bearing_tables_from_go <gofile> — one table name per line, in source order.
+#
+# Matches ONLY lines at exactly one tab of indentation whose first token is a quoted lower-snake
+# key followed by a colon. gofmt guarantees that shape for a top-level map literal's keys, and it
+# excludes the wrapped continuation lines of a long string value (which are indented two tabs).
+history_bearing_tables_from_go() {
+    awk '
+        /^var historyBearingTables = map\[string\]string\{/ { inblock = 1; next }
+        inblock && /^\}/ { exit }
+        inblock && match($0, /^\t"[a-z_]+":/) { print substr($0, RSTART + 2, RLENGTH - 4) }
+    ' "$1"
+}
+
+# allowed_history_cascades_from_go <gofile> — one edge per line as
+# `child|parent|constraint|childCols|parentCols`, matching the five fields of Go's fkCascadeEdge.
+#
+# The WHOLE record is emitted, not just the constraint name, so that an edge which keeps its name
+# but is re-pointed at a different parent or different columns shows up as a difference in both
+# directions rather than silently comparing equal.
+allowed_history_cascades_from_go() {
+    awk '
+        /^var allowedHistoryCascades = map\[fkCascadeEdge\]string\{/ { inblock = 1; next }
+        inblock && /^\}$/ { exit }
+        inblock && /^\t\{child: "/ {
+            line = $0
+            split("", m)
+            while (match(line, /(child|parent|constraint|childCols|parentCols): "[^"]*"/)) {
+                f = substr(line, RSTART, RLENGTH)
+                line = substr(line, RSTART + RLENGTH)
+                sep = index(f, ": \"")
+                key = substr(f, 1, sep - 1)
+                val = substr(f, sep + 3, length(f) - sep - 3)
+                m[key] = val
+            }
+            print m["child"] "|" m["parent"] "|" m["constraint"] "|" m["childCols"] "|" m["parentCols"]
+        }
+    ' "$1"
+}
+
+# set_diff <a> <b> — prints the non-empty lines of <a> that do not appear verbatim in <b>.
+# Pure bash (n is ~26 here); no sort, so the report keeps source order.
+set_diff() {
+    local a="$1" b="$2" line bline found
+    [ -z "$a" ] && return 0
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        found=false
+        while IFS= read -r bline; do
+            [ "$bline" = "$line" ] && found=true
+        done <<< "$b"
+        [ "$found" = true ] || printf '%s\n' "$line"
+    done <<< "$a"
+}
+
+# missing_sentinels <newline-list> <sentinel>... — prints the sentinels absent from the list.
+#
+# This is the dead-man's switch on the two extractors above. If the Go file is renamed, moved, or
+# its maps reformatted, the awk returns nothing and every comparison below would trivially agree —
+# the exact vacuous-pass shape this task exists to remove. An empty list reports EVERY sentinel.
+missing_sentinels() {
+    local list="$1"; shift
+    local s line found
+    for s in "$@"; do
+        found=false
+        while IFS= read -r line; do
+            [ "$line" = "$s" ] && found=true
+        done <<< "$list"
+        [ "$found" = true ] || printf '%s\n' "$s"
+    done
+}
+
+# unindexed_cascade_fk_allowlist — `child|constraint|reason`, one per line.
+#
+# A CASCADE foreign key whose child columns have no supporting index makes the parent DELETE
+# sequential-scan the child under an exclusive lock. This is a RATCHET, not a threshold: anything
+# unindexed and NOT named here fails the test, and any entry here that HAS since been indexed also
+# fails (as stale), so the list can only shrink. These three are pre-existing as of #1569 r17 and
+# are recorded rather than fixed, because indexing them is a schema change that belongs in its own
+# migration with its own review — not a silent side effect of adding a guard.
+unindexed_cascade_fk_allowlist() {
+    cat <<'UNINDEXED_EOF'
+account_status_history|fk_ash_user_id|GDPR erasure (DELETE FROM users) seq-scans account_status_history; erasure is rare and offline. Index it, then delete this line.
+budget_categories|fk_budget_categories_custom_category|parent custom_categories is TOMBSTONED, so this cascade only fires on an explicit purge. Index it, then delete this line.
+budget_categories|fk_budget_categories_savings_goal|parent savings_goals is TOMBSTONED, so this cascade only fires on an explicit purge (PurgeGoal). Index it, then delete this line.
+UNINDEXED_EOF
+}
+
+# psql_rows <sql> — pipe-separated, unaligned, header-less rows, newlines PRESERVED.
+#
+# run_psql cannot be used for any of the queries below: it `tr -d ' \n'`s its output, which
+# collapses a multi-row result into one unusable string.
+#
+# ⚠ A FAILED QUERY IS NOT AN EMPTY RESULT. `2>/dev/null || true` was the first draft here and it
+# cost a full suite run: a malformed ORDER BY made the CASCADE query error out, psql printed
+# nothing, and the check reported all 26 allowlisted edges as "GONE or WEAKENED" — a loud, wrong
+# answer that a reader could easily have "fixed" by trimming the allowlist. So: ON_ERROR_STOP,
+# stderr captured and printed, and a counter the caller turns into an explicit fail_test that says
+# the CHECK is broken rather than the schema.
+# ⚠ TWO further traps, both hit while building this and both silent:
+#   1. Every caller is `x="$(psql_rows "...")"`, so ANYTHING psql_rows writes to STDOUT lands in the
+#      variable and is then compared as if it were a schema row. log_error writes to stdout, so the
+#      diagnostic must be redirected to stderr or the error text itself becomes a bogus "finding".
+#   2. A command substitution runs in a SUBSHELL, so a shell-variable error counter incremented in
+#      here never reaches the caller. The flag is therefore a FILE.
+PSQL_ERROR_FLAG="${TMPDIR:-/tmp}/.bb-schema-constraint-psql-errors.$$"
+psql_rows() {
+    local out
+    if ! out="$(psql "$DATABASE_URL" -tA -F'|' -v ON_ERROR_STOP=1 -c "$1" 2>&1)"; then
+        log_error "psql query FAILED (a bug in the check, not a schema finding): $out" >&2
+        echo "psql failure" >> "$PSQL_ERROR_FLAG"
+        return 1
+    fi
+    printf '%s\n' "$out"
+}
+
+# sql_quoted_list <name>... — `'a','b',...` for an SQL IN clause. Table names here come from Go
+# source matched against /^[a-z_]+$/, so there is nothing to escape; the guard below re-checks.
+sql_quoted_list() {
+    local out="" n
+    for n in "$@"; do
+        case "$n" in
+            *[!a-z_]*|"") echo "sql_quoted_list: refusing unexpected identifier '$n'" >&2; return 1 ;;
+        esac
+        out="${out:+$out,}'$n'"
+    done
+    printf '%s' "$out"
+}
+
+# =============================================================================
 # Test 4: Schema Constraint Validation
 # =============================================================================
 
@@ -1846,48 +2005,227 @@ test_schema_constraints() {
         return 1
     fi
 
-    # Check critical foreign keys
+    # -------------------------------------------------------------------------
+    # The history-retention assertions (#1569 r17 task 2).
+    #
+    # Everything below is NAMED. There is no count floor anywhere in this function any more, and
+    # no path that logs a problem and then passes: `constraints_ok` is set false by every check
+    # that finds something and the function fail_test/return 1s on it.
+    # -------------------------------------------------------------------------
+    local constraints_ok=true
+    rm -f "$PSQL_ERROR_FLAG"
+
     echo ""
-    log_info "Checking critical foreign key constraints..."
+    log_info "Reading the history-bearing table set from $HISTORY_GUARD_GO ..."
 
-    local fk_count=$(run_psql "SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_type='FOREIGN KEY'")
-    log_info "Total foreign keys found: $fk_count"
-
-    if [ -z "$fk_count" ] || [ "$fk_count" -lt 5 ]; then
-        log_warning "Expected more foreign key constraints (found: $fk_count)"
-    else
-        log_success "Foreign key constraints present ($fk_count found)"
+    if [ ! -f "$HISTORY_GUARD_GO" ]; then
+        fail_test "History guard Go source not found at $HISTORY_GUARD_GO — cannot validate the history foreign keys"
+        fail_test "SCHEMA CONSTRAINT VALIDATION FAILED"
+        return 1
     fi
 
-    # Check critical indexes
-    echo ""
-    log_info "Checking for critical indexes..."
+    local history_tables allowed_edges
+    history_tables="$(history_bearing_tables_from_go "$HISTORY_GUARD_GO")"
+    allowed_edges="$(allowed_history_cascades_from_go "$HISTORY_GUARD_GO")"
 
-    local index_count=$(run_psql "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public'")
-    log_info "Total indexes found: $index_count"
-
-    if [ -z "$index_count" ] || [ "$index_count" -lt 10 ]; then
-        log_warning "Expected more indexes (found: $index_count)"
-    else
-        log_success "Indexes present ($index_count found)"
+    # Dead-man's switch: if the extractors have stopped seeing the Go maps, every comparison below
+    # would agree vacuously. Fail here instead.
+    local absent
+    absent="$(missing_sentinels "$history_tables" accounts transactions balance_snapshots savings_goal_contributions)"
+    if [ -n "$absent" ]; then
+        fail_test "historyBearingTables extraction is degraded — these known members were not found: $(echo "$absent" | tr '\n' ' ')"
+        constraints_ok=false
+    fi
+    absent="$(missing_sentinels "$allowed_edges" \
+        'transactions|users|fk_transactions_user_id|user_id|id' \
+        'savings_goal_contributions|savings_goals|fk_contributions_savings_goal|savings_goal_id|id')"
+    if [ -n "$absent" ]; then
+        fail_test "allowedHistoryCascades extraction is degraded — these known edges were not found: $(echo "$absent" | tr '\n' ' ')"
+        constraints_ok=false
     fi
 
-    # Check unique constraints
+    if [ "$constraints_ok" = false ]; then
+        fail_test "SCHEMA CONSTRAINT VALIDATION FAILED - could not read the history guard's table set"
+        return 1
+    fi
+
+    local history_count
+    history_count="$(printf '%s\n' "$history_tables" | grep -c . || true)"
+    log_success "History-bearing tables under guard: $history_count"
+
+    local in_list
+    in_list="$(sql_quoted_list $history_tables)"
+
+    # --- Assertion 1: every history-bearing table EXISTS. --------------------
+    # The expected_tables loop above names ten PRE-BRANCH tables and none of this branch's history
+    # tables, so a migration dropping balance_snapshots outright was invisible to it.
     echo ""
-    log_info "Checking unique constraints..."
-
-    local unique_count=$(run_psql "SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_type='UNIQUE'")
-    log_info "Total unique constraints found: $unique_count"
-
-    if [ -z "$unique_count" ] || [ "$unique_count" -lt 3 ]; then
-        log_warning "Expected more unique constraints (found: $unique_count)"
+    log_info "Checking that every history-bearing table exists..."
+    local live_tables missing_tables
+    live_tables="$(psql_rows "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY 1")"
+    missing_tables="$(set_diff "$history_tables" "$live_tables")"
+    if [ -n "$missing_tables" ]; then
+        while IFS= read -r t; do
+            [ -z "$t" ] && continue
+            fail_test "History-bearing table '$t' is MISSING from the migrated schema"
+        done <<< "$missing_tables"
+        constraints_ok=false
     else
-        log_success "Unique constraints present ($unique_count found)"
+        log_success "All $history_count history-bearing tables exist"
+    fi
+
+    # --- Assertion 2: the ON DELETE CASCADE edge set is EXACTLY the allowlist. -
+    # Both directions. An UNEXPECTED edge is a new route by which some other delete destroys
+    # history; a MISSING edge is an allowlisted CASCADE that has been dropped or weakened to
+    # NO ACTION / RESTRICT / SET NULL — for the GDPR-erasure edges off `users` that strands
+    # personal data after a completed erasure, which the ADR forbids just as firmly.
+    echo ""
+    log_info "Checking the ON DELETE behaviour of every foreign key into a history-bearing table..."
+    local live_edges
+    live_edges="$(psql_rows "
+        SELECT c.relname || '|' || p.relname || '|' || con.conname || '|' ||
+               (SELECT string_agg(a.attname, ',' ORDER BY x.ord)
+                  FROM unnest(con.conkey) WITH ORDINALITY AS x(att, ord)
+                  JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = x.att) || '|' ||
+               (SELECT string_agg(a.attname, ',' ORDER BY x.ord)
+                  FROM unnest(con.confkey) WITH ORDINALITY AS x(att, ord)
+                  JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = x.att)
+          FROM pg_constraint con
+          JOIN pg_class c ON c.oid = con.conrelid
+          JOIN pg_class p ON p.oid = con.confrelid
+         WHERE con.contype = 'f'
+           AND con.confdeltype = 'c'
+           AND c.relnamespace = 'public'::regnamespace
+           AND c.relname IN ($in_list)
+         ORDER BY 1")"
+
+    # A totally empty result against a non-empty allowlist means the QUERY broke, not that 26
+    # constraints vanished at once. Say so, rather than emitting 26 misleading findings.
+    local live_edge_count
+    live_edge_count="$(printf '%s\n' "$live_edges" | grep -c . || true)"
+    if [ "${live_edge_count:-0}" -eq 0 ]; then
+        fail_test "The CASCADE query returned NO rows at all while allowedHistoryCascades is non-empty — treat this as a broken check, not as 26 dropped constraints."
+        constraints_ok=false
+    fi
+
+    local unexpected_edges missing_edges
+    unexpected_edges="$(set_diff "$live_edges" "$allowed_edges")"
+    missing_edges="$(set_diff "$allowed_edges" "$live_edges")"
+
+    if [ -n "$unexpected_edges" ]; then
+        while IFS= read -r e; do
+            [ -z "$e" ] && continue
+            fail_test "UNALLOWLISTED ON DELETE CASCADE into a history-bearing table: $e — a delete on the parent will destroy financial history. Add it to allowedHistoryCascades with a reason, or make the edge RESTRICT."
+        done <<< "$unexpected_edges"
+        constraints_ok=false
+    fi
+    if [ -n "$missing_edges" ]; then
+        while IFS= read -r e; do
+            [ -z "$e" ] && continue
+            fail_test "ALLOWLISTED ON DELETE CASCADE is GONE or WEAKENED: $e is not an ON DELETE CASCADE in the migrated schema. If this was deliberate, remove it from allowedHistoryCascades; if it is an erasure path off users, personal data now survives erasure."
+        done <<< "$missing_edges"
+        constraints_ok=false
+    fi
+    if [ -z "$unexpected_edges" ] && [ -z "$missing_edges" ]; then
+        local edge_count
+        edge_count="$(printf '%s\n' "$allowed_edges" | grep -c . || true)"
+        log_success "All $edge_count CASCADE edges into history-bearing tables match allowedHistoryCascades exactly"
+    fi
+
+    # --- Assertion 3: every history-bearing table has a PRIMARY KEY. ---------
+    # Not a count of unique constraints anywhere in the schema: a history table without a primary
+    # key cannot be de-duplicated on re-sync and cannot be pointed at by anything.
+    echo ""
+    log_info "Checking that every history-bearing table has a primary key..."
+    local pkless
+    pkless="$(psql_rows "
+        SELECT c.relname
+          FROM pg_class c
+         WHERE c.relnamespace = 'public'::regnamespace
+           AND c.relkind = 'r'
+           AND c.relname IN ($in_list)
+           AND NOT EXISTS (SELECT 1 FROM pg_constraint pc
+                            WHERE pc.conrelid = c.oid AND pc.contype = 'p')
+         ORDER BY 1")"
+    if [ -n "$pkless" ]; then
+        while IFS= read -r t; do
+            [ -z "$t" ] && continue
+            fail_test "History-bearing table '$t' has NO PRIMARY KEY"
+        done <<< "$pkless"
+        constraints_ok=false
+    else
+        log_success "Every history-bearing table has a primary key"
+    fi
+
+    # --- Assertion 4: CASCADE child columns are indexed (ratchet). -----------
+    echo ""
+    log_info "Checking that every CASCADE into a history-bearing table has a supporting index..."
+    local live_unindexed
+    live_unindexed="$(psql_rows "
+        SELECT c.relname || '|' || con.conname
+          FROM pg_constraint con
+          JOIN pg_class c ON c.oid = con.conrelid
+         WHERE con.contype = 'f'
+           AND con.confdeltype = 'c'
+           AND c.relnamespace = 'public'::regnamespace
+           AND c.relname IN ($in_list)
+           AND NOT EXISTS (
+                SELECT 1 FROM pg_index i
+                 WHERE i.indrelid = con.conrelid AND i.indisvalid AND i.indpred IS NULL
+                   AND (SELECT string_agg(a.attname, ',' ORDER BY x.ord)
+                          FROM unnest((i.indkey::int2[])[0:array_length(con.conkey, 1) - 1])
+                               WITH ORDINALITY AS x(att, ord)
+                          JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = x.att)
+                     = (SELECT string_agg(a.attname, ',' ORDER BY x.ord)
+                          FROM unnest(con.conkey) WITH ORDINALITY AS x(att, ord)
+                          JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = x.att))
+         ORDER BY 1")"
+
+    local known_unindexed
+    known_unindexed="$(unindexed_cascade_fk_allowlist | cut -d'|' -f1,2)"
+    local new_unindexed stale_unindexed
+    new_unindexed="$(set_diff "$live_unindexed" "$known_unindexed")"
+    stale_unindexed="$(set_diff "$known_unindexed" "$live_unindexed")"
+
+    if [ -n "$new_unindexed" ]; then
+        while IFS= read -r e; do
+            [ -z "$e" ] && continue
+            fail_test "CASCADE $e into a history-bearing table has NO supporting index — the parent DELETE will sequential-scan the child under an exclusive lock. Add the index, or add the edge to unindexed_cascade_fk_allowlist with a reason."
+        done <<< "$new_unindexed"
+        constraints_ok=false
+    fi
+    if [ -n "$stale_unindexed" ]; then
+        while IFS= read -r e; do
+            [ -z "$e" ] && continue
+            fail_test "STALE unindexed_cascade_fk_allowlist entry: $e is now indexed (or gone). Delete the line — this list only shrinks."
+        done <<< "$stale_unindexed"
+        constraints_ok=false
+    fi
+    if [ -z "$new_unindexed" ] && [ -z "$stale_unindexed" ]; then
+        log_success "CASCADE index coverage matches the recorded exceptions exactly ($(printf '%s\n' "$known_unindexed" | grep -c . || true) known-unindexed)"
+    fi
+
+    # --- Schema-wide totals, REPORTED not gated. -----------------------------
+    # These are the three numbers the old count floors gated on. They are informational: a floor
+    # 30x below reality proves nothing, and the assertions above say what actually matters.
+    echo ""
+    log_info "Schema totals (informational, not gated): foreign keys=$(run_psql "SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_type='FOREIGN KEY'"), indexes=$(run_psql "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public'"), unique constraints=$(run_psql "SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_type='UNIQUE'")"
+
+    if [ -e "$PSQL_ERROR_FLAG" ]; then
+        local psql_error_count
+        psql_error_count="$(grep -c . "$PSQL_ERROR_FLAG" || true)"
+        rm -f "$PSQL_ERROR_FLAG"
+        fail_test "$psql_error_count schema-validation query/queries failed to EXECUTE — every finding above is unreliable; fix the check, do not edit the allowlists"
+        constraints_ok=false
     fi
 
     echo ""
-    pass_test "SCHEMA CONSTRAINT VALIDATION PASSED"
-    return 0
+    if [ "$constraints_ok" = true ]; then
+        pass_test "SCHEMA CONSTRAINT VALIDATION PASSED - history-bearing tables, their CASCADE edges and their primary keys all match the Go guard"
+        return 0
+    fi
+    fail_test "SCHEMA CONSTRAINT VALIDATION FAILED - see the history foreign-key findings above"
+    return 1
 }
 
 # =============================================================================

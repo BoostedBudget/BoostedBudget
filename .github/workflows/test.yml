@@ -221,6 +221,17 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: python3 scripts/check-ungated-guard-steps.py
 
+      # #1569 round 17 task 2. Unit suite for the history-foreign-key assertions that replaced
+      # test_schema_constraints' three count floors in scripts/test-migrations.sh. Hosted HERE
+      # rather than in migration-tests because that job is paths-gated on
+      # `backend/migrations/**` / `backend/**` / `.github/workflows/**` — and this suite's corpus
+      # is scripts/test-migrations.sh plus backend/internal/repository/history_cascade_guard_test.go,
+      # so a change confined to scripts/** would not run it there. Pure shell against synthetic
+      # fixtures and the real Go guard: no Postgres, no migrate binary, no browser, ~1s.
+      - name: Test schema-constraint history-FK assertions (#1569)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/schema-constraint-history-fks.test.sh
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
