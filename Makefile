@@ -92,10 +92,17 @@ test-fast:
 	@echo ""
 	@echo "⚠️  E2E tests skipped for speed. Run 'make test-all' before creating PRs."
 	@echo ""
+	@# #1569 r19: this used to end in `|| true`, which discarded squawk's exit code.
+	@# squawk DOES exit 1 on findings (verified), so `|| true` was not belt-and-braces --
+	@# it made a real violation pass locally and fail only in CI, the exact local/CI
+	@# divergence that cost round 18 a full round. --pg-version=17 matches CI; without
+	@# it squawk lints against a different default and can disagree with the CI step.
+	@# ⚠ The glob is *.up.sql deliberately: squawk REFUSES a .down.sql path and still
+	@# exits 0, so a *.sql glob silently lints half its input. See test.yml.
 	@echo "1️⃣  Linting Migrations..."
 	@if command -v squawk &> /dev/null; then \
 		echo "Running Squawk migration linter..."; \
-		squawk backend/migrations/*.up.sql || true; \
+		squawk backend/migrations/*.up.sql --pg-version=17; \
 	else \
 		echo "⚠️  Migration lint skipped (squawk not installed)"; \
 		echo "   Install: npm install -g squawk-cli"; \
@@ -145,11 +152,18 @@ test-all:
 	@echo "Running ALL tests with coverage reports"
 	@echo "========================================"
 	@echo ""
+	@# #1569 r19: this used to end in `|| true`, which discarded squawk's exit code.
+	@# squawk DOES exit 1 on findings (verified), so `|| true` was not belt-and-braces --
+	@# it made a real violation pass locally and fail only in CI, the exact local/CI
+	@# divergence that cost round 18 a full round. --pg-version=17 matches CI; without
+	@# it squawk lints against a different default and can disagree with the CI step.
+	@# ⚠ The glob is *.up.sql deliberately: squawk REFUSES a .down.sql path and still
+	@# exits 0, so a *.sql glob silently lints half its input. See test.yml.
 	@echo "1️⃣  Linting Migrations..."
 	@# Run Squawk migration linter (no database connection needed)
 	@if command -v squawk &> /dev/null; then \
 		echo "Running Squawk migration linter..."; \
-		squawk backend/migrations/*.up.sql || true; \
+		squawk backend/migrations/*.up.sql --pg-version=17; \
 	else \
 		echo "⚠️  Migration lint skipped (squawk not installed)"; \
 		echo "   Install: npm install -g squawk-cli"; \
