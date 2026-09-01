@@ -16,7 +16,7 @@ help:
 	@echo "  make test-ci          - Run CI tests with coverage enforcement"
 	@echo "  make backend-test     - Run backend tests only"
 	@echo "  make frontend-test    - Run frontend tests only"
-	@echo "  make test-scripts     - Run shell script regression suites (scripts/**/*.test.sh)"
+	@echo "  make test-scripts     - Run the 21 shell regression suites (scripts/**, apps/web/scripts/**)"
 	@echo ""
 	@echo "Backend:"
 	@echo "  make backend-build    - Build backend binary"
@@ -97,8 +97,15 @@ test-fast:
 	@# it made a real violation pass locally and fail only in CI, the exact local/CI
 	@# divergence that cost round 18 a full round. --pg-version=17 matches CI; without
 	@# it squawk lints against a different default and can disagree with the CI step.
-	@# ⚠ The glob is *.up.sql deliberately: squawk REFUSES a .down.sql path and still
-	@# exits 0, so a *.sql glob silently lints half its input. See test.yml.
+	@# The glob is *.up.sql because .squawk.toml:32-38 excludes *.down.sql anyway
+	@# ("rollback migrations NEED DROP TABLE statements"), plus three named files.
+	@# ⚠⚠ #1569 r19: an earlier version of THESE TWO LINES claimed squawk "REFUSES a
+	@# .down.sql path and still exits 0". That is FALSE -- squawk exits 1 -- and the
+	@# same false sentence was retracted from test.yml in 138b7dd0 while these two
+	@# copies survived, because the retraction fixed the file it was found in rather
+	@# than every file it had been pasted into. Grep the whole tree when retracting a
+	@# claim. ⚠ --pg-version=17 is REDUNDANT (.squawk.toml:7 already pins 17); it is
+	@# kept only so this command reads identically to the CI step in test.yml.
 	@echo "1️⃣  Linting Migrations..."
 	@if command -v squawk &> /dev/null; then \
 		echo "Running Squawk migration linter..."; \
@@ -157,8 +164,15 @@ test-all:
 	@# it made a real violation pass locally and fail only in CI, the exact local/CI
 	@# divergence that cost round 18 a full round. --pg-version=17 matches CI; without
 	@# it squawk lints against a different default and can disagree with the CI step.
-	@# ⚠ The glob is *.up.sql deliberately: squawk REFUSES a .down.sql path and still
-	@# exits 0, so a *.sql glob silently lints half its input. See test.yml.
+	@# The glob is *.up.sql because .squawk.toml:32-38 excludes *.down.sql anyway
+	@# ("rollback migrations NEED DROP TABLE statements"), plus three named files.
+	@# ⚠⚠ #1569 r19: an earlier version of THESE TWO LINES claimed squawk "REFUSES a
+	@# .down.sql path and still exits 0". That is FALSE -- squawk exits 1 -- and the
+	@# same false sentence was retracted from test.yml in 138b7dd0 while these two
+	@# copies survived, because the retraction fixed the file it was found in rather
+	@# than every file it had been pasted into. Grep the whole tree when retracting a
+	@# claim. ⚠ --pg-version=17 is REDUNDANT (.squawk.toml:7 already pins 17); it is
+	@# kept only so this command reads identically to the CI step in test.yml.
 	@echo "1️⃣  Linting Migrations..."
 	@# Run Squawk migration linter (no database connection needed)
 	@if command -v squawk &> /dev/null; then \
