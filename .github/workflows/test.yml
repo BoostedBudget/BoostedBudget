@@ -122,9 +122,19 @@ jobs:
     # superseding pushes, not natural durations). 35 is roughly 2x the observed maximum, so a
     # legitimately slow run still finishes while a wedge fails in well under an hour.
     #
-    # If this starts firing on healthy runs, the answer is NOT a bigger number -- it is that the host
-    # can no longer carry the matrix, which is #1489's subject.
-    timeout-minutes: 35
+    # ⚠⚠ RAISED 35 -> 45 ON 2026-09-01 BY EXPLICIT USER AUTHORISATION, overriding the paragraph
+    # above, which still stands as the correct engineering position: a bigger number does not fix
+    # #1489, it only stops this job from being the thing that reports it. Recorded here rather than
+    # silently applied, because the previous sentence would otherwise read as a rule the file itself
+    # ignores.
+    # The override is grounded: the last three runs to reach the test step were killed AT the 35m cap
+    # (36-37m elapsed) while still passing tests steadily -- test #402 passed 160ms before one kill --
+    # so 35 now truncates healthy runs rather than catching wedges. The 4.6-17.7 minute range quoted
+    # above predates the host-load regression and no longer describes this pool.
+    # ⚠ 45 is NOT a new derived bound -- it is headroom bought while #1489 is unresolved. Do not
+    # quote it as measured, and do not raise it again: the next increase is an admission that the
+    # host cannot carry the matrix, which is #1489's actual subject.
+    timeout-minutes: 45
     environment: e2e  # Access Clerk secrets from e2e environment
     env:
       UNIQUE_WORKSPACE: workspace-e2e-test-${{ github.run_id }}
@@ -1354,9 +1364,11 @@ jobs:
           # it takes ~85s locally under -race, so CI on this loaded four-runner pool is
           # ~7x slower, and the accumulated guard runtime finally crossed the default.
           #
-          # ⚠ This is NOT the same call as e2e-test's timeout-minutes: 35. That one was
-          # DERIVED from twelve observed runs and its comment says raising it is the wrong
-          # answer. This one replaces an unexamined default with a stated bound.
+          # ⚠ This is NOT the same call as e2e-test's timeout-minutes (45 since 2026-09-01,
+          # 35 before that). That one was DERIVED from twelve observed runs, then raised by
+          # explicit authorisation once the derivation stopped describing the host; its own
+          # comment still says raising it is the wrong answer to #1489. This one replaces an
+          # unexamined default with a stated bound -- a different act from either.
           # ⚠ If 20m starts firing, do NOT raise it again -- the guards' runtime is the
           # real signal, and the fix is to make them cheaper or move them to their own job.
           go test -v -race -timeout 20m \
@@ -1490,7 +1502,13 @@ jobs:
     # cold `docker pull redis:7-alpine` on a runner that hasn't cached the image yet, not because
     # execution time is expected to meaningfully grow. Re-measure across real CI runs before
     # lowering, same as the note above.
-    timeout-minutes: 30
+    #
+    # ⚠ RAISED 30 -> 45 ON 2026-09-01, same user authorisation as e2e-test above, and this one is
+    # measurement-driven rather than a concession: on run 33466644820 this job SUCCEEDED at 27m
+    # against the 30m cap -- three minutes of headroom -- and on the immediately preceding run it was
+    # cancelled at 32m under host load. A job that passes at 27/30 is one slow dependency pull away
+    # from a false red that looks like a test failure.
+    timeout-minutes: 45
     env:
       UNIQUE_WORKSPACE: workspace-backend-integration-test-${{ github.run_id }}
       # Container names are unique per run AND per rerun attempt, so a killed
