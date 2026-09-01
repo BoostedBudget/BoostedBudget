@@ -536,3 +536,152 @@ func TestDashboard_PastAsOfDate_MergeDirection_DecidesInclusionUnderATypeFilter(
 			"sees the successor's type. An overwriting merge would resolve it to the predecessor "+
 			"and drop $300 from the total — the merge direction is not a labelling choice")
 }
+
+// TestDashboard_RemovedThenRestoredAccount_KeepsItsPreRemovalBaseline_Integration is the INVERSE of
+// #1569's founding symptom, and nothing covered it: an account that is active TODAY, carries a
+// LEGITIMATE pre-removal snapshot, and has a RECORDED GAP IN LIVENESS that straddles the baseline
+// instant.
+//
+// It is materially different from
+// TestDashboard_AccountOpenedAfterTheCutoff_IsAbsentFromTheBaseline_Integration, which shares the
+// same map precedence but has no legitimate pre-cutoff history (that test says so itself: the
+// account "contributes nothing either way"). Here the pre-cutoff snapshot is real money, really
+// held, by an account that really existed — and the recorded as-of universe at the baseline instant
+// is nevertheless EMPTY, because the account was in a 'removed' interval right then.
+//
+// ── THE EXPECTED VALUE, DECIDED AND WRITTEN DOWN BEFORE THE FIRST RUN ────────────────────────────
+// Predicted: the as-of universe at the baseline instant is EMPTY, and PreviousNetWorth is
+// nonetheless $1,000 — the pre-removal snapshot — for a real +20% against today's $1,200.
+//
+// And that is the CORRECT answer, not merely the one the code produces. Three reasons, in
+// descending order of how load-bearing they are:
+//
+//  1. THE REMOVAL WAS NOT A FACT ABOUT THE MONEY. `removed_reason='provider_absent'` means the
+//     bank stopped reporting the account; RestoreProviderRemovedAccount exists precisely to say
+//     "that removal was never real" and REFUSES every other cause (a 'user_disconnect' or a legacy
+//     NULL gets ErrAccountNotRestorable and is never undone by a sync). The gap in
+//     account_status_history is a gap in OUR OBSERVATION, not in the account's existence. Excluding
+//     the balance would let a provider outage erase the user's money from their own history.
+//  2. THE BALANCE NEVER COMES FROM THE MAP. baselineBalanceForComparison and GetNetWorth's baseline
+//     loop take every figure from the snapshot row; the account map decides only inclusion and
+//     TYPE. So the question this test asks is genuinely "should a snapshot be dropped because the
+//     account was mid-outage at the cutoff", and the answer is no — the snapshot is a fact about
+//     -60d, an instant at which the account was indisputably live.
+//  3. EXCLUDING WOULD RE-CREATE THE FOUNDING BUG WITH THE SIGN FLIPPED. Baseline $0 against a
+//     current $1,200 is not "+20%"; it is an infinite rise, and the divide-by-zero guard would
+//     report 0% — "no change" — which is the exact string of characters issue #1569 was filed over.
+//
+// So a RED here would be a defect in my prediction, not in the product: the failure mode worth
+// fearing on this path is the baseline going to ZERO, not it including too much.
+//
+// What this test therefore pins is a JOINT property that no single existing test states: the as-of
+// universe and the baseline SUM are allowed to disagree about this account, and must. The universe
+// is the honest answer to "what did we know then"; the baseline is the honest answer to "how much
+// money was there". Anything that turns the first into a filter on the second breaks this.
+func TestDashboard_RemovedThenRestoredAccount_KeepsItsPreRemovalBaseline_Integration(t *testing.T) {
+	pool := setupDashboardAsOfDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	f := seedAsOfAccount(ctx, t, tx, "asof-restored")
+	now := time.Now().UTC()
+
+	// Live for 90 days, holding $1,000 sixty days ago (well before the 30-day baseline instant, and
+	// at an instant the account was unambiguously live), $1,200 today.
+	backdateActiveInterval(ctx, t, tx, f.AccountID, now.AddDate(0, 0, -90))
+	seedAsOfSnapshot(ctx, t, tx, f, 1000.00, now.AddDate(0, 0, -60))
+	seedAsOfSnapshot(ctx, t, tx, f, 1200.00, now)
+
+	// ── The provider stopped reporting the account 45 days ago. ──────────────────────────────
+	// removed_reason MUST be 'provider_absent': RestoreProviderRemovedAccount accepts nothing else.
+	_, err = tx.Exec(ctx, `
+		UPDATE accounts
+		SET status = 'removed', removed_at = $2, removed_reason = 'provider_absent', updated_at = $2
+		WHERE id = $1`, f.AccountID, now.AddDate(0, 0, -45))
+	require.NoError(t, err, "provider-absent removal")
+
+	// Backdate BOTH halves of the recorded transition. The trigger stamped clock_timestamp() on
+	// each; leaving them there would put the whole gap in the last few milliseconds, the baseline
+	// instant would fall inside the ORIGINAL active interval, and the test would pass while
+	// asserting nothing about a liveness gap at all. Two statements, closing before opening, so
+	// chk_ash_interval (valid_to > valid_from) is never momentarily violated.
+	ct, err := tx.Exec(ctx, `
+		UPDATE account_status_history SET valid_to = $2
+		WHERE account_id = $1 AND status = 'active'`, f.AccountID, now.AddDate(0, 0, -45))
+	require.NoError(t, err)
+	require.EqualValues(t, 1, ct.RowsAffected(), "exactly one recorded active interval to close")
+	ct, err = tx.Exec(ctx, `
+		UPDATE account_status_history SET valid_from = $2
+		WHERE account_id = $1 AND status = 'removed' AND valid_to IS NULL`,
+		f.AccountID, now.AddDate(0, 0, -45))
+	require.NoError(t, err)
+	require.EqualValues(t, 1, ct.RowsAffected(), "exactly one open removed interval to backdate")
+
+	// ── The bank starts reporting it again today, and the sync restores it. ──────────────────
+	// This runs the REAL repository method, not hand-written SQL, because the cause check
+	// ('provider_absent' and nothing else) is the reason this scenario is reachable at all.
+	// r.db.Begin(ctx) on a pgx.Tx opens a SAVEPOINT, so the nesting inside this test's outer tx is
+	// legitimate — the restore commits to the savepoint and stays inside the rollback below.
+	accountRepo := repository.NewAccountRepository(tx, dashboardAsOfEncryptor(t))
+	require.NoError(t,
+		accountRepo.RestoreProviderRemovedAccount(ctx, f.AccountID.String(), f.UserID.String()),
+		"a provider_absent removal is restorable; if this errors the fixture is not the scenario")
+
+	var status string
+	var removedAt *time.Time
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT status, removed_at FROM accounts WHERE id = $1`, f.AccountID).Scan(&status, &removedAt))
+	require.Equal(t, "active", status, "restored, so the CURRENT-map precedence is the one under test")
+	require.Nil(t, removedAt, "the restore clears removed_at; a live row must not claim a removal date")
+
+	// The gap is real and recorded: three intervals, and none of the 'active' ones covers -30d.
+	baselineInstant := endOfDay(now.Truncate(24*time.Hour).AddDate(0, 0, -30))
+	var liveAtBaseline bool
+	require.NoError(t, tx.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM account_status_history h
+		               WHERE h.account_id = $1 AND h.status = 'active'
+		                 AND h.valid_from <= $2 AND (h.valid_to IS NULL OR h.valid_to > $2))`,
+		f.AccountID, baselineInstant).Scan(&liveAtBaseline))
+	require.False(t, liveAtBaseline,
+		"fixture precondition: the removal interval must straddle the baseline instant, or this "+
+			"test is the already-covered always-live case wearing a different name")
+
+	// ── Assertion 1: the as-of universe is EMPTY at the baseline instant. ────────────────────
+	universe, err := accountRepo.GetAccountsWithInstitutionFiltered(ctx, f.UserID.String(),
+		repository.AccountFilterOptions{AsOf: &baselineInstant, IncludeHidden: true})
+	require.NoError(t, err)
+	assert.Empty(t, universe,
+		"recorded liveness says the account was mid-outage at the baseline instant, and the as-of "+
+			"universe reports that honestly")
+
+	// ── Assertion 2: the baseline SUM keeps the money anyway. ────────────────────────────────
+	svc := NewDashboardService(repository.NewBalanceSnapshotRepository(tx), accountRepo)
+
+	netWorth, err := svc.GetNetWorth(ctx, f.UserID.String(), nil)
+	require.NoError(t, err)
+	assert.InDelta(t, 1200.00, netWorth.NetWorth, 0.001,
+		"the account is live again, so today's figure is today's snapshot")
+	require.NotNil(t, netWorth.PeriodComparison,
+		"a nil comparison would silently skip every assertion below — the vacuity class this file "+
+			"has already been bitten by")
+	assert.InDelta(t, 1000.00, netWorth.PeriodComparison.PreviousNetWorth, 0.001,
+		"the $1,000 was really held at -60d by an account that was really live then. A provider "+
+			"outage across the baseline instant is a gap in what we OBSERVED, not in what the user "+
+			"OWNED, and RestoreProviderRemovedAccount is the system stating exactly that. A $0 "+
+			"here would be #1569's founding bug with the sign flipped")
+	assert.InDelta(t, 200.00, netWorth.PeriodComparison.NetWorthChange, 0.001)
+	assert.InDelta(t, 20.0, netWorth.PeriodComparison.NetWorthChangePercent, 0.001,
+		"a real +20%%. The 0%% a zero baseline would produce via the divide-by-zero guard is the "+
+			"exact symptom this issue was filed for")
+
+	summary, err := svc.GetBalanceSummary(ctx, f.UserID.String(), nil)
+	require.NoError(t, err)
+	require.NotNil(t, summary.PeriodComparison)
+	assert.InDelta(t, 1200.00, summary.TotalBalance, 0.001)
+	assert.InDelta(t, 1000.00, summary.PeriodComparison.PreviousBalance, 0.001,
+		"the balance-summary baseline resolves through the same precedence and must agree — the "+
+			"two endpoints disagreeing about one account is its own bug class here")
+	assert.InDelta(t, 20.0, summary.PeriodComparison.ChangePercent, 0.001)
+}
