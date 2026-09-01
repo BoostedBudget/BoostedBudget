@@ -25,6 +25,28 @@
 -- disallowed-unique-constraint, …) could have applied here even if they were enabled. The NOT NULL
 -- columns below carry DEFAULTs and are on a brand-new table, so adding-not-nullable-field is
 -- inapplicable rather than merely silenced.
+--
+-- ⚠ TWO OF THIS FILE'S CLAIMS WERE LATER FOUND WRONG AND HAVE BEEN CORRECTED IN PLACE HERE.
+-- A migration file is immutable once applied, so correcting a false COMMENT takes TWO edits: this
+-- ORIGINAL file, which is what a FRESH database gets, and a NEW forward migration, which is what an
+-- already-migrated database gets. The forward halves shipped first and this file was left carrying
+-- the wrong text; that half of the correction is what the edits below complete.
+--
+--   * the exclusive column's `--` NARRATIVE claimed the rows sacrificed by an exclusive advance
+--     were reached "until the next wrap" -- a recovery that does not exist. Its CATALOGUE comment
+--     did not carry that sentence; it simply omitted the price altogether, which is why 000142
+--     replaced it with a longer text that states the price explicitly. Both are corrected below,
+--     and 000142 re-issues the catalogue half for already-migrated databases.
+--   * the ts2 catalogue comment said ts2 is "NULL for the two user sweeps", which a fourth sweep
+--     (plaid_orphan_retry) made incomplete. Re-issued by migration 000141, which deliberately
+--     re-states it as a CONDITION rather than a count so the next sweep cannot invalidate it again.
+--
+-- Both corrected texts below are copied VERBATIM from those two migrations and must stay that way:
+-- on a fresh database 000141/000142 run moments later and set the identical text, so the catalogue
+-- converges either way, and TestReissuedColumnCommentsDoNotDrift
+-- (backend/internal/repository/reissued_column_comment_guard_test.go) fails if a copy is re-worded
+-- in one file and not the other. Nothing about the SCHEMA changed in either correction -- no
+-- column, constraint, index, default, type or datum. These were documentation defects.
 
 CREATE TABLE IF NOT EXISTS sweep_cursors (
     -- One row per sweep. The PRESENCE of a row is what means "this sweep stopped early and has a
@@ -57,8 +79,17 @@ CREATE TABLE IF NOT EXISTS sweep_cursors (
     --
     -- Set TRUE only in the degenerate case where an entire capped run was consumed by rows sharing
     -- ONE timestamp key, so an inclusive resume would replay the identical page forever and
-    -- reintroduce the starvation this table exists to fix. It buys guaranteed forward progress at
-    -- the cost of skipping the remainder of that one over-cap tie group until the next wrap.
+    -- reintroduce the starvation this table exists to fix.
+    --
+    -- ⚠ CORRECTED IN PLACE (see the file header). This paragraph originally ended: "It buys
+    -- guaranteed forward progress at the cost of skipping the remainder of that one over-cap tie
+    -- group until the next wrap." The "until the next wrap" recovery DOES NOT EXIST. A wrap
+    -- restarts the sweep at the BEGINNING of its candidate set, re-reads the same first cap-worth
+    -- of the same tie group and stops in the same place, so the rows behind that first cap-worth
+    -- are reached on NO run at all -- not a later one, and not a post-wrap one. What the exclusive
+    -- advance does buy is that everything RANKED BEHIND the tie group is reached. Migration 000142 re-issues the
+    -- catalogue comment below with this correction for databases that had already applied 000140;
+    -- repository.NextPosition is the authoritative statement, with the test that demonstrates it.
     exclusive BOOLEAN NOT NULL DEFAULT FALSE,
 
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -78,9 +109,32 @@ COMMENT ON COLUMN sweep_cursors.ts1 IS
     'First non-identity ORDER BY component of the owning sweep. NULL is a real position, coalesced to the '
     'timestamptz infinity by the queries to match ORDER BY ... NULLS LAST.';
 
+-- ⚠ CORRECTED IN PLACE (see the file header). Copied VERBATIM from migration 000141, which
+-- re-issues this text for already-migrated databases; do not re-word it in one file only.
 COMMENT ON COLUMN sweep_cursors.ts2 IS
-    'Second non-identity ORDER BY component, used only by the item_cleanup sweep (last_synced_at); NULL for the two user sweeps.';
+    'Second non-identity ORDER BY component of the owning sweep, and NULL whenever that sweep''s '
+    'sort key has no second non-identity component -- which is the case for every sweep whose '
+    'candidates are ordered by a single timestamp plus the row id. Stated as a CONDITION rather '
+    'than as a list or a count of sweeps on purpose: the original wording said "NULL for the two '
+    'user sweeps" and a fourth sweep made it incomplete the day it was added, while nothing in it '
+    'looked stale. The authoritative per-sweep mapping is repository.SweepCursorName, whose '
+    'constants each name their own TS1/TS2 columns and which a new sweep has to edit anyway. '
+    'A NULL here is a REAL position, not "unset" (absence of the whole row is "unset"), and is '
+    'coalesced to the timestamptz infinity by the page queries to match ORDER BY ... NULLS LAST.';
 
+-- ⚠ CORRECTED IN PLACE (see the file header). Copied VERBATIM from migration 000142, which
+-- re-issues this text for already-migrated databases; do not re-word it in one file only. It reads
+-- as this file retracting its own earlier sentence because that is exactly what it is -- the
+-- retraction is carried in the catalogue text itself so a reader of the live database sees it too.
 COMMENT ON COLUMN sweep_cursors.exclusive IS
-    'FALSE = resume at this timestamp key (re-visits boundary ties, never skips one). TRUE = resume strictly '
-    'after it; set only when a whole capped run was consumed by a single timestamp key, to guarantee forward progress.';
+    'FALSE = resume AT this timestamp key, re-visiting the rows that tie on it and skipping none. '
+    'TRUE = resume STRICTLY AFTER it, and it is set in exactly one condition: the run started from '
+    'a stored key and spent its whole cap without the timestamp key changing, so an inclusive save '
+    'would hand the next run the identical page forever. THE PRICE, STATED AS A CONDITION SO IT '
+    'CANNOT BE MISREAD AS A DELAY: whichever rows sit behind the first cap-worth of that one '
+    'identical-timestamp-key group are then reached on no run at all -- not on a later run, and '
+    'not by restarting the sweep from the beginning, because restarting re-reads that same first '
+    'cap-worth and stops in the same place. 000140 said those rows were reached "until the next '
+    'wrap"; that recovery does not exist and this comment retracts it. Everything RANKED BEHIND '
+    'the group is reached, which is what the exclusive advance buys. The authoritative statement, '
+    'with the test that demonstrates it, is repository.NextPosition.';
