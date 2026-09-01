@@ -2433,17 +2433,22 @@ jobs:
           npm install -g squawk-cli
           $HOME/bin/migrate --version && squawk --version
 
-      # ⚠ The glob is *.up.sql, and that is the honest scope rather than a narrowing.
-      # #1569 round 19: this step used to pass `migrations/*.sql` -- 366 files -- and print
-      # "Found 0 issues in 180 files 🎉" with exit 0 and no warning. squawk REFUSES a
-      # `.down.sql` path outright ("Failed to find files for provided patterns") and still
-      # exits 0, so all 183 down migrations were silently unlinted while the command implied
-      # it covered them. Passing *.up.sql makes the command say what it actually does.
+      # The glob is *.up.sql so the command matches the policy that .squawk.toml already
+      # enforces. This step used to pass `migrations/*.sql` (366 files) and print "Found 0
+      # issues in 180 files", which LOOKED like half the input vanishing. It is not:
+      # .squawk.toml:32-38 excludes `*.down.sql` deliberately -- "rollback migrations NEED
+      # DROP TABLE statements" -- plus three up-migrations, each with its own stated reason.
+      # 183 up files minus those three = the 180 linted. Coverage here is unchanged; only the
+      # command's appearance is.
       #
-      # ⚠ Three up-migrations are ALSO not linted -- squawk cannot parse them and, again,
-      # says so only by omission from its own count: 000030_add_river_queue,
-      # 000047_drop_sync_audit, 000145_river_migration_007. 183 passed in, 180 linted.
-      # If that count ever drops further, squawk has silently stopped reading something else.
+      # ⚠⚠ #1569 r19, corrected by Codex: an earlier version of THIS comment claimed squawk
+      # "REFUSES a .down.sql path and still exits 0" and that the three files were
+      # "unparseable". BOTH WERE FALSE. squawk exits 1 on a down-only invocation (the earlier
+      # measurement piped through `tail`, so it read tail's exit code, not squawk's), and the
+      # three files parse fine -- run with `--config=/dev/null` and they emit ordinary
+      # warnings. The exclusions are configuration, not capability. ⚠ Do not re-derive this
+      # step's scope from its output count without reading .squawk.toml first: the count is
+      # a consequence of that file, and a drop in it means an exclusion was ADDED there.
       - name: Lint migrations with Squawk
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: squawk migrations/*.up.sql --pg-version=17
@@ -2496,7 +2501,7 @@ jobs:
       # that no workflow ran"; that was FALSE when written and stayed false for nine rounds —
       # no-ungated-migrate-down-invocation-guard.test.sh, check-ci-env-drift.test.sh and
       # summarize-go-test.test.sh were all still unwired, and round 15 task 1 wired them. As of
-      # that commit all 17 suites in `make test-scripts` do have an individual CI step, but
+      # that commit all 21 suites in `make test-scripts` do have an individual CI step, but
       # `make test-scripts` itself still runs in no CI job, so the per-suite wiring below and in
       # frontend-test remains the only thing that executes them. It was
       # reachable only through `make test-scripts`, which no job invokes — so its eight cases,
