@@ -22,29 +22,137 @@ import (
 // 000175. Fixing one and leaving the identical sentence next door is how this defect kept
 // surviving on this branch.
 //
-// WHAT THIS GUARD CLAIMS. For each column below, every migration that carries a
-// `COMMENT ON COLUMN <table>.<column> IS $COMMENT$...$COMMENT$` must carry the SAME text. It says
-// nothing about whether that text is TRUE — no test can — only that a correction cannot be applied
-// to one copy and forgotten on the others, which is the mechanical half of the defect.
+// WHAT THIS GUARD CLAIMS. For each column below, every UP migration that carries a
+// `COMMENT ON COLUMN <table>.<column> IS <body>` must carry the SAME body, in either of the two
+// quoting forms this tree uses — dollar-quoted `$COMMENT$…$COMMENT$` or one or more adjacent
+// single-quoted literals, which SQL concatenates. It says nothing about whether that text is
+// TRUE — no test can — only that a correction cannot be applied to one copy and forgotten on the
+// others, which is the mechanical half of the defect.
 //
-// WHAT IT DOES NOT CLAIM. It only sees the dollar-quoted `$COMMENT$` form. A comment written as an
-// ordinary single-quoted string is invisible to it; the accounts lifecycle comments all use the
-// dollar-quoted form, and the vacuity check below fails if that stops being true.
+// WHAT IT DOES NOT CLAIM.
+//
+//   - It compares BODIES, not truth, and not the `--` narrative around them. 000140's false "until
+//     the next wrap" claim lived ONLY in a `--` comment — its catalogue COMMENT merely omitted the
+//     price — so this guard could not have caught that half of the defect and still cannot. Only
+//     the catalogue half of a correction is mechanically checkable here.
+//   - It reads ONLY `*.up.sql`. A comment-only DOWN migration exists precisely to restore the
+//     SUPERSEDED wording (see 000141/000142's down files), so including them would report a
+//     deliberate, correct difference as drift. Verified when this restriction was added: every
+//     watched column's copies live in up migrations, so the counts below did not move.
+//   - Both quoting forms ARE now seen, and the note that used to stand here — that a single-quoted
+//     comment is invisible to this guard — was true until #1569 round 20 and is no longer. That
+//     blind spot was one of the two reasons 000140's retracted comments went unwatched while they
+//     were wrong; the other was simply that nobody had added them to the map below.
+//     `accounts.replaced_at` is still deliberately absent from that map, but for the other half of
+//     the old note: 000033 is its only copy, so there is nothing to drift.
+//   - It covers COMMENT ON COLUMN only. 000136 re-issues a COMMENT ON TABLE alongside its column
+//     comment under the same "copied verbatim ... must never become one" instruction, and that
+//     half is still enforced by prose alone.
 
 // reissuedColumnComments names the columns whose COMMENT text is re-issued across migrations, with
 // the number of copies expected. The count is a vacuity check: if a rename or a reformat makes the
 // extractor stop seeing a file, the guard would otherwise pass by finding one copy and comparing it
-// with itself.
+// with itself — which is the real risk, since the mismatch itself fails loudly in EITHER direction.
+// Re-derive a count by grepping `COMMENT ON COLUMN <col>` across `*.up.sql` rather than guessing.
 var reissuedColumnComments = map[string]int{
 	"accounts.removed_at": 3, // 000149 (origin), 000174 (first re-issue), 000175 (this correction)
 	"accounts.expired_at": 2, // 000155 (origin), 000174
-	// accounts.replaced_at is deliberately NOT here: 000033 writes it as an ordinary single-quoted
-	// string and 000174 does not re-issue it, so there is exactly one copy and nothing to drift.
+	// accounts.replaced_at is deliberately NOT here: 000033 is its only copy and 000174 does not
+	// re-issue it, so there is nothing to drift.
+	"sweep_cursors.ts2":       2, // 000140 (origin, corrected in place), 000141 (re-issue)
+	"sweep_cursors.exclusive": 2, // 000140 (origin, corrected in place), 000142 (re-issue)
+	// 000135 (origin, corrected in place before it reached main) and 000136 (the catch-up for
+	// databases that had applied 000135 already). 000136's header instructs that the bodies stay
+	// verbatim copies "and must never become one [a summary]" — enforced by nobody until now.
+	"plaid_orphaned_items.token_expires_at": 2,
 }
 
-// dollarQuotedColumnCommentRegexp matches `COMMENT ON COLUMN <qualified column> IS $COMMENT$…$COMMENT$`.
-var dollarQuotedColumnCommentRegexp = regexp.MustCompile(
-	`(?is)COMMENT\s+ON\s+COLUMN\s+([a-z_][a-z0-9_.]*)\s+IS\s+\$COMMENT\$(.*?)\$COMMENT\$`)
+// columnCommentHeadRegexp matches the `COMMENT ON COLUMN <qualified column> IS` prefix; the body
+// that follows is read by columnCommentsIn, which understands both quoting forms.
+var columnCommentHeadRegexp = regexp.MustCompile(
+	`(?is)COMMENT\s+ON\s+COLUMN\s+([a-z_][a-z0-9_.]*)\s+IS\s`)
+
+type columnComment struct{ column, text string }
+
+// columnCommentsIn extracts every `COMMENT ON COLUMN` body from RAW migration text, deliberately
+// without blanking SQL comments first: these bodies contain `--` (they cite constraint names and
+// aside clauses after a dash), so blanking would truncate a body at the first dash and compare two
+// mutilated strings. The cost of matching raw text is that a `--` line QUOTING a whole COMMENT
+// statement would be counted as a copy, so a statement whose line already contains `--` before it
+// is skipped as prose. Write pointers in `--` comments as "the ts2 comment", never as a pasted
+// `COMMENT ON COLUMN …` statement, and this stays true.
+func columnCommentsIn(raw string) []columnComment {
+	var out []columnComment
+	for _, loc := range columnCommentHeadRegexp.FindAllStringSubmatchIndex(raw, -1) {
+		lineStart := strings.LastIndexByte(raw[:loc[0]], '\n') + 1
+		if strings.Contains(raw[lineStart:loc[0]], "--") {
+			continue // a prose line quoting a statement, not a statement
+		}
+		column := strings.ToLower(raw[loc[2]:loc[3]])
+		body, ok := readCommentBody(raw, loc[1])
+		if !ok {
+			continue
+		}
+		out = append(out, columnComment{column: column, text: normaliseCommentText(body)})
+	}
+	return out
+}
+
+const dollarCommentTag = "$COMMENT$"
+
+// readCommentBody reads the string that follows `... IS` at offset i: either one dollar-quoted
+// `$COMMENT$…$COMMENT$` literal, or a run of adjacent single-quoted literals (SQL concatenates
+// those, and a DOUBLED apostrophe inside one is a single escaped apostrophe).
+func readCommentBody(raw string, i int) (string, bool) {
+	for i < len(raw) && isSQLSpace(raw[i]) {
+		i++
+	}
+	if strings.HasPrefix(raw[i:], dollarCommentTag) {
+		rest := raw[i+len(dollarCommentTag):]
+		end := strings.Index(rest, dollarCommentTag)
+		if end < 0 {
+			return "", false
+		}
+		return rest[:end], true
+	}
+
+	var body strings.Builder
+	literals := 0
+	for {
+		for i < len(raw) && isSQLSpace(raw[i]) {
+			i++
+		}
+		if i >= len(raw) || raw[i] != '\'' {
+			break
+		}
+		i++
+		closed := false
+		for i < len(raw) {
+			if raw[i] != '\'' {
+				body.WriteByte(raw[i])
+				i++
+				continue
+			}
+			if i+1 < len(raw) && raw[i+1] == '\'' { // escaped apostrophe
+				body.WriteByte('\'')
+				i += 2
+				continue
+			}
+			i++
+			closed = true
+			break
+		}
+		if !closed {
+			return "", false // unterminated literal: not something to compare
+		}
+		literals++
+	}
+	return body.String(), literals > 0
+}
+
+func isSQLSpace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\r' || b == '\n'
+}
 
 func TestReissuedColumnCommentsDoNotDrift(t *testing.T) {
 	dir := filepath.Join(backendDirRoot(t), "migrations")
@@ -64,31 +172,25 @@ func TestReissuedColumnCommentsDoNotDrift(t *testing.T) {
 	found := map[string][]copyOf{}
 
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".up.sql") {
 			continue
 		}
 		raw, readErr := os.ReadFile(filepath.Join(dir, e.Name()))
 		if readErr != nil {
 			t.Fatalf("reading %s: %v", e.Name(), readErr)
 		}
-		// Matched against the RAW text, deliberately. These comment bodies contain `--` (they cite
-		// constraint names after a dash), so blanking SQL comments first would truncate the body at
-		// the first dash and compare two mutilated strings. The cost is that a `--` line quoting a
-		// whole dollar-quoted COMMENT statement would be counted; nothing in the tree does that, and
-		// the per-column copy count above would fail loudly if one appeared.
-		for _, m := range dollarQuotedColumnCommentRegexp.FindAllStringSubmatch(string(raw), -1) {
-			col := strings.ToLower(m[1])
-			if _, watched := reissuedColumnComments[col]; !watched {
+		for _, c := range columnCommentsIn(string(raw)) {
+			if _, watched := reissuedColumnComments[c.column]; !watched {
 				continue
 			}
-			found[col] = append(found[col], copyOf{file: e.Name(), text: normaliseCommentText(m[2])})
+			found[c.column] = append(found[c.column], copyOf{file: e.Name(), text: c.text})
 		}
 	}
 
 	for col, wantCopies := range reissuedColumnComments {
 		copies := found[col]
 		if len(copies) != wantCopies {
-			t.Errorf("expected %d migration(s) to carry the COMMENT for %s, found %d %v.\n"+
+			t.Errorf("expected %d up migration(s) to carry the COMMENT for %s, found %d %v.\n"+
 				"A count that has GROWN means a new re-issue needs adding to reissuedColumnComments. "+
 				"A count that has SHRUNK means the extractor stopped seeing a file, which would make "+
 				"this guard compare a copy with itself and pass vacuously.",
