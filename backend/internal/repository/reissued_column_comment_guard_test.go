@@ -35,16 +35,25 @@ import (
 //     the next wrap" claim lived ONLY in a `--` comment — its catalogue COMMENT merely omitted the
 //     price — so this guard could not have caught that half of the defect and still cannot. Only
 //     the catalogue half of a correction is mechanically checkable here.
-//   - It reads ONLY `*.up.sql`. A comment-only DOWN migration exists precisely to restore the
-//     SUPERSEDED wording (see 000141/000142's down files), so including them would report a
-//     deliberate, correct difference as drift. Verified when this restriction was added: every
-//     watched column's copies live in up migrations, so the counts below did not move.
+//   - It reads ONLY `*.up.sql`, and that is REQUIRED rather than a convenience. A comment-only DOWN
+//     migration exists precisely to restore the SUPERSEDED wording, so including one would report a
+//     deliberate, correct difference as drift. Three of the five columns below have exactly such a
+//     down copy — sweep_cursors.ts2 (000141.down, 000184.down), sweep_cursors.exclusive (000142.down,
+//     000184.down) and plaid_orphaned_items.token_expires_at (000136.down) — which is WHY the
+//     restriction exists. What the restriction did NOT do is narrow what was already being compared:
+//     every copy the guard counted before it was added lived in an up migration, so the accounts.*
+//     counts (3 and 2) did not move.
 //   - Both quoting forms ARE now seen, and the note that used to stand here — that a single-quoted
 //     comment is invisible to this guard — was true until #1569 round 20 and is no longer. That
 //     blind spot was one of the two reasons 000140's retracted comments went unwatched while they
 //     were wrong; the other was simply that nobody had added them to the map below.
 //     `accounts.replaced_at` is still deliberately absent from that map, but for the other half of
 //     the old note: 000033 is its only copy, so there is nothing to drift.
+//   - It un-escapes a doubled apostrophe on the single-quoted path but returns a dollar-quoted body
+//     RAW, because dollar quoting has no escape to undo. A column written in BOTH forms would
+//     therefore compare unequal wherever its text contains an apostrophe. Nothing does that today —
+//     each watched column uses one form throughout — and the failure mode is a loud drift report,
+//     not a silent pass, so it is documented rather than handled.
 //   - It covers COMMENT ON COLUMN only. 000136 re-issues a COMMENT ON TABLE alongside its column
 //     comment under the same "copied verbatim ... must never become one" instruction, and that
 //     half is still enforced by prose alone.
@@ -59,8 +68,12 @@ var reissuedColumnComments = map[string]int{
 	"accounts.expired_at": 2, // 000155 (origin), 000174
 	// accounts.replaced_at is deliberately NOT here: 000033 is its only copy and 000174 does not
 	// re-issue it, so there is nothing to drift.
-	"sweep_cursors.ts2":       2, // 000140 (origin, corrected in place), 000141 (re-issue)
-	"sweep_cursors.exclusive": 2, // 000140 (origin, corrected in place), 000142 (re-issue)
+	// 000184 re-issues BOTH of these, because 000141's and 000142's own replacement sentences were
+	// later found wrong in turn (the ts2 text named one authority that was already not the only one;
+	// the exclusive text stated the over-cap sacrifice with no precondition). All three files per
+	// column are edited in lockstep and this guard is what makes that mandatory rather than hoped-for.
+	"sweep_cursors.ts2":       3, // 000140 (origin), 000141 (first re-issue), 000184 (this correction)
+	"sweep_cursors.exclusive": 3, // 000140 (origin), 000142 (first re-issue), 000184 (this correction)
 	// 000135 (origin, corrected in place before it reached main) and 000136 (the catch-up for
 	// databases that had applied 000135 already). 000136's header instructs that the bodies stay
 	// verbatim copies "and must never become one [a summary]" — enforced by nobody until now.
