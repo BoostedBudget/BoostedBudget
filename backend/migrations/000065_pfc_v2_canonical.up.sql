@@ -243,8 +243,11 @@ END $$;
 -- 2f. FK: budget_categories.custom_category_id → custom_categories(id)
 --     ON DELETE CASCADE: removing a custom_category removes the budget entry targeting it.
 -- #1569 T8 (r17) / T2 (r18): the guard is qualified by table_name, table_schema AND
--- constraint_type. information_schema.table_constraints lists every constraint type and is keyed
--- by (constraint_schema, constraint_name), so all three predicates are load-bearing:
+-- constraint_type. information_schema.table_constraints lists every constraint type, and although
+-- the SQL standard nominally keys it by (constraint_catalog, constraint_schema, constraint_name),
+-- ⚠ that key does NOT uniquely identify a row in Postgres: constraint names are unique only per
+-- TABLE (000149's header states the same thing about pg_constraint). That is precisely why
+-- table_name is required rather than redundant. All three predicates are load-bearing:
 --   * without table_name, a same-named constraint on another table answers the guard;
 --   * without table_schema, a same-named constraint on a same-named table in another visible
 --     schema answers it while the unqualified ALTER TABLE below targets the search_path table --
