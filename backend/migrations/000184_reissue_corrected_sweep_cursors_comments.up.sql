@@ -1,7 +1,9 @@
 -- Issue #1569 round 20 fix 1: RE-ISSUE the COMMENTs on sweep_cursors.ts2 and sweep_cursors.exclusive,
 -- because 000141 and 000142 -- themselves corrections -- each shipped with a claim of their own that
--- does not survive checking. This is the third link in that chain and it is the reason the chain is
--- now mechanically enforced (TestReissuedColumnCommentsDoNotDrift).
+-- does not survive checking. This is the third link in that chain. The chain is mechanically enforced
+-- by TestReissuedColumnCommentsDoNotDrift, which PREDATES this migration -- it was written for the
+-- 000149/000174/000175 accounts.removed_at incident, the same failure one table over -- and which
+-- this migration was added to rather than caused.
 --
 -- WHAT WAS WRONG IN 000141's ts2 TEXT, RESTATED IN FULL SO THIS FILE IS NOT A DANGLING POINTER:
 --
@@ -35,9 +37,13 @@
 -- The ORIGINAL files (000140, and 000141/000142 which are originals for their own new sentences) are
 -- what a FRESH database gets and have been edited in place in the same commit as this file; THIS file
 -- is what every already-migrated database gets, since golang-migrate never re-runs an applied
--- version. On a fresh database the two paths produce byte-identical text, which is exactly what
--- TestReissuedColumnCommentsDoNotDrift asserts across all four up migrations that now carry these
--- two bodies (000140, 000141, 000142, and this one).
+-- version. On a fresh database the two paths set the same catalogue text either way, which is what
+-- TestReissuedColumnCommentsDoNotDrift asserts -- per column, not per file, and the four files do not
+-- each carry both bodies: the ts2 body is in 000140, 000141 and this file; the exclusive body is in
+-- 000140, 000142 and this file; only 000140 and this file carry both. ⚠ The guard compares the bodies
+-- with whitespace COLLAPSED (normaliseCommentText), so re-wrapping across lines is not drift but any
+-- change of word or punctuation is. It is NOT a byte comparison and must not be described as one --
+-- the copies' indentation differs between a top-level statement and one inside a DO block.
 --
 -- SCOPE: two comments. No column, constraint, index, default, type or datum is touched, and no
 -- behaviour changes -- the mechanism was always correct, only its description was not. Squawk: this

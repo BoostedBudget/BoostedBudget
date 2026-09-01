@@ -10,6 +10,15 @@
 -- "Until the next wrap" is false. A wrap restarts the sweep at the BEGINNING of its candidate set,
 -- which re-reads the same first cap-worth of the same tie group and stops in the same place, so the
 -- rows behind that first cap-worth are reached on NO run -- not a later one, and not a post-wrap one.
+--
+-- ⚠ WITH ONE PRECONDITION, WHICH THIS PARAGRAPH LEFT IMPLICIT: "stops in the same place" holds only
+-- while that first cap-worth keeps FAILING, since failing is what makes those head rows keep
+-- consuming the whole cap. The moment they succeed they leave the candidate set, the tail behind
+-- them becomes the new head, and it is reached. Nothing above is withdrawn -- "until the next wrap"
+-- is still false, because a wrap does not repair the case where the head keeps failing -- but the
+-- omission is named here rather than 25 lines down, because the identical omission in the catalogue
+-- body was corrected and this restatement of it was not.
+--
 -- That is precisely why the advance goes exclusive in the first place: an inclusive resume would
 -- replay the identical page forever. The old text therefore promised a bound that the mechanism it
 -- describes cannot deliver, and a reader budgeting for "one extra cycle of latency" would have been
@@ -38,9 +47,16 @@
 -- It stated the over-cap sacrifice with NO precondition ("...are then reached on no run at all"),
 -- which overstates it: the sacrifice lasts only while the group's first cap-worth keeps FAILING and
 -- so keeps consuming the whole cap; when those head rows succeed they leave the candidate set and
--- the tail becomes the new head. repository.NextPosition already carried the precondition. Migration
--- 000184 re-issues the corrected body for databases that had already applied this file, and
--- TestReissuedColumnCommentsDoNotDrift now holds 000140, this file and 000184 byte-identical.
+-- the tail becomes the new head. repository.NextPosition carries this precondition -- and flags that
+-- its own earlier wording got it wrong and was corrected in place ("AND THE PRECONDITION IS NOT WHAT
+-- THIS COMMENT USED TO SAY"), so it is not a source that was right all along either. Migration 000184
+-- re-issues the corrected body for databases that had already applied this file.
+-- ⚠ The SAME un-preconditioned form also stood in this file's own NARRATIVE above and was missed on
+-- the first correction pass, because the guard compares catalogue BODIES and never narrative. It is
+-- marked there too, in place.
+-- TestReissuedColumnCommentsDoNotDrift holds 000140, this file and 000184 in agreement -- comparing
+-- the bodies with whitespace COLLAPSED, so re-wrapping is not drift but any change of word or
+-- punctuation is. It is not a byte comparison, and the three files' indentation already differs.
 --
 -- SCOPE: one comment. No column, constraint, index, default or datum is touched, and no behaviour
 -- changes -- the mechanism was always correct, only its description was not. Squawk: this repo runs

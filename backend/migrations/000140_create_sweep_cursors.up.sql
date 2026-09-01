@@ -136,8 +136,10 @@ COMMENT ON COLUMN sweep_cursors.ts1 IS
     'First non-identity ORDER BY component of the owning sweep. NULL is a real position, coalesced to the '
     'timestamptz infinity by the queries to match ORDER BY ... NULLS LAST.';
 
--- ⚠ CORRECTED IN PLACE (see the file header). Byte-identical to migrations 000141 and 000184,
--- which re-issue this text for already-migrated databases; do not re-word it in one file only.
+-- ⚠ CORRECTED IN PLACE (see the file header). The same text as migrations 000141 and 000184, which
+-- re-issue it for already-migrated databases; do not re-word it in one file only. Held in agreement
+-- by TestReissuedColumnCommentsDoNotDrift, which compares the bodies with whitespace COLLAPSED --
+-- re-wrapping is fine, any change of word or punctuation is not. Not a byte comparison.
 COMMENT ON COLUMN sweep_cursors.ts2 IS
     'Second non-identity ORDER BY component of the owning sweep, and NULL whenever that sweep''s '
     'sort key has no second non-identity component -- which is the case for every sweep whose '
@@ -153,8 +155,10 @@ COMMENT ON COLUMN sweep_cursors.ts2 IS
     '"unset" (absence of the whole row is "unset"), and is coalesced to the timestamptz infinity '
     'by the page queries to match ORDER BY ... NULLS LAST.';
 
--- ⚠ CORRECTED IN PLACE (see the file header). Byte-identical to migrations 000142 and 000184,
--- which re-issue this text for already-migrated databases; do not re-word it in one file only. It reads
+-- ⚠ CORRECTED IN PLACE (see the file header). The same text as migrations 000142 and 000184, which
+-- re-issue it for already-migrated databases; do not re-word it in one file only. Held in agreement
+-- by TestReissuedColumnCommentsDoNotDrift, which compares the bodies with whitespace COLLAPSED --
+-- re-wrapping is fine, any change of word or punctuation is not. Not a byte comparison. It reads
 -- as this file retracting its own earlier sentence because that is exactly what it is -- the
 -- retraction is carried in the catalogue text itself so a reader of the live database sees it too.
 COMMENT ON COLUMN sweep_cursors.exclusive IS
