@@ -42,9 +42,13 @@ import (
 //     retracted claim in their own narrative for a full round AFTER the body was fixed, and the
 //     original "until the next wrap" defect lived ONLY in a `--` comment (000140's catalogue COMMENT
 //     merely omitted the price), so this guard could never have caught it. When you correct a watched
-//     body, grep the same file's prose for the sentence you just replaced — nothing here will.
-//     Do NOT try to automate that: an attempt at narrative detection on this branch produced ~70
-//     hits of ordinary English and was correctly discarded.
+//     body, grep the same file's prose for the sentence you just replaced — nothing HERE will.
+//     ⚠ Partially mechanised since #1569 round 20 fix 3: TestNoRetractedSentenceSurvivesInNarrative
+//     (retracted_sentence_guard_test.go) pins a HAND-LISTED table of outright-retracted sentences
+//     and fails if one stands unquoted in any up migration's `--` prose. It catches only what is
+//     enumerated, so it narrows this hole rather than closing it — a twin nobody lists is still
+//     invisible. Do NOT try to close the rest by detecting English: an attempt at that class on this
+//     branch produced ~70 hits of ordinary prose and was correctly discarded.
 //   - It reads ONLY `*.up.sql`, and that is REQUIRED rather than a convenience. A comment-only DOWN
 //     migration exists precisely to restore the SUPERSEDED wording, so including one would report a
 //     deliberate, correct difference as drift. Three of the five columns below have exactly such a
