@@ -17,8 +17,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make dev                    # Docker-compose up
 make test-fast              # Backend+frontend tests, NO e2e (~2min)
 make test-all               # ALL tests including e2e (~4min)
-make test-scripts           # The 19 shell guard suites in scripts/__tests__/ and
-                             # apps/web/scripts/__tests__/ — separate CI steps, NOT covered by
+make test-scripts           # The 21 shell guard suites: 19 in scripts/__tests__/, one in
+                             # apps/web/scripts/__tests__/, and — ⚠ do not drop this one when
+                             # re-deriving the count from the two __tests__ globs, which is how
+                             # this line came to say 19 — scripts/check-frontend-coverage.test.sh,
+                             # which sits beside its subject rather than in a __tests__ dir.
+                             # Verified #1569 r19: every on-disk suite is invoked by the target
+                             # (no orphans), and the target's own "N/21:" labels agree.
+                             # Separate CI steps, NOT covered by
                              # test-fast/test-all/bun run test. Fails on the first red. Docker/
                              # Postgres-dependent suites skip with a visible warning if unavailable
                              # locally (CI always has them and runs unconditionally). #1569 task 7.1:
