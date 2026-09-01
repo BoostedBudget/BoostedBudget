@@ -574,10 +574,29 @@ func TestDashboard_PastAsOfDate_MergeDirection_DecidesInclusionUnderATypeFilter(
 // So a RED here would be a defect in my prediction, not in the product: the failure mode worth
 // fearing on this path is the baseline going to ZERO, not it including too much.
 //
+// ⚠ WHAT IS PINNED IS BROADER THAN THE JUSTIFICATION GIVEN FOR IT. Reason 1 leans on
+// 'provider_absent', but the baseline path never reads removed_reason OR account_status_history for
+// this account: the current map hits, historicalAccountMap short-circuits (dashboard_service.go
+// :1061-1063), and sfAccountsAsOf is never issued. The retention asserted below therefore holds for
+// ANY account that is status='active' today, whatever cause removed it. Unreachable now —
+// RestoreProviderRemovedAccount is the only production write returning accounts.status to 'active'
+// (account_repository.go:1980; no production caller passes AccountStatusActive to UpdateStatus), and
+// it refuses every cause but 'provider_absent'. But a NEW write path to 'active' would inherit this
+// retention WITHOUT inheriting the cause check, and this test would keep passing.
+//
 // What this test therefore pins is a JOINT property that no single existing test states: the as-of
 // universe and the baseline SUM are allowed to disagree about this account, and must. The universe
 // is the honest answer to "what did we know then"; the baseline is the honest answer to "how much
-// money was there". Anything that turns the first into a filter on the second breaks this.
+// money was there". Anything that turns the first into a filter on the second breaks this — and it
+// breaks it toward ZERO, not toward over-counting: with the restore skipped (the same account, not
+// active today) the short-circuit stops firing, sfAccountsAsOf(previousCutoff) IS issued, returns
+// empty because the account was mid-outage, and every figure below goes to 0.00. Measured, not
+// reasoned.
+//
+// ⚠ LIMIT, stated so nobody over-reads the mutant set: assertion 2 is INVARIANT to the liveness gap.
+// Because the current-map hit short-circuits historicalAccountMap, no account_status_history
+// mutation can move PreviousNetWorth — only assertion 1 responds to the gap. The restore's necessity
+// is guarded by the require.Equal("active", status) check below, not by any history mutation.
 func TestDashboard_RemovedThenRestoredAccount_KeepsItsPreRemovalBaseline_Integration(t *testing.T) {
 	pool := setupDashboardAsOfDB(t)
 	ctx := context.Background()
@@ -602,11 +621,28 @@ func TestDashboard_RemovedThenRestoredAccount_KeepsItsPreRemovalBaseline_Integra
 		WHERE id = $1`, f.AccountID, now.AddDate(0, 0, -45))
 	require.NoError(t, err, "provider-absent removal")
 
-	// Backdate BOTH halves of the recorded transition. The trigger stamped clock_timestamp() on
-	// each; leaving them there would put the whole gap in the last few milliseconds, the baseline
-	// instant would fall inside the ORIGINAL active interval, and the test would pass while
-	// asserting nothing about a liveness gap at all. Two statements, closing before opening, so
-	// chk_ash_interval (valid_to > valid_from) is never momentarily violated.
+	// Backdate the recorded transition; the trigger stamped clock_timestamp() on both halves.
+	//
+	// ⚠ STATEMENT 1 IS THE LOAD-BEARING ONE, and an earlier version of this comment said otherwise.
+	// Closing the 'active' interval at -45d is what stops it covering the baseline instant, and
+	// accountLiveAsOfPredicate (account_repository.go:1567-1569) tests ACTIVE intervals ONLY — so
+	// the unrecorded hole statement 1 opens reads "not live" exactly as strongly as a 'removed' row
+	// would. VERIFIED BY DELETION, both directions: drop statement 1 and require.False(liveAtBaseline)
+	// below fires; drop statement 2 and the whole test still passes, unchanged. That precondition is
+	// the guard that stops a future edit quietly removing statement 1 — which is precisely the edit
+	// the old comment made look safe, by crediting statement 2 with the property statement 1
+	// supplies.
+	//
+	// STATEMENT 2 buys contiguity and realism, NOT the property under test: with it the recorded
+	// history is gapless (active[-90d,-45d) -> removed[-45d,now) -> active[now,inf)); without it the
+	// -45d..now stretch is simply unrecorded. Nothing in the schema wants contiguity — 000151
+	// declares only chk_ash_interval and uq_ash_open, and no overlap or gap constraint exists. It is
+	// kept because a fixture modelling a provider outage ought to record the outage.
+	//
+	// Their ORDER is immaterial, verified by reversing them: chk_ash_interval is a PER-ROW CHECK
+	// (000151_create_account_status_history.up.sql:49) and statement 2's target row has
+	// valid_to IS NULL, which short-circuits it. The previous claim here — that closing before
+	// opening avoided a momentary violation — was invented; neither ordering can violate anything.
 	ct, err := tx.Exec(ctx, `
 		UPDATE account_status_history SET valid_to = $2
 		WHERE account_id = $1 AND status = 'active'`, f.AccountID, now.AddDate(0, 0, -45))
@@ -673,7 +709,7 @@ func TestDashboard_RemovedThenRestoredAccount_KeepsItsPreRemovalBaseline_Integra
 			"here would be #1569's founding bug with the sign flipped")
 	assert.InDelta(t, 200.00, netWorth.PeriodComparison.NetWorthChange, 0.001)
 	assert.InDelta(t, 20.0, netWorth.PeriodComparison.NetWorthChangePercent, 0.001,
-		"a real +20%%. The 0%% a zero baseline would produce via the divide-by-zero guard is the "+
+		"a real +20%. The 0% a zero baseline would produce via the divide-by-zero guard is the "+
 			"exact symptom this issue was filed for")
 
 	summary, err := svc.GetBalanceSummary(ctx, f.UserID.String(), nil)
