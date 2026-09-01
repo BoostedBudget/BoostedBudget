@@ -1346,7 +1346,20 @@ jobs:
           # cmd/server, cmd/encrypt-migrate, scripts/generate-openapi are entrypoints
           # with no unit tests; including them at 0% drags the total unfairly.
           # cmd/plaid_validation/validators IS real logic and IS included.
-          go test -v -race \
+          #
+          # -timeout 20m is EXPLICIT, and that is the point. This step previously ran with
+          # Go's DEFAULT 10m per package -- a limit nobody chose. #1569 round 18: the
+          # internal/repository package hit 602s and was killed by it. That package is
+          # dominated by the ~30 mechanical guards, which walk and parse the whole tree;
+          # it takes ~85s locally under -race, so CI on this loaded four-runner pool is
+          # ~7x slower, and the accumulated guard runtime finally crossed the default.
+          #
+          # ⚠ This is NOT the same call as e2e-test's timeout-minutes: 35. That one was
+          # DERIVED from twelve observed runs and its comment says raising it is the wrong
+          # answer. This one replaces an unexamined default with a stated bound.
+          # ⚠ If 20m starts firing, do NOT raise it again -- the guards' runtime is the
+          # real signal, and the fix is to make them cheaper or move them to their own job.
+          go test -v -race -timeout 20m \
             -coverprofile=coverage.out -covermode=atomic \
             -coverpkg=./internal/...,./cmd/plaid_validation/validators/... \
             ./...
