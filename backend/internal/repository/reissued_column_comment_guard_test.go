@@ -25,16 +25,26 @@ import (
 // WHAT THIS GUARD CLAIMS. For each column below, every UP migration that carries a
 // `COMMENT ON COLUMN <table>.<column> IS <body>` must carry the SAME body, in either of the two
 // quoting forms this tree uses — dollar-quoted `$COMMENT$…$COMMENT$` or one or more adjacent
-// single-quoted literals, which SQL concatenates. It says nothing about whether that text is
-// TRUE — no test can — only that a correction cannot be applied to one copy and forgotten on the
+// single-quoted literals, which SQL concatenates. "Same" means equal after whitespace is COLLAPSED
+// (normaliseCommentText): re-wrapping a body across lines is not drift, but any change of word or
+// punctuation is. It is NOT a byte comparison — do not describe it as one in a migration comment,
+// which has already happened in five places at once — and the copies' indentation genuinely differs
+// between a top-level statement and one inside a DO block. It says nothing about whether that text
+// is TRUE — no test can — only that a correction cannot be applied to one copy and forgotten on the
 // others, which is the mechanical half of the defect.
 //
 // WHAT IT DOES NOT CLAIM.
 //
-//   - It compares BODIES, not truth, and not the `--` narrative around them. 000140's false "until
-//     the next wrap" claim lived ONLY in a `--` comment — its catalogue COMMENT merely omitted the
-//     price — so this guard could not have caught that half of the defect and still cannot. Only
-//     the catalogue half of a correction is mechanically checkable here.
+//   - ⚠ IT COMPARES BODIES, NOT TRUTH, AND NOT THE `--` NARRATIVE AROUND THEM — AND A NARRATIVE
+//     TWIN OF A WATCHED BODY IS UNGUARDED BY CONSTRUCTION. These migrations restate their catalogue
+//     text in prose directly above it, so a correction applied to the body and not to the twin four
+//     lines up passes this guard cleanly. That is not hypothetical: 000141 and 000142 each kept the
+//     retracted claim in their own narrative for a full round AFTER the body was fixed, and the
+//     original "until the next wrap" defect lived ONLY in a `--` comment (000140's catalogue COMMENT
+//     merely omitted the price), so this guard could never have caught it. When you correct a watched
+//     body, grep the same file's prose for the sentence you just replaced — nothing here will.
+//     Do NOT try to automate that: an attempt at narrative detection on this branch produced ~70
+//     hits of ordinary English and was correctly discarded.
 //   - It reads ONLY `*.up.sql`, and that is REQUIRED rather than a convenience. A comment-only DOWN
 //     migration exists precisely to restore the SUPERSEDED wording, so including one would report a
 //     deliberate, correct difference as drift. Three of the five columns below have exactly such a
