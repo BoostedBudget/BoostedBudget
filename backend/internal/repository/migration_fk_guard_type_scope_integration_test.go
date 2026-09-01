@@ -162,9 +162,16 @@ func fkDefOnPublicChild(ctx context.Context, tx pgx.Tx, c fkGuardCase) (string, 
 // bytes. Before the fix all five guards accepted the CHECK as proof the FK existed and skipped the
 // ADD without reporting anything.
 //
-// Constraint names are unique per table, so once the guard demands a FOREIGN KEY the only two
-// outcomes available are (1) the ADD runs and fails loudly on the name collision, or (2) the FK is
-// present. What must never happen again is the third outcome: success with no cascade.
+// Constraint names are unique per table, so once the guard demands a FOREIGN KEY, a same-named
+// NON-FK constraint can no longer suppress it: either the ADD runs and fails loudly on the name
+// collision, or the FK is present. That is the case this test pins.
+//
+// ⚠ It does NOT eliminate the third outcome — success with no cascade — in general, and this
+// comment claimed it did until #1569 r19 (Codex). The guard proves only that "a same-named FK on
+// this table exists". A same-named FK with the WRONG SHAPE — different target columns or table, or
+// ON DELETE RESTRICT instead of CASCADE — still satisfies it, the ADD is still skipped, and the
+// intended cascade is still absent. Closing that needs the guard to check confdeltype and the
+// referenced columns; it is a recorded residual, not something this test covers.
 func TestMigrationFKGuards_SameNamedNonForeignKeyMustNotSuppressTheCascade(t *testing.T) {
 	for _, c := range fkGuardCases() {
 		t.Run(c.name, func(t *testing.T) {
