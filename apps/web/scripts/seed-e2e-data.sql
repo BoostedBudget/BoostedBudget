@@ -387,8 +387,44 @@ BEGIN
      '["groceries", "essentials"]'::jsonb, 'plaid'),
 
     -- Restaurants
+    --
+    -- ⚠ This row's date is CLAMPED into the current calendar month, and that is load-bearing —
+    -- do NOT "simplify" it back to a bare CURRENT_DATE - INTERVAL '2 days'.
+    --
+    -- cache-freshness.auth.spec.ts moves THIS transaction's category and then asserts that the
+    -- dashboard's Cash Flow Summary widget's Expenses total drops by exactly $45. That widget
+    -- has no way to choose its own window: DashboardContext defaults `timeframe` to 'this_month'
+    -- (startOfMonth..endOfMonth, src/shared/dates/presets.ts) and the preset lives in plain
+    -- useState with no URL or localStorage persistence, so the spec's `page.reload()` always
+    -- lands back on the current month. A transaction dated 2 days ago falls in the PREVIOUS
+    -- month on the 1st and 2nd of every month, putting it outside the only window the widget
+    -- will ever request — the move then changes September's total by $0 and the spec fails with
+    -- "the dashboard is serving stale data", blaming the cache for a calendar artifact. That is
+    -- exactly what happened on 2026-09-02.
+    --
+    -- GREATEST() keeps the intended "2 days ago" recency on every other day of the month and
+    -- only pulls the date forward to the 1st when 2 days ago would cross the boundary. Verified
+    -- against real PostgreSQL 17.11 over all 365 days of 2026: 0 future-dated results, 0 landing
+    -- in the wrong month, and the clamp engaging on exactly 24 days -- the 1st and 2nd of each
+    -- month. The ::date result type was confirmed there too, not inferred.
+    --
+    -- Early in the month this can collide with the '1 day' rows above; no spec asserts an
+    -- ordering over seeded transaction dates (url-sort.auth.spec.ts runs against
+    -- mockTransactionPage, not this fixture), and cache-freshness finds this row by amount, not
+    -- by date or position.
+    --
+    -- UTC is explicit rather than inherited. Three clocks have to agree for the assertion to mean
+    -- anything, and only two of them are UTC by default: the Playwright browser is PINNED to UTC
+    -- (playwright.config.ts `timezoneId: 'UTC'`) and computes the widget's window with
+    -- startOfMonth(new Date()); this container happens to run UTC, but a bare CURRENT_DATE would
+    -- silently follow a non-UTC session timezone and could disagree with the browser by a day at
+    -- the boundary. Naming UTC here removes that dependency instead of relying on a default.
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-002',
-     45.00, CURRENT_DATE - INTERVAL '2 days', 'Chipotle Mexican Grill', 'Chipotle',
+     45.00, GREATEST(
+       (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date - INTERVAL '2 days',
+       date_trunc('month', (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date)
+     )::date,
+     'Chipotle Mexican Grill', 'Chipotle',
      'FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANTS', 'in store', false,
      '["dining"]'::jsonb, 'plaid'),
 
