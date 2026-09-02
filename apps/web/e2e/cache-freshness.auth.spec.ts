@@ -75,7 +75,21 @@ test.describe('Cache freshness after a real transaction-category write (#1531)',
   test('editing a transaction category immediately moves cash-flow expenses and spending-by-category, consistently, and reverting restores both', async ({
     page,
   }, testInfo) => {
-    testInfo.setTimeout(120_000)
+    // Whole-test budget. This spec is unusually navigation-heavy for one test: six full page
+    // loads (three goto + three reload, deliberately never SPA soft-navs — see
+    // captureCashFlowSummary's header comment) against a real backend, plus a PUT and a revert.
+    //
+    // 120_000 was calibrated on the Mac Mini runner and is NOT enough on the 2-vCPU Ubicloud
+    // runner this job moved to in #1598: the test ran 2.1m there and died mid-`locator.click`
+    // with "Test timeout of 120000ms exceeded", twice out of two runs, while the same commit
+    // passed on mac. The budget was the binding constraint, not any single action — even the
+    // finally-block's revert PUT inherited the already-expired deadline and logged
+    // "category cleanup failed (non-fatal)", leaving the fixture moved.
+    //
+    // Locally the whole spec file completes in ~49s, so 300_000 on CI is roughly 2x the observed
+    // CI cost rather than an arbitrary round number. Kept at 120_000 locally so a genuine hang
+    // still surfaces quickly on a dev machine.
+    testInfo.setTimeout(process.env.CI ? 300_000 : 120_000)
 
     // A page.goto is required BEFORE any apiClient() call: apiClient reads the auth token from
     // window.Clerk.session in the browser context (helpers/api/client.ts), which doesn't exist
@@ -128,8 +142,9 @@ test.describe('Cache freshness after a real transaction-category write (#1531)',
     expect(txnResponse.ok(), `GET transactions search failed: ${await txnResponse.text()}`).toBe(
       true
     )
-    const txnBody: { transactions: Array<{ id: string; amount: number; pfc_primary?: string }> } =
-      await txnResponse.json()
+    const txnBody: {
+      transactions: Array<{ id: string; amount: number; pfc_primary?: string; date: string }>
+    } = await txnResponse.json()
     const chipotle = txnBody.transactions.find((t) => t.amount === CHIPOTLE_AMOUNT)
     expect(
       chipotle,
@@ -138,6 +153,54 @@ test.describe('Cache freshness after a real transaction-category write (#1531)',
     ).toBeTruthy()
     const transactionId = chipotle!.id
     expect(chipotle!.pfc_primary).toBe(ORIGINAL_PFC_PRIMARY)
+
+    // =========================================================================
+    // ⚠ SHARED FIXTURE ROW. cache-household-visibility.auth.spec.ts moves and reverts this SAME
+    // $45 transaction. Two specs interleaving their move/revert around each other's baselines
+    // would produce a zero delta with nothing wrong in the cache — the same false signal this
+    // guard exists to prevent. It is not reachable today on either path: CI runs
+    // `workers: 1` (playwright.config.ts), and locally that spec `test.skip`s itself unless
+    // TEST_CLERK_EMAIL_2 is set, which .env.e2e does not set. Setting a second identity locally
+    // (workers: 2) makes the hazard live — isolate the row or serialize the two specs before
+    // relying on a local run in that configuration.
+    //
+    // PREMISE GUARD — the moved transaction must fall inside the window the widget will read.
+    //
+    // Every Expenses assertion below is a subtraction across two reads of the SAME window, so a
+    // transaction OUTSIDE that window yields a difference of exactly $0 — indistinguishable from
+    // a stale cache, and reported as one by the "serving stale data" message on the first
+    // Expenses assertion. This guard exists because that is not hypothetical: on 2026-09-02 the
+    // fixture's
+    // `CURRENT_DATE - INTERVAL '2 days'` dated this row 2026-08-31 while the widget requested
+    // September, and the spec failed claiming the dashboard served stale data when the cache was
+    // working correctly.
+    //
+    // The window is not ours to pick. captureCashFlowSummary reads the response the widget's own
+    // fetch received, and DashboardContext defaults `timeframe` to 'this_month' in plain useState
+    // with no URL or localStorage persistence — so the `page.reload()` inside that helper always
+    // returns to the current calendar month, whatever we set beforehand. The fixture complies
+    // instead: seed-e2e-data.sql clamps this row into the current month (see its comment).
+    //
+    // ⚠ UTC getters, deliberately — NOT getFullYear()/getMonth(). The clock that decides the
+    // window is the BROWSER's, and the browser is pinned to UTC (playwright.config.ts
+    // `timezoneId: 'UTC'`, added by #1569 T8-FIX) while this Node process runs in the runner's
+    // local zone. Using local getters here compares against a clock nothing else in the system
+    // uses: at 2026-09-01T00:30Z a UTC browser and a UTC database both say September while a
+    // New York runner still says August, and the guard would fail a fixture that is correct.
+    // The seed names UTC explicitly for the same reason (see seed-e2e-data.sql), so all three
+    // clocks agree by construction rather than by coincidence.
+    //
+    // Date-only comparison on the ISO prefix; `date` is serialized from a Go time.Time.
+    const now = new Date()
+    const currentMonthPrefix = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
+    expect(
+      chipotle!.date.slice(0, 7),
+      `Seeded Chipotle transaction is dated ${chipotle!.date} — outside the current UTC month ` +
+        `(${currentMonthPrefix}), which is the only window the Cash Flow Summary widget requests. ` +
+        'Moving its category cannot change that window\'s Expenses total, so every assertion ' +
+        'below would report a $0 delta as cache staleness. This is a FIXTURE problem, not a cache ' +
+        'problem: fix the date expression for e2e-txn-002 in apps/web/scripts/seed-e2e-data.sql.'
+    ).toBe(currentMonthPrefix)
 
     try {
       // =========================================================================
@@ -272,7 +335,13 @@ async function captureCashFlowSummary(
   // closes the dialog — so this must be a real wait, not an instantaneous check.
   const widgetHeading = page.getByText('Cash Flow Summary', { exact: true })
   const widgetAlreadyPresent = await widgetHeading
-    .waitFor({ state: 'visible', timeout: 5000 })
+    // CI-aware: a bare 5s was the reason CI took the expensive branch at all. On the second
+    // call the widget IS already persisted in the saved layout, but after a cold `page.reload()`
+    // the dashboard has to resolve profile + layout + accounts before any widget renders, and on
+    // the 2-vCPU runner that regularly exceeds 5s. Missing the wait sends the test into the
+    // Add-Widget dialog flow — six more interactions — which is what consumed the whole-test
+    // budget above. Waiting longer here is strictly cheaper than falling through.
+    .waitFor({ state: 'visible', timeout: process.env.CI ? 20_000 : 5_000 })
     .then(() => true)
     .catch(() => false)
   if (!widgetAlreadyPresent) {
