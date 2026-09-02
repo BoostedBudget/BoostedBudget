@@ -74,9 +74,15 @@ const Header = lazy(() =>
 // is `sticky top-0 z-50 ... border-b border-border ... h-16`, and this mirrors it. Deliberately
 // empty rather than a shimmer — the chrome is not content, and a pulsing bar reads as an error.
 // aria-hidden so a screen reader is not told about a banner that has no navigation in it yet.
-function HeaderPlaceholder() {
+// Exported ONLY so the no-layout-shift contract can be asserted directly. RTL's render() wraps
+// in act(), which flushes the microtask that resolves the lazy chunk, so the suspended frame is
+// already gone by the time a test can query the DOM for it — the placeholder is real in a browser
+// but unobservable from a unit test. Comparing it to Header's own geometry is the only
+// deterministic way to pin the contract. See App.test.tsx.
+export function HeaderPlaceholder() {
   return (
     <div
+      data-testid="header-placeholder"
       aria-hidden="true"
       className="sticky top-0 z-50 h-16 border-b border-border bg-background/80 backdrop-blur-sm"
     />

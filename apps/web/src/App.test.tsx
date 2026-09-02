@@ -9,7 +9,7 @@ import userEvent from '@testing-library/user-event'
 import { BrowserRouter, MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
-import App from './App'
+import App, { HeaderPlaceholder } from './App'
 import { ThemeProvider } from './shared/theme'
 
 import {
@@ -146,6 +146,43 @@ describe('App', () => {
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /user menu/i })).toBeInTheDocument()
       })
+    })
+
+    // #1601 review finding 6: Header became React.lazy(), and nothing exercised the BOUNDARY —
+    // Header.test.tsx imports the component directly, and e2e/navigation.auth.spec.ts's bodies
+    // are empty stubs. The risk of lazy chrome is not that it fails to appear (the user-menu
+    // assertions here would catch that) but that its arrival SHIFTS the layout, which no existing
+    // assertion could see.
+    //
+    // The suspended frame itself is NOT assertable: RTL's render() wraps in act(), which flushes
+    // the microtask resolving the lazy chunk, so the placeholder is gone before any query can see
+    // it. A first draft of this test asserted on it and failed for exactly that reason. What IS
+    // deterministic — and what actually matters — is that the placeholder reserves the same box
+    // the real header occupies.
+    it('the lazy Header resolves, and its placeholder reserves the same box (no layout shift)', async () => {
+      const Wrapper = createWrapper()
+      render(<App />, { wrapper: Wrapper })
+
+      // The lazy boundary genuinely resolves: without this the header never arrives and every
+      // authenticated route renders headless.
+      await waitFor(() => expect(screen.getByRole('banner')).toBeInTheDocument())
+      const headerClass = screen.getByRole('banner').className
+
+      // Render the stand-in on its own and compare geometry. Asserted on BOTH sides rather than
+      // hardcoded once, so changing Header's height without changing the placeholder fails here
+      // instead of shipping a visible jump on every authenticated route.
+      const { container: phContainer } = render(<HeaderPlaceholder />)
+      const placeholder = phContainer.querySelector('[data-testid="header-placeholder"]')
+      expect(placeholder).not.toBeNull()
+      const phClass = placeholder!.className
+
+      for (const geometry of ['h-16', 'sticky', 'top-0', 'border-b']) {
+        expect(headerClass).toContain(geometry)
+        expect(phClass).toContain(geometry)
+      }
+
+      // aria-hidden: an empty box announced as a banner with no navigation is worse than silence.
+      expect(placeholder!.getAttribute('aria-hidden')).toBe('true')
     })
 
     it('should not render login button', async () => {
