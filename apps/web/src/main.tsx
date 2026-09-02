@@ -88,9 +88,44 @@ const AuthReadyGate = ({ children }: { children: React.ReactNode }) => {
     }
   }, [getToken, isLoaded, isSignedIn]) // Re-register when sign-in state or getToken changes
 
-  // Don't render children until Clerk is loaded
+  // ⚠ Paints a shell rather than `null` while Clerk is in flight, and the distinction is the
+  // whole point: FCP is FIRST CONTENTFUL PAINT, and `null` is not contentful. Nothing at all
+  // reached the screen until Clerk's serialised chain (clerk.browser.js -> /v1/environment ->
+  // /v1/client) resolved, which is why #1601 measured FCP ~5.8s while total-blocking-time was
+  // 0ms, bootup-time 0.2s and server-response-time 30ms all scored 1 — the page was not busy,
+  // it was blank. Cutting the eager payload 36% (847 -> 540 KiB) moved performance 0.55 -> 0.57,
+  // because bytes were never the constraint; this gate was.
+  //
+  // A user staring at a white screen for several seconds is the actual product problem here; the
+  // metric follows from fixing it rather than the other way round.
+  //
+  // ⚠ What this deliberately does NOT change: children are still gated on `isLoaded`, so the
+  // race this component exists for (#691 — React Query hooks firing before
+  // setAuthTokenProvider registers, producing 401s) is untouched. Making the gate ROUTE-AWARE so
+  // public routes render their real content early is the larger change still open on #1601, and
+  // it carries that 401 risk; this does not attempt it.
+  //
+  // It also does not help the E2E suite: every .auth spec navigates to a protected route, so it
+  // must wait for Clerk regardless. This is a Lighthouse/UX fix, not a flake fix.
+  //
+  // Geometry matches the real header (sticky h-16, border-b — see App.tsx's HeaderPlaceholder and
+  // Header.tsx:64) so the swap cannot shift layout, and the brand mark is identical in both
+  // states so it does not flash.
   if (!isLoaded) {
-    return null
+    return (
+      <div data-testid="auth-loading">
+        <div
+          aria-hidden="true"
+          className="sticky top-0 z-50 h-16 border-b border-border bg-background/80 backdrop-blur-sm flex items-center px-4 md:px-6 gap-2"
+        >
+          <span className="text-2xl">🚀</span>
+          <span className="font-bold text-xl hidden sm:inline">BoostedBudget</span>
+        </div>
+        <span className="sr-only" role="status">
+          Loading BoostedBudget
+        </span>
+      </div>
+    )
   }
 
   return <>{children}</>

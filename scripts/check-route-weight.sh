@@ -46,11 +46,19 @@ INDEX_HTML="${DIST_DIR}/index.html"
 # Budget in KiB of gzip. Overridable for the regression suite; the committed default is the
 # ratchet. Raising it is a decision that belongs in a commit message, not an env var.
 #
-# 541 is a RATCHET AT THE MEASURED VALUE, not a statement that 541 KiB is good. Measured
-# 2026-09-02 after #1601 Task 2 at 553,962 bytes (540.98 KiB) across 11 local assets, down from
-# 867,876 bytes (847.54 KiB) across 20 — a 36% cut. 541 is that value rounded up, so any growth
-# at all trips it. (11, not 10: the #1601 review found the first version omitted parser-blocking
-# classic scripts, so /config.js — 322 gzip bytes — is now correctly inside the total.)
+# 542 is a RATCHET AT THE MEASURED VALUE, not a statement that 542 KiB is good. Measured
+# 2026-09-02 at 554,030 bytes (541.04 KiB) across 11 local assets, down from 867,876 bytes
+# (847.54 KiB) across 20 — a 36% cut. 542 is that value rounded up, so any growth at all trips
+# it. (11, not 10: the #1601 review found the first version omitted parser-blocking classic
+# scripts, so /config.js — 322 gzip bytes — is now correctly inside the total.)
+#
+# ⚠ Raised 541 -> 542 for +68 bytes, deliberately and once. AuthReadyGate (apps/web/src/main.tsx)
+# used to render `null` while Clerk was in flight, so NOTHING painted and FCP could not fire; it
+# now paints a small header shell. Those 68 gzip bytes buy first paint on every route, which is
+# the constraint #1601 could not move by cutting 307 KiB of payload. This is the rare case where
+# the number should go up: the guard fired, the growth was inspected, and it is the fix rather
+# than a regression. Re-derive from a fresh build before ever raising it again — do not nudge it
+# to make a red build green.
 #
 # ⚠ UNITS. This budget is BINARY KiB (1024). `.size-limit.json` next door uses `KB` which
 # bytes-iec parses as DECIMAL 1000, so the two files' numbers are NOT interchangeable: 541 here is
@@ -64,7 +72,7 @@ INDEX_HTML="${DIST_DIR}/index.html"
 #   vendor 446 · shared 34 · css 18+3 · entry 14 · billing 11 · api-client 7 · shared-2 2
 # billing is deliberate — SubscriptionManagementSkeleton and SubscriptionErrorState are a
 # Suspense fallback and an error-boundary fallback, which must resolve synchronously.
-BUDGET_KIB="${ROUTE_WEIGHT_BUDGET_KIB:-541}"
+BUDGET_KIB="${ROUTE_WEIGHT_BUDGET_KIB:-542}"
 
 fail() {
   printf '❌ %s\n' "$1" >&2
