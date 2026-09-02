@@ -23,8 +23,25 @@ mkfix() { mkdir -p "$(dirname "$TMP/$1")"; printf '%s\n' "$2" > "$TMP/$1"; }
 # runs on both (locally on macOS, and in the e2e-test job on a Linux runner), so it must not
 # hardcode either -- a portability suite that is itself unportable is a contradiction, and the
 # first draft of case 8 shipped exactly that.
+# ⚠ GNU FIRST, BSD SECOND. The order is the whole fix, and the reverse form shipped here and
+# broke CI on run 33677232876.
+#
+# The obvious reading is that `stat -f '%Lp'` is BSD-only and will simply fail on GNU, so a
+# `|| stat -c '%a'` fallback covers Linux. It does not: GNU's `-f` is a VALID BUT DIFFERENT flag
+# meaning "display filesystem status". It exits 0 and prints a multi-line filesystem dump, so the
+# fallback never runs and this function returns that dump instead of a mode. Case 8 then compared
+# two dumps whose `Free:`/`Available:` block counts had changed between the two calls, and failed —
+# intermittently, only on Linux, only when something else touched the disk in between. It passed on
+# the previous SHA for no better reason than that the counts happened to match.
+#
+# `stat -c` has no such ambiguity: BSD stat has no `-c` at all ("stat: illegal option -- c",
+# non-zero), so trying GNU first fails cleanly on macOS and falls through. Verified on both.
+#
+# This is the third BSD/GNU divergence in this branch and the second of the same shape — a flag
+# that is not absent on the other platform but means something else, which is far worse than one
+# that errors. CLAUDE.md's rule stands: verify with /bin/bash and BSD tools, not just `bash`.
 file_mode() {
-    stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
+    stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
 }
 
 echo "1/9: every non-portable in-place form is rejected"
