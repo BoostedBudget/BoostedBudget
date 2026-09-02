@@ -3242,6 +3242,17 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-orphan-chunks.test.sh
 
+      # #1601. Hosted here rather than in e2e-test (where the other shell guards live) for two
+      # reasons: check-route-weight.sh needs a BUILT apps/web/dist, which only this job produces
+      # (via `make check-bundle-size` below), and the sibling bundle guard's suite is already
+      # hosted here. The guard itself runs inside that make target, so it is gated on the same
+      # frontend/workflow filters as the rest of this job -- correct here, because unlike the
+      # #1569/#1598 whole-tree guards its subject IS the frontend, so it is deliberately NOT in
+      # check-ungated-guard-steps.py's REQUIRED_UNGATED_STEPS.
+      - name: Test route-weight guard (#1601 regression suite)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/check-route-weight.test.sh
+
       - name: Check bundle size
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: make check-bundle-size
