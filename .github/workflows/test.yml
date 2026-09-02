@@ -3015,6 +3015,11 @@ jobs:
     # a wedged LHCI run would have billed six hours of runner time. 20 minutes is a wedge bound,
     # not a performance target -- a frontend build plus 3 audit runs over 2 URLs is minutes.
     timeout-minutes: 20
+    # Needed for secrets.CLERK_PUBLISHABLE_KEY, which is an `e2e` ENVIRONMENT secret rather than
+    # a repo-level one (verified: the repo has no CLERK_* secrets at all; the e2e environment has
+    # six). That environment has no protection rules and no branch policy, so declaring it neither
+    # gates this job nor requires an approval -- e2e-test already declares it for the same reason.
+    environment: e2e
 
     steps:
       # No `sudo rm -rf` and no `path:`/`clean: false`: those existed so concurrent jobs on one
@@ -3074,9 +3079,75 @@ jobs:
       - name: Install workspace dependencies
         run: bun install --frozen-lockfile
 
+      # ⚠ VITE_CLERK_PUBLISHABLE_KEY is REQUIRED for this build, and its absence is why the very
+      # first Ubicloud run of this job failed. That failure was NOT a Linux or Ubicloud problem,
+      # and it was not the threshold variance this migration anticipated -- it is a latent defect
+      # that has been in this job since #995 created it, invisible because the job has never once
+      # executed (it was `if: false` from 2026-04-09 onward).
+      #
+      # The mechanism: `bun run build` is a PRODUCTION build, so `import.meta.env.MODE` is
+      # 'production' and `isDevelopment` is false in apps/web/src/main.tsx. The runtime
+      # `window.ENV` shim (apps/web/public/config.js) ships with CLERK_PUBLISHABLE_KEY explicitly
+      # `undefined` -- the real values are injected by docker-entrypoint.sh at CONTAINER start,
+      # which never happens here because Lighthouse serves the static dist with `npx serve`. With
+      # neither source present, main.tsx throws at module top level:
+      #   "FATAL: Clerk configuration not loaded. window.ENV is undefined or empty."
+      # Nothing renders, and Lighthouse reports only `NO_FCP` ("The page did not paint any
+      # content"), which names neither Clerk nor the missing variable.
+      #
+      # Reproduced locally to be sure, rather than inferred: building with the key absent gives
+      # `#root` innerHTML length 0 and that exact pageerror; building with a real key gives ~49KB
+      # of rendered DOM. A syntactically valid DUMMY key is NOT sufficient -- it clears the throw
+      # but Clerk's SDK then fails to load its script from the encoded domain
+      # (ERR_NAME_NOT_RESOLVED) and the app still never paints. It must be a real publishable key.
+      #
+      # Embedding it is safe by design: a Clerk PUBLISHABLE key is public and already ships inside
+      # every production frontend bundle. The secret key is not used here.
+      - name: Guard — Clerk publishable key must be present for the build
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VITE_CLERK_PUBLISHABLE_KEY:-}" ]; then
+            echo "::error::CLERK_PUBLISHABLE_KEY resolved empty. The frontend build would produce a bundle that throws before first paint, and Lighthouse would report only NO_FCP. Check the 'e2e' environment secret and this job's environment: declaration."
+            exit 1
+          fi
+          echo "Clerk publishable key present (${#VITE_CLERK_PUBLISHABLE_KEY} chars)"
+
       - name: Build frontend
         working-directory: apps/web
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
         run: bun run build
+
+      # Fails loudly if the bundle cannot paint, instead of leaving Lighthouse to report NO_FCP --
+      # which is what made the original failure take a local reproduction to diagnose. Cheap
+      # (~2s) relative to three Lighthouse runs, and it names the actual cause.
+      - name: Guard — built bundle must render before auditing
+        working-directory: apps/web
+        run: |
+          set -euo pipefail
+          npx --yes serve dist -l 31001 --no-clipboard --single >/tmp/serve-probe.log 2>&1 &
+          for _ in $(seq 1 20); do
+            curl -sf "http://localhost:31001/" >/dev/null 2>&1 && break
+            sleep 1
+          done
+          node --input-type=module -e "
+            import { chromium } from '@playwright/test';
+            const b = await chromium.launch({ args: ['--no-sandbox'] });
+            const p = await b.newPage();
+            const errors = [];
+            p.on('pageerror', e => errors.push(e.message));
+            await p.goto('http://localhost:31001/', { waitUntil: 'load' });
+            await p.waitForTimeout(3000);
+            const size = await p.evaluate(() => (document.getElementById('root')?.innerHTML || '').length);
+            await b.close();
+            if (size < 500) {
+              console.error('::error::the built bundle rendered ' + size + ' bytes into #root — Lighthouse would report NO_FCP. Page errors: ' + (errors.join(' | ') || '(none)'));
+              process.exit(1);
+            }
+            console.log('bundle renders (' + size + ' bytes into #root)');
+          "
 
       - name: Allocate LHCI port
         # Was `45000 + (run_id % 50) * 100`, to keep 50 concurrent jobs from colliding on one
