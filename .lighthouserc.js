@@ -25,12 +25,26 @@ module.exports = {
           deviceScaleFactor: 1,
           disabled: false,
         },
-        // Chrome flags for macOS Mac Mini CI stability.
-        // --headless (not --headless=new): old headless is proven stable in macOS CI;
-        //   --headless=new causes EPERM/WebSocket failures on self-hosted macOS runners.
-        // --no-sandbox: required for CI — system Chrome helper processes run with
-        //   different permissions, causing kill EPERM without this flag.
-        // --disable-dev-shm-usage: prevents memory issues in constrained CI environments.
+        // Chrome flags for Linux CI. This job runs on ubicloud-standard-2 as of #1598; it
+        // previously ran (or rather, was disabled) on the self-hosted Mac Mini, and the
+        // rationale below was rewritten because the macOS-specific version had become
+        // actively misleading about the platform it describes.
+        //
+        // --headless: kept, but NOT for the reason previously recorded here. That comment said
+        //   "old headless is proven stable in macOS CI; --headless=new causes EPERM/WebSocket
+        //   failures on self-hosted macOS runners" -- reasoning that does not transfer to Linux,
+        //   and which #996 flatly contradicts by asserting LHCI appends --headless=new
+        //   unconditionally. Neither claim was re-verified. What matters in practice is that
+        //   Chrome 132 REMOVED old headless, so on any current browser this flag selects new
+        //   headless whatever the intent was. That is fine here: the process-group conflict that
+        //   got this job disabled was macOS behaviour, which Linux does not share. The
+        //   workflow's "Preflight — resolve Chrome" step echoes the Chrome version so the mode
+        //   actually in use is recoverable from the logs.
+        // --no-sandbox: required on a CI VM, where the sandbox's user-namespace requirements are
+        //   not reliably available.
+        // --disable-dev-shm-usage: /dev/shm is small on CI VMs and Chrome will crash on it.
+        //   Note this is the HOST-run browser, not a container, so Playwright's --ipc=host
+        //   advice does not apply.
         chromeFlags: [
           '--headless',
           '--disable-gpu',
@@ -39,7 +53,18 @@ module.exports = {
           '--disable-extensions',
           '--disable-dev-shm-usage',
         ],
-        // No CPU throttling on dedicated Mac Mini CI hardware (avoids amplifying score variance)
+        // No CPU/network throttling.
+        //
+        // ⚠ #1598: the premise of this setting has changed and the thresholds have NOT been
+        // recalibrated. It previously read "No CPU throttling on dedicated Mac Mini CI hardware
+        // (avoids amplifying score variance)" -- true of a dedicated machine. This job now runs
+        // on a shared 2-vCPU cloud VM, where leaving throttling off MAXIMISES score variance,
+        // judged against a Performance >= 0.8 floor that was derived on the opposite hardware.
+        //
+        // If Performance proves noisy on Ubicloud, the order of remedies is: raise numberOfRuns
+        // from 3 to 5 first, then consider ENABLING modest CPU throttling to stabilise scores.
+        // Do NOT lower the threshold, and do not change anything here on the evidence of a
+        // single run.
         throttling: {
           cpuSlowdownMultiplier: 1,
           requestLatencyMs: 0,
