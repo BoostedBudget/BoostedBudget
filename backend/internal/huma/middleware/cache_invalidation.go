@@ -154,6 +154,23 @@ func (b *bumpOnFirstWrite) Write(p []byte) (int, error) {
 	return b.w.Write(p)
 }
 
+// Flush forwards to the wrapped writer when it supports flushing.
+//
+// Nothing in this codebase needs it TODAY: there is no huma.StreamResponse anywhere, huma's only
+// http.Flusher reference is inside a doc comment (huma.go:72), humaecho asserts nothing, and the
+// one endpoint that streams a download is a GET — which this middleware skips entirely.
+//
+// It exists because the trap is silent and the fix is six lines. huma's own StreamResponse
+// example does `if f, ok := writer.(http.Flusher); ok { f.Flush() }`, so the day someone adds a
+// streaming response to a mutating endpoint, an io.Writer-only wrapper here would make that
+// assertion fail and quietly disable flushing — a stalled response with no error anywhere.
+// Forwarding keeps the wrapper transparent instead.
+func (b *bumpOnFirstWrite) Flush() {
+	if f, ok := b.w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // NewCacheInvalidationMiddleware returns a Huma middleware that bumps the acting user's (and,
 // when hh is non-nil and resolves one, their household's) cache generation after every mutating,
 // authenticated operation whose response was not a genuine failure.
