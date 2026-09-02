@@ -325,8 +325,8 @@ func TestHandlePaddleWebhook_IdempotencyPoisoningClosed(t *testing.T) {
 // WebhookRepo, a signature-VERIFIED webhook must be rejected with a non-2xx, never acked 200,
 // because acking without persisting would silently lose a real billing event forever (Paddle never
 // retries a 2xx). This configuration is unreachable in the wired deployment — see the doc comment
-// above the guard in paddle_webhook.go referencing backend/cmd/server/main.go:2048-2079, where every
-// route registration branch either requires (main.go:2065) or transitively guarantees (main.go:2048,
+// above the guard in paddle_webhook.go referencing backend/cmd/server/main.go:2065-2096, where every
+// route registration branch either requires (main.go:2082) or transitively guarantees (main.go:2065,
 // via the outer Clerk-gated block that assigns paddleWebhookRepo before paddleWebhookService can be
 // set) a non-nil repository. This test is belt-and-braces against a wiring regression, not a claim
 // that the nil-repo state occurs in production: IF that wiring invariant is ever broken, the handler

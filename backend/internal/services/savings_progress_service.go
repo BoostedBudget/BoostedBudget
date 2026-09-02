@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -26,6 +27,9 @@ type SavingsProgressGoalRepo interface {
 	UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error
 	// MarkCompleted sets is_completed and sticky completed_at (Codex C5).
 	MarkCompleted(ctx context.Context, goalID string) error
+	// CountCompletedByUserID counts the user's completed goals. Required because
+	// GetActiveByUserID's universe excludes them — see Issue #1569 Task 20 (A4).
+	CountCompletedByUserID(ctx context.Context, userID string) (int, error)
 }
 
 // SavingsProgressContribRepo is the minimal interface for reading contribution totals.
@@ -69,21 +73,32 @@ type savingsProgressService struct {
 	goalRepo    SavingsProgressGoalRepo
 	contribRepo SavingsProgressContribRepo
 	accountRepo SavingsProgressAccountRepo
-	logger      *slog.Logger
+	// chainResolver maps a goal's stable user_account_id to the live account in its
+	// re-link chain (Issue #1569). May be nil — resolution then degrades to the goal's
+	// physical account_id, which is the pre-#1569 behaviour.
+	chainResolver AccountChainResolver
+	logger        *slog.Logger
 }
 
 // NewSavingsProgressService creates a new SavingsProgressService.
+//
+// chainResolver is a required constructor parameter rather than a setter on purpose
+// (Issue #1569): this branch fixed a production defect where a chain-aware collaborator
+// was constructed but never injected, so every row silently took the degraded path.
+// Pass nil only in tests that deliberately exercise the no-resolver fallback.
 func NewSavingsProgressService(
 	goalRepo SavingsProgressGoalRepo,
 	contribRepo SavingsProgressContribRepo,
 	accountRepo SavingsProgressAccountRepo,
+	chainResolver AccountChainResolver,
 	logger *slog.Logger,
 ) SavingsProgressService {
 	return &savingsProgressService{
-		goalRepo:    goalRepo,
-		contribRepo: contribRepo,
-		accountRepo: accountRepo,
-		logger:      logger,
+		goalRepo:      goalRepo,
+		contribRepo:   contribRepo,
+		accountRepo:   accountRepo,
+		chainResolver: chainResolver,
+		logger:        logger,
 	}
 }
 
@@ -114,16 +129,40 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 		newAmount = sum
 
 	case domain.ProgressBasisBalance:
-		account, err := s.accountRepo.GetByIDAndUser(ctx, goal.AccountID, goal.UserID)
+		account, err := s.resolveBasisAccount(ctx, goal.UserID, goal)
 		if err != nil {
-			return fmt.Errorf("savings_progress: get account %s for goal %s: %w", goal.AccountID, goal.ID, err)
+			return err
+		}
+
+		// Issue #1569: a retained (non-active) account's current_balance is frozen at
+		// disconnect and will never update again. Freeze current_amount rather than
+		// recomputing from that frozen figure on every run — same treatment as the nil-balance
+		// case below, and for the same reason (nothing new to report).
+		//
+		// ORDER MATTERS, and it is the opposite of what it was. Task 21 (item D) made a terminal
+		// account carry NO balance at all, so such an account now ALSO satisfies the nil check —
+		// and with the nil check first, every disconnected account was reported as merely "stale".
+		// The outcome is identical either way (freeze, never zero); what was lost was the operator
+		// signal that says WHY, and "stale" invites waiting for a sync that is never coming.
+		// Checking the specific condition before the general one keeps the log honest.
+		//
+		// After resolveBasisAccount this fires only when the chain genuinely has no live
+		// member (or the goal carries no chain reference at all). An ordinary re-link
+		// resolves to the live row and lands below.
+		if isAccountDisconnected(account) {
+			s.logger.Warn("savings_progress: basis account is no longer active — skipping recompute",
+				slog.String("goal_id", goal.ID),
+				slog.String("account_id", account.ID),
+				slog.String("account_status", string(account.Status)),
+			)
+			return nil
 		}
 
 		// Codex C9: NULL/stale balance — leave prior value, do NOT zero.
 		if account.CurrentBalance == nil {
 			s.logger.Warn("savings_progress: account balance is nil — skipping recompute (stale)",
 				slog.String("goal_id", goal.ID),
-				slog.String("account_id", goal.AccountID),
+				slog.String("account_id", account.ID),
 			)
 			return nil
 		}
@@ -136,16 +175,26 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 		if goal.AccountPercentage == nil {
 			return fmt.Errorf("savings_progress: goal %s has account_percentage basis but nil percentage", goal.ID)
 		}
-		account, err := s.accountRepo.GetByIDAndUser(ctx, goal.AccountID, goal.UserID)
+		account, err := s.resolveBasisAccount(ctx, goal.UserID, goal)
 		if err != nil {
-			return fmt.Errorf("savings_progress: get account %s for goal %s: %w", goal.AccountID, goal.ID, err)
+			return err
+		}
+
+		// Issue #1569: see the identical check in the balance-basis branch above.
+		if isAccountDisconnected(account) {
+			s.logger.Warn("savings_progress: basis account is no longer active — skipping recompute",
+				slog.String("goal_id", goal.ID),
+				slog.String("account_id", account.ID),
+				slog.String("account_status", string(account.Status)),
+			)
+			return nil
 		}
 
 		// Codex C9: same null/stale handling.
 		if account.CurrentBalance == nil {
 			s.logger.Warn("savings_progress: account balance is nil — skipping recompute (stale)",
 				slog.String("goal_id", goal.ID),
-				slog.String("account_id", goal.AccountID),
+				slog.String("account_id", account.ID),
 			)
 			return nil
 		}
@@ -212,6 +261,128 @@ func (s *savingsProgressService) RecomputeUser(ctx context.Context, userID strin
 	return nil
 }
 
+// applyBasisAccountFreshness overwrites item.Freshness / item.LinkedBalance from the goal's
+// live basis account (Issue #1569).
+//
+// It distinguishes the two ways resolution can fail to produce an account, because they mean
+// opposite things to the reader:
+//
+//   - no live member in the chain, or a retained physical row -> FreshnessBasisAccountDisconnected.
+//     The number is frozen forever and the UI says so.
+//   - an infrastructure failure (database blip, resolver error) -> FreshnessUnknown. We do NOT
+//     know whether the account is live, so reporting the time-based `fresh` computed from
+//     balance_as_of would assert something we did not check. The earlier version of this code
+//     swallowed the error with `if err == nil`, which made a frozen goal claim freshness and
+//     the disconnected badge disappear for the duration of the blip.
+func (s *savingsProgressService) applyBasisAccountFreshness(
+	ctx context.Context,
+	requesterID string,
+	goal *domain.SavingsGoal,
+	item *domain.SavingsGoalProgressItem,
+) {
+	acct, err := s.resolveBasisAccount(ctx, requesterID, goal)
+	if err != nil {
+		s.logger.Warn("progress_summary: could not resolve basis account — reporting unknown freshness",
+			slog.String("goal_id", goal.ID),
+			slog.String("error", err.Error()),
+		)
+		item.Freshness = domain.FreshnessUnknown
+		return
+	}
+	if acct == nil {
+		return
+	}
+
+	// A disconnected basis account's balance will never update again — report that distinctly
+	// from "still updating, just not recently" (FreshnessStale).
+	if isAccountDisconnected(acct) {
+		item.Freshness = domain.FreshnessBasisAccountDisconnected
+	}
+	if acct.CurrentBalance != nil {
+		bal := clampNonNegative(*acct.CurrentBalance)
+		item.LinkedBalance = &bal
+	}
+}
+
+// resolveBasisAccount returns the account whose current_balance a balance-basis (or
+// account_percentage-basis) goal must be computed from (Issue #1569).
+//
+// A goal stores two references to its account:
+//   - AccountID     — the PHYSICAL accounts row it was created against. A re-link inserts a
+//     new physical row and marks this one 'replaced', freezing its balance forever.
+//   - UserAccountID — the STABLE chain identity shared by every row in the chain (#1109).
+//
+// When the goal carries a chain reference and a resolver is wired, this returns the LIVE
+// member of the chain, so an ordinary re-link resumes recomputation instead of freezing.
+//
+// It deliberately does NOT decide whether to freeze. When the chain has no live member it
+// falls through to the physical row, which the caller's isAccountDisconnected guard then
+// freezes exactly as before — the freeze decision stays in one place.
+//
+// Degradation is honest, not silent-wrong: with no chain reference (UserAccountID nil or
+// empty — real production rows are still like this, see #1569's main.go wiring defect) or no
+// resolver, it reads the physical row, which is the pre-#1569 behaviour and still freezes when
+// that row is terminal. It never substitutes a different chain's account.
+func (s *savingsProgressService) resolveBasisAccount(ctx context.Context, requesterID string, goal *domain.SavingsGoal) (*domain.Account, error) {
+	accountID := goal.AccountID
+
+	if s.chainResolver != nil && goal.UserAccountID != nil && *goal.UserAccountID != "" {
+		activeID, err := s.chainResolver.ResolveActiveID(ctx, *goal.UserAccountID, requesterID)
+		switch {
+		case err == nil:
+			accountID = activeID
+		case errors.Is(err, ErrNoActiveAccount):
+			// The chain exists but every member is retained — the user disconnected and did
+			// not re-link. Keep the physical row so the caller's guard freezes the goal.
+			s.logger.Warn("savings_progress: no live account in chain — falling back to the retained row",
+				slog.String("goal_id", goal.ID),
+				slog.String("user_account_id", *goal.UserAccountID),
+			)
+		case errors.Is(err, ErrAmbiguousActiveAccount):
+			// #1569 R11 T2: two live siblings share this user_account_id (an ordinary Plaid
+			// shape — see ErrAmbiguousActiveAccount's doc comment). We cannot tell which one
+			// the goal actually means, and guessing is exactly the bug being fixed. Follow the
+			// SAME degradation philosophy as ErrNoActiveAccount above: keep the physical row so
+			// the caller's isAccountDisconnected guard freezes the goal, rather than silently
+			// recomputing from an arbitrarily-chosen sibling's balance.
+			s.logger.Warn("savings_progress: chain has more than one live account — refusing to guess, falling back to the retained row",
+				slog.String("goal_id", goal.ID),
+				slog.String("user_account_id", *goal.UserAccountID),
+			)
+		case errors.Is(err, ErrEmptyUserAccountID):
+			// Unreachable (the empty string is filtered above); degrade rather than error.
+		default:
+			// An infrastructure failure is NOT "no live member" — surface it instead of
+			// freezing a healthy goal on a transient database error.
+			return nil, fmt.Errorf("savings_progress: resolve live account for goal %s: %w", goal.ID, err)
+		}
+	}
+
+	// Scope the read to the REQUESTER, never to goal.UserID. Passing the goal's own owner id
+	// would make this ownership check compare the goal against itself, so it could never fail
+	// closed — and this path sets item.LinkedBalance, a financial amount. The pre-#1569 code
+	// passed the requester's id here; keeping that is not a refinement, it is preserving the
+	// only ownership gate on the read.
+	account, err := s.accountRepo.GetByIDAndUser(ctx, accountID, requesterID)
+	if err != nil {
+		return nil, fmt.Errorf("savings_progress: get account %s for goal %s: %w", accountID, goal.ID, err)
+	}
+	return account, nil
+}
+
+// isAccountDisconnected reports whether a balance-basis goal's linked account is no longer
+// active — replaced, expired, or removed (Issue #1569). An empty Status is treated as active
+// for backward compatibility with any pre-#1569 caller path that never populated the field
+// (mirrors the frontend's isInactive() legacy-account handling in useActiveAccounts.ts).
+func isAccountDisconnected(account *domain.Account) bool {
+	switch account.Status {
+	case domain.AccountStatusReplaced, domain.AccountStatusExpired, domain.AccountStatusRemoved:
+		return true
+	default:
+		return false
+	}
+}
+
 // clampNonNegative returns 0 if v < 0, otherwise v.
 // Negative balances (overdrafts) are meaningless as savings progress.
 func clampNonNegative(v float64) float64 {
@@ -237,9 +408,21 @@ func (s *savingsProgressService) GetProgressSummary(ctx context.Context, userID 
 	now := time.Now()
 	const freshnessWindow = 24 * time.Hour
 
+	// Issue #1569 Task 20 (A4). Counted with its OWN query, not by scanning `goals`: that slice
+	// comes from GetActiveByUserID, whose WHERE clause is `is_completed = false`, so counting
+	// IsCompleted within it could only ever produce 0 — which is exactly what this field reported
+	// to every consumer, including the MCP/LLM one, for every user who has ever finished a goal.
+	//
+	// A failure here is PROPAGATED rather than defaulted to 0. Falling back to zero would restore
+	// the original defect on the one path where nobody would notice, and a confidently wrong count
+	// is worse for an LLM consumer than an error it can report.
+	completedCount, err := s.goalRepo.CountCompletedByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("progress_summary: count completed goals: %w", err)
+	}
+
 	items := make([]domain.SavingsGoalProgressItem, 0, len(goals))
 	var totalSaved, totalTarget float64
-	completedCount := 0
 
 	for _, goal := range goals {
 		// Always fetch confirmed contributions (Codex C11 — show even for non-contributions bases).
@@ -283,17 +466,15 @@ func (s *savingsProgressService) GetProgressSummary(ctx context.Context, userID 
 		case domain.ProgressBasisBalance:
 			item.ComputedFrom = domain.ComputedFromAccountBalance
 			item.Freshness = s.computeFreshness(goal.BalanceAsOf, now, freshnessWindow)
-			if acct, err := s.accountRepo.GetByIDAndUser(ctx, goal.AccountID, userID); err == nil && acct != nil && acct.CurrentBalance != nil {
-				bal := clampNonNegative(*acct.CurrentBalance)
-				item.LinkedBalance = &bal
-			}
+			// Issue #1569: resolve through the re-link chain so the flag agrees with what
+			// RecomputeGoal actually computed from — otherwise a re-linked goal would be
+			// reported as disconnected while its amount is being updated normally.
+			s.applyBasisAccountFreshness(ctx, userID, goal, &item)
 		case domain.ProgressBasisAccountPercentage:
 			item.ComputedFrom = domain.ComputedFromAccountPercentage
 			item.Freshness = s.computeFreshness(goal.BalanceAsOf, now, freshnessWindow)
-			if acct, err := s.accountRepo.GetByIDAndUser(ctx, goal.AccountID, userID); err == nil && acct != nil && acct.CurrentBalance != nil {
-				bal := clampNonNegative(*acct.CurrentBalance)
-				item.LinkedBalance = &bal
-			}
+			// Issue #1569: see the identical chain resolution in the balance-basis branch above.
+			s.applyBasisAccountFreshness(ctx, userID, goal, &item)
 		default: // manual or empty
 			item.ProgressBasis = domain.ProgressBasisManual // normalise empty string
 			item.ComputedFrom = domain.ComputedFromManual
@@ -303,9 +484,6 @@ func (s *savingsProgressService) GetProgressSummary(ctx context.Context, userID 
 		items = append(items, item)
 		totalSaved += goal.CurrentAmount
 		totalTarget += goal.TargetAmount
-		if goal.IsCompleted {
-			completedCount++
-		}
 	}
 
 	var overallPct float64

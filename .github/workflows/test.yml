@@ -122,9 +122,19 @@ jobs:
     # superseding pushes, not natural durations). 35 is roughly 2x the observed maximum, so a
     # legitimately slow run still finishes while a wedge fails in well under an hour.
     #
-    # If this starts firing on healthy runs, the answer is NOT a bigger number -- it is that the host
-    # can no longer carry the matrix, which is #1489's subject.
-    timeout-minutes: 35
+    # ⚠⚠ RAISED 35 -> 45 ON 2026-09-01 BY EXPLICIT USER AUTHORISATION, overriding the paragraph
+    # above, which still stands as the correct engineering position: a bigger number does not fix
+    # #1489, it only stops this job from being the thing that reports it. Recorded here rather than
+    # silently applied, because the previous sentence would otherwise read as a rule the file itself
+    # ignores.
+    # The override is grounded: the last three runs to reach the test step were killed AT the 35m cap
+    # (36-37m elapsed) while still passing tests steadily -- test #402 passed 160ms before one kill --
+    # so 35 now truncates healthy runs rather than catching wedges. The 4.6-17.7 minute range quoted
+    # above predates the host-load regression and no longer describes this pool.
+    # ⚠ 45 is NOT a new derived bound -- it is headroom bought while #1489 is unresolved. Do not
+    # quote it as measured, and do not raise it again: the next increase is an admission that the
+    # host cannot carry the matrix, which is #1489's actual subject.
+    timeout-minutes: 45
     environment: e2e  # Access Clerk secrets from e2e environment
     env:
       UNIQUE_WORKSPACE: workspace-e2e-test-${{ github.run_id }}
@@ -175,6 +185,75 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-mcp-job-triggers.test.sh
 
+      # #1569 round 15 task 1. scripts/assert-no-ungated-migrate-down-invocation.sh was built on an
+      # explicit user ruling — "make bypass structurally hard" — after the `migrate-reset`
+      # disposability gate was defeated three separate ways in three rounds. It ran in NO CI job at
+      # all: a new ungated `migrate ... down` could have been added anywhere in the tree and nothing
+      # would have caught it. Its regression suite was likewise unrun.
+      #
+      # Hosted HERE, not in migration-tests, on purpose. The guard's candidate set is every tracked
+      # *.sh, Makefile, workflow, Dockerfile and extensionless shell-shebang script in the tree (63
+      # files today) — so a violation can be introduced in the root Makefile, infra/Dockerfile or
+      # apps/web/scripts/*.sh, none of which match the `migrations`/`backend` paths-filters that gate
+      # migration-tests and backend-test. A guard whose whole purpose is "structurally hard to
+      # bypass" must not itself be bypassable by choosing which file you put the invocation in. This
+      # job has no `needs:`/paths-filter gate at all (`if: always() && !cancelled()` reacts only to
+      # prior job outcomes), so it runs on every PR — the same argument the two steps above make.
+      # Both steps are pure shell against the checked-out tree: no Postgres, no `migrate` binary, no
+      # browser, so they need none of the setup below and cost ~1s each on an already-loaded runner.
+      #
+      # Regression suite first (proves the guard itself can still reject a fixture), then the real
+      # scan against this checked-out tree — the same two-step shape as the typographic-quote guard
+      # in backend-test. The suite mutates tracked files in THIS WORKSPACE only and restores every
+      # one through an explicit backup copy in its own EXIT trap (never `git stash`/`git checkout`).
+      - name: Test ungated-migrate-down guard (#1569 regression suite)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/no-ungated-migrate-down-invocation-guard.test.sh
+
+      - name: Guard — no ungated 'migrate ... down' anywhere in the tree (#1569)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/assert-no-ungated-migrate-down-invocation.sh
+
+      # #1569 round 17 task 1. Every step above, and the "whole-tree corpus guards" step further
+      # down, is correct ONLY because this job has no `needs:`/paths-filter gate. That property is
+      # load-bearing and invisible: adding `needs: detect-changes` and an `if:` here would silently
+      # unwire five history/citation guards plus three shell guards, and every one of them would
+      # keep passing locally. This checks it, naming the steps that depend on it.
+      #
+      # Regression suite first (proves the guard can still reject a gated fixture), then the real
+      # scan — the same two-step shape as the three guards above. Pure Python against the
+      # checked-out workflow file: no Go, no Bun, no browser, ~1s.
+      - name: Test ungated-guard-step wiring guard (#1569 regression suite)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/check-ungated-guard-steps.test.sh
+
+      - name: Guard — whole-tree guard steps must live in an ungated job (#1569)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: python3 scripts/check-ungated-guard-steps.py
+
+      # #1569 round 17 task 2. Unit suite for the history-foreign-key assertions that replaced
+      # test_schema_constraints' three count floors in scripts/test-migrations.sh. Hosted HERE
+      # rather than in migration-tests because that job is paths-gated on
+      # `backend/migrations/**` / `backend/**` / `.github/workflows/**` — and this suite's corpus
+      # is scripts/test-migrations.sh plus backend/internal/repository/history_cascade_guard_test.go,
+      # so a change confined to scripts/** would not run it there. Pure shell against synthetic
+      # fixtures and the real Go guard: no Postgres, no migrate binary, no browser, ~1s.
+      - name: Test schema-constraint history-FK assertions (#1569)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/schema-constraint-history-fks.test.sh
+
+      # #1569 round 17 task 3. scripts/smoke-test.sh is the hard gate on real production and
+      # staging deploys, and until this round it could not fail on a lost HTTPS redirect, absent
+      # CORS, or an RFC 9728 OAuth `resource` mismatch. This suite runs the real script against a
+      # stubbed curl and asserts both directions: the fatal checks exit non-zero, and the
+      # unreliable-probe variant of each still exits 0 so a network flake cannot block a release.
+      # Hosted HERE because its corpus spans scripts/**, .github/workflows/** (the deploy
+      # workflows that invoke it) and apps/mcp-server/wrangler.toml, which no single paths filter
+      # covers. No network, no Postgres, no Bun: ~1s.
+      - name: Test smoke-test deploy-gate failure paths (#1569)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/smoke-test-failure-paths.test.sh
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -215,6 +294,52 @@ jobs:
 
       - name: Make backend binary executable
         run: chmod +x $GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
+
+      # #1569 round 17 task 1. FIVE Go guards scan corpora that live OUTSIDE the paths-filters of
+      # the only job that ran them (backend-test, gated `backend || api || workflow || config`,
+      # where `backend` is backend/**, go.mod, go.sum, scripts/**):
+      #
+      #   TestNoUnallowlistedFrontendFixtureHistoryDelete  scans apps/web/scripts/**
+      #   TestMarkdownCitedTestNamesResolve                scans docs/** + root *.md
+      #   TestMarkdownDecisionCrossReferencesResolve       scans docs/** + root *.md
+      #   TestMarkdownCitedPathsResolve                    scans docs/** + root *.md
+      #   TestCitedLineNumbersAreInRange                   adds docs/**, CLAUDE.md, apps/**, packages/**
+      #
+      # `apps/web/**` matches only the `frontend` filter and `docs/**` + root `*.md` match NO filter
+      # at all, so a PR confined to any of those corpora skipped backend-test and ran none of them.
+      # The severe case: an unallowlisted `DELETE FROM <history table>` added to
+      # apps/web/scripts/seed-e2e-data.sql — a file deliberately brought INTO G4's universe in
+      # #1569 task 7.9 — touched nothing the gate could see, so the guard never executed and the
+      # delete shipped. A guard extension that cannot execute is indistinguishable from one that
+      # was never written.
+      #
+      # Hosted HERE for the same reason as the three steps at the top of this job: e2e-test has no
+      # `needs:`/paths-filter gate at all (`if: always() && !cancelled()` reacts only to prior job
+      # outcomes), so it runs on EVERY pull request. That makes the trigger unconditional rather
+      # than merely wider — there is no changed-path set that can evade it, which is strictly
+      # stronger than adding `docs/**`/`apps/web/scripts/**` to backend-test's `if:`. It was chosen
+      # over the two alternatives on cost: widening backend-test would run the entire -race +
+      # coverage backend suite on every docs-only PR, and a dedicated job would take one of the
+      # four self-hosted Mac Mini runner slots on every PR — the saturation that has already caused
+      # job failures on this pool. This step takes a runner slot from nobody: it is ~15s appended to
+      # a job that is already running, reusing the Go toolchain and GOCACHE set up just above for
+      # the backend binary. The duplicate execution on backend PRs (backend-test runs `./...`) is
+      # accepted as the price of an ungated trigger.
+      #
+      # ⚠ Whole packages, NOT `-run '<regex>'`: an `-run` pattern that matches nothing exits 0, so a
+      # renamed test would silently turn this step into a no-op — the same "green but not running"
+      # failure this step exists to fix. `internal/repository` additionally carries G1/G2/G4's other
+      # halves and `internal/testsupport/citations` is entirely corpus guards, so nothing here is
+      # off-topic. Kept BEFORE the E2E run so a corpus violation fails in seconds instead of after
+      # a 15-minute browser suite.
+      #
+      # ⚠ The "this job is ungated" property this step depends on is itself enforced, by
+      # scripts/check-ungated-guard-steps.py (run below, and by `make test-scripts`). Adding
+      # `needs: detect-changes` + an `if:` to this job would otherwise silently unwire all five
+      # guards again, which is exactly how they came to be unwired in the first place.
+      - name: Guard — whole-tree corpus guards (#1569 R17 T1)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: go test -count=1 ./internal/repository/ ./internal/testsupport/citations/
 
       - name: Install golang-migrate
         env:
@@ -981,24 +1106,34 @@ jobs:
                 f"{passed} pass, {failed} fail, {skipped if skipped is not None else 0} skip{ran_desc}")
           PY
 
+      # #1569 task 7.1: same shape as the frontend-test job above — each of the checks below is
+      # INDEPENDENT of the "Guard — MCP unit suite" step and of each other (none consumes another's
+      # output), so each gets `if: always() && !cancelled()` so one early failure cannot hide the
+      # rest. The job still goes red overall because a failing step fails the job regardless of
+      # `if:`.
       - name: Typecheck MCP server
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         # Uses --skipLibCheck to avoid OOM from large generated api-client type declarations.
         run: NODE_OPTIONS=--max-old-space-size=2048 bun run typecheck
 
       - name: Lint MCP server
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: bun run lint
 
       - name: Check manifest completeness (deny-by-default CI gate)
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: bun run scripts/check-manifest-completeness.ts
 
       - name: Check no direct API call bypasses
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: bun run scripts/check-no-direct-api-calls.ts
 
       - name: Rebuild spec index and check for drift
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: |
           bun run src/spec/index-builder.ts
@@ -1010,6 +1145,7 @@ jobs:
           fi
 
       - name: Rebuild facade and check for drift
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
         run: |
           bun run scripts/generate-facade.ts
@@ -1220,7 +1356,22 @@ jobs:
           # cmd/server, cmd/encrypt-migrate, scripts/generate-openapi are entrypoints
           # with no unit tests; including them at 0% drags the total unfairly.
           # cmd/plaid_validation/validators IS real logic and IS included.
-          go test -v -race \
+          #
+          # -timeout 20m is EXPLICIT, and that is the point. This step previously ran with
+          # Go's DEFAULT 10m per package -- a limit nobody chose. #1569 round 18: the
+          # internal/repository package hit 602s and was killed by it. That package is
+          # dominated by the ~30 mechanical guards, which walk and parse the whole tree;
+          # it takes ~85s locally under -race, so CI on this loaded four-runner pool is
+          # ~7x slower, and the accumulated guard runtime finally crossed the default.
+          #
+          # ⚠ This is NOT the same call as e2e-test's timeout-minutes (45 since 2026-09-01,
+          # 35 before that). That one was DERIVED from twelve observed runs, then raised by
+          # explicit authorisation once the derivation stopped describing the host; its own
+          # comment still says raising it is the wrong answer to #1489. This one replaces an
+          # unexamined default with a stated bound -- a different act from either.
+          # ⚠ If 20m starts firing, do NOT raise it again -- the guards' runtime is the
+          # real signal, and the fix is to make them cheaper or move them to their own job.
+          go test -v -race -timeout 20m \
             -coverprofile=coverage.out -covermode=atomic \
             -coverpkg=./internal/...,./cmd/plaid_validation/validators/... \
             ./...
@@ -1351,7 +1502,13 @@ jobs:
     # cold `docker pull redis:7-alpine` on a runner that hasn't cached the image yet, not because
     # execution time is expected to meaningfully grow. Re-measure across real CI runs before
     # lowering, same as the note above.
-    timeout-minutes: 30
+    #
+    # ⚠ RAISED 30 -> 45 ON 2026-09-01, same user authorisation as e2e-test above, and this one is
+    # measurement-driven rather than a concession: on run 33466644820 this job SUCCEEDED at 27m
+    # against the 30m cap -- three minutes of headroom -- and on the immediately preceding run it was
+    # cancelled at 32m under host load. A job that passes at 27/30 is one slow dependency pull away
+    # from a false red that looks like a test failure.
+    timeout-minutes: 45
     env:
       UNIQUE_WORKSPACE: workspace-backend-integration-test-${{ github.run_id }}
       # Container names are unique per run AND per rerun attempt, so a killed
@@ -1379,12 +1536,45 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
+      # #1569 round 15 task 1. Round 14 added two pieces of anti-vacuity tooling —
+      # scripts/check-ci-env-drift.sh and scripts/summarize-go-test.sh — after a real regression hid
+      # for two rounds inside 30 integration tests that t.Skip()'d silently for want of
+      # CACHE_REDIS_TEST_URL/REDIS_TEST_URL. Both had falsification suites; neither suite ran in any
+      # CI job, because they were reachable only through `make test-scripts`, which no job invokes.
+      # The things that exist to stop a silent-skip regression were themselves unrun.
+      #
+      # Filed in THIS job because this is the job they are about: check-ci-env-drift.sh derives its
+      # list of load-bearing vars by parsing this job's own "Guard — DATABASE_URL,
+      # CACHE_REDIS_TEST_URL, REDIS_TEST_URL must be set" step out of this file, so the suite is a
+      # real cross-file guard on the workflow, not just on the script — renaming or restructuring
+      # that step turns five of its seven cases red. This job's `if:` covers both inputs the suite
+      # depends on (`backend` matches scripts/**; `workflow` matches .github/workflows/**).
+      #
+      # Runs before "Set up Go" deliberately: it is pure shell + awk over a YAML file and needs no
+      # toolchain, so it reports a drifted guard step in seconds rather than after the Go module
+      # download. It sets its own env vars per case under `env -i`, so it neither reads nor depends
+      # on this job's DATABASE_URL/Redis URLs, and it starts nothing.
+      - name: Test CI-env-drift checker (#1569 falsification suite)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/check-ci-env-drift.test.sh
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
         # Note: go clean -cache is intentionally omitted — it is destructive on
         # a shared self-hosted runner when backend-test runs concurrently.
+
+      # Sibling of the step above, and the reason it is on THIS side of "Set up Go": this suite
+      # drives scripts/summarize-go-test.sh against a throwaway two-file Go module in a temp dir
+      # (module summarizetestfixture — never the backend module), so it needs a Go toolchain. It
+      # runs in well under a second, touches no database and no network, and asserts the wrapper
+      # really does tally PASS/FAIL/SKIP so a skipped test can never read as an indistinguishable
+      # clean `ok`. #1569 round 15 task 1 also made its "go not on PATH" branch fail closed when
+      # $CI is set, so wiring it here cannot degrade into a step that silently exits 0.
+      - name: Test go-test skip summarizer (#1569 falsification suite)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/summarize-go-test.test.sh
 
       - name: Configure job-local Go build cache
         # runner context is unavailable in job-level env blocks (GitHub Actions limitation),
@@ -1626,6 +1816,7 @@ jobs:
           migrate -database "$DATABASE_URL" -path backend/migrations up
 
       - name: Run integration tests
+        id: run-integration-tests
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
@@ -1648,8 +1839,91 @@ jobs:
             exit 1
           fi
           echo "Integration packages: $PKGS"
+          # #1569 Task 9.2: -coverpkg used to be ./internal/... — every package under internal,
+          # whether or not this job ever executes it. That kept packages this job NEVER runs
+          # (e.g. internal/workers) permanently in the denominator at 0.0%, and it's why the
+          # floor below was measured wrong last round: `./internal/...` as the TEST TARGET
+          # exercises far more code than `$PKGS` does, against the same denominator, so the old
+          # comment's 83.6% baseline was never reproducible by CI's actual command (CI: 76.7%).
+          # -coverpkg is now pinned to the literal $PKGS set (comma-joined, same 11 packages
+          # the go test invocation below actually runs), so the number means "of the code these
+          # integration tests target, how much do they cover" — not "of all internal code".
+          # The original rationale for using a set BROADER than any single package still holds
+          # among these 11: a covered line executed by an integration test in one package but
+          # living in another (e.g. a repository method exercised only via a service integration
+          # test) still counts, because both internal/repository and internal/services are in
+          # the set — matching the unit job's -coverpkg semantics, just scoped to what runs here.
+          # ./cmd/server is deliberately included even though it's outside ./internal/...: it's
+          # one of the 11 packages this job actually tests (cmd/server has an integration-tagged
+          # test file), so by the "same set the job runs" rule it belongs in the denominator too.
+          COVERPKG=$(printf '%s\n' "$PKGS" | tr '\n' ',' | sed 's/,$//')
+          echo "Integration coverpkg: $COVERPKG"
           # shellcheck disable=SC2086
-          go test $PKGS -tags integration -p 1 -timeout 10m -v
+          go test $PKGS -tags integration -p 1 -timeout 10m -v \
+            -coverprofile=coverage-integration.out -covermode=atomic -coverpkg="$COVERPKG"
+
+      - name: Check Go integration coverage threshold (≥77%)
+        # #1569 Task 8.3: the backend-test job's 74% gate runs WITHOUT -tags integration, so the
+        # entire read path for retained history (data_export_repository.go, the history-dated
+        # holding/liability queries, rule_execution_history_repository.go, etc.) measures 0% there
+        # and is invisible to that gate — even though it is well covered by the integration suite
+        # this job runs. This step closes that blind spot with its own gate on THIS job's profile.
+        #
+        # #1569 Task 9.2: the prior floor (80%, comment below preserved for history) was measured
+        # with `-coverpkg=./internal/... ./internal/...` — using ./internal/... as both the TEST
+        # TARGET and the coverage scope. CI never runs `./internal/...` as the test target; it
+        # runs only the 11 packages containing a `//go:build integration` file ($PKGS above).
+        # Testing all of ./internal/... exercises far more code against the same denominator,
+        # which is why that measurement (83.6%) never matched CI's real number (76.7%) — it was
+        # measuring a broader run than the one that actually happens. The denominator is now
+        # narrowed to $PKGS too (see the `run: Run integration tests` step's coverpkg comment),
+        # so this floor and that scope agree.
+        #
+        # Floor re-measured 2026-08-27 against a warm Postgres 17 (`boostedbudget-db`, port 5434)
+        # and both dev Redis containers, reproducing CI's exact command from `/bin/bash -c` (NOT
+        # zsh — zsh does not word-split an unquoted $PKGS and silently reports 0.0%):
+        #   FILES=$(grep -rl '^//go:build integration' --include='*_test.go' .)
+        #   PKGS=$(printf '%s\n' "$FILES" | xargs -n1 dirname | sort -u)   # 11 packages
+        #   COVERPKG=$(printf '%s\n' "$PKGS" | tr '\n' ',' | sed 's/,$//')
+        #   go test $PKGS -tags integration -p 1 -timeout 10m -v \
+        #     -coverprofile=/tmp/int.out -covermode=atomic -coverpkg="$COVERPKG"
+        #   go tool cover -func=/tmp/int.out | tail -1
+        #
+        # ⚠ THE COMMAND ABOVE IS THE ONE THE STEP ABOVE RUNS, AND IT DID NOT USED TO BE
+        # (#1569 T9-FIX item 9). It said `-timeout 15m` and appended `./...` after $PKGS, which
+        # widens the TEST TARGET back to every package — the exact mistake the paragraph above it
+        # exists to describe having already fixed once, restated as the reproduction recipe. A
+        # "reproduce CI exactly" comment that does not is worse than none: it produces a number
+        # under a different run and files it against this floor.
+        #
+        # Re-measured 2026-08-27 with the CORRECTED command, same warm Postgres 17 on port 5434:
+        # 80.2% (11 packages, all green). The 80.3% the widened command reported happens to land
+        # within noise of the right one, so the floor below did not have to move — but that is a
+        # coincidence, not a validation, and the recipe is now the thing it claims to be.
+        #
+        # Floor set to 77% — a few points below the measured baseline, not a guess — so it
+        # ratchets against regression without failing on ordinary environment variance
+        # (Postgres/Redis timing, etc.). Confirmed the gate can still fail: locally,
+        # `check-coverage.sh coverage-integration.out 81` on this same profile FAILED
+        # ("80.3% is below threshold 81%") and `... 77` PASSED — RED above the measured value,
+        # GREEN at the floor.
+        # (The two portfolio-snapshot re-link failures this paragraph used to record as
+        # "already-uncommitted-locally" were the money-doubling fix mid-flight; both are green as
+        # of the run that produced the 80.2% above.)
+        #
+        # Runs even if the tests step failed or was cancelled-but-not-cancelled, so a real
+        # coverage regression is never hidden behind an unrelated red test (Round 7: steps
+        # defaulting to if: success() silently skipped 13 later steps, including a coverage
+        # gate, in another job). This step is independent of test pass/fail — it only needs the
+        # profile file the previous step wrote — so it does not gate on that step's outcome.
+        if: always() && !cancelled()
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: |
+          echo "::group::Checking integration coverage threshold"
+          bash ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/scripts/check-coverage.sh \
+            coverage-integration.out \
+            77
+          echo "::endgroup::"
 
       - name: Save Go build cache
         # G4 fix: the old guard (`if: ... && steps.cache-go-build.outputs.cache-hit != 'true'`)
@@ -1764,26 +2038,64 @@ jobs:
       #
       # Wired here rather than left to `make test-scripts`, which no CI job runs: a guard written
       # because a missing flag broke CI was itself invisible to CI.
+      #
+      # #1569 task 7.1: this and every other step down to "Combine coverage reports" below is an
+      # INDEPENDENT guard/verification — none of them consumes another's output, they only share
+      # the workspace set up by "Install workspace dependencies" above. Before this fix, one early
+      # guard failing (e.g. the typecheck-tests-gate meta-test) skipped all 13 steps after it
+      # (default GitHub Actions behaviour: a step with no `if:` only runs while job status is
+      # still "success"), so CI reported one red step instead of "none of your gates ran". Each
+      # gets `if: always() && !cancelled()` so a sibling's failure cannot hide it; the job still
+      # goes red overall because a failing step fails the job regardless of `if:`. Genuinely
+      # dependent steps below (the rrweb proof on Chromium install, the coverage-merge test on
+      # lcov, "Combine coverage" on the coverage run) are NOT blanket always() — each is additionally
+      # gated on ITS OWN real prerequisite's outcome, so it does not run against missing input and
+      # produce a confusing secondary failure that masks the true cause.
       - name: Guard — frontend suite must run with an effective per-test timeout (#1537)
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-frontend-test-timeout.test.sh
 
+      # #1569 Codex finding 5: the test-typecheck gate must fail closed whenever tsc did not
+      # finish. Drives a COPY of the gate against a stub compiler, so the crash-mid-check and
+      # failed-mktemp paths are constructed rather than reasoned about.
+      - name: Test the test-typecheck gate fails closed
+        if: always() && !cancelled()
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash apps/web/scripts/__tests__/typecheck-tests-gate.test.sh
+
       # Same "make test-scripts runs in no CI job" reasoning as the step above. This one asserts
-      # that the 22 hand-maintained process-isolated test paths all still EXIST and that
+      # that the 23 hand-maintained process-isolated test paths all still EXIST and that
       # test-conflict-files.sh and test-regular.sh still agree on them. Both runners take those
       # paths on faith, and a stale entry in any MULTI-file group is silent: bun exits 0 having
       # skipped the filter it could not resolve, so the file simply stops being tested while this
       # job stays green. Runs BEFORE the suite so the failure names the stale path rather than
       # surfacing later as unexplained pollution in an unrelated test.
       - name: Guard — process-isolated test list must exist and stay in sync (#1537)
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-isolated-test-lists.test.sh
 
+      # #1569 task 20 (A1). The E2E seeder swallowed a totally failed seed four separate ways and
+      # printed "✅ Test data seeded successfully!", so the E2E job ran the whole suite against a
+      # database holding one user row and nothing else. This guard really CALLS seed_e2e_data
+      # against a recording docker stub and asserts it returns non-zero when psql fails.
+      #
+      # Wired into this job rather than the E2E job on purpose: it needs no database, no browser
+      # and no Clerk credentials, so it must not wait behind the E2E job to report that the E2E
+      # job's own reporting is broken.
+      - name: Guard — the E2E seeder must fail loudly (#1569)
+        if: always() && !cancelled()
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/check-e2e-seed-fails-loudly.test.sh
+
       - name: Lint frontend
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bun run lint
 
       - name: Typecheck frontend
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bun run typecheck
 
@@ -1797,14 +2109,22 @@ jobs:
       # of change that could silently break this mechanism, which eight of #1514's
       # <option>-text fixes depend on.
       - name: Install Chromium for rrweb mask-proof
+        id: install-chromium-rrweb
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bunx playwright install --with-deps chromium
 
+      # Genuinely dependent on the step above (needs the Chromium binary it installs), so it is
+      # gated on that step's own outcome rather than unconditional always() — running this without
+      # a real Chromium would fail for an unrelated reason and mask whichever earlier guard failed.
       - name: Run rrweb <option> masking proof
+        if: always() && !cancelled() && steps.install-chromium-rrweb.outcome == 'success'
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bun run test:rrweb-mask-proof
 
       - name: Run frontend tests with coverage
+        id: frontend-coverage-run
+        if: always() && !cancelled()
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: |
           echo "::group::Running frontend tests with coverage"
@@ -1812,6 +2132,8 @@ jobs:
           echo "::endgroup::"
 
       - name: Ensure lcov is installed
+        id: ensure-lcov
+        if: always() && !cancelled()
         env:
           LC_ALL: C
           LANG: C
@@ -1835,13 +2157,21 @@ jobs:
       # Must run after "Ensure lcov is installed" above: it invokes the real lcov binary,
       # not a stub. Was previously unwired from every runner (no Makefile target, no CI
       # step) — see scripts/check-frontend-coverage.test.sh's own header.
+      # Genuinely dependent on "Ensure lcov is installed" (invokes the real lcov binary), so
+      # gated on that step's own outcome rather than unconditional always().
       - name: Test frontend coverage merge tooling
+        if: always() && !cancelled() && steps.ensure-lcov.outcome == 'success'
         env:
           LC_ALL: C
           LANG: C
         run: bash ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/scripts/check-frontend-coverage.test.sh
 
+      # Genuinely dependent on "Run frontend tests with coverage" (merges the lcov files that step
+      # produces), so gated on that step's own outcome — an unconditional always() here would try
+      # to merge coverage that was never generated and fail for a confusing, unrelated reason.
       - name: Combine coverage reports and enforce thresholds
+        id: combine-coverage
+        if: always() && !cancelled() && steps.frontend-coverage-run.outcome == 'success'
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         env:
           LC_ALL: C
@@ -1862,6 +2192,7 @@ jobs:
 
       - name: Upload combined coverage report
         id: upload-frontend-coverage
+        if: always() && !cancelled() && steps.combine-coverage.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         continue-on-error: true
         with:
@@ -1913,6 +2244,15 @@ jobs:
       - name: Test pg_dump-via-docker
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/pg_dump-via-docker.test.sh
+
+      # #1569 round 15 task 9: the replay loop must execute a CONCURRENTLY migration the way
+      # golang-migrate does (no transaction). Its static half needs nothing; its live half is
+      # skipped here because this step runs BEFORE the Postgres container is started, exactly like
+      # the two above — the live half is covered by "Run comprehensive migration tests" below,
+      # which now replays 000182 for real.
+      - name: Test migration replay transaction semantics
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/replay-concurrently-transaction.test.sh
 
       - name: Configure PostgreSQL client tools
         run: |
@@ -2111,9 +2451,25 @@ jobs:
           npm install -g squawk-cli
           $HOME/bin/migrate --version && squawk --version
 
+      # The glob is *.up.sql so the command matches the policy that .squawk.toml already
+      # enforces. This step used to pass `migrations/*.sql` (366 files) and print "Found 0
+      # issues in 180 files", which LOOKED like half the input vanishing. It is not:
+      # .squawk.toml:32-38 excludes `*.down.sql` deliberately -- "rollback migrations NEED
+      # DROP TABLE statements" -- plus three up-migrations, each with its own stated reason.
+      # 183 up files minus those three = the 180 linted. Coverage here is unchanged; only the
+      # command's appearance is.
+      #
+      # ⚠⚠ #1569 r19, corrected by Codex: an earlier version of THIS comment claimed squawk
+      # "REFUSES a .down.sql path and still exits 0" and that the three files were
+      # "unparseable". BOTH WERE FALSE. squawk exits 1 on a down-only invocation (the earlier
+      # measurement piped through `tail`, so it read tail's exit code, not squawk's), and the
+      # three files parse fine -- run with `--config=/dev/null` and they emit ordinary
+      # warnings. The exclusions are configuration, not capability. ⚠ Do not re-derive this
+      # step's scope from its output count without reading .squawk.toml first: the count is
+      # a consequence of that file, and a drop in it means an exclusion was ADDED there.
       - name: Lint migrations with Squawk
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
-        run: squawk migrations/*.sql --pg-version=17
+        run: squawk migrations/*.up.sql --pg-version=17
 
       # PG_DUMP points at the server container's own pg_dump, regardless of what the "Configure
       # PostgreSQL client tools" step above resolved on the host. That step PREFERS a host client
@@ -2135,6 +2491,53 @@ jobs:
       # verifying nothing about schema identity — on every run before this commit. The script now
       # fails closed on both an unchecked `migrate` exit code and an empty dump, and checks
       # client-vs-server major versions up front, so a future mismatch is loud rather than silent.
+      # #1569 Codex finding 1: the destructive-target guard's own suite. Runs HERE, after the
+      # Postgres container is up, and not with the other pure-shell suites at the top of this job,
+      # because half of its cases must point at a LIVE cluster: a suite that can only reach dead
+      # ports can observe the guard refusing, never the guard SAYING YES to a real database — which
+      # is exactly the blind spot that let a name-only guard admit `production_test`. It creates and
+      # drops its own guardprobe_* databases on the container; it never touches DATABASE_URL's.
+      - name: Test migration destructive-target guard
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: bash scripts/__tests__/test-migrations-target-guard.test.sh
+
+      # #1569 round 12 task 7: the entry-point guard on `make migrate-reset`
+      # (backend/scripts/assert-migrate-reset-target-disposable.sh, wired into
+      # backend/Makefile's migrate-reset target). Filed here, beside the sibling
+      # test-migrations.sh guard above, for the same reason: half its cases need a LIVE cluster to
+      # observe the guard saying YES to a real (empty) database, not just refusing. It creates and
+      # drops its own mrguard_* databases on the container; it never touches DATABASE_URL's.
+      - name: Test migrate-reset entry-point guard
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: bash scripts/__tests__/migrate-reset-target-guard.test.sh
+
+      # #1569 round 5 (G3). This comment used to call this "the LAST suite under scripts/__tests__
+      # that no workflow ran"; that was FALSE when written and stayed false for nine rounds —
+      # no-ungated-migrate-down-invocation-guard.test.sh, check-ci-env-drift.test.sh and
+      # summarize-go-test.test.sh were all still unwired, and round 15 task 1 wired them. As of
+      # that commit all 21 suites in `make test-scripts` do have an individual CI step, but
+      # `make test-scripts` itself still runs in no CI job, so the per-suite wiring below and in
+      # frontend-test remains the only thing that executes them. It was
+      # reachable only through `make test-scripts`, which no job invokes — so its eight cases,
+      # including its own mutant, proved nothing about any commit. A guard that exists but never
+      # runs is the same as no guard, and this was the third instance of that class on this branch.
+      #
+      # Filed HERE, beside the target-guard suite, because it is about the same subject: the root
+      # Makefile's migrate-* recipes and scripts/resolve-dev-database-url.sh, i.e. WHICH database a
+      # destructive migration command would reach. It does not need the Postgres container — every
+      # case either dry-runs make (`make -n` against a sentinel URL on a dead port) or drives the
+      # resolver through docker/psql shims — but it must not be pulled away from the guard it is a
+      # sibling of. It neither reads nor writes this job's DATABASE_URL database: the make cases
+      # override DATABASE_URL with the sentinel, and the resolver cases run under `env -u
+      # DATABASE_URL`.
+      - name: Test root Makefile migrate delegation and dev-URL resolver
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/root-migrate-delegation.test.sh
+
       - name: Run comprehensive migration tests
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}

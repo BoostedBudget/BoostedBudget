@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -39,6 +40,14 @@ func (m *MockSavingsGoalRepository) GetByIDForUser(ctx context.Context, id, user
 	return args.Get(0).(*domain.SavingsGoal), args.Error(1)
 }
 
+func (m *MockSavingsGoalRepository) GetDeletedByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.SavingsGoal), args.Error(1)
+}
+
 func (m *MockSavingsGoalRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
@@ -68,12 +77,22 @@ func (m *MockSavingsGoalRepository) Update(ctx context.Context, goal *domain.Sav
 	return args.Error(0)
 }
 
-func (m *MockSavingsGoalRepository) Delete(ctx context.Context, id, userID string) error {
+func (m *MockSavingsGoalRepository) Delete(ctx context.Context, id, userID string, auditLog repository.AuditLogRepository) error {
+	args := m.Called(ctx, id, userID)
+	return args.Error(0)
+}
+
+func (m *MockSavingsGoalRepository) PurgeGoal(ctx context.Context, id, userID string, auditLog repository.AuditLogRepository) error {
 	args := m.Called(ctx, id, userID)
 	return args.Error(0)
 }
 
 func (m *MockSavingsGoalRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
+	args := m.Called(ctx, userID)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockSavingsGoalRepository) CountCompletedByUserID(ctx context.Context, userID string) (int, error) {
 	args := m.Called(ctx, userID)
 	return args.Int(0), args.Error(1)
 }
@@ -563,7 +582,6 @@ func TestSavingsGoalService_CreateGoal_ReplacedAccountRejected(t *testing.T) {
 	mockAccountRepo.AssertExpectations(t)
 }
 
-
 // TestSavingsGoalService_UpdateGoal_RefreshesUserAccountID verifies that when a user
 // changes a savings goal's linked account, UpdateGoal writes the new account's
 // user_account_id to the goal. Issue #1109: B.5 fix.
@@ -783,7 +801,7 @@ func TestSavingsGoalService_UpdateGoal_SetsProgressBasis(t *testing.T) {
 		{
 			name: "switch to account_percentage sets pct",
 			req: domain.UpdateSavingsGoalRequest{
-				ProgressBasis:    &pctBasis,
+				ProgressBasis:     &pctBasis,
 				AccountPercentage: &pct,
 			},
 			wantBasis: "account_percentage",
@@ -1265,4 +1283,58 @@ func TestUpdateGoal_BasisSwitch_SeedErrorIsNonFatal(t *testing.T) {
 
 	require.NoError(t, err, "UpdateGoal must succeed even when seed contribution insert fails")
 	assert.NotNil(t, goal)
+}
+
+// ── #1569 Task 12 fix round 1 (I5) ────────────────────────────────────────────────────────────
+//
+// Before these, replacing GetDeletedGoals's body with `return nil, nil` left
+// `go test ./internal/services/` entirely green: the repository stub existed and was never called,
+// so the service layer of gap 2 was unexercised.
+
+func TestSavingsGoalService_GetDeletedGoals_ReturnsWhatTheRepositoryFound(t *testing.T) {
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	deletedAt := time.Now().Add(-72 * time.Hour)
+	deleted := []*domain.SavingsGoal{{
+		ID:        "goal-deleted",
+		UserID:    userID,
+		Name:      "Abandoned Trip",
+		DeletedAt: &deletedAt,
+	}}
+
+	// The DELETED listing, not GetByUserID. A service that called the live listing instead would
+	// return goals the purge screen must never offer to destroy.
+	mockGoalRepo.On("GetDeletedByUserID", ctx, userID).Return(deleted, nil)
+
+	got, err := service.GetDeletedGoals(ctx, userID)
+
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "goal-deleted", got[0].ID)
+	require.NotNil(t, got[0].DeletedAt, "deleted_at must survive the service layer")
+	mockGoalRepo.AssertExpectations(t)
+	// Nothing else may be consulted: recomputing a balance-based current_amount for a goal the
+	// user stopped tracking would state a figure that has kept moving since they walked away.
+	mockGoalRepo.AssertNotCalled(t, "GetByUserID", ctx, userID)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+func TestSavingsGoalService_GetDeletedGoals_PropagatesRepositoryError(t *testing.T) {
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+
+	ctx := context.Background()
+	mockGoalRepo.On("GetDeletedByUserID", ctx, "user-123").
+		Return(nil, errors.New("database error"))
+
+	got, err := service.GetDeletedGoals(ctx, "user-123")
+
+	require.Error(t, err)
+	assert.Nil(t, got)
+	mockGoalRepo.AssertExpectations(t)
 }

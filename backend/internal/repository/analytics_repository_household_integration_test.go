@@ -145,39 +145,200 @@ func TestAnalyticsRepository_GetSpendingByCategory_Household_ExcludesHiddenVisib
 	assert.InDelta(t, 100, results[0].Total, 0.01, "hidden-visibility share must be excluded entirely")
 }
 
-// TestAnalyticsRepository_GetSpendingByCategory_Household_RevokedShareExcludedImmediately
-// covers the member-removal path: RemoveMember/self-leave revokes the member's shares via
-// HouseholdShareRepository.RevokeSharesForUser (revoked_at = now()); the household_accounts
-// CTE's `revoked_at IS NULL` filter must drop that account from the aggregate immediately,
-// with no separate cleanup step required.
-func TestAnalyticsRepository_GetSpendingByCategory_Household_RevokedShareExcludedImmediately(t *testing.T) {
+// revokeHouseholdShareAt closes the member's open grant in this household at an explicit instant.
+// RevokeSharesForUser is the real production path (member removal / self-leave) and sets
+// revoked_at = now(); the follow-up UPDATE backdates it so a test can place transactions on BOTH
+// sides of the revocation deterministically.
+//
+// The instant is supplied from Go rather than read back from the DB on purpose: the Docker Postgres
+// clock runs about a millisecond behind the host, so a DB-generated revoked_at compared against a
+// Go-generated transaction date is a flaky comparison waiting to happen.
+func revokeHouseholdShareAt(t *testing.T, pool *pgxpool.Pool, householdID, memberUserID, userAccountID string, revokedAt time.Time) {
+	t.Helper()
+	ctx := context.Background()
+
+	// Capture the OPEN grant first. Backdating by (household, user_account) alone would also rewrite
+	// grants closed by an earlier call, which is exactly what the re-fingerprinted fixture builds --
+	// the id is what keeps repeated revocations independent.
+	var shareID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT id::text FROM household_account_shares
+		WHERE household_id = $1 AND user_account_id = $2 AND revoked_at IS NULL
+	`, householdID, userAccountID).Scan(&shareID), "expected exactly one open grant to revoke")
+
+	shareRepo := repository.NewHouseholdShareRepository(pool)
+	require.NoError(t, shareRepo.RevokeSharesForUser(ctx, householdID, memberUserID))
+
+	tag, err := pool.Exec(ctx, `
+		UPDATE household_account_shares SET revoked_at = $1
+		WHERE id = $2 AND revoked_at IS NOT NULL
+	`, revokedAt, shareID)
+	require.NoError(t, err, "backdate revoked_at")
+	require.Equal(t, int64(1), tag.RowsAffected(), "expected the revoked grant to be backdated")
+}
+
+// TestAnalyticsRepository_GetSpendingByCategory_Household_DepartedMemberSharedPeriodRetained is the
+// #1569 T23 behaviour change, and it REPLACES a test that asserted the opposite
+// (..._RevokedShareExcludedImmediately, which required a revoked share to drop out of the aggregate
+// entirely, past included).
+//
+// That old rule erased a departed member's whole history from household spending, income and
+// savings-rate, while the balance/net-worth reads had already been fixed to keep the shared period.
+// The two universes disagreed about the same days. The rule now matches the balance side: the
+// household keeps exactly what was shared with it, for exactly as long as it was shared, and gains
+// nothing after the member leaves.
+//
+// Both directions are asserted here, because a fix that only widened would be just as wrong as the
+// bug: the pre-revocation transaction must be IN and the post-revocation one must be OUT.
+func TestAnalyticsRepository_GetSpendingByCategory_Household_DepartedMemberSharedPeriodRetained(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
 	repo := repository.NewAnalyticsRepository(pool)
 
 	owner, member, hh, ownerAcct, memberAcct := setupTwoMemberSharedHousehold(t, pool)
 	now := time.Now().UTC()
-	insertHouseholdTransaction(t, pool, owner, ownerAcct.AccountID, ownerAcct.LinkedItemID, 100, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
-	insertHouseholdTransaction(t, pool, member, memberAcct.AccountID, memberAcct.LinkedItemID, 999, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
 
-	// Simulate member removal / self-leave: RevokeSharesForUser is the real production path.
-	shareRepo := repository.NewHouseholdShareRepository(pool)
-	require.NoError(t, shareRepo.RevokeSharesForUser(ctx, hh, member))
+	insertHouseholdTransaction(t, pool, owner, ownerAcct.AccountID, ownerAcct.LinkedItemID, 100, now.AddDate(0, 0, -10), "FOOD_AND_DRINK")
+	// Inside the shared period (shared 2 months ago, revoked 3 days ago) -- must be RETAINED.
+	insertHouseholdTransaction(t, pool, member, memberAcct.AccountID, memberAcct.LinkedItemID, 999, now.AddDate(0, 0, -10), "FOOD_AND_DRINK")
+	// After the member left -- must NOT appear; the household never had visibility of it.
+	insertHouseholdTransaction(t, pool, member, memberAcct.AccountID, memberAcct.LinkedItemID, 777, now.AddDate(0, 0, -1), "FOOD_AND_DRINK")
+
+	revokeHouseholdShareAt(t, pool, hh, member, memberAcct.UserAccountID, now.AddDate(0, 0, -3))
 
 	filters := domain.SpendingFilters{
 		StartDate: now.AddDate(0, -1, 0),
 		EndDate:   now,
 		HouseholdScope: &domain.HouseholdScope{
-			HouseholdID:   hh,
-			MemberUserIDs: []string{owner, member}, // still "active" per caller's stale view —
-			// the revoked SHARE (not membership) is what must gate inclusion here.
+			HouseholdID: hh,
+			// The member has DEPARTED: they are no longer an active member. Their closed grant is
+			// what admits their shared period, which is the membership relaxation the balance CTEs
+			// already carry.
+			MemberUserIDs: []string{owner},
 		},
 	}
 
 	results, err := repo.GetSpendingByCategory(ctx, owner, filters)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	assert.InDelta(t, 100, results[0].Total, 0.01, "removed member's revoked share must drop out of the aggregate immediately")
+	assert.InDelta(t, 1099, results[0].Total, 0.01,
+		"owner's $100 + departed member's in-period $999; the post-revocation $777 must be excluded")
+	assert.Equal(t, 2, results[0].TransactionCount)
+}
+
+// TestAnalyticsRepository_GetSpendingByCategory_Household_RefingerprintedClosedGrantsCountedOnce is
+// the regression that retention would otherwise have shipped, and it is the reason this fix is a
+// SEMI-JOIN rather than a widened JOIN.
+//
+// household_grants emits one row per GRANT. A single account that was shared, re-fingerprinted
+// (a Plaid re-link can change physical_account_blind_idx) and shared again owns two closed grants
+// whose intervals both cover the same day. Under the old `JOIN household_accounts ha ON
+// ha.user_account_id = a.user_account_id`, that account would match twice and every one of its
+// transactions would land twice in SUM() and COUNT() -- silent money inflation across nine
+// endpoints, strictly worse than the under-reporting being fixed.
+//
+// EXISTS makes that unrepresentable: it answers once per transaction however many grants cover it.
+// The assertion is the EXACT total, not merely a non-zero one -- the defect it guards against
+// doubles the number, so an assertion that tolerated 500 would not see it.
+func TestAnalyticsRepository_GetSpendingByCategory_Household_RefingerprintedClosedGrantsCountedOnce(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	now := time.Now().UTC()
+	txnDate := now.AddDate(0, 0, -10)
+
+	// Grant 1: shared 3 months ago under the pre-relink fingerprint, revoked 2 days ago.
+	fpBefore := "fp-before-" + hh
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fpBefore, domain.ShareVisibilityShared, now.AddDate(0, -3, 0))
+	revokeHouseholdShareAt(t, pool, hh, member, memberAcct.UserAccountID, now.AddDate(0, 0, -2))
+
+	// Grant 2: the SAME user_account shared again under a NEW fingerprint, over an interval that
+	// also covers txnDate, and likewise now closed. Two closed grants, one user_account.
+	fpAfter := "fp-after-" + hh
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fpAfter, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+	revokeHouseholdShareAt(t, pool, hh, member, memberAcct.UserAccountID, now.AddDate(0, 0, -1))
+
+	var grants int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM household_account_shares
+		WHERE household_id = $1 AND user_account_id = $2 AND revoked_at IS NOT NULL
+	`, hh, memberAcct.UserAccountID).Scan(&grants))
+	require.Equal(t, 2, grants, "fixture must produce TWO closed grants, or this proves nothing")
+
+	insertHouseholdTransaction(t, pool, member, memberAcct.AccountID, memberAcct.LinkedItemID, 250, txnDate, "FOOD_AND_DRINK")
+
+	filters := domain.SpendingFilters{
+		StartDate: now.AddDate(0, -1, 0),
+		EndDate:   now,
+		HouseholdScope: &domain.HouseholdScope{
+			HouseholdID:   hh,
+			MemberUserIDs: []string{owner},
+		},
+	}
+
+	results, err := repo.GetSpendingByCategory(ctx, owner, filters)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.InDelta(t, 250, results[0].Total, 0.01,
+		"two closed grants covering the same day must not double the money: $250, never $500")
+	assert.Equal(t, 1, results[0].TransactionCount,
+		"two closed grants covering the same day must not double the transaction count")
+}
+
+// TestAnalyticsRepository_Household_BalanceAndSpendingUniversesAgreeOverSharedPeriod pins the
+// property #1569 Decision 7 previously recorded as ABSENT: household spending and household
+// net-worth answered about the same days out of different account universes, and no test asserted
+// they agreed because they did not.
+//
+// They do now. One departed member, one closed grant, one transaction and one balance snapshot both
+// inside the shared period: both reads must see the member's account. If either universe drifts
+// from the other again, this fails.
+func TestAnalyticsRepository_Household_BalanceAndSpendingUniversesAgreeOverSharedPeriod(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	analytics := repository.NewAnalyticsRepository(pool)
+	balances := repository.NewBalanceSnapshotRepository(pool)
+
+	owner, member, hh, ownerAcct, memberAcct := setupTwoMemberSharedHousehold(t, pool)
+	now := time.Now().UTC()
+	inPeriod := now.AddDate(0, 0, -10)
+
+	insertHouseholdTransaction(t, pool, owner, ownerAcct.AccountID, ownerAcct.LinkedItemID, 100, inPeriod, "FOOD_AND_DRINK")
+	insertHouseholdTransaction(t, pool, member, memberAcct.AccountID, memberAcct.LinkedItemID, 400, inPeriod, "FOOD_AND_DRINK")
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 1000, inPeriod)
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 500, inPeriod)
+
+	// The member leaves AFTER both the transaction and the snapshot.
+	revokeHouseholdShareAt(t, pool, hh, member, memberAcct.UserAccountID, now.AddDate(0, 0, -3))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
+
+	results, err := analytics.GetSpendingByCategory(ctx, owner, domain.SpendingFilters{
+		StartDate:      now.AddDate(0, -1, 0),
+		EndDate:        now,
+		HouseholdScope: scope,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.InDelta(t, 500, results[0].Total, 0.01,
+		"SPENDING must include the departed member's in-period $400 alongside the owner's $100")
+
+	snapshots, err := balances.GetSnapshotsAsOfForHousehold(ctx, owner, scope, inPeriod.AddDate(0, 0, 1))
+	require.NoError(t, err)
+	var balanceTotal float64
+	for _, snap := range snapshots {
+		if snap.CurrentBalance != nil {
+			balanceTotal += *snap.CurrentBalance
+		}
+	}
+	assert.InDelta(t, 1500, balanceTotal, 0.01,
+		"BALANCE must include the same departed member's account over the same shared period")
 }
 
 func TestAnalyticsRepository_GetSpendingByCategory_Household_IsHiddenAccountStillIncluded(t *testing.T) {
@@ -289,6 +450,74 @@ func TestAnalyticsRepository_GetSpendingByCategory_Household_JointAccountCounted
 	require.Len(t, results, 1)
 	assert.InDelta(t, 60, results[0].Total, 0.01, "joint account must be counted once (owner's earliest-shared copy), not $120")
 	assert.Equal(t, 1, results[0].TransactionCount)
+}
+
+// TestAnalyticsRepository_GetSpendingByCategory_Household_JointAccountWithClosedGrantCountedOnce
+// pins the joint-account dedup for the case where the LOSING copy's grant is CLOSED.
+//
+// #1569 T3 (#1582) skips the per-transaction NOT EXISTS whenever a fingerprint is held by only
+// ONE user_account — a provably-vacuous subquery in that case. That skip is only an identity if
+// "held by one user_account" is computed over EVERY grant in household_grants, closed ones
+// included. An implementation that decided contestedness from the OPEN grants alone would see
+// the owner's revoked copy as absent, declare the fingerprint uncontested for the member's copy,
+// skip the tiebreak, and count the joint account TWICE ($120 instead of $60) — precisely the
+// silent money inflation the EXISTS shape exists to make unrepresentable.
+//
+// Owner shared first and is therefore the winner, so the correct answer is the owner's $60.
+func TestAnalyticsRepository_GetSpendingByCategory_Household_JointAccountWithClosedGrantCountedOnce(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+
+	ownerAcct := setupHouseholdMemberAccount(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	now := time.Now().UTC()
+	txnDate := now.AddDate(0, 0, -5)
+	fingerprint := "joint-closed-fp-" + hh
+
+	// Owner's copy: shared 2 months ago, revoked YESTERDAY — closed, but still covering txnDate.
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+	revokeHouseholdShareAt(t, pool, hh, owner, ownerAcct.UserAccountID, now.AddDate(0, 0, -1))
+
+	// Member's copy of the SAME physical account: shared 1 month ago, still open.
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, now.AddDate(0, -1, 0))
+
+	// Fixture assertion: exactly one CLOSED and one OPEN grant on this fingerprint, held by
+	// two DIFFERENT user_accounts. Without this the test could pass while proving nothing.
+	var open, closed int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT COUNT(*) FILTER (WHERE revoked_at IS NULL),
+		       COUNT(*) FILTER (WHERE revoked_at IS NOT NULL)
+		FROM household_account_shares
+		WHERE household_id = $1 AND physical_account_blind_idx = $2
+	`, hh, fingerprint).Scan(&open, &closed))
+	require.Equal(t, 1, open, "fixture must leave exactly one OPEN grant on the joint fingerprint")
+	require.Equal(t, 1, closed, "fixture must leave exactly one CLOSED grant on the joint fingerprint")
+
+	insertHouseholdTransaction(t, pool, owner, ownerAcct.AccountID, ownerAcct.LinkedItemID, 60, txnDate, "FOOD_AND_DRINK")
+	insertHouseholdTransaction(t, pool, member, memberAcct.AccountID, memberAcct.LinkedItemID, 60, txnDate, "FOOD_AND_DRINK")
+
+	filters := domain.SpendingFilters{
+		StartDate: now.AddDate(0, -3, 0),
+		EndDate:   now,
+		HouseholdScope: &domain.HouseholdScope{
+			HouseholdID:   hh,
+			MemberUserIDs: []string{owner, member},
+		},
+	}
+
+	results, err := repo.GetSpendingByCategory(ctx, owner, filters)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.InDelta(t, 60, results[0].Total, 0.01,
+		"a joint account whose winning copy's grant is CLOSED must still be counted once: $60, never $120")
+	assert.Equal(t, 1, results[0].TransactionCount,
+		"a joint account whose winning copy's grant is CLOSED must not double the transaction count")
 }
 
 func TestAnalyticsRepository_GetSpendingByCategory_Household_CustomCategoryNamespaceSafeToRequester(t *testing.T) {
@@ -784,10 +1013,16 @@ func TestAnalyticsRepository_GetSpendingByCategory_Household_IncludesReplacedAcc
 func markAccountNonActive(t *testing.T, pool *pgxpool.Pool, accountID, status string) {
 	t.Helper()
 	var err error
-	if status == "replaced" {
+	switch status {
+	case "replaced":
 		_, err = pool.Exec(context.Background(),
 			`UPDATE accounts SET status = 'replaced', replaced_at = now() WHERE id = $1`, accountID)
-	} else {
+	case "expired":
+		// accounts_expired_at_consistency (migration 000155, Issue #1569 Task 6) requires
+		// expired_at whenever status = 'expired'.
+		_, err = pool.Exec(context.Background(),
+			`UPDATE accounts SET status = 'expired', expired_at = now() WHERE id = $1`, accountID)
+	default:
 		_, err = pool.Exec(context.Background(),
 			`UPDATE accounts SET status = $2 WHERE id = $1`, accountID, status)
 	}
@@ -1006,4 +1241,190 @@ func TestAnalyticsRepository_GetIncomeSourceBreakdown_Household_IncludesReplaced
 	require.Len(t, results, 1)
 	assert.InDelta(t, 1500, results[0].Total, 0.01,
 		"income received on a since-replaced account must remain in the household income breakdown")
+}
+
+// ── Same-day unshare / re-share ─────────────────────────────────────────────────────────────────
+//
+// WHY THESE TWO TESTS EXIST. #1569 T3 round 6 was told to ship the "option (b) losers ANTI JOIN"
+// rewrite of householdSharedTransactionPredicate and refuted it instead: the rewrite splits HEAD's
+// single `EXISTS(g : g covers this day AND g wins its tiebreak)` into
+// `EXISTS(g : g covers) AND NOT EXISTS(g : g covers AND g loses)`, which asks whether EVERY
+// covering grant wins rather than whether SOME covering grant wins. The two agree only while no
+// user_account holds two grants covering the same day — and `uq_household_account_shares_active`
+// forbids two UN-REVOKED grants per (household, user_account) AND NOTHING MORE, so unsharing an
+// account and re-sharing it later the SAME DAY produces exactly that, with the day-overlap
+// predicate (generous at both ends, by design) putting both grants on the boundary day. Under the
+// rewrite, money DISAPPEARS. Full reasoning and both measurements:
+// docs/decisions/2026-08-26-household-grants-cte-performance.md.
+//
+// ⚠ HEAD IS CORRECT ON THIS SHAPE AND NOTHING PINNED IT. The shipped household suite does not
+// cover it, and testdata/t3bench_seed.sql STRUCTURALLY CANNOT contain it — the seed gives each
+// user_account one open grant plus non-overlapping closed ones — so TestT3BenchAntiJoinEquality's
+// agreement on the seed proves nothing about this shape. That is precisely why the equality harness
+// passed while the candidate was wrong. These two tests are the missing pin: any future variant of
+// the predicate must reproduce these amounts, and an agreement harness run against the seed is not
+// a substitute for them.
+//
+// Both build the grants through the PRODUCTION write paths (InsertShare / RevokeSharesForUser via
+// the helpers above), never by hand-inserting rows: five defects on this branch came from fixtures
+// writing rows production cannot produce.
+
+// sameDayAt returns base's calendar day at the given UTC hour. The two grants in these fixtures
+// differ only by time-of-day, which is the whole point: `t.date` is a DATE, so both intervals cover
+// the same day no matter which hour is chosen.
+func sameDayAt(base time.Time, hour int) time.Time {
+	y, m, d := base.UTC().Date()
+	return time.Date(y, m, d, hour, 0, 0, 0, time.UTC)
+}
+
+// requireGrantsCoveringDay asserts how many grants of one user_account cover a given day under the
+// REAL overlap rule householdSharedTransactionPredicate applies. Without it these tests could pass
+// while the fixture never built the two-grants-on-one-day shape they exist to exercise — an
+// agreement that proves nothing is the exact failure mode that let the anti-join look equivalent.
+func requireGrantsCoveringDay(t *testing.T, pool *pgxpool.Pool, householdID, userAccountID string, day time.Time, want int) {
+	t.Helper()
+	var got int
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM household_account_shares has
+		WHERE has.household_id = $1
+		  AND has.user_account_id = $2
+		  AND has.visibility = 'shared'
+		  AND ($3::date + 1) > (has.shared_at AT TIME ZONE 'UTC')
+		  AND (has.revoked_at IS NULL OR $3::date < (has.revoked_at AT TIME ZONE 'UTC'))
+	`, householdID, userAccountID, day.Format("2006-01-02")).Scan(&got))
+	require.Equal(t, want, got,
+		"fixture must leave exactly %d grant(s) of this user_account covering the boundary day; "+
+			"got %d, so the shape this test exists to exercise was not built", want, got)
+}
+
+// TestAnalyticsRepository_GetSpendingByCategory_Household_SameDayUnshareReshare_PlainAccountCountedOnce
+// is the FIRST of the two consequences the anti-join produces: a member's own account, freshly
+// re-fingerprinted, is dropped for the boundary day because an UNRELATED revoked grant of the same
+// user_account lost a tiebreak on its OLD fingerprint.
+//
+// HEAD is right because EXISTS asks whether SOME covering grant wins: the new grant's fingerprint
+// is held by one user_account, so it is uncontested, so it wins, so the day is included. It is also
+// counted exactly ONCE despite two covering grants — EXISTS yields at most one row however many
+// grants match, which is why the retention rewrite abandoned the JOIN (a JOIN here reports $120).
+//
+// The old fingerprint has to be CONTESTED for this to be the anti-join's failing shape rather than
+// a trivial one, so a third member holds it from earlier and outranks the departing grant.
+func TestAnalyticsRepository_GetSpendingByCategory_Household_SameDayUnshareReshare_PlainAccountCountedOnce(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	rival := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+	rivalAcct := setupHouseholdMemberAccount(t, pool, rival)
+
+	now := time.Now().UTC()
+	boundary := now.AddDate(0, 0, -5)
+	txnDate := sameDayAt(boundary, 0)
+	fpOld := "sameday-old-fp-" + hh
+	fpNew := "sameday-new-fp-" + hh
+
+	// The rival holds the OLD fingerprint from earlier, which makes it contested and makes the
+	// member's grant on it the loser. The rival's own account carries no spend.
+	insertHouseholdShare(t, pool, hh, rivalAcct.UserAccountID, &fpOld, domain.ShareVisibilityShared, now.AddDate(0, -3, 0))
+
+	// The member's account: shared on the old fingerprint, unshared at 13:00 on the boundary day...
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fpOld, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+	revokeHouseholdShareAt(t, pool, hh, member, memberAcct.UserAccountID, sameDayAt(boundary, 13))
+	// ...and re-shared at 14:00 the SAME day under a fresh fingerprint. Two grants, one day.
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fpNew, domain.ShareVisibilityShared, sameDayAt(boundary, 14))
+
+	requireGrantsCoveringDay(t, pool, hh, memberAcct.UserAccountID, txnDate, 2)
+
+	insertHouseholdTransaction(t, pool, member, memberAcct.AccountID, memberAcct.LinkedItemID, 60, txnDate, "FOOD_AND_DRINK")
+
+	filters := domain.SpendingFilters{
+		StartDate: now.AddDate(0, -4, 0),
+		EndDate:   now,
+		HouseholdScope: &domain.HouseholdScope{
+			HouseholdID:   hh,
+			MemberUserIDs: []string{owner, member, rival},
+		},
+	}
+
+	results, err := repo.GetSpendingByCategory(ctx, owner, filters)
+	require.NoError(t, err)
+	require.Len(t, results, 1,
+		"the re-shared account's spend must still be in the household aggregate on the boundary day — "+
+			"an empty result is the anti-join's money-disappearing failure")
+	assert.InDelta(t, 60, results[0].Total, 0.01,
+		"same-day unshare/re-share must count the day ONCE: $60. $0 means a covering grant that LOST "+
+			"an unrelated tiebreak suppressed the whole account (the refuted anti-join); $120 means "+
+			"the two covering grants were joined rather than existentially matched")
+	assert.Equal(t, 1, results[0].TransactionCount,
+		"two grants covering one day must not double the transaction count")
+}
+
+// TestAnalyticsRepository_GetSpendingByCategory_Household_SameDayUnshareReshare_JointAccountCountedOnce
+// is the SECOND and worse consequence: on a JOINT account the anti-join drops BOTH copies — the
+// re-shared copy loses to the other member, the other member loses to the original copy — so the
+// account contributes nothing at all on the boundary day.
+//
+// HEAD counts exactly one copy, which is the entire point of the fingerprint dedup. Ranking is
+// `(share_started_at, user_account_id)` ascending, so with the member's ORIGINAL grant earliest:
+//
+//   - the owner's copy loses to it and is excluded;
+//   - the member's original copy has no lower-ranked rival, wins, and carries the day.
+//
+// $0 would be the refuted rewrite's answer; $120 would be the dedup gone.
+func TestAnalyticsRepository_GetSpendingByCategory_Household_SameDayUnshareReshare_JointAccountCountedOnce(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+
+	ownerAcct := setupHouseholdMemberAccount(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	now := time.Now().UTC()
+	boundary := now.AddDate(0, 0, -5)
+	txnDate := sameDayAt(boundary, 0)
+	fpJoint := "sameday-joint-fp-" + hh
+
+	// Member's ORIGINAL copy of the joint account — earliest, so it outranks everything.
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fpJoint, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+	// Owner's copy of the SAME physical account, shared later, still open.
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, &fpJoint, domain.ShareVisibilityShared, now.AddDate(0, -1, 0))
+	// The member unshares at 13:00 on the boundary day and re-shares at 14:00 the same day.
+	revokeHouseholdShareAt(t, pool, hh, member, memberAcct.UserAccountID, sameDayAt(boundary, 13))
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fpJoint, domain.ShareVisibilityShared, sameDayAt(boundary, 14))
+
+	requireGrantsCoveringDay(t, pool, hh, memberAcct.UserAccountID, txnDate, 2)
+	requireGrantsCoveringDay(t, pool, hh, ownerAcct.UserAccountID, txnDate, 1)
+
+	// Both members post the joint account's SAME $60 charge, as a joint account does.
+	insertHouseholdTransaction(t, pool, member, memberAcct.AccountID, memberAcct.LinkedItemID, 60, txnDate, "FOOD_AND_DRINK")
+	insertHouseholdTransaction(t, pool, owner, ownerAcct.AccountID, ownerAcct.LinkedItemID, 60, txnDate, "FOOD_AND_DRINK")
+
+	filters := domain.SpendingFilters{
+		StartDate: now.AddDate(0, -3, 0),
+		EndDate:   now,
+		HouseholdScope: &domain.HouseholdScope{
+			HouseholdID:   hh,
+			MemberUserIDs: []string{owner, member},
+		},
+	}
+
+	results, err := repo.GetSpendingByCategory(ctx, owner, filters)
+	require.NoError(t, err)
+	require.Len(t, results, 1,
+		"a joint account unshared and re-shared the same day must still contribute on that day — "+
+			"an empty result is the anti-join dropping BOTH copies")
+	assert.InDelta(t, 60, results[0].Total, 0.01,
+		"the joint account must be counted exactly once on the boundary day: $60, never $0 and never $120")
+	assert.Equal(t, 1, results[0].TransactionCount,
+		"exactly one of the two joint copies may contribute a transaction on the boundary day")
 }

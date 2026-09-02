@@ -25,7 +25,7 @@ func setupBoostExecutionMockDB(t *testing.T) (pgxmock.PgxPoolIface, BoostExecuti
 
 // boostExecutionColumns lists the columns returned by scanExecution.
 var boostExecutionColumns = []string{
-	"id", "boost_id", "status", "started_at", "completed_at",
+	"id", "boost_id", "user_id", "boost_name", "definition_snapshot", "status", "started_at", "completed_at",
 	"execution_duration_ms", "trigger_context", "input_data", "output_data",
 	"error_code", "error_message", "retry_count", "max_retries",
 }
@@ -33,18 +33,21 @@ var boostExecutionColumns = []string{
 func addBoostExecutionRow(rows *pgxmock.Rows, execID, boostID string) *pgxmock.Rows {
 	return rows.AddRow(
 		execID,
-		boostID,
+		&boostID,
+		"user-"+execID,                  // user_id (#1569 Task 14)
+		strPtr("Test Boost"),            // boost_name (#1569 Task 14)
+		[]byte(`{"name":"Test Boost"}`), // definition_snapshot (#1569 Task 14)
 		domain.ExecutionStatusPending,
 		time.Now(),
-		nil,       // completed_at
-		nil,       // execution_duration_ms
+		nil,          // completed_at
+		nil,          // execution_duration_ms
 		[]byte("{}"), // trigger_context JSONB
-		nil,       // input_data
-		nil,       // output_data
-		nil,       // error_code
-		nil,       // error_message
-		0,         // retry_count
-		3,         // max_retries
+		nil,          // input_data
+		nil,          // output_data
+		nil,          // error_code
+		nil,          // error_message
+		0,            // retry_count
+		3,            // max_retries
 	)
 }
 
@@ -67,24 +70,27 @@ func TestBoostExecutionRepository_Create_Success(t *testing.T) {
 
 	ctx := context.Background()
 	execution := &domain.BoostExecution{
-		BoostID: uuid.New().String(),
+		BoostID: strPtr(uuid.New().String()),
 	}
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO boost_executions`)).
 		WithArgs(
 			pgxmock.AnyArg(), // id (generated)
 			execution.BoostID,
+			pgxmock.AnyArg(),              // user_id (#1569 Task 14)
+			pgxmock.AnyArg(),              // boost_name (#1569 Task 14)
+			pgxmock.AnyArg(),              // definition_snapshot (#1569 Task 14)
 			domain.ExecutionStatusPending, // status (defaulted)
-			pgxmock.AnyArg(), // started_at (defaulted)
-			pgxmock.AnyArg(), // completed_at (nil)
-			pgxmock.AnyArg(), // execution_duration_ms (nil)
-			pgxmock.AnyArg(), // trigger_context (defaulted to {})
-			pgxmock.AnyArg(), // input_data
-			pgxmock.AnyArg(), // output_data
-			pgxmock.AnyArg(), // error_code
-			pgxmock.AnyArg(), // error_message
-			pgxmock.AnyArg(), // retry_count
-			3, // max_retries (defaulted to 3)
+			pgxmock.AnyArg(),              // started_at (defaulted)
+			pgxmock.AnyArg(),              // completed_at (nil)
+			pgxmock.AnyArg(),              // execution_duration_ms (nil)
+			pgxmock.AnyArg(),              // trigger_context (defaulted to {})
+			pgxmock.AnyArg(),              // input_data
+			pgxmock.AnyArg(),              // output_data
+			pgxmock.AnyArg(),              // error_code
+			pgxmock.AnyArg(),              // error_message
+			pgxmock.AnyArg(),              // retry_count
+			3,                             // max_retries (defaulted to 3)
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
@@ -103,14 +109,15 @@ func TestBoostExecutionRepository_Create_Error(t *testing.T) {
 
 	ctx := context.Background()
 	execution := &domain.BoostExecution{
-		BoostID: uuid.New().String(),
+		BoostID: strPtr(uuid.New().String()),
 	}
 
 	dbErr := errors.New("db error")
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO boost_executions`)).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
 			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(dbErr)
 
 	err := repo.Create(ctx, execution)
@@ -206,7 +213,7 @@ func TestBoostExecutionRepository_GetByID_Success(t *testing.T) {
 	rows := pgxmock.NewRows(boostExecutionColumns)
 	addBoostExecutionRow(rows, execID, boostID)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, status`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, user_id, boost_name, definition_snapshot, status`)).
 		WithArgs(execID).
 		WillReturnRows(rows)
 
@@ -215,7 +222,8 @@ func TestBoostExecutionRepository_GetByID_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, execID, result.ID)
-	assert.Equal(t, boostID, result.BoostID)
+	require.NotNil(t, result.BoostID)
+	assert.Equal(t, boostID, *result.BoostID)
 	assert.Equal(t, domain.ExecutionStatusPending, result.Status)
 	assert.Equal(t, 3, result.MaxRetries)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -228,7 +236,7 @@ func TestBoostExecutionRepository_GetByID_NotFound(t *testing.T) {
 	ctx := context.Background()
 	execID := uuid.New().String()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, status`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, user_id, boost_name, definition_snapshot, status`)).
 		WithArgs(execID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -254,7 +262,7 @@ func TestBoostExecutionRepository_GetByBoostID_Success(t *testing.T) {
 	addBoostExecutionRow(rows, execID1, boostID)
 	addBoostExecutionRow(rows, execID2, boostID)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, status`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, user_id, boost_name, definition_snapshot, status`)).
 		WithArgs(boostID, 10, 0).
 		WillReturnRows(rows)
 
@@ -275,7 +283,7 @@ func TestBoostExecutionRepository_GetByBoostID_Empty(t *testing.T) {
 	boostID := uuid.New().String()
 
 	rows := pgxmock.NewRows(boostExecutionColumns)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, status`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, user_id, boost_name, definition_snapshot, status`)).
 		WithArgs(boostID, 10, 0).
 		WillReturnRows(rows)
 
@@ -305,7 +313,7 @@ func TestBoostExecutionRepository_GetByBoostIDWithFilter_NoStatus(t *testing.T) 
 	// Data query
 	rows := pgxmock.NewRows(boostExecutionColumns)
 	addBoostExecutionRow(rows, execID, boostID)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, status`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, user_id, boost_name, definition_snapshot, status`)).
 		WithArgs(boostID, 10, 0).
 		WillReturnRows(rows)
 
@@ -336,10 +344,11 @@ func TestBoostExecutionRepository_GetByBoostIDWithFilter_WithStatus(t *testing.T
 	// Data query with status filter
 	rows := pgxmock.NewRows(boostExecutionColumns)
 	rows.AddRow(
-		execID, boostID, domain.ExecutionStatusCompleted,
+		execID, &boostID, "user-"+execID, strPtr("Test Boost"), []byte(`{"name":"Test Boost"}`),
+		domain.ExecutionStatusCompleted,
 		time.Now(), nil, nil, []byte("{}"), nil, nil, nil, nil, 0, 3,
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, status`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, user_id, boost_name, definition_snapshot, status`)).
 		WithArgs(boostID, status, 10, 0).
 		WillReturnRows(rows)
 
@@ -366,7 +375,7 @@ func TestBoostExecutionRepository_GetLastExecutionForBoost_Found(t *testing.T) {
 	rows := pgxmock.NewRows(boostExecutionColumns)
 	addBoostExecutionRow(rows, execID, boostID)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, status`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, user_id, boost_name, definition_snapshot, status`)).
 		WithArgs(boostID).
 		WillReturnRows(rows)
 
@@ -375,7 +384,8 @@ func TestBoostExecutionRepository_GetLastExecutionForBoost_Found(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, execID, result.ID)
-	assert.Equal(t, boostID, result.BoostID)
+	require.NotNil(t, result.BoostID)
+	assert.Equal(t, boostID, *result.BoostID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -386,7 +396,7 @@ func TestBoostExecutionRepository_GetLastExecutionForBoost_NotFound(t *testing.T
 	ctx := context.Background()
 	boostID := uuid.New().String()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, status`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, user_id, boost_name, definition_snapshot, status`)).
 		WithArgs(boostID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -411,7 +421,7 @@ func TestBoostExecutionRepository_GetPendingExecutions_Success(t *testing.T) {
 	rows := pgxmock.NewRows(boostExecutionColumns)
 	addBoostExecutionRow(rows, execID, boostID)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, status`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, user_id, boost_name, definition_snapshot, status`)).
 		WithArgs(10).
 		WillReturnRows(rows)
 
@@ -431,7 +441,7 @@ func TestBoostExecutionRepository_GetPendingExecutions_Empty(t *testing.T) {
 	ctx := context.Background()
 
 	rows := pgxmock.NewRows(boostExecutionColumns)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, status`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, user_id, boost_name, definition_snapshot, status`)).
 		WithArgs(10).
 		WillReturnRows(rows)
 
@@ -454,11 +464,12 @@ func TestBoostExecutionRepository_GetFailedExecutions_Success(t *testing.T) {
 
 	rows := pgxmock.NewRows(boostExecutionColumns)
 	rows.AddRow(
-		execID, boostID, domain.ExecutionStatusFailed,
+		execID, &boostID, "user-"+execID, strPtr("Test Boost"), []byte(`{"name":"Test Boost"}`),
+		domain.ExecutionStatusFailed,
 		time.Now(), nil, nil, []byte("{}"), nil, nil,
 		strPtr("ERR_001"), strPtr("failure message"), 1, 3,
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, status`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, user_id, boost_name, definition_snapshot, status`)).
 		WithArgs(boostID, 5).
 		WillReturnRows(rows)
 
@@ -479,7 +490,7 @@ func TestBoostExecutionRepository_GetFailedExecutions_QueryError(t *testing.T) {
 	ctx := context.Background()
 	boostID := uuid.New().String()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, status`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, boost_id, user_id, boost_name, definition_snapshot, status`)).
 		WithArgs(boostID, 5).
 		WillReturnError(errors.New("db error"))
 

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -112,6 +112,14 @@ func TestMortgageLiabilityRepository_ReplaceForAccount_Success(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO mortgage_liabilities`)).
 		WithArgs(anyArgs(30)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// #1569 T6 fix round 1: the capture reads its UTC day from the SERVER (see serverUTCDate —
+	// the aggregate and its rows must be filed under the same day across UTC midnight), then runs
+	// as a SET: mark what it no longer observes absent, then upsert what it does.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT (now() AT TIME ZONE 'UTC')::date`)).
+		WillReturnRows(pgxmock.NewRows([]string{"date"}).AddRow(time.Now().UTC().Truncate(24 * time.Hour)))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO liability_statements`)).
+		WithArgs(accountID, userID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
 	err := repo.ReplaceForAccount(ctx, accountID, userID, liability)
@@ -134,6 +142,14 @@ func TestMortgageLiabilityRepository_ReplaceForAccount_NilDeletesOnly(t *testing
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM mortgage_liabilities`)).
 		WithArgs(accountID, userID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	// #1569 fix round 1, Critical 2: the delete-only path now records the ABSENCE rather than
+	// leaving today's earlier statement standing as the day's answer. It flips `present` only —
+	// details, and with them the APR schedule this DELETE just wiped, are deliberately kept.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT (now() AT TIME ZONE 'UTC')::date`)).
+		WillReturnRows(pgxmock.NewRows([]string{"date"}).AddRow(time.Now().UTC().Truncate(24 * time.Hour)))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE liability_statements`)).
+		WithArgs(accountID, userID, "mortgage", pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
 	err := repo.ReplaceForAccount(ctx, accountID, userID, nil)

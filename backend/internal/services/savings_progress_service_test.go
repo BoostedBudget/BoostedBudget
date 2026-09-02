@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -42,6 +43,14 @@ func (m *mockSavingsProgressGoalRepo) MarkCompleted(ctx context.Context, goalID 
 	return m.Called(ctx, goalID).Error(0)
 }
 
+// Issue #1569 Task 20 (A4). Driven by testify like the rest of this mock, so a test that forgets
+// to set an expectation FAILS rather than silently getting 0 — which is the exact value the
+// defect produced, and would make a regression indistinguishable from a passing fix.
+func (m *mockSavingsProgressGoalRepo) CountCompletedByUserID(ctx context.Context, userID string) (int, error) {
+	args := m.Called(ctx, userID)
+	return args.Int(0), args.Error(1)
+}
+
 type mockSavingsProgressContribRepo struct{ mock.Mock }
 
 func (m *mockSavingsProgressContribRepo) SumConfirmedByGoal(ctx context.Context, userID, goalID string) (float64, error) {
@@ -67,7 +76,7 @@ func newTestProgressService(
 	accountRepo *mockSavingsProgressAccountRepo,
 ) SavingsProgressService {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	return NewSavingsProgressService(goalRepo, contribRepo, accountRepo, logger)
+	return NewSavingsProgressService(goalRepo, contribRepo, accountRepo, nil, logger)
 }
 
 func makeGoal(id, userID, accountID, basis string, target, current float64) *domain.SavingsGoal {
@@ -295,6 +304,40 @@ func TestSavingsProgress_Balance_SetsBalanceAsOf(t *testing.T) {
 	goalRepo.AssertExpectations(t)
 }
 
+// TestSavingsProgress_Balance_DisconnectedAccount_SkipsRecompute tests that a balance-basis
+// goal pointed at a retained (non-active) account freezes current_amount rather than
+// recomputing from a frozen balance forever (Issue #1569).
+func TestSavingsProgress_Balance_DisconnectedAccount_SkipsRecompute(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
+
+	goal := makeGoal("g1", "u1", "acc1", domain.ProgressBasisBalance, 5000, 1000)
+	balance := 3500.00
+	account := &domain.Account{
+		ID:             "acc1",
+		UserID:         "u1",
+		CurrentBalance: &balance,
+		Status:         domain.AccountStatusRemoved,
+		UpdatedAt:      time.Now(),
+	}
+
+	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
+	// Registered as .Maybe() so a regression records the write instead of panicking on an
+	// unexpected mock call, letting assertNoCallTo below fail as a real assertion.
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	err := svc.RecomputeGoal(context.Background(), goal)
+
+	require.NoError(t, err)
+	// Neither UpdateCurrentAmount nor MarkCompleted should be called — same freeze semantics
+	// as the nil-balance case above.
+	assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
+	assertNoCallTo(t, &goalRepo.Mock, "MarkCompleted")
+}
+
 // ─── account_percentage basis ─────────────────────────────────────────────────
 
 // TestSavingsProgress_AccountPercentage_ComputesCorrectly tests the percent-of-balance basis.
@@ -404,6 +447,8 @@ func TestSavingsProgress_RecomputeUser_ProcessesAllGoals(t *testing.T) {
 	g2 := makeGoal("g2", "u1", "acc1", domain.ProgressBasisContributions, 2000, 0)
 
 	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{g1, g2}, nil)
+	// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g2").Return(800.00, nil)
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g2", 800.00, mock.Anything, (*time.Time)(nil)).Return(nil)
 
@@ -428,6 +473,8 @@ func TestSavingsProgress_RecomputeUser_ContinuesOnGoalError(t *testing.T) {
 	g2 := makeGoal("g2", "u1", "acc1", domain.ProgressBasisContributions, 2000, 0)
 
 	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{g1, g2}, nil)
+	// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 	// g1 fails
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(0.0, errors.New("db error")).Once()
 	// g2 succeeds
@@ -451,6 +498,8 @@ func TestSavingsProgress_RecomputeUser_GetActiveGoalsError(t *testing.T) {
 	svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
 
 	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return(nil, errors.New("db error"))
+	// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 
 	err := svc.RecomputeUser(context.Background(), "u1")
 
@@ -520,6 +569,8 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
 
 		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{}, nil)
+		// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+		goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 
 		summary, err := svc.GetProgressSummary(context.Background(), "u1")
 
@@ -545,6 +596,8 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		}
 
 		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+		// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+		goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 		contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(250.0, nil)
 
 		summary, err := svc.GetProgressSummary(context.Background(), "u1")
@@ -578,6 +631,8 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		account := &domain.Account{ID: "acct-2", UserID: "u1", CurrentBalance: &bal}
 
 		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+		// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+		goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 		contribRepo.On("SumConfirmedByGoal", mock.Anything, "g2").Return(0.0, nil)
 		accountRepo.On("GetByIDAndUser", mock.Anything, "acct-2", "u1").Return(account, nil)
 
@@ -612,6 +667,8 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		account := &domain.Account{ID: "acct-3", UserID: "u1", CurrentBalance: &bal}
 
 		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+		// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+		goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 		contribRepo.On("SumConfirmedByGoal", mock.Anything, "g3").Return(0.0, nil)
 		accountRepo.On("GetByIDAndUser", mock.Anything, "acct-3", "u1").Return(account, nil)
 
@@ -638,6 +695,8 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		account := &domain.Account{ID: "acct-4", UserID: "u1", CurrentBalance: &bal}
 
 		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+		// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+		goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 		contribRepo.On("SumConfirmedByGoal", mock.Anything, "g4").Return(0.0, nil)
 		accountRepo.On("GetByIDAndUser", mock.Anything, "acct-4", "u1").Return(account, nil)
 
@@ -645,6 +704,42 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, domain.FreshnessUnknown, summary.Goals[0].Freshness)
+	})
+
+	t.Run("balance basis: freshness basis_account_disconnected when linked account is retained", func(t *testing.T) {
+		// Issue #1569: the account exists (soft-removed, not deleted) but is no longer active —
+		// its current_balance will never update again. This must be surfaced distinctly from
+		// FreshnessStale, which means "still updating, just not recently."
+		goalRepo := &mockSavingsProgressGoalRepo{}
+		contribRepo := &mockSavingsProgressContribRepo{}
+		accountRepo := &mockSavingsProgressAccountRepo{}
+		svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
+
+		recentBalance := time.Now().Add(-1 * time.Hour)
+		bal := 800.0
+		goal := &domain.SavingsGoal{
+			ID: "g5", UserID: "u1", Name: "Disconnected Goal",
+			CurrentAmount: 800.0, TargetAmount: 2000.0,
+			ProgressBasis: domain.ProgressBasisBalance, AccountID: "acct-5",
+			BalanceAsOf: &recentBalance,
+		}
+		account := &domain.Account{
+			ID: "acct-5", UserID: "u1", CurrentBalance: &bal,
+			Status: domain.AccountStatusRemoved,
+		}
+
+		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+		// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+		goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
+		contribRepo.On("SumConfirmedByGoal", mock.Anything, "g5").Return(0.0, nil)
+		accountRepo.On("GetByIDAndUser", mock.Anything, "acct-5", "u1").Return(account, nil)
+
+		summary, err := svc.GetProgressSummary(context.Background(), "u1")
+
+		require.NoError(t, err)
+		require.Len(t, summary.Goals, 1)
+		assert.Equal(t, domain.FreshnessBasisAccountDisconnected, summary.Goals[0].Freshness)
+		goalRepo.AssertExpectations(t)
 	})
 
 	t.Run("portfolio totals computed correctly across multiple goals", func(t *testing.T) {
@@ -659,13 +754,15 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		}
 
 		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return(goals, nil)
+		// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+		goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 		contribRepo.On("SumConfirmedByGoal", mock.Anything, "ga").Return(500.0, nil)
 		contribRepo.On("SumConfirmedByGoal", mock.Anything, "gb").Return(200.0, nil)
 
 		summary, err := svc.GetProgressSummary(context.Background(), "u1")
 
 		require.NoError(t, err)
-		assert.Equal(t, 700.0, summary.TotalSaved)  // 500 + 200
+		assert.Equal(t, 700.0, summary.TotalSaved)   // 500 + 200
 		assert.Equal(t, 1500.0, summary.TotalTarget) // 1000 + 500
 		// 700/1500*100 = 46.67
 		assert.Equal(t, 46.67, summary.OverallPercentComplete)
@@ -687,4 +784,107 @@ func TestRoundToCents(t *testing.T) {
 	assert.Equal(t, 1.24, roundToCents(1.235))
 	assert.Equal(t, 0.0, roundToCents(0.0))
 	assert.Equal(t, 333.33, roundToCents(333.3333333))
+}
+
+// TestSavingsProgress_TerminalAccountWithNoBalance_FreezesOnBothBases is the shape the repository
+// now ACTUALLY returns, on both bases.
+//
+// The two tests above hand-build a `domain.Account{Status: removed, CurrentBalance: &bal}`. After
+// #1569 task 21 (item D) no repository read can produce that any more: a terminal account carries
+// NO balance, so the real object is terminal AND nil. Those tests still pass and are still worth
+// keeping — they pin that the STATUS alone is sufficient to freeze, independently of the balance —
+// but neither of them exercises the object the code now actually receives, and a test suite whose
+// every fixture is unreachable is a suite that has stopped watching.
+//
+// What must hold, and does: freeze, never zero, on both bases. The nil path and the terminal path
+// agree, which is why item D reinforces task 13's freeze rather than colliding with it. The order
+// of the two checks decides only which warning is logged, and is asserted for by
+// TestSavingsProgress_TerminalAccountWithNoBalance_LogsTheDisconnection below.
+func TestSavingsProgress_TerminalAccountWithNoBalance_FreezesOnBothBases(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		basis string
+		goal  func() *domain.SavingsGoal
+	}{
+		{
+			name:  "balance basis",
+			basis: domain.ProgressBasisBalance,
+			goal: func() *domain.SavingsGoal {
+				return makeGoal("g1", "u1", "acc1", domain.ProgressBasisBalance, 5000, 1000)
+			},
+		},
+		{
+			name:  "account_percentage basis",
+			basis: domain.ProgressBasisAccountPercentage,
+			goal: func() *domain.SavingsGoal {
+				g := makeGoal("g1", "u1", "acc1", domain.ProgressBasisAccountPercentage, 5000, 1000)
+				pct := 0.5
+				g.AccountPercentage = &pct
+				return g
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			goalRepo := &mockSavingsProgressGoalRepo{}
+			contribRepo := &mockSavingsProgressContribRepo{}
+			accountRepo := &mockSavingsProgressAccountRepo{}
+			svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
+
+			// Terminal AND balance-less — what GetByIDAndUser returns for a closed account now.
+			account := &domain.Account{
+				ID:               "acc1",
+				UserID:           "u1",
+				CurrentBalance:   nil,
+				AvailableBalance: nil,
+				Status:           domain.AccountStatusRemoved,
+				UpdatedAt:        time.Now(),
+			}
+
+			accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
+			goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+			goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+			err := svc.RecomputeGoal(context.Background(), tc.goal())
+
+			require.NoError(t, err)
+			assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
+			assertNoCallTo(t, &goalRepo.Mock, "MarkCompleted")
+		})
+	}
+}
+
+// TestSavingsProgress_TerminalAccountWithNoBalance_LogsTheDisconnection pins the ORDER of the two
+// skip checks, which is the only thing item D could have quietly broken here.
+//
+// A closed account now satisfies BOTH conditions: it is disconnected, and (since item D) it carries
+// no balance. The outcome is the same either way — freeze, never zero — so no behavioural test can
+// tell the orderings apart, and the ordering would have flipped unnoticed. What differs is the
+// operator-facing warning: "balance is nil ... (stale)" says a sync is late, and invites waiting for
+// one that is never coming; "basis account is no longer active" says the account is gone. The
+// specific condition must be checked before the general one.
+func TestSavingsProgress_TerminalAccountWithNoBalance_LogsTheDisconnection(t *testing.T) {
+	var logs bytes.Buffer
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	svc := NewSavingsProgressService(goalRepo, contribRepo, accountRepo, nil, logger)
+
+	account := &domain.Account{
+		ID: "acc1", UserID: "u1", CurrentBalance: nil, AvailableBalance: nil,
+		Status: domain.AccountStatusRemoved, UpdatedAt: time.Now(),
+	}
+	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	require.NoError(t, svc.RecomputeGoal(context.Background(),
+		makeGoal("g1", "u1", "acc1", domain.ProgressBasisBalance, 5000, 1000)))
+
+	out := logs.String()
+	assert.Contains(t, out, "basis account is no longer active",
+		"a CLOSED account must be reported as closed, not as a late sync")
+	assert.NotContains(t, out, "account balance is nil",
+		"the nil check must not claim this one — since item D every closed account satisfies it too, "+
+			"so a nil-first ordering silently relabels every disconnection as 'stale'")
 }

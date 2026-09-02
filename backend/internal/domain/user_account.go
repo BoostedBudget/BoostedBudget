@@ -34,6 +34,29 @@ type UserAccount struct {
 	PrimaryType    *string `json:"primary_type,omitempty" db:"primary_type"`       // depository, credit, etc.
 	PrimarySubtype *string `json:"primary_subtype,omitempty" db:"primary_subtype"` // checking, savings, etc.
 
+	// IdentityType and IdentitySubtype are the FROZEN identity of this chain, distinct from
+	// PrimaryType/PrimarySubtype above. #1569 round 11 task 3: PrimaryType/PrimarySubtype are
+	// explicitly "from most recent Plaid link" and are overwritten on every re-link
+	// (normalizeExistingUserAccount -> UpdatePrimaryTypeAndSubtype) — they are descriptive,
+	// last-writer-wins labels, not identity. Keying re-link matching on them would let a Plaid-
+	// reported subtype change at re-link silently merge or split a chain (the exact
+	// $9,000-for-$5,000 double-count bug this branch exists to prevent).
+	//
+	// IdentityType/IdentitySubtype are written ONCE, at mint (UserAccountService.MatchOrCreate's
+	// Create path and database/backfill.go's synthesiseUserAccountID), and NEVER rewritten
+	// afterward — there is deliberately no UpdateIdentity method. Guarded mechanically by
+	// TestNoUpdateOfUserAccountsIdentityColumns (AST scan of every UPDATE user_accounts SQL
+	// literal in non-test Go) and by a BEFORE UPDATE trigger
+	// (trg_user_accounts_identity_immutable, migration 000177) that rejects any UPDATE changing
+	// either column once set.
+	//
+	// Nothing reads these for matching yet (task 4 will change the match key); this task only
+	// writes them. json:"-" because they are not yet part of the API surface — there is no
+	// consumer of them outside the backend, and adding them to the Huma response body now would
+	// drift the checked-in openapi.yaml (this task does not run generate-openapi).
+	IdentityType    *string `json:"-" db:"identity_type"`
+	IdentitySubtype *string `json:"-" db:"identity_subtype"`
+
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }

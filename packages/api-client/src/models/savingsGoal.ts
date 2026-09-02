@@ -44,6 +44,7 @@ export interface SavingsGoal {
   currency_code: string;
   current_amount: number;
   deadline?: string;
+  deleted_at?: string;
   description?: string;
   id: string;
   is_completed: boolean;

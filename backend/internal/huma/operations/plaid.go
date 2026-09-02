@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/maxnussbaum/BoostedBudget/internal/dateutil"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
@@ -67,9 +68,14 @@ type ExchangePublicTokenOutput struct {
 type GetAccountsInput struct {
 	inputs.AuthenticatedInput
 	IncludeHidden   string `query:"include_hidden" doc:"If 'true', includes hidden accounts"`
-	Status          string `query:"status" doc:"Filter by account status: 'active' (default), 'replaced', or 'all'"`
+	Status          string `query:"status" doc:"Filter by account status: 'active' (default), 'replaced', 'all' (active+replaced — a misnomer inherited from history, see AccountFilterOptions.StatusFilter), or 'all_statuses' (every status: active, replaced, expired, removed — for surfaces like the closed-accounts view that need the full universe)"`
 	IncludeReplaced string `query:"include_replaced" doc:"If 'true', equivalent to status=all (backward-compat alias)"`
 	UserAccountID   string `query:"user_account_id" doc:"When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set."`
+	// AsOfDate resolves the account universe as it REALLY WAS on that day, from
+	// account_status_history, instead of guessing from current status. Mutually exclusive with
+	// status=all, status=replaced, and include_replaced=true — combining them returns a 400
+	// rather than reaching repository.ErrAccountFilterAsOfConflict. Issue #1569.
+	AsOfDate string `query:"as_of_date" doc:"Get accounts as of a specific date (YYYY-MM-DD) — which accounts were live that day. Cannot be combined with status=all, status=replaced, or include_replaced=true."`
 }
 
 // GetAccountsOutput represents the response for getting accounts.
@@ -80,14 +86,32 @@ type GetAccountsOutput struct {
 	}
 }
 
-// DeleteAccountInput represents the input for deleting an account.
-type DeleteAccountInput struct {
+// DisconnectAccountInput represents the input for disconnecting a single account — stopping it
+// from syncing while retaining all of its history. Issue #1569, Task 6.
+type DisconnectAccountInput struct {
 	inputs.AuthenticatedInput
 	ID string `path:"id" doc:"Account ID"`
 }
 
-// DisconnectInstitutionInput represents the input for disconnecting an institution.
+// PurgeAccountInput represents the input for permanently destroying an account and everything
+// derived from it. Issue #1569, Task 6: this is the renamed, genuinely-destructive DELETE that
+// DeleteAccountInput used to back before Task 2 made that route non-destructive.
+type PurgeAccountInput struct {
+	inputs.AuthenticatedInput
+	ID string `path:"id" doc:"Account ID"`
+}
+
+// DisconnectInstitutionInput represents the input for disconnecting an institution — stopping
+// Plaid sync/billing while retaining all of its accounts' history. Issue #1569, Task 6: this now
+// backs POST /linked-items/{id}/disconnect rather than DELETE.
 type DisconnectInstitutionInput struct {
+	inputs.AuthenticatedInput
+	ID string `path:"id" doc:"Linked item ID"`
+}
+
+// PurgeInstitutionInput represents the input for permanently destroying a linked item and every
+// account under it. Issue #1569, Task 6.
+type PurgeInstitutionInput struct {
 	inputs.AuthenticatedInput
 	ID string `path:"id" doc:"Linked item ID"`
 }
@@ -171,12 +195,26 @@ func (h *PlaidHandler) GetAccounts(ctx context.Context, input *GetAccountsInput)
 	if input.UserAccountID != "" && input.Status == "" {
 		statusFilter = "all"
 	}
+	includeReplaced := input.IncludeReplaced == "true"
+
+	// Issue #1569: as_of_date and a "widen/narrow current status" filter ask contradictory
+	// questions (see repository.ErrAccountFilterAsOfConflict / resolveAccountStatusScope). The
+	// API layer rejects the combination itself rather than letting the resolver's error leak
+	// through as an opaque 500.
+	asOf, err := dateutil.ParseOptionalDate(input.AsOfDate, "as_of_date")
+	if err != nil {
+		return nil, err
+	}
+	if asOf != nil && (statusFilter == "all" || statusFilter == "replaced" || statusFilter == "all_statuses" || includeReplaced) {
+		return nil, huma.Error400BadRequest("as_of_date cannot be combined with status=all, status=replaced, status=all_statuses, or include_replaced=true")
+	}
 
 	opts := services.AccountFilterOptions{
 		IncludeHidden:   input.IncludeHidden == "true",
-		StatusFilter:    statusFilter,                    // "active" (default), "replaced", "all"
-		IncludeReplaced: input.IncludeReplaced == "true", // backward-compat alias for status=all
+		StatusFilter:    statusFilter, // "active" (default), "replaced", "all"
+		IncludeReplaced: includeReplaced,
 		UserAccountID:   input.UserAccountID,
+		AsOf:            asOf,
 	}
 
 	accounts, err := h.accountService.GetAccountsFiltered(ctx, input.UserID, opts)
@@ -191,10 +229,10 @@ func (h *PlaidHandler) GetAccounts(ctx context.Context, input *GetAccountsInput)
 	return output, nil
 }
 
-// DeleteAccount handles DELETE /api/v1/accounts/:id requests.
-// Deletes a single account with ownership validation.
-func (h *PlaidHandler) DeleteAccount(ctx context.Context, input *DeleteAccountInput) (*struct{}, error) {
-	err := h.accountService.DeleteAccount(ctx, input.ID, input.UserID)
+// DisconnectAccount handles POST /api/v1/accounts/:id/disconnect requests.
+// Stops a single account from syncing while retaining all of its history. Issue #1569, Task 6.
+func (h *PlaidHandler) DisconnectAccount(ctx context.Context, input *DisconnectAccountInput) (*struct{}, error) {
+	err := h.accountService.DisconnectAccount(ctx, input.ID, input.UserID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
@@ -202,10 +240,37 @@ func (h *PlaidHandler) DeleteAccount(ctx context.Context, input *DeleteAccountIn
 	return nil, nil
 }
 
-// DisconnectInstitution handles DELETE /api/v1/linked-items/:id requests.
-// Disconnects an institution and all associated accounts.
+// PurgeAccount handles DELETE /api/v1/accounts/:id requests.
+// Permanently destroys a single account and everything derived from it, with ownership
+// validation. Issue #1569, Task 6: renamed from DeleteAccount, which this route backed before
+// Task 2 made it non-destructive; the non-destructive verb now lives at DisconnectAccount.
+func (h *PlaidHandler) PurgeAccount(ctx context.Context, input *PurgeAccountInput) (*struct{}, error) {
+	err := h.accountService.PurgeAccount(ctx, input.ID, input.UserID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return nil, nil
+}
+
+// DisconnectInstitution handles POST /api/v1/linked-items/:id/disconnect requests.
+// Disconnects an institution (stops Plaid sync/billing) while retaining all of its accounts'
+// history. Issue #1569, Task 6: moved from DELETE to POST; the DELETE route is now the
+// genuinely-destructive PurgeInstitution below.
 func (h *PlaidHandler) DisconnectInstitution(ctx context.Context, input *DisconnectInstitutionInput) (*struct{}, error) {
 	err := h.accountService.DisconnectInstitution(ctx, input.ID, input.UserID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return nil, nil
+}
+
+// PurgeInstitution handles DELETE /api/v1/linked-items/:id requests.
+// Permanently destroys a linked item and every account under it, with ownership validation.
+// Issue #1569, Task 6.
+func (h *PlaidHandler) PurgeInstitution(ctx context.Context, input *PurgeInstitutionInput) (*struct{}, error) {
+	err := h.accountService.PurgeInstitution(ctx, input.ID, input.UserID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
@@ -299,27 +364,51 @@ func RegisterPlaidRoutes(api huma.API, handler *PlaidHandler) {
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateAccount)
 
-	// DELETE /api/v1/accounts/:id - Delete account
+	// POST /api/v1/accounts/:id/disconnect - Disconnect account (Issue #1569, Task 6)
 	huma.Register(api, huma.Operation{
-		OperationID:   "deleteAccount",
-		Method:        http.MethodDelete,
-		Path:          "/api/v1/accounts/{id}",
-		Summary:       "Delete account",
-		Description:   "Deletes a single account with ownership validation.",
+		OperationID:   "disconnectAccount",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/accounts/{id}/disconnect",
+		Summary:       "Disconnect account",
+		Description:   "Stops a single account from syncing and retains its financial history. Does not destroy any data — use DELETE to permanently purge an account and its history.",
 		Tags:          []string{"Accounts"},
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
-	}, handler.DeleteAccount)
+	}, handler.DisconnectAccount)
 
-	// DELETE /api/v1/linked-items/:id - Disconnect institution
+	// DELETE /api/v1/accounts/:id - Purge account (Issue #1569, Task 6: renamed from deleteAccount)
+	huma.Register(api, huma.Operation{
+		OperationID:   "purgeAccount",
+		Method:        http.MethodDelete,
+		Path:          "/api/v1/accounts/{id}",
+		Summary:       "Purge account",
+		Description:   "Permanently destroys a single account and everything derived from it — balance history, holdings, liabilities, AND investment transactions (buys, sells, dividends) for an investment account — with ownership validation. This cannot be undone. Bank transactions (from a checking/savings/credit account) are NOT destroyed; investment transactions ARE, since they have no independent existence apart from the account. Refuses if a savings goal still references this account, and refuses unless the account was already disconnected (POST .../disconnect first) — a live account cannot be purged, since the next Plaid sync would recreate it.",
+		Tags:          []string{"Accounts"},
+		Security:      []map[string][]string{{"clerk": {}}},
+		DefaultStatus: http.StatusNoContent,
+	}, handler.PurgeAccount)
+
+	// POST /api/v1/linked-items/:id/disconnect - Disconnect institution (Issue #1569, Task 6)
 	huma.Register(api, huma.Operation{
 		OperationID:   "disconnectInstitution",
-		Method:        http.MethodDelete,
-		Path:          "/api/v1/linked-items/{id}",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/linked-items/{id}/disconnect",
 		Summary:       "Disconnect institution",
-		Description:   "Disconnects an institution and all associated accounts.",
+		Description:   "Disconnects an institution (stops Plaid sync/billing) and retains all of its accounts' financial history. Does not destroy any data — use DELETE to permanently purge the institution and its accounts.",
 		Tags:          []string{"Accounts"},
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DisconnectInstitution)
+
+	// DELETE /api/v1/linked-items/:id - Purge institution (Issue #1569, Task 6: renamed from disconnectInstitution)
+	huma.Register(api, huma.Operation{
+		OperationID:   "purgeInstitution",
+		Method:        http.MethodDelete,
+		Path:          "/api/v1/linked-items/{id}",
+		Summary:       "Purge institution",
+		Description:   "Permanently destroys a linked item and every account under it — balance history, holdings, liabilities, AND investment transactions (buys, sells, dividends) for any investment account — with ownership validation. This cannot be undone. Bank transactions are NOT destroyed; investment transactions ARE, since they have no independent existence apart from the account. Refuses if a savings goal still references one of its accounts, and refuses unless the institution was already disconnected. Use POST .../disconnect first.",
+		Tags:          []string{"Accounts"},
+		Security:      []map[string][]string{{"clerk": {}}},
+		DefaultStatus: http.StatusNoContent,
+	}, handler.PurgeInstitution)
 }

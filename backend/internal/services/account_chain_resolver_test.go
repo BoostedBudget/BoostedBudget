@@ -16,7 +16,7 @@ import (
 // AccountRepository that only stubs the methods used by AccountChainResolver.
 type mockAccountRepositoryForChainResolver struct {
 	getByUserIDFn               func(ctx context.Context, userID string) ([]domain.Account, error)
-	getByUserAccountAndStatusFn func(ctx context.Context, userAccountID, status string) ([]domain.Account, error)
+	getByUserAccountAndStatusFn func(ctx context.Context, userAccountID, status, userID string) ([]domain.Account, error)
 	getByUserAccountIDFn        func(ctx context.Context, userAccountID string) ([]domain.Account, error)
 }
 
@@ -27,9 +27,9 @@ func (m *mockAccountRepositoryForChainResolver) GetByUserID(ctx context.Context,
 	return nil, nil
 }
 
-func (m *mockAccountRepositoryForChainResolver) GetByUserAccountAndStatus(ctx context.Context, userAccountID, status string) ([]domain.Account, error) {
+func (m *mockAccountRepositoryForChainResolver) GetByUserAccountAndStatus(ctx context.Context, userAccountID, status, userID string) ([]domain.Account, error) {
 	if m.getByUserAccountAndStatusFn != nil {
-		return m.getByUserAccountAndStatusFn(ctx, userAccountID, status)
+		return m.getByUserAccountAndStatusFn(ctx, userAccountID, status, userID)
 	}
 	return nil, nil
 }
@@ -48,6 +48,9 @@ func (m *mockAccountRepositoryForChainResolver) CreateBatch(ctx context.Context,
 func (m *mockAccountRepositoryForChainResolver) GetByLinkedItemID(ctx context.Context, linkedItemID string) ([]domain.Account, error) {
 	return nil, nil
 }
+func (m *mockAccountRepositoryForChainResolver) GetByLinkedItemIDIncludingRetained(ctx context.Context, linkedItemID string) ([]domain.Account, error) {
+	return nil, nil
+}
 func (m *mockAccountRepositoryForChainResolver) GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error) {
 	return nil, nil
 }
@@ -56,9 +59,6 @@ func (m *mockAccountRepositoryForChainResolver) CountByUserID(ctx context.Contex
 }
 func (m *mockAccountRepositoryForChainResolver) CountActiveByLinkedItemID(ctx context.Context, linkedItemID string) (int, error) {
 	return 0, nil
-}
-func (m *mockAccountRepositoryForChainResolver) Delete(ctx context.Context, accountID, userID string) error {
-	return nil
 }
 func (m *mockAccountRepositoryForChainResolver) GetByIDAndUser(ctx context.Context, accountID, userID string) (*domain.Account, error) {
 	return nil, nil
@@ -78,18 +78,30 @@ func (m *mockAccountRepositoryForChainResolver) UpdateStatus(ctx context.Context
 func (m *mockAccountRepositoryForChainResolver) CheckFingerprintOwnership(ctx context.Context, fingerprintBlindIdx, excludeUserID string) (*repository.FingerprintOwnership, error) {
 	return nil, nil
 }
-func (m *mockAccountRepositoryForChainResolver) ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) error {
+func (m *mockAccountRepositoryForChainResolver) ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) ([]string, error) {
+	return nil, nil
+}
+func (m *mockAccountRepositoryForChainResolver) MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string, reason domain.RemovalReason) error {
+	return nil
+}
+func (m *mockAccountRepositoryForChainResolver) MarkRemovedByProvider(ctx context.Context, accountID, userID string) error {
+	return nil
+}
+func (m *mockAccountRepositoryForChainResolver) RestoreProviderRemovedAccount(ctx context.Context, accountID, userID string) error {
+	return nil
+}
+func (m *mockAccountRepositoryForChainResolver) PurgeAccount(ctx context.Context, accountID, userID string, auditLog repository.AuditLogRepository) error {
 	return nil
 }
 func (m *mockAccountRepositoryForChainResolver) GetByUserAccountIDAndUser(ctx context.Context, userAccountID, userID string) (*domain.Account, error) {
 	return nil, nil
 }
 
-func (m *mockAccountRepositoryForChainResolver) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
+func (m *mockAccountRepositoryForChainResolver) GetForHouseholdScopeActiveNow(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
 	return nil, nil
 }
 
-func (m *mockAccountRepositoryForChainResolver) GetForHouseholdScopeAllStatuses(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
+func (m *mockAccountRepositoryForChainResolver) GetForHouseholdScopeLiveAsOf(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
 	return nil, nil
 }
 
@@ -177,38 +189,65 @@ func TestAccountChainResolver_ListActiveByUser(t *testing.T) {
 func TestAccountChainResolver_ResolveActiveID(t *testing.T) {
 	ctx := context.Background()
 	userAccountID := "ua-001"
+	userID := "user-abc"
 
 	t.Run("returns active account ID", func(t *testing.T) {
 		activeID := "acct-active-1"
 		mock := &mockAccountRepositoryForChainResolver{
-			getByUserAccountAndStatusFn: func(ctx context.Context, uaID, status string) ([]domain.Account, error) {
+			getByUserAccountAndStatusFn: func(ctx context.Context, uaID, status, uID string) ([]domain.Account, error) {
 				assert.Equal(t, userAccountID, uaID)
 				assert.Equal(t, string(domain.AccountStatusActive), status)
+				assert.Equal(t, userID, uID, "ResolveActiveID must thread userID through to the repository (#1569 R11 T2)")
 				return []domain.Account{{ID: activeID, Status: domain.AccountStatusActive}}, nil
 			},
 		}
 		svc := NewAccountChainResolver(mock)
-		resultID, err := svc.ResolveActiveID(ctx, userAccountID)
+		resultID, err := svc.ResolveActiveID(ctx, userAccountID, userID)
 		require.NoError(t, err)
 		assert.Equal(t, activeID, resultID)
 	})
 
 	t.Run("returns error when no active account found", func(t *testing.T) {
 		mock := &mockAccountRepositoryForChainResolver{
-			getByUserAccountAndStatusFn: func(ctx context.Context, uaID, status string) ([]domain.Account, error) {
+			getByUserAccountAndStatusFn: func(ctx context.Context, uaID, status, uID string) ([]domain.Account, error) {
 				return []domain.Account{}, nil
 			},
 		}
 		svc := NewAccountChainResolver(mock)
-		_, err := svc.ResolveActiveID(ctx, userAccountID)
+		_, err := svc.ResolveActiveID(ctx, userAccountID, userID)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrNoActiveAccount)
+	})
+
+	// #1569 R11 T2: two live siblings sharing one user_account_id is an ordinary Plaid shape
+	// (maskless accounts at the same institution), not corruption. Before this fix,
+	// GetByUserAccountAndStatus's ORDER BY created_at ASC meant accounts[0] was deterministically
+	// the OLDER of the two, discarded silently. This test uses DIFFERENT balances on the two
+	// siblings so a regression that silently resolves to either one is distinguishable from a
+	// correct refusal — a fixture with equal balances proved nothing (see round 9-10's
+	// $1,500/$1,500 mistake).
+	t.Run("returns ErrAmbiguousActiveAccount when more than one active account shares the chain, and does not pick either", func(t *testing.T) {
+		olderBalance := 1500.00
+		newerBalance := 9999.00
+		mock := &mockAccountRepositoryForChainResolver{
+			getByUserAccountAndStatusFn: func(ctx context.Context, uaID, status, uID string) ([]domain.Account, error) {
+				return []domain.Account{
+					{ID: "acct-older-sibling", Status: domain.AccountStatusActive, CurrentBalance: &olderBalance},
+					{ID: "acct-newer-sibling", Status: domain.AccountStatusActive, CurrentBalance: &newerBalance},
+				}, nil
+			},
+		}
+		svc := NewAccountChainResolver(mock)
+		resultID, err := svc.ResolveActiveID(ctx, userAccountID, userID)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrAmbiguousActiveAccount)
+		assert.Empty(t, resultID, "an ambiguous chain must not return either sibling's id")
 	})
 
 	t.Run("returns error for empty userAccountID", func(t *testing.T) {
 		mock := &mockAccountRepositoryForChainResolver{}
 		svc := NewAccountChainResolver(mock)
-		_, err := svc.ResolveActiveID(ctx, "")
+		_, err := svc.ResolveActiveID(ctx, "", userID)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrEmptyUserAccountID)
 	})
@@ -216,12 +255,12 @@ func TestAccountChainResolver_ResolveActiveID(t *testing.T) {
 	t.Run("propagates repository error", func(t *testing.T) {
 		expectedErr := errors.New("db error")
 		mock := &mockAccountRepositoryForChainResolver{
-			getByUserAccountAndStatusFn: func(ctx context.Context, uaID, status string) ([]domain.Account, error) {
+			getByUserAccountAndStatusFn: func(ctx context.Context, uaID, status, uID string) ([]domain.Account, error) {
 				return nil, expectedErr
 			},
 		}
 		svc := NewAccountChainResolver(mock)
-		_, err := svc.ResolveActiveID(ctx, userAccountID)
+		_, err := svc.ResolveActiveID(ctx, userAccountID, userID)
 		require.ErrorIs(t, err, expectedErr)
 	})
 }

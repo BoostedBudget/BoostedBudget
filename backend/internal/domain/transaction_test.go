@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestTransaction_Validate_Success_Plaid tests validation for Plaid transactions
@@ -242,4 +243,58 @@ func TestTransaction_Validate_AllSources(t *testing.T) {
 			assert.NoError(t, err, "Valid %s transaction should pass validation", source)
 		})
 	}
+}
+
+// Issue #1569: Reversed() is the single predicate the API and every renderer branch on, so the
+// asymmetry between the two tombstone reasons is pinned here rather than left to each call site.
+func TestTransaction_Reversed(t *testing.T) {
+	now := time.Now()
+	posted := TxnDeletedProviderRemovedPosted
+	pending := TxnDeletedProviderRemovedPending
+
+	t.Run("live row is not reversed", func(t *testing.T) {
+		tx := &Transaction{}
+		assert.False(t, tx.Reversed())
+	})
+
+	t.Run("posted removal is reversed", func(t *testing.T) {
+		tx := &Transaction{DeletedAt: &now, DeletedReason: &posted}
+		assert.True(t, tx.Reversed())
+	})
+
+	t.Run("settled pending is NOT reversed", func(t *testing.T) {
+		tx := &Transaction{DeletedAt: &now, DeletedReason: &pending}
+		assert.False(t, tx.Reversed(),
+			"a row removed while pending has a posted twin already in the table; calling it a "+
+				"reversal would double-count the same money")
+	})
+
+	t.Run("reason without timestamp is not reversed", func(t *testing.T) {
+		// The database CHECK (transactions_tombstone_consistency) makes this state unreachable in
+		// storage, but Reversed() is also called on structs assembled in memory, and defaulting to
+		// "reversed" for a half-populated struct would surface rows nothing decided to surface.
+		tx := &Transaction{DeletedReason: &posted}
+		assert.False(t, tx.Reversed())
+	})
+}
+
+// TestNewBankingActivityItem_CarriesReversal: the transactions list endpoint returns ActivityItem,
+// not Transaction, so a reversal that is correct in the domain but dropped in the wrapper is
+// invisible to every client.
+func TestNewBankingActivityItem_CarriesReversal(t *testing.T) {
+	now := time.Now()
+	posted := TxnDeletedProviderRemovedPosted
+
+	item := NewBankingActivityItem(&Transaction{
+		ID: "t1", Date: now, DeletedAt: &now, DeletedReason: &posted,
+	})
+	require.NotNil(t, item.Reversed)
+	assert.True(t, *item.Reversed)
+	require.NotNil(t, item.ReversedAt)
+	assert.Equal(t, now, *item.ReversedAt)
+
+	live := NewBankingActivityItem(&Transaction{ID: "t2", Date: now})
+	require.NotNil(t, live.Reversed)
+	assert.False(t, *live.Reversed, "reversed must be present-and-false on live rows, not absent")
+	assert.Nil(t, live.ReversedAt)
 }

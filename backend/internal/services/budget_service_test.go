@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -60,7 +61,7 @@ func (m *MockBudgetRepository) Update(ctx context.Context, budget *domain.Budget
 	return args.Error(0)
 }
 
-func (m *MockBudgetRepository) Delete(ctx context.Context, id, userID string) error {
+func (m *MockBudgetRepository) Delete(ctx context.Context, id, userID string, auditLog repository.AuditLogRepository) error {
 	args := m.Called(ctx, id, userID)
 	return args.Error(0)
 }
@@ -101,7 +102,7 @@ func (m *MockBudgetRepository) UpdateCategorySpentAmount(ctx context.Context, ca
 	return args.Error(0)
 }
 
-func (m *MockBudgetRepository) DeleteCategory(ctx context.Context, id, budgetID string) error {
+func (m *MockBudgetRepository) DeleteCategory(ctx context.Context, id, budgetID string, auditLog repository.AuditLogRepository) error {
 	args := m.Called(ctx, id, budgetID)
 	return args.Error(0)
 }
@@ -1341,11 +1342,11 @@ func TestBudgetService_DeleteCategory_AutoCreatedSavings_WritesTombstone(t *test
 	svc := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
 
 	savingsCat := domain.BudgetCategory{
-		ID:           categoryID,
-		BudgetID:     budgetID,
-		CategoryKind: "savings",
+		ID:            categoryID,
+		BudgetID:      budgetID,
+		CategoryKind:  "savings",
 		SavingsGoalID: func() *string { s := goalID; return &s }(),
-		AutoCreated:  true,
+		AutoCreated:   true,
 	}
 	budget := createTestBudgetForService(userID)
 	budget.ID = budgetID
@@ -1378,11 +1379,11 @@ func TestBudgetService_DeleteCategory_ManualSavings_NoTombstone(t *testing.T) {
 
 	// manual savings category (AutoCreated = false)
 	savingsCat := domain.BudgetCategory{
-		ID:           categoryID,
-		BudgetID:     budgetID,
-		CategoryKind: "savings",
+		ID:            categoryID,
+		BudgetID:      budgetID,
+		CategoryKind:  "savings",
 		SavingsGoalID: func() *string { s := goalID; return &s }(),
-		AutoCreated:  false, // user-created, no tombstone
+		AutoCreated:   false, // user-created, no tombstone
 	}
 	budget := createTestBudgetForService(userID)
 	budget.ID = budgetID
@@ -1459,9 +1460,9 @@ func TestBudgetService_BackfillManagedCategories(t *testing.T) {
 
 		// Budget already has a savings category for this goal
 		existingCat := domain.BudgetCategory{
-			ID:           "cat-existing",
-			BudgetID:     budgetID,
-			CategoryKind: "savings",
+			ID:            "cat-existing",
+			BudgetID:      budgetID,
+			CategoryKind:  "savings",
 			SavingsGoalID: func() *string { s := goalID; return &s }(),
 		}
 		activeBudgets := []*domain.Budget{
@@ -2007,9 +2008,9 @@ func TestBudgetService_CreateBudget_RejectsCrossUserCustomCategory(t *testing.T)
 		},
 	}
 
-	// GetNamesByIDs is user-scoped; a category owned by someone else is simply absent
-	// from the returned map.
-	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
+	// GetLiveNamesByIDs is user-scoped AND tombstone-filtered (#1569 Task 9); a category owned
+	// by someone else is simply absent from the returned map.
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
 		Return(map[string]string{}, nil)
 
 	budget, err := service.CreateBudget(ctx, userID, req)
@@ -2043,7 +2044,7 @@ func TestBudgetService_AddCategory_RejectsCrossUserCustomCategory(t *testing.T) 
 	}
 
 	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
 		Return(map[string]string{}, nil)
 
 	category, err := service.AddCategory(ctx, userID, budgetID, req)

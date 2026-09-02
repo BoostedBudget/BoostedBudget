@@ -13,6 +13,12 @@
 # Exit 0 on all assertions passing, non-zero on any failure.
 set -euo pipefail
 
+# PROSE-ASSERTION AUDIT (#1569 task 7.1). "E2E auth session verified" below matches a stable
+# PREFIX of a templated f-string (check-e2e-storage-state.py interpolates cookie counts/names
+# after it) — the dynamic part is correctly left unasserted. Decision: CONTRACT for the prefix;
+# it names the mechanism (session verified), not a scope claim about what a count measures, so
+# it does not carry the typecheck-gate failure mode. Left unchanged.
+
 SCRIPT="$(cd "$(dirname "$0")/.." && pwd)/check-e2e-storage-state.py"
 PASS=0
 FAIL=0

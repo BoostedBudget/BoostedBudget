@@ -34,6 +34,11 @@ export interface SavingsGoal {
   progress_basis?: ProgressBasis;
   /** Required when progress_basis is "account_percentage" (0 < x ≤ 1). */
   account_percentage?: number;
+  /**
+   * Issue #1569: set only on goals returned by GET /savings-goals/deleted. Every other listing
+   * filters tombstoned rows out, so this is undefined on any goal reached through them.
+   */
+  deleted_at?: string;
 }
 
 export interface CreateSavingsGoalRequest {

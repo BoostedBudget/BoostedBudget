@@ -51,6 +51,15 @@ func (m *MockBoostExecutionService) GetExecutionHistoryWithFilter(ctx context.Co
 	return args.Get(0).([]*domain.BoostExecution), args.Int(1), args.Error(2)
 }
 
+// GetUserExecutionHistory is the Issue #1569 Task 14 account-wide reader (orphans included).
+func (m *MockBoostExecutionService) GetUserExecutionHistory(ctx context.Context, userID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
+	args := m.Called(ctx, userID, status, limit, offset)
+	if args.Get(0) == nil {
+		return nil, 0, args.Error(2)
+	}
+	return args.Get(0).([]*domain.BoostExecution), args.Int(1), args.Error(2)
+}
+
 func (m *MockBoostExecutionService) TestBoost(ctx context.Context, rule *domain.Boost, triggerData map[string]interface{}) (*domain.BoostTestResult, error) {
 	args := m.Called(ctx, rule, triggerData)
 	if args.Get(0) == nil {

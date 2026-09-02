@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,7 +53,39 @@ type SavingsContributionRepository interface {
 
 	// ListByGoal returns all contributions for a goal ordered by occurred_on DESC.
 	// userID is required to enforce ownership scoping (Codex C1 / M20 contribution API).
+	// Excludes TOMBSTONED goals: use ListByDeletedGoal to read a deleted goal's ledger.
 	ListByGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error)
+
+	// ListByDeletedGoal returns the contributions of a TOMBSTONED goal, ordered like ListByGoal.
+	// It is the deliberate inverse of ListByGoal and exists for the same reason
+	// SavingsGoalRepository.GetDeletedByUserID does: task 8 made DELETE /savings-goals/{id} a
+	// tombstone and told the user, in the endpoint's own description, that "every contribution
+	// logged against the goal is retained" — while ListByGoal's `g.deleted_at IS NULL` join made
+	// GET /savings-goals/{goalID}/contributions answer 200 with an empty array, indistinguishable
+	// from a goal that never had one. There is no restore path anywhere on this branch, so those
+	// itemised entries — dates, amounts, sources, and money the user typed in BY HAND, which no
+	// provider can supply again — could never be read back. Retention nobody can read is deletion
+	// with a longer receipt (#1569 Task 12's phrasing, and T2's defect).
+	//
+	// Scoped to the caller's own user_id: the TOMBSTONE predicate is inverted, the TENANCY
+	// predicate is not. Returns an empty slice for a live goal — this is a separate read, NOT a
+	// relaxed one, because widening ListByGoal/SumConfirmedByGoal would resurrect deleted goals
+	// into progress recomputation and budget "spent" totals.
+	//
+	// Both directions are pinned by TestSavingsContributions_DeletedGoal_Integration: it asserts
+	// that this read sees the tombstoned goal AND that ListByGoal, SumConfirmedByGoal and
+	// SumConfirmedByGoalInPeriod still do not. (This copy used to exist because the reasons in the
+	// SQL below live in a raw string literal, which the cited-test-name guard in
+	// internal/testsupport/citations could not see. It can now — #1569 T8 taught it to read SQL
+	// comments inside string literals — so both copies are checked, and this one is kept only
+	// because a reader of the interface should not have to open the implementation.)
+	ListByDeletedGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error)
+
+	// SumConfirmedByDeletedGoal is SumConfirmedByGoal for a TOMBSTONED goal: the confirmed total
+	// the user is owed a truthful figure for once the goal is gone. It feeds the deleted-goal
+	// contributions endpoint only; it is NOT wired into progress recomputation or budget sync, and
+	// must never be — see ListByDeletedGoal for why the live reads stay narrow.
+	SumConfirmedByDeletedGoal(ctx context.Context, userID, goalID string) (float64, error)
 
 	// ConfirmContribution promotes a proposed contribution to confirmed status.
 	// userID is required for ownership verification (Codex C1).
@@ -69,12 +103,23 @@ type SavingsContributionRepository interface {
 	// Returns ErrContributionNotProposed if the row is not in 'proposed' status.
 	RejectContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error)
 
-	// DeleteContribution removes a contribution. userID is required for ownership verification.
-	// Returns ErrContributionNotFound if id does not exist or does not belong to userID.
-	DeleteContribution(ctx context.Context, userID, id string) error
+	// DeleteContribution PERMANENTLY DESTROYS one contribution the user named. It is the single
+	// deliberate, user-facing hard delete of financial history on this branch — see the
+	// implementation's doc comment for the four ADR controls it carries and what they do not cover.
+	// userID is required for ownership verification.
+	// auditLog, when non-nil, writes a "savings_goal_contribution.history_purged" entry INSIDE the
+	// same transaction as the delete, mirroring PurgeAccount/PurgeLinkedItem/PurgeGoal.
+	// Returns ErrContributionNotFound if id does not exist, does not belong to userID, sits under a
+	// tombstoned goal, is itself tombstoned, or is a 'rejected' sticky tombstone.
+	DeleteContribution(ctx context.Context, userID, id string, auditLog AuditLogRepository) error
 
-	// DeleteManagedForTransaction removes all managed_by_reconciliation rows for a transaction.
-	// Called before deleting a transaction to avoid phantom progress (Codex C4).
+	// DeleteManagedForTransaction TOMBSTONES managed_by_reconciliation rows for a transaction whose
+	// goal is still LIVE, so a removed transaction cannot leave phantom progress behind (Codex C4).
+	// #1569 round 12 task 2: this is an UPDATE (deleted_at/deleted_reason), NOT a hard delete —
+	// Plaid reporting a transaction as `removed` is the provider acting, not the user asking for a
+	// contribution to be destroyed. Rows belonging to a TOMBSTONED goal are left alone entirely:
+	// they are that goal's retained ledger and a provider re-statement is not a deletion request
+	// (#1569 C1).
 	DeleteManagedForTransaction(ctx context.Context, transactionID string) error
 
 	// ArchiveByGoal clears managed_by_reconciliation on all rows for a goal so the
@@ -99,8 +144,35 @@ type SavingsContributionRepository interface {
 // contributionSelectCols is the canonical column list for contribution rows.
 const contributionSelectCols = `
 	id, savings_goal_id, transaction_id, amount, source, status,
-	managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
+	managed_by_reconciliation, confirmed_by_user, occurred_on::text, created_at, updated_at
 `
+
+// contributionSelectColsJoined is contributionSelectCols for queries that JOIN savings_goals.
+//
+// Both tables have an `id`, so the unqualified list is ambiguous the moment a JOIN is present and
+// Postgres rejects the whole statement with `column reference "id" is ambiguous`. Use this one in a
+// JOIN context and contributionSelectCols in a single-table SELECT or a RETURNING clause (where no
+// alias exists to qualify with).
+//
+// Both cast occurred_on to text: the column is DATE and SavingsGoalContribution.OccurredOn is a
+// `string` holding YYYY-MM-DD, and pgx cannot scan a binary-format date straight into *string.
+//
+// Neither problem is #1569's — the tombstone work only added `deleted_at IS NULL` to five
+// ownership probes in this file. They were found because #1569 round 1 added the first integration
+// coverage these three methods have ever had (finding M-1), and both defects made the affected
+// methods fail 100% of the time against a real database. See
+// TestSavingsContributionRepository_Integration_*_RejectsTombstoned.
+const contributionSelectColsJoined = `
+	c.id, c.savings_goal_id, c.transaction_id, c.amount, c.source, c.status,
+	c.managed_by_reconciliation, c.confirmed_by_user, c.occurred_on::text, c.created_at, c.updated_at
+`
+
+// contributionStatusRejected is the 'rejected' sticky-tombstone status (R3-7). It is bound as a
+// query PARAMETER rather than inlined as a literal in DeleteContribution's WHERE on purpose: the G2
+// predicate guard blanks SQL string literals before matching, so an inlined 'rejected' would be
+// invisible to the fragment it is supposed to pin, while `c.status <> $3` is not. Same precedent as
+// PurgeAccount's `status <> $3` (bound to 'active').
+const contributionStatusRejected = "rejected"
 
 // savingsContributionRepository implements SavingsContributionRepository using PostgreSQL.
 type savingsContributionRepository struct {
@@ -121,7 +193,7 @@ func (r *savingsContributionRepository) Insert(ctx context.Context, userID strin
 	// Verify goal ownership (Codex C1 / IDOR guard) — mirrors UpsertFromTransaction.
 	var dummy int
 	if err := r.db.QueryRow(ctx,
-		`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`,
+		`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
 		contrib.SavingsGoalID, userID,
 	).Scan(&dummy); err != nil {
 		if err == pgx.ErrNoRows {
@@ -133,7 +205,7 @@ func (r *savingsContributionRepository) Insert(ctx context.Context, userID strin
 	// Verify transaction ownership if an optional link was supplied.
 	if contrib.TransactionID != nil {
 		if err := r.db.QueryRow(ctx,
-			`SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2`,
+			`SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
 			*contrib.TransactionID, userID,
 		).Scan(&dummy); err != nil {
 			if err == pgx.ErrNoRows {
@@ -212,7 +284,7 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 
 	// Step 0: Verify goal ownership (Codex C1 / G7 ownership guard).
 	var dummy int
-	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`
+	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`
 	if err = tx.QueryRow(ctx, goalCheckQuery, goalID, userID).Scan(&dummy); err != nil {
 		if err == pgx.ErrNoRows {
 			err = domain.ErrSavingsGoalNotFound
@@ -222,7 +294,7 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 
 	// Step 1: Lock the transaction row, verify ownership, and get its magnitude.
 	var txnMagnitude float64
-	lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`
+	lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`
 	if err = tx.QueryRow(ctx, lockQuery, transactionID, userID).Scan(&txnMagnitude); err != nil {
 		if err == pgx.ErrNoRows {
 			err = domain.ErrContributionNotFound
@@ -239,6 +311,7 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 		WHERE transaction_id = $1
 		  AND status = 'confirmed'
 		  AND savings_goal_id != $2
+		  AND deleted_at IS NULL
 	`
 	if err = tx.QueryRow(ctx, capQuery, transactionID, goalID).Scan(&allocatedElsewhere); err != nil {
 		return err
@@ -252,22 +325,68 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 
 	// Step 3: Upsert on the partial unique key.
 	now := time.Now()
-	// Step 3: Upsert as confirmed. Also promotes a pre-existing proposed row to confirmed
-	// so that a boost-match (M19) or user-confirm does not create a duplicate.
+	// Step 3: Upsert as confirmed. Promotes a pre-existing MACHINE row (proposed, or already
+	// auto-confirmed) to this call's amount/source, so a boost-match (M19) or a later automatic
+	// correlation pass does not create a duplicate. It does NOT overwrite a row a human has
+	// already decided about (#1569 round 12 task 3 — an independent Codex audit found this DO
+	// UPDATE had no predicate at all, so an automatic pass silently clobbered a user-confirmed
+	// amount with no audit trail and no user action).
+	//
+	// Discriminator: confirmed_by_user, not status. This method's OWN INSERT below sets
+	// status='confirmed' with confirmed_by_user=false, so a later automatic pass legitimately
+	// needs to keep updating rows this same (or a sibling automatic) writer produced — using
+	// status='confirmed' as the guard would freeze that machine-to-machine correction, which is
+	// not the defect being fixed here. On a TRANSACTION-LINKED row — the only kind this arbiter
+	// can reach — confirmed_by_user is set to true by exactly two paths,
+	// InsertManualFromTransaction and ConfirmContribution, both requiring an explicit user action,
+	// so it is the correct "did a human decide this" bit.
+	// ⚠ Deliberately NOT "the only writers in the codebase": savings_goal_service.go's
+	// handleBasisSwitch seed also inserts ConfirmedByUser=true via the generic Insert. It sets no
+	// TransactionID, so it can never occupy this partial index's slot (transaction_id IS NOT NULL)
+	// — which is why the scoped claim above is the true one and the unscoped one would be false.
+	//
+	// `status != 'rejected'` is a second, independent leg, not a status-based version of the same
+	// idea: RejectContribution never touches confirmed_by_user (a rejected row still reads
+	// confirmed_by_user = false), so confirmed_by_user = false alone would let this automatic
+	// writer silently resurrect a row the user explicitly rejected back to 'confirmed' — the exact
+	// same class of bug, laundered through a different status value. This mirrors the sibling
+	// automatic writer UpsertProposedFromTransaction's established rule (R3-7) that rejected
+	// tombstones are never touched by an automatic path.
+	//
+	// When neither the INSERT nor the DO UPDATE fires (RowsAffected = 0), the slot is held by a
+	// row a human has decided about; this is treated as an expected, non-fatal race (the caller
+	// already treats UpsertFromTransaction errors as skip-and-log — see
+	// transferCorrelationService.createBoostMatchContribution) and is logged here for visibility.
+	//
+	// ON CONFLICT target: migration 000180 (#1569 round 12 task 2) narrowed
+	// unique_contribution_per_goal_per_transaction to `... AND deleted_at IS NULL`, so a
+	// tombstoned row (Plaid `removed` on the prior transaction) no longer occupies this
+	// (transaction_id, savings_goal_id) slot forever — a fresh INSERT for the same key lands as a
+	// NEW row, never resurrecting the tombstone. The arbiter clause below must match the index
+	// predicate exactly or Postgres rejects the ON CONFLICT target.
 	upsertQuery := `
 		INSERT INTO savings_goal_contributions (
 			id, savings_goal_id, transaction_id, amount, source, status,
 			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
 		) VALUES (gen_random_uuid(), $1, $2, $3, $4, 'confirmed', true, false, CURRENT_DATE, $5, $5)
-		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL
+		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL
 		DO UPDATE SET
 			amount     = EXCLUDED.amount,
 			source     = EXCLUDED.source,
 			status     = 'confirmed',
 			updated_at = EXCLUDED.updated_at
+		WHERE savings_goal_contributions.confirmed_by_user = false
+		  AND savings_goal_contributions.status != 'rejected'
 	`
-	if _, err = tx.Exec(ctx, upsertQuery, goalID, transactionID, amount, source, now); err != nil {
+	tag, execErr := tx.Exec(ctx, upsertQuery, goalID, transactionID, amount, source, now)
+	if execErr != nil {
+		err = execErr
 		return err
+	}
+	if tag.RowsAffected() == 0 {
+		slog.WarnContext(ctx, "UpsertFromTransaction: skipped automatic contribution write — "+
+			"slot is held by a row a user already confirmed or rejected",
+			"goal_id", goalID, "transaction_id", transactionID, "amount", amount, "source", source)
 	}
 
 	if err = tx.Commit(ctx); err != nil {
@@ -302,7 +421,7 @@ func (r *savingsContributionRepository) InsertManualFromTransaction(
 
 	// Step 0: Verify goal ownership (Codex C1 / G7 ownership guard).
 	var dummy int
-	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`
+	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`
 	if err = tx.QueryRow(ctx, goalCheckQuery, goalID, userID).Scan(&dummy); err != nil {
 		if err == pgx.ErrNoRows {
 			err = domain.ErrSavingsGoalNotFound
@@ -312,7 +431,7 @@ func (r *savingsContributionRepository) InsertManualFromTransaction(
 
 	// Step 1: Lock the transaction row, verify ownership, and get its magnitude.
 	var txnMagnitude float64
-	lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`
+	lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`
 	if err = tx.QueryRow(ctx, lockQuery, transactionID, userID).Scan(&txnMagnitude); err != nil {
 		if err == pgx.ErrNoRows {
 			err = domain.ErrContributionNotFound
@@ -328,6 +447,7 @@ func (r *savingsContributionRepository) InsertManualFromTransaction(
 		WHERE transaction_id = $1
 		  AND status = 'confirmed'
 		  AND savings_goal_id != $2
+		  AND deleted_at IS NULL
 	`
 	if err = tx.QueryRow(ctx, capQuery, transactionID, goalID).Scan(&allocatedElsewhere); err != nil {
 		return nil, err
@@ -345,15 +465,20 @@ func (r *savingsContributionRepository) InsertManualFromTransaction(
 	// proposed row that the user is now manually confirming with an explicit amount/date).
 	// Rows already in 'confirmed' status (boost_match, sync-confirmed, or a prior manual log)
 	// and 'rejected' tombstones are NOT overwritten — the WHERE predicate makes the DO UPDATE
-	// a no-op, which causes RETURNING to return NULL; the handler will return ErrContributionNotFound
-	// in that case. This guards against silent source/metadata corruption (Codex R4-1 follow-up).
+	// a no-op, which causes RETURNING to return no row (pgx.ErrNoRows); this repository method
+	// returns domain.ErrContributionAlreadyConfirmed in that case — not ErrContributionNotFound,
+	// which this comment previously and incorrectly claimed (see the scanErr handling below).
+	// This guards against silent source/metadata corruption (Codex R4-1 follow-up).
+	// ON CONFLICT target: matches migration 000180's narrowed
+	// unique_contribution_per_goal_per_transaction — see UpsertFromTransaction's comment above for
+	// why the `AND deleted_at IS NULL` leg must be here too.
 	now := time.Now()
 	upsertQuery := `
 		INSERT INTO savings_goal_contributions (
 			id, savings_goal_id, transaction_id, amount, source, status,
 			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
 		) VALUES (gen_random_uuid(), $1, $2, $3, 'manual', 'confirmed', false, true, $4, $5, $5)
-		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL
+		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL
 		DO UPDATE SET
 			amount                    = EXCLUDED.amount,
 			source                    = 'manual',
@@ -397,7 +522,7 @@ func (r *savingsContributionRepository) UpsertProposedFromTransaction(
 ) error {
 	// Step 0: Verify goal ownership.
 	var dummy int
-	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`
+	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`
 	if err := r.db.QueryRow(ctx, goalCheckQuery, goalID, userID).Scan(&dummy); err != nil {
 		if err == pgx.ErrNoRows {
 			return domain.ErrSavingsGoalNotFound
@@ -407,7 +532,7 @@ func (r *savingsContributionRepository) UpsertProposedFromTransaction(
 
 	// Step 1: Verify transaction ownership (no lock — proposed rows are best-effort).
 	var txnExists int
-	txnCheckQuery := `SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2`
+	txnCheckQuery := `SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`
 	if err := r.db.QueryRow(ctx, txnCheckQuery, transactionID, userID).Scan(&txnExists); err != nil {
 		if err == pgx.ErrNoRows {
 			return domain.ErrContributionNotFound
@@ -423,13 +548,16 @@ func (r *savingsContributionRepository) UpsertProposedFromTransaction(
 	// WHERE status='proposed' clause already excludes them.
 	// occurred_on=CURRENT_DATE — same Issue #1461 UTC-calendar-day decision as
 	// UpsertFromTransaction's own doc comment above; both auto-derived paths share it.
+	// ON CONFLICT target: matches migration 000180's narrowed
+	// unique_contribution_per_goal_per_transaction — see UpsertFromTransaction's comment for why
+	// the `AND deleted_at IS NULL` leg must be here too.
 	now := time.Now()
 	upsertQuery := `
 		INSERT INTO savings_goal_contributions (
 			id, savings_goal_id, transaction_id, amount, source, status,
 			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
 		) VALUES (gen_random_uuid(), $1, $2, $3, 'confirmed_transfer', 'proposed', true, false, CURRENT_DATE, $4, $4)
-		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL
+		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL
 		DO UPDATE SET
 			amount     = EXCLUDED.amount,
 			updated_at = EXCLUDED.updated_at
@@ -447,10 +575,11 @@ func (r *savingsContributionRepository) SumConfirmedByGoal(ctx context.Context, 
 	query := `
 		SELECT COALESCE(SUM(c.amount), 0)
 		FROM savings_goal_contributions c
-		JOIN savings_goals g ON g.id = c.savings_goal_id
+		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
 		WHERE c.savings_goal_id = $1
 		  AND g.user_id = $2
 		  AND c.status = 'confirmed'
+		  AND c.deleted_at IS NULL
 	`
 	var total float64
 	if err := r.db.QueryRow(ctx, query, goalID, userID).Scan(&total); err != nil {
@@ -465,10 +594,11 @@ func (r *savingsContributionRepository) SumConfirmedByGoalInPeriod(ctx context.C
 	query := `
 		SELECT COALESCE(SUM(c.amount), 0)
 		FROM savings_goal_contributions c
-		JOIN savings_goals g ON g.id = c.savings_goal_id
+		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
 		WHERE c.savings_goal_id = $1
 		  AND g.user_id = $2
 		  AND c.status = 'confirmed'
+		  AND c.deleted_at IS NULL
 		  AND c.occurred_on >= $3::date
 		  AND c.occurred_on <= $4::date
 	`
@@ -506,11 +636,12 @@ type scannable interface {
 // ListByGoal returns all contributions for a goal ordered newest-first.
 // userID is joined through savings_goals to enforce ownership scoping (Codex C1 / M20).
 func (r *savingsContributionRepository) ListByGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error) {
-	query := `SELECT ` + contributionSelectCols + `
+	query := `SELECT ` + contributionSelectColsJoined + `
 		FROM savings_goal_contributions c
-		JOIN savings_goals g ON g.id = c.savings_goal_id
+		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
 		WHERE c.savings_goal_id = $1
 		  AND g.user_id = $2
+		  AND c.deleted_at IS NULL
 		ORDER BY c.occurred_on DESC, c.created_at DESC`
 
 	rows, err := r.db.Query(ctx, query, goalID, userID)
@@ -536,6 +667,77 @@ func (r *savingsContributionRepository) ListByGoal(ctx context.Context, userID, 
 	return contribs, nil
 }
 
+// ListByDeletedGoal returns a TOMBSTONED goal's contributions, newest-first.
+// See the interface doc for why this read exists and why it is separate from ListByGoal.
+func (r *savingsContributionRepository) ListByDeletedGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error) {
+	query := `SELECT ` + contributionSelectColsJoined + `
+		FROM savings_goal_contributions c
+		-- tombstone-exempt(savings_goals g): THIS READ IS THE DELETED GOAL'S LEDGER ITSELF (#1569 T2). Inverting the
+		-- predicate is the entire purpose, exactly as in SavingsGoalRepository.GetDeletedByUserID:
+		-- the caller has deliberately named a goal it knows is deleted, from the deleted-goals
+		-- surface, and the endpoint's whole job is to prove the contributions were retained.
+		-- Widening ListByGoal instead would resurrect the goal into progress recomputation and
+		-- budget "spent" totals, so this is a SEPARATE read and the live ones are untouched.
+		-- Tenancy is unchanged (g.user_id = $2) and is asserted by
+		-- TestSavingsContributions_DeletedGoal_Integration, which deletes a SECOND user's goal
+		-- with its own contribution precisely so a read keyed on deleted_at alone would fail.
+		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NOT NULL
+		WHERE c.savings_goal_id = $1
+		  AND g.user_id = $2
+		  -- c.deleted_at IS NULL (#1569 round 12 task 2): a contribution tombstoned by
+		  -- DeleteManagedForTransaction is retained but permanently invisible EVERYWHERE in the
+		  -- product, including this deleted-goal ledger view. This is a READ of the ledger, not the
+		  -- exemption ListByGoal's sibling JOIN documents above — that one deliberately inverts
+		  -- g.deleted_at to show a TOMBSTONED GOAL's history; this leg is the contribution row's
+		  -- OWN tombstone and is never inverted anywhere.
+		  AND c.deleted_at IS NULL
+		ORDER BY c.occurred_on DESC, c.created_at DESC`
+
+	rows, err := r.db.Query(ctx, query, goalID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	contribs := []*domain.SavingsGoalContribution{}
+	for rows.Next() {
+		c, err := scanContribution(rows)
+		if err != nil {
+			return nil, err
+		}
+		contribs = append(contribs, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return contribs, nil
+}
+
+// SumConfirmedByDeletedGoal returns the confirmed contribution total of a TOMBSTONED goal.
+// See the interface doc: this feeds the deleted-goal ledger endpoint and nothing else.
+func (r *savingsContributionRepository) SumConfirmedByDeletedGoal(ctx context.Context, userID, goalID string) (float64, error) {
+	query := `
+		SELECT COALESCE(SUM(c.amount), 0)
+		FROM savings_goal_contributions c
+		-- tombstone-exempt(savings_goals g): the companion sum for ListByDeletedGoal (#1569 T2) — same inverted
+		-- predicate, same reason, same unchanged tenancy scoping. Deliberately NOT called from
+		-- SavingsProgressService or BudgetSyncService: those must keep using SumConfirmedByGoal so
+		-- a deleted goal contributes nothing to progress or to a budget period's spend.
+		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NOT NULL
+		WHERE c.savings_goal_id = $1
+		  AND g.user_id = $2
+		  AND c.status = 'confirmed'
+		  -- c.deleted_at IS NULL: same reasoning as ListByDeletedGoal's own comment above — this is
+		  -- the contribution row's OWN tombstone, never inverted.
+		  AND c.deleted_at IS NULL
+	`
+	var total float64
+	if err := r.db.QueryRow(ctx, query, goalID, userID).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
 // ConfirmContribution promotes a proposed contribution to confirmed status.
 // Acquires a row-level lock on the contribution, then (if txn-linked) re-checks
 // allocation capacity before flipping to 'confirmed' (Codex C2 / M20).
@@ -552,10 +754,10 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 
 	// Step 0: Load + lock the contribution row; verify it belongs to userID via goal ownership.
 	fetchQuery := `
-		SELECT ` + contributionSelectCols + `
+		SELECT ` + contributionSelectColsJoined + `
 		FROM savings_goal_contributions c
-		JOIN savings_goals g ON g.id = c.savings_goal_id
-		WHERE c.id = $1 AND g.user_id = $2
+		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
+		WHERE c.id = $1 AND g.user_id = $2 AND c.deleted_at IS NULL
 		FOR UPDATE OF c
 	`
 	contrib := &domain.SavingsGoalContribution{}
@@ -582,7 +784,7 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 	// Step 1: If transaction-linked, re-check allocation capacity (Codex C2).
 	if contrib.TransactionID != nil {
 		var txnMagnitude float64
-		lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`
+		lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`
 		if err = tx.QueryRow(ctx, lockQuery, *contrib.TransactionID, userID).Scan(&txnMagnitude); err != nil {
 			if err == pgx.ErrNoRows {
 				err = domain.ErrContributionNotFound
@@ -597,6 +799,7 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 			WHERE transaction_id = $1
 			  AND status = 'confirmed'
 			  AND savings_goal_id != $2
+			  AND deleted_at IS NULL
 		`
 		if err = tx.QueryRow(ctx, capQuery, *contrib.TransactionID, contrib.SavingsGoalID).Scan(&allocatedElsewhere); err != nil {
 			return nil, err
@@ -614,7 +817,7 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 	updateQuery := `
 		UPDATE savings_goal_contributions
 		SET status = 'confirmed', confirmed_by_user = true, managed_by_reconciliation = false, updated_at = $1
-		WHERE id = $2
+		WHERE id = $2 AND deleted_at IS NULL
 		RETURNING ` + contributionSelectCols
 	updatedRow := tx.QueryRow(ctx, updateQuery, now, id)
 	updated, scanErr := scanContribution(updatedRow)
@@ -629,24 +832,97 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 	return updated, nil
 }
 
-// DeleteContribution removes a contribution row owned by userID.
-// Returns ErrContributionNotFound if the row does not exist or is not owned by userID.
-func (r *savingsContributionRepository) DeleteContribution(ctx context.Context, userID, id string) error {
-	query := `
+// DeleteContribution permanently destroys one contribution row owned by userID.
+// Returns ErrContributionNotFound if the row does not exist, is not owned by userID, or is one of
+// the rows this path refuses (below).
+//
+// THIS IS THE ONE DELIBERATE, USER-FACING HARD DELETE OF FINANCIAL HISTORY ON THIS BRANCH: the user
+// named this one contribution, in the UI, and asked for it to go away — the narrowest possible
+// explicit request. #1569 round 17 task 6 brought it from 2 of the ADR's 4 explicit-destruction
+// controls to 4 of 4 (docs/decisions/2026-08-24-financial-history-retained-by-default.md
+// § Classification Test); the earlier version of this comment deferred two of them and never
+// mentioned the third problem at all.
+//
+//  1. OWN ENDPOINT, distinct from the retaining path. DELETE
+//     /savings-goals/{goalID}/contributions/{id}. Deleting the GOAL tombstones and retains every
+//     contribution; rejecting a proposal retains it too.
+//  2. AUDIT ROW IN THE SAME TRANSACTION. "savings_goal_contribution.history_purged", via
+//     auditLog.LogInTx, committed or rolled back with the DELETE. The HTTP layer's slog line is
+//     NOT this control — it survives a rolled-back transaction and it is not queryable as a trail.
+//     Same shape as PurgeAccount/PurgeLinkedItem/PurgeGoal, and like them auditLog may be nil
+//     (tests, and only tests — main.go wires it).
+//  3. A PRECONDITION REFUSING DATA THE USER DID NOT NAME — the leg that needed judgement, because
+//     the purges' form ("the parent is already tombstoned") INVERTS here. A contribution under a
+//     LIVE goal is exactly what this endpoint exists to destroy, so refusing live data verbatim
+//     would delete the feature. What the purges' precondition actually buys is that the
+//     destruction cannot surprise anyone: the resource has already left every live surface. For a
+//     per-row delete the same guarantee reads the other way round — destruction is permitted ONLY
+//     for a row that is still ON the surface the user was looking at, and refused for every row
+//     the product has already retired from it. There are exactly three such retirements, and all
+//     three are now in the WHERE:
+//     • `g.deleted_at IS NULL` — the goal is tombstoned, so its ledger is retained history read
+//     through ListByDeletedGoal, not a live sheet. (Pre-existing; PurgeGoal is the path that
+//     destroys those, and it has its own confirm copy.)
+//     • `c.deleted_at IS NULL` — the row itself is tombstoned. This is the leg that was MISSING
+//     and undocumented, and it is the one that destroyed retained data: a reconciler row
+//     tombstoned by DeleteManagedForTransaction when Plaid reported the transaction as
+//     `removed` ("the provider is not the user") is invisible in every product surface, so the
+//     user cannot have seen it in a confirm dialog — yet its id was still reachable here.
+//     • `c.status <> $3` (bound to 'rejected') — a rejected row is a STICKY TOMBSTONE kept on
+//     purpose so UpsertProposedFromTransaction cannot re-propose the same transfer-in (R3-7),
+//     and GoalContributionsSheet.tsx filters it out of the ledger. The endpoint's own
+//     description promises to destroy a contribution "(proposed or confirmed)"; rejected was
+//     never in its contract, and destroying one both erases a deliberate retention and
+//     regresses R3-7 into a re-proposal loop.
+//     ⚠ WHAT THIS PRECONDITION DOES NOT PROTECT, stated plainly:
+//     • It does not protect the row the user DID name. A live, visible, confirmed contribution —
+//     including hand-typed money no provider can supply again — is destroyed, irrecoverably.
+//     That is the point of the endpoint, and there is no restore path anywhere on this branch.
+//     • It does not check that the user was shown honest confirm copy. That lives in the UI.
+//     • It does not distinguish a row the user entered from one the reconciler created: the
+//     predicate keys on c.id alone (see the G2 allowlist entry, which says the same).
+//     • It refuses with ErrContributionNotFound rather than a distinct conflict error, because
+//     all three refused shapes are rows the caller cannot see; "not found" is the honest answer
+//     and leaks nothing. The cost is that a refusal is indistinguishable from a wrong id.
+//  4. ALLOWLIST ENTRY — allowedHistoryDeletes in history_delete_guard_test.go, whose `predicate`
+//     pins these WHERE fragments. Widening this statement fails that guard with no DB attached.
+//
+// The three legs are in the DELETE's OWN WHERE rather than in a preceding Go check, for the reason
+// #1569 round 14 reversed itself over on PurgeGoal: a Go `if` is invisible to the guard, so an edit
+// could remove it while the guard stayed green. Here they are the only check, so there is no pair
+// that can disagree and no check-then-act window to race.
+func (r *savingsContributionRepository) DeleteContribution(ctx context.Context, userID, id string, auditLog AuditLogRepository) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
+
+	result, err := tx.Exec(ctx, `
 		DELETE FROM savings_goal_contributions c
 		USING savings_goals g
 		WHERE c.id = $1
 		  AND c.savings_goal_id = g.id
 		  AND g.user_id = $2
-	`
-	result, err := r.db.Exec(ctx, query, id, userID)
+		  AND g.deleted_at IS NULL
+		  AND c.deleted_at IS NULL
+		  AND c.status <> $3
+	`, id, userID, contributionStatusRejected)
 	if err != nil {
 		return err
 	}
 	if result.RowsAffected() == 0 {
 		return domain.ErrContributionNotFound
 	}
-	return nil
+
+	if auditLog != nil {
+		if err := auditLog.LogInTx(ctx, tx, "savings_goal_contribution.history_purged",
+			"savings_goal_contribution", id); err != nil {
+			return fmt.Errorf("delete contribution %s: audit log: %w", id, err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 // RejectContribution sets a proposed contribution to 'rejected' status (sticky tombstone).
@@ -662,7 +938,9 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 		WHERE c.id = $1
 		  AND c.savings_goal_id = g.id
 		  AND g.user_id = $2
+		  AND g.deleted_at IS NULL
 		  AND c.status = 'proposed'
+		  AND c.deleted_at IS NULL
 		RETURNING c.id, c.savings_goal_id, c.transaction_id, c.amount, c.source, c.status,
 			c.managed_by_reconciliation, c.confirmed_by_user,
 			to_char(c.occurred_on, 'YYYY-MM-DD'), c.created_at, c.updated_at`
@@ -679,8 +957,8 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 			var exists int
 			checkQuery := `
 				SELECT 1 FROM savings_goal_contributions c
-				JOIN savings_goals g ON g.id = c.savings_goal_id
-				WHERE c.id = $1 AND g.user_id = $2
+				JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
+				WHERE c.id = $1 AND g.user_id = $2 AND c.deleted_at IS NULL
 			`
 			if chkErr := r.db.QueryRow(ctx, checkQuery, id, userID).Scan(&exists); chkErr != nil {
 				// Row not found or wrong user.
@@ -694,14 +972,47 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 	return contrib, nil
 }
 
-// DeleteManagedForTransaction removes all reconciler-owned contributions for a transaction.
-// Must be called BEFORE deleting the transaction to prevent phantom progress (Codex C4).
+// DeleteManagedForTransaction TOMBSTONES reconciler-owned contributions for a transaction whose
+// goal is still LIVE, so a removed transaction cannot leave phantom progress behind (Codex C4).
+//
+// ⚠ #1569 round 12 task 2 — same NAME, different MECHANISM. This used to be a real `DELETE FROM
+// savings_goal_contributions`, which was SIDE-EFFECT destruction: Plaid reporting a transaction as
+// `removed` is the provider acting, not the user asking for a contribution to be destroyed ("the
+// provider is not the user" — the branch's founding corollary, and an independent Codex audit
+// named this exact call site as the headline finding that the branch's principle was not yet
+// satisfied). The method keeps its name because every caller (transactionSyncService.
+// processRemovedTransactions) and every progress computation this feeds still describes the right
+// outcome — the row now leaves PROGRESS, not the table. See migration 000180 for the two tombstone
+// columns this UPDATE writes, and domain.SavingsContributionDeletedReasonProviderRemovedTxn for why
+// 'provider_removed_txn' is the one reason value this path ever writes.
+//
+// The `g.deleted_at IS NULL` join is load-bearing and is #1569 whole-branch review C1. Without it a
+// Plaid `removed` entry arriving weeks after the user deleted a goal silently shrank that goal's
+// RETAINED ledger — side-effect destruction, the class the ADR forbids, on the exact surface T2/T7
+// built to prove retention. The tempting refutation ("ConfirmContribution clears
+// managed_by_reconciliation, so a managed row is never confirmed") is false: UpsertFromTransaction
+// INSERTS status='confirmed' with managed_by_reconciliation=true — reached from
+// transferCorrelationService.createBoostMatchContribution with source='boost_match' — and its
+// ON CONFLICT DO UPDATE promotes a proposed row to confirmed without clearing the flag. So the rows
+// this predicate matches are NOT uniformly derived-and-regenerable. For a deleted goal there is no
+// progress left to keep honest (nothing reads it into progress), only a ledger to preserve.
+//
+// `c.deleted_at IS NULL` in the WHERE makes a re-delivery of the same `removed` entry a no-op
+// instead of re-stamping deleted_at with a later timestamp — this UPDATE, unlike the old DELETE,
+// is not naturally idempotent on its own.
+// Regression: TestDeleteManagedForTransaction_DeletedGoalLedgerSurvives_Integration.
 func (r *savingsContributionRepository) DeleteManagedForTransaction(ctx context.Context, transactionID string) error {
 	query := `
-		DELETE FROM savings_goal_contributions
-		WHERE transaction_id = $1 AND managed_by_reconciliation = true
+		UPDATE savings_goal_contributions c
+		SET deleted_at = NOW(), deleted_reason = $2, updated_at = NOW()
+		FROM savings_goals g
+		WHERE c.savings_goal_id = g.id
+		  AND c.transaction_id = $1
+		  AND c.managed_by_reconciliation = true
+		  AND g.deleted_at IS NULL
+		  AND c.deleted_at IS NULL
 	`
-	_, err := r.db.Exec(ctx, query, transactionID)
+	_, err := r.db.Exec(ctx, query, transactionID, domain.SavingsContributionDeletedReasonProviderRemovedTxn)
 	return err
 }
 
@@ -712,7 +1023,7 @@ func (r *savingsContributionRepository) ArchiveByGoal(ctx context.Context, goalI
 	query := `
 		UPDATE savings_goal_contributions
 		SET managed_by_reconciliation = false, updated_at = NOW()
-		WHERE savings_goal_id = $1 AND managed_by_reconciliation = true
+		WHERE savings_goal_id = $1 AND managed_by_reconciliation = true AND deleted_at IS NULL
 	`
 	_, err := r.db.Exec(ctx, query, goalID)
 	return err

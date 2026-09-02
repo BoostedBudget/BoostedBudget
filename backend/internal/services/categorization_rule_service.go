@@ -79,19 +79,36 @@ func (s *categorizationRuleService) enrichCustomCategoryDisplay(ctx context.Cont
 	return nil
 }
 
+// assertTargetCategoryOwnedAndLive refuses a custom-category rule target that is not the caller's
+// (Issue #1540's IDOR guard) or that has been tombstoned (Issue #1569 Task 9). A nil target is a
+// no-op. GetLiveNamesByIDs answers both questions in one query: it is user-scoped AND filters
+// `deleted_at IS NULL`, so an ID absent from the returned map is either not owned or deleted.
+//
+// The tombstone half is not tidiness. DeleteWithReassignment DISABLES the rules that pointed at a
+// deleted category rather than deleting or blanking them, on the promise that a rule whose target
+// the user can no longer see cannot keep acting. That promise is worth nothing if the rule can be
+// ARMED AGAIN afterwards, which is why this is called from the two re-enable paths (UpdateRule's
+// `enabled` field and ToggleRule) and not only from the two places that supply a target.
+func (s *categorizationRuleService) assertTargetCategoryOwnedAndLive(ctx context.Context, userID string, targetID *string) error {
+	if targetID == nil {
+		return nil
+	}
+	names, err := s.customCategoryRepo.GetLiveNamesByIDs(ctx, userID, []string{*targetID})
+	if err != nil {
+		return err
+	}
+	if _, ok := names[*targetID]; !ok {
+		return domain.ErrCategoryNotFound
+	}
+	return nil
+}
+
 // CreateRule creates a new categorization rule (unlimited rules for all tiers).
 func (s *categorizationRuleService) CreateRule(ctx context.Context, userID string, req *domain.CreateCategorizationRuleRequest) (*domain.CategorizationRule, error) {
 	// IDOR check: reject a target_custom_category_id belonging to another user before
-	// persisting (Issue #1540). GetNamesByIDs is already user-scoped; an ID absent from
-	// the result isn't owned by the caller.
-	if req.TargetCustomCategoryID != nil {
-		names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, []string{*req.TargetCustomCategoryID})
-		if err != nil {
-			return nil, err
-		}
-		if _, ok := names[*req.TargetCustomCategoryID]; !ok {
-			return nil, domain.ErrCategoryNotFound
-		}
+	// persisting (Issue #1540), or one that has been tombstoned (Issue #1569 Task 9).
+	if err := s.assertTargetCategoryOwnedAndLive(ctx, userID, req.TargetCustomCategoryID); err != nil {
+		return nil, err
 	}
 
 	// Create the rule
@@ -213,15 +230,26 @@ func (s *categorizationRuleService) UpdateRule(ctx context.Context, userID, rule
 		rule.TargetPFCDetailed = req.TargetPFCDetailed
 	}
 	if req.TargetCustomCategoryID != nil {
-		// IDOR check: reject a target_custom_category_id belonging to another user (Issue #1540).
-		names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, []string{*req.TargetCustomCategoryID})
-		if err != nil {
+		// IDOR check: reject a target belonging to another user (#1540) or a tombstoned one (#1569).
+		if err := s.assertTargetCategoryOwnedAndLive(ctx, userID, req.TargetCustomCategoryID); err != nil {
 			return nil, err
 		}
-		if _, ok := names[*req.TargetCustomCategoryID]; !ok {
-			return nil, domain.ErrCategoryNotFound
-		}
 		rule.TargetCustomCategoryID = req.TargetCustomCategoryID
+	}
+
+	// Issue #1569 Task 9: ARMING the rule re-checks the target it ALREADY has.
+	//
+	// The check above only fires when the request supplies a target. `PATCH {"enabled": true}`
+	// supplies none, so without this second gate a rule that DeleteWithReassignment disabled could
+	// be switched straight back on with `target_custom_category_id` still naming a tombstoned
+	// category — and ruleApplicationService would then write that id onto transactions, which is
+	// exactly the "keeps firing at something the user cannot see" failure the disable exists to
+	// prevent. Skipped when the request also supplies a target, because the block above has
+	// already validated the value being written.
+	if req.Enabled != nil && *req.Enabled && req.TargetCustomCategoryID == nil {
+		if err := s.assertTargetCategoryOwnedAndLive(ctx, userID, rule.TargetCustomCategoryID); err != nil {
+			return nil, err
+		}
 	}
 	if req.TargetTags != nil {
 		rule.TargetTags = *req.TargetTags
@@ -273,6 +301,15 @@ func (s *categorizationRuleService) ToggleRule(ctx context.Context, userID, rule
 	// Verify ownership
 	if rule.UserID != userID {
 		return nil, domain.ErrRuleNotFound
+	}
+
+	// Issue #1569 Task 9: the OTHER re-enable path. UpdateRule's `enabled` field is not the only
+	// way back on; this one takes the flag directly. Same gate, same reason — see
+	// assertTargetCategoryOwnedAndLive.
+	if enabled {
+		if err := s.assertTargetCategoryOwnedAndLive(ctx, userID, rule.TargetCustomCategoryID); err != nil {
+			return nil, err
+		}
 	}
 
 	// Update enabled status

@@ -33,8 +33,8 @@ func makeOverrideRow(id int64, userID, resourceType string) []interface{} {
 		id,
 		userID,
 		resourceType,
-		100,           // limit_value
-		&reason,       // reason
+		100,               // limit_value
+		&reason,           // reason
 		(*time.Time)(nil), // expires_at (nil = permanent)
 		time.Now(),
 		time.Now(),
@@ -264,9 +264,9 @@ func TestSubscriptionOverrideRepository_UpdateOverride_Success(t *testing.T) {
 	ctx := context.Background()
 	reason := "updated reason"
 	override := &domain.UserSubscriptionOverride{
-		ID:           42,
-		LimitValue:   200,
-		Reason:       &reason,
+		ID:         42,
+		LimitValue: 200,
+		Reason:     &reason,
 	}
 
 	updatedAt := time.Now()

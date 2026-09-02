@@ -124,7 +124,15 @@ func createDeleteCascadeFixtureUser(
 	_, err = pool.Exec(ctx, `
 		UPDATE users
 		SET retention_started_at = retention_started_at - make_interval(months => $1::int),
-		    retention_expires_at = retention_expires_at - make_interval(months => $1::int)
+		    retention_expires_at = retention_expires_at - make_interval(months => $1::int),
+		    -- Issue #1569 T1: the sweep and the retention claim both now require BOTH promised
+		    -- pre-deletion notices to have actually been recorded
+		    -- (retentionNoticesDeliveredPredicate). A fixture with NULL markers is a WITHHELD
+		    -- account, not a deletion candidate, so every test below would be asserting against a
+		    -- user the gate refuses. Backdated relative to the (already backdated) expiry so the
+		    -- row describes a user genuinely warned before their clock ran out.
+		    retention_notice_30d_sent_at = retention_expires_at - make_interval(months => $1::int) - INTERVAL '30 days',
+		    retention_notice_7d_sent_at = retention_expires_at - make_interval(months => $1::int) - INTERVAL '7 days'
 		WHERE id = $2`,
 		deleteCascadeRetentionMonths+1, user.ID,
 	)
@@ -1296,7 +1304,9 @@ func TestDeleteUserCascade_Integration_NonFKUserScopedTablesAreCleaned(t *testin
 		VALUES (1002, 'account_deletion', 'critical', '{}'::jsonb, '[]'::jsonb, 5, $1, $2)
 		RETURNING id`, now, other.ID,
 	).Scan(&otherDLQID))
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM dead_letter_jobs WHERE id IN ($1, $2)", targetDLQID, otherDLQID) })
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM dead_letter_jobs WHERE id IN ($1, $2)", targetDLQID, otherDLQID)
+	})
 
 	execNoErr(t, ctx, pool, `
 		INSERT INTO idempotency_keys (key, user_id, operation_id, response_body)
@@ -1304,7 +1314,9 @@ func TestDeleteUserCascade_Integration_NonFKUserScopedTablesAreCleaned(t *testin
 	execNoErr(t, ctx, pool, `
 		INSERT INTO idempotency_keys (key, user_id, operation_id, response_body)
 		VALUES ($1, $2, 'op-other', '{}'::jsonb)`, "idem-other-"+suffix, other.ID)
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM idempotency_keys WHERE user_id IN ($1, $2)", target.ID, other.ID) })
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM idempotency_keys WHERE user_id IN ($1, $2)", target.ID, other.ID)
+	})
 
 	var targetAuditID, otherAuditID string
 	require.NoError(t, pool.QueryRow(ctx, `
@@ -1315,7 +1327,9 @@ func TestDeleteUserCascade_Integration_NonFKUserScopedTablesAreCleaned(t *testin
 		INSERT INTO mcp_audit_log (actor_user_id, grant_id, operation_class, operation_id, result)
 		VALUES ($1, 'grant-other', 'read', 'op-2', 'success') RETURNING id`, other.ID,
 	).Scan(&otherAuditID))
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM mcp_audit_log WHERE actor_user_id IN ($1, $2)", target.ID, other.ID) })
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM mcp_audit_log WHERE actor_user_id IN ($1, $2)", target.ID, other.ID)
+	})
 
 	deleted, _, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
 	require.NoError(t, err)
@@ -1507,14 +1521,18 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 	// listed entry no longer in the live schema) fails the ElementsMatch check below with a diff
 	// — telling a future developer exactly which table needs seed+assertion coverage added here.
 	expectedUserScopedFKs := []userScopedFK{
+		{Table: "account_status_history", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "accounts", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "audit_logs", Column: "user_id", DeleteRule: "SET NULL"},
 		{Table: "balance_snapshots", Column: "user_id", DeleteRule: "CASCADE"},
+		{Table: "boost_executions", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "boosts", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "budgets", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "categorization_rules", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "credit_liabilities", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "custom_categories", Column: "user_id", DeleteRule: "CASCADE"},
+		{Table: "holding_snapshots", Column: "user_id", DeleteRule: "CASCADE"},
+		{Table: "holding_observations", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "holdings", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "household_invites", Column: "accepted_user_id", DeleteRule: "SET NULL"},
 		{Table: "household_invites", Column: "inviter_user_id", DeleteRule: "CASCADE"},
@@ -1522,6 +1540,7 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		{Table: "household_share_consents", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "households", Column: "owner_user_id", DeleteRule: "CASCADE"},
 		{Table: "investment_transactions", Column: "user_id", DeleteRule: "CASCADE"},
+		{Table: "liability_statements", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "linked_items", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "mcp_recipes", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "merchant_name_overrides", Column: "user_id", DeleteRule: "CASCADE"},
@@ -1529,15 +1548,26 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		{Table: "notifications", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "paddle_transactions", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "portfolio_snapshots", Column: "user_id", DeleteRule: "CASCADE"},
+		// #1569 Task 11: the ledger of which portfolio_snapshots days the repair examined.
+		{Table: "portfolio_snapshot_repairs", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "privacy_settings", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "referral_codes", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "referrals", Column: "referred_id", DeleteRule: "CASCADE"},
 		{Table: "referrals", Column: "referrer_id", DeleteRule: "CASCADE"},
 		{Table: "rollover_history", Column: "user_id", DeleteRule: "CASCADE"},
+		// #1569 Task 14: boost_executions and rule_execution_history gained their OWN user_id
+		// CASCADE because their parent FKs became ON DELETE SET NULL. Before that flip each was
+		// reachable only through its parent (boost_id -> boosts, rule_id -> categorization_rules),
+		// so without these two entries an erased user's automation history would survive forever.
+		{Table: "rule_execution_history", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "savings_goals", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "student_loan_liabilities", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "subscription_entitlements", Column: "payer_user_id", DeleteRule: "CASCADE"},
 		{Table: "subscription_entitlements", Column: "user_id", DeleteRule: "CASCADE"},
+		// #1569 Task 6 (#1579): the before/after record of every category or review-state overwrite.
+		// It carries NO FK to transactions (a purge of one transaction must not take the record of
+		// what was overwritten on it), so this users FK is its only route to erasure.
+		{Table: "transaction_annotation_history", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "transactions", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "transfer_suggestions", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "user_accounts", Column: "user_id", DeleteRule: "CASCADE"},
@@ -1661,6 +1691,10 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		VALUES ($1, $2, $3, 'Checking', 'depository') RETURNING id`,
 		item.ID, target.ID, "plaid-acct-"+suffix,
 	).Scan(&accountID))
+	// account_status_history (Issue #1569): the accounts INSERT trigger
+	// (record_account_status_change(), migration 000152) fires on this very INSERT and opens an
+	// 'active' interval with user_id = target.ID directly — no separate seed statement needed,
+	// this row IS this table's seed for the sanity check below.
 
 	execNoErr(t, ctx, pool, `
 		INSERT INTO balance_snapshots (account_id, user_id, snapshot_at, source)
@@ -1680,6 +1714,25 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		INSERT INTO holdings (user_id, account_id, security_id, quantity)
 		VALUES ($1, $2, $3, 1)`, target.ID, accountID, securityID)
 
+	// #1569 T6: the two append-only history tables. They exist precisely so a sync cannot destroy
+	// a user's past — which makes it all the more important that a GDPR erasure still can. Both
+	// carry a user_id CASCADE FK to users, and DeleteUserCascade issues one DELETE FROM users and
+	// lets the FK graph do the rest, so the count==0 assertion in the loop below is the proof.
+	execNoErr(t, ctx, pool, `
+		INSERT INTO holding_snapshots (user_id, account_id, security_id, as_of_date, quantity)
+		VALUES ($1, $2, $3, CURRENT_DATE, 1)`, target.ID, accountID, securityID)
+
+	// #1569 T9-FIX item 2: the record that a capture RAN for an account on a day, which is the
+	// only trace an account holding nothing leaves. Not history — it carries no value — but it is
+	// user-scoped, so erasure has to reach it like everything else.
+	execNoErr(t, ctx, pool, `
+		INSERT INTO holding_observations (user_id, account_id, as_of_date)
+		VALUES ($1, $2, CURRENT_DATE)`, target.ID, accountID)
+
+	execNoErr(t, ctx, pool, `
+		INSERT INTO liability_statements (user_id, account_id, liability_type, as_of_date, details)
+		VALUES ($1, $2, 'credit', CURRENT_DATE, '{"last_statement_balance": 100, "aprs": []}'::jsonb)`, target.ID, accountID)
+
 	execNoErr(t, ctx, pool, `
 		INSERT INTO investment_transactions (user_id, account_id, plaid_investment_transaction_id, type, name, amount, date)
 		VALUES ($1, $2, $3, 'buy', 'Test Buy', 100, CURRENT_DATE)`,
@@ -1690,6 +1743,25 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		VALUES ($1, 'Test Goal', 1000, $2, 'manual')`, target.ID, accountID)
 
 	execNoErr(t, ctx, pool, `INSERT INTO portfolio_snapshots (user_id, snapshot_date) VALUES ($1, CURRENT_DATE)`, target.ID)
+
+	// #1569 Task 6 (#1579): the annotation trail. transaction_id is deliberately FK-free, so a row
+	// naming a transaction that does not exist is a REAL production shape and is what this fixture
+	// seeds. ⚠ NOT "purge the transaction, keep the record", as this comment used to say: nothing
+	// purges a transaction. Both parent FKs are ON DELETE SET NULL and allowedHistoryDeletes has no
+	// `transactions` entry, so the only hard delete is GDPR erasure via the users CASCADE. The real
+	// shape is a row written for a transaction whose id this table never re-checks — the point of
+	// the missing FK is that this table cannot be pruned by anything happening to `transactions`.
+	execNoErr(t, ctx, pool, `
+		INSERT INTO transaction_annotation_history
+			(user_id, transaction_id, change_source, prior_reviewed, new_reviewed)
+		VALUES ($1, gen_random_uuid(), 'review', true, false)`, target.ID)
+
+	execNoErr(t, ctx, pool, `
+		INSERT INTO portfolio_snapshot_repairs
+			(user_id, snapshot_date, outcome, reason, expected_account_count, observed_account_count,
+			 previous_total_value, previous_total_cost_basis, previous_total_gain_loss)
+		VALUES ($1, CURRENT_DATE - 1, 'refused_no_coverage', 'seeded by the cascade fixture', 0, 0, 0, 0, 0)`,
+		target.ID)
 
 	// merchants -> merchant_name_overrides (Issue #1440: this FK did not exist before migration
 	// 000128 — the one gap the coordinator's own schema audit missed; see this task's report).
@@ -1733,9 +1805,29 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		VALUES ($1, $2, $3, 10, 'full', NOW(), NOW() + INTERVAL '1 day')`,
 		target.ID, budgetID, budgetCategoryID)
 
+	// boosts -> boost_executions and categorization_rules -> rule_execution_history. Since #1569
+	// Task 14 both history tables carry their OWN user_id CASCADE (their parent FKs are now
+	// ON DELETE SET NULL, so the old two-hop path no longer erases them). Seeded and asserted
+	// below rather than only listed in the tripwire.
+	var cascadeBoostID, cascadeRuleID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO boosts (user_id, name, boost_type) VALUES ($1, 'Test Boost', 'budget_alert') RETURNING id`,
+		target.ID).Scan(&cascadeBoostID))
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO categorization_rules (user_id, name) VALUES ($1, 'Test Rule') RETURNING id`,
+		target.ID).Scan(&cascadeRuleID))
+
+	var boostExecutionID, ruleExecutionID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO boost_executions (boost_id, user_id, status, boost_name)
+		VALUES ($1, $2, 'completed', 'Test Boost') RETURNING id`,
+		cascadeBoostID, target.ID).Scan(&boostExecutionID))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO rule_execution_history (rule_id, user_id, action_type, result, rule_name)
+		VALUES ($1, $2, 'category', 'applied', 'Test Rule') RETURNING id`,
+		cascadeRuleID, target.ID).Scan(&ruleExecutionID))
+
 	// Standalone tables (no dependencies beyond user_id).
-	execNoErr(t, ctx, pool, `INSERT INTO boosts (user_id, name, boost_type) VALUES ($1, 'Test Boost', 'budget_alert')`, target.ID)
-	execNoErr(t, ctx, pool, `INSERT INTO categorization_rules (user_id, name) VALUES ($1, 'Test Rule')`, target.ID)
 	execNoErr(t, ctx, pool, `INSERT INTO custom_categories (user_id, name) VALUES ($1, 'Test Category')`, target.ID)
 	execNoErr(t, ctx, pool, `INSERT INTO mcp_recipes (user_id, name) VALUES ($1, 'Test Recipe')`, target.ID)
 	execNoErr(t, ctx, pool, `
@@ -1836,6 +1928,14 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 	var budgetCategoryCount int
 	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM budget_categories WHERE id = $1", budgetCategoryID).Scan(&budgetCategoryCount))
 	assert.Equal(t, 0, budgetCategoryCount, "budget_categories must cascade away transitively via budgets")
+
+	// #1569 Task 14: these two are now erased by their OWN user_id CASCADE, not by their parent's.
+	// If either FK were dropped the row would survive erasure with a NULL parent, silently.
+	var boostExecutionCount, ruleExecutionCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM boost_executions WHERE id = $1", boostExecutionID).Scan(&boostExecutionCount))
+	assert.Equal(t, 0, boostExecutionCount, "boost_executions must be erased via its own user_id CASCADE")
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM rule_execution_history WHERE id = $1", ruleExecutionID).Scan(&ruleExecutionCount))
+	assert.Equal(t, 0, ruleExecutionCount, "rule_execution_history must be erased via its own user_id CASCADE")
 }
 
 // ─── Round 15, finding D2: the same predicate, asked BEFORE the irreversible external work ───────

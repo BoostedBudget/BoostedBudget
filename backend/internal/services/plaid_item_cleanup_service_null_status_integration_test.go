@@ -99,6 +99,11 @@ func TestPlaidCleanupService_Integration_NullStatusItem_ActuallyDisconnectedAndM
 	fakePlaid := &countingPlaidCollaborator{}
 	svc := NewPlaidItemCleanupService(linkedItemRepo, fakePlaid)
 	svc.SetWorkClaimsRepo(claimsRepo)
+	// Issue #1569 Task 20: the account transition is a required capability. These tests are about
+	// the Plaid/claim machinery, not that transition, so a no-op stand-in is wired; the transition
+	// itself is proven against the real repository in
+	// repository/account_repository_link_removed_integration_test.go.
+	svc.SetAccountRepo(permissiveAccountRepoForCleanup{})
 
 	err = svc.DisconnectAllUserItemsIfEligible(ctx, user.ID, alwaysEligible)
 	require.NoError(t, err)

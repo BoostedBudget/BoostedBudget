@@ -170,7 +170,8 @@ export function McpPage() {
     }
   }, [])
 
-  const { allowedOperations, readOperations, writeOperations, publicBoundaries } = capabilitySummary
+  const { allowedOperations, readOperations, writeOperations, destructiveWriteOperations, publicBoundaries } =
+    capabilitySummary
 
   return (
     <div>
@@ -207,6 +208,23 @@ export function McpPage() {
               <p className="text-foreground">
                 MCP exposes {allowedOperations} capabilities: {readOperations} for reading your finances and{' '}
                 {writeOperations} for changes that always wait for your confirmation.
+              </p>
+              {/*
+                #1569 task 20 (A5). capabilitySummary.json has carried destructiveWriteOperations
+                since task 16 and nothing read it, so a page whose subject is "what can an agent do
+                to my money" could not say that some of what it advertises deletes permanently.
+
+                The number is rendered, never written out in words, and no list of WHICH ones is
+                given: both would drift the moment the manifest gains or loses a destructive entry,
+                and the generator is the only thing that knows. `writeOperations` still means
+                write-OR-destructive, so {allowedOperations} = {readOperations} + {writeOperations}
+                is untouched and the sentence above stays true — the count below is a SUBSET of it,
+                not a fourth bucket. Pinned by McpPage.test.tsx.
+              */}
+              <p className="text-foreground">
+                {destructiveWriteOperations} of those changes permanently delete something rather than
+                retaining it, and cannot be undone — your confirmation is the only thing standing in
+                front of them.
               </p>
               <p className="text-foreground">
                 Ask about spending, budgets, transactions, categories, savings goals, net worth, investments, and

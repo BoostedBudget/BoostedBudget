@@ -12,8 +12,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/mockassert"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -69,6 +72,19 @@ func (m *mockSavingsContributionRepo) ListByGoal(ctx context.Context, userID, go
 	return args.Get(0).([]*domain.SavingsGoalContribution), args.Error(1)
 }
 
+func (m *mockSavingsContributionRepo) ListByDeletedGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error) {
+	args := m.Called(ctx, userID, goalID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.SavingsGoalContribution), args.Error(1)
+}
+
+func (m *mockSavingsContributionRepo) SumConfirmedByDeletedGoal(ctx context.Context, userID, goalID string) (float64, error) {
+	args := m.Called(ctx, userID, goalID)
+	return args.Get(0).(float64), args.Error(1)
+}
+
 func (m *mockSavingsContributionRepo) ConfirmContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error) {
 	args := m.Called(ctx, userID, id)
 	if args.Get(0) == nil {
@@ -85,8 +101,8 @@ func (m *mockSavingsContributionRepo) RejectContribution(ctx context.Context, us
 	return args.Get(0).(*domain.SavingsGoalContribution), args.Error(1)
 }
 
-func (m *mockSavingsContributionRepo) DeleteContribution(ctx context.Context, userID, id string) error {
-	args := m.Called(ctx, userID, id)
+func (m *mockSavingsContributionRepo) DeleteContribution(ctx context.Context, userID, id string, auditLog repository.AuditLogRepository) error {
+	args := m.Called(ctx, userID, id, auditLog)
 	return args.Error(0)
 }
 
@@ -447,8 +463,11 @@ func TestDeleteContribution_Success(t *testing.T) {
 	contribRepo := new(mockSavingsContributionRepo)
 	progress := new(mockContributionProgressRecomputer)
 	handler := NewContributionHandler(contribRepo, progress, nil)
+	// #1569 r17 t11: DeleteContribution refuses outright when the audit sink is unwired, so the
+	// success path must wire one. See TestDeleteContribution_RefusesWithoutAuditSink.
+	handler.SetAuditLogRepository(&stubAuditLogRepository{})
 
-	contribRepo.On("DeleteContribution", mock.Anything, userID, contribID).
+	contribRepo.On("DeleteContribution", mock.Anything, userID, contribID, mock.Anything).
 		Return(nil)
 	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
 
@@ -475,8 +494,9 @@ func TestDeleteContribution_NotFound_Returns404(t *testing.T) {
 
 	contribRepo := new(mockSavingsContributionRepo)
 	handler := NewContributionHandler(contribRepo, nil, nil)
+	handler.SetAuditLogRepository(&stubAuditLogRepository{})
 
-	contribRepo.On("DeleteContribution", mock.Anything, userID, contribID).
+	contribRepo.On("DeleteContribution", mock.Anything, userID, contribID, mock.Anything).
 		Return(domain.ErrContributionNotFound)
 
 	ctx := context.Background()
@@ -914,4 +934,32 @@ func TestRejectContribution_NotProposed_Returns409(t *testing.T) {
 // Reuses the same helper pattern as existing operations tests.
 func authenticatedInput(userID string) inputs.AuthenticatedInput {
 	return inputs.AuthenticatedInput{UserID: userID}
+}
+
+// stubAuditLogRepository is a non-nil repository.AuditLogRepository for handler tests that are not
+// about the audit trail itself. #1569 round 17 task 11 made a nil sink a hard refusal, so "no audit
+// sink" is no longer a usable default in a test that expects the delete to reach the repository.
+type stubAuditLogRepository struct{}
+
+func (stubAuditLogRepository) Log(context.Context, string, string, string) error { return nil }
+func (stubAuditLogRepository) LogInTx(context.Context, pgx.Tx, string, string, string) error {
+	return nil
+}
+
+// TestDeleteContribution_RefusesWithoutAuditSink pins the fail-loud half of ADR control 2 at the
+// handler: with no audit repository wired — the exact state a dropped SetAuditLogRepository line in
+// cmd/server/main.go produces — the contribution is NOT destroyed un-audited. The repository is
+// never reached.
+func TestDeleteContribution_RefusesWithoutAuditSink(t *testing.T) {
+	contribRepo := new(mockSavingsContributionRepo)
+	handler := NewContributionHandler(contribRepo, nil, nil)
+
+	_, err := handler.DeleteContribution(context.Background(), &DeleteContributionInput{
+		AuthenticatedInput: authenticatedInput("user-noaudit"),
+		GoalID:             "goal-noaudit",
+		ID:                 "contrib-noaudit",
+	})
+
+	require.Error(t, err)
+	mockassert.NoCallTo(t, &contribRepo.Mock, "DeleteContribution")
 }

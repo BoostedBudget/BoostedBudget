@@ -107,7 +107,7 @@ func TestTransactionRepository_CreateBatch_ConflictPreservesUserFields_Integrati
 		LinkedItemID:          linkedItemID,
 		Source:                domain.SourcePlaid,
 		ExternalTransactionID: &externalID, // same ExternalTransactionID → conflict fires
-		Amount:                -6.00,        // amount is in the SET clause → updated (expected)
+		Amount:                -6.00,       // amount is in the SET clause → updated (expected)
 		Date:                  time.Now().UTC().Truncate(24 * time.Hour),
 		Name:                  "Starbucks",
 		// No CategoryOverrideKind / PFCPrimaryOverride: incoming re-sync has nil overrides.

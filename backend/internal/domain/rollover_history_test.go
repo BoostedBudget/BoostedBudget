@@ -57,8 +57,8 @@ func TestRolloverHistory_Validate(t *testing.T) {
 		return &RolloverHistory{
 			ID:                     "rollover-1",
 			UserID:                 "user-1",
-			BudgetID:               "budget-1",
-			SourceBudgetCategoryID: "cat-1",
+			BudgetID:               ptrStr("budget-1"),
+			SourceBudgetCategoryID: ptrStr("cat-1"),
 			Amount:                 100.00,
 			RolloverType:           RolloverTypeFull,
 			BudgetPeriodStart:      periodStart,
@@ -102,7 +102,7 @@ func TestRolloverHistory_Validate(t *testing.T) {
 
 	t.Run("missing budget_id fails validation", func(t *testing.T) {
 		rh := validRollover()
-		rh.BudgetID = ""
+		rh.BudgetID = ptrStr("")
 		err := rh.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "budget_id is required")
@@ -110,7 +110,7 @@ func TestRolloverHistory_Validate(t *testing.T) {
 
 	t.Run("missing source_budget_category_id fails validation", func(t *testing.T) {
 		rh := validRollover()
-		rh.SourceBudgetCategoryID = ""
+		rh.SourceBudgetCategoryID = ptrStr("")
 		err := rh.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "source_budget_category_id is required")

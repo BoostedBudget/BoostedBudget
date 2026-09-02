@@ -197,9 +197,21 @@ test.describe('Landing Page - Unauthenticated', () => {
       // Collapse
       await faqButton.click();
 
-      // Answer should be hidden (max-height: 0)
+      // Answer should be hidden.
+      //
+      // #1569: assert the BEHAVIOUR (the text is no longer visible), not the mechanism. This
+      // assertion used to read `toHaveCSS('max-height', '0px')`, which pinned the specific CSS
+      // property the collapse happened to use. The collapse then moved from `max-h-0 -> max-h-96`
+      // to `grid-rows-[0fr] -> [1fr]` — precisely because the old form CLIPPED the longer answers
+      // under `overflow-hidden` with no scrollbar and no indication text had been cut, and the
+      // answer it was truncating was the deletion one. The component got better and this test went
+      // red, which is the wrong way round.
+      await expect(page.getByText(/plaid.*trusted service/i)).toBeHidden();
+
+      // Keep one mechanism-level check so a collapse that stops collapsing is still caught:
+      // `grid-template-rows: 0fr` computes to `0px`.
       const answer = page.locator('#faq-answer-0');
-      await expect(answer).toHaveCSS('max-height', '0px');
+      await expect(answer).toHaveCSS('grid-template-rows', '0px');
     });
   });
 

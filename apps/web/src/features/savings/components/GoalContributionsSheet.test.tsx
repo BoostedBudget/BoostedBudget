@@ -368,8 +368,65 @@ describe('GoalContributionsSheet', () => {
     })
   })
 
+  // #1569 R18 T1 — Delete is a PERMANENT hard delete of a hand-logged amount
+  // (savings_contribution_repository.go DeleteContribution: `DELETE FROM
+  // savings_goal_contributions`, no tombstone, no restore path anywhere on this branch), and it
+  // was the only explicit-destruction path a user could fire in a single click with no
+  // confirmation of any kind. It now goes through the same ConfirmationDialog DeletedGoalsPanel
+  // uses for its purge.
   describe('Delete action', () => {
-    it('calls delete mutation and onContributionChanged on Delete click', async () => {
+    /** The row's Delete button, not the dialog's confirm button (both match /delete/i). */
+    function rowDeleteButton() {
+      return screen.getByRole('button', { name: 'Delete' })
+    }
+    function dialogConfirmButton() {
+      return screen.getByRole('button', { name: /delete forever/i })
+    }
+
+    it('does NOT call the delete mutation on the first click — it only raises the confirmation', () => {
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      fireEvent.click(rowDeleteButton())
+
+      // The whole point: a dialog that renders but does not gate is a no-op.
+      expect(mockDeleteSavingsGoalContributionMutateAsync).not.toHaveBeenCalled()
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(
+        'savings_contribution_deleted',
+        expect.any(Object)
+      )
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    })
+
+    it('does NOT call the delete mutation when the confirmation is cancelled', async () => {
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      fireEvent.click(rowDeleteButton())
+      fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+
+      await waitFor(() => {
+        expect(screen.queryByRole('alertdialog')).toBeNull()
+      })
+      expect(mockDeleteSavingsGoalContributionMutateAsync).not.toHaveBeenCalled()
+      expect(mockOnChange).not.toHaveBeenCalled()
+    })
+
+    it('calls delete mutation and onContributionChanged once the confirmation is confirmed', async () => {
       mockDeleteSavingsGoalContributionMutateAsync.mockResolvedValueOnce(undefined)
 
       renderWithQueryClient(
@@ -382,18 +439,19 @@ describe('GoalContributionsSheet', () => {
         />
       )
 
-      // Find delete buttons (there should be at least one — for the confirmed row)
-      const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
-      expect(deleteButtons.length).toBeGreaterThan(0)
-      fireEvent.click(deleteButtons[0])
+      fireEvent.click(rowDeleteButton())
+      fireEvent.click(dialogConfirmButton())
 
       await waitFor(() => {
-        expect(mockDeleteSavingsGoalContributionMutateAsync).toHaveBeenCalled()
+        expect(mockDeleteSavingsGoalContributionMutateAsync).toHaveBeenCalledWith({
+          goalID: goalId,
+          id: mockConfirmed.id,
+        })
         expect(mockOnChange).toHaveBeenCalled()
       })
     })
 
-    it('fires SAVINGS_CONTRIBUTION_DELETED analytics on delete', async () => {
+    it('fires SAVINGS_CONTRIBUTION_DELETED analytics only after confirmation', async () => {
       mockDeleteSavingsGoalContributionMutateAsync.mockResolvedValueOnce(undefined)
 
       renderWithQueryClient(
@@ -406,8 +464,8 @@ describe('GoalContributionsSheet', () => {
         />
       )
 
-      const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
-      fireEvent.click(deleteButtons[0])
+      fireEvent.click(rowDeleteButton())
+      fireEvent.click(dialogConfirmButton())
 
       await waitFor(() => {
         expect(mockTrackEvent).toHaveBeenCalledWith(
@@ -415,6 +473,45 @@ describe('GoalContributionsSheet', () => {
           expect.any(Object)
         )
       })
+    })
+
+    it('names the amount and date, and never promises the contribution can be brought back', () => {
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      fireEvent.click(rowDeleteButton())
+      const dialog = screen.getByRole('alertdialog')
+      const text = dialog.textContent ?? ''
+
+      expect(text).toMatch(/\$250\.00/)
+      expect(text).toMatch(/Jun 8, 2026/)
+      expect(text).toMatch(/permanently/i)
+      // A false retention/restore claim is the exact class this branch keeps having to remove.
+      expect(text).not.toMatch(/restore|undelete|recover|undo/i)
+      // The amount in the dialog is PII like the amount in the row.
+      expect(dialog.querySelectorAll('[data-ph-mask]').length).toBeGreaterThan(0)
+    })
+
+    it('keeps the amount masked and does not confirm Reject (Reject is a tombstone, not a delete)', () => {
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /reject/i }))
+      expect(screen.queryByRole('alertdialog')).toBeNull()
     })
   })
 
@@ -468,6 +565,130 @@ describe('GoalContributionsSheet', () => {
           expect.any(Object)
         )
       })
+    })
+  })
+
+  // Issue #1569 T9.5 — a failed read must not render as "No contributions yet". This sheet's own
+  // twin, DeletedGoalContributions, already refuses to do that; the live ledger did not.
+  describe('failed read', () => {
+    it('reports the failed read and does not claim there are no contributions', () => {
+      mockUseListSavingsGoalContributions.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        // Widened: the mock is typed from its default `error: null`.
+        error: new Error('network down') as unknown as null,
+        refetch: mock(() => Promise.resolve({})),
+      })
+
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      expect(screen.getByRole('alert')).toBeInTheDocument()
+      expect(screen.getByText(/couldn't load/i)).toBeInTheDocument()
+      expect(screen.queryByText(/No contributions yet/i)).toBeNull()
+    })
+
+    // ── #1569 T9-FIX item 7: rows that SURVIVED a failed refetch ────────────────────────
+    //
+    // The test above uses `data: undefined`, so it cannot see this at all. React Query keeps the
+    // last successful listing when a later refetch fails, so `data` can be real rows AND `error`
+    // truthy at the same instant — and this sheet rendered the error notice AND the full row
+    // list, verbs included. Confirm/Reject/Delete then act on a row we have just said we cannot
+    // vouch for; Reject writes a sticky tombstone and Delete destroys a hand-logged
+    // contribution outright.
+    //
+    // Same remedy DeletedGoalsPanel took in round 8, and for the same reason: keep the rows —
+    // they are the user's, and blanking them is the false "nothing here" by another route — and
+    // disarm the verbs until the listing can be refreshed.
+    function withStaleRows() {
+      mockUseListSavingsGoalContributions.mockReturnValue({
+        data: [mockProposed, mockConfirmed],
+        isLoading: false,
+        error: new Error('network down') as unknown as null,
+        refetch: mock(() => Promise.resolve({})),
+      })
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+    }
+
+    it('keeps the rows that survived the failed refetch', () => {
+      withStaleRows()
+      expect(screen.getByLabelText('Contributions list')).toBeInTheDocument()
+      expect(screen.queryByText(/No contributions yet/i)).toBeNull()
+    })
+
+    it('disarms every verb on rows it can no longer vouch for', () => {
+      withStaleRows()
+
+      expect(screen.getByRole('button', { name: /confirm/i })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /reject/i })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /delete/i })).toBeDisabled()
+    })
+
+    // Second half of the disarm, the hole DeletedGoalsPanel's first draft left behind: the
+    // confirmation can already be OPEN when the refetch fails, and its confirm button is not the
+    // one the row's `disabled` prop touches.
+    it('closes an already-open delete confirmation when the listing goes stale', async () => {
+      const { rerender } = renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+
+      mockUseListSavingsGoalContributions.mockReturnValue({
+        data: [mockProposed, mockConfirmed],
+        isLoading: false,
+        error: new Error('network down') as unknown as null,
+        refetch: mock(() => Promise.resolve({})),
+      })
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <GoalContributionsSheet
+            goalId={goalId}
+            goalName={goalName}
+            open={true}
+            onOpenChange={mockOnOpenChange}
+            onContributionChanged={mockOnChange}
+          />
+        </QueryClientProvider>
+      )
+
+      await waitFor(() => {
+        expect(screen.queryByRole('alertdialog')).toBeNull()
+      })
+      expect(mockDeleteSavingsGoalContributionMutateAsync).not.toHaveBeenCalled()
+    })
+
+    it('says the listing may be stale rather than only that a request failed', () => {
+      withStaleRows()
+
+      const notice = screen.getByRole('status')
+      expect(notice.textContent ?? '').toMatch(/out of date/i)
+      // A NEGATIVE assertion, like DeletedGoalsPanel's: an unscoped "everything is still kept"
+      // here would be the same false retention claim this branch keeps re-shipping.
+      expect(notice.textContent ?? '').not.toMatch(/no contributions/i)
     })
   })
 })

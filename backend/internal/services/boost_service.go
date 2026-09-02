@@ -49,6 +49,10 @@ type boostService struct {
 	savingsGoalRepo repository.SavingsGoalRepository // optional; used for ownership validation (GAP AE)
 	accountRepo     repository.AccountRepository     // optional; used for ownership validation (GAP AE)
 	budgetRepo      repository.BudgetRepository      // optional; used for category ownership validation (#1270)
+	// auditLogRepo records the boost.deleted entry INSIDE BoostsRepository.Delete's own
+	// transaction (Issue #1569 Task 8), via LogInTx. Nil-safe optional dependency wired by
+	// SetAuditLogRepository; when unset the delete still works and writes no entry.
+	auditLogRepo repository.AuditLogRepository
 }
 
 // NewBoostService creates a new BoostService instance.
@@ -68,6 +72,12 @@ func NewBoostService(
 // Issue #972: GAP AE.
 func (s *boostService) SetSavingsGoalRepo(repo repository.SavingsGoalRepository) {
 	s.savingsGoalRepo = repo
+}
+
+// SetAuditLogRepository injects the audit-log repository so DeleteBoost records a boost.deleted
+// entry inside the same transaction as the tombstone. Issue #1569, Task 8.
+func (s *boostService) SetAuditLogRepository(ar repository.AuditLogRepository) {
+	s.auditLogRepo = ar
 }
 
 // SetAccountRepo injects the account repository for ownership validation.
@@ -311,7 +321,10 @@ func (s *boostService) DeleteBoost(ctx context.Context, userID, boostID string) 
 		return domain.ErrBoostNotFound
 	}
 
-	return s.boostRepo.Delete(ctx, boostID)
+	// The repository scopes the tombstone by user_id as well (Issue #1569 Task 8); the
+	// GetByID-then-compare above is kept so a cross-user id still reports ErrBoostNotFound from
+	// the same place it always did rather than depending on the repository's row count.
+	return s.boostRepo.Delete(ctx, boostID, userID, s.auditLogRepo)
 }
 
 // ToggleBoost enables or disables a boost.

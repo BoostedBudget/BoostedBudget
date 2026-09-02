@@ -183,8 +183,8 @@ func TestHouseholdService_AcceptInvite_BumpsJoinerOwnerHouseholdAndExistingMembe
 		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-caller", now, now, now))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", "inst-1", &mask))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", "inst-1", &mask, nil, nil))
 	pool.ExpectQuery("INSERT INTO household_share_consents").
 		WithArgs("hh-1", "caller-1", domain.HouseholdShareConsentVersion, pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "consented_at", "created_at"}).AddRow("consent-1", now, now))
@@ -349,21 +349,38 @@ func TestHouseholdService_SetAccountShareVisibility_BumpsOtherMemberAndHousehold
 	now := time.Now()
 	instIdx := "inst-blind"
 	maskIdx := "mask-blind"
-	combined := instIdx + maskIdx
+	// #1569 round 11 task 4, coordinator round 3 fix: the fingerprint now includes identity
+	// (empty here since the mocked row's identity_type/identity_subtype are nil).
+	combined := instIdx + maskIdx + ":N:N"
 
 	pool.ExpectBegin()
+	// #1569 T7 lock-ordering fix: households FOR UPDATE first (see the method's comment),
+	// resolved by a non-locking GetHouseholdForUser lookup, then the member row.
+	pool.ExpectQuery("hm.role\\s+FROM household_members hm").WithArgs("caller-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil, "member"))
+	pool.ExpectQuery("FROM households WHERE id = \\$1 FOR UPDATE").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("FOR UPDATE OF hm").WithArgs("caller-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
 			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("FROM user_accounts WHERE user_id").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", instIdx, &maskIdx))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", instIdx, &maskIdx, nil, nil))
+	// #1569 T7: SetShareVisibility now opens a nested transaction (a SAVEPOINT here, since
+	// the service already holds one) to close the outgoing interval before opening the new one.
+	pool.ExpectBegin()
+	pool.ExpectExec("UPDATE household_account_shares SET revoked_at").
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectQuery("ON CONFLICT").
 		WithArgs("hh-1", "acct-1", &combined, domain.ShareVisibilityShared).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "household_id", "user_account_id", "visibility", "shared_at", "revoked_at",
 			"physical_account_blind_idx", "created_at", "updated_at",
 		}).AddRow("share-1", "hh-1", "acct-1", domain.ShareVisibilityShared, now, nil, &combined, now, now))
+	pool.ExpectCommit()
 	pool.ExpectCommit()
 	// Issue #1531 Task 10b-2b: post-commit re-list of household hh-1's active members —
 	// caller-1 (who toggled visibility) and owner-1 (the OTHER member whose combined

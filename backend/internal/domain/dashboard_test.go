@@ -17,7 +17,7 @@ import (
 // BOTH the personal and household-scope balance-summary/net-worth responses
 // (see dashboard_service.go's getBalanceSummaryHousehold/getNetWorthHousehold,
 // which construct it identically to the personal path — ID, Name, Balance
-// only). The repository layer (account_repository.go GetForHouseholdScope)
+// only). The repository layer (account_repository.go GetForHouseholdScopeActiveNow)
 // does select accounts.mask from the database, but that value is never
 // threaded into this struct today.
 //

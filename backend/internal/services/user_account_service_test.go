@@ -47,8 +47,8 @@ func (m *MockUserAccountRepository) GetByUserID(ctx context.Context, userID stri
 	return args.Get(0).([]domain.UserAccount), args.Error(1)
 }
 
-func (m *MockUserAccountRepository) FindByInstitutionAndMask(ctx context.Context, userID, institutionID string, mask *string) (*domain.UserAccount, error) {
-	args := m.Called(ctx, userID, institutionID, mask)
+func (m *MockUserAccountRepository) FindByInstitutionAndMask(ctx context.Context, userID, institutionID string, mask *string, identityType, identitySubtype *string) (*domain.UserAccount, error) {
+	args := m.Called(ctx, userID, institutionID, mask, identityType, identitySubtype)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -105,7 +105,7 @@ func TestUserAccountService_MatchOrCreate_ExistingMatch(t *testing.T) {
 	}
 
 	// Setup mocks - existing account found
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).Return(existingUA, nil)
 	// No Create should be called since existing found
 	// No UpdatePrimaryTypeAndSubtype should be called since type/subtype match existing
 
@@ -138,7 +138,7 @@ func TestUserAccountService_MatchOrCreate_NoMatch_CreatesNew(t *testing.T) {
 	accountSubtype := "savings"
 
 	// Setup mocks - no existing account found
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(nil, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).Return(nil, nil)
 	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.UserAccount")).
 		Run(func(args mock.Arguments) {
 			ua := args.Get(1).(*domain.UserAccount)
@@ -149,6 +149,13 @@ func TestUserAccountService_MatchOrCreate_NoMatch_CreatesNew(t *testing.T) {
 			assert.Equal(t, accountName, *ua.AccountNameHint)
 			assert.Equal(t, accountType, *ua.PrimaryType)
 			assert.Equal(t, accountSubtype, *ua.PrimarySubtype)
+			// #1569 round 11 task 3: identity_type/identity_subtype are written ONCE, at mint,
+			// from the SAME founding account that caused this mint — never from PrimaryType/
+			// PrimarySubtype, which are last-writer-wins and get rewritten on every re-link.
+			if assert.NotNil(t, ua.IdentityType) && assert.NotNil(t, ua.IdentitySubtype) {
+				assert.Equal(t, accountType, *ua.IdentityType)
+				assert.Equal(t, accountSubtype, *ua.IdentitySubtype)
+			}
 			assert.False(t, ua.IsHidden) // Default
 		}).Return(nil)
 
@@ -186,7 +193,7 @@ func TestUserAccountService_MatchOrCreate_UpdatesTypeOnMatch(t *testing.T) {
 	newType := "credit" // Different from existing
 	newSubtype := "credit card"
 
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).Return(existingUA, nil)
 	mockRepo.On("UpdatePrimaryTypeAndSubtype", ctx, existingUA.ID, existingUA.UserID, newType, newSubtype).Return(nil)
 
 	// Execute
@@ -220,7 +227,7 @@ func TestUserAccountService_MatchOrCreate_NoUpdateWhenTypeSame(t *testing.T) {
 	}
 
 	// Same type and subtype
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).Return(existingUA, nil)
 	// UpdatePrimaryTypeAndSubtype should NOT be called
 
 	// Execute
@@ -261,7 +268,7 @@ func TestUserAccountService_MatchOrCreate_PreservesCustomizations(t *testing.T) 
 		PrimarySubtype:  userAccountStrPtr("checking"),
 	}
 
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).Return(existingUA, nil)
 	// Type matches, not hidden — no extra repo calls expected
 
 	// Execute - re-link with same account info
@@ -305,7 +312,7 @@ func TestUserAccountService_MatchOrCreate_UnhidesHiddenUserAccount(t *testing.T)
 		IsHidden:       true, // Previously deleted (hidden)
 	}
 
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).Return(existingUA, nil)
 	// UpdateHidden must be called to un-hide the account
 	mockRepo.On("UpdateHidden", ctx, existingUA.ID, existingUA.UserID, false).Return(nil)
 
@@ -342,7 +349,7 @@ func TestUserAccountService_MatchOrCreate_DoesNotCallUpdateHiddenWhenNotHidden(t
 		IsHidden:       false, // Already visible
 	}
 
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).Return(existingUA, nil)
 	// UpdateHidden must NOT be called
 
 	// Execute
@@ -378,7 +385,7 @@ func TestUserAccountService_MatchOrCreate_UpdateHiddenError_StillReturnsAccountH
 		IsHidden:       true,
 	}
 
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).Return(existingUA, nil)
 	mockRepo.On("UpdateHidden", ctx, existingUA.ID, existingUA.UserID, false).Return(assert.AnError)
 
 	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, "BoA Checking", "depository", "checking")
@@ -409,7 +416,7 @@ func TestUserAccountService_MatchOrCreate_NullMask_NoExisting(t *testing.T) {
 	accountSubtype := "brokerage"
 
 	// No mask (nil)
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, (*string)(nil)).Return(nil, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, (*string)(nil), mock.Anything, mock.Anything).Return(nil, nil)
 	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.UserAccount")).
 		Run(func(args mock.Arguments) {
 			ua := args.Get(1).(*domain.UserAccount)
@@ -445,7 +452,7 @@ func TestUserAccountService_MatchOrCreate_NullMask_ExistingMatch(t *testing.T) {
 		PrimarySubtype: userAccountStrPtr("brokerage"),
 	}
 
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, (*string)(nil)).Return(existingUA, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, (*string)(nil), mock.Anything, mock.Anything).Return(existingUA, nil)
 
 	// Execute with nil mask
 	result, err := service.MatchOrCreate(ctx, userID, institutionID, nil, "Account", "investment", "brokerage")
@@ -467,10 +474,10 @@ func TestUserAccountService_MatchOrCreate_DifferentInstitution_CreatesNew(t *tes
 	ctx := context.Background()
 	userID := "user-123"
 	institutionID := "ins_chase" // Different institution
-	mask := "1234"              // Same mask as existing BoA account
+	mask := "1234"               // Same mask as existing BoA account
 
 	// No match for Chase with this mask
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(nil, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).Return(nil, nil)
 	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.UserAccount")).Return(nil)
 
 	// Execute
@@ -495,7 +502,7 @@ func TestUserAccountService_MatchOrCreate_SameInstitutionDifferentMask_CreatesNe
 	mask := "5678" // Different mask
 
 	// No match for this mask at BoA
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(nil, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).Return(nil, nil)
 	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.UserAccount")).Return(nil)
 
 	// Execute
@@ -517,7 +524,7 @@ func TestUserAccountService_MatchOrCreate_RepoError_FindByInstitutionAndMask(t *
 	ctx := context.Background()
 	mask := "1234"
 
-	mockRepo.On("FindByInstitutionAndMask", ctx, "user-123", "ins_bofa", &mask).
+	mockRepo.On("FindByInstitutionAndMask", ctx, "user-123", "ins_bofa", &mask, mock.Anything, mock.Anything).
 		Return(nil, errors.New("database connection error"))
 
 	// Execute
@@ -540,7 +547,7 @@ func TestUserAccountService_MatchOrCreate_RepoError_Create(t *testing.T) {
 	mask := "1234"
 	genericErr := errors.New("database connection error")
 
-	mockRepo.On("FindByInstitutionAndMask", ctx, "user-123", "ins_bofa", &mask).Return(nil, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, "user-123", "ins_bofa", &mask, mock.Anything, mock.Anything).Return(nil, nil)
 	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.UserAccount")).
 		Return(genericErr)
 
@@ -580,11 +587,11 @@ func TestMatchOrCreate_DuplicateError_ReturnsExistingRow(t *testing.T) {
 
 	// First call: no existing row (both goroutines see nil simultaneously)
 	// Second call: re-find after duplicate error returns the winner's row
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).
 		Return(nil, nil).Once()
 	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.UserAccount")).
 		Return(repository.ErrDuplicateUserAccount)
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).
 		Return(existingUA, nil).Once()
 
 	// Execute
@@ -625,11 +632,11 @@ func TestMatchOrCreate_DuplicateError_RunsNormalization(t *testing.T) {
 		IsHidden:       true,                            // hidden — should be un-hidden
 	}
 
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).
 		Return(nil, nil).Once()
 	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.UserAccount")).
 		Return(repository.ErrDuplicateUserAccount)
-	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).
 		Return(existingUA, nil).Once()
 	mockRepo.On("UpdatePrimaryTypeAndSubtype", ctx, existingUA.ID, existingUA.UserID, newType, newSubtype).Return(nil)
 	mockRepo.On("UpdateHidden", ctx, existingUA.ID, existingUA.UserID, false).Return(nil)
@@ -950,10 +957,10 @@ func TestUserAccountService_UpdateCustomization_PartialUpdate(t *testing.T) {
 	mockRepo.On("Update", ctx, mock.AnythingOfType("*domain.UserAccount")).
 		Run(func(args mock.Arguments) {
 			ua := args.Get(1).(*domain.UserAccount)
-			assert.Equal(t, newNickname, *ua.Nickname)       // Updated
-			assert.Equal(t, "#FF0000", *ua.CustomColor)      // Preserved
-			assert.Equal(t, "bank", *ua.CustomIcon)          // Preserved
-			assert.False(t, ua.IsHidden)                     // Preserved
+			assert.Equal(t, newNickname, *ua.Nickname)  // Updated
+			assert.Equal(t, "#FF0000", *ua.CustomColor) // Preserved
+			assert.Equal(t, "bank", *ua.CustomIcon)     // Preserved
+			assert.False(t, ua.IsHidden)                // Preserved
 		}).Return(nil)
 
 	// Execute
@@ -1110,7 +1117,7 @@ func TestUserAccountService_MatchOrCreate_ForeignHiddenRow_RejectsAndPropagates(
 		IsHidden:       true,
 	}
 
-	mockRepo.On("FindByInstitutionAndMask", ctx, actorID, institutionID, &mask).Return(foreignUA, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, actorID, institutionID, &mask, mock.Anything, mock.Anything).Return(foreignUA, nil)
 	// Scoped to the actor: the repository rejects, because the actor does not own the row.
 	mockRepo.On("UpdateHidden", ctx, foreignUA.ID, actorID, false).Return(repository.ErrUserAccountNotFound)
 	// Scoped to the row owner (the tautological call): the repository happily succeeds.
@@ -1148,7 +1155,7 @@ func TestUserAccountService_MatchOrCreate_ForeignRowTypeChange_RejectsAndPropaga
 		IsHidden:       false,
 	}
 
-	mockRepo.On("FindByInstitutionAndMask", ctx, actorID, institutionID, &mask).Return(foreignUA, nil)
+	mockRepo.On("FindByInstitutionAndMask", ctx, actorID, institutionID, &mask, mock.Anything, mock.Anything).Return(foreignUA, nil)
 	mockRepo.On("UpdatePrimaryTypeAndSubtype", ctx, foreignUA.ID, actorID, newType, newSubtype).
 		Return(repository.ErrUserAccountNotFound)
 	mockRepo.On("UpdatePrimaryTypeAndSubtype", ctx, foreignUA.ID, victimID, newType, newSubtype).

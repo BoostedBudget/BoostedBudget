@@ -144,10 +144,12 @@ type ProfileRepository interface {
 	//   - every consumer (30d notice, 7d notice, GetUsersWithExpiredRetentionPage, the occurrence CAS)
 	//     reads the row's OWN stored value, so an untouched row is internally consistent end to end —
 	//     no notice is skipped and nobody is deleted early;
-	//   - retention_notice_30d_sent_at / _7d_sent_at are SET-ONCE flags that gate re-send, and
-	//     GetUsersWithExpiredRetentionPage does not reference them at all, so shrinking a deadline after a
-	//     notice had fired would delete an account on a SHORTER window than the email promised, with
-	//     no new notice;
+	//   - retention_notice_30d_sent_at / _7d_sent_at are SET-ONCE flags that gate re-send. ⚠ Since
+	//     Issue #1569 T1 GetUsersWithExpiredRetentionPage DOES reference them
+	//     (retentionNoticesDeliveredPredicate) — this bullet previously said it did not, which was
+	//     accurate and was the C1 defect. The conclusion is unchanged and if anything stronger:
+	//     shrinking a deadline after a notice had fired would delete an account on a SHORTER window
+	//     than the email promised, with no new notice;
 	//   - migrations 000119-000122 set this codebase's precedent for retroactively correcting a
 	//     grace timestamp: only ever defer the harmful action, never hasten it (000120: "never a
 	//     premature disconnect"), and both have deliberately no-op down migrations for that reason.
@@ -450,6 +452,20 @@ type ProfileRepository interface {
 	// work would already be irreversibly done by the time a later guard could catch a comp
 	// granted in the race window.
 	ClaimForDeletion(ctx context.Context, userID string, kind DeletionClaimKind) (bool, error)
+
+	// CountRetentionDeletionsWithheld reports how many accounts the Issue #1569 T1 notice gate is
+	// holding back from hard deletion, split into notice-pending (healthy: the clock is still
+	// running) and withheld (the clock has run out, so no notice query can ever reach the user
+	// again). See the implementation for the full rationale.
+	CountRetentionDeletionsWithheld(ctx context.Context) (RetentionWithholdingCounts, error)
+
+	// ⚠ GetRetentionDeletionsWithheldPage — the ENUMERATING sibling of the method above (Issue
+	// #1584) — is DELIBERATELY NOT ON THIS INTERFACE, for the reason NewProfileRepository's own doc
+	// comment gives about the occurrence-scoped methods #1413 P6 added: it has exactly one
+	// consumer, operations.RetentionWithheldReader, which declares the two methods it needs and is
+	// satisfied structurally by the concrete *profileRepository. Adding it here would ripple a stub
+	// into every unrelated service's test double that implements this interface in full, buying
+	// nothing — no caller wants this method through this interface.
 
 	// UpdateUserEmailTx updates a user's email, blind index, and resets email_verified=false
 	// within an existing transaction. Returns ErrDuplicateEmail if the email is already in use.
@@ -1652,31 +1668,100 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// exact set of rows this statement rewrote, so it can bump precisely those owners' cache scopes
 	// AFTER this transaction commits (never inside it — a cache bump is not part of the erasure and
 	// must not be able to roll it back or delay it).
-	rows, err := tx.Query(ctx, `
-		UPDATE transactions
-		SET custom_category_override_id = NULL, category_override_kind = NULL, effective_category_name = pfc_primary
-		WHERE custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1)
-		RETURNING user_id
-	`, userID)
-	if err != nil {
-		return false, nil, fmt.Errorf("DeleteUserCascade: clear dangling custom category overrides: %w", err)
-	}
+	// #1590: THE CLEAR IS NOW RECORDED, for the surviving owners only.
+	//
+	// Everything above says why this statement must run and why the value it writes is right. What
+	// it did not say is that the row it touches can belong to a DIFFERENT, SURVIVING user, and that
+	// user's category override, override kind and effective name were destroyed with no trail — in a
+	// codebase whose whole thesis is that a user's own work is retained. Three other statements that
+	// overwrite the same columns (UpdateCategory, BulkUpdateCategory, and since #1578 the settlement
+	// move) already record what they overwrote; this one carried an allowlist exemption instead.
+	//
+	// The fix is the SAME capture CTE those three use, under a fourth change_source, 'erasure'
+	// (migration 000172). No new plumbing: the surviving owner was already in hand here, because
+	// RETURNING user_id is what feeds affectedOwnerIDs for the cache bump.
+	//
+	// ⚠ ONLY SURVIVING OWNERS ARE RECORDED — that is what the `surviving` CTE is for. The erased
+	// user's own transactions are cleared by this same statement and hard-deleted moments later by
+	// the DELETE FROM users below, and transaction_annotation_history.user_id CASCADEs from users, so
+	// a row written for them would be destroyed inside this same database transaction. Recording it
+	// would cost writes and prove nothing.
+	//
+	// ⚠ AND THAT SAME CASCADE IS WHY B'S ROW SURVIVES A'S ERASURE. The recorded user_id is inherited
+	// from the UPDATE's own RETURNING — never re-derived, never the erased user — so the history row
+	// hangs off B, whom this statement does not delete. Erasing B later still destroys it, which is
+	// the direction GDPR requires. Both are pinned:
+	// TestErasureClear_SurvivingUsersAnnotationIsRecorded_Integration and
+	// TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned.
+	//
+	// ⚠ THE SEVERITY IS DEFENCE IN DEPTH, and it is worth keeping the reason visible rather than
+	// letting the next reader infer a live bug from the length of this comment. All five writers of
+	// transactions.custom_category_override_id refuse a cross-owner value today (the two category
+	// endpoints via services/transaction_service.go, the two settlement moves via their
+	// twin.user_id = s.user_id predicate, and CreateBatch via the rule target that
+	// assertTargetCategoryOwnedAndLive validates). Nothing in the DATABASE enforces it — there is no
+	// trigger — so the row remains schema-reachable, and this records the loss if one ever exists.
+	//
+	// tombstone-exempt(transactions prior): the prior alias is the PRE-IMAGE of the very row this
+	// statement is updating (prior.id = t.id), not an independent read. The target is deliberately
+	// unfiltered (see the write: exemption below) and repeating a filter on prior would capture a
+	// DIFFERENT set of rows from the one the UPDATE touches.
+	clearDanglingOverridesSQL := `
+		WITH cleared AS (
+			-- tombstone-exempt(write:transactions t): GDPR ERASURE (#1569 T8 write-target audit). A tombstoned
+			-- transaction still holds an FK to the category about to be hard-deleted, so skipping it
+			-- would trip fk_transactions_custom_category_override and abort the erasure.
+			UPDATE transactions t
+			SET custom_category_override_id = NULL, category_override_kind = NULL, effective_category_name = t.pfc_primary
+			-- tombstone-exempt(transactions prior): the PRE-IMAGE of the row being updated
+			-- (prior.id = t.id), joined so the capture below reads what this statement destroys.
+			FROM transactions prior
+			WHERE prior.id = t.id
+			  AND t.custom_category_override_id IN (
+				-- tombstone-exempt(custom_categories): GDPR ERASURE (#1569 Task 9). A tombstoned category is still a row
+				-- and is about to be hard-deleted by the DELETE FROM users below; a surviving user's
+				-- transaction pointing at it would trip fk_transactions_custom_category_override
+				-- exactly as it would for a live one. Filtering here would reintroduce the residual
+				-- this statement exists to close. Pinned by
+				-- TestCategoryTombstone_GDPRErasureStillDestroysIt_Integration.
+				SELECT id FROM custom_categories WHERE user_id = $1)
+			RETURNING ` + annotationCaptureReturning("t") + `
+		),
+		surviving AS (
+			-- The erased user's own rows are excluded here rather than in the INSERT, because the
+			-- final SELECT below still needs the FULL set: a row belonging to the erased user is not
+			-- worth a history entry, but the caller's cache bookkeeping reads every owner.
+			SELECT * FROM cleared WHERE captured_user_id <> $1::uuid
+		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeErasure, "surviving") + `
+		SELECT captured_user_id FROM cleared
+	`
+
+	// The lock predicate is the UPDATE's own, verbatim. annotationLockTargets requires that: a lock
+	// over a smaller set than the write touches leaves rows unlocked and reintroduces the race the
+	// lock exists to close.
+	const clearDanglingOverridesLock = `custom_category_override_id IN (
+		-- tombstone-exempt(custom_categories): same reason as the statement it locks for — the
+		-- category is about to be hard-deleted whether or not it is tombstoned.
+		SELECT id FROM custom_categories WHERE user_id = $1)`
+
 	seenOwner := map[string]bool{userID: true} // the deleted user's own cache is purged separately; never re-bump it here
-	for rows.Next() {
-		var ownerID string
-		if scanErr := rows.Scan(&ownerID); scanErr != nil {
-			rows.Close()
-			return false, nil, fmt.Errorf("DeleteUserCascade: scan dangling custom category override owner: %w", scanErr)
-		}
-		if !seenOwner[ownerID] {
-			seenOwner[ownerID] = true
-			affectedOwnerIDs = append(affectedOwnerIDs, ownerID)
-		}
-	}
-	rowsErr := rows.Err()
-	rows.Close()
-	if rowsErr != nil {
-		return false, nil, fmt.Errorf("DeleteUserCascade: iterate dangling custom category override owners: %w", rowsErr)
+	if err := runCapturingQuery(ctx, tx,
+		clearDanglingOverridesLock, []any{userID},
+		clearDanglingOverridesSQL, []any{userID},
+		func(rows pgx.Rows) error {
+			for rows.Next() {
+				var ownerID string
+				if scanErr := rows.Scan(&ownerID); scanErr != nil {
+					return fmt.Errorf("DeleteUserCascade: scan dangling custom category override owner: %w", scanErr)
+				}
+				if !seenOwner[ownerID] {
+					seenOwner[ownerID] = true
+					affectedOwnerIDs = append(affectedOwnerIDs, ownerID)
+				}
+			}
+			return nil
+		}); err != nil {
+		return false, nil, fmt.Errorf("DeleteUserCascade: clear dangling custom category overrides: %w", err)
 	}
 
 	// Issue #1440 round-3 Finding 4 (Codex review): null out four ON DELETE NO ACTION references
@@ -1724,6 +1809,8 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		return false, nil, fmt.Errorf("DeleteUserCascade: clear dangling accounts.user_account_id references: %w", err)
 	}
 	if _, err = tx.Exec(ctx, `
+		-- tombstone-exempt(write:transactions): GDPR ERASURE, same reason as the override clear above --
+		-- a tombstoned row's dangling user_account_id would abort the cascade (#1569 T8).
 		UPDATE transactions SET user_account_id = NULL
 		WHERE user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $1)
 	`, userID); err != nil {
@@ -2381,7 +2468,7 @@ const userRequestedDeletionClaimPredicate = `
 // Such a user is picked up by the user-requested path once their own window elapses.
 const retentionDeletionClaimPredicate = `
 	  AND deletion_requested_at IS NULL
-	` + expiredRetentionClockPredicate + noManualOverrideAtAllPredicate
+	` + expiredRetentionClockPredicate + retentionNoticesDeliveredPredicate + noManualOverrideAtAllPredicate
 
 // expiredRetentionClockPredicate is the "this account's retention clock has actually run out, and
 // the account is still unsubscribed" test — the pair of facts that makes a user a retention
@@ -2422,6 +2509,88 @@ const expiredRetentionClockPredicate = `
 	  AND retention_expires_at <= NOW()
 	  AND subscription_status IN ('inactive', 'cancelled')
 `
+
+// retentionNoticesDeliveredPredicate is the Issue #1569 T1 gate: BOTH promised pre-deletion notices
+// must have actually been recorded before a retention hard-delete is a candidate or a claim.
+//
+// WHY IT EXISTS. apps/web/src/legal/PrivacyPolicy.tsx promises a cancelled user notice at 30 days
+// and again at 7 days before their data is destroyed. Nothing enforced that promise: this pair of
+// columns was referenced by the notice queries only, never by the destruction path, while
+// cmd/server/main.go passes no EmailService to RetentionCleanupCheckWorker in any environment — so
+// canSendRetentionNotice returned false before the work-claim was even taken and the markers stayed
+// NULL forever. The net effect was a hard delete at the end of the window with zero warnings sent.
+// The comment above userSelectQuery said outright that this query "does not reference them at all";
+// that was accurate, and it was the defect.
+//
+// BOTH, not either. The 7-day final warning is a separate promise from the 30-day one, so a user who
+// received only one has not received what the policy states. Each of the four marker combinations
+// is pinned by TestRetentionNoticeGate_Integration_UnwarnedUserIsNotADeletionCandidate, including
+// the both-recorded case that proves this is a gate and not a permanent halt.
+//
+// ⚠ THIS GATE CAN HOLD AN ACCOUNT INDEFINITELY, and that is deliberate but must never be silent.
+// With no email service wired the markers can never be stamped, so an expired account is retained
+// rather than deleted — the safe direction to fail, per the #1569 ruling, but one that trades a
+// silent destruction for a silent retention if nothing reports it. CountRetentionDeletionsWithheld
+// below, published by RetentionCleanupCheckWorker's Step 2b as
+// observability.RetentionDeletionsWithheld, is the other half of this fix and is not optional.
+//
+// SAFE TO RE-CHECK AT CLAIM TIME (retentionDeletionClaimPredicate splices this too, so the two can
+// never drift the way they did in #1440 T0-retention). The markers are not strictly monotonic —
+// ClearRetentionDates and admin_user_repository.go's re-arm both NULL them — but neither can leave
+// a row that this gate then refuses unfairly. ClearRetentionDates NULLs retention_expires_at in the
+// SAME statement, which expiredRetentionClockPredicate already refuses. The admin re-arm is the
+// subtler one and is worth spelling out so nobody re-derives it: it sets a FUTURE
+// retention_expires_at, which WOULD restore the notice sweep's reach — and it fires only for a user
+// carrying a manual_tier_override, whom noManualOverrideAtAllPredicate excludes from this query
+// anyway. So the re-check can only ever agree with a refusal another clause has already made; it
+// can never turn a legitimate candidate into a false refusal.
+const retentionNoticesDeliveredPredicate = `
+	  AND retention_notice_30d_sent_at IS NOT NULL
+	  AND retention_notice_7d_sent_at IS NOT NULL
+`
+
+// retentionNoticesMissingPredicate is the EXACT logical negation of
+// retentionNoticesDeliveredPredicate above — the rows that predicate refuses.
+//
+// Exact, not approximately so, and this is worth stating because a "reason" that is true of most
+// cases and asserted of all of them is how six false claims shipped on this branch. `IS NULL` and
+// `IS NOT NULL` are TOTAL predicates over a nullable timestamptz: neither ever evaluates to NULL,
+// so De Morgan applies without the three-valued-logic caveat that would break the same rewrite over
+// `=`. NOT (a IS NOT NULL AND b IS NOT NULL) ≡ (a IS NULL OR b IS NULL), for every row, always.
+//
+// It is written out rather than derived because SQL has no negation operator over a spliced
+// fragment; TestRetentionWithheldEnumeration_Integration_AgreesWithTheCountAndIsDisjointFromTheSweep
+// is what actually holds the two to being complements — it asserts, per seeded expired account,
+// that it is a deletion candidate XOR an enumerated withheld row.
+const retentionNoticesMissingPredicate = `
+	  AND (retention_notice_30d_sent_at IS NULL OR retention_notice_7d_sent_at IS NULL)
+`
+
+// retentionWithheldPopulationPredicate selects the accounts the Issue #1569 T1 notice gate is
+// HOLDING BACK from hard deletion: every condition GetUsersWithExpiredRetentionPage requires,
+// except that at least one promised pre-deletion notice was never recorded.
+//
+// ⚠ ONE CONSTANT, TWO CONSUMERS, DELIBERATELY (Issue #1584). CountRetentionDeletionsWithheld
+// reports how many there are; GetRetentionDeletionsWithheldPage enumerates which ones. Before this
+// constant existed the count restated the predicate inline, and a second consumer restating it
+// again is exactly the drift that produced #1440 T0-retention — a dashboard reading "N withheld"
+// above a list that does not contain N rows is worse than either surface alone, because it makes
+// an operator distrust both. Splicing expiredRetentionClockPredicate and
+// noManualOverrideAtAllPredicate (rather than restating them) keeps the pair tied to the sweep they
+// are the complement of; `is_deleted = FALSE` and `deletion_requested_at IS NULL` are restated
+// exactly as GetUsersWithExpiredRetentionPage itself restates them.
+//
+// ⚠ WHY A COMPED ACCOUNT IS EXCLUDED even though its notices are also unrecorded: the sweep does
+// not want to delete it in the first place (noManualOverrideAtAllPredicate), so the notice gate is
+// not what is holding it. Listing it here would misattribute the reason and put a healthy comp on
+// an operator's exception list.
+//
+// Begins with WHERE, so it is spliced as the whole clause and callers append only ordering,
+// keyset and limit.
+const retentionWithheldPopulationPredicate = `
+		WHERE is_deleted = FALSE
+		  AND deletion_requested_at IS NULL
+	` + expiredRetentionClockPredicate + noManualOverrideAtAllPredicate + retentionNoticesMissingPredicate
 
 // deletionAuthorisationUnionPredicate is satisfied when a claim of EITHER kind would be authorised.
 // It is composed from the two kind predicates above rather than restated, so it cannot drift away
@@ -3389,7 +3558,7 @@ func (r *profileRepository) GetUsersWithExpiredRetentionPage(ctx context.Context
 	const predicate = `
 		WHERE is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
-	` + expiredRetentionClockPredicate
+	` + expiredRetentionClockPredicate + retentionNoticesDeliveredPredicate
 
 	var query string
 	var args []interface{}
@@ -4543,6 +4712,243 @@ func (r *profileRepository) GetOrphanedFKlessUserScopedRowCounts(ctx context.Con
 		return OrphanedFKlessUserScopedRowCounts{}, fmt.Errorf("GetOrphanedFKlessUserScopedRowCounts: %w", err)
 	}
 	return counts, nil
+}
+
+// RetentionWithholdingCounts is the population Issue #1569 T1's gate is holding back, split into
+// the states an operator has to be able to tell apart. See CountRetentionDeletionsWithheld.
+type RetentionWithholdingCounts struct {
+	// WithheldNoticeMissing is the count of users the hard-delete sweep is REFUSING because at
+	// least one promised pre-deletion notice was never recorded: every condition of
+	// GetUsersWithExpiredRetentionPage's predicate holds EXCEPT
+	// retentionNoticesDeliveredPredicate. Every one of these accounts is held indefinitely, because
+	// the notice queries cannot reach a user whose clock has already run out (see below).
+	WithheldNoticeMissing int
+	// NoticePending is the HEALTHY population and is deliberately disjoint from the one above: a
+	// user whose retention clock is still RUNNING with a notice marker still NULL. Reported so the
+	// alert on the withheld count can be shown not to be firing on ordinary cancellations.
+	NoticePending int
+}
+
+// CountRetentionDeletionsWithheld reports how many accounts the Issue #1569 T1 notice gate is
+// holding back from hard deletion, and how many are merely awaiting a notice that is still due. It
+// is the observability half of that gate and it is not optional:
+// retentionNoticesDeliveredPredicate converts "deleted with no warning ever sent" into "retained
+// indefinitely", and a refusal nobody can see is how an account accumulates in silence.
+//
+// ⚠ WHY THE CLOCK SPLITS THE POPULATION, and why an alert that ignores it is worthless.
+// `retention_notice_30d_sent_at IS NULL` means two completely different things:
+//
+//   - retention_expires_at > NOW(): the notice sweep can still reach this user.
+//     GetUsersNeedingRetention30dNotice and GetUsersNeedingRetention7dNotice both bound their
+//     population by exactly that comparison, so the marker is simply not due yet. Healthy, and the
+//     ordinary state of every cancelled account. Counted as NoticePending, never alerted on.
+//   - retention_expires_at <= NOW(): those same two queries can NEVER select this user again, their
+//     bound being the opposite one. The missing notice will not arrive by any existing path, so the
+//     gate holds the row forever. Counted as WithheldNoticeMissing, and this is the alert.
+//
+// ⚠ ONE REASON THIS COUNT DELIBERATELY CANNOT SEE: a withheld user with NO EMAIL ADDRESS on file.
+// canSendRetentionNotice (queue/jobs/retention_cleanup_check.go) checks exactly that, on the
+// DECRYPTED value, and it is a genuinely distinct reason a notice can never be sent. No SQL
+// predicate here can reproduce it, and the first draft of this method that tried
+// (`email IS NULL OR email = ''`) was silently dead code: users.email stores CIPHERTEXT, and
+// FieldEncryptor.EncryptString returns "ENC$"+ct for EVERY input INCLUDING the empty string
+// (crypto/field_encryptor.go), so an addressless encrypted row never matches an empty-string test.
+// The deterministic email_blind_idx COULD discriminate, as GetUserByEmail does — but migration
+// 000061 puts a FULL UNIQUE index on that column, so at most ONE row in the entire database can
+// carry the empty address, and a Prometheus reason label whose population is capped at one is not
+// worth its cardinality. Such a user is therefore counted in WithheldNoticeMissing like any other:
+// correct for the alert (it IS withheld, and the alert fires), merely imprecise for the diagnosis.
+//
+// ⚠ SINCE ISSUE #1584 THE DIAGNOSIS IS AVAILABLE ELSEWHERE, and nothing in the paragraph above is
+// weakened by it. GetRetentionDeletionsWithheldPage enumerates this same population through
+// queryUsers, which DECRYPTS email for every row it returns, so it reports HasEmailOnFile at
+// exactly the point canSendRetentionNotice observes it. That is a difference in KIND, not in
+// cleverness: it is a per-row read rather than a labelled aggregate, so neither the ciphertext
+// problem nor the UNIQUE-index cardinality argument applies to it. This method still cannot
+// separate the reason, and still should not try.
+//
+// The process-level half of the reason (is an email service wired at all?) is likewise invisible to
+// SQL and is applied by the caller — see
+// RetentionCleanupCheckWorker.monitorRetentionDeletionsWithheld.
+//
+// ⚠ WHAT IS SPLICED AND WHAT IS NOT, stated precisely because the first version of this comment
+// claimed the whole predicate was spliced when only one constant was:
+//   - The WITHHELD half — the alerted number — is now the WHOLE clause spliced, as
+//     retentionWithheldPopulationPredicate (Issue #1584), which itself splices
+//     expiredRetentionClockPredicate and noManualOverrideAtAllPredicate verbatim from the sweep and
+//     restates only `is_deleted = FALSE` / `deletion_requested_at IS NULL`, exactly as
+//     GetUsersWithExpiredRetentionPage itself restates them. It shares that constant with
+//     GetRetentionDeletionsWithheldPage, so this number and the list an operator reads beneath it
+//     cannot disagree.
+//   - The PENDING half CANNOT splice expiredRetentionClockPredicate: its clock bound is the
+//     OPPOSITE one (`> NOW()`), which is the very reason that constant's own doc comment gives for
+//     not applying it to GetUsersNeedingRetention30dNotice/7dNotice either. It DOES splice
+//     retentionNoticesMissingPredicate, which is common to both halves. Its status test is
+//     restated, as those two queries also restate it. A status added to
+//     expiredRetentionClockPredicate would therefore reach the withheld count but not the pending
+//     count — acceptable, because pending is never alerted on, but do not read the two halves as
+//     equally protected.
+//
+// One round trip, two counting subqueries, no row loading: this runs on every scheduled pass and
+// the population it reports should normally be empty.
+func (r *profileRepository) CountRetentionDeletionsWithheld(ctx context.Context) (RetentionWithholdingCounts, error) {
+	var counts RetentionWithholdingCounts
+	const query = `
+		SELECT
+			(SELECT COUNT(*) FROM users ` + retentionWithheldPopulationPredicate + `),
+			(SELECT COUNT(*) FROM users
+			  WHERE is_deleted = FALSE
+			    AND deletion_requested_at IS NULL
+			    AND retention_expires_at IS NOT NULL
+			    AND retention_expires_at > NOW()
+			    AND subscription_status IN ('inactive', 'cancelled')
+			` + noManualOverrideAtAllPredicate + retentionNoticesMissingPredicate + `)
+	`
+	if err := r.db.QueryRow(ctx, query).Scan(&counts.WithheldNoticeMissing, &counts.NoticePending); err != nil {
+		return RetentionWithholdingCounts{}, fmt.Errorf("CountRetentionDeletionsWithheld: %w", err)
+	}
+	return counts, nil
+}
+
+// RetentionWithheldAccount is one account the Issue #1569 T1 notice gate is holding back, as
+// GetRetentionDeletionsWithheldPage returns it.
+//
+// ⚠ IT CARRIES NO EMAIL ADDRESS, ONLY WHETHER THERE IS ONE. This projection is built for an admin
+// surface, and an operator deciding what to do about a stuck account needs to know that an address
+// exists, never what it is. Returning the decrypted address would put a plaintext email into an
+// HTTP response and into whatever logs sit behind it, for no decision it would help anyone make.
+type RetentionWithheldAccount struct {
+	UserID string
+	// SubscriptionStatus is 'inactive' or 'cancelled' — expiredRetentionClockPredicate admits no
+	// other value. Returned anyway so the surface reports what was actually read rather than what
+	// the predicate is believed to allow.
+	SubscriptionStatus string
+	// RetentionExpiresAt is in the PAST for every row here, by construction. It is the operator's
+	// severity ordering (how long has this account been stuck?) and the keyset pagination key.
+	RetentionExpiresAt time.Time
+	// Notice30dSentAt / Notice7dSentAt say WHICH promise was not kept. At least one is nil in every
+	// row — that is what makes the row withheld — and both being nil is the ordinary case, since no
+	// EmailService is wired in any environment today.
+	Notice30dSentAt *time.Time
+	Notice7dSentAt  *time.Time
+	// HasEmailOnFile is the FOURTH withholding reason, and this is the only surface in the codebase
+	// that can report it. See the method doc.
+	HasEmailOnFile bool
+}
+
+// GetRetentionDeletionsWithheldPage ENUMERATES the accounts CountRetentionDeletionsWithheld merely
+// counts — Issue #1584, closing the selection gap the TODO in
+// RetentionCleanupCheckWorker.monitorRetentionDeletionsWithheld named.
+//
+// THE STATE IT REACHES. Issue #1569 T1 gated the hard-delete sweep on both promised pre-deletion
+// notices having been recorded (retentionNoticesDeliveredPredicate), and BOTH notice queries bound
+// their population by `retention_expires_at > NOW()` (GetUsersNeedingRetention30dNotice and its 7d
+// sibling). An account whose clock runs out with a marker still NULL therefore cannot be deleted
+// BY THE RETENTION SWEEP, or noticed by the current notice queries. The metric calls that state
+// notice_impossible_window_passed.
+//
+// ⚠ SCOPED TO THE SWEEP ON PURPOSE — an earlier draft said "it can never be deleted", which is
+// globally false and falsely reassuring. User-requested GDPR erasure is the OTHER authorisation
+// and it is untouched: userRequestedDeletionClaimPredicate requires `deletion_requested_at IS NOT
+// NULL`, retentionWithheldPopulationPredicate requires that same column to be NULL, so the two
+// populations are disjoint by construction — a withheld account that requests erasure leaves this
+// enumeration in the same statement that makes it a user-requested deletion candidate, and
+// services/deletion_service.go's ExecuteDeletion routes it by kind rather than treating every
+// deletion as a retention deletion. Nothing in #1569 T1 blocks a user's own erasure request, and
+// writing otherwise here would put a GDPR refusal one confident reader away. Proved by
+// TestRetentionWithheldEnumeration_Integration_UserRequestedDeletionStillDeletesAWithheldAccount.
+//
+// The population is INACTIVE OR CANCELLED, not cancelled alone — expiredRetentionClockPredicate's
+// `subscription_status IN ('inactive', 'cancelled')`, spliced (not restated) into the shared
+// predicate below, so the count and this enumeration cannot disagree about who is in it.
+//
+// ⚠ CORRECTING #1584'S OWN PREMISE, because it is half stale and re-deriving it from the ticket
+// would waste a round: the ticket says "no existing query can SELECT these users at all". They have
+// been COUNTED, by reason, since T1 — CountRetentionDeletionsWithheld. What did not exist is a read
+// that returns the ROWS, which is what an operator needs to act on any of the three drain options
+// the ticket lists. That is what this method is, and it is all it is.
+//
+// ⚠ WHAT THIS DELIBERATELY DOES NOT DO. It sends nothing, extends no clock, waives no notice and
+// makes NO WRITE of any kind. Choosing between "send late against a re-armed retention_expires_at",
+// "record a waiver and allow deletion" and "notify out of band" is a product decision that is
+// parked until after go-live with beta; shipping any of them inside this read would be taking that
+// decision by implication. A pure read is the part that was blocked on nothing.
+//
+// ⚠ THE ONE THING THIS READ CAN SEE THAT THE COUNT PROVABLY CANNOT: whether the account has an
+// address on file. CountRetentionDeletionsWithheld's doc comment sets out, correctly, why no SQL
+// predicate can single that out — users.email is ciphertext, EncryptString("") is still "ENC$"+ct,
+// and email_blind_idx (the one column that could) carries migration 000061's FULL UNIQUE index,
+// capping the population at one row database-wide and making it worthless as a metric label. None
+// of that is weakened here, because this read does not use a predicate: it goes through queryUsers,
+// which DECRYPTS email for every row, and reports the state post-decryption at exactly the point
+// canSendRetentionNotice (queue/jobs/retention_cleanup_check.go) observes it — `user.Email == ""`.
+// Per-row, not aggregated, so the cardinality argument does not reach it either. Pinned by
+// TestRetentionWithheldEnumeration_Integration_ReportsAnAddresslessAccountTheCountCannotSee, whose
+// fixture is built through CreateUserTx so the column really does hold EncryptString("") ciphertext
+// — the shape a fixture writing a bare empty string into the column could not produce, which is
+// how a dead predicate once shipped green on this branch.
+//
+// PREDICATE SHARED WITH THE COUNT, not restated: retentionWithheldPopulationPredicate. The number
+// on a dashboard and the list beneath it must be the same population or an operator can trust
+// neither.
+//
+// KEYSET PAGINATION on (retention_expires_at, id) ASC, mirroring GetUsersWithExpiredRetentionPage
+// and reusing its RetentionSweepCursor. The tie-break on id is load-bearing rather than decorative:
+// this population is a BACKLOG, so its rows are very likely to share one expiry, and a cursor
+// keyed on the timestamp alone would silently drop every row after the first of each tied group.
+// TestRetentionWithheldEnumeration_Integration_KeysetPaginationCoversTiedExpiries seeds five rows
+// on one expiry for exactly that reason.
+func (r *profileRepository) GetRetentionDeletionsWithheldPage(ctx context.Context, after *RetentionSweepCursor, limit int) ([]RetentionWithheldAccount, error) {
+	if limit <= 0 {
+		limit = retentionSweepDefaultPageSize
+	}
+
+	var query string
+	var args []interface{}
+	if after == nil {
+		query = userSelectQuery + retentionWithheldPopulationPredicate + `
+			ORDER BY retention_expires_at ASC, id ASC
+			LIMIT $1
+		`
+		args = []interface{}{limit}
+	} else {
+		query = userSelectQuery + retentionWithheldPopulationPredicate + `
+			  AND (retention_expires_at, id) > ($1, $2)
+			ORDER BY retention_expires_at ASC, id ASC
+			LIMIT $3
+		`
+		args = []interface{}{after.ExpiresAt, after.UserID, limit}
+	}
+
+	users, err := r.queryUsers(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("GetRetentionDeletionsWithheldPage: %w", err)
+	}
+
+	accounts := make([]RetentionWithheldAccount, 0, len(users))
+	for _, u := range users {
+		// expiredRetentionClockPredicate requires retention_expires_at IS NOT NULL, so this is
+		// never nil for a row this query returned. Guarded anyway rather than dereferenced blind:
+		// the predicate is spliced from another declaration, and a nil-pointer panic in a
+		// monitoring read is a worse failure than a skipped row.
+		if u.RetentionExpiresAt == nil {
+			continue
+		}
+		accounts = append(accounts, RetentionWithheldAccount{
+			UserID:             u.ID,
+			SubscriptionStatus: u.SubscriptionStatus,
+			RetentionExpiresAt: *u.RetentionExpiresAt,
+			Notice30dSentAt:    u.RetentionNotice30dSentAt,
+			Notice7dSentAt:     u.RetentionNotice7dSentAt,
+			// The SAME test canSendRetentionNotice applies, on the SAME decrypted value. Written
+			// as the identical expression rather than as a helper call because the two live in
+			// different packages and the jobs-side one is a method on the worker; if that check
+			// ever grows (a syntactic validity test, say), this must grow with it or this column
+			// starts reporting a reason the sender does not act on.
+			HasEmailOnFile: u.Email != "",
+		})
+	}
+	return accounts, nil
 }
 
 // SetPastDueStartedAt sets the past_due_started_at timestamp for a user.

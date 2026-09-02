@@ -440,6 +440,13 @@ func main() {
 	var plaidService services.PlaidService
 	// Declare accountService at package scope for Huma handler registration
 	var accountService services.AccountService
+	// Issue #1569: userAccountService must be constructed BEFORE accountService, not alongside the
+	// user-account routes further down. LinkAccounts now REFUSES to create an account without a
+	// stable user_accounts identity (ErrStableAccountIdentityUnavailable), because an identity-less
+	// account is a permanent re-link double-count seed once history is retained rather than
+	// cascade-deleted. Until this wiring existed, accountService.userAccountSvc was nil in
+	// production and EVERY linked account was written with user_account_id = NULL.
+	var userAccountService services.UserAccountService
 
 	// Authenticated routes (requires database and Clerk)
 
@@ -629,6 +636,9 @@ func main() {
 		}
 		profileRepo.SetOverrideTierValidator(overrideTierValidator)
 		privacyRepo := repository.NewPrivacyRepository(db)
+		// Issue #1587: GDPR data export (Article 20). Needs the field encryptor: several exported
+		// columns are stored as ENC$ ciphertext and the user must receive the plaintext.
+		dataExportRepo := repository.NewDataExportRepository(db, fieldEncryptor)
 		linkedItemRepo := repository.NewLinkedItemRepository(db, fieldEncryptor)
 		accountRepo := repository.NewAccountRepository(db, fieldEncryptor)
 		transactionRepo := repository.NewTransactionRepository(db, fieldEncryptor)
@@ -728,6 +738,8 @@ func main() {
 			JobQueue:     nil, // Set after jobQueue is created via SetJobQueue
 		})
 		privacyService := services.NewPrivacyService(privacyRepo)
+		dataExportService := services.NewDataExportService(dataExportRepo)
+		dataExportService.SetAnalytics(phClient)
 		transactionService := services.NewTransactionService(transactionRepo, customCategoryRepo)
 		transactionService.SetAnalytics(phClient)
 		transactionService.SetAccountRepository(accountRepo) // #1329: embed account in investment rows
@@ -759,10 +771,18 @@ func main() {
 		// Issue #345: Tag and category services
 		userTagService := services.NewUserTagService(userTagRepo)
 		customCategoryService := services.NewCustomCategoryService(customCategoryRepo)
+		// Issue #1569 Task 9: the category delete is a tombstone now, and writes a
+		// custom_category.deleted audit entry inside its own transaction.
+		customCategoryService.SetAuditLogRepository(repository.NewAuditLogRepository(db))
 		// Issue #346: Categorization rules services
 		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo, customCategoryRepo)
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
 		ruleApplicationService.SetAnalytics(phClient)
+		// Issue #1569 Task 5 (#1572): the automation audit trail's writer. Until this line
+		// rule_execution_history had no production writer at all — it was backfilled by migration
+		// 000164 and then never written to again, so the trail was permanently empty.
+		ruleExecutionHistoryRepo := repository.NewRuleExecutionHistoryRepository(db)
+		ruleApplicationService.SetRuleExecutionHistoryRepository(ruleExecutionHistoryRepo)
 		// Issue #354: Cash flow analytics and dashboard preferences services
 		analyticsServiceImpl := services.NewAnalyticsService(analyticsRepo)
 		analyticsServiceImpl.SetBalanceSnapshotRepo(balanceSnapshotRepo) // wires snapshot repo for GetNetWorthTrend (Issue #1215 PR3)
@@ -796,13 +816,16 @@ func main() {
 		// Issue #1300: Savings contribution repo + progress service.
 		// Created here so budget sync and goal services can share a single instance.
 		savingsContribRepo := repository.NewSavingsContributionRepository(db)
-		savingsProgressService := services.NewSavingsProgressService(savingsGoalRepo, savingsContribRepo, accountRepo, budgetLogger)
+		savingsProgressService := services.NewSavingsProgressService(savingsGoalRepo, savingsContribRepo, accountRepo, services.NewAccountChainResolver(accountRepo), budgetLogger)
 
 		// Issue #1300: Cross-wire budget ↔ savings-goal services for carry-forward / auto-create.
 		budgetService.SetGoalRepo(savingsGoalRepo)
 		// Issue #1300: Wire IDOR ownership checker so AddCategory validates savings_goal_id
 		// belongs to the authenticated user before persisting (Codex C1).
 		budgetService.SetGoalOwnershipChecker(savingsGoalRepo)
+		// Issue #1569 Task 8: budget.deleted / budget_category.deleted audit entries, written
+		// inside the tombstone's own transaction via LogInTx.
+		budgetService.SetAuditLogRepository(repository.NewAuditLogRepository(db))
 		savingsGoalService.SetBudgetRepo(budgetRepo)
 		// Issue #1300 M13: Wire progress recomputer so CreateGoal initialises
 		// current_amount per progress_basis immediately after goal creation.
@@ -812,6 +835,11 @@ func main() {
 		if phClient != nil {
 			savingsGoalService.SetAnalytics(phClient)
 		}
+		// Issue #1569 Task 8: savings_goal.deleted / savings_goal.history_purged audit entries,
+		// written inside the repository's own transaction via LogInTx. Declared later in this
+		// function as `auditLogger`, so a fresh AuditLogRepository is constructed here rather than
+		// reordering the wiring; both wrap the same pool and hold no state.
+		savingsGoalService.SetAuditLogRepository(repository.NewAuditLogRepository(db))
 
 		// Issue #138: Investment read services — DB-only, no Plaid dependency.
 		// Initialized here (outside the Plaid block) so investment route handlers
@@ -839,6 +867,9 @@ func main() {
 		boostService.SetSavingsGoalRepo(savingsGoalRepo)
 		boostService.SetAccountRepo(accountRepo)
 		boostService.SetBudgetRepo(budgetRepo) // #1270: category ownership validation
+		// Issue #1569 Task 8: boost.deleted audit entry, written inside the tombstone's own
+		// transaction via LogInTx.
+		boostService.SetAuditLogRepository(repository.NewAuditLogRepository(db))
 		appLogger.Info("Boost service initialized")
 
 		// Issue #37: Boost Execution Service
@@ -1026,7 +1057,24 @@ func main() {
 		// auto-deletion (deleteExpiredAccounts nil-guards it and logs a warning instead of
 		// panicking); Steps 0/0b/1/2 (retention-clock repair, Plaid-disconnect repair, 30d/7d
 		// notices) all run regardless, since none of them touch deletionService at all.
-		// Note: EmailService is nil in MVP — notice emails are skipped until Phase 3 email templates
+		// ⚠ EmailService IS DELIBERATELY LEFT NIL, AND THAT NOW WITHHOLDS DELETIONS. The general email
+		// service constructed above (SendGrid or its mock) does not implement
+		// jobs.RetentionEmailService.SendRetentionNoticeEmail at all, so there is nothing to pass here:
+		// the 30d/7d pre-deletion notices apps/web/src/legal/PrivacyPolicy.tsx promises are not sent in
+		// any environment, and canSendRetentionNotice returns false before the work-claim is taken, so
+		// retention_notice_30d_sent_at / _7d_sent_at are never stamped. Email lands after go-live.
+		//
+		// ⚠ WHAT THIS COMMENT USED TO OMIT, and the omission is how Issue #1569 defect C1 survived: it
+		// said only that notices were skipped, and never that Step 3 DELETED THE ACCOUNT ANYWAY. It did
+		// — GetUsersWithExpiredRetentionPage had no predicate on the notice markers — so a cancelled
+		// user's data was hard-deleted at the end of the retention window having been warned zero times.
+		// Since #1569 T1 the sweep and the deletion claim both require BOTH markers
+		// (retentionNoticesDeliveredPredicate), so with EmailService nil the consequence is inverted:
+		// expired accounts are RETAINED INDEFINITELY rather than deleted. That is deliberate — retain is
+		// the safe direction to fail — and it is made visible, not silent, by Step 2b
+		// (monitorRetentionDeletionsWithheld / observability.RetentionDeletionsWithheld). The
+		// privacy-policy text still promises deletion after the window and is knowingly out of step
+		// until the notice email exists; it belongs with that work, not with the gate.
 		retentionCleanupCheckWorker = jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{
 			ProfileRepo:     profileRepo,
 			DeletionService: deletionService,
@@ -1253,7 +1301,10 @@ func main() {
 		portfolioSnapshotWorker = jobs.NewPortfolioSnapshotWorker(jobs.PortfolioSnapshotWorkerDeps{
 			HoldingRepo:  holdingRepo,
 			SnapshotRepo: portfolioSnapshotRepo,
-			Logger:       appLogger,
+			// #1569 T6: the daily run also records the row-level history behind each aggregate,
+			// so a day with no Plaid sync is not a day task 11 has nothing to rebuild from.
+			HoldingSnapshotRepo: repository.NewHoldingSnapshotRepository(db),
+			Logger:              appLogger,
 		})
 		appLogger.Info("Portfolio snapshot worker created (River)")
 
@@ -1283,6 +1334,10 @@ func main() {
 				appLogger.Error("Failed to initialize Plaid service", "error", err)
 			} else {
 				// Create account service with all dependencies
+				if userAccountService == nil {
+					userAccountService = services.NewUserAccountService(
+						repository.NewUserAccountRepository(db, fieldEncryptor))
+				}
 				accountService = services.NewAccountService(
 					plaidService,
 					linkedItemRepo,
@@ -1290,6 +1345,8 @@ func main() {
 					profileRepo,
 					db,
 					services.WithEncryptor(fieldEncryptor), // Issue #1010: Cross-user fingerprint checks
+					// Issue #1569: required, not optional — see the declaration comment above.
+					services.WithUserAccountService(userAccountService),
 				)
 
 				// Issue #1531 Blocker 1: wire cache invalidation for the cross-user fingerprint
@@ -1301,6 +1358,16 @@ func main() {
 				// satisfies services.SyncCacheHouseholdLookup, same as it already does for
 				// transactionSyncService and humamiddleware.HouseholdLookup.
 				accountService.SetCacheInvalidation(cacheInstance.Generations(), householdRepo)
+
+				// Issue #1569, Task 5G: audit-log account.removed / institution.disconnected.
+				// Nothing was audit-logged on either path before this.
+				accountService.SetAuditLogger(auditLogger)
+
+				// Issue #1569, Task 6: audit-log account.history_purged / linked_item.history_purged
+				// INSIDE PurgeAccount/PurgeInstitution's own transaction, via LogInTx. auditLogger
+				// (repository.NewAuditLogRepository) satisfies both AuditLogger and
+				// AuditLogRepository, so the same instance backs both setters.
+				accountService.SetAuditLogRepository(auditLogger)
 
 				appLogger.Info("Plaid service initialized")
 				appLogger.Info("Account linking service initialized")
@@ -1318,6 +1385,16 @@ func main() {
 				// hold their own, different flow claim and disconnect the same user's Plaid items
 				// concurrently.
 				plaidCleanupService.SetWorkClaimsRepo(workClaimsRepo)
+				// Issue #1569 Task 20 (A2): required so that removing an item's Plaid Item also
+				// transitions its accounts to 'removed'. Without it the accounts stayed 'active'
+				// forever with no removed_at, and the frontend rendered their frozen balances as
+				// current ones. The frontend helper is now getAccountClosedDate, which likewise
+				// returns undefined for an active account; accountBalanceProjection nulls a
+				// terminal account's balance server-side as well, but the status transition is
+				// still what triggers both.
+				// The service refuses to touch Plaid at all when this is unset, so a wiring
+				// regression here fails loudly rather than silently reproducing the defect.
+				plaidCleanupService.SetAccountRepo(accountRepo)
 				appLogger.Info("Plaid item cleanup service initialized")
 
 				// Issue #668: Wire cleanup service to deletion service (resolves nil dependency from earlier)
@@ -1378,6 +1455,13 @@ func main() {
 				// structurally satisfies services.SyncCacheHouseholdLookup, same as it already
 				// does for humamiddleware.HouseholdLookup.
 				transactionSyncService.SetCacheInvalidation(cacheInstance.Generations(), householdRepo)
+
+				// Issue #1569, Task 5: audit-log account.removed_by_provider. When a bank closes an
+				// account, Plaid stops returning it from /accounts/get and the sync soft-removes it
+				// so it drops out of CURRENT net worth; without this wiring that removal would
+				// happen with no trace a user could be shown. Same auditLogger instance as
+				// accountService's user-initiated account.removed entries above.
+				transactionSyncService.SetAuditLogger(auditLogger)
 
 				// Issue #972: Initialize TransferCorrelationService and wire into sync pipeline (B4)
 				transferCorrelationService := services.NewTransferCorrelationService(
@@ -2062,8 +2146,12 @@ func main() {
 		// These were registered for OpenAPI spec generation (RegisterAllRoutesForSpec)
 		// but never wired into the runtime server, so /api/v1/user-accounts 404'd even
 		// though the generated spec + MCP Worker advertised it.
-		userAccountRepo := repository.NewUserAccountRepository(db, fieldEncryptor)
-		userAccountService := services.NewUserAccountService(userAccountRepo)
+		// Issue #1569: reuse the instance wired into accountService above rather than constructing a
+		// second one, so the linking path and the routes cannot diverge.
+		if userAccountService == nil {
+			userAccountService = services.NewUserAccountService(
+				repository.NewUserAccountRepository(db, fieldEncryptor))
+		}
 		operations.RegisterUserAccountRoutes(humaAPI, operations.NewUserAccountHandler(userAccountService))
 		appLogger.Info("Huma user account routes registered")
 
@@ -2081,6 +2169,22 @@ func main() {
 		humaRuleHandler := operations.NewCategorizationRuleHandler(categorizationRuleService)
 		operations.RegisterCategorizationRuleRoutes(humaAPI, humaRuleHandler)
 		appLogger.Info("Huma categorization rule routes registered")
+
+		// Issue #1569 Task 5 (#1572): the automation audit trail's read path. The writer half is
+		// wired above, onto ruleApplicationService. A sibling path, not a child of
+		// /api/v1/auto-categorization — see RegisterRuleExecutionRoutes for why.
+		operations.RegisterRuleExecutionRoutes(humaAPI,
+			operations.NewRuleExecutionHandler(services.NewRuleExecutionHistoryService(ruleExecutionHistoryRepo)))
+		appLogger.Info("Huma rule execution history routes registered")
+
+		// Issue #1569 Task 6 (#1579): the annotation trail's read path. There is no writer to wire:
+		// the capture is a CTE inside the three UPDATE statements in transaction_repository.go, so
+		// it cannot be left unwired by a future call site the way a Go writer can.
+		operations.RegisterTransactionAnnotationHistoryRoutes(humaAPI,
+			operations.NewTransactionAnnotationHistoryHandler(
+				services.NewTransactionAnnotationHistoryService(
+					repository.NewTransactionAnnotationHistoryRepository(db))))
+		appLogger.Info("Huma transaction annotation history routes registered")
 
 		// Register Huma merchant routes (Issue #957: Merchant name handling)
 		merchantOverrideRepo := repository.NewMerchantOverrideRepository(db)
@@ -2145,6 +2249,25 @@ func main() {
 		operations.RegisterInvestmentRoutes(humaAPI, humaInvestmentHandler)
 		appLogger.Info("Investment routes registered")
 
+		// Register retained holdings history route (Issue #1569).
+		// Its own service and its own repository read: this is the HISTORICAL universe, and it is
+		// wired separately from investmentService so no current-state caller can reach it.
+		humaHoldingHistoryHandler := operations.NewHoldingHistoryHandler(
+			services.NewHoldingHistoryService(repository.NewHoldingSnapshotRepository(db)),
+		)
+		operations.RegisterHoldingHistoryRoutes(humaAPI, humaHoldingHistoryHandler)
+		appLogger.Info("Retained holdings history route registered")
+
+		// Register retained per-account balance history route (Issue #1569).
+		// Same shape and the same reason as the holdings history above: its own service over its
+		// own repository read, wired away from every current-state balance caller so none can
+		// reach it and none of its figures can be mistaken for a live balance.
+		humaAccountBalanceHistoryHandler := operations.NewAccountBalanceHistoryHandler(
+			services.NewAccountBalanceHistoryService(repository.NewBalanceSnapshotRepository(db)),
+		)
+		operations.RegisterAccountBalanceHistoryRoutes(humaAPI, humaAccountBalanceHistoryHandler)
+		appLogger.Info("Retained account balance history route registered")
+
 		// Register MCP recipe routes (Issue #1087: MCP server)
 		humaRecipeRepo := repository.NewRecipeRepository(db)
 		humaRecipeService := services.NewRecipeService(humaRecipeRepo)
@@ -2192,6 +2315,11 @@ func main() {
 			savingsProgressService, // ContributionProgressRecomputer: RecomputeGoalByID (R3-2)
 			savingsGoalRepo,        // ContributionGoalReader: GetByIDForUser (R3-3 C8 basis gate)
 		)
+		// Issue #1569 round 17 task 6: DeleteContribution is the one deliberate user-facing hard
+		// delete of financial history; its audit row must be written INSIDE the delete's own
+		// transaction. Same construction as savingsGoalService's wiring above — a fresh
+		// AuditLogRepository, because `auditLogger` is scoped to a different block.
+		humaContributionHandler.SetAuditLogRepository(repository.NewAuditLogRepository(db))
 		operations.RegisterContributionRoutes(humaAPI, humaContributionHandler)
 		appLogger.Info("Huma savings goal contribution routes registered (M20 D6 source-a)")
 
@@ -2243,6 +2371,14 @@ func main() {
 		operations.RegisterPrivacyRoutes(humaAPI, humaPrivacyHandler)
 		appLogger.Info("Huma privacy routes registered")
 
+		// Register the Huma data-export route (Issue #1587).
+		// ⚠ Also registered in operations.RegisterAllRoutesForSpec — `make generate-openapi` reads
+		// that function and never this file, so a route wired only here is invisible to the spec
+		// and to the generated client.
+		humaDataExportHandler := operations.NewDataExportHandler(dataExportService)
+		operations.RegisterDataExportRoutes(humaAPI, humaDataExportHandler)
+		appLogger.Info("Huma data export route registered")
+
 		// Register Huma category preview routes (Issue #559: Huma migration)
 		humaCategoryPreviewHandler := operations.NewCategoryPreviewHandler(categoryPreviewService)
 		operations.RegisterCategoryPreviewRoutes(humaAPI, humaCategoryPreviewHandler)
@@ -2272,7 +2408,11 @@ func main() {
 			WithPaddleWebhookRepo(paddleWebhookRepo).
 			WithJobQueue(jobQueue).
 			WithDeadLetterService(deadLetterService).
-			WithPlaidOrphanedItemRepo(plaidOrphanedItemRepo)
+			WithPlaidOrphanedItemRepo(plaidOrphanedItemRepo).
+			// Issue #1584: the enumerating read over accounts the #1569 T1 pre-deletion-notice gate
+			// is holding indefinitely. Without this the endpoint registers and answers 503 — the
+			// same shape the other optional admin dependencies use.
+			WithRetentionWithheldReader(profileRepo)
 		operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
 		appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)", "plaid_configured", plaidService != nil)
 

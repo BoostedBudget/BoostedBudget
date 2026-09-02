@@ -16,7 +16,7 @@ import { TransactionFilterPanel } from './components/TransactionFilterPanel'
 import { useGetUserTags, getGetUserTagsQueryKey } from '@boostedbudget/api-client/endpoints/tags/tags'
 import { useGetUserCategories, getGetUserCategoriesQueryKey, useGetPlaidPrimaryCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
-import { useActiveAccounts } from '@/features/accounts/hooks'
+import { useAllAccounts, isInactive } from '@/features/accounts/hooks'
 import type { Transaction, FeedRow, InvestmentActivity, ActivityType } from './types'
 import { isInvestmentRow } from './types'
 import type { Account } from '../accounts/types'
@@ -45,6 +45,32 @@ export function computeEffectiveSort(
   return { columnId: 'date', direction: sort.direction }
 }
 
+/**
+ * Issue #1569, Task 3: the backend deliberately returns a disconnected account's
+ * transactions (retainedAccountVisibilityLeg), so the filter dropdown must offer
+ * retained (non-active) accounts too — not just active ones — or the user has no
+ * way to filter to them.
+ *
+ * Active accounts are listed first (this is a transactions page, not an account
+ * manager — a long tail of closed accounts must not crowd the top of the list),
+ * and each closed account's label carries the "(Closed)" suffix used by the
+ * closed-accounts surface on AccountsPage (see AccountTable.tsx / AccountCard.tsx's
+ * "Closed" badge), so the user cannot mistake a closed account for a live one.
+ *
+ * Exported for unit testing.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function buildAccountOptions(accounts: Account[]): FilterOption[] {
+  const toOption = (acc: Account): FilterOption => ({
+    value: acc.id,
+    label: isInactive(acc) ? `${acc.nickname || acc.name} (Closed)` : (acc.nickname || acc.name),
+    masked: true,
+  })
+  const active = accounts.filter((acc) => !isInactive(acc))
+  const closed = accounts.filter(isInactive)
+  return [...active.map(toOption), ...closed.map(toOption)]
+}
+
 export function TransactionsPage() {
   const {
     filters,
@@ -60,6 +86,7 @@ export function TransactionsPage() {
     setCustomDateRange,
     setStatusFilter,
     setIncludeInvestmentActivity,
+    setIncludeReversed,
     setActivityTypes,
   } = useTransactionFilters()
 
@@ -84,7 +111,11 @@ export function TransactionsPage() {
 
   const { data: tagsData } = useGetUserTags()
   const { data: categoriesData } = useGetUserCategories()
-  const { accounts: accountsList } = useActiveAccounts()
+  // Issue #1569, Task 3: useAllAccounts (not useActiveAccounts) — the backend now
+  // deliberately returns a disconnected account's transactions, so both the
+  // id→name lookup (accountsMap) and the filter dropdown (accountOptions) need
+  // the full universe of statuses, not just active accounts.
+  const { accounts: accountsList } = useAllAccounts()
   const { data: plaidPrimariesData } = useGetPlaidPrimaryCategories()
 
   const availableTags = (tagsData as unknown as UserTag[]) ?? []
@@ -99,15 +130,9 @@ export function TransactionsPage() {
     }, {})
   }, [accountsList])
 
-  // Create account filter options
-  const accountOptions = useMemo<FilterOption[]>(() => {
-    const accs = accountsList ?? []
-    return accs.map((acc) => ({
-      value: acc.id,
-      label: acc.nickname || acc.name,
-      masked: true,
-    }))
-  }, [accountsList])
+  // Create account filter options — active accounts first, closed accounts labeled
+  // and appended after (see buildAccountOptions).
+  const accountOptions = useMemo<FilterOption[]>(() => buildAccountOptions(accountsList ?? []), [accountsList])
 
   const handleAccountFilterChange = useCallback(
     (value: string[]) => setFilter('account_ids', value.length > 0 ? value : undefined),
@@ -195,6 +220,12 @@ export function TransactionsPage() {
     setIncludeInvestmentActivity(enabled)
     trackEvent(ANALYTICS_EVENTS.INVESTMENT_ACTIVITY_FILTER_TOGGLED, { enabled })
   }, [setIncludeInvestmentActivity, trackEvent])
+
+  // Issue #1569 T12: reversals are opt-in, so the toggle is a user decision worth recording.
+  const handleIncludeReversedChange = useCallback((enabled: boolean) => {
+    setIncludeReversed(enabled)
+    trackEvent(ANALYTICS_EVENTS.REVERSED_TRANSACTIONS_FILTER_TOGGLED, { enabled })
+  }, [setIncludeReversed, trackEvent])
 
   const handleActivityTypesChange = useCallback((types: ActivityType[]) => {
     setActivityTypes(types)
@@ -285,6 +316,7 @@ export function TransactionsPage() {
         onStatusFilterChange={setStatusFilter}
         onIncludeInvestmentActivityChange={handleIncludeInvestmentChange}
         onActivityTypesChange={handleActivityTypesChange}
+        onIncludeReversedChange={handleIncludeReversedChange}
         onClearAll={clearAllFilters}
         disabled={isLoading}
       />

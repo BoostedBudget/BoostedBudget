@@ -37,7 +37,13 @@ interface AccountBreakdownTableProps {
   onBalanceRangeChange?: (value: RangeValue | null) => void
 }
 
-function formatCurrency(value: number, currencyCode = 'USD'): string {
+/**
+ * ⚠ `null` renders an em dash, never "$0" (Issue #1569 whole-branch review, I1). An account with
+ * no current balance is not an account holding nothing, and the Accounts page already renders
+ * exactly this row as "—" — the two surfaces disagreeing about the same account is the defect.
+ */
+function formatCurrency(value: number | null, currencyCode = 'USD'): string {
+  if (value === null) return EM_DASH
   return Math.abs(value).toLocaleString('en-US', {
     style: 'currency',
     currency: currencyCode,
@@ -45,6 +51,8 @@ function formatCurrency(value: number, currencyCode = 'USD'): string {
     maximumFractionDigits: 0,
   })
 }
+
+const EM_DASH = '\u2014'
 
 interface AccountSectionProps extends Pick<
   AccountBreakdownTableProps,
@@ -202,9 +210,16 @@ function AccountSection({
       render: (row) => (
         <span
           data-testid={`breakdown-percent-${row.id}`}
-          aria-label={`${row.percentOfSide.toFixed(1)}% of ${title.toLowerCase()}`}
+          // The em dash alone is not an accessible name, and this attribute is recorded verbatim
+          // by session replay, so it stays structural — no amount, no share, and no "0.0%"
+          // claim about an account whose balance the app does not have.
+          aria-label={
+            row.percentOfSide === null
+              ? `Share of ${title.toLowerCase()} not available`
+              : `${row.percentOfSide.toFixed(1)}% of ${title.toLowerCase()}`
+          }
         >
-          {row.percentOfSide.toFixed(1)}%
+          {row.percentOfSide === null ? EM_DASH : `${row.percentOfSide.toFixed(1)}%`}
         </span>
       ),
     },

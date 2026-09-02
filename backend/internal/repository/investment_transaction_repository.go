@@ -147,10 +147,16 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 
 // GetByUserID retrieves investment transactions for a user with pagination.
 // Joins accounts to filter out replaced accounts (Issue #1109).
+//
+// Issue #1569: carries the same historical leg as the unified activity feed
+// (retainedAccountVisibilityLeg, transaction_repository.go) so a soft-removed account's
+// investment transactions stay visible here too. Without it the investments page and the activity
+// feed disagree about the SAME rows — before Task 2 both said "empty" because a disconnect
+// CASCADE-deleted them, so the divergence is one this issue would otherwise have introduced.
 func (r *investmentTransactionRepository) GetByUserID(ctx context.Context, userID string, limit, offset int) ([]domain.InvestmentTransaction, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("investments").Inc()
 
-	query := `
+	query := fmt.Sprintf(`
 		SELECT investment_transactions.id, investment_transactions.user_id, investment_transactions.account_id,
 			investment_transactions.user_account_id, investment_transactions.security_id,
 			investment_transactions.plaid_investment_transaction_id,
@@ -161,10 +167,10 @@ func (r *investmentTransactionRepository) GetByUserID(ctx context.Context, userI
 		FROM investment_transactions
 		JOIN accounts a ON a.id = investment_transactions.account_id
 		WHERE investment_transactions.user_id = $1
-		  AND a.status = 'active'
+		  AND (a.status = 'active'%s)
 		ORDER BY investment_transactions.date DESC
 		LIMIT $2 OFFSET $3
-	`
+	`, retainedAccountVisibilityLegs("investment_transactions", "investment_transactions.date"))
 
 	rows, err := r.db.Query(ctx, query, userID, limit, offset)
 	if err != nil {
@@ -257,6 +263,11 @@ func (r *investmentTransactionRepository) GetByAccountID(ctx context.Context, ac
 // account_id points to a replaced account is still returned when an active account
 // shares the same user_account_id (the stable chain key set at insert time).
 // Uses the idx_inv_txn_user_date_id covering index (added in migration 000096).
+//
+// Issue #1569: also carries retainedAccountVisibilityLeg (transaction_repository.go), the same
+// historical leg the unified activity feed uses, so a soft-removed account's investment
+// transactions remain listed on the investments page instead of vanishing from it while still
+// appearing in the feed.
 func (r *investmentTransactionRepository) GetByUserIDKeyset(
 	ctx context.Context,
 	userID string,
@@ -347,26 +358,16 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 		FROM investment_transactions it
 		LEFT JOIN securities sec ON sec.id = it.security_id
 		WHERE it.user_id = $1
-		  -- Chain-expansion active-account filter: include pre-relink rows whose
-		  -- account_id is replaced, as long as an active account shares the same
-		  -- user_account_id (the stable chain key set at insert time — Issue #1109).
-		  -- Using EXISTS subqueries (no JOIN) avoids row duplication when multiple
-		  -- accounts share a user_account_id.
+		  -- Chain-expansion and retained legs, rendered together so neither can be dropped
+		  -- without the other — see retainedAccountVisibilityLegs (#1569 task 21 / C4).
 		  AND (
 		      EXISTS (SELECT 1 FROM accounts WHERE id = it.account_id AND status = 'active')
-		      OR (
-		          it.user_account_id IS NOT NULL
-		          AND EXISTS (
-		              SELECT 1 FROM accounts chain_a
-		              WHERE chain_a.user_account_id = it.user_account_id
-		                AND chain_a.status = 'active'
-		          )
-		      )
+%s
 		  )
 		%s
 		ORDER BY it.date DESC, it.id ASC
 		LIMIT $%d
-	`, extraConditions, limitPH)
+	`, retainedAccountVisibilityLegs("it", "it.date"), extraConditions, limitPH)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {

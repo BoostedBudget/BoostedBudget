@@ -13,6 +13,7 @@ import type { GetTransactionsSortDir } from '@boostedbudget/api-client/models/ge
 import type { Transaction as ApiTransaction } from '@boostedbudget/api-client/models/transaction';
 import type { ActivityItem } from '@boostedbudget/api-client/models/activityItem';
 import type { TransactionFilters, FeedRow } from '../types';
+import { isSettledPending } from '../types';
 
 export type TransactionFiltersState = TransactionFilters;
 export type SortBy = GetTransactionsSortBy;
@@ -55,6 +56,10 @@ function flattenFilters(filters: TransactionFiltersState): Record<string, string
     // Issue #1299: Investment activity canonicalization rules:
     // 1. include_investment_activity defaults true — omit when true (or undefined), send 'false' only when explicitly disabled
     ...(filters.include_investment_activity === false && { include_investment_activity: 'false' }),
+    // Issue #1569 T12: reversals are opt-in. Sent ONLY when explicitly true — `false` is the
+    // server default and stays off the wire, so the omitted and the declined cases produce the
+    // same request and therefore the same React Query cache entry.
+    ...(filters.include_reversed === true && { include_reversed: 'true' }),
     // 2. activity_types: only send when investment activity is included AND types are selected; sort for stable cache key
     ...(filters.include_investment_activity !== false && filters.activity_types?.length && {
       activity_types: [...filters.activity_types].sort().join(','),
@@ -112,8 +117,29 @@ export function useInfiniteTransactions(opts: UseInfiniteTransactionsOptions) {
     refetchOnWindowFocus: false,
   });
 
+  // #1569 T12 (I2): a settled pending is dropped here, so it reaches no consumer of THIS hook —
+  // not the table, not the card view, not a future one. useBudgetTransactions reads transactions
+  // by a separate path this does not cover; that path never sends include_reversed, so the row
+  // cannot reach it today, but do not read this as a global guarantee. See isSettledPending for
+  // why the client re-checks something the backend already gates twice.
+  //
+  // The drop is logged because a row arriving here means a backend regression: the API contract
+  // says this combination cannot occur. Silently hiding it would make that regression invisible
+  // rather than merely harmless.
   const transactions: FeedRow[] = useMemo(
-    () => (query.data?.pages.flatMap((p) => p.transactions ?? []) ?? []).map(toFeedRow),
+    () =>
+      (query.data?.pages.flatMap((p) => p.transactions ?? []) ?? [])
+        .map(toFeedRow)
+        .filter((row) => {
+          if (isSettledPending(row)) {
+            console.warn(
+              '[#1569] dropped a settled-pending transaction the API should never have returned',
+              { id: row.id },
+            );
+            return false;
+          }
+          return true;
+        }),
     [query.data],
   );
 

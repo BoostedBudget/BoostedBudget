@@ -21,6 +21,7 @@ import { PRESETS } from '@/shared/dates'
 import {
   TransactionDateFilter,
   TransactionInvestmentFilter,
+  TransactionReversedFilter,
   TransactionStatusFilter,
   FilterPill,
 } from './filters'
@@ -35,6 +36,9 @@ interface TransactionFilterPanelProps {
   onStatusFilterChange: (status: StatusFilter) => void
   onIncludeInvestmentActivityChange: (val: boolean) => void
   onActivityTypesChange: (types: ActivityType[]) => void
+  /** Issue #1569 T12: opt in to bank-reversed transactions. Optional so existing callers and
+   *  tests that do not offer the control keep compiling; when absent the control is not shown. */
+  onIncludeReversedChange?: (val: boolean) => void
   onClearAll?: () => void
   disabled?: boolean
 }
@@ -45,10 +49,12 @@ interface FilterPillsSectionProps {
   statusDisplayValue: string | null
   investmentDisplayValue: string | null
   activityTypesDisplayValue: string | null
+  reversedDisplayValue: string | null
   onDatePresetChange: (preset: DatePreset) => void
   onStatusFilterChange: (status: StatusFilter) => void
   onIncludeInvestmentActivityChange: (val: boolean) => void
   onActivityTypesChange: (types: ActivityType[]) => void
+  onIncludeReversedChange?: (val: boolean) => void
 }
 
 // Extracted module-level component for filter pills
@@ -57,16 +63,19 @@ function FilterPillsSection({
   statusDisplayValue,
   investmentDisplayValue,
   activityTypesDisplayValue,
+  reversedDisplayValue,
   onDatePresetChange,
   onStatusFilterChange,
   onIncludeInvestmentActivityChange,
   onActivityTypesChange,
+  onIncludeReversedChange,
 }: FilterPillsSectionProps) {
   const pills: Array<{ show: string | null, label: string, value: string | null, onRemove: () => void }> = [
     { show: dateDisplayValue, label: 'Date', value: dateDisplayValue, onRemove: () => onDatePresetChange('all') },
     { show: statusDisplayValue, label: 'Status', value: statusDisplayValue, onRemove: () => onStatusFilterChange('all') },
     { show: investmentDisplayValue, label: 'Investments', value: investmentDisplayValue, onRemove: () => onIncludeInvestmentActivityChange(true) },
     { show: activityTypesDisplayValue, label: 'Activity', value: activityTypesDisplayValue, onRemove: () => onActivityTypesChange([]) },
+    { show: reversedDisplayValue, label: 'Reversed', value: reversedDisplayValue, onRemove: () => onIncludeReversedChange?.(false) },
   ]
 
   return (
@@ -103,6 +112,7 @@ export function TransactionFilterPanel({
   onStatusFilterChange,
   onIncludeInvestmentActivityChange,
   onActivityTypesChange,
+  onIncludeReversedChange,
   onClearAll,
   disabled,
 }: TransactionFilterPanelProps) {
@@ -112,6 +122,9 @@ export function TransactionFilterPanel({
 
   const includeInvestmentActivity = filters.include_investment_activity ?? true
   const activityTypes = (filters.activity_types ?? []) as ActivityType[]
+  // Issue #1569 T12. `?? false` mirrors the API default, so a URL that never mentions the flag
+  // and one that says false are the same state here.
+  const includeReversed = filters.include_reversed ?? false
 
   // Consolidated clear all handler — use atomic onClearAll (single setSearchParams) when
   // provided to avoid the multi-call race where the last setSearchParams overwrites earlier
@@ -125,6 +138,7 @@ export function TransactionFilterPanel({
     onStatusFilterChange('all')
     onIncludeInvestmentActivityChange(true)
     onActivityTypesChange([])
+    onIncludeReversedChange?.(false)
   }
 
   const filterPillsProps = useMemo<FilterPillsSectionProps>(() => {
@@ -159,16 +173,18 @@ export function TransactionFilterPanel({
       statusDisplayValue: getStatusDisplayValue(),
       investmentDisplayValue: getInvestmentDisplayValue(),
       activityTypesDisplayValue: getActivityTypesDisplayValue(),
+      reversedDisplayValue: includeReversed ? 'Shown' : null,
       onDatePresetChange,
       onStatusFilterChange,
       onIncludeInvestmentActivityChange,
       onActivityTypesChange,
+      onIncludeReversedChange,
     }
-  }, [datePreset, filters.start_date, filters.end_date, filters.activity_types, statusFilter, includeInvestmentActivity, onDatePresetChange, onStatusFilterChange, onIncludeInvestmentActivityChange, onActivityTypesChange])
+  }, [datePreset, filters.start_date, filters.end_date, filters.activity_types, statusFilter, includeInvestmentActivity, includeReversed, onDatePresetChange, onStatusFilterChange, onIncludeInvestmentActivityChange, onActivityTypesChange, onIncludeReversedChange])
 
   // Calculate active count for date/status/investment filters
   const investmentActiveCount = (!includeInvestmentActivity ? 1 : 0) + (activityTypes.length > 0 ? 1 : 0)
-  const dateStatusActiveCount = (datePreset !== 'all' ? 1 : 0) + (statusFilter !== 'all' ? 1 : 0) + investmentActiveCount
+  const dateStatusActiveCount = (datePreset !== 'all' ? 1 : 0) + (statusFilter !== 'all' ? 1 : 0) + investmentActiveCount + (includeReversed ? 1 : 0)
   const hasDateStatusFilters = dateStatusActiveCount > 0
 
   // Mobile: Bottom sheet
@@ -224,6 +240,13 @@ export function TransactionFilterPanel({
                   onActivityTypesChange={onActivityTypesChange}
                   disabled={disabled}
                 />
+                {onIncludeReversedChange && (
+                  <TransactionReversedFilter
+                    includeReversed={includeReversed}
+                    onChange={onIncludeReversedChange}
+                    disabled={disabled}
+                  />
+                )}
               </div>
             </div>
 
@@ -325,6 +348,15 @@ export function TransactionFilterPanel({
               onActivityTypesChange={onActivityTypesChange}
               disabled={disabled}
             />
+
+            {/* Reversed transactions opt-in (#1569 T12) */}
+            {onIncludeReversedChange && (
+              <TransactionReversedFilter
+                includeReversed={includeReversed}
+                onChange={onIncludeReversedChange}
+                disabled={disabled}
+              />
+            )}
           </div>
 
           {/* Clear all button */}

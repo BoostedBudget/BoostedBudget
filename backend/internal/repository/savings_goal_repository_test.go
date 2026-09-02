@@ -2,15 +2,15 @@ package repository
 
 import (
 	"context"
-	
+
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -60,7 +60,7 @@ func TestSavingsGoalRepository_Create(t *testing.T) {
 		pgxmock.AnyArg(), // currency_code
 		goal.AccountID,
 		goal.UserAccountID, // user_account_id (Issue #1109)
-		pgxmock.AnyArg(), // deadline
+		pgxmock.AnyArg(),   // deadline
 		goal.IsCompleted,
 		goal.CompletedAt,
 		pgxmock.AnyArg(), // created_at
@@ -139,7 +139,7 @@ func TestSavingsGoalRepository_GetByID(t *testing.T) {
 			goalID,
 			userID,
 			"Vacation Fund",
-			&desc,     // Use pointer for nullable description
+			&desc, // Use pointer for nullable description
 			5000.00,
 			1000.00,
 			"USD",
@@ -392,20 +392,20 @@ func TestSavingsGoalRepository_Update(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
 		WithArgs(
 			goal.Name,
-			pgxmock.AnyArg(), // description
-			pgxmock.AnyArg(), // target_amount
-			pgxmock.AnyArg(), // current_amount
-			pgxmock.AnyArg(), // currency_code
-			pgxmock.AnyArg(), // account_id
-			pgxmock.AnyArg(), // deadline
-			pgxmock.AnyArg(), // is_completed
-			pgxmock.AnyArg(), // completed_at
-			pgxmock.AnyArg(), // updated_at
+			pgxmock.AnyArg(),   // description
+			pgxmock.AnyArg(),   // target_amount
+			pgxmock.AnyArg(),   // current_amount
+			pgxmock.AnyArg(),   // currency_code
+			pgxmock.AnyArg(),   // account_id
+			pgxmock.AnyArg(),   // deadline
+			pgxmock.AnyArg(),   // is_completed
+			pgxmock.AnyArg(),   // completed_at
+			pgxmock.AnyArg(),   // updated_at
 			goal.UserAccountID, // $11 user_account_id — must be persisted
-			pgxmock.AnyArg(), // progress_basis
-			pgxmock.AnyArg(), // account_percentage
-			pgxmock.AnyArg(), // last_calculated_at
-			pgxmock.AnyArg(), // balance_as_of
+			pgxmock.AnyArg(),   // progress_basis
+			pgxmock.AnyArg(),   // account_percentage
+			pgxmock.AnyArg(),   // last_calculated_at
+			pgxmock.AnyArg(),   // balance_as_of
 			goal.ID,
 			goal.UserID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -494,7 +494,9 @@ func TestSavingsGoalRepository_Update_NotFound(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestSavingsGoalRepository_Delete tests savings goal deletion
+// TestSavingsGoalRepository_Delete tests savings goal deletion. Issue #1569 Task 8: it is a
+// TOMBSTONE now, not a DELETE — the statement must be an UPDATE, and it must be followed by the
+// budget-category cascade inside the same transaction.
 func TestSavingsGoalRepository_Delete(t *testing.T) {
 	mock, repo := setupSavingsGoalMockDB(t)
 	defer mock.Close()
@@ -503,11 +505,16 @@ func TestSavingsGoalRepository_Delete(t *testing.T) {
 	goalID := uuid.New().String()
 	userID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM savings_goals`)).
-		WithArgs(goalID, userID).
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
+		WithArgs(goalID, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
+		WithArgs(goalID, domain.SoftDeleteReasonParent, domain.SoftDeletedByUser).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
-	err := repo.Delete(ctx, goalID, userID)
+	err := repo.Delete(ctx, goalID, userID, nil)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -522,11 +529,13 @@ func TestSavingsGoalRepository_Delete_NotFound(t *testing.T) {
 	goalID := uuid.New().String()
 	userID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM savings_goals`)).
-		WithArgs(goalID, userID).
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
+		WithArgs(goalID, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
 
-	err := repo.Delete(ctx, goalID, userID)
+	err := repo.Delete(ctx, goalID, userID, nil)
 
 	assert.Error(t, err)
 	assert.Equal(t, domain.ErrSavingsGoalNotFound, err)

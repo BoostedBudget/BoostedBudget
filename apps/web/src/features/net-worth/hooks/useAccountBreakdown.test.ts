@@ -256,4 +256,82 @@ describe('useAccountBreakdown', () => {
     expect(result.current.assets).toEqual([])
     expect(result.current.liabilities).toEqual([])
   })
+
+  // Issue #1569 whole-branch review, I1. `?? 0` on a MISSING balance is a claim that the account
+  // holds exactly zero. It is not reachable for a CLOSED account (filterActiveAccounts drops
+  // those upstream), but it is reachable for an ACTIVE one: account_service.go only assigns
+  // `current_balance` when Plaid returns a non-nil `balances.current`, so an account whose first
+  // sync has not landed arrives with no balance at all. The Accounts page renders that as "—";
+  // the breakdown rendered "$0.00 at 0.0%".
+  describe('an active account with no current balance', () => {
+    it('carries a null balance on the row rather than zero', () => {
+      const accounts = [makeAccount({ id: 'acc-nb', current_balance: undefined })]
+      mockUseGetAccounts.mockReturnValue({ data: { accounts, total_count: 1 }, isLoading: false, error: null })
+      const { result } = renderHook(() => useAccountBreakdown())
+      expect(result.current.assets).toHaveLength(1)
+      expect(result.current.assets[0].currentBalance).toBeNull()
+    })
+
+    it('carries a null percentage rather than 0.0%', () => {
+      const accounts = [
+        makeAccount({ id: 'acc-nb', current_balance: undefined }),
+        makeAccount({ id: 'acc-funded', current_balance: 400 }),
+      ]
+      mockUseGetAccounts.mockReturnValue({ data: { accounts, total_count: 2 }, isLoading: false, error: null })
+      const { result } = renderHook(() => useAccountBreakdown())
+      const row = result.current.assets.find((r) => r.id === 'acc-nb')!
+      expect(row.percentOfSide).toBeNull()
+      // The funded account still gets a real share of a real total — the unknown row contributes
+      // nothing rather than poisoning the denominator.
+      expect(result.current.assets.find((r) => r.id === 'acc-funded')!.percentOfSide).toBe(100)
+    })
+
+    it('leaves the side totals untouched', () => {
+      const accounts = [
+        makeAccount({ id: 'acc-nb', current_balance: undefined }),
+        makeAccount({ id: 'acc-funded', current_balance: 400 }),
+        makeAccount({ id: 'acc-card', type: 'credit', current_balance: undefined }),
+      ]
+      mockUseGetAccounts.mockReturnValue({ data: { accounts, total_count: 3 }, isLoading: false, error: null })
+      const { result } = renderHook(() => useAccountBreakdown())
+      expect(result.current.assetsTotal).toBe(400)
+      expect(result.current.liabilitiesTotal).toBe(0)
+      // A liability with no balance is still LISTED — it exists, its amount is unknown.
+      expect(result.current.liabilities).toHaveLength(1)
+      expect(result.current.liabilities[0].currentBalance).toBeNull()
+    })
+
+    // Issue #1569 whole-branch review flagged this intersection as a WIDER visible change than
+    // the motivating case: the null-balance check runs BEFORE the zero-total check, so a
+    // balance-less row reports null even on a side whose total is 0 — where the sibling
+    // zero-balance rows all report 0%. SETTLED AS CORRECT, and pinned here so it is a decision
+    // rather than an accident.
+    //
+    // The two rows are genuinely different and the surface already says so in the balance column:
+    // a $0 account holds nothing (renders "$0.00"), a balance-less account has not told us what
+    // it holds (renders "—"). Ordering the checks the other way would print "0.0%" against a "—"
+    // balance, which reads as "this account is 0% of the total" — a quantity claim about an
+    // unknown. An em dash in both columns is the honest pair, and it is what the Accounts page
+    // shows for the same account.
+    it('keeps the null percentage even when the side total is 0 (unknown is not 0%)', () => {
+      const accounts = [
+        makeAccount({ id: 'acc-nb', current_balance: undefined }),
+        makeAccount({ id: 'acc-zero', current_balance: 0 }),
+      ]
+      mockUseGetAccounts.mockReturnValue({ data: { accounts, total_count: 2 }, isLoading: false, error: null })
+      const { result } = renderHook(() => useAccountBreakdown())
+      expect(result.current.assetsTotal).toBe(0)
+      expect(result.current.assets.find((r) => r.id === 'acc-nb')!.percentOfSide).toBeNull()
+      // …while the account that really does hold zero keeps saying so.
+      expect(result.current.assets.find((r) => r.id === 'acc-zero')!.percentOfSide).toBe(0)
+    })
+
+    it('keeps a real balance as a number (guards the null branch from swallowing everything)', () => {
+      const accounts = [makeAccount({ id: 'acc-funded', current_balance: 400 })]
+      mockUseGetAccounts.mockReturnValue({ data: { accounts, total_count: 1 }, isLoading: false, error: null })
+      const { result } = renderHook(() => useAccountBreakdown())
+      expect(result.current.assets[0].currentBalance).toBe(400)
+      expect(result.current.assets[0].percentOfSide).toBe(100)
+    })
+  })
 })
