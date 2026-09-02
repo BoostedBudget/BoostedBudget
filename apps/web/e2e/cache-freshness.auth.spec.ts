@@ -72,10 +72,31 @@ const WAIT_ELEMENT_MS = 10_000 * CI_WAIT_FACTOR
 // through to the six-interaction Add-Widget dialog flow, which is what consumed the whole-test
 // budget on run 33660693375. Waiting longer here is strictly cheaper than falling through.
 const WAIT_WIDGET_MS = 5_000 * CI_WAIT_FACTOR
-// Whole-test budget, from the same factor. Six full page loads against a real backend plus a PUT
-// and a revert; the finally-block's revert inherits whatever is left, and on run 33660693375 it
-// inherited an already-expired deadline and logged "category cleanup failed (non-fatal)".
-const TEST_BUDGET_MS = 120_000 * CI_WAIT_FACTOR
+// Whole-test budget. ⚠ Deliberately NOT scaled by CI_WAIT_FACTOR — see the retraction below.
+//
+// ⚠ RETRACTION (run 33678171305). I first set this to 120_000 * CI_WAIT_FACTOR = 360_000, on the
+// stated grounds that 120s "was calibrated on the Mac Mini and is not enough on the 2-vCPU
+// runner". THAT WAS WRONG, and measurement refutes it: on the green run (33673717843) this test
+// completed in 39.9s on that exact runner type, so 120s was already 3x the headroom it needs.
+//
+// The test does not need a bigger budget; it intermittently HANGS. A budget does not fix a hang,
+// it only prices one — and tripling it tripled the price. One hung attempt burned 6.2 minutes
+// instead of ~2.
+//
+// ⚠ Scale honestly: this describe block sets `retries: 0` (below), so that is 6.2 minutes ONCE,
+// not x3. My first draft of this comment said "three attempts ~18.6 minutes, which blew the job's
+// 45-minute cap" — both halves were wrong. Measuring the run instead: 39.5 minutes of test time
+// total, with a cluster of ~31s durations across boosts-table, budget-hierarchy, url-sort,
+// dashboard, transaction-filtering and savings — i.e. dozens of UNRELATED tests hitting the
+// global 30s per-test timeout and retrying under `retries: 2`. That starvation blew the cap; this
+// budget added about four minutes to it. Fixing this is still right (360s was 9x the measured
+// healthy 39.9s) but it is not the headline.
+//
+// The budget is a HANG DETECTOR, not a slowness allowance. Slowness is absorbed by the
+// per-action waits above, which are individually bounded; this only has to exceed the sum of the
+// legitimate ones. 180_000 is 4.5x the measured healthy duration and leaves room for a couple of
+// worst-case 45s responses, while capping a hung attempt at 3 minutes rather than 6.
+const TEST_BUDGET_MS = process.env.CI ? 180_000 : 120_000
 
 const CHIPOTLE_AMOUNT = 45.0
 const ORIGINAL_PFC_PRIMARY = 'FOOD_AND_DRINK'
@@ -114,6 +135,19 @@ test.describe('Cache freshness after a real transaction-category write (#1531)',
     // CI cost rather than an arbitrary round number. Kept at 120_000 locally so a genuine hang
     // still surfaces quickly on a dev machine.
     testInfo.setTimeout(TEST_BUDGET_MS)
+
+    // ⚠ The actual reason a hang could cost 6 minutes: Playwright's default actionTimeout is 0,
+    // meaning NO per-action limit, so a single `.click()` or `.waitFor()` blocks until the
+    // whole-test budget expires. That is why run 33678171305 shows nothing but a 30s
+    // notification poll for six minutes — the page was alive and the test was simply waiting,
+    // unbounded, with no error to point at.
+    //
+    // Bounding it per action does two things a budget cannot: it caps what one hang costs, and it
+    // fails with a message naming the locator that never resolved instead of an anonymous
+    // whole-test timeout. Set here rather than in playwright.config.ts because config is shared
+    // by every spec and this is the one with a known intermittent hang; widening it globally is a
+    // separate decision.
+    page.setDefaultTimeout(WAIT_ELEMENT_MS)
 
     // A page.goto is required BEFORE any apiClient() call: apiClient reads the auth token from
     // window.Clerk.session in the browser context (helpers/api/client.ts), which doesn't exist

@@ -264,6 +264,57 @@ def check_workflow(path, seen):
                 f"container so Actions health-gates it and destroys it with the VM."
             )
 
+    # R8 (#1598). Playwright's `globalTimeout` must stay BELOW the e2e-test job's
+    # `timeout-minutes`, with room for artifact upload.
+    #
+    # These two numbers live in different files and neither mentions the other, so the ordering is
+    # exactly the kind of invariant that inverts silently. It matters because of what each does
+    # when it fires: `globalTimeout` stops the run and Playwright still writes its report, so the
+    # upload steps execute; the JOB timeout has GitHub cancel the job, which SKIPS every remaining
+    # step. On run 33678171305 that skipped the HTML report, the videos and the skipped-count
+    # guard — the one run that most needed diagnostics produced none, for 45 runner-minutes.
+    #
+    # Lower the job's timeout-minutes under globalTimeout and you are back to losing artifacts,
+    # with nothing to tell you.
+    e2e = jobs.get("e2e-test")
+    if isinstance(e2e, dict):
+        job_minutes = e2e.get("timeout-minutes")
+        # Derived from the WORKFLOW's location, not the CWD. `.github/workflows/x.yml` ->
+        # three parents up is the repo root. This keeps the rule independent of where the guard
+        # is invoked from, and makes it self-skip for the synthetic fixture trees in
+        # check-runner-portability.test.sh (which have no apps/web/) instead of silently
+        # measuring the REAL config against a fixture's job — a coupling that would make the
+        # suite's verdicts depend on this repo's actual timeout values.
+        cfg = path.parent.parent.parent / "apps" / "web" / "playwright.config.ts"
+        if cfg.is_file() and isinstance(job_minutes, int):
+            m = re.search(
+                r"globalTimeout:\s*process\.env\.CI\s*\?\s*(\d+)\s*\*\s*60\s*\*\s*1000",
+                cfg.read_text(),
+            )
+            if not m:
+                findings.append(
+                    f"{path.name}: job 'e2e-test' sets timeout-minutes={job_minutes} but "
+                    f"apps/web/playwright.config.ts declares no `globalTimeout: process.env.CI ? "
+                    f"N * 60 * 1000`. Without it a hung run is CANCELLED at the job timeout, "
+                    f"which skips the report and video uploads."
+                )
+            else:
+                global_minutes = int(m.group(1))
+                if global_minutes >= job_minutes:
+                    findings.append(
+                        f"{path.name}: Playwright globalTimeout ({global_minutes}m) is not below "
+                        f"job 'e2e-test' timeout-minutes ({job_minutes}m). The job would be "
+                        f"cancelled before Playwright could write its report, skipping every "
+                        f"upload step."
+                    )
+                elif job_minutes - global_minutes < 5:
+                    findings.append(
+                        f"{path.name}: only {job_minutes - global_minutes}m between Playwright "
+                        f"globalTimeout ({global_minutes}m) and job timeout-minutes "
+                        f"({job_minutes}m). Leave at least 5m for artifact upload and cache "
+                        f"saves, or a timed-out run still loses its diagnostics."
+                    )
+
     lighthouse = jobs.get("lighthouse-audit")  # R6
     if isinstance(lighthouse, dict) and lighthouse.get("if") in (False, "false"):
         findings.append(
