@@ -237,6 +237,37 @@ describe('App', () => {
     }, 60000)
   })
 
+  // #1598: Clerk's default sign-in redirect target had no route, so a Clerk-initiated redirect
+  // (an expired session, most commonly) fell through to path="*" and showed the user
+  // "404 Page Not Found" instead of a way to sign back in. This app has no sign-in PAGE on
+  // purpose — LandingHeader opens Clerk's MODAL — so "/" is the correct destination, and it is
+  // already where ProtectedRoute sends unauthenticated users.
+  //
+  // Asserted on the RENDERED OUTCOME rather than on ClerkProvider's props: the props are one of
+  // two mechanisms (the /sign-in and /sign-up routes in App.tsx are the other), and what actually
+  // matters is that neither of these URLs can ever render the 404 page.
+  describe('sign-in / sign-up URLs never render the 404 page', () => {
+    beforeEach(() => {
+      mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: false, isLoaded: true }))
+      mockUseUser.mockReturnValue(createMockClerkUser({ user: null }))
+      mockUseClerk.mockReturnValue(createMockClerk())
+    })
+
+    for (const path of ['/sign-in', '/sign-up']) {
+      it(`${path} does not render NotFoundPage`, async () => {
+        const Wrapper = createMemoryWrapper([path])
+        render(<App />, { wrapper: Wrapper })
+
+        await waitFor(() => {
+          expect(screen.queryByText('Page Not Found')).not.toBeInTheDocument()
+        })
+        // And the 404's numeral is absent too — NotFoundPage renders both, so checking one alone
+        // could pass on a partial render.
+        expect(screen.queryByText('404')).not.toBeInTheDocument()
+      })
+    }
+  })
+
   describe('landing page sections', () => {
     beforeEach(() => {
       mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: false, isLoaded: true }))

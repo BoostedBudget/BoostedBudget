@@ -100,7 +100,25 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <ThemeProvider defaultTheme="system">
-      <ClerkProvider publishableKey={clerkPublishableKey}>
+      {/* ⚠ signInUrl/signUpUrl point at "/" DELIBERATELY, and omitting them was a real bug.
+          This app has no sign-in PAGE by design — it signs in through Clerk's modal, opened by
+          openSignIn()/openSignUp() from LandingHeader.tsx. But Clerk defaults its redirect target
+          to /sign-in, and App.tsx has no such route, so a Clerk-initiated sign-in redirect fell
+          through to `path="*"` and rendered NotFoundPage. A user whose session expired was shown
+          "404 Page Not Found" instead of a way to sign back in.
+          Evidence (#1598 run 33688968531): a URL assertion caught it directly —
+          "unexpected value http://localhost:33600/dashboard" then
+          "unexpected value http://localhost:33600/sign-in", and all 12 failing/flaky specs in
+          that run captured the 404 page WITH a full authenticated header, because the header
+          renders outside <Routes>.
+          "/" is the right target: it is the landing page that hosts the sign-in modal, and it is
+          already where ProtectedRoute sends unauthenticated users (ProtectedRoute.tsx:34), so
+          this makes Clerk agree with the app instead of contradicting it. */}
+      <ClerkProvider
+        publishableKey={clerkPublishableKey}
+        signInUrl="/"
+        signUpUrl="/"
+      >
         <PostHogProvider client={posthog}>
           <ErrorBoundary>
             <Provider store={store}>
