@@ -16,22 +16,36 @@
  *                        E2E runs/CI runners — Issue #1514)
  *
  * Note: this script does NOT emit LHCI_PORT. Lighthouse CI (`.github/workflows/test.yml`,
- * the `lighthouse-audit` job, currently `if: false` pending #996) computes its own
- * LHCI_PORT independently and never invokes this script, so an LHCI_PORT emitted here
+ * the `lighthouse-audit` job) sets its own fixed LHCI_PORT and never invokes this script, so an
+ * LHCI_PORT emitted here
  * would be dead output — verified by checking that run-e2e-with-ports.sh only exports
  * variables matching `^E2E_` (see its `grep -E "^E2E_"`) and that no other caller reads
  * this script's stdout for LHCI_PORT.
  *
  * Port layout (Issue #1514): one contiguous 600-port block per job, carved into five
- * 100-port per-service sub-bands, entirely below this host's ephemeral port floor
- * (net.inet.ip.portrange.first = 49152):
+ * 100-port per-service sub-bands, sized to sit below the host's ephemeral port floor:
  *   block    = 15000 + (runId % 50) * 600
  *   frontend = block +   0 .. +  99
  *   backend  = block + 100 .. + 199
  *   postgres = block + 200 .. + 299
  *   prod     = block + 300 .. + 399
  *   metrics  = block + 400 .. + 499
- * Max possible port: 15000 + 49*600 + 599 = 44999 (< 49152).
+ * Max possible port: 15000 + 49*600 + 599 = 44999.
+ *
+ * ⚠ THAT CEILING IS ONLY BELOW THE FLOOR ON macOS. #1598:
+ *   macOS: net.inet.ip.portrange.first = 49152, so 44999 is safely below it as shipped. This
+ *          was the only platform that mattered when the layout was designed.
+ *   Linux: net.ipv4.ip_local_port_range defaults to 32768, which OVERLAPS this block from 32768
+ *          to 44999 — so the kernel can hand an outbound socket a port this script is about to
+ *          hand a server, producing an intermittent, load-dependent EADDRINUSE that reads as
+ *          test flake rather than as a port-allocation bug.
+ *
+ * In CI that overlap is currently bounded rather than eliminated, by two properties of the
+ * ephemeral runner: there is exactly one job per VM, and the databases are GitHub Actions
+ * `services:` containers on Actions-mapped ports, so nothing else publishes into this range.
+ * Do NOT reuse this allocator on a busy Linux host without either raising the kernel floor
+ * (`sysctl -w net.ipv4.ip_local_port_range="49152 60999"`) or lowering the block ceiling below
+ * 32768.
  *
  * Blocks are unique per *offset* (runId % 50), not per run: runs 50 apart (e.g. 7 and 57)
  * share the same block. Within a shared block, findAvailablePort's in-band scan picks
