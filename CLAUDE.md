@@ -17,13 +17,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make dev                    # Docker-compose up
 make test-fast              # Backend+frontend tests, NO e2e (~2min)
 make test-all               # ALL tests including e2e (~4min)
-make test-scripts           # The 23 shell guard suites: 21 in scripts/__tests__/, one in
+make test-scripts           # The 24 shell guard suites: 22 in scripts/__tests__/, one in
                              # apps/web/scripts/__tests__/, and — ⚠ do not drop this one when
                              # re-deriving the count from the two __tests__ globs, which is how
                              # this line came to say 19 — scripts/check-frontend-coverage.test.sh,
                              # which sits beside its subject rather than in a __tests__ dir.
                              # Verified #1569 r19: every on-disk suite is invoked by the target
-                             # (no orphans), and the target's own "N/23:" labels agree.
+                             # (no orphans), and the target's own "N/24:" labels agree.
                              # Separate CI steps, NOT covered by
                              # test-fast/test-all/bun run test. Fails on the first red. Docker/
                              # Postgres-dependent suites skip with a visible warning if unavailable
@@ -44,10 +44,20 @@ make test-scripts           # The 23 shell guard suites: 21 in scripts/__tests__
                              # check-portable-sed and check-runner-portability, both hosted in
                              # e2e-test and both also in check-ungated-guard-steps.py's
                              # REQUIRED_UNGATED_STEPS (which now pins 12 step names, not 8), so
-                             # they cannot be silently unwired. Re-derive with:
+                             # they cannot be silently unwired.
+                             # ⚠ #1601 adds the 24th, check-route-weight, and it breaks TWO
+                             # patterns the entries above would lead you to assume. It is hosted in
+                             # **bundle-size, not e2e-test**, because its guard needs a BUILT
+                             # apps/web/dist and only that job produces one (its sibling bundle
+                             # guard check-orphan-chunks is hosted there for the same reason). And
+                             # it is deliberately **NOT** in REQUIRED_UNGATED_STEPS: that list is
+                             # for guards whose subject no paths filter covers, whereas this one's
+                             # subject IS the frontend, so being gated on the frontend/workflow
+                             # filters is correct rather than a hole. The pin therefore stays at 12
+                             # step names, not 13. Re-derive with:
                              #   git ls-files -- '*__tests__/*.test.sh' 'scripts/*.test.sh' | wc -l
                              # and NOT by grepping the Makefile, which returns 46 because every
-                             # suite appears twice there — once in its "N/23:" label and once as
+                             # suite appears twice there — once in its "N/24:" label and once as
                              # the invoked path.
                              # Adding a suite to this target therefore does NOT put it in CI; add a
                              # step too. **CI is the ONLY authoritative gate** —
