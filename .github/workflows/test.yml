@@ -3134,7 +3134,17 @@ jobs:
           done
           node --input-type=module -e "
             import { chromium } from '@playwright/test';
-            const b = await chromium.launch({ args: ['--no-sandbox'] });
+            // executablePath is REQUIRED here, not an optimisation. This job never runs
+            // \\`playwright install\\` (only e2e-test does), so Playwright's own bundled Chromium is
+            // not on disk and a bare launch() dies with 'Executable doesn't exist at
+            // .../chromium_headless_shell-.../chrome-headless-shell'. That is exactly how the
+            // first version of this guard failed -- masking the very question it exists to
+            // answer. Reusing CHROME_PATH (resolved by the preflight above) also makes the probe
+            // faithful rather than merely cheap: it exercises the SAME browser lhci will launch.
+            const b = await chromium.launch({
+              executablePath: process.env.CHROME_PATH,
+              args: ['--no-sandbox'],
+            });
             const p = await b.newPage();
             const errors = [];
             p.on('pageerror', e => errors.push(e.message));
