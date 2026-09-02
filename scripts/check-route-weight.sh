@@ -47,9 +47,15 @@ INDEX_HTML="${DIST_DIR}/index.html"
 # ratchet. Raising it is a decision that belongs in a commit message, not an env var.
 #
 # 541 is a RATCHET AT THE MEASURED VALUE, not a statement that 541 KiB is good. Measured
-# 2026-09-02 after #1601 Task 2 at 553,584 bytes (540.61 KiB) across 10 assets, down from
+# 2026-09-02 after #1601 Task 2 at 553,962 bytes (540.98 KiB) across 11 local assets, down from
 # 867,876 bytes (847.54 KiB) across 20 — a 36% cut. 541 is that value rounded up, so any growth
-# at all trips it.
+# at all trips it. (11, not 10: the #1601 review found the first version omitted parser-blocking
+# classic scripts, so /config.js — 322 gzip bytes — is now correctly inside the total.)
+#
+# ⚠ UNITS. This budget is BINARY KiB (1024). `.size-limit.json` next door uses `KB` which
+# bytes-iec parses as DECIMAL 1000, so the two files' numbers are NOT interchangeable: 541 here is
+# 553,984 bytes, while "541 KB" there would be 541,000. Compare bytes, never the labels, when
+# reconciling a chunk budget against this route total.
 #
 # The original target was 400, and it is NOT reachable by removing eager app code, because
 # `vendor` alone is 446 KiB of the remaining 541. Getting under 400 requires splitting vendor
@@ -77,6 +83,15 @@ fail() {
 # tr '<' '\n' first: these tags are minified onto few lines, and a line-oriented grep -o over
 # the raw file is fine, but splitting on '<' keeps each match to exactly one tag and makes the
 # rel= and type= tests unambiguous.
+# Tag shapes that block or precede the first paint. #1601 review finding 2: the first version
+# accepted only module scripts, modulepreloads and stylesheets, which UNDER-REPORTED the route —
+# index.html also carries `/config.js` and the Paddle SDK as parser-blocking CLASSIC scripts
+# (no async, no defer), and those gate discovery of our own JS. A guard that under-reports a size
+# is worse than none, so classic blocking scripts and `<link rel=preload>` are in the universe too.
+#
+# A classic script counts only when it has NEITHER async NOR defer — those genuinely do not block
+# the parser, and counting them would overstate the route just as badly as the old form
+# understated it.
 extract_refs() {
   tr '<' '\n' < "$INDEX_HTML" \
     | while IFS= read -r tag; do
@@ -84,6 +99,10 @@ extract_refs() {
           script*type=\"module\"*src=\"*)  ;;
           link*rel=\"modulepreload\"*)     ;;
           link*rel=\"stylesheet\"*)        ;;
+          link*rel=\"preload\"*)           ;;
+          script*async*) continue ;;
+          script*defer*) continue ;;
+          script*src=\"*)                   ;;
           *) continue ;;
         esac
         # Pull href="..." or src="..." — whichever this tag carries.
@@ -102,26 +121,98 @@ extract_refs() {
     | sort -u
 }
 
+# SECOND, INDEPENDENT extraction (#1601 review finding 3). The invariant further down proves the
+# summing loop consumed every ref it was GIVEN; it cannot notice that the ref list itself was cut
+# short, because a truncated list is self-consistent. A review mutant that appended `head -4` to
+# extract_refs therefore reported "52 KiB across 4 assets" and exited 0 against a 10-asset tree.
+#
+# This counts the same thing by a deliberately DIFFERENT route — one grep pipeline over the whole
+# file instead of tr + a per-tag case statement. The two must agree exactly. Truncation, a broken
+# case pattern or a lost tag class in either implementation now disagrees with the other, and
+# disagreement fails. Keep them independent: if you "simplify" this to call extract_refs, the
+# cross-check becomes a tautology and this whole class of bug reopens.
+independent_ref_count() {
+  /usr/bin/grep -oE '<(script|link)[^>]*>' "$INDEX_HTML" \
+    | /usr/bin/grep -vE '(async|defer)[ >=]' \
+    | /usr/bin/grep -E 'rel="(modulepreload|stylesheet|preload)"|src="' \
+    | /usr/bin/grep -oE '(href|src)="[^"]*"' \
+    | /usr/bin/sed -e 's/^[a-z]*="//' -e 's/"$//' \
+    | /usr/bin/sed '/^$/d' \
+    | sort -u \
+    | /usr/bin/wc -l \
+    | /usr/bin/tr -d ' '
+}
+
 REFS="$(extract_refs)"
 
 [ -n "$REFS" ] || fail "Parsed ${INDEX_HTML} but found no entry module, modulepreload or stylesheet.
        Either the build output shape changed or the file is truncated. Refusing to report 0 KiB
        as a pass — a parser that silently matches nothing looks identical to a tiny bundle."
 
+INDEPENDENT_COUNT="$(independent_ref_count)"
+PARSED_COUNT="$(printf '%s\n' "$REFS" | /usr/bin/sed '/^$/d' | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+if [ "$PARSED_COUNT" -ne "$INDEPENDENT_COUNT" ]; then
+  fail "Two independent parses of ${INDEX_HTML} disagree: the tag walker found ${PARSED_COUNT}
+       asset reference(s), the grep pipeline found ${INDEPENDENT_COUNT}. One of them is wrong, so
+       the total would be untrustworthy in an unknown direction. Refusing to report it."
+fi
+
+# Parser-blocking THIRD-PARTY origins we already ship and have accepted. A cross-origin script
+# cannot be weighed from disk, so it is never part of the byte total — but a NEW one appearing is
+# exactly the regression this guard should catch (a third-party connection gating discovery of our
+# own JS is what Lighthouse charges 313ms of critical-path latency for), so an unlisted origin is
+# a hard failure rather than a silent omission.
+KNOWN_BLOCKING_THIRD_PARTY="cdn.paddle.com"
+
 # Sum gzip bytes, collecting a breakdown as we go. Newline-delimited "bytes<TAB>path" lines
 # instead of an associative array, for bash 3.2.
 TOTAL=0
 BREAKDOWN=""
 MISSING=""
+REMOTE=""
+UNKNOWN_REMOTE=""
+REF_COUNT=0
+PROCESSED=0
 
-while IFS= read -r ref; do
+# ⚠ An IFS-newline `for`, NOT `while read ... done <<EOF`. #1601 review finding 1: a here-document
+# needs a temp file, and when Bash cannot create one (read-only or restricted TMPDIR, a sandbox,
+# a full disk) the redirection fails WITHOUT `set -e` stopping the script — the loop body simply
+# never runs and the guard printed "0 KiB gzip across 0 assets" and exited 0. That is the precise
+# fail-open the empty-parse check above exists to prevent, arriving through a different door. This
+# form touches no temp file, and the PROCESSED/REF_COUNT invariant below closes the class rather
+# than this one instance.
+OLD_IFS="$IFS"
+IFS='
+'
+for ref in $REFS; do
+  IFS="$OLD_IFS"
   [ -n "$ref" ] || continue
+  REF_COUNT=$((REF_COUNT + 1))
+  # Cross-origin refs (https://…, //…) cannot be weighed from disk.
+  case "$ref" in
+    http://*|https://*|//*)
+      host="$(printf '%s' "$ref" | /usr/bin/sed -e 's|^https\{0,1\}://||' -e 's|^//||' -e 's|/.*$||')"
+      REMOTE="${REMOTE}${ref}
+"
+      if ! printf '%s\n' "$KNOWN_BLOCKING_THIRD_PARTY" | /usr/bin/grep -Fxq "$host"; then
+        UNKNOWN_REMOTE="${UNKNOWN_REMOTE}${host}	${ref}
+"
+      fi
+      PROCESSED=$((PROCESSED + 1))
+      IFS='
+'
+      continue
+      ;;
+  esac
   # Refs are absolute site paths ("/assets/x.js"); dist/ is the site root.
   rel="${ref#/}"
   file="${DIST_DIR}/${rel}"
   if [ ! -f "$file" ]; then
     MISSING="${MISSING}${ref}
 "
+    PROCESSED=$((PROCESSED + 1))
+    IFS='
+'
     continue
   fi
   # `gzip -c < "$file"`, NOT `gzip -c "$file"`. Given a named argument, gzip embeds the ORIGINAL
@@ -130,11 +221,26 @@ while IFS= read -r ref; do
   # no name, which makes this a measure of the content alone.
   bytes="$(gzip -c < "$file" | /usr/bin/wc -c | /usr/bin/tr -d ' ')"
   TOTAL=$((TOTAL + bytes))
+  PROCESSED=$((PROCESSED + 1))
   BREAKDOWN="${BREAKDOWN}${bytes}	${ref}
 "
-done <<EOF
-$REFS
-EOF
+  IFS='
+'
+done
+IFS="$OLD_IFS"
+
+# THE FAIL-CLOSED INVARIANT (#1601 review finding 1). Every ref parsed must have been accounted
+# for — measured, recorded as missing, or recorded as cross-origin. If the loop was skipped or cut
+# short for ANY reason, this is what refuses to report the shortfall as a pass. It is the
+# generalisation of the here-doc bug, not a patch for it: truncation, an unreadable file, a
+# `continue` added without a counter bump, all land here.
+EXPECTED_REFS="$(printf '%s\n' "$REFS" | /usr/bin/sed '/^$/d' | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+if [ "$PROCESSED" -ne "$EXPECTED_REFS" ]; then
+  fail "Parsed ${EXPECTED_REFS} asset reference(s) but only accounted for ${PROCESSED}.
+       The summing loop did not run to completion, so the total below would understate the route.
+       Refusing to report it. (Historically this was a here-document whose temp file could not be
+       created, which left the loop body unexecuted and still exited 0.)"
+fi
 
 # A referenced-but-absent asset is a real defect (a stale index.html, or a build that did not
 # finish), and silently skipping it would UNDERSTATE the route weight — the one direction a
@@ -143,6 +249,18 @@ if [ -n "$MISSING" ]; then
   printf '❌ index.html references assets that do not exist in %s:\n' "$DIST_DIR" >&2
   printf '%s' "$MISSING" | /usr/bin/sed '/^$/d;s/^/       /' >&2
   fail "Refusing to report a total that omits them."
+fi
+
+# A NEW parser-blocking third-party origin is a route regression even though its bytes are not
+# ours to weigh, so it fails rather than being quietly listed.
+if [ -n "$UNKNOWN_REMOTE" ]; then
+  printf '❌ New parser-blocking third-party script(s) on the landing route:\n' >&2
+  printf '%s' "$UNKNOWN_REMOTE" | /usr/bin/sed '/^$/d;s/^/       /' >&2
+  printf '   A cross-origin blocking script gates discovery of our own JS behind someone else'"'"'s\n' >&2
+  printf '   connection, which is why Lighthouse charges this to the critical path. Give it async or\n' >&2
+  printf '   defer if the consumer tolerates it, or add the origin to KNOWN_BLOCKING_THIRD_PARTY\n' >&2
+  printf '   with a reason.\n' >&2
+  fail "Refusing to accept a new third-party blocking script silently."
 fi
 
 BUDGET_BYTES=$((BUDGET_KIB * 1024))
@@ -171,5 +289,13 @@ if [ "$TOTAL" -gt "$BUDGET_BYTES" ]; then
   exit 1
 fi
 
-printf '✅ Landing route (/) eager download: %s KiB gzip across %s assets (budget %s KiB)\n' \
+printf '✅ Landing route (/) eager download: %s KiB gzip across %s local assets (budget %s KiB)\n' \
   "$TOTAL_KIB" "$COUNT" "$BUDGET_KIB"
+if [ -n "$REMOTE" ]; then
+  # Stated on success too: the total is explicitly NOT the whole first-paint cost, and a reader
+  # who does not know that will over-trust the number.
+  printf '   Plus %s parser-blocking third-party request(s), whose bytes cannot be measured from\n' \
+    "$(printf '%s' "$REMOTE" | /usr/bin/sed '/^$/d' | /usr/bin/wc -l | /usr/bin/tr -d ' ')" >&2
+  printf '   disk and are NOT in the total above:\n' >&2
+  printf '%s' "$REMOTE" | /usr/bin/sed '/^$/d;s/^/       /' >&2
+fi

@@ -147,10 +147,28 @@ export default defineConfig({
             // #1601. The KEYSTONE of the landing route's cascade — ONE group, deliberately.
             //
             // These are all light modules that eager code needs but which lived in heavy feature
-            // chunks, so importing one dragged its whole feature along. They are consolidated
-            // into a single group because rolldown honours only the FIRST group matching a given
-            // name: three separate `name: 'shared'` entries silently left the 2nd and 3rd
-            // unapplied, which measured as no change at all and cost a debugging round.
+            // chunks, so importing one dragged its whole feature along.
+            //
+            // ⚠ RETRACTION. An earlier version of this comment said they were consolidated
+            // because "rolldown honours only the FIRST group matching a given name". THAT IS
+            // FALSE, and the #1601 review caught it. Rolldown's own docs say the opposite — "It's
+            // ok to have the same name for different groups. Rolldown will deduplicate the chunk
+            // names if necessary", with higher priority chosen first and group index breaking
+            // ties only among equal priorities. Both groups always applied; the build proves it
+            // by emitting two distinct `shared-*.js` chunks.
+            //
+            // I inferred the wrong rule from a measurement that did not move (797 -> 798 KiB) for
+            // an entirely different reason: the admin chunk was being held on the landing route
+            // by rolldown's unresolved-optional-peer stub for date-fns-tz, which `vendor`
+            // imported. Relocating these modules WAS working the whole time; the stub was masking
+            // it. One group is still the clearer way to express one intent, so the shape stays —
+            // but not for the reason originally given.
+            //
+            // ⚠ Known consequence, accepted: the two shared chunks import each other
+            // (shared-A <-> shared-B is a genuine chunk-level cycle in the current build). ES
+            // modules handle cyclic chunk imports, the build succeeds and the app and E2E suite
+            // pass, so this is a maintenance smell rather than a defect — but if chunking here is
+            // reworked, breaking the cycle is the thing to aim for.
             //
             //   profile/hooks/*        — useProfile is a thin api-client wrapper, but the profile
             //                            chunk also holds ProfilePage, which imports the admin
