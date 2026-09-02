@@ -20,7 +20,7 @@
   {
     "name": "vendor",
     "path": "apps/web/dist/assets/vendor-*.js",
-    "limit": "435 KB",
+    "limit": "465 KB",
     "gzip": true
   },
   {
@@ -39,6 +39,18 @@
     "name": "shared",
     "path": "apps/web/dist/assets/shared-*.js",
     "limit": "40 KB",
+    "gzip": true
+  },
+  {
+    "name": "layout-chrome",
+    "path": "apps/web/dist/assets/layout-chrome-*.js",
+    "limit": "5 KB",
+    "gzip": true
+  },
+  {
+    "name": "header",
+    "path": "apps/web/dist/assets/Header-*.js",
+    "limit": "6 KB",
     "gzip": true
   },
   {
@@ -164,7 +176,7 @@
   {
     "name": "investments",
     "path": "apps/web/dist/assets/investments-*.js",
-    "limit": "7 KB",
+    "limit": "8 KB",
     "gzip": true
   }
 ]

@@ -14,16 +14,74 @@ import {
 } from './privacy'
 import { ProtectedRoute } from './auth'
 import { PremiumRoute } from './auth/PremiumRoute'
-import { Header, AppFooter } from './components/layout'
-import { SubscriptionStatusBanner } from './features/billing/components/SubscriptionStatusBanner'
-import { HouseholdOverCapacityBanner } from './features/household/components/HouseholdOverCapacityBanner'
+// #1601: AppFooter is imported CONCRETELY and Header is lazy, and the split matters.
+//
+// Both live in src/components/layout/, which vite.config.ts's `shared` group sweeps into the
+// eagerly-imported `shared` chunk. Header's own imports (@/features/notifications and
+// @/features/transactions/hooks/useReviewSummary) were therefore static edges out of `shared`
+// into the feature chunks, and transactions pulls accounts, which pulls
+// investments/net-worth/household/profile/admin, which pulls dashboard, which pulls echarts.
+// That single edge is most of the 847 KiB the landing route used to download — for a component
+// `!isLandingPage` means it does not even RENDER on `/`.
+//
+// It must be BOTH lazy here AND excluded from the `shared` group (see vite.config.ts's
+// `layout-chrome` group): groups assign chunks by path glob, so lazy() alone would leave the
+// module sitting in an eager chunk with its static imports intact.
+//
+// AppFooter stays eager on purpose — it renders on the landing page, so making it lazy would
+// buy nothing and cost a paint. Importing it via the barrel would re-create the Header edge,
+// because the barrel re-exports Header.
+import { AppFooter } from './components/layout/AppFooter'
+// #1601: both banners render only under `isAuthenticated && !isLandingPage`, so on / they were
+// pure eager weight — and HouseholdOverCapacityBanner's own imports (useProfile, useHousehold)
+// were static edges from the landing entry into the profile and household chunks.
+//
+// SubscriptionManagementSkeleton and SubscriptionErrorState stay EAGER on purpose: they are a
+// Suspense fallback and an error-boundary fallback respectively, which have to be available
+// synchronously at the moment the thing they stand in for is still loading or has failed. A
+// lazy fallback needs a fallback of its own. They are why the billing chunk remains on /'s
+// eager set; that is a deliberate 11 KiB, not an oversight.
+const SubscriptionStatusBanner = lazy(() =>
+  import('./features/billing/components/SubscriptionStatusBanner').then((m) => ({
+    default: m.SubscriptionStatusBanner,
+  }))
+)
+const HouseholdOverCapacityBanner = lazy(() =>
+  import('./features/household/components/HouseholdOverCapacityBanner').then((m) => ({
+    default: m.HouseholdOverCapacityBanner,
+  }))
+)
 import { SubscriptionManagementSkeleton } from './features/billing/components/SubscriptionManagementSkeleton'
 import { SubscriptionErrorState } from './features/billing/components/SubscriptionErrorState'
 import { useUpdatePrivacySettings } from '@boostedbudget/api-client/endpoints/privacy/privacy'
 import type { PrivacySettings as PrivacySettingsType } from './features/profile/types'
 import { LandingPage } from './features/landing'
-import { AdminRoute, AdminLayout } from './features/admin'
+// #1601: concrete modules, NOT the './features/admin' barrel. That barrel re-exports every
+// admin page (AdminDashboardPage, UsersPage, HealthDashboardPage, WebhooksPage,
+// DeadLetterPage, PlaidOrphanedItemsPage), so importing two guards from it pulled the whole
+// admin chunk onto the LANDING page's eager critical path even though every admin route
+// below is React.lazy(). Verified with scripts/check-route-weight.sh.
+import { AdminRoute } from './features/admin/components/AdminRoute'
+import { AdminLayout } from './features/admin/components/AdminLayout'
 import { NotFoundPage } from './features/not-found/NotFoundPage'
+
+// #1601 — see the AppFooter import note above for why this is lazy.
+const Header = lazy(() =>
+  import('./components/layout/Header').then((m) => ({ default: m.Header }))
+)
+
+// Reserves the header's exact box so the lazy boundary cannot cause layout shift: Header's root
+// is `sticky top-0 z-50 ... border-b border-border ... h-16`, and this mirrors it. Deliberately
+// empty rather than a shimmer — the chrome is not content, and a pulsing bar reads as an error.
+// aria-hidden so a screen reader is not told about a banner that has no navigation in it yet.
+function HeaderPlaceholder() {
+  return (
+    <div
+      aria-hidden="true"
+      className="sticky top-0 z-50 h-16 border-b border-border bg-background/80 backdrop-blur-sm"
+    />
+  )
+}
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useTheme } from './shared/theme'
 import { posthog } from './shared/lib/posthog'
@@ -290,9 +348,24 @@ function App() {
 
   return (
     <div className={`w-full${isLandingPage ? ' landing-page' : ''}`}>
-      {!isLandingPage && <Header />}
-      {isAuthenticated && !isLandingPage && <SubscriptionStatusBanner />}
-      {isAuthenticated && !isLandingPage && <HouseholdOverCapacityBanner />}
+      {!isLandingPage && (
+        <Suspense fallback={<HeaderPlaceholder />}>
+          <Header />
+        </Suspense>
+      )}
+      {/* null fallbacks, deliberately: unlike the header these banners are conditional strips
+          that frequently render nothing at all (dismissed, or under capacity), so reserving a
+          box would CREATE the layout shift the header placeholder exists to prevent. */}
+      {isAuthenticated && !isLandingPage && (
+        <Suspense fallback={null}>
+          <SubscriptionStatusBanner />
+        </Suspense>
+      )}
+      {isAuthenticated && !isLandingPage && (
+        <Suspense fallback={null}>
+          <HouseholdOverCapacityBanner />
+        </Suspense>
+      )}
 
       {isLandingPage ? (
         <Routes>
