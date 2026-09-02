@@ -474,7 +474,7 @@ jobs:
           # action.yml at this pinned SHA). Left at the default, setup-go caches GOMODCACHE *and*
           # `go env GOCACHE` under its own key `setup-go-<os>-<arch>-go<ver>-<hash(go.sum)>`, in
           # addition to the two explicit caches below -- the same bytes moved twice, against
-          # Ubicloud's 30GB/repo/week cache quota. And because that key hashes ONLY go.sum, every
+          # Ubicloud's 30 GB cache quota. And because that key hashes ONLY go.sum, every
           # run after the first save for a given go.sum is an exact hit, so its build-cache half
           # never absorbs newly-compiled packages. That is precisely the freeze this repo already
           # diagnosed for its own hand-rolled key at the "Save Go build cache" step in
@@ -507,7 +507,13 @@ jobs:
           # records why the github.sha version was itself a bug: it minted a new entry on every
           # commit, including ones that cannot change compiled output, evicting warm entries under
           # a capped quota. That argument survives the move to Ubicloud with different numbers
-          # (30GB/repo/week, 7-day idle eviction).
+          # Ubicloud's cache quota is 30 GB per repository -- a STANDING cap on total stored
+          # bytes, not a weekly transfer allowance, which is how an earlier version of these
+          # comments described it. Measured from the Ubicloud console on #1598: the four keys this
+          # branch writes occupy 848.8 MB of that 30 GB (playwright 363.7, bun-store 203.9,
+          # go-modules 156.1, gocache-e2e 125.0), so eviction pressure is not currently a concern
+          # -- but a per-commit key would still churn entries for no benefit, which is the actual
+          # argument.
           key: gocache-e2e-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
           restore-keys: |
             gocache-e2e-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-
