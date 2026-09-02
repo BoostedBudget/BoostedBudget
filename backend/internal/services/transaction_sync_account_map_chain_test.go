@@ -2,8 +2,15 @@ package services
 
 // Issue #1109: Chain-transparency test for buildAccountMaps.
 // Verifies that after a re-link (old account replaced, new account active),
-// the accountMap only contains the new account — GetByLinkedItemID already
-// filters on status='active', so replaced accounts are excluded.
+// the accountMap contains the new account keyed on its own Plaid account ID.
+// These tests mock GetByLinkedItemIDIncludingRetained (Issue #1569 Task 1b) with
+// only the current account in the returned set — the old/replaced/mid accounts
+// in a chain typically carry DIFFERENT plaid_account_id values (a re-link mints a
+// new one), so buildAccountMaps, which does not filter by status itself, would
+// only ever map a same-keyed predecessor if one were included in the repo's
+// result. This suite does not include one, so it is not itself proof that a
+// retained account is excluded — see transaction_sync_retained_account_test.go for
+// that (Task 1b's regression is the opposite: retained accounts MUST be mapped).
 
 import (
 	"context"
@@ -16,9 +23,8 @@ import (
 
 // TestBuildAccountMaps_AfterRelink_OnlyContainsNewAccount verifies that when a
 // re-link has occurred (old account replaced, new account active with the same
-// linked_item_id), the accountMap built by buildAccountMaps contains ONLY the
-// new active account. The replaced account must not appear because
-// GetByLinkedItemID filters on status='active'.
+// linked_item_id), the accountMap built by buildAccountMaps contains the new
+// active account, keyed by its Plaid account ID.
 func TestBuildAccountMaps_AfterRelink_OnlyContainsNewAccount(t *testing.T) {
 	mockAccountRepo := new(MockAccountRepository)
 
@@ -42,8 +48,8 @@ func TestBuildAccountMaps_AfterRelink_OnlyContainsNewAccount(t *testing.T) {
 	linkedItemID := "linked-item-relink-test"
 	stableUserAccountID := "user-acct-stable-uuid"
 
-	// After re-link: GetByLinkedItemID returns only the NEW active account.
-	// The old account (status='replaced') is excluded by the SQL WHERE clause.
+	// After re-link: the repo returns only the NEW active account for this test
+	// fixture (the old account is a separate row this test does not include).
 	newAccount := domain.Account{
 		ID:             "new-account-uuid",
 		PlaidAccountID: "plaid-acc-checking",
@@ -51,7 +57,7 @@ func TestBuildAccountMaps_AfterRelink_OnlyContainsNewAccount(t *testing.T) {
 		Status:         domain.AccountStatusActive,
 		UserAccountID:  &stableUserAccountID,
 	}
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).
 		Return([]domain.Account{newAccount}, nil)
 
 	accountMap, userAccountMap, err := service.buildAccountMaps(ctx, linkedItemID)
@@ -75,9 +81,8 @@ func TestBuildAccountMaps_AfterRelink_OnlyContainsNewAccount(t *testing.T) {
 func TestBuildAccountMaps_Depth2Chain_OnlyContainsCurrentAccount(t *testing.T) {
 	// Depth-2 chain: acct_old -> acct_mid -> acct_current
 	// All three share the same user_account_id (stableUserAccountID).
-	// GetByLinkedItemID returns only the current active account (the repo already
-	// filters to active-only for sync purposes). The account map must only contain
-	// the current active Plaid account ID.
+	// This fixture's repo mock returns only the current account, so the account
+	// map contains only its Plaid account ID.
 	mockAccountRepo := new(MockAccountRepository)
 
 	service := NewTransactionSyncService(
@@ -91,7 +96,8 @@ func TestBuildAccountMaps_Depth2Chain_OnlyContainsCurrentAccount(t *testing.T) {
 	stableUserAccountID := "user-acct-stable-depth2"
 	plaidAccountID := "plaid-acc-shared" // same Plaid account ID across all re-links
 
-	// Only the current active account is returned (older ones are replaced)
+	// This fixture's mock returns only the current account (older ones are
+	// separate rows this test does not include).
 	acctCurrent := domain.Account{
 		ID:             "acct_current",
 		PlaidAccountID: plaidAccountID,
@@ -99,7 +105,7 @@ func TestBuildAccountMaps_Depth2Chain_OnlyContainsCurrentAccount(t *testing.T) {
 		Status:         domain.AccountStatusActive,
 		UserAccountID:  &stableUserAccountID,
 	}
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).
 		Return([]domain.Account{acctCurrent}, nil)
 
 	accountMap, userAccountMap, err := service.buildAccountMaps(ctx, linkedItemID)

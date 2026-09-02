@@ -4,12 +4,40 @@
 -- WARNING: This rollback LOSES sub-day precision!
 -- If multiple snapshots per day exist, only keeps most recent per day
 -- ============================================================================
+--
+-- ⚠⚠ #1569 round 12 task 4 (Codex-cited example): "CRITICAL: destructive if high-frequency
+-- snapshots exist" was a comment, not a control -- a rollback is run from a CLI that prints
+-- nothing from SQL comments. The guard below REFUSES rather than silently truncating sub-day
+-- history when the delete below would actually remove a row. Conditioned on "would delete
+-- something" (not on emptiness) for the same reason 000150/000151/000180's guards are: the
+-- rollback suite runs `down -all` against a clean/single-snapshot-per-day database, so this is
+-- silent there and loud exactly where it matters.
 
 -- Step 1: Drop new indexes
 DROP INDEX IF EXISTS idx_balance_snapshots_snapshot_at;
 DROP INDEX IF EXISTS idx_balance_snapshots_user_at;
 DROP INDEX IF EXISTS idx_balance_snapshots_date_trunc;
 DROP INDEX IF EXISTS idx_balance_snapshots_account_at;
+
+DO $$
+DECLARE
+    n BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO n FROM balance_snapshots bs1
+    WHERE EXISTS (
+        SELECT 1 FROM balance_snapshots bs2
+        WHERE bs2.account_id = bs1.account_id
+          AND DATE(bs2.snapshot_at) = DATE(bs1.snapshot_at)
+          AND bs2.snapshot_at > bs1.snapshot_at
+    );
+    IF n > 0 THEN
+        RAISE EXCEPTION
+            'refusing to roll back 000017: % balance_snapshots row(s) would be permanently deleted '
+            'to collapse multiple same-day snapshots into one (this rollback truncates snapshot_at '
+            'to DATE precision). Those intra-day snapshots exist nowhere else. Export them, or '
+            'delete the ones you are willing to lose yourself, before retrying.', n;
+    END IF;
+END $$;
 
 -- Step 2: Delete duplicate snapshots (keep only latest per account per day)
 -- CRITICAL: This is DESTRUCTIVE if high-frequency snapshots exist

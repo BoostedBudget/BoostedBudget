@@ -80,7 +80,7 @@ func (m *mockWebhookRepository) Update(ctx context.Context, event *domain.Webhoo
 // WebhookRepo, a signature-VERIFIED webhook must be rejected with a non-2xx, never acked 200,
 // because acking without persisting would silently lose the webhook forever (Plaid never retries a
 // 2xx). This configuration is unreachable in the wired deployment — see the doc comment above the
-// guard in plaid_webhook.go referencing backend/cmd/server/main.go:2001-2043, where both
+// guard in plaid_webhook.go referencing backend/cmd/server/main.go:2018-2060, where both
 // registration branches always construct and inject a non-nil repository before the route is ever
 // registered. This test is belt-and-braces against a wiring regression, not a claim that the
 // nil-repo state occurs in production: IF that wiring invariant is ever broken, the handler must

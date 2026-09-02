@@ -64,14 +64,18 @@ func TestGetOrphanedFKlessUserScopedRowCounts_Integration_DetectsOrphans(t *test
 	execNoErr(t, ctx, pool, `
 		INSERT INTO idempotency_keys (key, user_id, operation_id, response_body)
 		VALUES ($1, $2, 'op-orphan', '{}'::jsonb)`, "idem-orphan-"+suffix, user.ID)
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM idempotency_keys WHERE user_id = $1", user.ID) })
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM idempotency_keys WHERE user_id = $1", user.ID)
+	})
 
 	var auditID string
 	require.NoError(t, pool.QueryRow(ctx, `
 		INSERT INTO mcp_audit_log (actor_user_id, grant_id, operation_class, operation_id, result)
 		VALUES ($1, 'grant-orphan', 'read', 'op-orphan', 'success') RETURNING id`, user.ID,
 	).Scan(&auditID))
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM mcp_audit_log WHERE actor_user_id = $1", user.ID) })
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM mcp_audit_log WHERE actor_user_id = $1", user.ID)
+	})
 
 	// Delete the user directly — bypassing DeleteUserCascade entirely — so the three rows above
 	// are left pointing at a user_id/actor_user_id that no longer exists, exactly reproducing the

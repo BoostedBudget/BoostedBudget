@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -58,7 +58,7 @@ func (m *mockBoostExecutionRepository) GetByID(ctx context.Context, id string) (
 func (m *mockBoostExecutionRepository) GetByBoostID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.BoostExecution, error) {
 	var result []*domain.BoostExecution
 	for _, e := range m.executions {
-		if e.BoostID == ruleID {
+		if e.BoostID != nil && *e.BoostID == ruleID {
 			result = append(result, e)
 		}
 	}
@@ -68,7 +68,7 @@ func (m *mockBoostExecutionRepository) GetByBoostID(ctx context.Context, ruleID 
 func (m *mockBoostExecutionRepository) GetLastExecutionForBoost(ctx context.Context, ruleID string) (*domain.BoostExecution, error) {
 	var latest *domain.BoostExecution
 	for _, e := range m.executions {
-		if e.BoostID == ruleID {
+		if e.BoostID != nil && *e.BoostID == ruleID {
 			if latest == nil || e.StartedAt.After(latest.StartedAt) {
 				latest = e
 			}
@@ -90,10 +90,26 @@ func (m *mockBoostExecutionRepository) GetPendingExecutions(ctx context.Context,
 	return result, nil
 }
 
+// GetByUserID is the Issue #1569 Task 14 reader that can see an execution whose boost has been
+// purged (boost_id NULL). Matching on the execution's own UserID mirrors the real query.
+func (m *mockBoostExecutionRepository) GetByUserID(ctx context.Context, userID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
+	var result []*domain.BoostExecution
+	for _, e := range m.executions {
+		if e.UserID != userID {
+			continue
+		}
+		if status != nil && e.Status != *status {
+			continue
+		}
+		result = append(result, e)
+	}
+	return result, len(result), nil
+}
+
 func (m *mockBoostExecutionRepository) GetFailedExecutions(ctx context.Context, ruleID string, limit int) ([]*domain.BoostExecution, error) {
 	var result []*domain.BoostExecution
 	for _, e := range m.executions {
-		if e.BoostID == ruleID && e.Status == domain.ExecutionStatusFailed {
+		if e.BoostID != nil && *e.BoostID == ruleID && e.Status == domain.ExecutionStatusFailed {
 			result = append(result, e)
 		}
 	}
@@ -105,7 +121,7 @@ func (m *mockBoostExecutionRepository) GetFailedExecutions(ctx context.Context, 
 func (m *mockBoostExecutionRepository) GetByBoostIDWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
 	var result []*domain.BoostExecution
 	for _, e := range m.executions {
-		if e.BoostID == ruleID {
+		if e.BoostID != nil && *e.BoostID == ruleID {
 			if status == nil || e.Status == *status {
 				result = append(result, e)
 			}
@@ -534,11 +550,11 @@ func TestBoostExecutionService(t *testing.T) {
 		}
 
 		return &domain.Boost{
-			ID:       "rule-1",
-			UserID:   userID,
-			Name:     "Test Rule",
-			Enabled:  true,
-			Priority: 1,
+			ID:        "rule-1",
+			UserID:    userID,
+			Name:      "Test Rule",
+			Enabled:   true,
+			Priority:  1,
 			BoostType: boostType,
 			TriggerConfig: domain.TriggerConfig{
 				Type:  triggerType,
@@ -573,7 +589,8 @@ func TestBoostExecutionService(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.NotEmpty(t, execution.ID)
-		assert.Equal(t, boost.ID, execution.BoostID)
+		require.NotNil(t, execution.BoostID)
+		assert.Equal(t, boost.ID, *execution.BoostID)
 		assert.Equal(t, domain.ExecutionStatusCompleted, execution.Status)
 		assert.NotNil(t, execution.CompletedAt)
 
@@ -684,11 +701,11 @@ func TestProcessEventTrigger(t *testing.T) {
 		boostRepo := &mockBoostsRepository{
 			boosts: []*domain.Boost{
 				{
-					ID:       "rule-1",
-					UserID:   userID,
-					Name:     "Test Rule",
-					Enabled:  true,
-					Priority: 1,
+					ID:        "rule-1",
+					UserID:    userID,
+					Name:      "Test Rule",
+					Enabled:   true,
+					Priority:  1,
 					BoostType: domain.BoostTypeTransferSuggestion,
 					TriggerConfig: domain.TriggerConfig{
 						Type:  domain.TriggerTypeEvent,
@@ -757,13 +774,13 @@ func TestGetExecutionHistory(t *testing.T) {
 			executions: []*domain.BoostExecution{
 				{
 					ID:        "exec-1",
-					BoostID:    "rule-1",
+					BoostID:   strPtr("rule-1"),
 					Status:    domain.ExecutionStatusCompleted,
 					StartedAt: now.Add(-1 * time.Hour),
 				},
 				{
 					ID:        "exec-2",
-					BoostID:    "rule-1",
+					BoostID:   strPtr("rule-1"),
 					Status:    domain.ExecutionStatusCompleted,
 					StartedAt: now,
 				},
@@ -786,9 +803,9 @@ func TestGetExecutionHistory(t *testing.T) {
 
 // Mock boosts repository for testing.
 type mockBoostsRepository struct {
-	boosts        []*domain.Boost
+	boosts              []*domain.Boost
 	createError         error
-	eventTriggerBoosts   []*domain.Boost
+	eventTriggerBoosts  []*domain.Boost
 	incrementExecCalled bool
 	updateSuccessCalled bool
 }
@@ -866,7 +883,7 @@ func (m *mockBoostsRepository) Update(ctx context.Context, boost *domain.Boost) 
 	return domain.ErrBoostNotFound
 }
 
-func (m *mockBoostsRepository) Delete(ctx context.Context, id string) error {
+func (m *mockBoostsRepository) Delete(ctx context.Context, id, userID string, auditLog repository.AuditLogRepository) error {
 	for i, r := range m.boosts {
 		if r.ID == id {
 			m.boosts = append(m.boosts[:i], m.boosts[i+1:]...)
@@ -969,6 +986,10 @@ func (m *mockSavingsGoalRepository) GetByIDForUser(ctx context.Context, id, user
 	return nil, domain.ErrSavingsGoalNotFound
 }
 
+func (m *mockSavingsGoalRepository) GetDeletedByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
+	return nil, nil
+}
+
 func (m *mockSavingsGoalRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
 	var result []*domain.SavingsGoal
 	for _, g := range m.goals {
@@ -1008,7 +1029,11 @@ func (m *mockSavingsGoalRepository) Update(ctx context.Context, goal *domain.Sav
 	return domain.ErrSavingsGoalNotFound
 }
 
-func (m *mockSavingsGoalRepository) Delete(ctx context.Context, id, userID string) error {
+func (m *mockSavingsGoalRepository) PurgeGoal(ctx context.Context, id, userID string, auditLog repository.AuditLogRepository) error {
+	return m.Delete(ctx, id, userID, auditLog)
+}
+
+func (m *mockSavingsGoalRepository) Delete(ctx context.Context, id, userID string, auditLog repository.AuditLogRepository) error {
 	for i, g := range m.goals {
 		if g.ID == id {
 			m.goals = append(m.goals[:i], m.goals[i+1:]...)
@@ -1022,6 +1047,18 @@ func (m *mockSavingsGoalRepository) CountByUserID(ctx context.Context, userID st
 	count := 0
 	for _, g := range m.goals {
 		if g.UserID == userID {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// Issue #1569 Task 20 (A4): completed goals live outside GetActiveByUserID's universe, so the
+// summary counts them separately. This fake mirrors CountByUserID's shape.
+func (m *mockSavingsGoalRepository) CountCompletedByUserID(ctx context.Context, userID string) (int, error) {
+	count := 0
+	for _, g := range m.goals {
+		if g.UserID == userID && g.IsCompleted {
 			count++
 		}
 	}
@@ -1070,11 +1107,11 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		actionsJSON, _ := json.Marshal(action)
 
 		return &domain.Boost{
-			ID:       "rule-savings-1",
-			UserID:   userID,
-			Name:     "Savings Goal Contribution",
-			Enabled:  true,
-			Priority: 1,
+			ID:        "rule-savings-1",
+			UserID:    userID,
+			Name:      "Savings Goal Contribution",
+			Enabled:   true,
+			Priority:  1,
 			BoostType: domain.BoostTypeSavingsGoal,
 			TriggerConfig: domain.TriggerConfig{
 				Type:  domain.TriggerTypeEvent,
@@ -1253,7 +1290,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 			UserID:         userID,
 			Name:           "Bad Savings Rule",
 			Enabled:        true,
-			BoostType:       domain.BoostTypeSavingsGoal,
+			BoostType:      domain.BoostTypeSavingsGoal,
 			TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
 			ConditionLogic: "AND",
 			Actions:        actionsJSON,
@@ -1375,7 +1412,7 @@ func TestBoostExecutionService_SavingsGoal_NilRepo_ReturnsError(t *testing.T) {
 		UserID:         userID,
 		Name:           "Savings Goal Rule",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeSavingsGoal,
+		BoostType:      domain.BoostTypeSavingsGoal,
 		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: domain.EventBudgetPeriodEnd},
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
@@ -1430,7 +1467,7 @@ func TestProcessEventTrigger_BatchContinuesAfterBoostFailure(t *testing.T) {
 		UserID:         userID,
 		Name:           "Failing Rule",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeSavingsGoal,
+		BoostType:      domain.BoostTypeSavingsGoal,
 		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: domain.EventBudgetPeriodEnd},
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
@@ -1449,7 +1486,7 @@ func TestProcessEventTrigger_BatchContinuesAfterBoostFailure(t *testing.T) {
 		UserID:         userID,
 		Name:           "Succeeding Rule",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: domain.EventBudgetPeriodEnd},
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
@@ -1541,11 +1578,11 @@ func TestBoostTestExecution(t *testing.T) {
 		})
 
 		return &domain.Boost{
-			ID:       "rule-1",
-			UserID:   userID,
-			Name:     "Test Transfer Rule",
-			Enabled:  true,
-			Priority: 1,
+			ID:        "rule-1",
+			UserID:    userID,
+			Name:      "Test Transfer Rule",
+			Enabled:   true,
+			Priority:  1,
 			BoostType: domain.BoostTypeTransferSuggestion,
 			TriggerConfig: domain.TriggerConfig{
 				Type:  domain.TriggerTypeEvent,
@@ -1567,11 +1604,11 @@ func TestBoostTestExecution(t *testing.T) {
 		})
 
 		return &domain.Boost{
-			ID:       "rule-2",
-			UserID:   userID,
-			Name:     "Budget Alert Rule",
-			Enabled:  true,
-			Priority: 1,
+			ID:        "rule-2",
+			UserID:    userID,
+			Name:      "Budget Alert Rule",
+			Enabled:   true,
+			Priority:  1,
 			BoostType: domain.BoostTypeBudgetAlert,
 			TriggerConfig: domain.TriggerConfig{
 				Type:  domain.TriggerTypeEvent,
@@ -1989,11 +2026,11 @@ func TestBoostExecutionService_ExpiresAt(t *testing.T) {
 		})
 
 		boost := &domain.Boost{
-			ID:       "rule-expires-test",
-			UserID:   userID,
-			Name:     "Transfer Rule",
-			Enabled:  true,
-			Priority: 1,
+			ID:        "rule-expires-test",
+			UserID:    userID,
+			Name:      "Transfer Rule",
+			Enabled:   true,
+			Priority:  1,
 			BoostType: domain.BoostTypeTransferSuggestion,
 			TriggerConfig: domain.TriggerConfig{
 				Type:  domain.TriggerTypeEvent,
@@ -2051,11 +2088,11 @@ func TestBoostExecutionService_ExpiresAt(t *testing.T) {
 		})
 
 		boost := &domain.Boost{
-			ID:       "rule-savings-expires",
-			UserID:   userID,
-			Name:     "Savings Goal Rule",
-			Enabled:  true,
-			Priority: 1,
+			ID:        "rule-savings-expires",
+			UserID:    userID,
+			Name:      "Savings Goal Rule",
+			Enabled:   true,
+			Priority:  1,
 			BoostType: domain.BoostTypeSavingsGoal,
 			TriggerConfig: domain.TriggerConfig{
 				Type:  domain.TriggerTypeEvent,
@@ -2367,7 +2404,7 @@ func TestBoostTestExecution_DottedFieldPreviewShowsActual(t *testing.T) {
 	})
 	boost := &domain.Boost{
 		ID: "rule-dotted", UserID: "u", Name: "dotted", Enabled: true, Priority: 1,
-		BoostType:      domain.BoostTypeTransferSuggestion,
+		BoostType:     domain.BoostTypeTransferSuggestion,
 		TriggerConfig: domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
 		// UI-built dotted field — backend emits flat "remaining"
 		Conditions: []domain.BoostCondition{
@@ -2501,7 +2538,7 @@ func TestFlatActionJSON_ValidateAndExecuteConsistency(t *testing.T) {
 				UserID:         userID,
 				Name:           "Flat Action Rule",
 				Enabled:        true,
-				BoostType:       tc.boostType,
+				BoostType:      tc.boostType,
 				TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
 				ConditionLogic: "AND",
 				Conditions:     []domain.BoostCondition{},
@@ -2595,7 +2632,7 @@ func TestExecuteBoost_PartialFieldAction_ReturnsError(t *testing.T) {
 				UserID:         userID,
 				Name:           "Partial Boost",
 				Enabled:        true,
-				BoostType:       tc.boostType,
+				BoostType:      tc.boostType,
 				TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
 				ConditionLogic: "AND",
 				Conditions:     []domain.BoostCondition{},
@@ -2642,7 +2679,7 @@ func TestTransferExcess_ValidateAndExecute(t *testing.T) {
 			UserID:         userID,
 			Name:           "Excess Savings",
 			Enabled:        true,
-			BoostType:       domain.BoostTypeTransferSuggestion,
+			BoostType:      domain.BoostTypeTransferSuggestion,
 			TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
 			ConditionLogic: "AND",
 			Conditions:     []domain.BoostCondition{},
@@ -2729,10 +2766,10 @@ func TestExecuteSavingsGoal_RejectsMismatchedOwner(t *testing.T) {
 		"amount":          100.0,
 	})
 	boost := &domain.Boost{
-		ID:      "attacker-rule-id",
-		UserID:  attackerUserID, // ← attacker's boost, references owner's goal
-		Name:    "attacker boost",
-		Enabled: true,
+		ID:        "attacker-rule-id",
+		UserID:    attackerUserID, // ← attacker's boost, references owner's goal
+		Name:      "attacker boost",
+		Enabled:   true,
 		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -2751,6 +2788,71 @@ func TestExecuteSavingsGoal_RejectsMismatchedOwner(t *testing.T) {
 	require.NoError(t, err, "mismatched-owner savings_goal boost must be skipped (not error)")
 	assert.Empty(t, suggestionRepo.suggestions,
 		"no suggestion must be created for a savings_goal boost referencing another user's goal")
+}
+
+// TestExecuteSavingsGoal_AmbiguousChain_UsesPhysicalAccount_NotGuess pins #1569 R11 T2's
+// deliberate site-3 decision: when the savings goal's chain has more than one live account
+// (ErrAmbiguousActiveAccount), executeSavingsGoal falls back to the goal's own physical
+// AccountID rather than guessing between the two live siblings — and, UNLIKE site 2 (the
+// transfer-suggestion source/destination), it still creates the suggestion, because the
+// physical row IS the account the goal was created against, not an unrelated guess.
+func TestExecuteSavingsGoal_AmbiguousChain_UsesPhysicalAccount_NotGuess(t *testing.T) {
+	ctx := context.Background()
+
+	userID := "user-1"
+	goalID := "goal-ambiguous-chain"
+	uaid := "uaid-ambiguous"
+
+	goalRepo := &mockSavingsGoalRepository{
+		goals: []*domain.SavingsGoal{
+			{
+				ID:            goalID,
+				UserID:        userID,
+				Name:          "Emergency Fund",
+				AccountID:     "physical-savings-account",
+				UserAccountID: &uaid,
+			},
+		},
+	}
+	execRepo := &mockBoostExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	boostRepo := &mockBoostsRepository{}
+
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
+	svc.SetSavingsGoalRepo(goalRepo)
+	svc.SetChainResolver(&stubChainResolver{resolveErr: ErrAmbiguousActiveAccount})
+
+	actionsJSON, _ := json.Marshal(map[string]interface{}{
+		"savings_goal_id": goalID,
+		"from_account_id": "from-account",
+		"amount_type":     "fixed",
+		"amount":          100.0,
+	})
+	boost := &domain.Boost{
+		ID:        "rule-savings-ambiguous",
+		UserID:    userID,
+		Name:      "Ambiguous chain savings boost",
+		Enabled:   true,
+		BoostType: domain.BoostTypeSavingsGoal,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Actions:        actionsJSON,
+		ConditionLogic: "AND",
+	}
+
+	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{
+		domain.EventDataKeyRemaining: 500.0,
+		domain.EventDataKeyAmount:    1000.0,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, suggestionRepo.suggestions, 1,
+		"an ambiguous chain must not block the savings-goal suggestion — the physical account is a safe fallback")
+	require.NotNil(t, suggestionRepo.suggestions[0].ToAccountID)
+	assert.Equal(t, "physical-savings-account", *suggestionRepo.suggestions[0].ToAccountID,
+		"must use the goal's own physical account, not guess between the two live siblings")
 }
 
 // ============================================================================
@@ -2822,7 +2924,7 @@ type stubChainResolver struct {
 func (s *stubChainResolver) ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error) {
 	return nil, nil
 }
-func (s *stubChainResolver) ResolveActiveID(_ context.Context, _ string) (string, error) {
+func (s *stubChainResolver) ResolveActiveID(_ context.Context, _, _ string) (string, error) {
 	return s.resolvedID, s.resolveErr
 }
 func (s *stubChainResolver) ChainAccountIDs(_ context.Context, _ string) ([]string, error) {
@@ -2871,10 +2973,10 @@ func TestExecuteTransferSuggestion_ChainResolverIDOR(t *testing.T) {
 		"amount":               100.0,
 	})
 	boost := &domain.Boost{
-		ID:       "attacker-rule",
-		UserID:   attackerUserID,
-		Name:     "chain resolver idor boost",
-		Enabled:  true,
+		ID:        "attacker-rule",
+		UserID:    attackerUserID,
+		Name:      "chain resolver idor boost",
+		Enabled:   true,
 		BoostType: domain.BoostTypeTransferSuggestion,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -2986,8 +3088,11 @@ func TestCalculateTransferAmount_DerivedTypesReturnZeroOnMissingKey(t *testing.T
 // TestResolveAndVerifyUserAccount_AccountRepoNilFailOpen documents the intentional
 // behavior: when accountRepo is nil (e.g. in unit tests that don't set SetAccountRepo),
 // resolveAndVerifyUserAccount applies the resolved ID WITHOUT a DB ownership check and
-// logs a warning. This is safe because production always wires accountRepo (main.go:~1324)
-// and the service-layer create/update validation already runs ownership checks.
+// logs a warning. This is expected to be dead in production because main.go's
+// boostExecutionService wiring block calls SetAccountRepo unconditionally (guarded only
+// by db != nil && cfg.ClerkSecretKey != "") and the service-layer create/update
+// validation already runs ownership checks — but nothing enforces a non-nil accountRepo,
+// so this is an operational wiring assumption, not a guarded invariant.
 //
 // The test prevents future over-hardening (panicking or returning an error when nil)
 // while documenting why the fail-open is intentional. Issue #972 GAP AE + C12.
@@ -3016,6 +3121,30 @@ func TestResolveAndVerifyUserAccount_AccountRepoNilFailOpen(t *testing.T) {
 		"nil accountRepo must still apply the resolved ID (fail-open; ownership check skipped)")
 }
 
+// TestResolveAndVerifyUserAccount_AmbiguousChain_FallsBackLikeNoActiveAccount pins #1569 R11
+// T2's site-2 decision (fix round 1: an earlier revision returned skip=true here, which was a
+// monotonicity bug — the objectively WORSE condition, ErrNoActiveAccount, already did not skip,
+// so skipping only on ambiguity made a stronger-guarantee state produce a WEAKER outcome). The
+// caller's pinned id is not an unrelated guess — executeTransferSuggestion already
+// ownership-verifies it via accountRepo.GetByIDAndUser before calling this function — so this
+// function must NOT skip the rule and must NOT call onResolve, the same as ErrNoActiveAccount.
+func TestResolveAndVerifyUserAccount_AmbiguousChain_FallsBackLikeNoActiveAccount(t *testing.T) {
+	ctx := context.Background()
+
+	stubResolver := &stubChainResolver{resolveErr: ErrAmbiguousActiveAccount}
+	svc := &boostExecutionService{chainResolver: stubResolver}
+
+	onResolveCalled := false
+	skip, err := svc.resolveAndVerifyUserAccount(ctx, "user-account-ambiguous", "user-1", "rule-ambiguous",
+		func(id string) { onResolveCalled = true },
+		"from_user_account_id",
+	)
+
+	require.NoError(t, err)
+	assert.False(t, skip, "an ambiguous chain must not skip the rule — it must fall back to the pinned id, like ErrNoActiveAccount does")
+	assert.False(t, onResolveCalled, "onResolve must not be called for an ambiguous chain — the resolver still refuses to guess WHICH sibling")
+}
+
 // ============================================================================
 // Issue #1271 Item 2 — A-CR1 brick risk: partial/legacy rule must not brick at execution
 // ============================================================================
@@ -3040,10 +3169,10 @@ func TestExecuteBoost_PartialScopedConditionDoesNotBrick(t *testing.T) {
 		"threshold_value":       80,
 	})
 	boost := &domain.Boost{
-		ID:       "rule-legacy-partial",
-		UserID:   "test-user-id",
-		Name:     "Legacy Partial Boost",
-		Enabled:  true,
+		ID:        "rule-legacy-partial",
+		UserID:    "test-user-id",
+		Name:      "Legacy Partial Boost",
+		Enabled:   true,
 		BoostType: domain.BoostTypeBudgetAlert,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -3161,11 +3290,11 @@ func TestProcessEventTrigger_SkipsRuleBoundToOtherBudget(t *testing.T) {
 	boostRepo := &mockBoostsRepository{
 		boosts: []*domain.Boost{
 			{
-				ID:       "rule-budget-scope",
-				UserID:   userID,
-				Name:     "Category Rule for Budget X",
-				Enabled:  true,
-				Priority: 1,
+				ID:        "rule-budget-scope",
+				UserID:    userID,
+				Name:      "Category Rule for Budget X",
+				Enabled:   true,
+				Priority:  1,
 				BoostType: domain.BoostTypeTransferSuggestion,
 				TriggerConfig: domain.TriggerConfig{
 					Type:  domain.TriggerTypeEvent,
@@ -3213,11 +3342,11 @@ func TestProcessEventTrigger_FiresRuleBoundToMatchingBudget(t *testing.T) {
 	boostRepo := &mockBoostsRepository{
 		boosts: []*domain.Boost{
 			{
-				ID:       "rule-budget-match",
-				UserID:   userID,
-				Name:     "Category Rule for Budget X",
-				Enabled:  true,
-				Priority: 1,
+				ID:        "rule-budget-match",
+				UserID:    userID,
+				Name:      "Category Rule for Budget X",
+				Enabled:   true,
+				Priority:  1,
 				BoostType: domain.BoostTypeTransferSuggestion,
 				TriggerConfig: domain.TriggerConfig{
 					Type:  domain.TriggerTypeEvent,
@@ -3269,11 +3398,11 @@ func TestProcessEventTrigger_UnscopedRuleFiresForAnyBudget(t *testing.T) {
 	boostRepo := &mockBoostsRepository{
 		boosts: []*domain.Boost{
 			{
-				ID:       "rule-unscoped",
-				UserID:   userID,
-				Name:     "Unscoped Budget Rule",
-				Enabled:  true,
-				Priority: 1,
+				ID:        "rule-unscoped",
+				UserID:    userID,
+				Name:      "Unscoped Budget Rule",
+				Enabled:   true,
+				Priority:  1,
 				BoostType: domain.BoostTypeTransferSuggestion,
 				TriggerConfig: domain.TriggerConfig{
 					Type:  domain.TriggerTypeEvent,
@@ -3292,7 +3421,7 @@ func TestProcessEventTrigger_UnscopedRuleFiresForAnyBudget(t *testing.T) {
 	service := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 	eventData := map[string]interface{}{
-		domain.EventDataKeyBudgetID: "budget-any",
+		domain.EventDataKeyBudgetID:    "budget-any",
 		domain.EventDataKeyPercentUsed: 75.0,
 	}
 
@@ -3321,11 +3450,11 @@ func TestProcessEventTrigger_ORLogicDoesNotEscapeBudgetScope(t *testing.T) {
 	boostRepo := &mockBoostsRepository{
 		boosts: []*domain.Boost{
 			{
-				ID:       "rule-or-escape",
-				UserID:   userID,
-				Name:     "OR Rule With Budget Scope",
-				Enabled:  true,
-				Priority: 1,
+				ID:        "rule-or-escape",
+				UserID:    userID,
+				Name:      "OR Rule With Budget Scope",
+				Enabled:   true,
+				Priority:  1,
 				BoostType: domain.BoostTypeTransferSuggestion,
 				TriggerConfig: domain.TriggerConfig{
 					Type:  domain.TriggerTypeEvent,
@@ -3631,8 +3760,8 @@ func TestBoostExecutionService_GetExecutionHistoryWithFilter_NoFilter(t *testing
 
 	execRepo := &mockBoostExecutionRepository{
 		executions: []*domain.BoostExecution{
-			{ID: "e1", BoostID: boostID, Status: domain.ExecutionStatusCompleted},
-			{ID: "e2", BoostID: boostID, Status: domain.ExecutionStatusFailed},
+			{ID: "e1", BoostID: &boostID, Status: domain.ExecutionStatusCompleted},
+			{ID: "e2", BoostID: &boostID, Status: domain.ExecutionStatusFailed},
 		},
 	}
 	svc := NewBoostExecutionService(execRepo, &mockTransferSuggestionRepository{}, &mockBoostsRepository{}, nil)
@@ -3652,9 +3781,9 @@ func TestBoostExecutionService_GetExecutionHistoryWithFilter_WithStatusFilter(t 
 
 	execRepo := &mockBoostExecutionRepository{
 		executions: []*domain.BoostExecution{
-			{ID: "e1", BoostID: boostID, Status: domain.ExecutionStatusCompleted},
-			{ID: "e2", BoostID: boostID, Status: domain.ExecutionStatusFailed},
-			{ID: "e3", BoostID: boostID, Status: domain.ExecutionStatusCompleted},
+			{ID: "e1", BoostID: &boostID, Status: domain.ExecutionStatusCompleted},
+			{ID: "e2", BoostID: &boostID, Status: domain.ExecutionStatusFailed},
+			{ID: "e3", BoostID: &boostID, Status: domain.ExecutionStatusCompleted},
 		},
 	}
 	svc := NewBoostExecutionService(execRepo, &mockTransferSuggestionRepository{}, &mockBoostsRepository{}, nil)
@@ -3669,3 +3798,203 @@ func TestBoostExecutionService_GetExecutionHistoryWithFilter_WithStatusFilter(t 
 	}
 }
 
+// ---------------------------------------------------------------------------------------------
+// Issue #1569 Task 14 — the definition snapshot is captured at execution time and frozen there.
+// ---------------------------------------------------------------------------------------------
+
+// newSnapshotTestBoost builds a fully-populated budget-alert boost for the snapshot tests.
+func newSnapshotTestBoost() *domain.Boost {
+	actionsJSON, _ := json.Marshal(map[string]interface{}{
+		"notification_channels": []string{"email"},
+		"threshold_type":        "percentage",
+		"threshold_value":       80,
+	})
+	desc := "explains itself to the user, not to the audit trail"
+	return &domain.Boost{
+		ID:          "boost-snapshot-1569",
+		UserID:      "user-snapshot-1569",
+		Name:        "Warn me at 80%",
+		Description: &desc,
+		Enabled:     true,
+		Priority:    7,
+		BoostType:   domain.BoostTypeBudgetAlert,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: "budget_updated",
+		},
+		Conditions: []domain.BoostCondition{{
+			Field:    "budget_category.percent_used",
+			Operator: domain.ConditionOperatorGte,
+			Value:    "80",
+		}},
+		ConditionLogic: "AND",
+		Actions:        actionsJSON,
+	}
+}
+
+// TestExecuteBoost_WritesDefinitionSnapshotAtExecutionTime is the "what did this automation do, and
+// why" half. fk_boost_executions_boost_id is ON DELETE SET NULL, so the execution row has to carry
+// its own explanation; a row that only says `status=completed` explains nothing once the boost that
+// produced it is gone.
+func TestExecuteBoost_WritesDefinitionSnapshotAtExecutionTime(t *testing.T) {
+	ctx := context.Background()
+	execRepo := &mockBoostExecutionRepository{}
+	svc := NewBoostExecutionService(execRepo, &mockTransferSuggestionRepository{}, &mockBoostsRepository{}, nil)
+
+	boost := newSnapshotTestBoost()
+	execution, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
+	require.NoError(t, err)
+	require.NotNil(t, execution)
+
+	assert.Equal(t, boost.UserID, execution.UserID,
+		"user_id is the execution row's own ON DELETE CASCADE path to users once boost_id can be NULL")
+	require.NotNil(t, execution.BoostID)
+	assert.Equal(t, boost.ID, *execution.BoostID)
+	require.NotNil(t, execution.BoostName)
+	assert.Equal(t, "Warn me at 80%", *execution.BoostName)
+
+	require.NotEmpty(t, execution.DefinitionSnapshot, "an orphan with no snapshot explains nothing")
+	var snap map[string]interface{}
+	require.NoError(t, json.Unmarshal(execution.DefinitionSnapshot, &snap))
+
+	assert.Equal(t, boost.ID, snap["boost_id"], "which automation this was, after boost_id is NULLed")
+	assert.Equal(t, "Warn me at 80%", snap["name"])
+	assert.Equal(t, string(domain.BoostTypeBudgetAlert), snap["boost_type"], "WHAT it did")
+	assert.NotNil(t, snap["actions"], "WHAT it did, in detail")
+	assert.NotNil(t, snap["trigger_config"], "WHY it ran at all")
+	assert.NotEmpty(t, snap["conditions"], "WHY it fired")
+	assert.Equal(t, "AND", snap["condition_logic"])
+	assert.Equal(t, true, snap["enabled"], "why a skip was recorded, when one is")
+	assert.Equal(t, float64(7), snap["priority"])
+	assert.Equal(t, "boost_execution_service", snap["captured_by"],
+		"provenance distinguishes a live capture from migration 000164's backfill")
+	assert.NotEmpty(t, snap["captured_at"])
+
+	// Deliberate exclusions, asserted so a later "just add everything" does not slip in.
+	assert.NotContains(t, snap, "description",
+		"free text with no bearing on behaviour and a PII surface with no reader")
+	assert.NotContains(t, snap, "execution_count",
+		"a lifetime counter, not a fact about this execution")
+	assert.NotContains(t, snap, "last_executed_at")
+}
+
+// TestExecuteBoost_SnapshotDoesNotFollowLaterDefinitionEdits is the "as it was THEN" half, and the
+// only thing that makes the snapshot worth having: if editing the boost rewrote its history, the
+// snapshot would be a slower way of reading the parent row.
+func TestExecuteBoost_SnapshotDoesNotFollowLaterDefinitionEdits(t *testing.T) {
+	ctx := context.Background()
+	execRepo := &mockBoostExecutionRepository{}
+	svc := NewBoostExecutionService(execRepo, &mockTransferSuggestionRepository{}, &mockBoostsRepository{}, nil)
+
+	boost := newSnapshotTestBoost()
+	execution, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
+	require.NoError(t, err)
+
+	// The user renames the boost, disables it, raises the threshold and drops the condition.
+	boost.Name = "Warn me at 95%"
+	boost.Enabled = false
+	boost.Priority = 99
+	boost.Conditions = nil
+	boost.Actions, _ = json.Marshal(map[string]interface{}{
+		"notification_channels": []string{"email"},
+		"threshold_type":        "percentage",
+		"threshold_value":       95,
+	})
+
+	// A second execution must see the NEW definition...
+	second, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
+	require.NoError(t, err)
+	require.NotNil(t, second.BoostName)
+	assert.Equal(t, "Warn me at 95%", *second.BoostName)
+
+	// ...while the first execution's record of what happened is untouched.
+	require.Len(t, execRepo.executions, 2)
+	stored := execRepo.executions[0]
+	require.Equal(t, execution.ID, stored.ID)
+	require.NotNil(t, stored.BoostName)
+	assert.Equal(t, "Warn me at 80%", *stored.BoostName,
+		"renaming a boost must not rewrite what the audit trail says it was called when it ran")
+
+	var snap map[string]interface{}
+	require.NoError(t, json.Unmarshal(stored.DefinitionSnapshot, &snap))
+	assert.Equal(t, "Warn me at 80%", snap["name"])
+	assert.Equal(t, true, snap["enabled"], "the boost was enabled WHEN IT RAN; it is disabled now")
+	assert.Equal(t, float64(7), snap["priority"])
+	assert.NotEmpty(t, snap["conditions"], "the conditions it actually evaluated, not today's empty set")
+	actions, ok := snap["actions"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, float64(80), actions["threshold_value"],
+		"the threshold it actually applied, not the one the user set afterwards")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Issue #1569 Task 14 (review round 2) — the per-user automation history reader.
+// ---------------------------------------------------------------------------------------------
+
+// TestGetUserExecutionHistory_ReturnsOrphansAndScopesToTheUser is the service half of the only read
+// path that can surface an execution whose boost has been purged. Every other read is keyed on
+// boost_id, so without this a retained orphan is invisible to every client.
+func TestGetUserExecutionHistory_ReturnsOrphansAndScopesToTheUser(t *testing.T) {
+	ctx := context.Background()
+
+	orphanName := "Purged Boost"
+	liveBoostID := "boost-live"
+	execRepo := &mockBoostExecutionRepository{
+		executions: []*domain.BoostExecution{
+			// The orphan: its boost is gone, so boost_id is NULL.
+			{ID: "e-orphan", BoostID: nil, UserID: "user-1", BoostName: &orphanName,
+				Status: domain.ExecutionStatusCompleted},
+			{ID: "e-live", BoostID: &liveBoostID, UserID: "user-1",
+				Status: domain.ExecutionStatusCompleted},
+			// Another tenant's row. Must never appear.
+			{ID: "e-other", BoostID: &liveBoostID, UserID: "user-2",
+				Status: domain.ExecutionStatusCompleted},
+		},
+	}
+	svc := NewBoostExecutionService(execRepo, &mockTransferSuggestionRepository{}, &mockBoostsRepository{}, nil)
+
+	executions, total, err := svc.GetUserExecutionHistory(ctx, "user-1", nil, 20, 0)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, total)
+	require.Len(t, executions, 2)
+
+	ids := make([]string, 0, len(executions))
+	for _, e := range executions {
+		ids = append(ids, e.ID)
+	}
+	assert.Contains(t, ids, "e-orphan",
+		"the orphan is the whole reason this reader exists; filtering it out is the bug")
+	assert.NotContains(t, ids, "e-other", "another tenant's automation history must never be returned")
+
+	var orphan *domain.BoostExecution
+	for _, e := range executions {
+		if e.ID == "e-orphan" {
+			orphan = e
+		}
+	}
+	require.NotNil(t, orphan)
+	assert.Nil(t, orphan.BoostID, "the parent link is gone")
+	require.NotNil(t, orphan.BoostName)
+	assert.Equal(t, "Purged Boost", *orphan.BoostName,
+		"and the caller can still say which automation this was")
+}
+
+func TestGetUserExecutionHistory_PassesTheStatusFilterThrough(t *testing.T) {
+	ctx := context.Background()
+	liveBoostID := "boost-live"
+	execRepo := &mockBoostExecutionRepository{
+		executions: []*domain.BoostExecution{
+			{ID: "e-done", BoostID: &liveBoostID, UserID: "user-1", Status: domain.ExecutionStatusCompleted},
+			{ID: "e-failed", BoostID: nil, UserID: "user-1", Status: domain.ExecutionStatusFailed},
+		},
+	}
+	svc := NewBoostExecutionService(execRepo, &mockTransferSuggestionRepository{}, &mockBoostsRepository{}, nil)
+
+	failed := domain.ExecutionStatusFailed
+	executions, total, err := svc.GetUserExecutionHistory(ctx, "user-1", &failed, 20, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	require.Len(t, executions, 1)
+	assert.Equal(t, "e-failed", executions[0].ID)
+}

@@ -213,13 +213,37 @@ migrate -database "$DATABASE_URL" -path migrations version
 
 ### Rollback Migrations
 
-```bash
-# Rollback last migration
-migrate -database "$DATABASE_URL" -path migrations down 1
+**Rollback ONE migration: use `make migrate-down`, not the raw command below.**
+(#1569 round 13 task 1) `make migrate-down` runs the same
+`backend/scripts/assert-migrate-reset-target-disposable.sh` guard as `migrate-reset` before
+`down 1` — repeated `make migrate-down` walks all the way back through every `.down.sql` in
+reverse, exactly like `down -all` does in one shot. The raw command below bypasses that guard:
 
-# Rollback all migrations
+```bash
+# ⚠ BYPASSES the migrate-down disposability guard entirely. Prefer `make migrate-down`.
+migrate -database "$DATABASE_URL" -path migrations down 1
+```
+
+**Rollback ALL migrations: use `make migrate-reset`, not the raw command below.**
+(#1569 round 12 task 7) `make migrate-reset` runs
+`backend/scripts/assert-migrate-reset-target-disposable.sh` first, refusing to run against a
+database holding real data that was not explicitly marked disposable — per-migration rollback
+refusal guards can be bypassed entirely by `down -all`'s reverse execution order, so this is the
+only place the protection actually lives. The raw command below **deliberately bypasses that
+guard**:
+
+```bash
+# ⚠ BYPASSES the migrate-reset disposability guard entirely. Prefer `make migrate-reset`.
 migrate -database "$DATABASE_URL" -path migrations down -all
 ```
+
+⚠ `scripts/assert-no-ungated-migrate-down-invocation.sh` (part of `make test-scripts`) checks
+every `.sh`/Makefile/GitHub Actions workflow/Dockerfile/extensionless shell-shebang script in
+this repo for an ungated `migrate ... down` invocation — a new one, or an existing gated one
+losing its gate call, fails the build. **It does NOT reach**: a raw command typed directly at a
+shell (why the warnings above still matter), a `.mjs`/`.js`/`.ts`/`.cjs` bun/npm script (a shell
+command there is necessarily inside a string literal), or variable/`eval` indirection even within
+the scanned file types — see the script's own header comment for the full, current scope.
 
 ### Force Version (Recovery)
 

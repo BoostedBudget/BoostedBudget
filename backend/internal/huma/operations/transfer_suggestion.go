@@ -95,10 +95,24 @@ type AcceptTransferSuggestionInput struct {
 }
 
 // AcceptTransferSuggestionOutput is the response for accepting a transfer suggestion.
+//
+// ⚠ SUGGESTION IS omitempty, AND THAT IS THE CONTRACT RATHER THAN A STYLE CHOICE — the same rule
+// ListAdminRetentionWithheldOutput.NextCursor carries. huma renders a *struct field as a bare
+// `$ref` (huma@v2.39.1 schema.go:623 — object nullability is explicitly unsupported), so unlike a
+// *string, whose schema carries "null" in its type union, there is no encoding of "present but
+// empty" for it: a nil comes out ABSENT, not null. Without omitempty the field stays in `required`
+// (schema.go:908), publishing a schema that REJECTS a body the server really sends and generating a
+// TypeScript model that types the field non-optional for a client to dereference. The live nil path
+// is the MCP idempotency replay in ConfirmMatch/DeclineMatch: a cache hit whose stored value is
+// null calls buildOutput(nil, false). omitempty makes "absent" the schema-valid encoding of "no
+// suggestion in this body". All five transfer-suggestion response bodies follow this; pinned by
+// TestTransferSuggestionOutputs_DoNotRequireAFieldHumaCannotEmit (against the COMMITTED
+// api/openapi.yaml) and TestTransferSuggestionFile_NoRequiredPointerToStructField (against this
+// file's source, so a field added later is covered without extending a list).
 type AcceptTransferSuggestionOutput struct {
 	Body struct {
-		Message    string                    `json:"message"`
-		Suggestion *domain.TransferSuggestion `json:"suggestion"`
+		Message    string                     `json:"message"`
+		Suggestion *domain.TransferSuggestion `json:"suggestion,omitempty"`
 	}
 }
 
@@ -112,10 +126,12 @@ type RejectTransferSuggestionInput struct {
 }
 
 // RejectTransferSuggestionOutput is the response for rejecting a transfer suggestion.
+// suggestion is omitempty for the reason spelled out on AcceptTransferSuggestionOutput: huma
+// renders a *struct as a bare $ref, so a nil is ABSENT and `required` would reject it.
 type RejectTransferSuggestionOutput struct {
 	Body struct {
-		Message    string                    `json:"message"`
-		Suggestion *domain.TransferSuggestion `json:"suggestion"`
+		Message    string                     `json:"message"`
+		Suggestion *domain.TransferSuggestion `json:"suggestion,omitempty"`
 	}
 }
 
@@ -258,10 +274,12 @@ type DeclineTransferSuggestionMatchInput struct {
 }
 
 // DeclineTransferSuggestionMatchOutput is the response for declining a transfer suggestion match.
+// suggestion is omitempty for the reason spelled out on AcceptTransferSuggestionOutput: huma
+// renders a *struct as a bare $ref, so a nil is ABSENT and `required` would reject it.
 type DeclineTransferSuggestionMatchOutput struct {
 	Body struct {
 		Message    string                     `json:"message"`
-		Suggestion *domain.TransferSuggestion `json:"suggestion"`
+		Suggestion *domain.TransferSuggestion `json:"suggestion,omitempty"`
 	}
 }
 
@@ -280,10 +298,12 @@ type ConfirmTransferSuggestionMatchInput struct {
 }
 
 // ConfirmTransferSuggestionMatchOutput is the response for confirming a transfer suggestion match.
+// suggestion is omitempty for the reason spelled out on AcceptTransferSuggestionOutput: huma
+// renders a *struct as a bare $ref, so a nil is ABSENT and `required` would reject it.
 type ConfirmTransferSuggestionMatchOutput struct {
 	Body struct {
 		Message    string                     `json:"message"`
-		Suggestion *domain.TransferSuggestion `json:"suggestion"`
+		Suggestion *domain.TransferSuggestion `json:"suggestion,omitempty"`
 	}
 }
 
@@ -476,10 +496,12 @@ type CancelTransferSuggestionInput struct {
 }
 
 // CancelTransferSuggestionOutput is the response for cancelling a transfer suggestion.
+// suggestion is omitempty for the reason spelled out on AcceptTransferSuggestionOutput: huma
+// renders a *struct as a bare $ref, so a nil is ABSENT and `required` would reject it.
 type CancelTransferSuggestionOutput struct {
 	Body struct {
 		Message    string                     `json:"message"`
-		Suggestion *domain.TransferSuggestion `json:"suggestion"`
+		Suggestion *domain.TransferSuggestion `json:"suggestion,omitempty"`
 	}
 }
 

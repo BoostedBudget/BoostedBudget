@@ -109,7 +109,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_BumpsOnPartialCommitEv
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-partial", userID)
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -161,7 +161,7 @@ func TestLiabilitySyncService_SyncLiabilities_BumpsUserCacheGenerationAfterSucce
 	linkedItem := makeLinkedItem("item-liab-cache", userID)
 
 	credit := makePlaidCreditLiability(plaidAccountID)
-	resp := makePlaidLiabilitiesResponse([]plaid.CreditCardLiability{credit}, []plaid.MortgageLiability{}, []plaid.StudentLoan{})
+	resp := makePlaidLiabilitiesResponse([]plaid.CreditCardLiability{credit}, []plaid.MortgageLiability{}, []plaid.StudentLoan{}, plaidAccountID)
 	deps.plaidSvc.On("LiabilitiesGet", ctx, "tok").Return(resp, nil)
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
@@ -202,7 +202,7 @@ func TestLiabilitySyncService_SyncLiabilities_BumpsOnPartialCommitEvenWhenLaterC
 	linkedItem := makeLinkedItem("item-liab-partial", userID)
 
 	credit := makePlaidCreditLiability(plaidAccountID)
-	resp := makePlaidLiabilitiesResponse([]plaid.CreditCardLiability{credit}, []plaid.MortgageLiability{}, []plaid.StudentLoan{})
+	resp := makePlaidLiabilitiesResponse([]plaid.CreditCardLiability{credit}, []plaid.MortgageLiability{}, []plaid.StudentLoan{}, plaidAccountID)
 	deps.plaidSvc.On("LiabilitiesGet", ctx, "tok").Return(resp, nil)
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},

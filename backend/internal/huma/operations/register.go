@@ -35,6 +35,8 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	transactionHandler := &TransactionHandler{}
 	categoryHandler := &CategoryHandler{}
 	categorizationRuleHandler := &CategorizationRuleHandler{}
+	ruleExecutionHandler := &RuleExecutionHandler{}
+	transactionAnnotationHistoryHandler := &TransactionAnnotationHistoryHandler{}
 	notificationHandler := &NotificationHandler{}
 	dashboardHandler := &DashboardHandler{}
 	analyticsHandler := &AnalyticsHandler{}
@@ -44,6 +46,8 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	plaidHandler := &PlaidHandler{}
 	profileHandler := &ProfileHandler{}
 	privacyHandler := &PrivacyHandler{}
+	// Issue #1587: GDPR data export
+	dataExportHandler := &DataExportHandler{}
 	adminHandler := &AdminHandler{}
 	categoryPreviewHandler := &CategoryPreviewHandler{}
 	deletionHandler := &DeletionHandler{}
@@ -77,6 +81,12 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Issue #138: Investment portfolio endpoints (8 ops: 4 core + 4 analytics)
 	investmentHandler := &InvestmentHandler{}
 
+	// Issue #1569: retained holdings history for a closed account (1 op)
+	holdingHistoryHandler := &HoldingHistoryHandler{}
+
+	// Issue #1569: retained per-account balance history for a closed account (1 op)
+	accountBalanceHistoryHandler := &AccountBalanceHistoryHandler{}
+
 	// Issue #1300 M20: Savings goal contribution API (D6 source-a manual log + confirm + delete)
 	contributionHandler := &ContributionHandler{}
 
@@ -106,6 +116,11 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	RegisterTransactionRoutes(api, transactionHandler)
 	RegisterCategoryRoutes(api, categoryHandler)
 	RegisterCategorizationRuleRoutes(api, categorizationRuleHandler)
+	// Issue #1569 Task 5 (#1572): the automation audit trail's read endpoint.
+	RegisterRuleExecutionRoutes(api, ruleExecutionHandler)
+
+	// Issue #1569 Task 6 (#1579): the annotation trail's read endpoint.
+	RegisterTransactionAnnotationHistoryRoutes(api, transactionAnnotationHistoryHandler)
 	RegisterNotificationRoutes(api, notificationHandler)
 	RegisterDashboardRoutes(api, dashboardHandler)
 	RegisterAnalyticsRoutes(api, analyticsHandler)
@@ -115,6 +130,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	RegisterPlaidRoutes(api, plaidHandler)
 	RegisterProfileRoutes(api, profileHandler)
 	RegisterPrivacyRoutes(api, privacyHandler)
+	RegisterDataExportRoutes(api, dataExportHandler)
 	RegisterAdminRoutes(api, adminHandler)
 	RegisterCategoryPreviewRoutes(api, categoryPreviewHandler)
 	RegisterDeletionRoutes(api, deletionHandler)
@@ -150,6 +166,13 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #138: Investment portfolio (4 core + 4 analytics operations)
 	RegisterInvestmentRoutes(api, investmentHandler)
+
+	// Issue #1569: retained holdings history (historical universe — see holding_history.go)
+	RegisterHoldingHistoryRoutes(api, holdingHistoryHandler)
+
+	// Issue #1569: retained per-account balance history (historical universe — see
+	// account_balance_history.go)
+	RegisterAccountBalanceHistoryRoutes(api, accountBalanceHistoryHandler)
 
 	// Issue #1300 M20: Savings goal contribution API
 	RegisterContributionRoutes(api, contributionHandler)

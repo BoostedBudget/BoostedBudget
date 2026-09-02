@@ -92,6 +92,27 @@ func createRetentionFixtureUser(
 	return user
 }
 
+// markRetentionNoticesDelivered stamps BOTH pre-deletion notice markers on a fixture user,
+// backdated relative to the given expiry so the row describes a user genuinely warned at 30 and 7
+// days before their clock ran out.
+//
+// ⚠ REQUIRED BY EVERY EXPIRED-RETENTION *SELECTION* FIXTURE SINCE ISSUE #1569 T1, and by none of the
+// notice fixtures. The hard-delete sweep and the retention claim now both require both markers
+// (retentionNoticesDeliveredPredicate), so a candidate seeded with NULLs is a WITHHELD account and
+// the query under test correctly returns nothing. The 30d/7d NOTICE queries require the opposite
+// (retention_notice_*_sent_at IS NULL is half of what makes a user need the notice), which is why
+// createRetentionFixtureUser still leaves them NULL and this is a separate, opt-in step.
+func markRetentionNoticesDelivered(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID string, retentionExpiresAt time.Time) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `
+		UPDATE users
+		SET retention_notice_30d_sent_at = $1,
+		    retention_notice_7d_sent_at = $2
+		WHERE id = $3`,
+		retentionExpiresAt.Add(-30*24*time.Hour), retentionExpiresAt.Add(-7*24*time.Hour), userID)
+	require.NoError(t, err)
+}
+
 // setupRetentionFixtures creates the three canonical fixtures (active comp, expired comp,
 // ordinary) all sharing the same retention_expires_at, so a single call to the retention
 // query under test can be asserted against all three at once.
@@ -180,6 +201,12 @@ func TestGetUsersWithExpiredRetentionPage_Integration_ExcludesActiveComp(t *test
 
 	retentionExpiresAt := time.Now().Add(-1 * time.Hour) // already expired
 	fixtures := setupRetentionFixtures(t, ctx, pool, repo, "rexp", retentionExpiresAt)
+	// Issue #1569 T1: all three fixtures must be fully warned, or the ordinary user would be held
+	// back by the notice gate and this test would pass for the wrong reason — proving nothing about
+	// the manual-override exclusion it exists to check.
+	for _, u := range []*domain.User{fixtures.activeComp, fixtures.expiredComp, fixtures.ordinaryUser} {
+		markRetentionNoticesDelivered(t, ctx, pool, u.ID, retentionExpiresAt)
+	}
 
 	assertRetentionSelection(t, walkAllExpiredRetentionUsers(t, ctx, repo), fixtures)
 }
@@ -202,12 +229,18 @@ func TestRetentionQueries_Integration_ExpiredOverride_ExcludedUntilCleared(t *te
 		name               string
 		retentionExpiresAt time.Time
 		query              func(context.Context) ([]*domain.User, error)
+		// noticesDelivered is Issue #1569 T1: the expired-retention query requires BOTH
+		// pre-deletion notice markers to be recorded, while the two NOTICE queries require them to
+		// be NULL (that is half of what makes a user need the notice at all). The flag is therefore
+		// the exact inverse between these rows; hard-coding either value for all three would make
+		// this test vacuous for one of the queries.
+		noticesDelivered bool
 	}{
-		{"30d_notice", time.Now().Add(15 * 24 * time.Hour), repo.GetUsersNeedingRetention30dNotice},
-		{"7d_notice", time.Now().Add(3 * 24 * time.Hour), repo.GetUsersNeedingRetention7dNotice},
+		{"30d_notice", time.Now().Add(15 * 24 * time.Hour), repo.GetUsersNeedingRetention30dNotice, false},
+		{"7d_notice", time.Now().Add(3 * 24 * time.Hour), repo.GetUsersNeedingRetention7dNotice, false},
 		{"expired_retention", time.Now().Add(-1 * time.Hour), func(ctx context.Context) ([]*domain.User, error) {
 			return walkAllExpiredRetentionUsers(t, ctx, repo), nil
-		}},
+		}, true},
 	}
 
 	for _, tt := range tests {
@@ -216,6 +249,9 @@ func TestRetentionQueries_Integration_ExpiredOverride_ExcludedUntilCleared(t *te
 			premium := "premium"
 			expiredAt := time.Now().Add(-1 * time.Hour)
 			user := createRetentionFixtureUser(t, ctx, pool, repo, suffix, tt.retentionExpiresAt, &premium, &expiredAt)
+			if tt.noticesDelivered {
+				markRetentionNoticesDelivered(t, ctx, pool, user.ID, tt.retentionExpiresAt)
+			}
 
 			before, err := tt.query(ctx)
 			require.NoError(t, err)

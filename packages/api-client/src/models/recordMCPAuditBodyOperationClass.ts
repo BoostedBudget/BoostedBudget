@@ -32,7 +32,7 @@
  */
 
 /**
- * Operation class: read or write
+ * Operation class: read, write, or destructive (permanently destroys data — #1569)
  */
 export type RecordMCPAuditBodyOperationClass = typeof RecordMCPAuditBodyOperationClass[keyof typeof RecordMCPAuditBodyOperationClass];
 
@@ -40,4 +40,5 @@ export type RecordMCPAuditBodyOperationClass = typeof RecordMCPAuditBodyOperatio
 export const RecordMCPAuditBodyOperationClass = {
   read: 'read',
   write: 'write',
+  destructive: 'destructive',
 } as const;

@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -14,6 +16,14 @@ import (
 type RuleApplicationRepository interface {
 	GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.CategorizationRule, error)
 	IncrementMatchCount(ctx context.Context, ruleID string) error
+}
+
+// RuleExecutionHistoryRepository is the automation audit trail's data access, declared here (as
+// RuleApplicationRepository is) so the service depends on the narrow shape it needs rather than on
+// the repository package. Implemented by repository.ruleExecutionHistoryRepository.
+type RuleExecutionHistoryRepository interface {
+	Create(ctx context.Context, execution *domain.RuleExecution) error
+	GetByUserID(ctx context.Context, userID string, limit, offset int) ([]*domain.RuleExecution, int, error)
 }
 
 // BatchRuleApplication records the outcome of applying rules to one transaction
@@ -30,6 +40,42 @@ type BatchRuleApplication struct {
 	// CategoryRuleID is the ID of the specific rule that set the category.
 	// Empty when CategoryApplied is false.
 	CategoryRuleID string
+
+	// Executions is the automation audit trail for this transaction: one entry per rule that
+	// ACTUALLY CHANGED something, carrying the rule's name and definition as they were at that
+	// moment. Issue #1569 Task 5 (#1572).
+	//
+	// ⚠ Executions is NOT MatchedRuleIDs. MatchedRuleIDs is every rule whose conditions matched,
+	// and it drives match counts, which are a "how often is this rule relevant" statistic. A rule
+	// can match and change nothing — its target category is already the transaction's category, or
+	// the tag it offers is already present. The user's ruling for #1572 is that history records
+	// what a rule DID, so those produce no entry here while still counting as a match.
+	//
+	// ⚠ It is also not MatchedRuleIDs minus the no-ops: the rule name and definition must be
+	// captured HERE, inside ApplyRulesToBatch, where the *domain.CategorizationRule is in scope.
+	// Re-reading categorization_rules from the writer would capture the rule as it is at WRITE
+	// time, which is precisely the drift rule_name and definition_snapshot exist to prevent.
+	Executions []RuleExecutionRecord
+}
+
+// RuleExecutionRecord is one rule's contribution to one transaction, captured at evaluation time
+// and written to rule_execution_history by EmitBatchSideEffects.
+//
+// ONE RECORD PER RULE, NEVER PER ACTION. `unique_rule_transaction UNIQUE (rule_id, transaction_id)`
+// makes a second row for the same pair unrepresentable, so a rule that set the category AND added a
+// tag produces a single record with ActionType "both". This is why ActionType is derived by merging
+// contributions rather than emitted per action.
+type RuleExecutionRecord struct {
+	// RuleID is the rule that changed something. Never empty.
+	RuleID string
+	// RuleName is the rule's name AS IT WAS at evaluation time.
+	RuleName string
+	// ActionType is one of domain.RuleExecutionAction{Category,Tags,Both}, derived from what this
+	// rule actually changed — not from what it was configured to attempt.
+	ActionType string
+	// DefinitionSnapshot is the marshalled rule definition as it was at evaluation time.
+	// nil when marshalling failed, which writes SQL NULL rather than failing the sync.
+	DefinitionSnapshot json.RawMessage
 }
 
 // RuleApplicationService applies categorization rules to transactions.
@@ -55,9 +101,10 @@ type RuleApplicationService interface {
 
 // ruleApplicationService implements RuleApplicationService.
 type ruleApplicationService struct {
-	ruleRepo   RuleApplicationRepository
-	ruleEngine *rules.RuleEngine
-	analytics  phclient.Analytics
+	ruleRepo    RuleApplicationRepository
+	ruleEngine  *rules.RuleEngine
+	analytics   phclient.Analytics
+	historyRepo RuleExecutionHistoryRepository
 }
 
 // NewRuleApplicationService creates a new RuleApplicationService instance.
@@ -71,6 +118,14 @@ func NewRuleApplicationService(ruleRepo RuleApplicationRepository) *ruleApplicat
 // SetAnalytics sets the analytics client for event capture.
 func (s *ruleApplicationService) SetAnalytics(analytics phclient.Analytics) {
 	s.analytics = analytics
+}
+
+// SetRuleExecutionHistoryRepository wires the automation audit trail's writer.
+// Issue #1569 Task 5 (#1572). Setter injection, exactly as SetAnalytics is, so the ~15 existing
+// NewRuleApplicationService call sites keep compiling and a nil repository is a silent no-op rather
+// than a panic.
+func (s *ruleApplicationService) SetRuleExecutionHistoryRepository(repo RuleExecutionHistoryRepository) {
+	s.historyRepo = repo
 }
 
 // ApplyRulesToTransaction applies all enabled rules to a single transaction.
@@ -180,6 +235,14 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 		return nil, nil
 	}
 
+	// Indexed once for the audit trail: a record must carry the rule's name and definition AS THEY
+	// WERE at evaluation time, and the *domain.CategorizationRule holding them is only in scope
+	// here. Issue #1569 Task 5.
+	rulesByID := make(map[string]*domain.CategorizationRule, len(userRules))
+	for _, r := range userRules {
+		rulesByID[r.ID] = r
+	}
+
 	var applications []BatchRuleApplication
 
 	for i := range txns {
@@ -189,6 +252,15 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 		// (reviewed rows are protected from auto-recategorization, Issue #1203).
 		if tx.CategorySourceField == domain.CategorySourceManual || tx.Reviewed {
 			continue
+		}
+
+		// Captured BEFORE any mutation. The audit trail records what a rule CHANGED, and the only
+		// way to know that is to compare before with after. Issue #1569 Task 5.
+		categoryBefore := categoryAssignment(tx)
+		reviewedBefore := tx.Reviewed
+		tagsBefore := make(map[string]bool, len(tx.Tags))
+		for _, tag := range tx.Tags {
+			tagsBefore[tag] = true
 		}
 
 		result, err := s.ruleEngine.EvaluateRules(tx, userRules)
@@ -242,11 +314,247 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 				MatchedRuleIDs:  result.MatchedRuleIDs,
 				CategoryApplied: result.TargetKind != nil,
 				CategoryRuleID:  result.CategoryRuleID,
+				Executions: buildRuleExecutionRecords(
+					tx, result, rulesByID, categoryBefore, reviewedBefore, tagsBefore),
 			})
 		}
 	}
 
 	return applications, nil
+}
+
+// categoryAssignment renders a transaction's category assignment as one comparable value.
+//
+// THE FOUR FIELDS MOVE AS A UNIT and the database enforces it: the
+// `valid_category_override_discriminator` CHECK rejects a row whose category_override_kind is
+// 'custom' without a custom_category_override_id. Comparing them one at a time would let a
+// half-change read as no change.
+//
+// DELIBERATELY EXCLUDES category_source, which is bookkeeping about the fact that a rule ran rather
+// than a record of what the rule DID: it is set unconditionally whenever result.TargetKind != nil,
+// so folding it in would make every category match look like a category change.
+//
+// ⚠ `reviewed` USED TO BE EXCLUDED HERE TOO, and that was a defect — R73, review round 1 D2. It is
+// now handled OUTSIDE this function, in buildRuleExecutionRecords, as its own contribution test.
+// The reason it does not belong in this fingerprint is that it is not part of the category
+// assignment; the reason it must be tested somewhere is that flipping it is permanent and
+// user-visible. Read buildRuleExecutionRecords' `reviewedChanged` for the argument.
+//
+// Uses a rune Postgres forbids in an identifier as the separator so no combination of real values
+// can collide across field boundaries.
+func categoryAssignment(tx *domain.Transaction) string {
+	parts := []*string{
+		tx.CategoryOverrideKind,
+		tx.PFCPrimaryOverride,
+		tx.PFCDetailedOverride,
+		tx.CustomCategoryOverrideID,
+	}
+	out := ""
+	for _, p := range parts {
+		if p == nil {
+			out += "\x00<nil>"
+			continue
+		}
+		out += "\x00" + *p
+	}
+	return out
+}
+
+// buildRuleExecutionRecords attributes each ACTUAL change to the rule that made it.
+//
+// Issue #1569 Task 5 (#1572), and this function is where three of that task's four hard questions
+// are answered:
+//
+//   - MATCHED vs CHANGED. A rule can match and do nothing: every tag it offers is already present.
+//     Those get no record, per the user's ruling, which is also why `result` is always 'applied'
+//     and never 'skipped_manual'.
+//     ⚠ R73 NARROWED THIS, and the narrowing is worth stating rather than discovering. A category
+//     rule ALSO flips `reviewed` false→true, and that flip is permanent: the next batch hits the
+//     `tx.Reviewed → continue` guard and skips the row forever. So for category rules "matched" and
+//     "changed" now coincide on every transaction the loop does not skip, and the
+//     matched-but-changed-nothing case survives only for tag-only rules. That is deliberate — the
+//     alternative silently loses a durable, user-visible state change (a `target_kind='clear'` rule
+//     on a fresh Plaid transaction changes NOTHING ELSE) to keep a distinction tidy.
+//   - MULTI-RULE. result.MatchedRuleIDs can hold several rules while result.CategoryRuleID names
+//     one. The answer is one record per CONTRIBUTING rule, attributed to that rule — the category
+//     goes to result.CategoryRuleID, and each landed tag goes to the rule that supplied it (which
+//     domain.TagSource.RuleID records). Collapsing several rules onto CategoryRuleID would
+//     misattribute another rule's tag, and dropping them would lose it entirely.
+//   - ONE ROW PER RULE. unique_rule_transaction UNIQUE (rule_id, transaction_id) makes a second row
+//     for the same pair unrepresentable, so a rule that did both is merged into ActionType "both".
+//
+// Emission order follows result.MatchedRuleIDs, which the engine produces in a deterministic
+// priority order, so the records are stable run to run.
+//
+// ⚠ A tag REMOVED by a replace-behaviour rule is a change nothing here attributes: applyTagsToTransaction
+// drops rule-sourced tags that are not re-offered, and the removal belongs to no single rule. Such
+// a transaction produces no tag record. Recording removals needs an action_type the live
+// `valid_action_type` CHECK does not have.
+//
+// ⚠ THE `tagsBefore` CLAUSE IS DEFENSIVE-ONLY ON TODAY'S ONLY CALLER — do not read it as exercised.
+// The sole production path is transaction_sync_service.processAddedTransactions, and nothing on it
+// populates Tags, TagsSource, CategoryOverrideKind, CategorySourceField or Reviewed before
+// ApplyRulesToBatch runs: the rows come straight from the Plaid mapper (services/plaid_mapper.go),
+// which sets none of them. So in production `tagsBefore` is always EMPTY and `categoryBefore` is
+// always the all-nil tuple. Deleting `|| tagsBefore[ts.Tag]` used to leave the entire suite green
+// (review round 1, D1); it is now pinned by
+// TestApplyRulesToBatch_ARuleWhoseOwnTagIsAlreadyPresentContributesNothing, which constructs the
+// unreachable shape on purpose and says so. Any unit fixture that hand-builds a transaction with
+// pre-existing annotations is describing a state this caller cannot produce.
+func buildRuleExecutionRecords(
+	tx *domain.Transaction,
+	result *rules.RuleResult,
+	rulesByID map[string]*domain.CategorizationRule,
+	categoryBefore string,
+	reviewedBefore bool,
+	tagsBefore map[string]bool,
+) []RuleExecutionRecord {
+	type contribution struct {
+		category bool
+		tags     bool
+	}
+	changed := make(map[string]*contribution)
+
+	categoryChanged := categoryAssignment(tx) != categoryBefore
+	// R73 (review round 1, D2): a reviewed false→true transition IS a change, and on the only
+	// production caller it is the ONLY change a `target_kind='clear'` rule makes.
+	reviewedChanged := !reviewedBefore && tx.Reviewed
+	if result.CategoryRuleID != "" && (categoryChanged || reviewedChanged) {
+		changed[result.CategoryRuleID] = &contribution{category: true}
+	}
+
+	for _, ts := range tx.TagsSource {
+		if ts.Source != "rule" || ts.RuleID == nil || tagsBefore[ts.Tag] {
+			continue
+		}
+		c, ok := changed[*ts.RuleID]
+		if !ok {
+			c = &contribution{}
+			changed[*ts.RuleID] = c
+		}
+		c.tags = true
+	}
+
+	if len(changed) == 0 {
+		return nil
+	}
+
+	records := make([]RuleExecutionRecord, 0, len(changed))
+	for _, ruleID := range result.MatchedRuleIDs {
+		c, ok := changed[ruleID]
+		if !ok {
+			continue
+		}
+		delete(changed, ruleID) // a rule id appearing twice must not yield two rows
+
+		rule := rulesByID[ruleID]
+		if rule == nil {
+			// Unreachable in practice: every id in MatchedRuleIDs came from userRules. Guarded so
+			// a future engine change degrades to a nameless record rather than a nil dereference.
+			records = append(records, RuleExecutionRecord{RuleID: ruleID, ActionType: actionTypeFor(c.category, c.tags)})
+			continue
+		}
+
+		records = append(records, RuleExecutionRecord{
+			RuleID:             ruleID,
+			RuleName:           rule.Name,
+			ActionType:         actionTypeFor(c.category, c.tags),
+			DefinitionSnapshot: buildRuleDefinitionSnapshot(rule),
+		})
+	}
+
+	return records
+}
+
+// actionTypeFor maps what a rule changed onto the live `valid_action_type` CHECK's three values.
+// Never called with both false: buildRuleExecutionRecords only creates a contribution when
+// something changed.
+func actionTypeFor(category, tags bool) string {
+	switch {
+	case category && tags:
+		return domain.RuleExecutionActionBoth
+	case category:
+		return domain.RuleExecutionActionCategory
+	default:
+		return domain.RuleExecutionActionTags
+	}
+}
+
+// buildRuleDefinitionSnapshot freezes the rule definition as it stands at execution time.
+//
+// Mirrors buildBoostDefinitionSnapshot (boost_execution_service.go) field for field in convention,
+// including captured_at / captured_by, and matches the field set migration 000164's backfill wrote
+// so a backfilled row and a live-written row are the same shape.
+//
+// DELIBERATELY EXCLUDED, for the same reasons the boost snapshot excludes its equivalents:
+//
+//	description                                free text, no bearing on behaviour, and a PII
+//	                                           surface with no reader
+//	match_count, override_count, last_matched_at
+//	                                           counters describing the rule's whole lifetime rather
+//	                                           than this execution — and this very row is one of the
+//	                                           things they count
+//	created_at, updated_at                     properties of the definition, not of what it did
+//	user_id                                    already a first-class column on the row
+//
+// ⚠ `conditions` IS DELIBERATELY INCLUDED, THOUGH IT CARRIES USER-TYPED TEXT (merchant substrings,
+// amounts). Review round 1 asked whether it belongs with `description`, which is excluded above
+// partly as a PII surface. The decision is to keep it, on three grounds, recorded so it is a
+// decision rather than an oversight:
+//
+//  1. The exclusion of `description` rests FIRST on "no bearing on behaviour". `conditions` is the
+//     entire answer to "why did this fire" — the one question an orphaned row exists to answer.
+//     Dropping it leaves a snapshot that says what happened and cannot say why.
+//  2. It is NOT a new exposure. GET /api/v1/auto-categorization already returns every enabled rule
+//     to its owner with `conditions` populated (domain.CategorizationRule.Conditions is
+//     `json:"conditions"`), as does GET /api/v1/auto-categorization/{id}. The same user sees the
+//     same bytes today. GET /api/v1/rule-executions is tenancy-scoped to the row's own user_id, so
+//     no second party gains anything.
+//  3. What it DOES add is a copy that outlives the rule, which is the point — and which means a
+//     GDPR erasure must reach it. It does: rule_execution_history.user_id -> users(id) ON DELETE
+//     CASCADE (migration 000164), the row's own path, independent of the rule.
+//
+// ⚠ The obligation this creates is on any future UI: a rendered condition value is user-typed
+// financial text and needs `data-ph-mask` for session replay, exactly as a merchant name does.
+// There is no UI today; this is the note for whoever builds one.
+//
+// Marshalling cannot fail for these types in practice; if it somehow did, a nil snapshot is written
+// (SQL NULL) rather than failing the sync. Losing the explanation is bad; refusing to categorize
+// the user's transactions because the explanation would not serialise is worse.
+func buildRuleDefinitionSnapshot(rule *domain.CategorizationRule) json.RawMessage {
+	snapshot := map[string]interface{}{
+		"rule_id":         rule.ID,
+		"name":            rule.Name,
+		"enabled":         rule.Enabled,
+		"priority":        rule.Priority,
+		"condition_logic": rule.ConditionLogic,
+		"conditions":      rule.Conditions,
+		"tag_behavior":    rule.TagBehavior,
+		"source":          rule.Source,
+		"captured_at":     time.Now().UTC().Format(time.RFC3339),
+		"captured_by":     "rule_application_service",
+	}
+	if rule.TargetKind != nil {
+		snapshot["target_kind"] = *rule.TargetKind
+	}
+	if rule.TargetPFCPrimary != nil {
+		snapshot["target_pfc_primary"] = *rule.TargetPFCPrimary
+	}
+	if rule.TargetPFCDetailed != nil {
+		snapshot["target_pfc_detailed"] = *rule.TargetPFCDetailed
+	}
+	if rule.TargetCustomCategoryID != nil {
+		snapshot["target_custom_category_id"] = *rule.TargetCustomCategoryID
+	}
+	if len(rule.TargetTags) > 0 {
+		snapshot["target_tags"] = rule.TargetTags
+	}
+
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil
+	}
+	return encoded
 }
 
 // applyTagsToTransaction merges rule tags with existing manual tags, deduplicating as needed.
@@ -307,6 +615,56 @@ func (s *ruleApplicationService) EmitBatchSideEffects(ctx context.Context, userI
 		// Increment match counts for all matched rules (category + tag-only).
 		for _, ruleID := range app.MatchedRuleIDs {
 			_ = s.ruleRepo.IncrementMatchCount(ctx, ruleID)
+		}
+
+		s.writeExecutionHistory(ctx, userID, app)
+	}
+}
+
+// writeExecutionHistory persists the automation audit trail for one transaction.
+// Issue #1569 Task 5 (#1572).
+//
+// WHY IT LIVES HERE AND NOT IN ApplyRulesToBatch. rule_execution_history.transaction_id carries a
+// foreign key to transactions — ON DELETE SET NULL since migration 000157, but an FK all the same —
+// so a row written before the transaction exists, or for one the upsert never inserted, violates it
+// (SQLSTATE 23503). EmitBatchSideEffects runs AFTER CreateBatch and is already gated on insertedIDs,
+// which CreateBatch derives from `xmax::text::bigint = 0`: genuinely new rows only, never
+// conflict-preserved ones.
+//
+// BEST-EFFORT, DELIBERATELY. This runs after the transactions are already committed and the caller
+// has no error channel. A failed audit write is logged and the sync continues; the alternative is
+// telling the user their transactions did not sync because the explanation of the sync did not save.
+func (s *ruleApplicationService) writeExecutionHistory(ctx context.Context, userID string, app BatchRuleApplication) {
+	if s.historyRepo == nil || len(app.Executions) == 0 {
+		return
+	}
+
+	transactionID := app.TransactionID
+	for _, rec := range app.Executions {
+		ruleID := rec.RuleID
+		var ruleName *string
+		if rec.RuleName != "" {
+			ruleName = &rec.RuleName
+		}
+
+		err := s.historyRepo.Create(ctx, &domain.RuleExecution{
+			RuleID:        &ruleID,
+			TransactionID: &transactionID,
+			UserID:        userID,
+			RuleName:      ruleName,
+			// Only actual changes reach this point, so the result is always 'applied'. See
+			// domain.RuleExecutionResultApplied for why skipped_manual is unrecordable here.
+			ActionType:         rec.ActionType,
+			Result:             domain.RuleExecutionResultApplied,
+			DefinitionSnapshot: rec.DefinitionSnapshot,
+		})
+		if err != nil {
+			slog.WarnContext(ctx, "failed to record rule execution history",
+				"error", err,
+				"rule_id", rec.RuleID,
+				"transaction_id", app.TransactionID,
+				"action_type", rec.ActionType,
+			)
 		}
 	}
 }

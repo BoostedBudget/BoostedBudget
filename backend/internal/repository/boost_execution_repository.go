@@ -40,6 +40,15 @@ type BoostExecutionRepository interface {
 
 	// GetFailedExecutions retrieves failed executions for retry.
 	GetFailedExecutions(ctx context.Context, boostID string, limit int) ([]*domain.BoostExecution, error)
+
+	// GetByUserID retrieves a user's whole automation history, with an optional status filter and
+	// a total count, keyed on the execution row's OWN user_id rather than on its boost.
+	//
+	// Issue #1569 Task 14. Every other read here is keyed on `boost_id = $1`, so once
+	// fk_boost_executions_boost_id became ON DELETE SET NULL an execution whose boost had been
+	// purged would have been physically retained and invisible to every list in the app --
+	// retention that reads as deletion. This is the reader that can still see it.
+	GetByUserID(ctx context.Context, userID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error)
 }
 
 // boostExecutionRepository implements BoostExecutionRepository using PostgreSQL.
@@ -76,17 +85,30 @@ func (r *boostExecutionRepository) Create(ctx context.Context, execution *domain
 		triggerContextJSON = execution.TriggerContext
 	}
 
+	// nil (not []byte{}) so the column is SQL NULL rather than invalid JSON when unset.
+	var definitionSnapshot []byte
+	if len(execution.DefinitionSnapshot) > 0 {
+		definitionSnapshot = execution.DefinitionSnapshot
+	}
+
+	// user_id, boost_name and definition_snapshot are written ONCE, here, from the definition as
+	// it stands at execution time. Update() never touches them: the point of a snapshot is that a
+	// later rename, edit or purge of the boost does not rewrite what history says happened.
+	// Issue #1569 Task 14.
 	query := `
 		INSERT INTO boost_executions (
-			id, boost_id, status, started_at, completed_at,
+			id, boost_id, user_id, boost_name, definition_snapshot, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,
 			error_code, error_message, retry_count, max_retries
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`
 
 	_, err := r.db.Exec(ctx, query,
 		execution.ID,
 		execution.BoostID,
+		execution.UserID,
+		execution.BoostName,
+		definitionSnapshot,
 		execution.Status,
 		execution.StartedAt,
 		execution.CompletedAt,
@@ -136,7 +158,7 @@ func (r *boostExecutionRepository) Update(ctx context.Context, execution *domain
 // GetByID retrieves an execution by its ID.
 func (r *boostExecutionRepository) GetByID(ctx context.Context, id string) (*domain.BoostExecution, error) {
 	query := `
-		SELECT id, boost_id, status, started_at, completed_at,
+		SELECT id, boost_id, user_id, boost_name, definition_snapshot, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,
 			error_code, error_message, retry_count, max_retries
 		FROM boost_executions
@@ -149,7 +171,7 @@ func (r *boostExecutionRepository) GetByID(ctx context.Context, id string) (*dom
 // GetByBoostID retrieves executions for a specific boost with pagination.
 func (r *boostExecutionRepository) GetByBoostID(ctx context.Context, boostID string, limit, offset int) ([]*domain.BoostExecution, error) {
 	query := `
-		SELECT id, boost_id, status, started_at, completed_at,
+		SELECT id, boost_id, user_id, boost_name, definition_snapshot, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,
 			error_code, error_message, retry_count, max_retries
 		FROM boost_executions
@@ -170,7 +192,7 @@ func (r *boostExecutionRepository) GetByBoostIDWithFilter(ctx context.Context, b
 
 	// Build data query
 	dataQuery := `
-		SELECT id, boost_id, status, started_at, completed_at,
+		SELECT id, boost_id, user_id, boost_name, definition_snapshot, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,
 			error_code, error_message, retry_count, max_retries
 		FROM boost_executions
@@ -209,7 +231,7 @@ func (r *boostExecutionRepository) GetByBoostIDWithFilter(ctx context.Context, b
 // GetLastExecutionForBoost retrieves the most recent execution for a rule.
 func (r *boostExecutionRepository) GetLastExecutionForBoost(ctx context.Context, boostID string) (*domain.BoostExecution, error) {
 	query := `
-		SELECT id, boost_id, status, started_at, completed_at,
+		SELECT id, boost_id, user_id, boost_name, definition_snapshot, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,
 			error_code, error_message, retry_count, max_retries
 		FROM boost_executions
@@ -224,7 +246,7 @@ func (r *boostExecutionRepository) GetLastExecutionForBoost(ctx context.Context,
 // GetPendingExecutions retrieves pending executions for processing queue.
 func (r *boostExecutionRepository) GetPendingExecutions(ctx context.Context, limit int) ([]*domain.BoostExecution, error) {
 	query := `
-		SELECT id, boost_id, status, started_at, completed_at,
+		SELECT id, boost_id, user_id, boost_name, definition_snapshot, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,
 			error_code, error_message, retry_count, max_retries
 		FROM boost_executions
@@ -239,7 +261,7 @@ func (r *boostExecutionRepository) GetPendingExecutions(ctx context.Context, lim
 // GetFailedExecutions retrieves failed executions for retry.
 func (r *boostExecutionRepository) GetFailedExecutions(ctx context.Context, boostID string, limit int) ([]*domain.BoostExecution, error) {
 	query := `
-		SELECT id, boost_id, status, started_at, completed_at,
+		SELECT id, boost_id, user_id, boost_name, definition_snapshot, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,
 			error_code, error_message, retry_count, max_retries
 		FROM boost_executions
@@ -251,14 +273,63 @@ func (r *boostExecutionRepository) GetFailedExecutions(ctx context.Context, boos
 	return r.queryExecutions(ctx, query, boostID, limit)
 }
 
+// GetByUserID retrieves every execution belonging to a user, orphans included.
+//
+// Issue #1569 Task 14: this is the only read of boost_executions not keyed on boost_id, and so the
+// only one that can return a row whose boost has been purged. BoostName/DefinitionSnapshot are what
+// a caller shows in place of the missing parent.
+func (r *boostExecutionRepository) GetByUserID(
+	ctx context.Context,
+	userID string,
+	status *domain.ExecutionStatus,
+	limit, offset int,
+) ([]*domain.BoostExecution, int, error) {
+	countQuery := `SELECT COUNT(*) FROM boost_executions WHERE user_id = $1`
+	countArgs := []interface{}{userID}
+
+	dataQuery := `
+		SELECT id, boost_id, user_id, boost_name, definition_snapshot, status, started_at, completed_at,
+			execution_duration_ms, trigger_context, input_data, output_data,
+			error_code, error_message, retry_count, max_retries
+		FROM boost_executions
+		WHERE user_id = $1`
+	dataArgs := []interface{}{userID}
+
+	if status != nil {
+		countQuery += ` AND status = $2`
+		countArgs = append(countArgs, *status)
+		dataQuery += ` AND status = $2`
+		dataArgs = append(dataArgs, *status)
+	}
+
+	var total int
+	if err := r.db.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	nextArg := len(dataArgs) + 1
+	dataQuery += fmt.Sprintf(` ORDER BY started_at DESC LIMIT $%d OFFSET $%d`, nextArg, nextArg+1)
+	dataArgs = append(dataArgs, limit, offset)
+
+	executions, err := r.queryExecutions(ctx, dataQuery, dataArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return executions, total, nil
+}
+
 // scanExecution scans a single execution from a row.
 func (r *boostExecutionRepository) scanExecution(row pgx.Row) (*domain.BoostExecution, error) {
 	execution := &domain.BoostExecution{}
-	var triggerContext, inputData, outputData []byte
+	var triggerContext, inputData, outputData, definitionSnapshot []byte
 
 	err := row.Scan(
 		&execution.ID,
 		&execution.BoostID,
+		&execution.UserID,
+		&execution.BoostName,
+		&definitionSnapshot,
 		&execution.Status,
 		&execution.StartedAt,
 		&execution.CompletedAt,
@@ -281,6 +352,9 @@ func (r *boostExecutionRepository) scanExecution(row pgx.Row) (*domain.BoostExec
 
 	// Assign raw JSON fields
 	execution.TriggerContext = json.RawMessage(triggerContext)
+	if definitionSnapshot != nil {
+		execution.DefinitionSnapshot = json.RawMessage(definitionSnapshot)
+	}
 	if inputData != nil {
 		execution.InputData = json.RawMessage(inputData)
 	}
@@ -302,11 +376,14 @@ func (r *boostExecutionRepository) queryExecutions(ctx context.Context, query st
 	var executions []*domain.BoostExecution
 	for rows.Next() {
 		execution := &domain.BoostExecution{}
-		var triggerContext, inputData, outputData []byte
+		var triggerContext, inputData, outputData, definitionSnapshot []byte
 
 		err := rows.Scan(
 			&execution.ID,
 			&execution.BoostID,
+			&execution.UserID,
+			&execution.BoostName,
+			&definitionSnapshot,
 			&execution.Status,
 			&execution.StartedAt,
 			&execution.CompletedAt,
@@ -325,6 +402,9 @@ func (r *boostExecutionRepository) queryExecutions(ctx context.Context, query st
 
 		// Assign raw JSON fields
 		execution.TriggerContext = json.RawMessage(triggerContext)
+		if definitionSnapshot != nil {
+			execution.DefinitionSnapshot = json.RawMessage(definitionSnapshot)
+		}
 		if inputData != nil {
 			execution.InputData = json.RawMessage(inputData)
 		}

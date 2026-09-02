@@ -151,8 +151,8 @@ func TestApplyNetBasis_OracleNetArithmetic(t *testing.T) {
 	}
 
 	// Oracle: compute expected outputs from raw inputs, independent of any intermediate variable.
-	expectedAssetTotal := stockValue + cashValue          // 8000
-	expectedNetTotal := expectedAssetTotal - liabValue    // 6800
+	expectedAssetTotal := stockValue + cashValue              // 8000
+	expectedNetTotal := expectedAssetTotal - liabValue        // 6800
 	expectedStockPct := stockValue / expectedAssetTotal * 100 // 62.5
 	expectedCashPct := cashValue / expectedAssetTotal * 100   // 37.5
 

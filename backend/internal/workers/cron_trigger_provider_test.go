@@ -477,7 +477,7 @@ func TestCronProvider_ExecutesRuleOnSchedule(t *testing.T) {
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		BoostID: "rule-1",
+		BoostID: ptrS("rule-1"),
 		Status: domain.ExecutionStatusCompleted,
 	}
 	mockExecutor.On("ExecuteBoost", mock.Anything, rule, mock.Anything).Return(execution, nil)

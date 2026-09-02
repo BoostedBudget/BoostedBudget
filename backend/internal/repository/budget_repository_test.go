@@ -2,15 +2,15 @@ package repository
 
 import (
 	"context"
-	
+
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -73,12 +73,12 @@ func TestBudgetRepository_Create(t *testing.T) {
 		budget.Amount,
 		pgxmock.AnyArg(), // currency_code
 		budget.IsActive,
-		pgxmock.AnyArg(), // created_at
-		pgxmock.AnyArg(), // updated_at
-		budget.IncomeAmount,  // income_amount (Issue #491)
-		pgxmock.AnyArg(),     // income_sources JSON (Issue #491)
-		pgxmock.AnyArg(),     // expected_income (Issue #1048)
-		pgxmock.AnyArg(),     // series_id (#1300 G5)
+		pgxmock.AnyArg(),    // created_at
+		pgxmock.AnyArg(),    // updated_at
+		budget.IncomeAmount, // income_amount (Issue #491)
+		pgxmock.AnyArg(),    // income_sources JSON (Issue #491)
+		pgxmock.AnyArg(),    // expected_income (Issue #1048)
+		pgxmock.AnyArg(),    // series_id (#1300 G5)
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.Create(ctx, budget)
@@ -326,9 +326,9 @@ func TestBudgetRepository_GetActiveByUserID(t *testing.T) {
 			true,
 			now,
 			now,
-			0.00,          // income_amount
-			`[]`,          // income_sources
-			0.00,          // expected_income (#1048)
+			0.00,           // income_amount
+			`[]`,           // income_sources
+			0.00,           // expected_income (#1048)
 			activeBudgetID, // series_id (#1300 G5)
 		))
 
@@ -419,11 +419,16 @@ func TestBudgetRepository_Delete(t *testing.T) {
 	budgetID := uuid.New().String()
 	userID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM budgets`)).
-		WithArgs(budgetID, userID).
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budgets`)).
+		WithArgs(budgetID, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
+		WithArgs(budgetID, domain.SoftDeleteReasonParent, domain.SoftDeletedByUser).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+	mock.ExpectCommit()
 
-	err := repo.Delete(ctx, budgetID, userID)
+	err := repo.Delete(ctx, budgetID, userID, nil)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -438,11 +443,13 @@ func TestBudgetRepository_Delete_NotFound(t *testing.T) {
 	budgetID := uuid.New().String()
 	userID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM budgets`)).
-		WithArgs(budgetID, userID).
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budgets`)).
+		WithArgs(budgetID, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
 
-	err := repo.Delete(ctx, budgetID, userID)
+	err := repo.Delete(ctx, budgetID, userID, nil)
 
 	assert.Error(t, err)
 	assert.Equal(t, domain.ErrBudgetNotFound, err)
@@ -683,11 +690,13 @@ func TestBudgetRepository_DeleteCategory(t *testing.T) {
 	categoryID := uuid.New().String()
 	budgetID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM budget_categories`)).
-		WithArgs(categoryID, budgetID).
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
+		WithArgs(categoryID, budgetID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
-	err := repo.DeleteCategory(ctx, categoryID, budgetID)
+	err := repo.DeleteCategory(ctx, categoryID, budgetID, nil)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -702,11 +711,13 @@ func TestBudgetRepository_DeleteCategory_NotFound(t *testing.T) {
 	categoryID := uuid.New().String()
 	budgetID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM budget_categories`)).
-		WithArgs(categoryID, budgetID).
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
+		WithArgs(categoryID, budgetID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
 
-	err := repo.DeleteCategory(ctx, categoryID, budgetID)
+	err := repo.DeleteCategory(ctx, categoryID, budgetID, nil)
 
 	assert.Error(t, err)
 	assert.Equal(t, domain.ErrBudgetCategoryNotFound, err)
@@ -1093,12 +1104,12 @@ func TestBudgetRepository_Create_IncludesExpectedIncome(t *testing.T) {
 		budget.Amount,
 		pgxmock.AnyArg(), // currency_code
 		budget.IsActive,
-		pgxmock.AnyArg(), // created_at
-		pgxmock.AnyArg(), // updated_at
-		budget.IncomeAmount,    // income_amount
-		pgxmock.AnyArg(),       // income_sources JSON
-		budget.ExpectedIncome,  // expected_income (#1048)
-		pgxmock.AnyArg(),       // series_id (#1300 G5)
+		pgxmock.AnyArg(),      // created_at
+		pgxmock.AnyArg(),      // updated_at
+		budget.IncomeAmount,   // income_amount
+		pgxmock.AnyArg(),      // income_sources JSON
+		budget.ExpectedIncome, // expected_income (#1048)
+		pgxmock.AnyArg(),      // series_id (#1300 G5)
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.Create(ctx, budget)
@@ -1127,12 +1138,12 @@ func TestBudgetRepository_Create_DefaultsExpectedIncomeToAmount(t *testing.T) {
 		budget.Amount,
 		pgxmock.AnyArg(), // currency_code
 		budget.IsActive,
-		pgxmock.AnyArg(), // created_at
-		pgxmock.AnyArg(), // updated_at
-		budget.IncomeAmount,  // income_amount
-		pgxmock.AnyArg(),     // income_sources JSON
-		budget.Amount,        // expected_income defaults to Amount when 0 (#1048)
-		pgxmock.AnyArg(),     // series_id (#1300 G5)
+		pgxmock.AnyArg(),    // created_at
+		pgxmock.AnyArg(),    // updated_at
+		budget.IncomeAmount, // income_amount
+		pgxmock.AnyArg(),    // income_sources JSON
+		budget.Amount,       // expected_income defaults to Amount when 0 (#1048)
+		pgxmock.AnyArg(),    // series_id (#1300 G5)
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.Create(ctx, budget)
@@ -1234,9 +1245,9 @@ func TestBudgetRepository_GetByUserID_ReturnsExpectedIncome(t *testing.T) {
 			true,
 			now,
 			now,
-			0.00,         // income_amount
-			`[]`,         // income_sources
-			450.00,       // expected_income (#1048)
+			0.00,           // income_amount
+			`[]`,           // income_sources
+			450.00,         // expected_income (#1048)
 			byUserBudgetID, // series_id (#1300 G5)
 		))
 
@@ -1281,9 +1292,9 @@ func TestBudgetRepository_GetActiveByUserID_ReturnsExpectedIncome(t *testing.T) 
 			true,
 			now,
 			now,
-			0.00,          // income_amount
-			`[]`,          // income_sources
-			500.00,        // expected_income (#1048)
+			0.00,            // income_amount
+			`[]`,            // income_sources
+			500.00,          // expected_income (#1048)
 			activeBudget2ID, // series_id (#1300 G5)
 		))
 
@@ -1310,16 +1321,16 @@ func TestBudgetRepository_Update_IncludesExpectedIncome(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budgets`)).
 		WithArgs(
 			budget.Name,
-			pgxmock.AnyArg(), // description
-			pgxmock.AnyArg(), // period
-			pgxmock.AnyArg(), // start_date
-			pgxmock.AnyArg(), // end_date
-			pgxmock.AnyArg(), // amount
-			pgxmock.AnyArg(), // currency_code
-			pgxmock.AnyArg(), // is_active
-			pgxmock.AnyArg(), // updated_at
-			pgxmock.AnyArg(), // income_amount
-			pgxmock.AnyArg(), // income_sources JSON
+			pgxmock.AnyArg(),      // description
+			pgxmock.AnyArg(),      // period
+			pgxmock.AnyArg(),      // start_date
+			pgxmock.AnyArg(),      // end_date
+			pgxmock.AnyArg(),      // amount
+			pgxmock.AnyArg(),      // currency_code
+			pgxmock.AnyArg(),      // is_active
+			pgxmock.AnyArg(),      // updated_at
+			pgxmock.AnyArg(),      // income_amount
+			pgxmock.AnyArg(),      // income_sources JSON
 			budget.ExpectedIncome, // expected_income (#1048)
 			budget.ID,
 			budget.UserID,
@@ -1421,9 +1432,9 @@ func TestBudgetRepository_GetByName_ReturnsExpectedIncome(t *testing.T) {
 			true,
 			now,
 			now,
-			0.00,         // income_amount
-			`[]`,         // income_sources JSON
-			500.00,       // expected_income (#1048)
+			0.00,           // income_amount
+			`[]`,           // income_sources JSON
+			500.00,         // expected_income (#1048)
 			byNameBudgetID, // series_id (#1300 G5)
 		))
 

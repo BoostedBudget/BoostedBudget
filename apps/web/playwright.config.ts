@@ -79,6 +79,17 @@ export default defineConfig({
 
   // Shared settings for all the projects below
   use: {
+    // #1569 T8-FIX, finding F. The browser context inherits the RUNNER's timezone and locale unless
+    // they are pinned, and specs assert rendered dates and currency: `formatDeletedOn` (and
+    // `formatHistoryLabel`) render with `toLocaleDateString(undefined, ...)`, so a fixture at
+    // 2026-03-20T12:00:00Z reads "March 20, 2026" in America/New_York and "March 21, 2026" in
+    // Pacific/Kiritimati — reproduced with Node's Intl, not reasoned about. That is a green suite
+    // that fails on a valid runner. Pinned rather than loosened: an assertion weakened to match any
+    // timezone stops testing the thing it was written for, and the fixture is already midday-UTC
+    // precisely so ONE pinned zone is enough.
+    timezoneId: 'UTC',
+    locale: 'en-US',
+
     // Base URL to use in actions like `await page.goto('/')`
     baseURL: process.env.PLAYWRIGHT_BASE_URL || `http://localhost:${frontendPort}`,
 

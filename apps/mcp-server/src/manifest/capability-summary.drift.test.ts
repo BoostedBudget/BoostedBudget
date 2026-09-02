@@ -17,11 +17,32 @@
  * ⚠ WAS 195 total / 62 excluded: Issue #1497 item 2 added
  * recordAdminPlaidOrphanedItemOperatorResolution, excluded under the blanket admin policy. The
  * allowed/read/write/destructive figures are unchanged, which is the point of the exclusion.
- * ⚠ NOW 194 total / 61 excluded: Issue #1514 moved /metrics to an internal-only listener and
+ * ⚠ WAS 194 total / 61 excluded: Issue #1514 moved /metrics to an internal-only listener and
  * stopped registering it for spec generation, so getMetrics no longer has a spec-index entry and
  * its (excluded) manifest classification was removed. Again allowed/read/write/destructive are
  * unchanged — only an exclusion disappeared, so the public-facing "what can the AI do" numbers
  * on the /mcp page are unaffected.
+ * ⚠ NOW 196 total / 63 excluded: Issue #1569 Task 6 split the single deleteAccount /
+ * disconnectInstitution DELETE-backed verb into disconnect (non-destructive) and purge
+ * (destructive) for both accounts and linked items — net +2 operationIds (deleteAccount removed,
+ * disconnectAccount/purgeAccount/purgeInstitution added; disconnectInstitution kept, moved to
+ * POST) and net +2 exclusions, since all four new/renamed operations stay excluded under
+ * REASON_PLAID_LINKING. allowed/read/write/destructive are unchanged.
+ * ⚠ NOW 199 total / 134 allowed / 89 read / 45 write / 65 excluded / 4 destructive: Issue #1569
+ * Task 16 (a) classified three operations that were in api/openapi.yaml but in NO manifest entry
+ * at all — purgeSavingsGoal (destructive, excluded), getDeletedSavingsGoals and
+ * getUserBoostExecutions (read), which is +3 total, +2 read, +1 excluded; (b) excluded
+ * deleteSavingsGoalContribution, which was an allowed write that hard-deletes a savings ledger
+ * row (−1 allowed write, +1 excluded); and (c) introduced the `destructive` class. Note what
+ * (c) did NOT do to these numbers: writeOperations still counts every allowed MUTATING
+ * operation (class 'write' OR 'destructive'), so allowed === read + write still holds and the
+ * public page's sentence stays arithmetically true. destructiveWriteOperations fell 9 → 4
+ * because deleteBudget/deleteBudgetCategory/deleteCategory/deleteSavingsGoal now tombstone
+ * rather than destroy, and deleteSavingsGoalContribution left the allowed set entirely.
+ * ⚠ NOW 204 total / 67 excluded: Issue #1584 added listAdminRetentionWithheld, the enumerating
+ * admin read over accounts the #1569 T1 pre-deletion-notice gate is holding indefinitely. Excluded
+ * under the blanket admin policy, so allowed/read/write/destructive are all unchanged — the public
+ * /mcp page's "what can the AI do" numbers are unaffected, which is the point of the exclusion.
  */
 
 import { describe, expect, it } from 'bun:test'
@@ -29,7 +50,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { computeCapabilitySummary, readSpecIndex } from '../../scripts/generate-mcp-capability-summary'
-import { ALL_OPERATION_IDS } from './capability-manifest'
+import { ALL_OPERATION_IDS, getCapability } from './capability-manifest'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const COMMITTED_JSON_PATH = resolve(__dirname, '../../../web/src/features/mcp/data/capabilitySummary.json')
@@ -81,16 +102,91 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
   it('documents the known baseline values (informational — the drift check above is authoritative)', () => {
     const fresh = computeCapabilitySummary(readSpecIndex())
 
-    expect(fresh.totalOperations).toBe(194)
-    expect(fresh.allowedOperations).toBe(133)
-    expect(fresh.readOperations).toBe(87)
-    expect(fresh.writeOperations).toBe(46)
-    expect(fresh.excludedOperations).toBe(61)
-    expect(fresh.destructiveWriteOperations).toBe(9)
+    // +1 across totals/allowed/read from Issue #1569: getAccountBalanceHistory, the per-account
+    // retained balance history reader (read, invocable). write/excluded/destructive are unchanged
+    // — it mutates nothing and destroys nothing.
+    expect(fresh.totalOperations).toBe(206)
+    expect(fresh.allowedOperations).toBe(139)
+    expect(fresh.readOperations).toBe(94)
+    expect(fresh.writeOperations).toBe(45)
+    expect(fresh.excludedOperations).toBe(67)
+    expect(fresh.destructiveWriteOperations).toBe(4)
     expect(fresh.allowedOperations).toBe(fresh.readOperations + fresh.writeOperations)
     expect(fresh.totalOperations).toBe(fresh.allowedOperations + fresh.excludedOperations)
 
     expect(fresh.publicBoundaries).toHaveLength(4)
+  })
+
+  /**
+   * #1569 Task 16. The drift test above compares AGGREGATES, so two classification changes
+   * that cancel out (one op write→destructive, another destructive→write) would leave every
+   * count identical and this file green. This pins the per-operation class carried in the
+   * committed spec index against the manifest, so any single reclassification is caught even
+   * when the totals do not move.
+   */
+  it('the committed spec index agrees with the manifest on every operation class', () => {
+    const disagreements = readSpecIndex()
+      .entries.filter((e) => {
+        const capability = getCapability(e.operationId)
+        return !capability || capability.class !== e.manifestClass || capability.excluded !== e.excluded
+      })
+      .map((e) => e.operationId)
+
+    expect(
+      disagreements,
+      'spec-index.json is stale relative to the manifest — rebuild with: bun run build:spec-index'
+    ).toEqual([])
+  })
+
+  /**
+   * The destructive tier is a public-facing claim ("N of these permanently destroy data"), so
+   * pin its membership from the summary's own inputs rather than trusting the aggregate count.
+   */
+  it('counts exactly the allowed destructive-class operations in destructiveWriteOperations', () => {
+    const allowedDestructive = readSpecIndex()
+      .entries.filter((e) => !e.excluded && e.manifestClass === 'destructive')
+      .map((e) => e.operationId)
+      .sort()
+
+    expect(allowedDestructive).toEqual(['clearMerchantOverride', 'deleteMCPRecipe', 'deleteRule', 'deleteTag'])
+    expect(computeCapabilitySummary(readSpecIndex()).destructiveWriteOperations).toBe(allowedDestructive.length)
+  })
+
+  /**
+   * #1569 Task 16, F1. The `excluded()` helper hard-coded `class: 'read'` onto every excluded
+   * entry, so the manifest asserted that purgeAccount, deleteHousehold and 43 other mutating
+   * verbs neither change nor destroy anything. Hand-fixing those 45 entries would only hold
+   * until the next one is added, so these two guards derive the invariant from the spec index's
+   * own HTTP methods and hold automatically for every future operation.
+   */
+  const NON_MUTATING_POSTS = new Set([
+    'previewCategoryMatches', // POST /budgets/categories/preview — returns matches, writes nothing
+    'runMCPRecipe' // v1 recipes compose read-class ops only (see the manifest's own note)
+  ])
+
+  it('classifies every GET operation as read', () => {
+    const offenders = readSpecIndex()
+      .entries.filter((e) => e.method === 'GET' && e.manifestClass !== 'read')
+      .map((e) => `${e.operationId} (${e.manifestClass})`)
+    expect(offenders).toEqual([])
+  })
+
+  it('classifies every state-changing operation as write or destructive, excluded ones included', () => {
+    const offenders = readSpecIndex()
+      .entries.filter(
+        (e) =>
+          e.method !== 'GET' &&
+          e.manifestClass === 'read' &&
+          !NON_MUTATING_POSTS.has(e.operationId)
+      )
+      .map((e) => `${e.method} ${e.operationId}`)
+
+    expect(
+      offenders,
+      'These operations change state but are classified `read`. If the operation really is ' +
+        'non-mutating, add it to NON_MUTATING_POSTS with a reason; otherwise use write(), ' +
+        'excludedWrite(), or destructive() in capability-manifest.ts.'
+    ).toEqual([])
   })
 
   it('committed JSON ends with a trailing newline (matches the generator script)', () => {

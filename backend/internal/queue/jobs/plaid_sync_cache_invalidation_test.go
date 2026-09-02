@@ -40,6 +40,12 @@ func (fakeZeroAccountRepo) GetByLinkedItemID(context.Context, string) ([]domain.
 	return nil, nil
 }
 
+// GetByLinkedItemIDIncludingRetained is what buildAccountMaps actually calls (Issue #1569
+// Task 1b); it must also be overridden here or the embedded nil AccountRepository panics.
+func (fakeZeroAccountRepo) GetByLinkedItemIDIncludingRetained(context.Context, string) ([]domain.Account, error) {
+	return nil, nil
+}
+
 // fakeSinglePagePlaidService returns one page (has_more=false) of a single Added transaction.
 type fakeSinglePagePlaidService struct {
 	services.PlaidService

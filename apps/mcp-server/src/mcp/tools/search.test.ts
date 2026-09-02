@@ -15,6 +15,18 @@ describe('parseSearchInput', () => {
     expect(input.class).toBe('write')
   })
 
+  // #1569 Task 16: the third capability class must be discoverable through the search tool —
+  // an agent has to be able to ask "which of these destroy data?" before calling one, and to
+  // filter them out. Without this the enum silently rejects it and the tier is invisible here.
+  it('accepts the destructive class filter (#1569 Task 16)', () => {
+    const input = parseSearchInput({ query: 'delete', class: 'destructive' })
+    expect(input.class).toBe('destructive')
+  })
+
+  it('still rejects a class outside the manifest vocabulary', () => {
+    expect(() => parseSearchInput({ query: 'delete', class: 'catastrophic' })).toThrow()
+  })
+
   it('accepts tag filter', () => {
     const input = parseSearchInput({ query: '', tag: 'Analytics' })
     expect(input.tag).toBe('Analytics')

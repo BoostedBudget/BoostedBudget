@@ -54,9 +54,27 @@ func TestHoldingRepository_ReplaceForAccount_DeletesOldInsertNew(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holdings`)).
 		WithArgs(anyArgs(11)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// #1569 T6 fix round 1: the capture reads its UTC day from the SERVER (see serverUTCDate —
+	// the aggregate and its rows must be filed under the same day across UTC midnight), then runs
+	// as a SET: mark what it no longer observes absent, then upsert what it does.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT (now() AT TIME ZONE 'UTC')::date`)).
+		WillReturnRows(pgxmock.NewRows([]string{"date"}).AddRow(time.Now().UTC().Truncate(24 * time.Hour)))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE holding_snapshots`)).
+		WithArgs(accountID, userID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holding_snapshots`)).
+		WithArgs(accountID, userID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// #1569 T9-FIX item 2: and then the observation itself. Neither statement above writes
+	// anything for an account that holds nothing, so "the capture ran" needs its own record —
+	// without it a confirmed-empty re-link successor is indistinguishable from one that has
+	// never synced, and the portfolio reports the retained predecessor's stale valuation.
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holding_observations`)).
+		WithArgs(userID, accountID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{holding})
+	_, err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{holding})
 
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -76,9 +94,27 @@ func TestHoldingRepository_ReplaceForAccount_EmptyHoldings(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM holdings`)).
 		WithArgs(accountID, userID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 3))
+	// #1569 T6 fix round 1: the capture reads its UTC day from the SERVER (see serverUTCDate —
+	// the aggregate and its rows must be filed under the same day across UTC midnight), then runs
+	// as a SET: mark what it no longer observes absent, then upsert what it does.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT (now() AT TIME ZONE 'UTC')::date`)).
+		WillReturnRows(pgxmock.NewRows([]string{"date"}).AddRow(time.Now().UTC().Truncate(24 * time.Hour)))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE holding_snapshots`)).
+		WithArgs(accountID, userID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holding_snapshots`)).
+		WithArgs(accountID, userID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// #1569 T9-FIX item 2: and then the observation itself. Neither statement above writes
+	// anything for an account that holds nothing, so "the capture ran" needs its own record —
+	// without it a confirmed-empty re-link successor is indistinguishable from one that has
+	// never synced, and the portfolio reports the retained predecessor's stale valuation.
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holding_observations`)).
+		WithArgs(userID, accountID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{})
+	_, err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{})
 
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -104,7 +140,7 @@ func TestHoldingRepository_ReplaceForAccount_RollbackOnInsertError(t *testing.T)
 		WillReturnError(errors.New("db constraint error"))
 	mock.ExpectRollback()
 
-	err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{holding})
+	_, err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{holding})
 
 	require.Error(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -350,7 +386,7 @@ func TestHoldingRepository_ReplaceForAccount_RejectsForeignHolding(t *testing.T)
 	theirs := makeTestHolding(foreign, accountID, uuid.New().String())
 
 	// No mock expectations: not a single statement may run.
-	err := repo.ReplaceForAccount(ctx, accountID, actor, []domain.Holding{mine, theirs})
+	_, err := repo.ReplaceForAccount(ctx, accountID, actor, []domain.Holding{mine, theirs})
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrReplaceTenantMismatch)
@@ -369,7 +405,7 @@ func TestHoldingRepository_ReplaceForAccount_RejectsEmptyActor(t *testing.T) {
 	accountID := uuid.New().String()
 	orphan := makeTestHolding("", accountID, uuid.New().String())
 
-	err := repo.ReplaceForAccount(context.Background(), accountID, "", []domain.Holding{orphan})
+	_, err := repo.ReplaceForAccount(context.Background(), accountID, "", []domain.Holding{orphan})
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrReplaceTenantMismatch)
@@ -384,7 +420,7 @@ func TestHoldingRepository_ReplaceForAccount_RejectsEmptyActorWithNoHoldings(t *
 	mock, repo := setupHoldingMockDB(t)
 	defer mock.Close()
 
-	err := repo.ReplaceForAccount(context.Background(), uuid.New().String(), "", nil)
+	_, err := repo.ReplaceForAccount(context.Background(), uuid.New().String(), "", nil)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrReplaceTenantMismatch)
@@ -407,7 +443,7 @@ func TestHoldingRepository_ReplaceForAccount_RejectsForeignAccount(t *testing.T)
 	misfiled := makeTestHolding(userID, accountB, uuid.New().String())
 
 	// No mock expectations: not a single statement may run.
-	err := repo.ReplaceForAccount(context.Background(), accountA, userID, []domain.Holding{mine, misfiled})
+	_, err := repo.ReplaceForAccount(context.Background(), accountA, userID, []domain.Holding{mine, misfiled})
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrReplaceAccountMismatch)
@@ -428,7 +464,7 @@ func TestHoldingRepository_ReplaceForAccount_RejectsEmptyAccountID(t *testing.T)
 			mock, repo := setupHoldingMockDB(t)
 			defer mock.Close()
 
-			err := repo.ReplaceForAccount(context.Background(), "", "u", holdings)
+			_, err := repo.ReplaceForAccount(context.Background(), "", "u", holdings)
 
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrReplaceAccountMismatch)

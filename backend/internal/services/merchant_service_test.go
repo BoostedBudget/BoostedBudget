@@ -379,10 +379,10 @@ func TestMerchantService_MergeMerchants_Success(t *testing.T) {
 	// target has no existing merge pointer — canonical is itself; toFlatten == sources only.
 	mor.On("GetMergeTarget", ctx, userID, targetID).Return("", nil)
 	mor.On("MergeAndFlatten", ctx, userID,
-		[]string{"m1", "m2"},   // sources
-		targetID,                // canonical
-		[]string{"m1", "m2"},   // toFlatten (no pre-merged target)
-		([]*string)(nil),        // no display names on MergeMerchants path
+		[]string{"m1", "m2"}, // sources
+		targetID,             // canonical
+		[]string{"m1", "m2"}, // toFlatten (no pre-merged target)
+		([]*string)(nil),     // no display names on MergeMerchants path
 	).Return(expected, nil)
 
 	result, err := svc.MergeMerchants(ctx, userID, sourceIDs, targetID)
@@ -445,10 +445,10 @@ func TestMerchantService_MergeMerchants_TargetAlreadyMerged_FlattensToCanonical(
 		{ID: "ov-1", UserID: userID, MerchantID: "m-A", MergedIntoMerchantID: &canonical},
 	}
 	mor.On("MergeAndFlatten", ctx, userID,
-		[]string{"m-A"},            // sources
-		"m-C",                      // canonical
-		[]string{"m-A", "m-B"},     // toFlatten: source + old intermediate target
-		([]*string)(nil),           // no display names on MergeMerchants path
+		[]string{"m-A"},        // sources
+		"m-C",                  // canonical
+		[]string{"m-A", "m-B"}, // toFlatten: source + old intermediate target
+		([]*string)(nil),       // no display names on MergeMerchants path
 	).Return(expected, nil)
 
 	result, err := svc.MergeMerchants(ctx, userID, []string{"m-A"}, "m-B")
@@ -475,9 +475,9 @@ func TestMerchantService_MergeMerchants_SourceEqualsCanonicalTarget_Skipped(t *t
 		{ID: "ov-1", UserID: userID, MerchantID: "m-B", MergedIntoMerchantID: &targetID},
 	}
 	mor.On("MergeAndFlatten", ctx, userID,
-		[]string{"m-B"}, // sources (m-A skipped — equals canonical)
-		"m-A",           // canonical
-		[]string{"m-B"}, // toFlatten
+		[]string{"m-B"},  // sources (m-A skipped — equals canonical)
+		"m-A",            // canonical
+		[]string{"m-B"},  // toFlatten
 		([]*string)(nil), // no display names on MergeMerchants path
 	).Return(expected, nil)
 
@@ -548,9 +548,9 @@ func TestMerchantService_MergeMerchants_SourceAlreadyCanonical_FlattensIncomingC
 	}
 	mor.On("MergeAndFlatten", ctx, userID,
 		[]string{"m-C", "m-D"}, // sources
-		canonical,               // canonical
+		canonical,              // canonical
 		[]string{"m-C", "m-D"}, // toFlatten — the repo will UPDATE A→C to A→E
-		([]*string)(nil),        // no display names on MergeMerchants path
+		([]*string)(nil),       // no display names on MergeMerchants path
 	).Return(expected, nil)
 
 	result, err := svc.MergeMerchants(ctx, userID, []string{"m-C", "m-D"}, "m-E")
@@ -587,9 +587,9 @@ func TestMerchantService_MergeMerchants_TargetAndSourceBothPreMerged(t *testing.
 	}
 	mor.On("MergeAndFlatten", ctx, userID,
 		[]string{"m-C", "m-D"},        // sources (neither is m-G)
-		canonical,                      // canonical = m-G
+		canonical,                     // canonical = m-G
 		[]string{"m-C", "m-D", "m-T"}, // toFlatten: sources + old intermediate target m-T
-		([]*string)(nil),               // no display names on MergeMerchants path
+		([]*string)(nil),              // no display names on MergeMerchants path
 	).Return(expected, nil)
 
 	result, err := svc.MergeMerchants(ctx, userID, []string{"m-C", "m-D"}, "m-T")
@@ -651,10 +651,10 @@ func TestSetOverride_WithMergePointer_RoutesThroughFlatten(t *testing.T) {
 		ID: "ov-1", UserID: userID, MerchantID: merchantID, MergedIntoMerchantID: &targetID,
 	}
 	mor.On("MergeAndFlatten", ctx, userID,
-		[]string{merchantID},  // sources
-		targetID,              // canonical
-		[]string{merchantID},  // toFlatten (no pre-merged target)
-		([]*string)(nil),      // no display name
+		[]string{merchantID}, // sources
+		targetID,             // canonical
+		[]string{merchantID}, // toFlatten (no pre-merged target)
+		([]*string)(nil),     // no display name
 	).Return([]domain.MerchantNameOverride{expected}, nil)
 
 	result, err := svc.SetOverride(ctx, userID, merchantID, nil, &targetID)

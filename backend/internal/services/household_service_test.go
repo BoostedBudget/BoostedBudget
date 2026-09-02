@@ -114,10 +114,6 @@ func (m *mockHouseholdShareRepo) RevokeSharesForUser(ctx context.Context, househ
 	args := m.Called(ctx, householdID, userID)
 	return args.Error(0)
 }
-func (m *mockHouseholdShareRepo) DeleteSharesForUser(ctx context.Context, householdID, userID string) error {
-	args := m.Called(ctx, householdID, userID)
-	return args.Error(0)
-}
 
 // SetShareVisibility and ListMyAccountShares (#1368 — Phase 4 writes) are not
 // exercised by these Phase 3 tests; stubbed to satisfy the expanded
@@ -1683,8 +1679,11 @@ func TestHouseholdService_PurgeRemovedMembership_Success(t *testing.T) {
 	// Not currently re-active in this household -> safe to clean up shares/entitlement.
 	pool.ExpectQuery("status = 'active'").WithArgs("hh-1", "member-1").
 		WillReturnError(pgx.ErrNoRows)
-	pool.ExpectExec("DELETE FROM household_account_shares").WithArgs("hh-1", "member-1").
-		WillReturnResult(pgxmock.NewResult("DELETE", 2))
+	// #1569 T7: the purge CLOSES any still-open grant instead of hard-deleting the
+	// household's record of what it was shown. An `ExpectExec("DELETE FROM
+	// household_account_shares")` here would now go unmatched.
+	pool.ExpectExec("UPDATE household_account_shares SET revoked_at").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
 	pool.ExpectExec("source = 'household'").WithArgs("member-1", "hh-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectCommit()
@@ -1712,8 +1711,11 @@ func TestHouseholdService_PurgeRemovedMembership_LocksHouseholdBeforeDelete(t *t
 		WillReturnRows(pgxmock.NewRows([]string{"household_id", "user_id"}).AddRow("hh-1", "member-1"))
 	pool.ExpectQuery("status = 'active'").WithArgs("hh-1", "member-1").
 		WillReturnError(pgx.ErrNoRows)
-	pool.ExpectExec("DELETE FROM household_account_shares").WithArgs("hh-1", "member-1").
-		WillReturnResult(pgxmock.NewResult("DELETE", 2))
+	// #1569 T7: the purge CLOSES any still-open grant instead of hard-deleting the
+	// household's record of what it was shown. An `ExpectExec("DELETE FROM
+	// household_account_shares")` here would now go unmatched.
+	pool.ExpectExec("UPDATE household_account_shares SET revoked_at").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
 	pool.ExpectExec("source = 'household'").WithArgs("member-1", "hh-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectCommit()
@@ -1785,7 +1787,7 @@ func TestHouseholdService_PurgeRemovedMembership_UserRejoined_SkipsShareAndEntit
 			"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at",
 			"prior_subscription_tier", "prior_subscription_status", "created_at", "updated_at",
 		}).AddRow("mem-new", "hh-1", "member-1", "member", "active", time.Now(), nil, nil, nil, time.Now(), time.Now()))
-	// No DELETE FROM household_account_shares, no entitlement UPDATE — must not run.
+	// No share write, no entitlement UPDATE — must not run.
 	pool.ExpectCommit()
 
 	err := svc.PurgeRemovedMembership(context.Background(), "hh-1", "member-row-old")
@@ -2302,9 +2304,9 @@ func TestHouseholdService_AcceptInvite_Success(t *testing.T) {
 		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-1", time.Now(), time.Now(), time.Now()))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", "inst-1", &mask).
-			AddRow("acct-2", "inst-2", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", "inst-1", &mask, nil, nil).
+			AddRow("acct-2", "inst-2", nil, nil, nil))
 	pool.ExpectQuery("INSERT INTO household_share_consents").
 		WithArgs("hh-1", "caller-1", domain.HouseholdShareConsentVersion, pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "consented_at", "created_at"}).AddRow("consent-1", time.Now(), time.Now()))
@@ -2509,10 +2511,10 @@ func TestHouseholdService_AcceptInvite_NonPayingInvitee_NotBlocked(t *testing.T)
 
 // TestCallerHasLivePaddleSubscription_CompedUser_NoPaddleBillingRelationship_JoinsFreely
 // documents (but does NOT pin the raw-vs-effective distinction of) the nil-PaddleSubscriptionID
-// short-circuit in callerHasLivePaddleSubscription (household_service.go:1440-1442): a comped
+// short-circuit in callerHasLivePaddleSubscription (household_service.go:1674-1676): a comped
 // user with no Paddle billing relationship at all has no refund/double-charge risk and must join
 // freely. Because PaddleSubscriptionID is nil here, the function returns at that check BEFORE
-// ever reaching the status switch at :1443 — so this case can never fail on a raw-vs-effective
+// ever reaching the status switch at :1677 — so this case can never fail on a raw-vs-effective
 // switch there, regardless of ManualTierOverride/effective status. The actual #1413 pin for that
 // switch is TestCallerHasLivePaddleSubscription_CompedUser_WithPaddleSub_RawCancelled_PinnedRaw
 // below, which sets a real PaddleSubscriptionID so the switch is actually exercised.
@@ -2530,7 +2532,7 @@ func TestCallerHasLivePaddleSubscription_CompedUser_NoPaddleBillingRelationship_
 }
 
 // TestCallerHasLivePaddleSubscription_CompedUser_WithPaddleSub_RawCancelled_PinnedRaw is the
-// #1413 PinnedRaw pin test for the status switch at household_service.go:1443. Unlike the test
+// #1413 PinnedRaw pin test for the status switch at household_service.go:1677. Unlike the test
 // above, PaddleSubscriptionID is set here so execution actually reaches that switch instead of
 // returning early at the nil check. Raw SubscriptionStatus is "cancelled" (the real Paddle
 // subscription is genuinely terminated — no refund/double-charge risk), while a LIVE manual
@@ -2622,7 +2624,7 @@ func TestHouseholdService_AcceptInvite_HiddenAccountIDsForeignID_RollsBack(t *te
 		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-1", time.Now(), time.Now(), time.Now()))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).AddRow("acct-1", "inst-1", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).AddRow("acct-1", "inst-1", nil, nil, nil))
 	pool.ExpectRollback()
 
 	_, err := svc.AcceptInvite(context.Background(), "caller-1", "rawtoken", true, []string{"someone-elses-account"})
@@ -2669,9 +2671,9 @@ func TestHouseholdService_AcceptInvite_CompedOwnerRawInactive_SucceedsAndPersist
 		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-1", time.Now(), time.Now(), time.Now()))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", "inst-1", &mask).
-			AddRow("acct-2", "inst-2", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", "inst-1", &mask, nil, nil).
+			AddRow("acct-2", "inst-2", nil, nil, nil))
 	pool.ExpectQuery("INSERT INTO household_share_consents").
 		WithArgs("hh-1", "caller-1", domain.HouseholdShareConsentVersion, pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "consented_at", "created_at"}).AddRow("consent-1", time.Now(), time.Now()))
@@ -2734,9 +2736,9 @@ func TestHouseholdService_AcceptInvite_OwnerActiveRawStatus_MalformedOverride_Se
 		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-1", time.Now(), time.Now(), time.Now()))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", "inst-1", &mask).
-			AddRow("acct-2", "inst-2", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", "inst-1", &mask, nil, nil).
+			AddRow("acct-2", "inst-2", nil, nil, nil))
 	pool.ExpectQuery("INSERT INTO household_share_consents").
 		WithArgs("hh-1", "caller-1", domain.HouseholdShareConsentVersion, pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "consented_at", "created_at"}).AddRow("consent-1", time.Now(), time.Now()))
@@ -2799,9 +2801,9 @@ func TestHouseholdService_AcceptInvite_CallerMalformedOverride_PriorTierFallsBac
 		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, ptrStringEquals("premium"), ptrStringEquals("cancelled")).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-1", time.Now(), time.Now(), time.Now()))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", "inst-1", &mask).
-			AddRow("acct-2", "inst-2", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", "inst-1", &mask, nil, nil).
+			AddRow("acct-2", "inst-2", nil, nil, nil))
 	pool.ExpectQuery("INSERT INTO household_share_consents").
 		WithArgs("hh-1", "caller-1", domain.HouseholdShareConsentVersion, pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "consented_at", "created_at"}).AddRow("consent-1", time.Now(), time.Now()))
@@ -2873,7 +2875,7 @@ func TestHouseholdService_AcceptInvite_RestoresRemovedMember_Success(t *testing.
 	pool.ExpectQuery("UPDATE household_members SET status = 'active'").WithArgs("mem-1").
 		WillReturnRows(pgxmock.NewRows([]string{"updated_at"}).AddRow(freshUpdatedAt))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).AddRow("acct-1", "inst-1", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).AddRow("acct-1", "inst-1", nil, nil, nil))
 	pool.ExpectQuery("INSERT INTO household_share_consents").
 		WithArgs("hh-1", "caller-1", domain.HouseholdShareConsentVersion, pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "consented_at", "created_at"}).AddRow("consent-1", time.Now(), time.Now()))

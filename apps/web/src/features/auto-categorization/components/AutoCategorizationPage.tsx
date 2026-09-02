@@ -9,6 +9,7 @@ import { useRuleFilters } from '../hooks/useRuleFilters'
 import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
 import { AutoCategorizationRuleTable, type SortColumn as RuleSortColumn, type SortDirection } from './AutoCategorizationRuleTable'
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
+import { RuleAutomationHistoryPanel } from './RuleAutomationHistoryPanel'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
 import type { ListView } from '@/shared/components/ListViewToggle'
 import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
@@ -244,6 +245,13 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
             </Button>
           </CardContent>
         </Card>
+        {/*
+          #1569 T9.4. The retained rule-run history is a SEPARATE query with its own loading,
+          error and empty handling, so a blip on the live rules list is no reason to also erase
+          every record of what the user's automations already did. The rules failure above keeps
+          its own message and Retry — this is additive.
+        */}
+        <RuleAutomationHistoryPanel />
       </div>
     )
   }
@@ -278,6 +286,13 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
             </Button>
           }
         />
+        {/*
+          #1569 T9.4 — THE LOAD-BEARING MOUNT. "No rules yet" is also the state of a user who has
+          DELETED every rule they had, and deleting a rule is a hard delete that keeps every
+          rule_execution_history row it produced. Mounting the history only in the branch below
+          would make the seat disappear at exactly the moment the retained data is all there is.
+        */}
+        <RuleAutomationHistoryPanel />
       </div>
     )
   }
@@ -358,6 +373,13 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
         variant="destructive"
         loading={tableDeleting}
       />
+
+      {/*
+        #1569 T9.4. `GET /api/v1/rule-executions` returns the automation audit trail and survives
+        the rule being deleted; `useGetUserRuleExecutions` had no consumer anywhere in the app.
+        This is where it is read.
+      */}
+      <RuleAutomationHistoryPanel />
     </div>
   )
 }

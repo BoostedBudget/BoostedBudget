@@ -44,17 +44,20 @@ import type {
 } from 'msw';
 
 import type {
+  AccountBalanceHistory,
   GetAccountsOutputBody,
   ReorderAccountsOutputBody,
   UpdateAccountOutputBody
 } from '../../models';
 
 
-export const getGetAccountsResponseMock = (overrideResponse: Partial<Extract<GetAccountsOutputBody, object>> = {}): GetAccountsOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), accounts: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({available_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', currency_code: faker.string.alpha({length: {min: 10, max: 20}}), current_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), custom_color: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), custom_emoji: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), custom_icon: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), display_order: faker.helpers.arrayElement([faker.number.int(), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), institution_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), is_hidden: faker.datatype.boolean(), linked_item_id: faker.string.alpha({length: {min: 10, max: 20}}), linked_item_status: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), mask: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), name: faker.string.alpha({length: {min: 10, max: 20}}), nickname: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), official_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), plaid_account_id: faker.string.alpha({length: {min: 10, max: 20}}), replaced_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), replaced_by_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), status: faker.string.alpha({length: {min: 10, max: 20}}), subtype: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), type: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_account_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), total_count: faker.number.int(), ...overrideResponse})
+export const getGetAccountsResponseMock = (overrideResponse: Partial<Extract<GetAccountsOutputBody, object>> = {}): GetAccountsOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), accounts: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({available_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', currency_code: faker.string.alpha({length: {min: 10, max: 20}}), current_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), custom_color: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), custom_emoji: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), custom_icon: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), display_order: faker.helpers.arrayElement([faker.number.int(), undefined]), expired_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), institution_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), is_hidden: faker.datatype.boolean(), last_known_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), last_known_balance_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), linked_item_id: faker.string.alpha({length: {min: 10, max: 20}}), linked_item_status: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), mask: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), name: faker.string.alpha({length: {min: 10, max: 20}}), nickname: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), official_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), plaid_account_id: faker.string.alpha({length: {min: 10, max: 20}}), removed_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), replaced_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), replaced_by_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), status: faker.helpers.arrayElement(['active','replaced','expired','removed'] as const), subtype: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), type: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_account_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), total_count: faker.number.int(), ...overrideResponse})
 
 export const getReorderAccountsResponseMock = (overrideResponse: Partial<Extract<ReorderAccountsOutputBody, object>> = {}): ReorderAccountsOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), success: faker.datatype.boolean(), ...overrideResponse})
 
-export const getUpdateAccountResponseMock = (overrideResponse: Partial<Extract<UpdateAccountOutputBody, object>> = {}): UpdateAccountOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), account: {available_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', currency_code: faker.string.alpha({length: {min: 10, max: 20}}), current_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), custom_color: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), custom_emoji: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), custom_icon: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), display_order: faker.helpers.arrayElement([faker.number.int(), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), institution_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), is_hidden: faker.datatype.boolean(), linked_item_id: faker.string.alpha({length: {min: 10, max: 20}}), linked_item_status: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), mask: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), name: faker.string.alpha({length: {min: 10, max: 20}}), nickname: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), official_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), plaid_account_id: faker.string.alpha({length: {min: 10, max: 20}}), replaced_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), replaced_by_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), status: faker.string.alpha({length: {min: 10, max: 20}}), subtype: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), type: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_account_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user_id: faker.string.alpha({length: {min: 10, max: 20}})}, ...overrideResponse})
+export const getUpdateAccountResponseMock = (overrideResponse: Partial<Extract<UpdateAccountOutputBody, object>> = {}): UpdateAccountOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), account: {available_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', currency_code: faker.string.alpha({length: {min: 10, max: 20}}), current_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), custom_color: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), custom_emoji: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), custom_icon: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), display_order: faker.helpers.arrayElement([faker.number.int(), undefined]), expired_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), institution_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), is_hidden: faker.datatype.boolean(), last_known_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), last_known_balance_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), linked_item_id: faker.string.alpha({length: {min: 10, max: 20}}), linked_item_status: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), mask: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), name: faker.string.alpha({length: {min: 10, max: 20}}), nickname: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), official_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), plaid_account_id: faker.string.alpha({length: {min: 10, max: 20}}), removed_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), replaced_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), replaced_by_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), status: faker.helpers.arrayElement(['active','replaced','expired','removed'] as const), subtype: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), type: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_account_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user_id: faker.string.alpha({length: {min: 10, max: 20}})}, ...overrideResponse})
+
+export const getGetAccountBalanceHistoryResponseMock = (overrideResponse: Partial<Extract<AccountBalanceHistory, object>> = {}): AccountBalanceHistory => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), account_id: faker.string.alpha({length: {min: 10, max: 20}}), first_date: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), last_date: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), points: Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({available_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), currency_code: faker.string.alpha({length: {min: 10, max: 20}}), current_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), date: faker.string.alpha({length: {min: 10, max: 20}})})), ...overrideResponse})
 
 
 export const getGetAccountsMockHandler = (overrideResponse?: GetAccountsOutputBody | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<GetAccountsOutputBody> | GetAccountsOutputBody), options?: RequestHandlerOptions) => {
@@ -81,7 +84,7 @@ export const getReorderAccountsMockHandler = (overrideResponse?: ReorderAccounts
   }, options)
 }
 
-export const getDeleteAccountMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+export const getPurgeAccountMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
   return http.delete('*/api/v1/accounts/:id', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {await delay(500);
   if (typeof overrideResponse === 'function') {await overrideResponse(info); }
 
@@ -103,8 +106,40 @@ export const getUpdateAccountMockHandler = (overrideResponse?: UpdateAccountOutp
   }, options)
 }
 
-export const getDisconnectInstitutionMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+export const getGetAccountBalanceHistoryMockHandler = (overrideResponse?: AccountBalanceHistory | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<AccountBalanceHistory> | AccountBalanceHistory), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/accounts/:id/balance-history', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetAccountBalanceHistoryResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getDisconnectAccountMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/accounts/:id/disconnect', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 204
+      })
+  }, options)
+}
+
+export const getPurgeInstitutionMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
   return http.delete('*/api/v1/linked-items/:id', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {await delay(500);
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 204
+      })
+  }, options)
+}
+
+export const getDisconnectInstitutionMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/linked-items/:id/disconnect', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
   if (typeof overrideResponse === 'function') {await overrideResponse(info); }
 
     return new HttpResponse(null,
@@ -115,7 +150,10 @@ export const getDisconnectInstitutionMockHandler = (overrideResponse?: void | ((
 export const getAccountsMock = () => [
   getGetAccountsMockHandler(),
   getReorderAccountsMockHandler(),
-  getDeleteAccountMockHandler(),
+  getPurgeAccountMockHandler(),
   getUpdateAccountMockHandler(),
+  getGetAccountBalanceHistoryMockHandler(),
+  getDisconnectAccountMockHandler(),
+  getPurgeInstitutionMockHandler(),
   getDisconnectInstitutionMockHandler()
 ]

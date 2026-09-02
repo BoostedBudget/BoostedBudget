@@ -83,6 +83,8 @@ func MapError(err error) error {
 		return huma.Error404NotFound("User not found")
 	case errors.Is(err, repository.ErrLinkedItemNotFound):
 		return huma.Error404NotFound("Linked item not found")
+	case errors.Is(err, repository.ErrLinkedItemNotDisconnected):
+		return huma.Error409Conflict("This institution must be disconnected before it can be purged")
 	case errors.Is(err, repository.ErrNotificationNotFound):
 		return huma.Error404NotFound("Notification not found")
 	case errors.Is(err, repository.ErrPrivacySettingsNotFound):
@@ -138,6 +140,16 @@ func MapError(err error) error {
 		return huma.Error409Conflict("Paddle webhook event already processed")
 	case errors.Is(err, repository.ErrAccountOwnedByAnotherUser):
 		return huma.Error409Conflict("This bank account is already linked by another user. Each physical account may only be connected to one BoostedBudget account at a time.")
+	case errors.Is(err, repository.ErrPurgeBlockedBySavingsGoal):
+		return huma.Error409Conflict("A savings goal still references this account. Delete the goal first, then try again.")
+	case errors.Is(err, repository.ErrAccountNotDisconnected):
+		return huma.Error409Conflict("This account must be disconnected before it can be purged.")
+	case errors.Is(err, repository.ErrAccountAlreadyDisconnected):
+		return huma.Error409Conflict("This account has already been disconnected.")
+	// Issue #1569, Task 8: purging a savings goal destroys hand-logged contributions, so it is
+	// gated on the goal already having been deleted. Same 409 shape as ErrAccountNotDisconnected.
+	case errors.Is(err, domain.ErrSavingsGoalNotDeleted):
+		return huma.Error409Conflict("This savings goal must be deleted before it can be purged.")
 	// GAP AW: idempotency key reused for a different operation — RFC 7231 / Stripe semantics.
 	case errors.Is(err, repository.ErrIdempotencyKeyConflict):
 		return huma.Error409Conflict("This idempotency key was already used for a different operation. Use a new key to perform a different request.")

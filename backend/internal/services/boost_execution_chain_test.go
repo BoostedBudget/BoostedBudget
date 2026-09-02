@@ -5,9 +5,9 @@ package services
 // and ToUserAccountID when the boost action has those stable IDs.
 
 import (
-	"errors"
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -44,7 +44,7 @@ func TestBoostExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
 		UserID:         "user-123",
 		Name:           "Transfer to Savings",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
@@ -55,7 +55,6 @@ func TestBoostExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-
 
 	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
@@ -96,7 +95,7 @@ func TestBoostExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T
 		UserID:         "user-123",
 		Name:           "Legacy Transfer Rule",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
@@ -107,7 +106,6 @@ func TestBoostExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-
 
 	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
@@ -131,7 +129,7 @@ func TestBoostExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing
 	boostRepo := &mockBoostsRepository{}
 
 	mockResolver := &mockAccountChainResolver{
-		resolveActiveIDFunc: func(ctx context.Context, userAccountID string) (string, error) {
+		resolveActiveIDFunc: func(ctx context.Context, userAccountID, userID string) (string, error) {
 			switch userAccountID {
 			case "stable-from-uaid":
 				return "active-from-account", nil
@@ -162,7 +160,7 @@ func TestBoostExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing
 		UserID:         "user-123",
 		Name:           "Chain Resolver Transfer",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
@@ -192,6 +190,70 @@ func TestBoostExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing
 	assert.Equal(t, "stable-to-uaid", *s.ToUserAccountID)
 }
 
+// TestBoostExecution_TransferAction_ChainResolver_AmbiguousChain_UsesPinnedAccount pins #1569
+// R11 T2's site-2 decision (fix round 1: an earlier revision skipped the suggestion here, which
+// was a monotonicity bug — see resolveAndVerifyUserAccount's doc comment). When the chain has
+// more than one live account (ErrAmbiguousActiveAccount), the suggestion still gets created,
+// using the rule's pinned FromAccountID/ToAccountID — the SAME fallback behaviour as
+// ErrNoActiveAccount, and the same kind of fallback the savings-goal destination site (T2 site 3)
+// uses. The resolver still refuses to guess WHICH live sibling to use; it does not refuse to act.
+func TestBoostExecution_TransferAction_ChainResolver_AmbiguousChain_UsesPinnedAccount(t *testing.T) {
+	execRepo := &mockBoostExecutionRepository{}
+	suggRepo := &mockTransferSuggestionRepository{}
+	boostRepo := &mockBoostsRepository{}
+
+	mockResolver := &mockAccountChainResolver{
+		resolveActiveIDFunc: func(ctx context.Context, userAccountID, userID string) (string, error) {
+			return "", ErrAmbiguousActiveAccount
+		},
+	}
+
+	svc := NewBoostExecutionService(execRepo, suggRepo, boostRepo, nil)
+	svc.SetChainResolver(mockResolver)
+
+	ctx := context.Background()
+	now := time.Now()
+
+	actionsJSON, _ := json.Marshal(domain.TransferAction{
+		FromAccountID:     "replaced-from-account",
+		ToAccountID:       "replaced-to-account",
+		FromUserAccountID: "stable-from-uaid-ambiguous",
+		ToUserAccountID:   "stable-to-uaid-ambiguous",
+		AmountType:        "fixed",
+		Amount:            500,
+	})
+
+	boost := &domain.Boost{
+		ID:             "rule-chain-resolver-ambiguous",
+		UserID:         "user-123",
+		Name:           "Ambiguous Chain Transfer",
+		Enabled:        true,
+		BoostType:      domain.BoostTypeTransferSuggestion,
+		ConditionLogic: "AND",
+		Conditions:     []domain.BoostCondition{},
+		Actions:        actionsJSON,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: "transaction_created",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
+	require.NoError(t, err)
+
+	require.Len(t, suggRepo.suggestions, 1,
+		"an ambiguous chain must not block the suggestion — it is not a guess, it is the rule's already-pinned account")
+	s := suggRepo.suggestions[0]
+	require.NotNil(t, s.FromAccountID)
+	assert.Equal(t, "replaced-from-account", *s.FromAccountID,
+		"an ambiguous chain must fall back to the pinned FromAccountID, the same outcome as ErrNoActiveAccount")
+	require.NotNil(t, s.ToAccountID)
+	assert.Equal(t, "replaced-to-account", *s.ToAccountID,
+		"an ambiguous chain must fall back to the pinned ToAccountID, not guess between the two live siblings")
+}
+
 // TestBoostExecution_TransferAction_ChainResolver_NilFallback verifies that when
 // chainResolver is nil, FromAccountID falls back to the raw value in the action.
 func TestBoostExecution_TransferAction_ChainResolver_NilFallback(t *testing.T) {
@@ -219,7 +281,7 @@ func TestBoostExecution_TransferAction_ChainResolver_NilFallback(t *testing.T) {
 		UserID:         "user-123",
 		Name:           "Nil Resolver Fallback",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
@@ -252,7 +314,7 @@ func TestBoostExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testi
 	boostRepo := &mockBoostsRepository{}
 
 	mockResolver := &mockAccountChainResolver{
-		resolveActiveIDFunc: func(_ context.Context, _ string) (string, error) {
+		resolveActiveIDFunc: func(_ context.Context, _, _ string) (string, error) {
 			return "should-not-be-called", nil
 		},
 	}
@@ -276,7 +338,7 @@ func TestBoostExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testi
 		UserID:         "user-123",
 		Name:           "Legacy No UAID",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
@@ -324,7 +386,7 @@ func TestBoostExecution_SimulateAction_IncludesFromUserAccountID(t *testing.T) {
 		UserID:         "user-sim",
 		Name:           "Simulate With UAID",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
@@ -348,16 +410,16 @@ func TestBoostExecution_SimulateAction_IncludesFromUserAccountID(t *testing.T) {
 // mockAccountChainResolver is a lightweight mock for AccountChainResolver used in
 // boost_execution_chain_test.go.
 type mockAccountChainResolver struct {
-	resolveActiveIDFunc func(ctx context.Context, userAccountID string) (string, error)
+	resolveActiveIDFunc func(ctx context.Context, userAccountID, userID string) (string, error)
 }
 
 func (m *mockAccountChainResolver) ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error) {
 	return nil, nil
 }
 
-func (m *mockAccountChainResolver) ResolveActiveID(ctx context.Context, userAccountID string) (string, error) {
+func (m *mockAccountChainResolver) ResolveActiveID(ctx context.Context, userAccountID, userID string) (string, error) {
 	if m.resolveActiveIDFunc != nil {
-		return m.resolveActiveIDFunc(ctx, userAccountID)
+		return m.resolveActiveIDFunc(ctx, userAccountID, userID)
 	}
 	return "", errors.New("ResolveActiveID not configured")
 }
@@ -378,7 +440,7 @@ func TestBoostExecution_TransferAction_ChainResolver_ResolvesActiveID_Depth2(t *
 	acctToCurrent := "active-to-account-gen3"
 
 	mockResolver := &mockAccountChainResolver{
-		resolveActiveIDFunc: func(ctx context.Context, userAccountID string) (string, error) {
+		resolveActiveIDFunc: func(ctx context.Context, userAccountID, userID string) (string, error) {
 			switch userAccountID {
 			case "stable-from-uaid-depth2":
 				return acctFromCurrent, nil
@@ -409,7 +471,7 @@ func TestBoostExecution_TransferAction_ChainResolver_ResolvesActiveID_Depth2(t *
 		UserID:         "user-depth2",
 		Name:           "Depth-2 Chain Transfer",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,

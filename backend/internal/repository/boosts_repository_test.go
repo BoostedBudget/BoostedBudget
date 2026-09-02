@@ -48,20 +48,20 @@ func TestBoostsTable_CanInsertWithJSONB(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO boosts`)).WithArgs(
 		boostID,
 		userID,
-		"Test Transfer Rule",      // name
-		"Test description",        // description
-		true,                      // enabled
-		10,                        // priority
-		"transfer_suggestion",     // boost_type
-		triggerConfig,             // trigger_config
-		conditions,                // conditions
-		"AND",                     // condition_logic
-		actions,                   // actions
-		int64(0),                  // execution_count
-		pgxmock.AnyArg(),          // last_executed_at (nil)
-		pgxmock.AnyArg(),          // last_successful_at (nil)
-		pgxmock.AnyArg(),          // created_at
-		pgxmock.AnyArg(),          // updated_at
+		"Test Transfer Rule",  // name
+		"Test description",    // description
+		true,                  // enabled
+		10,                    // priority
+		"transfer_suggestion", // boost_type
+		triggerConfig,         // trigger_config
+		conditions,            // conditions
+		"AND",                 // condition_logic
+		actions,               // actions
+		int64(0),              // execution_count
+		pgxmock.AnyArg(),      // last_executed_at (nil)
+		pgxmock.AnyArg(),      // last_successful_at (nil)
+		pgxmock.AnyArg(),      // created_at
+		pgxmock.AnyArg(),      // updated_at
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	_, err := mock.Exec(ctx, `
@@ -522,19 +522,19 @@ func makeBoostRow(id, userID, name string) []interface{} {
 		id,
 		userID,
 		name,
-		(*string)(nil),       // description
-		true,                 // enabled
-		10,                   // priority
-		"transfer_suggestion",// boost_type
-		[]byte("{}"),         // trigger_config JSONB
-		[]byte("[]"),         // conditions JSONB
-		"AND",                // condition_logic
-		[]byte("{}"),         // actions JSONB
-		int64(0),             // execution_count
-		(*time.Time)(nil),    // last_executed_at
-		(*time.Time)(nil),    // last_successful_at
-		time.Now(),           // created_at
-		time.Now(),           // updated_at
+		(*string)(nil),        // description
+		true,                  // enabled
+		10,                    // priority
+		"transfer_suggestion", // boost_type
+		[]byte("{}"),          // trigger_config JSONB
+		[]byte("[]"),          // conditions JSONB
+		"AND",                 // condition_logic
+		[]byte("{}"),          // actions JSONB
+		int64(0),              // execution_count
+		(*time.Time)(nil),     // last_executed_at
+		(*time.Time)(nil),     // last_successful_at
+		time.Now(),            // created_at
+		time.Now(),            // updated_at
 	}
 }
 
@@ -546,11 +546,11 @@ func TestBoostsRepository_Create_Success(t *testing.T) {
 
 	ctx := context.Background()
 	boost := &domain.Boost{
-		UserID:   uuid.New().String(),
-		Name:     "My Boost",
+		UserID:    uuid.New().String(),
+		Name:      "My Boost",
 		BoostType: domain.BoostTypeTransferSuggestion,
-		Enabled:  true,
-		Priority: 5,
+		Enabled:   true,
+		Priority:  5,
 	}
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO boosts`)).
@@ -564,7 +564,7 @@ func TestBoostsRepository_Create_Success(t *testing.T) {
 			boost.BoostType,
 			pgxmock.AnyArg(), // trigger_config JSON
 			pgxmock.AnyArg(), // conditions JSON
-			"AND", // condition_logic (defaulted to AND)
+			"AND",            // condition_logic (defaulted to AND)
 			pgxmock.AnyArg(), // actions
 			pgxmock.AnyArg(), // execution_count
 			pgxmock.AnyArg(), // last_executed_at
@@ -811,18 +811,23 @@ func TestBoostsRepository_Update_Success(t *testing.T) {
 
 // --- Delete ---
 
+// Issue #1569 Task 8: the delete is a TOMBSTONE now, and it carries a user_id predicate the old
+// `DELETE FROM boosts WHERE id = $1` never had.
 func TestBoostsRepository_Delete_Success(t *testing.T) {
 	mock, repo := setupBoostsRepoDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
 	boostID := uuid.New().String()
+	userID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM boosts WHERE id = $1`)).
-		WithArgs(boostID).
-		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE boosts`)).
+		WithArgs(boostID, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
-	err := repo.Delete(ctx, boostID)
+	err := repo.Delete(ctx, boostID, userID, nil)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -834,12 +839,15 @@ func TestBoostsRepository_Delete_NotFound(t *testing.T) {
 
 	ctx := context.Background()
 	boostID := uuid.New().String()
+	userID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM boosts WHERE id = $1`)).
-		WithArgs(boostID).
-		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE boosts`)).
+		WithArgs(boostID, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
 
-	err := repo.Delete(ctx, boostID)
+	err := repo.Delete(ctx, boostID, userID, nil)
 
 	assert.ErrorIs(t, err, domain.ErrBoostNotFound)
 	assert.NoError(t, mock.ExpectationsWereMet())

@@ -23,7 +23,7 @@ import { scanForUnmaskedPII, sentinelsFromFixture, type PIISentinel } from './pi
 import { ThemeProvider } from '@/shared/theme/ThemeProvider'
 
 // --- Centralized mocks (preloaded via bunfig.toml) ---
-import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
+import { mockUseGetAccounts, mockUseGetAccountBalanceHistory } from '@/test/mocks/accounts-api'
 import {
   mockGetTransactions,
   mockUseGetTransactions,
@@ -45,6 +45,12 @@ import {
   mockUseGetSavingsGoals,
   mockUseGetActiveSavingsGoals,
 } from '@/test/mocks/savings-goals-api'
+import {
+  mockUseGetDeletedSavingsGoals,
+  mockUsePurgeSavingsGoal,
+  mockPurgeSavingsGoalMutateAsync,
+  mockUseListDeletedSavingsGoalContributions,
+} from '@/test/mocks/savings-goals-api'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 import {
   mockUseGetSpendingByMerchant,
@@ -52,8 +58,16 @@ import {
   mockUseGetCashFlowSummary,
   mockUseGetPortfolioAllocationBreakdown,
 } from '@/test/mocks/analytics-api'
-import { mockUseGetBoosts } from '@/test/mocks/boosts-api'
-import { mockUseGetUserRules } from '@/test/mocks/auto-categorization-api'
+import {
+  mockUseGetBoosts,
+  mockUseGetUserBoostExecutions,
+  mockRefetchUserBoostExecutions,
+} from '@/test/mocks/boosts-api'
+import {
+  mockUseGetUserRules,
+  mockUseGetUserRuleExecutions,
+  mockRefetchUserRuleExecutions,
+} from '@/test/mocks/auto-categorization-api'
 import {
   mockUseGetBudgets,
   mockUseGetCurrentBudget,
@@ -66,6 +80,7 @@ import {
   mockUseGetPortfolioHistory,
   mockUseInfiniteInvestmentTransactions,
   mockFetchNextInvestmentPage,
+  mockUseGetAccountHoldingsHistory,
 } from '@/test/mocks/investments-api'
 import { mockUseSavingsImpactData } from '@/test/mocks/savings-impact-hooks'
 import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
@@ -111,6 +126,9 @@ const { TransactionTable } = await import('@/features/transactions/components/Tr
 const { AccountsPage } = await import('@/features/accounts/AccountsPage')
 const { NetWorthPage } = await import('@/features/net-worth/NetWorthPage')
 const { SavingsPage } = await import('@/features/savings/SavingsPage')
+const { DeletedGoalsPanel } = await import(
+  '@/features/savings/components/DeletedGoalsPanel'
+)
 const { ProfilePage } = await import('@/features/profile/ProfilePage')
 const { CategoryEditor } = await import('@/features/categories/components/CategoryEditor')
 const { BudgetsPage } = await import('@/features/budgets/components/BudgetsPage')
@@ -213,6 +231,23 @@ const { CustomCategoryForm } = await import('@/features/categories/components/Cu
 // attribute/text exposure even though the risk class differs from the rest of this file.
 const { DeleteAccountSection } = await import('@/features/deletion/components/DeleteAccountSection')
 
+// --- #1569 T8.6: the three retained-history surfaces this gate could not see. ---
+// ClosedAccountHoldingsHistory is NOT a standalone module: it is the branch HoldingsTable renders
+// for a closed account, so it is reached by rendering HoldingsTable in history mode (see the block
+// at the bottom of this file), not by importing it.
+const { ClosedAccountBalanceHistory } = await import(
+  '@/features/accounts/components/ClosedAccountBalanceHistory'
+)
+const { BoostAutomationHistoryPanel } = await import(
+  '@/features/boosts/components/BoostAutomationHistoryPanel'
+)
+// --- #1569 T9.4: the RULE twin of the surface above. Added here by hand, per the note further
+// down this file: membership is not derivable, so a new retained-history surface joins the sweep
+// only because someone adds it.
+const { RuleAutomationHistoryPanel } = await import(
+  '@/features/auto-categorization/components/RuleAutomationHistoryPanel'
+)
+
 const SENTINEL_MERCHANT = 'SENTINEL_MERCHANT_XYZ'
 const SENTINEL_NICKNAME = 'SENTINEL_NICKNAME_ABC'
 const SENTINEL_DESC = 'SENTINEL_DESC_QRS'
@@ -227,6 +262,8 @@ const SENTINEL_EMAIL = 'sentinel@pii-test.invalid'
 const SENTINEL_ACCOUNT_NAME = 'SENTINEL_ACCOUNT_ZXCV'
 const SENTINEL_SECURITY_NAME = 'SENTINEL_SECURITY_QRST'
 const SENTINEL_USER_NAME = 'Sentinel Username Person'
+const SENTINEL_BOOST_NAME = 'SENTINEL_BOOST_WXYZ'
+const SENTINEL_BOOST_ERROR = 'SENTINEL_BOOST_ERROR_HIJK'
 
 function createWrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
@@ -1908,13 +1945,16 @@ describe('PII coverage — Round 14: PortfolioHoldingsWidget (hand-built table)'
             user_id: 'user-1',
             account_id: 'acc-1',
             security_id: 'sec-1',
-            ticker_symbol: null,
+            // HoldingView.ticker_symbol is `string | undefined`, never null — a security with
+            // no ticker is an absent field, and the widget must still mask its name.
+            ticker_symbol: undefined,
             security_name: SENTINEL_SECURITY_NAME,
             quantity: 10,
             institution_value: 99999.99,
             day_change_pct: 1.23,
           },
         ],
+        count: 1,
       },
       isLoading: false,
       isError: false,
@@ -2953,5 +2993,536 @@ describe('PII coverage — Round 21 (#1514 fix round 5): account-deletion cancel
       { value: SENTINEL_TOKEN, fieldDescription: 'account_deletion.cancellation_token (capability, #1514 round 5)' },
     ]
     expect(scanForUnmaskedPII(container, sentinels)).toEqual([])
+  })
+})
+
+// ── #1569 Task 12 fix round 1 (I3) ────────────────────────────────────────────────────────────
+//
+// This gate is a hand-written per-surface list, so a new surface is invisible to it until someone
+// adds one. Task 12 shipped two and added neither. Worse, the existing "Savings page" block could
+// not have reached DeletedGoalsPanel even by accident: the panel's query mock defaults to
+// `data: undefined`, and the disclosure starts collapsed.
+
+describe('PII coverage — #1569 T12: DeletedGoalsPanel (deleted savings goals + purge dialog)', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUsePurgeSavingsGoal.mockReturnValue({
+      mutateAsync: mockPurgeSavingsGoalMutateAsync,
+      isPending: false,
+      isError: false,
+      error: null,
+    } as unknown as ReturnType<typeof mockUsePurgeSavingsGoal>)
+    mockUseGetDeletedSavingsGoals.mockReturnValue({
+      data: [
+        {
+          id: 'goal-pii-1',
+          user_id: 'user-1',
+          name: SENTINEL_GOAL_NAME,
+          target_amount: 44444.44,
+          current_amount: 33333.33,
+          currency_code: 'USD',
+          account_id: 'acct-1',
+          is_completed: false,
+          created_at: '2025-01-01T00:00:00Z',
+          updated_at: '2025-06-01T00:00:00Z',
+          deleted_at: '2025-06-01T00:00:00Z',
+        },
+      ],
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve(null)),
+    } as unknown as ReturnType<typeof mockUseGetDeletedSavingsGoals>)
+  })
+
+  const sentinels: PIISentinel[] = [
+    { value: SENTINEL_GOAL_NAME, fieldDescription: 'deleted savings goal name (#1569 T12)' },
+  ]
+
+  test('goal name and saved/target amounts are masked in the expanded list', async () => {
+    const user = userEvent.setup()
+    render(<DeletedGoalsPanel />, { wrapper: createWrapper() })
+    await user.click(screen.getByRole('button', { name: /deleted goals/i }))
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  // ── #1569 T7 fix round 1 (item 7) ────────────────────────────────────────────────────────
+  //
+  // T7 added a THIRD surface under this panel — the retained ledger — and did not add it here.
+  // Masking is asserted in DeletedGoalsPanel.test.tsx, so this was a coverage-location gap rather
+  // than an unguarded surface, but nothing enforces that this hand-written list is complete: the
+  // next surface to be added would be invisible in exactly the same way.
+  //
+  // The ledger's amounts are the point. They include money the user typed in by hand, which no
+  // provider can supply again, and they are read on a screen someone is looking at precisely
+  // because they are wondering what happened to it.
+  test('the retained contributions ledger masks every amount it renders', async () => {
+    mockUseListDeletedSavingsGoalContributions.mockReturnValue({
+      data: {
+        contributions: [
+          {
+            id: 'contrib-pii-1',
+            savings_goal_id: 'goal-pii-1',
+            amount: 91827.36,
+            occurred_on: '2025-03-14',
+            source: 'manual',
+            status: 'confirmed',
+            confirmed_by_user: true,
+            managed_by_reconciliation: false,
+            created_at: '2025-03-14T00:00:00Z',
+            updated_at: '2025-03-14T00:00:00Z',
+          },
+        ],
+        total_confirmed: 91827.36,
+      },
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof mockUseListDeletedSavingsGoalContributions>)
+
+    const ledgerSentinels: PIISentinel[] = [
+      { value: '91,827.36', fieldDescription: 'retained contribution amount (#1569 T7)' },
+      { value: SENTINEL_GOAL_NAME, fieldDescription: 'deleted savings goal name (#1569 T12)' },
+    ]
+
+    const user = userEvent.setup()
+    render(<DeletedGoalsPanel />, { wrapper: createWrapper() })
+    await user.click(screen.getByRole('button', { name: /deleted goals/i }))
+    await user.click(screen.getByRole('button', { name: /contributions:/i }))
+    await waitForSentinels(ledgerSentinels)
+    expect(scanForUnmaskedPII(document.body, ledgerSentinels)).toEqual([])
+  })
+
+  // The confirmation dialog repeats the goal name, and it is the surface a user stares at while
+  // deciding to destroy hand-logged money — exactly when a replay would be watched back.
+  test('the purge confirmation dialog masks the goal name it repeats', async () => {
+    const user = userEvent.setup()
+    render(<DeletedGoalsPanel />, { wrapper: createWrapper() })
+    await user.click(screen.getByRole('button', { name: /deleted goals/i }))
+    await user.click(screen.getByRole('button', { name: /delete permanently/i }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^delete forever$/i })).toBeInTheDocument()
+    )
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+describe('PII coverage — #1569 T12: TransactionTable reversed rows', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  const reversedRow = {
+    source: 'banking' as const,
+    id: 'txn-pii-reversed',
+    user_id: 'user-1',
+    account_id: 'acct-1',
+    amount: 77777.77,
+    date: '2025-03-11',
+    name: SENTINEL_MERCHANT,
+    merchant_name: SENTINEL_MERCHANT,
+    pending: false,
+    reversed: true,
+    reversed_at: '2025-03-14T09:00:00Z',
+    created_at: '2025-03-11T00:00:00Z',
+    updated_at: '2025-03-11T00:00:00Z',
+  }
+
+  // A reversal adds a badge, a strike-through and a data-reversed marker to the amount cell. The
+  // marker is a bare boolean on purpose — attributes are recorded verbatim by session replay and
+  // no mask covers them — and this is what will notice if that ever stops being true.
+  test('a reversed row leaks neither its amount nor its merchant', async () => {
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_MERCHANT, fieldDescription: 'merchant on a reversed transaction (#1569 T12)' },
+    ]
+    render(
+      <TransactionTable
+        transactions={[reversedRow]}
+        accountsMap={{}}
+      />,
+      { wrapper: createWrapper() }
+    )
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+// ── #1569 Task 8.6 ────────────────────────────────────────────────────────────────────────────
+//
+// THE THREE RETAINED-HISTORY SURFACES THIS GATE COULD NOT SEE. Rounds 6–7 shipped four screens
+// whose entire purpose is showing money we kept rather than destroyed. Only one of them
+// (DeletedGoalsPanel, above) entered this sweep. HoldingsTable was in the sweep but only ever
+// rendered as `<HoldingsTable />` — no props, i.e. CURRENT-STATE mode — so its closed-account
+// branch was never mounted here; ClosedAccountBalanceHistory and BoostAutomationHistoryPanel were
+// absent entirely.
+//
+// ⚠ STATED PRECISELY: each of these surfaces already carries thorough masking assertions in its
+// OWN test file, and all three were in fact already masked when this block was written. Nothing
+// below fixed a leak. What it fixes is WHERE the coverage lives — a per-component test protects
+// that component only, while this file is the one place a reviewer looks to ask "is every money
+// surface covered". A surface outside it is invisible to that question.
+//
+// ATTRIBUTES ARE THE POINT, not just text. `scanForUnmaskedPII` scans every attribute that is not
+// on `pii-masking.ts`'s SAFE_ATTRS denylist and deliberately does NOT honour a masked ancestor
+// when it does so, because session replay records attribute values verbatim and `data-ph-mask`
+// covers text only. So an `aria-label` carrying an amount — the exact thing
+// ClosedAccountBalanceHistory's chart wrapper had to be written around — fails these tests even
+// though the visible text passes.
+//
+// ⚠ MEMBERSHIP IN THIS FILE IS HAND-MAINTAINED, AND NOTHING ENFORCES THAT IT IS COMPLETE. A
+// completeness guard was considered for this task and deliberately NOT shipped. The denominator it
+// would need — "every component that renders money" — is not soundly derivable from source text
+// here: money reaches the DOM through at least four indirections (a `formatCurrency*` call, a
+// DataTable column whose `key` names a numeric field with no formatter call in the file at all, a
+// shared column array imported from another module, and a chart option builder), and the inverse
+// is just as bad — `formatPercent`, `formatHistoryLabel` and plain numeric columns sit in the same
+// files without being money. A grep-for-`formatCurrency` guard would therefore both miss surfaces
+// and fire on legitimate ones; a guard that fires on legitimate code gets deleted by the next
+// engineer, and one that cannot fail is worse than none. Both have already happened on this
+// branch. So: **when you add a surface that renders retained money, add it here by hand.** That
+// sentence is the mechanism. There is no other.
+
+describe('PII coverage — #1569 T8.6: ClosedAccountHoldingsHistory (a closed account’s retained positions)', () => {
+  const closedAccount = {
+    id: 'acct-closed-pii',
+    name: SENTINEL_ACCOUNT_NAME,
+    type: 'investment',
+    status: 'removed',
+    removed_at: '2026-03-10T00:00:00Z',
+    user_account_id: 'ua-closed-pii',
+  }
+
+  const position = {
+    security_id: 'sec-pii-hist-1',
+    as_of_date: '2026-03-04',
+    security_name: SENTINEL_SECURITY_NAME,
+    ticker_symbol: 'SNTL',
+    security_type: 'stock',
+    quantity: 12,
+    institution_price: 7652,
+    institution_value: 91827,
+    cost_basis: 71234,
+    gain_loss: 20593,
+    gain_loss_pct: 28.9,
+  }
+
+  // security_id / as_of_date / security_type are structural: an opaque id, a date the surface is
+  // REQUIRED to render (it is what stops these figures reading as current), and a fixed enum.
+  const sentinels: PIISentinel[] = sentinelsFromFixture(position, {
+    skipKeys: ['security_id', 'as_of_date', 'security_type'],
+    label: 'holding_snapshot',
+  })
+
+  beforeEach(() => {
+    cleanup()
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [closedAccount] },
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve({})),
+    } as unknown as ReturnType<typeof mockUseGetAccounts>)
+    // An EMPTY current-state read on a terminal account is what routes HoldingsTable into its
+    // history branch. Without this it renders the live table and the surface under test never
+    // mounts — the vacuity this file's header warns about.
+    mockUseGetHoldings.mockReturnValue({
+      data: { holdings: [], count: 0 },
+      isLoading: false,
+      isError: false,
+    })
+    mockUseGetAccountHoldingsHistory.mockReturnValue({
+      data: {
+        account_id: closedAccount.id,
+        as_of_date: '2026-03-04',
+        available_dates: ['2026-03-04', '2026-03-03'],
+        positions: [position],
+        total_value: 91827,
+      },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof mockUseGetAccountHoldingsHistory>)
+  })
+
+  // Same process-global reasoning as the balance-history block below: put the documented
+  // "nothing was ever captured" default back so a later file does not inherit these positions.
+  afterEach(() => {
+    mockUseGetAccountHoldingsHistory.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+    })
+  })
+
+  test('the retained positions table masks every security name, ticker and amount it renders', async () => {
+    render(<HoldingsTable accountId={closedAccount.id} />, { wrapper: createWrapper() })
+    // Proves the HISTORY branch mounted, not the live table: the live table has no such caption.
+    await waitFor(() =>
+      expect(document.body.textContent ?? '').toMatch(/not what the account holds today/i)
+    )
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  test('the as-of picker and the total-recorded-value footer leak nothing', async () => {
+    render(<HoldingsTable accountId={closedAccount.id} />, { wrapper: createWrapper() })
+    // The picker only renders above one retained day, and the footer only when total_value is
+    // present — both are seeded above. Confirm each rendered before asserting it is clean.
+    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(document.body.textContent ?? '').toMatch(/Total recorded value/i)
+    )
+    expect(document.body.textContent ?? '').toContain('$91,827.00')
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+describe('PII coverage — #1569 T8.6: ClosedAccountBalanceHistory (retained day-by-day balances)', () => {
+  const points = [
+    {
+      date: '2026-03-01',
+      current_balance: 91827.36,
+      available_balance: 81726.25,
+      currency_code: 'USD',
+    },
+    {
+      date: '2026-03-02',
+      current_balance: 76543.21,
+      available_balance: 66432.1,
+      currency_code: 'USD',
+    },
+  ]
+
+  // No free-text field exists on a balance point — every leaf is a date, an enum currency code or
+  // a number — so there is no fixture-derived sentinel to take. The amounts are caught by
+  // scanForUnmaskedPII's currency shape rule instead, in text AND in every scanned attribute,
+  // which is the whole risk on this surface: its chart is an ECharts canvas whose only accessible
+  // rendering is an aria-label, and an aria-label is recorded verbatim.
+  const sentinels: PIISentinel[] = []
+
+  beforeEach(() => {
+    cleanup()
+    mockUseGetAccountBalanceHistory.mockReturnValue({
+      data: { account_id: 'acct-closed-pii', points },
+      isLoading: false,
+      isError: false,
+      error: null,
+    })
+  })
+
+  // ⚠ THIS RESTORE IS LOAD-BEARING ACROSS FILES. These hook mocks are process-global (they are
+  // preloaded once via bunfig.toml), so a mockReturnValue set here is still in effect for every
+  // test file bun runs afterwards in the same worker. Leaving retained points seeded broke
+  // AccountDetailPage's "a closed account has no balance" test, which reaches this hook
+  // incidentally and relies on the documented resolved-and-empty default (see accounts-api.ts).
+  afterEach(() => {
+    mockUseGetAccountBalanceHistory.mockReturnValue({
+      data: { account_id: 'acc-1', points: [] },
+      isLoading: false,
+      isError: false,
+      error: null,
+    })
+  })
+
+  test('both money columns, the chart wrapper and its aria-label carry no unmasked amount', async () => {
+    render(
+      <ClosedAccountBalanceHistory
+        accountId="acct-closed-pii"
+        accountType="investment"
+        closedOn="2026-03-10T00:00:00Z"
+      />,
+      { wrapper: createWrapper() }
+    )
+    // Both rows must be on screen before the scan, or a pass means nothing.
+    await waitFor(() => expect(document.body.textContent ?? '').toContain('$91,827.36'))
+    expect(document.body.textContent ?? '').toContain('$66,432.10')
+    // The chart is React.lazy + Suspense; wait for it to resolve so its attributes are scanned
+    // rather than the fallback's.
+    await waitFor(() => expect(screen.getByTestId('echarts-chart')).toBeInTheDocument())
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+describe('PII coverage — #1569 T8.6: BoostAutomationHistoryPanel (runs of deleted boosts)', () => {
+  const execution = {
+    id: 'exec-pii-1',
+    boost_id: 'boost-deleted-pii',
+    user_id: 'user-1',
+    boost_name: SENTINEL_BOOST_NAME,
+    status: 'failed',
+    started_at: '2026-03-01T10:00:00Z',
+    execution_duration_ms: 1200,
+    retry_count: 0,
+    max_retries: 3,
+    // A failure message is rule/provider text: it can name a merchant and an amount, and it is
+    // the one free-text field on this surface.
+    error_message: `${SENTINEL_BOOST_ERROR}: could not move $4,812.09 to SENTINEL_MERCHANT_XYZ`,
+    trigger_context: { type: 'schedule' },
+  }
+
+  // id / boost_id / user_id are opaque keys; status and type are fixed enums the surface must
+  // render legibly (a masked status badge would erase the outcome the panel exists to show);
+  // started_at is a timestamp the row is required to state.
+  const sentinels: PIISentinel[] = sentinelsFromFixture(execution, {
+    skipKeys: ['id', 'boost_id', 'user_id', 'status', 'started_at', 'type'],
+    label: 'boost_execution',
+  })
+
+  beforeEach(() => {
+    cleanup()
+    // An EMPTY live-boost list is what makes this row a DELETED boost's retained run — the case
+    // the panel was built for. It is also the harder case to mask: the cell pairs the
+    // user-authored name with a "Deleted boost" marker that must stay legible.
+    mockUseGetBoosts.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve()),
+    } as unknown as ReturnType<typeof mockUseGetBoosts>)
+    mockUseGetUserBoostExecutions.mockReturnValue({
+      data: { executions: [execution], total: 1, limit: 20, offset: 0 },
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve()),
+    } as unknown as ReturnType<typeof mockUseGetUserBoostExecutions>)
+  })
+
+  // Same process-global reasoning as the two blocks above.
+  afterEach(() => {
+    mockUseGetUserBoostExecutions.mockReturnValue({
+      data: { executions: [], total: 0, limit: 20, offset: 0 },
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchUserBoostExecutions,
+    } as unknown as ReturnType<typeof mockUseGetUserBoostExecutions>)
+    mockUseGetBoosts.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve()),
+    } as unknown as ReturnType<typeof mockUseGetBoosts>)
+  })
+
+  test('the retained boost name and failure message are masked once the panel is expanded', async () => {
+    const user = userEvent.setup()
+    render(<BoostAutomationHistoryPanel />, { wrapper: createWrapper() })
+    const toggle = screen.getByRole('button', { name: /automation history/i })
+    await user.click(toggle)
+    // The marker proves this really is the deleted-boost path.
+    await waitFor(() => expect(screen.getByText('Deleted boost')).toBeInTheDocument())
+    await waitForSentinels(sentinels)
+
+    // ⚠ SCOPED TO THE EXPANDED PANEL, NOT document.body — and this is the ONE deviation from this
+    // file's default, so it is worth being exact about. The toggle's own label is
+    // `Automation history{` (${total})`}`, a single text node reading " (1)", and
+    // pii-masking.ts's CURRENCY_RE treats a parenthesised number as an accounting negative
+    // ("($1,234)"). That is a row COUNT, not money, so scanning the toggle would fail this test on
+    // legitimate code. (DeletedGoalsPanel writes the same count as `Deleted goals ({n})`, which
+    // React splits into three text nodes — "Deleted goals (", "1", ")" — so it evades the same
+    // rule by accident of node splitting, not by design.) Nothing here portals, so the panel
+    // element contains everything this surface renders.
+    //
+    // The excluded region is not left unasserted: the line below pins the toggle's entire text to
+    // "Automation history (N)", so an amount appearing there would fail on its own assertion.
+    expect(toggle.textContent).toMatch(/^Automation history \(\d+\)$/)
+    const panel = document.getElementById(toggle.getAttribute('aria-controls') ?? '')
+    expect(panel).not.toBeNull()
+    expect(scanForUnmaskedPII(panel as HTMLElement, sentinels)).toEqual([])
+  })
+})
+
+// ── #1569 T9.4 ────────────────────────────────────────────────────────────────────────────────
+//
+// RuleAutomationHistoryPanel — the automation AUDIT TRAIL of a rule the user has since deleted.
+// The sibling block above covers the boost twin; this is the rule one, and its PII shape is
+// different in a way worth stating: the boost row's only free text is an error message, while this
+// row carries the rule's CONDITIONS, restored out of a frozen `definition_snapshot`. Those are
+// user-typed merchant substrings and amounts — the same class of text as a merchant name on a
+// transaction — reaching the DOM through an indirection (a JSON blob) that no `formatCurrency`
+// grep would ever find. That is exactly the kind of surface this file exists to catch.
+//
+// The condition LABEL ("Merchant contains") is a fixed vocabulary and is deliberately NOT a
+// sentinel: masking it would erase the shape of the rule from replay while protecting nothing.
+describe('PII coverage — #1569 T9.4: RuleAutomationHistoryPanel (runs of deleted rules)', () => {
+  const execution = {
+    id: 'exec-pii-rule-1',
+    rule_id: null,
+    transaction_id: 'txn-pii-1',
+    user_id: 'user-1',
+    rule_name: SENTINEL_RULE_NAME,
+    action_type: 'category',
+    result: 'applied',
+    executed_at: '2026-03-01T10:00:00Z',
+    definition_snapshot: {
+      name: SENTINEL_RULE_NAME,
+      condition_logic: 'AND',
+      conditions: [
+        { type: 'merchant_contains', value: SENTINEL_MERCHANT },
+        { type: 'amount_greater_than', value: 4812.09 },
+      ],
+      captured_by: 'rule_application_service',
+    },
+  }
+
+  // id / rule_id / transaction_id / user_id are opaque keys; action_type and result are fixed
+  // enums the surface must render legibly (a masked outcome would erase what the panel exists to
+  // show); executed_at is a timestamp the row is required to state; `type` and `condition_logic`
+  // are the fixed condition vocabulary, rendered through CONDITION_TYPE_LABELS rather than
+  // verbatim; captured_by is capture metadata that is deliberately never rendered at all.
+  const sentinels: PIISentinel[] = [
+    ...sentinelsFromFixture(execution, {
+      skipKeys: [
+        'id',
+        'rule_id',
+        'transaction_id',
+        'user_id',
+        'action_type',
+        'result',
+        'executed_at',
+        'type',
+        'condition_logic',
+        'captured_by',
+      ],
+      label: 'rule_execution',
+    }),
+    // Numbers are not walked by sentinelsFromFixture, and an amount inside a condition is money
+    // the user typed. Named explicitly so it is covered rather than silently skipped.
+    { value: '4812.09', fieldDescription: 'rule_execution.definition_snapshot condition amount' },
+  ]
+
+  beforeEach(() => {
+    cleanup()
+    mockUseGetUserRuleExecutions.mockReturnValue({
+      data: { executions: [execution], total: 1, limit: 20, offset: 0 },
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve()),
+    } as unknown as ReturnType<typeof mockUseGetUserRuleExecutions>)
+  })
+
+  // Same process-global reasoning as the blocks above.
+  afterEach(() => {
+    mockUseGetUserRuleExecutions.mockReturnValue({
+      data: { executions: [], total: 0, limit: 20, offset: 0 },
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchUserRuleExecutions,
+    } as unknown as ReturnType<typeof mockUseGetUserRuleExecutions>)
+  })
+
+  test('the retained rule name and its frozen conditions are masked once the panel is expanded', async () => {
+    const user = userEvent.setup()
+    render(<RuleAutomationHistoryPanel />, { wrapper: createWrapper() })
+    const toggle = screen.getByRole('button', { name: /rule run history/i })
+    await user.click(toggle)
+    // The marker proves this really is the deleted-rule path.
+    await waitFor(() => expect(screen.getByText('Deleted rule')).toBeInTheDocument())
+    await waitForSentinels(sentinels)
+
+    // ⚠ SCOPED TO THE EXPANDED PANEL for the same reason the boost block is: the toggle's own
+    // label ends in " (1)", and pii-masking.ts's CURRENCY_RE reads a parenthesised number as an
+    // accounting negative. That is a row COUNT, not money. The excluded region is not left
+    // unasserted — the line below pins the toggle's entire text.
+    expect(toggle.textContent).toMatch(/^Rule run history \(\d+\)$/)
+    const panel = document.getElementById(toggle.getAttribute('aria-controls') ?? '')
+    expect(panel).not.toBeNull()
+    expect(scanForUnmaskedPII(panel as HTMLElement, sentinels)).toEqual([])
   })
 })

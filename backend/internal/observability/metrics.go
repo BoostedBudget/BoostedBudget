@@ -660,6 +660,61 @@ var (
 		Help: "Highest retry_attempt_count among UNRESOLVED plaid_orphaned_items rows — the worst single Plaid Item whose automated removal keeps failing after its owner's GDPR erasure. The maximum (not a sum or mean) because the signal is one Item retried into the ground; unresolved-only so a succeeded row's history cannot latch the alert. The daily sweep plus the 30-day credential retention caps any row near 30, so a reading above ~20 means a human should act at Plaid before the automated path expires. Absent until the daily pass has actually read the table, so alert on absence too.",
 	})
 
+	// RetentionDeletionsWithheld is Issue #1569 T1's gauge over accounts the retention hard-delete
+	// sweep is REFUSING to delete because a promised pre-deletion notice was never recorded.
+	//
+	// WHAT MADE IT NECESSARY. apps/web/src/legal/PrivacyPolicy.tsx promises a cancelled user notice
+	// at 30 days and again at 7 days before their data is destroyed. Until T1 nothing enforced that:
+	// GetUsersWithExpiredRetentionPage never referenced retention_notice_30d_sent_at /
+	// _7d_sent_at, and no EmailService is passed to RetentionCleanupCheckWorker in any environment,
+	// so the markers could never be stamped. Accounts were hard-deleted having been warned zero
+	// times. T1 gates the sweep on both markers — and a gate on a notice that cannot be sent turns a
+	// silent destruction into a silent retention, which is what this gauge exists to prevent.
+	//
+	// ⚠ THE REASON LABEL IS THE WHOLE VALUE, because a NULL marker means two different things and an
+	// alert on the undifferentiated count would fire on every ordinary cancellation:
+	//   * notice_pending — retention_expires_at is still in the FUTURE. Both
+	//     GetUsersNeedingRetention30dNotice and its 7d sibling bound their population by exactly
+	//     that, so the notice sweep can still reach this user. Healthy and transient. NOT an alert,
+	//     and normally the largest number here.
+	//   * notice_impossible_no_email_service — the clock has run out AND this process has no email
+	//     service wired, which is production today. Remedy: wire it. Reported for the whole withheld
+	//     population, because this cause dominates every per-user one.
+	//   * notice_impossible_window_passed — the clock has run out and a service IS wired. Wiring it
+	//     is still not enough: the two notice queries require retention_expires_at > NOW(), so
+	//     neither of them can ever select these users to notify them. This is the backlog the gate
+	//     accumulates, and draining it needs a deliberate product decision (send late against a
+	//     re-armed clock, waive the notice, or notify out of band) that has not been taken.
+	//     ⚠ SINCE ISSUE #1584 THESE ACCOUNTS ARE SELECTABLE — that half of the problem is closed.
+	//     profileRepository.GetRetentionDeletionsWithheldPage enumerates them, published at
+	//     GET /api/v1/admin/retention/withheld. This gauge still reports HOW MANY, and it is still
+	//     the thing to alert on; the endpoint is how a human finds out WHICH. An earlier version of
+	//     this comment said draining "needs a selection path that does not yet exist" — that is no
+	//     longer true, and what remains missing is only the decision about what to do to them.
+	//
+	// ⚠ A FOURTH REASON IS REAL BUT NOT REPORTED *HERE*: a withheld user with no address on file. It
+	// is folded into whichever label above applies, because no SQL predicate can single it out
+	// (users.email is ciphertext; EncryptString("") is still "ENC$"+ct) and the one column that
+	// could, email_blind_idx, carries a UNIQUE index that caps the population at one row
+	// database-wide. canSendRetentionNotice is where that state is actually seen, post-decryption —
+	// and, since #1584, so is the has_email_on_file field of the admin listing above, which decrypts
+	// per row instead of predicating and is therefore subject to neither obstacle. None of that
+	// makes a label viable here; it means the diagnosis lives on the enumeration, not on the metric.
+	//
+	// ⚠ ALERT ON THE SUM OF THE TWO notice_impossible_* REASONS BEING SUSTAINED ABOVE ZERO, never
+	// on the total: notice_pending is the healthy state. Alert on absence too — see below. The rules
+	// live in prose because this repo has no alert-rule file to put them in.
+	//
+	// Deliberately GAUGES reset to 0 on a clean pass, for the reason PlaidOrphanedItemsByAdminState
+	// spells out: an operator who wires the email service and drains the backlog must see the alert
+	// CLEAR. Nothing is published at all on a failed read — "unknown" must not be reported as "zero",
+	// which for this metric would assert that no account is being withheld on the strength of a read
+	// that failed.
+	RetentionDeletionsWithheld = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "retention_deletions_withheld",
+		Help: "Accounts whose retention hard-deletion is being withheld because a promised pre-deletion notice was never recorded, by reason. notice_pending is HEALTHY (the retention clock is still running and the notice sweep can still reach the user) and must never be alerted on. The two notice_impossible_* reasons are accounts the gate will hold indefinitely because no existing path can send the missing notice: alert on their sum being sustained above zero. no_email_service means this process has no email service wired at all, and wiring it is the remedy for the whole population; window_passed means a service IS wired and it still cannot help, because the notice queries only select users whose clock has not yet run out. A withheld user with no address on file is a real third reason but is folded into these two — see the metric declaration for why it cannot be separated. Not published at all on a failed read, so alert on absence too.",
+	}, []string{"reason"})
+
 	// InvestmentHoldingsSyncDuration tracks how long holdings sync operations take.
 	// Issue #659: Plaid Investments
 	InvestmentHoldingsSyncDuration = promauto.NewHistogram(prometheus.HistogramOpts{
@@ -689,6 +744,70 @@ var (
 		Name: "investment_transactions_synced_total",
 		Help: "Total number of investment transactions processed by action (inserted/skipped).",
 	}, []string{"action"})
+
+	// AccountLinkRefusedNoStableIdentity counts bank links refused because no stable
+	// user_accounts identity could be established for an account (Issue #1569, Phase 0).
+	//
+	// This path used to log-and-continue, persisting an account with a NULL user_account_id.
+	// Under history-retained-by-default such a row is never cascade-deleted, so it becomes a
+	// permanent re-link double-count seed and blocks the accounts.user_account_id NOT NULL
+	// constraint the retention model rests on. Refusing is deliberate; this counter is how we
+	// find out whether the refusal ever fires in practice, since it turns a previously silent
+	// degradation into a user-visible failure.
+	//
+	// ⚠ LABEL HYGIENE: "reason" is one of a small fixed set — service_unwired |
+	// match_or_create_failed. Never a raw error string or any account/user identifier.
+	AccountLinkRefusedNoStableIdentity = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "account_link_refused_no_stable_identity_total",
+		Help: "Total bank links refused because no stable user_accounts identity could be established, by reason (service_unwired, match_or_create_failed).",
+	}, []string{"reason"})
+
+	// PlaidWipeSkippedIncompleteResponse counts delete-only Plaid sync operations skipped
+	// because the target account was absent from the response's `accounts` array — the only
+	// per-account signal Plaid's /liabilities/get and /investments/holdings/get responses
+	// expose (Issue #1569 Task 4). An account missing from `accounts` means this response says
+	// nothing about that account at all, which this codebase treats as "unknown, do not wipe"
+	// rather than "confirmed no data of this type." Every increment here is a wipe that the old
+	// code would have performed and this one refused — that's the point of the counter: it turns
+	// a previously silent, undetectable data-loss path into something observable.
+	//
+	// ⚠ LABEL HYGIENE: "category" is one of a small fixed set — credit_liability |
+	// mortgage_liability | student_loan_liability | holdings. Never a raw error string or any
+	// account/user identifier.
+	PlaidWipeSkippedIncompleteResponse = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "plaid_wipe_skipped_incomplete_response_total",
+		Help: "Total delete-only Plaid sync operations skipped because the account was absent from the response's account list, by category (credit_liability, mortgage_liability, student_loan_liability, holdings).",
+	}, []string{"category"})
+
+	// PlaidProviderAccountRemoval counts the outcomes of reverse-direction account reconciliation:
+	// the sync noticing that Plaid has stopped returning an account, i.e. the bank closed it
+	// (Issue #1569 Task 5). Without this, a mass removal would be visible only in logs — and a
+	// wrong removal is PERMANENT: nothing in this codebase ever writes an account back to
+	// 'active', so a falsely-removed account leaves current net worth forever and stops receiving
+	// balance snapshots. This counter is how a sweep is noticed while it still matters.
+	//
+	// `removed` increments once per account actually transitioned. `refused_full_item_sweep`
+	// increments once per account SPARED by the all-or-nothing bound (so its magnitude is the size
+	// of the sweep that was refused, not the number of times the bound tripped) — any nonzero
+	// value there is an anomaly worth a human: it means a complete Plaid response named accounts
+	// but matched none of ours. `skipped_incomplete_response` increments once per reconciliation
+	// pass declined because the response could not certify anything.
+	//
+	// The inverse direction is counted here too (fix round 2): `restored` when a provider-removed
+	// account reappears in a confirmed-complete roster and goes back to 'active', and
+	// `restore_declined_not_provider` when a reappearing account is left removed because the USER
+	// disconnected it (or its cause predates migration 000154). A steadily climbing pair of
+	// `removed` and `restored` for the same population is the flapping signal — see
+	// restoreProviderRemovedAccounts for why no state-changing flap guard is applied.
+	//
+	// ⚠ LABEL HYGIENE: "outcome" is one of a small fixed set — removed | refused_full_item_sweep |
+	// skipped_incomplete_response | already_terminal | write_failed | restored |
+	// restore_declined_not_provider | restore_failed. Never a raw error string or any account/user
+	// identifier.
+	PlaidProviderAccountRemoval = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "plaid_provider_account_removal_total",
+		Help: "Total accounts affected by provider-initiated (bank-closed) account reconciliation, by outcome (removed, refused_full_item_sweep, skipped_incomplete_response, already_terminal, write_failed, restored, restore_declined_not_provider, restore_failed).",
+	}, []string{"outcome"})
 
 	// AccountsReplacedFiltered counts query executions that exclude replaced accounts or
 	// resolve a re-link chain (Issue #1109). The "family" label groups call sites by domain.
@@ -740,4 +859,33 @@ var (
 		Name: "accounts_replaced_filtered_total",
 		Help: "Number of query executions that excluded at least one replaced account or expanded a re-link chain",
 	}, []string{"family"})
+)
+
+// Reason labels for RetentionDeletionsWithheld (Issue #1569 T1). Declared as constants so the
+// publisher and every alert/test name the same strings — a GaugeVec label is a bare string and the
+// compiler cannot catch a typo, which would silently split the series in two.
+//
+// ⚠ EVERY ONE OF THESE MUST BE Set ON EVERY PASS, and nothing enforces it: a label value that is
+// never Set simply does not exist in the scrape, so an omitted reason does not fail loudly — its
+// accounts just vanish and the gauge quietly stops summing to the withheld population.
+//
+// ⚠ THERE IS DELIBERATELY NO no_address REASON. users.email stores ciphertext and
+// FieldEncryptor.EncryptString returns "ENC$"+ct even for the empty string, so no SQL predicate can
+// see an addressless row; email_blind_idx could, but its UNIQUE index caps that population at one
+// row database-wide. The state is real and is checked post-decryption in canSendRetentionNotice —
+// it is simply folded into whichever reason below applies rather than given a label that would
+// report at most 1. Issue #1584 did NOT change that and did not add a label: it added a per-row
+// has_email_on_file to the withheld-account admin listing, which reports the same state without a
+// predicate and without a metric series.
+const (
+	// RetentionWithheldNoticePending is the HEALTHY state: the retention clock is still running, so
+	// GetUsersNeedingRetention30dNotice / its 7d sibling can still select this user. Never alert.
+	RetentionWithheldNoticePending = "notice_pending"
+	// RetentionWithheldNoEmailService means the clock has run out and this process has no email
+	// service wired, so no notice can be sent at all. Reported for the whole withheld population
+	// because this process-wide cause dominates every per-user one.
+	RetentionWithheldNoEmailService = "notice_impossible_no_email_service"
+	// RetentionWithheldWindowPassed means the clock has run out and a service IS wired: the notice
+	// queries require retention_expires_at > NOW(), so nothing existing will ever send the notice.
+	RetentionWithheldWindowPassed = "notice_impossible_window_passed"
 )

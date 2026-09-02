@@ -47,11 +47,14 @@ import type {
   GetHoldingsOutputBody,
   GetInvestmentTransactionsOutputBody,
   GetPortfolioHistoryOutputBody,
+  HoldingSnapshotHistory,
   PortfolioSummary
 } from '../../models';
 
 
 export const getGetHoldingsResponseMock = (overrideResponse: Partial<Extract<GetHoldingsOutputBody, object>> = {}): GetHoldingsOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), count: faker.number.int(), holdings: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({account_id: faker.string.alpha({length: {min: 10, max: 20}}), cost_basis: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), day_change: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), day_change_pct: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), gain_loss: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), gain_loss_pct: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), institution_price: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), institution_value: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), quantity: faker.number.float({fractionDigits: 2}), security_id: faker.string.alpha({length: {min: 10, max: 20}}), security_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), security_type: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), ticker_symbol: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user_account_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), ...overrideResponse})
+
+export const getGetAccountHoldingsHistoryResponseMock = (overrideResponse: Partial<Extract<HoldingSnapshotHistory, object>> = {}): HoldingSnapshotHistory => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), account_id: faker.string.alpha({length: {min: 10, max: 20}}), as_of_date: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), available_dates: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), positions: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({as_of_date: faker.string.alpha({length: {min: 10, max: 20}}), cost_basis: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), gain_loss: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), gain_loss_pct: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), institution_price: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), institution_value: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), quantity: faker.number.float({fractionDigits: 2}), security_id: faker.string.alpha({length: {min: 10, max: 20}}), security_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), security_type: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), ticker_symbol: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined])})), null]), total_value: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), ...overrideResponse})
 
 export const getGetInvestmentTransactionsResponseMock = (overrideResponse: Partial<Extract<GetInvestmentTransactionsOutputBody, object>> = {}): GetInvestmentTransactionsOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), limit: faker.number.int(), next_cursor: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), transactions: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({account_id: faker.string.alpha({length: {min: 10, max: 20}}), amount: faker.number.float({fractionDigits: 2}), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', date: faker.date.past().toISOString().slice(0, 19) + 'Z', fees: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), name: faker.string.alpha({length: {min: 10, max: 20}}), plaid_investment_transaction_id: faker.string.alpha({length: {min: 10, max: 20}}), plaid_security_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), price: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), quantity: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), security_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), security_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), subtype: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), ticker_symbol: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), type: faker.string.alpha({length: {min: 10, max: 20}}), user_account_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), ...overrideResponse})
 
@@ -67,6 +70,18 @@ export const getGetHoldingsMockHandler = (overrideResponse?: GetHoldingsOutputBo
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getGetHoldingsResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getGetAccountHoldingsHistoryMockHandler = (overrideResponse?: HoldingSnapshotHistory | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<HoldingSnapshotHistory> | HoldingSnapshotHistory), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/investments/holdings/history', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetAccountHoldingsHistoryResponseMock(),
       { status: 200
       })
   }, options)
@@ -109,6 +124,7 @@ export const getGetPortfolioSummaryMockHandler = (overrideResponse?: PortfolioSu
 }
 export const getInvestmentsMock = () => [
   getGetHoldingsMockHandler(),
+  getGetAccountHoldingsHistoryMockHandler(),
   getGetInvestmentTransactionsMockHandler(),
   getGetPortfolioHistoryMockHandler(),
   getGetPortfolioSummaryMockHandler()

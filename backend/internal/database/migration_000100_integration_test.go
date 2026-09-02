@@ -162,10 +162,22 @@ func seedUserAccount(t *testing.T, tx pgx.Tx, userID, instBlindIdx, mask, maskBl
 
 // rollbackMigration000100 applies the real 000100 down SQL in tx:
 // drops the unique index and restores the non-unique index.
+//
+// #1569 round 11 task 4: migration 000178 replaced 000100's unique index with a narrower
+// descendant (unique_user_accounts_inst_mask_identity_blind) that ALSO enforces uniqueness on
+// (user_id, institution_id_blind_idx, mask_blind_idx) whenever identity_type/identity_subtype
+// agree — and every row this file's fixtures seed leaves identity_type/identity_subtype NULL, so
+// two NULL-identity duplicates still collide on 000178's index even after 000100's OWN unique
+// index is rolled back. These scenarios are about 000100's dedup logic, not identity narrowing,
+// so this helper also drops 000178's index (scoped to this test's own transaction, rolled back at
+// the end) to reproduce the pre-000178 world 000100's tests were written against.
 func rollbackMigration000100(t *testing.T, tx pgx.Tx) {
 	t.Helper()
+	_, err := tx.Exec(context.Background(),
+		`DROP INDEX IF EXISTS unique_user_accounts_inst_mask_identity_blind`)
+	require.NoError(t, err, "drop 000178 index failed")
 	downSQL := readMigrationFile(t, "000100_add_user_accounts_blind_idx_unique_index.down.sql")
-	_, err := tx.Exec(context.Background(), downSQL)
+	_, err = tx.Exec(context.Background(), downSQL)
 	require.NoError(t, err, "rollback migration 000100 failed")
 }
 

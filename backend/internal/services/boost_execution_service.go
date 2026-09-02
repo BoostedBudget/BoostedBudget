@@ -39,6 +39,15 @@ type BoostExecutionService interface {
 	// Issue #38: Rules API Endpoints - Execution history with filtering.
 	GetExecutionHistoryWithFilter(ctx context.Context, boostID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error)
 
+	// GetUserExecutionHistory retrieves a user's whole automation history, orphans included.
+	//
+	// Issue #1569 Task 14. Every other read here is scoped by boost, so once
+	// fk_boost_executions_boost_id became ON DELETE SET NULL an execution whose boost had been
+	// purged was retained in the database and reachable from no client at all. This is the only
+	// path that can return it. Tenancy comes from the execution row's own user_id -- there is no
+	// parent left to check ownership against, which is precisely why the column exists.
+	GetUserExecutionHistory(ctx context.Context, userID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error)
+
 	// TestBoost performs a dry-run execution of a rule without persisting any changes.
 	// Issue #38: Rules API Endpoints - Test endpoint.
 	TestBoost(ctx context.Context, boost *domain.Boost, triggerData map[string]interface{}) (*domain.BoostTestResult, error)
@@ -118,14 +127,25 @@ func (s *boostExecutionService) ExecuteBoost(ctx context.Context, boost *domain.
 
 	startTime := time.Now()
 
-	// Create execution record
+	// Create execution record.
+	//
+	// UserID, BoostName and DefinitionSnapshot are captured HERE, from the boost as it stands at
+	// this moment, and are never rewritten (BoostExecutionRepository.Update does not touch them).
+	// Issue #1569 Task 14: fk_boost_executions_boost_id is ON DELETE SET NULL, so this row must be
+	// able to answer "what did this automation do, and why" with no parent left to join to -- and
+	// it must answer with the definition AS IT WAS THEN, not as it is now.
 	triggerContextJSON, _ := json.Marshal(triggerData)
+	boostID := boost.ID
+	boostName := boost.Name
 	execution := &domain.BoostExecution{
-		ID:             uuid.New().String(),
-		BoostID: boost.ID,
-		Status:         domain.ExecutionStatusRunning,
-		StartedAt:      startTime,
-		TriggerContext: triggerContextJSON,
+		ID:                 uuid.New().String(),
+		BoostID:            &boostID,
+		UserID:             boost.UserID,
+		BoostName:          &boostName,
+		DefinitionSnapshot: buildBoostDefinitionSnapshot(boost),
+		Status:             domain.ExecutionStatusRunning,
+		StartedAt:          startTime,
+		TriggerContext:     triggerContextJSON,
 	}
 
 	// Save initial execution record
@@ -233,6 +253,20 @@ func (s *boostExecutionService) ProcessEventTrigger(ctx context.Context, userID,
 // GetBoostExecutionHistory retrieves execution history for a rule.
 func (s *boostExecutionService) GetBoostExecutionHistory(ctx context.Context, boostID string, limit, offset int) ([]*domain.BoostExecution, error) {
 	return s.executionRepo.GetByBoostID(ctx, boostID, limit, offset)
+}
+
+// GetUserExecutionHistory retrieves a user's whole automation history, orphans included.
+//
+// Issue #1569 Task 14. Ownership is enforced by the repository's `WHERE user_id = $1`, on the
+// execution row's OWN denormalised user_id -- a purged boost leaves no parent to authorise against,
+// so any check that went through boosts would either reject the orphan or crash on a NULL.
+func (s *boostExecutionService) GetUserExecutionHistory(
+	ctx context.Context,
+	userID string,
+	status *domain.ExecutionStatus,
+	limit, offset int,
+) ([]*domain.BoostExecution, int, error) {
+	return s.executionRepo.GetByUserID(ctx, userID, status, limit, offset)
 }
 
 // GetExecutionHistoryWithFilter retrieves execution history with optional status filter and total count.
@@ -470,14 +504,41 @@ func (s *boostExecutionService) executeTransferSuggestion(ctx context.Context, b
 // Called during transfer suggestion execution to resolve stable identifiers across Plaid re-links.
 // If resolution succeeds, calls onResolve with the active ID. Returns (true, nil) if ownership fails
 // and the entire rule should be skipped; otherwise returns (false, nil).
+//
+// #1569 R11 T2 fix round 1: ErrAmbiguousActiveAccount (more than one live account shares this
+// user_account_id) falls back to the caller's already-populated, already ownership-verified
+// pinned id — the SAME outcome as ErrNoActiveAccount and any other resolution failure — rather
+// than skipping the suggestion. An earlier revision of this function skipped on ambiguity only,
+// which was a monotonicity bug: it made the objectively WORSE condition (no live account
+// anywhere in the chain) produce a suggestion off the stale pinned id, while the objectively
+// BETTER condition (a live account definitely exists, there are just two) produced none at all.
+// The pinned id (transfer.FromAccountID / ToAccountID) is not an unrelated guess. IF
+// s.accountRepo is configured (see SetAccountRepo — wired unconditionally in production at
+// main.go's boostExecutionService wiring block, but that is an operational assumption this
+// package does not enforce; nothing panics or errors if a future caller omits the setter),
+// executeTransferSuggestion has already verified the pinned id via
+// accountRepo.GetByIDAndUser(ctx, transfer.FromAccountID, boost.UserID) and pre-populated
+// suggestion.FromAccountID/ToAccountID with it — the exact same kind of pinned, ownership-scoped
+// reference executeSavingsGoal falls back to as goal.AccountID. Falling back to it here is not
+// weaker than the savings-goal site's fallback; it is the same fallback, under the same
+// accountRepo-configured condition.
 func (s *boostExecutionService) resolveAndVerifyUserAccount(ctx context.Context, userAccountID, userID, boostID string,
 	onResolve func(string), fieldName string) (bool, error) {
 	if s.chainResolver == nil {
 		return false, nil
 	}
 
-	activeID, err := s.chainResolver.ResolveActiveID(ctx, userAccountID)
+	activeID, err := s.chainResolver.ResolveActiveID(ctx, userAccountID, userID)
 	if err != nil {
+		if errors.Is(err, ErrAmbiguousActiveAccount) {
+			// Logged distinctly from the generic "using raw id" warning below: two live
+			// siblings sharing a chain is an actionable, ordinary Plaid data shape (see
+			// ErrAmbiguousActiveAccount's doc comment), not a transport blip, and is worth
+			// being able to find in logs on its own.
+			slog.Warn("chain resolve: chain has more than one live account; using the rule's already ownership-verified pinned id instead of guessing between the live siblings",
+				"boost_id", boostID, "field", fieldName)
+			return false, nil
+		}
 		if !errors.Is(err, ErrNoActiveAccount) {
 			slog.Warn("chain resolve failed; using raw id", "error", err, "field", fieldName)
 		}
@@ -486,9 +547,13 @@ func (s *boostExecutionService) resolveAndVerifyUserAccount(ctx context.Context,
 
 	// Verify the resolved account belongs to this user before using it.
 	// If accountRepo is not configured, apply the resolved ID without an ownership check
-	// and log a warning — this is safe because (a) production always wires accountRepo
-	// (main.go:~1324) and (b) the service-layer validateBoostReferenceOwnership already
-	// validates from_user_account_id ownership at create/update time. Issue #972 GAP AE.
+	// and log a warning. This branch is expected to be dead in production because (a)
+	// main.go's boostExecutionService wiring block calls SetAccountRepo unconditionally
+	// (cmd/server/main.go, guarded only by db != nil && cfg.ClerkSecretKey != "") and (b)
+	// the service-layer validateBoostReferenceOwnership already validates
+	// from_user_account_id ownership at create/update time. Neither fact is enforced by
+	// this package — a non-nil accountRepo is an operational wiring assumption, not a
+	// guarded invariant. Issue #972 GAP AE.
 	if s.accountRepo != nil {
 		if _, ownerErr := s.accountRepo.GetByIDAndUser(ctx, activeID, userID); ownerErr != nil {
 			slog.Warn("chain resolve: resolved account belongs to different user; skipping boost",
@@ -717,9 +782,19 @@ func (s *boostExecutionService) executeSavingsGoal(ctx context.Context, boost *d
 	// Issue #1109: Resolve savings goal's account to current active account_id via stable user_account_id.
 	toAccountID := goal.AccountID
 	if goal.UserAccountID != nil && *goal.UserAccountID != "" && s.chainResolver != nil {
-		if activeID, err := s.chainResolver.ResolveActiveID(ctx, *goal.UserAccountID); err == nil {
+		if activeID, err := s.chainResolver.ResolveActiveID(ctx, *goal.UserAccountID, boost.UserID); err == nil {
 			toAccountID = activeID
 			observability.AccountsReplacedFiltered.WithLabelValues("automation").Inc()
+		} else if errors.Is(err, ErrAmbiguousActiveAccount) {
+			// #1569 R11 T2: two live siblings share this user_account_id. Falling back to the
+			// goal's own physical AccountID (the account it was pinned against) is the same
+			// fallback resolveAndVerifyUserAccount above uses for the transfer-suggestion sites
+			// — neither is a guess between the two live siblings, both keep the entity's own
+			// already-established account reference. Silently picking one of the two live
+			// siblings instead — the pre-fix behaviour — is the "mis-picked savings destination"
+			// this task exists to stop.
+			slog.Warn("chain resolve: chain has more than one live account for savings goal destination — using the goal's physical account instead of guessing",
+				"goal_id", goal.ID, "boost_id", boost.ID)
 		} else if !errors.Is(err, ErrNoActiveAccount) {
 			slog.Warn("chain resolve failed for savings goal account; using raw id", "error", err)
 		}
@@ -1030,4 +1105,58 @@ func ptrTime(t time.Time) *time.Time {
 
 func ptrString(s string) *string {
 	return &s
+}
+
+// buildBoostDefinitionSnapshot captures the parts of a boost definition needed to answer "what did
+// this automation do, and why" from the execution row alone, once the boost itself is gone.
+//
+// Issue #1569 Task 14. What is INCLUDED and why:
+//
+//	boost_id, name          which automation this was, after boost_id has been SET NULL
+//	boost_type, actions     WHAT it did
+//	trigger_config          WHY it ran at all
+//	conditions,
+//	condition_logic,
+//	enabled                 WHY it fired -- or why it recorded a skip with no effect
+//	priority                why it ran before or after a competing boost
+//	captured_at, captured_by
+//	                        provenance, so a reader can tell a live capture from migration
+//	                        000164's backfill of pre-existing rows
+//
+// Deliberately EXCLUDED:
+//
+//	description             free text, no bearing on behaviour, and a PII surface with no reader
+//	execution_count,
+//	last_executed_at,
+//	last_successful_at      counters describing the boost's whole lifetime rather than this
+//	                        execution -- and this very row is one of the things they count, so
+//	                        freezing them here would record a number that was already stale
+//	created_at, updated_at  properties of the definition, not of what it did
+//	user_id                 already a first-class column on the row
+//
+// Marshalling cannot fail for these types in practice; if it somehow did, a nil snapshot is
+// written (SQL NULL) rather than failing the execution. Losing the explanation is bad; refusing to
+// run the user's automation because the explanation would not serialise is worse.
+func buildBoostDefinitionSnapshot(boost *domain.Boost) json.RawMessage {
+	snapshot := map[string]interface{}{
+		"boost_id":        boost.ID,
+		"name":            boost.Name,
+		"boost_type":      boost.BoostType,
+		"enabled":         boost.Enabled,
+		"priority":        boost.Priority,
+		"condition_logic": boost.ConditionLogic,
+		"conditions":      boost.Conditions,
+		"trigger_config":  boost.TriggerConfig,
+		"captured_at":     time.Now().UTC().Format(time.RFC3339),
+		"captured_by":     "boost_execution_service",
+	}
+	if len(boost.Actions) > 0 {
+		snapshot["actions"] = boost.Actions
+	}
+
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil
+	}
+	return encoded
 }
