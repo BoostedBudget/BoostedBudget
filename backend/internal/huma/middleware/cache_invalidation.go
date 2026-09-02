@@ -40,8 +40,10 @@ package middleware
 // See TestCacheInvalidation_BumpsAfterRequestContextCancelled for the regression test.
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -74,6 +76,84 @@ type HouseholdLookup interface {
 	GetHouseholdForUser(ctx context.Context, userID string) (household *domain.Household, isOwner bool, found bool, err error)
 }
 
+// preFlushBumpContext wraps huma.Context so the acting user's cache generation is bumped BEFORE
+// any response byte reaches the client (#1600).
+//
+// WHY THIS EXISTS. The post-next block below runs after the handler has already flushed the
+// response, and between those two moments sit an uncached two-table JOIN (GetHouseholdForUser) and
+// a retrying Redis write with 100ms backoff. A client that reads immediately after its own write
+// can therefore be served from the OLD generation — stale financial data. That window was
+// invisible for as long as CI ran on a loaded four-runner Mac Mini, where the client's follow-up
+// request never won the race; it reproduced deterministically the moment e2e-test moved to a
+// dedicated VM (apps/web/e2e/cache-freshness.auth.spec.ts:75, "the dashboard is serving stale
+// data", 2 runs / 2 failures).
+//
+// ⚠ THIS DOES NOT MOVE THE BUMP BEFORE THE COMMIT, which would be strictly worse — see
+// TestBumpBeforeCommit_ProducesPermanentStaleEntry (internal/cache). Huma calls both SetStatus and
+// BodyWriter only AFTER the handler has returned (huma.go:538-540: SetStatus, then
+// Marshal(BodyWriter())), and the handler's commit happens inside the handler. So the resulting
+// order is: commit -> return -> bump -> bytes to client. "Commit, then bump" still holds; the
+// change is that "then bump" now also precedes the flush.
+//
+// ⚠ THE POST-NEXT BLOCK IS DELIBERATELY LEFT INTACT rather than having the user bump moved out of
+// it. Two reasons. First, it keeps the #1569 round 11 household-before-user ordering and its
+// BumpWithRetry exactly as they were, so none of that reasoning is disturbed. Second, it makes the
+// post-next user bump a FALLBACK: if this pre-flush bump fails (a Redis blip, or a response path
+// that writes no body and never sets a status), the old path still bumps. A duplicate bump is
+// harmless — it mints a second token, costing only hit rate, which is the direction the package
+// doc has always chosen.
+// embeddedHumaContext exists solely so the embedded field is NOT named `Context`. Embedding
+// huma.Context directly gives the field that name, which collides with the interface's own
+// `Context() context.Context` method and fails to satisfy it. huma itself uses this exact trick
+// for subContext (`type humaContext Context`, api.go:136).
+type embeddedHumaContext huma.Context
+
+type preFlushBumpContext struct {
+	embeddedHumaContext
+
+	mu      sync.Mutex
+	decided bool
+	bump    func()
+}
+
+// decide runs the bump at most once. `shouldBump` false records the decision WITHOUT bumping, so
+// a later body write cannot resurrect a deliberate 4xx skip.
+func (c *preFlushBumpContext) decide(shouldBump bool) {
+	c.mu.Lock()
+	alreadyDecided := c.decided
+	c.decided = true
+	c.mu.Unlock()
+	if alreadyDecided || !shouldBump {
+		return
+	}
+	c.bump()
+}
+
+// SetStatus is the only point where the status is known BEFORE bytes reach the client, so it is
+// where the 4xx policy is applied — the same policy the post-next block uses: a genuine 4xx is
+// assumed not to have reached a commit, so skipping the bump costs nothing.
+func (c *preFlushBumpContext) SetStatus(code int) {
+	c.decide(!(code >= 400 && code < 500))
+	c.embeddedHumaContext.SetStatus(code)
+}
+
+// BodyWriter returns a writer that bumps on the first write. This covers the case SetStatus does
+// not: a handler that writes a body without ever setting a status (the Status()==0 "unknown" case
+// the package doc concedes and deliberately bumps through).
+func (c *preFlushBumpContext) BodyWriter() io.Writer {
+	return &bumpOnFirstWrite{w: c.embeddedHumaContext.BodyWriter(), ctx: c}
+}
+
+type bumpOnFirstWrite struct {
+	w   io.Writer
+	ctx *preFlushBumpContext
+}
+
+func (b *bumpOnFirstWrite) Write(p []byte) (int, error) {
+	b.ctx.decide(true)
+	return b.w.Write(p)
+}
+
 // NewCacheInvalidationMiddleware returns a Huma middleware that bumps the acting user's (and,
 // when hh is non-nil and resolves one, their household's) cache generation after every mutating,
 // authenticated operation whose response was not a genuine failure.
@@ -104,10 +184,35 @@ func NewCacheInvalidationMiddleware(gens *cache.Generations, hh HouseholdLookup,
 			return
 		}
 
+		// #1600. The acting user's id is available here (this middleware runs after the auth
+		// middleware, which populates UserIDKey — see the package doc), so the pre-flush bump can
+		// be armed before the handler runs. Nothing is bumped yet: preFlushBumpContext only acts
+		// when the response is actually being written.
+		reqCtxBefore := ctx.Context()
+		actingUserID, _ := reqCtxBefore.Value(inputs.UserIDKey).(string)
+
+		handlerCtx := ctx
+		if actingUserID != "" {
+			handlerCtx = &preFlushBumpContext{
+				embeddedHumaContext: ctx,
+				bump: func() {
+					// Detached from the request context for the same reason the post-next block
+					// is (#1531 Blocker 2): the client may hang up mid-flush, and its own
+					// cancellation must not cancel the invalidation of a write that has already
+					// committed.
+					bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(reqCtxBefore), bumpTimeout)
+					defer cancel()
+					gens.Bump(bumpCtx, cache.ScopeUser, actingUserID, "http_mutation")
+				},
+			}
+		}
+
 		// Run the handler (and, inside it, any DB commit) FIRST. Everything below runs only
 		// after next returns — see the package-level doc comment on why that ordering is the
-		// whole safety property here.
-		next(ctx)
+		// whole safety property here. The pre-flush bump above fires DURING next, once the
+		// handler starts writing its response; everything below is the fallback path and the
+		// household work.
+		next(handlerCtx)
 
 		status := ctx.Status()
 		if status >= 400 && status < 500 {
