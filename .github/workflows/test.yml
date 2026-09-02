@@ -10,14 +10,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# No job in this workflow uses GITHUB_TOKEN (verified #1598: zero occurrences of GITHUB_TOKEN,
-# github.token, `gh api` or `gh pr` in this file), and this was the only one of the repo's seven
-# workflows without a permissions block. Low-stakes while every job ran on a private Mac Mini;
-# worth declaring now that two of them run third-party-supplied code on a cloud VM. Stating the
-# floor explicitly means a future step that DOES need write access has to ask for it in review
-# rather than inherit it silently.
-permissions:
-  contents: read
 
 env:
   GO_VERSION: '1.26.6'
@@ -120,6 +112,20 @@ jobs:
     name: E2E Tests
     if: always() && !cancelled()
     runs-on: ubicloud-standard-2
+    # Least-privilege token, scoped to this job rather than the whole workflow (#1598). This is
+    # one of only two jobs that now run on an ephemeral cloud VM, which is the entire reason the
+    # restriction is worth stating -- and neither writes with GITHUB_TOKEN.
+    #
+    # ⚠ Declared PER JOB on purpose. A workflow-level block was tried first and broke
+    # `detect-changes`: setting any `permissions:` drops every scope not listed, and
+    # dorny/paths-filter calls the PR Files API, which needs `pull-requests: read`. It failed with
+    # the generic "Resource not accessible by integration" -- naming neither the scope nor the
+    # action -- and because 11 jobs are gated on detect-changes' outputs, that one failure cascaded
+    # into skipping most of the matrix. Job-level scoping keeps a hardening change to the jobs it
+    # was justified for, and matches this repo's existing convention (deploy-production.yml,
+    # deploy-to-staging.yaml, cleanup-artifacts.yml all declare permissions per job).
+    permissions:
+      contents: read
     # ⚠⚠ READ THIS FIRST (#1598). Everything below was written about the self-hosted Mac Mini pool,
     # which this job NO LONGER RUNS ON. It is retained verbatim as history, not deleted, for two
     # reasons: the 45 was set by an explicit user authorisation that should not be quietly undone,
@@ -2991,6 +2997,20 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.workflow == 'true'
     runs-on: ubicloud-standard-2
+    # Least-privilege token, scoped to this job rather than the whole workflow (#1598). This is
+    # one of only two jobs that now run on an ephemeral cloud VM, which is the entire reason the
+    # restriction is worth stating -- and neither writes with GITHUB_TOKEN.
+    #
+    # ⚠ Declared PER JOB on purpose. A workflow-level block was tried first and broke
+    # `detect-changes`: setting any `permissions:` drops every scope not listed, and
+    # dorny/paths-filter calls the PR Files API, which needs `pull-requests: read`. It failed with
+    # the generic "Resource not accessible by integration" -- naming neither the scope nor the
+    # action -- and because 11 jobs are gated on detect-changes' outputs, that one failure cascaded
+    # into skipping most of the matrix. Job-level scoping keeps a hardening change to the jobs it
+    # was justified for, and matches this repo's existing convention (deploy-production.yml,
+    # deploy-to-staging.yaml, cleanup-artifacts.yml all declare permissions per job).
+    permissions:
+      contents: read
     # NEW in #1598. This job had no timeout at all, so it inherited GitHub's 360-minute default:
     # a wedged LHCI run would have billed six hours of runner time. 20 minutes is a wedge bound,
     # not a performance target -- a frontend build plus 3 audit runs over 2 URLs is minutes.
