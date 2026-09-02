@@ -41,9 +41,13 @@ name: Warm CI Cache
 # nothing is therefore NOT evidence of a broken cache, and it is the check a reader would
 # naturally reach for first.
 #
-# The only sound check is a restore HIT in a run log:
+# There are two sound checks. A restore HIT in a run log:
 #   "Cache restored from key: gocache-e2e-Linux-X64-go1.26.6-..."   <- working
 #   "Cache not found for input keys: ..."                            <- cold (or broken)
+# and the Ubicloud console (Project > GitHub Runners > Caches), which lists the entries GitHub's
+# API cannot see, with a per-entry "last used" timestamp -- the most direct evidence that a key is
+# actually being CONSUMED and not merely written. Confirmed there on #1598: all four keys present
+# for this branch, each "last used" within minutes of the run that restored them.
 #
 # Ubicloud does preserve GitHub's branch scoping ("workflow runs can only access caches created
 # on the current branch/tag or the default branch"), which is what makes this workflow's
@@ -105,7 +109,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           # EXPLICIT false, matching e2e-test. This input defaults to TRUE, and left at the
           # default it would write its own go.sum-keyed entry alongside the two below -- the same
-          # bytes twice against Ubicloud's 30GB/repo/week quota. See e2e-test's Set up Go for the
+          # bytes twice against Ubicloud's 30 GB cache quota. See e2e-test's Set up Go for the
           # full argument.
           cache: false
 
