@@ -132,5 +132,11 @@ func MapPlaidTransactionBase(plaidTxn plaid.Transaction) (*domain.Transaction, e
 		PFCCategoryIconURL: pfc.CategoryIconURL,
 		PaymentChannel:     paymentChannel,
 		Pending:            plaidTxn.GetPending(),
+
+		// #1578: the link from a POSTED transaction back to the pending one it replaced. Plaid
+		// sets it only on a settlement, so nil here is the ordinary case. `.Get()` returns the
+		// inner *string of the NullableString, which is nil both when the field is absent and when
+		// it is an explicit JSON null -- the two are the same thing for us.
+		PendingTransactionID: plaidTxn.PendingTransactionId.Get(),
 	}, nil
 }

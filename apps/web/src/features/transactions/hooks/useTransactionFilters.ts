@@ -29,6 +29,9 @@ export interface UseTransactionFiltersResult {
   setStatusFilter: (status: StatusFilter) => void
   setIncludeInvestmentActivity: (val: boolean) => void
   setActivityTypes: (types: ActivityType[]) => void
+  /** Issue #1569: whether bank-reversed transactions are currently shown. Default false. */
+  includeReversed: boolean
+  setIncludeReversed: (val: boolean) => void
 }
 
 const SPEC = {
@@ -52,6 +55,14 @@ const SPEC = {
     kind: 'scalar',
     codec: 'boolean' as const,
     activeWhen: (v: unknown) => v === false,
+  },
+  // Issue #1569 T12: reversals default OFF (mirroring the API's include_reversed default), so
+  // the mirror image of the investment rule applies — `true` is the departure from default and
+  // is the only value that belongs in the URL.
+  include_reversed: {
+    kind: 'scalar',
+    codec: 'boolean' as const,
+    activeWhen: (v: unknown) => v === true,
   },
 } as const satisfies FilterSpec
 
@@ -108,6 +119,10 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
       merchant_id:   state.filters.merchant_id,
       // Issue #1299: include_investment_activity — undefined means default (true)
       include_investment_activity: state.filters.include_investment_activity,
+      // Issue #1569: include_reversed — undefined means default (false). Normalised so an
+      // explicit `false` in a hand-written URL produces the same filters object (and therefore
+      // the same query cache key) as its absence.
+      include_reversed: state.filters.include_reversed === true ? true : undefined,
       // activity_types is meaningless when investment activity is disabled (include=false).
       // Suppress in derived state so deep-linked URLs (?include=false&activity_types=buy)
       // don't count stale types in activeFilterCount or show phantom filter pills (F2).
@@ -135,6 +150,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
       countIf(filters.amount_type && filters.amount_type !== 'all') +
       countIf(filters.merchant_id !== undefined) +
       countIf(filters.include_investment_activity === false) +
+      countIf(filters.include_reversed === true) +
       countIf(filters.activity_types && filters.activity_types.length > 0)
     )
   }, [filters, state.filters.pfc_primaries, state.filters.pfc_detaileds, state.filters.custom_category_ids])
@@ -194,6 +210,17 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
     [setFilters],
   )
 
+  // Issue #1569 T12. Opting OUT clears the param rather than writing include_reversed=false:
+  // false is the server default, so persisting it would make two identical requests look like
+  // two different filter states (and split the React Query cache).
+  const includeReversed = state.filters.include_reversed === true
+  const setIncludeReversed = useCallback(
+    (val: boolean) => {
+      setFilter('include_reversed', val ? true : undefined)
+    },
+    [setFilter],
+  )
+
   // Setting activity types is a no-op when investment activity is disabled
   const setActivityTypes = useCallback(
     (types: ActivityType[]) => {
@@ -226,5 +253,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
     setStatusFilter,
     setIncludeInvestmentActivity,
     setActivityTypes,
+    includeReversed,
+    setIncludeReversed,
   }
 }

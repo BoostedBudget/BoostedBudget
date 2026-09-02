@@ -137,6 +137,25 @@ func (c *ctxCheckingClient) SetNX(ctx context.Context, key, value string, ttl ti
 	return c.Fake.SetNX(ctx, key, value, ttl)
 }
 
+// flakySetClient wraps redisclient.Fake, failing the first failCount Set calls and succeeding on
+// every subsequent one — used exclusively by the item 3 (#1569 round 11) tests below to model a
+// transient Redis blip. setCalls records every SET's key, in order, so a test can assert on WHICH
+// scope was written first (the reorder) as well as whether a retry recovered (the fail-open fix).
+type flakySetClient struct {
+	*redisclient.Fake
+	failCount int
+	setCalls  []string // keys SET was called with, in order
+}
+
+func (c *flakySetClient) Set(ctx context.Context, key, value string, ttl time.Duration) error {
+	c.setCalls = append(c.setCalls, key)
+	if c.failCount > 0 {
+		c.failCount--
+		return errors.New("redis: timeout")
+	}
+	return c.Fake.Set(ctx, key, value, ttl)
+}
+
 // runMiddleware invokes mw with a handler that sets responseStatus (0 means "never call
 // SetStatus", modelling the unwritten/unknown case).
 func runMiddleware(mw func(huma.Context, func(huma.Context)), op *huma.Operation, ctx context.Context, responseStatus int) {
@@ -388,4 +407,46 @@ func TestCacheInvalidation_BumpsAfterRequestContextCancelled(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, beforeHH, afterHH,
 		"the household bump must also survive the cancelled request context")
+}
+
+// TestCacheInvalidation_HouseholdBumpedBeforeUser (#1569 round 11 item 3) pins the reordering:
+// the household generation key is written to Redis BEFORE the user's. Before this fix the order
+// was user-then-household, which meant a shared-budget failure (or a household lookup failure)
+// landed on the higher-blast-radius household bump — see cache_invalidation.go's doc comment on
+// the reorder for the full reasoning.
+func TestCacheInvalidation_HouseholdBumpedBeforeUser(t *testing.T) {
+	client := &flakySetClient{Fake: redisclient.NewFake("cache")}
+	gens := cache.NewGenerations(client)
+	hh := &fakeHouseholdLookup{household: &domain.Household{ID: "hh1"}, found: true}
+	mw := humamiddleware.NewCacheInvalidationMiddleware(gens, hh, nil)
+
+	runMiddleware(mw, securedOp(http.MethodPost), ctxWithUser("u1"), http.StatusOK)
+
+	userKey := cache.GenerationKey(cache.ScopeTag(cache.ScopeUser, "u1"))
+	hhKey := cache.GenerationKey(cache.ScopeTag(cache.ScopeHousehold, "hh1"))
+	require.Len(t, client.setCalls, 2, "exactly one SET per scope")
+	assert.Equal(t, hhKey, client.setCalls[0], "the household generation must be written FIRST")
+	assert.Equal(t, userKey, client.setCalls[1], "the user generation must be written SECOND")
+}
+
+// TestCacheInvalidation_HouseholdBumpRecoversFromTransientSetFailure (#1569 round 11 item 3) is
+// the fail-open half, independent of the reorder: a household bump whose FIRST Redis SET attempt
+// fails must still land, because BumpWithRetry (not plain Bump) now backs the household half.
+// Before this fix, a bare Bump would have logged and silently given up — this test would have
+// failed on the "household generation actually changed" assertion.
+func TestCacheInvalidation_HouseholdBumpRecoversFromTransientSetFailure(t *testing.T) {
+	client := &flakySetClient{Fake: redisclient.NewFake("cache"), failCount: 1}
+	gens := cache.NewGenerations(client)
+	hh := &fakeHouseholdLookup{household: &domain.Household{ID: "hh1"}, found: true}
+	mw := humamiddleware.NewCacheInvalidationMiddleware(gens, hh, nil)
+
+	beforeHH, err := gens.Get(context.Background(), cache.ScopeHousehold, "hh1")
+	require.NoError(t, err)
+
+	runMiddleware(mw, securedOp(http.MethodPost), ctxWithUser("u1"), http.StatusOK)
+
+	afterHH, err := gens.Get(context.Background(), cache.ScopeHousehold, "hh1")
+	require.NoError(t, err)
+	assert.NotEqual(t, beforeHH, afterHH,
+		"the household bump must recover from a single transient Redis SET failure via retry")
 }

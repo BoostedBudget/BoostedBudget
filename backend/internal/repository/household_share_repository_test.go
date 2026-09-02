@@ -26,20 +26,28 @@ func TestHouseholdShareRepository_ListActiveUserAccountFingerprints(t *testing.T
 	defer mock.Close()
 
 	maskIdx := "mask-blind-1"
+	identityType := "investment"
+	identitySubtype := "brokerage"
+	// #1569 round 11 task 4, coordinator round 3 fix: identity_type/identity_subtype are now
+	// PART of the fingerprint (see AccountFingerprint's doc comment for why — two different real
+	// accounts belonging to the same user that share institution+mask must not compute the same
+	// fingerprint, and two DIFFERENT users' independently-computed fingerprints for the SAME real
+	// account must agree, which requires identity in the concat either way).
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, institution_id_blind_idx, mask_blind_idx FROM user_accounts WHERE user_id = $1
+		SELECT id, institution_id_blind_idx, mask_blind_idx, identity_type, identity_subtype
+		FROM user_accounts WHERE user_id = $1
 	`)).
 		WithArgs("user-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
-			AddRow("acct-1", "inst-blind-1", &maskIdx).
-			AddRow("acct-2", "inst-blind-2", nil))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx", "identity_type", "identity_subtype"}).
+			AddRow("acct-1", "inst-blind-1", &maskIdx, &identityType, &identitySubtype).
+			AddRow("acct-2", "inst-blind-2", nil, nil, nil))
 
 	fps, err := repo.ListActiveUserAccountFingerprints(context.Background(), "user-1")
 	require.NoError(t, err)
 	require.Len(t, fps, 2)
 	assert.Equal(t, "acct-1", fps[0].UserAccountID)
 	require.NotNil(t, fps[0].PhysicalBlindIdx)
-	assert.Equal(t, "inst-blind-1"+maskIdx, *fps[0].PhysicalBlindIdx)
+	assert.Equal(t, "inst-blind-1"+maskIdx+":S"+identityType+":S"+identitySubtype, *fps[0].PhysicalBlindIdx)
 	assert.Nil(t, fps[1].PhysicalBlindIdx, "no mask -> nil physical fingerprint")
 }
 
@@ -92,6 +100,15 @@ func TestHouseholdShareRepository_SetShareVisibility_Share(t *testing.T) {
 
 	physIdx := "combined-fp"
 	now := time.Now()
+	mock.ExpectBegin()
+	// #1569 T7: the outgoing interval is CLOSED first, and only when it is a different state.
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE household_account_shares SET revoked_at = now(), updated_at = now()
+		WHERE household_id = $1 AND user_account_id = $2
+		  AND revoked_at IS NULL AND visibility <> $3
+	`)).
+		WithArgs("hh-1", "acct-1", domain.ShareVisibilityShared).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility)
 		VALUES ($1, $2, $3, $4)
@@ -107,21 +124,31 @@ func TestHouseholdShareRepository_SetShareVisibility_Share(t *testing.T) {
 			"id", "household_id", "user_account_id", "visibility", "shared_at", "revoked_at",
 			"physical_account_blind_idx", "created_at", "updated_at",
 		}).AddRow("share-1", "hh-1", "acct-1", domain.ShareVisibilityShared, now, nil, &physIdx, now, now))
+	mock.ExpectCommit()
 
 	share, err := repo.SetShareVisibility(context.Background(), "hh-1", "acct-1", &physIdx, domain.ShareVisibilityShared)
 	require.NoError(t, err)
 	require.NotNil(t, share)
 	assert.Equal(t, "share-1", share.ID)
 	assert.Equal(t, domain.ShareVisibilityShared, share.Visibility)
-	assert.Nil(t, share.RevokedAt, "PATCH share/hide must never write revoked_at")
+	assert.Nil(t, share.RevokedAt, "the row SetShareVisibility returns is always the newly-OPEN interval")
 }
 
-func TestHouseholdShareRepository_SetShareVisibility_Hide_NeverTouchesRevokedAt(t *testing.T) {
+func TestHouseholdShareRepository_SetShareVisibility_Hide_LeavesAnOpenRow(t *testing.T) {
 	t.Parallel()
 	mock, repo := setupHouseholdShareMockDB(t)
 	defer mock.Close()
 
 	now := time.Now()
+	mock.ExpectBegin()
+	// #1569 T7: the outgoing interval is CLOSED first, and only when it is a different state.
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE household_account_shares SET revoked_at = now(), updated_at = now()
+		WHERE household_id = $1 AND user_account_id = $2
+		  AND revoked_at IS NULL AND visibility <> $3
+	`)).
+		WithArgs("hh-1", "acct-1", domain.ShareVisibilityHidden).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility)
 		VALUES ($1, $2, $3, $4)
@@ -137,11 +164,13 @@ func TestHouseholdShareRepository_SetShareVisibility_Hide_NeverTouchesRevokedAt(
 			"id", "household_id", "user_account_id", "visibility", "shared_at", "revoked_at",
 			"physical_account_blind_idx", "created_at", "updated_at",
 		}).AddRow("share-1", "hh-1", "acct-1", domain.ShareVisibilityHidden, now, nil, nil, now, now))
+	mock.ExpectCommit()
 
 	share, err := repo.SetShareVisibility(context.Background(), "hh-1", "acct-1", nil, domain.ShareVisibilityHidden)
 	require.NoError(t, err)
-	// Hiding an account keeps it "active" (revoked_at NULL) so member-removal's
-	// RevokeSharesForUser still catches and revokes it later. #1368 Phase 4.
+	// Hiding an account keeps an OPEN row (revoked_at NULL) so member-removal's
+	// RevokeSharesForUser still catches and revokes it later. #1368 Phase 4. What #1569 T7
+	// changed is the row the previous state left behind, not this one.
 	assert.Nil(t, share.RevokedAt)
 	assert.Equal(t, domain.ShareVisibilityHidden, share.Visibility)
 }
@@ -190,25 +219,11 @@ func TestHouseholdShareRepository_RevokeSharesForUser(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// ─── DeleteSharesForUser (#1371 — Phase 7 foundation) ────────────────────────
+// ─── No delete counterpart (#1569 T7) ────────────────────────────────────────
 //
-// Unlike RevokeSharesForUser (soft-revoke, sets revoked_at, run at removal time),
-// DeleteSharesForUser is a hard delete run at purge time (30 days later) by
-// PurgeRemovedMembership, permanently removing the already-revoked share rows.
-
-func TestHouseholdShareRepository_DeleteSharesForUser(t *testing.T) {
-	t.Parallel()
-	mock, repo := setupHouseholdShareMockDB(t)
-	defer mock.Close()
-
-	mock.ExpectExec(regexp.QuoteMeta(`
-		DELETE FROM household_account_shares
-		WHERE household_id = $1
-		  AND user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $2)
-	`)).
-		WithArgs("hh-1", "user-1").
-		WillReturnResult(pgxmock.NewResult("DELETE", 2))
-
-	err := repo.DeleteSharesForUser(context.Background(), "hh-1", "user-1")
-	require.NoError(t, err)
-}
+// DeleteSharesForUser — the hard delete PurgeRemovedMembership ran 30 days after removal —
+// was removed here. Closing a grant interval is now the only thing that ever happens to a
+// household_account_shares row; see PurgeRemovedMembership's comment for the ruling, and
+// TestHouseholdServiceIntegration_PurgeRemovedMembership_RetainsRevokedShareGrants for the
+// behaviour it pins. Erasure of the row belongs to GDPR alone and reaches it by cascade
+// from user_accounts.

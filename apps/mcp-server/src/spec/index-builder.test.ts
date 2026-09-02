@@ -133,7 +133,8 @@ describe('issue #1503: fail-closed on unclassified operations', () => {
 
   it('every entry from the committed spec carries a manifest classification', () => {
     for (const entry of entries) {
-      expect(entry.manifestClass === 'read' || entry.manifestClass === 'write').toBe(true)
+      // #1569 Task 16 added the third class; keep this list exhaustive against OperationClass.
+      expect(['read', 'write', 'destructive']).toContain(entry.manifestClass)
       expect(typeof entry.excluded).toBe('boolean')
     }
   })

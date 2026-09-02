@@ -184,9 +184,9 @@ func TestCreateLinkToken_Success(t *testing.T) {
 
 	// Given: Valid PlaidService with real sandbox credentials
 	cfg := &config.Config{
-		PlaidClientID:   clientID,
-		PlaidSecret:     secret,
-		PlaidEnv:        "sandbox",
+		PlaidClientID:    clientID,
+		PlaidSecret:      secret,
+		PlaidEnv:         "sandbox",
 		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
 		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
 	}
@@ -217,9 +217,9 @@ func TestCreateLinkToken_IncludesCorrectUserID(t *testing.T) {
 
 	// Given: Valid PlaidService
 	cfg := &config.Config{
-		PlaidClientID:   clientID,
-		PlaidSecret:     secret,
-		PlaidEnv:        "sandbox",
+		PlaidClientID:    clientID,
+		PlaidSecret:      secret,
+		PlaidEnv:         "sandbox",
 		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
 		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
 	}
@@ -313,9 +313,9 @@ func TestCreateLinkToken_IncludesWebhookURL(t *testing.T) {
 
 	// Given: PlaidService with webhook URL configured
 	cfg := &config.Config{
-		PlaidClientID:   clientID,
-		PlaidSecret:     secret,
-		PlaidEnv:        "sandbox",
+		PlaidClientID:    clientID,
+		PlaidSecret:      secret,
+		PlaidEnv:         "sandbox",
 		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
 		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
 	}
@@ -343,9 +343,9 @@ func TestCreateLinkToken_ReturnsExpirationTime(t *testing.T) {
 
 	// Given: Valid PlaidService
 	cfg := &config.Config{
-		PlaidClientID:   clientID,
-		PlaidSecret:     secret,
-		PlaidEnv:        "sandbox",
+		PlaidClientID:    clientID,
+		PlaidSecret:      secret,
+		PlaidEnv:         "sandbox",
 		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
 		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
 	}
@@ -371,9 +371,9 @@ func TestCreateLinkToken_ReturnsExpirationTime(t *testing.T) {
 func TestCreateLinkToken_PlaidAPIError(t *testing.T) {
 	// Given: PlaidService with invalid credentials (will cause API error)
 	cfg := &config.Config{
-		PlaidClientID:   "invalid_client_id",
-		PlaidSecret:     "invalid_secret",
-		PlaidEnv:        "sandbox",
+		PlaidClientID:    "invalid_client_id",
+		PlaidSecret:      "invalid_secret",
+		PlaidEnv:         "sandbox",
 		PlaidWebhookURL:  "https://api.boostedbudget.com/webhooks/plaid",
 		PlaidRedirectURI: "https://boostedbudget.com/oauth-callback",
 	}

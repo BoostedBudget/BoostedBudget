@@ -132,4 +132,12 @@ const (
 	// EventMCPCodeExecuted    = "mcp_code_executed"     -- deferred: fired by Worker on execute()
 	// EventMCPExecuteFailed   = "mcp_execute_failed"    -- deferred: fired by Worker on tool error
 	// EventMCPSessionRevoked  = "mcp_session_revoked"   -- deferred: no revocation hook exists yet
+
+	// GDPR data export (Issue #1587)
+	//
+	// EventDataExportGenerated fires when a user's Article 20 export is produced. Its row_count
+	// property is load-bearing rather than decorative: DataExportService serves the export
+	// synchronously on a reasoned size bound, and this event is how we find out when that bound
+	// stops holding without waiting for someone to re-derive the arithmetic.
+	EventDataExportGenerated = "data_export_generated"
 )

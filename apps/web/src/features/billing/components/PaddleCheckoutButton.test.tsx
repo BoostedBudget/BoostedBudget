@@ -273,7 +273,6 @@ describe('PaddleCheckoutButton', () => {
 
   describe('Paddle.js Integration', () => {
     it('should show error if window.Paddle is not loaded', async () => {
-      // @ts-expect-error - Deleting window.Paddle to test error handling
       delete window.Paddle
 
       const Wrapper = createWrapper()

@@ -10,6 +10,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 )
@@ -181,10 +182,20 @@ func (s *investmentSyncService) ProcessWebhook(ctx context.Context, webhook *dom
 	case "HOLDINGS":
 		var holdingResult *domain.HoldingSyncResult
 		holdingResult, err = s.SyncHoldings(ctx, linkedItem)
-		if err == nil && holdingResult != nil && len(holdingResult.Errors) > 0 {
-			// Partial failure: some accounts skipped due to unmapped securities.
-			// Existing holdings are preserved but not updated — trigger retry.
-			err = fmt.Errorf("holdings sync partial failure: %v", holdingResult.Errors)
+		if err == nil && holdingResult != nil {
+			switch {
+			case len(holdingResult.Errors) > 0:
+				// Partial failure: some accounts skipped due to unmapped securities.
+				// Existing holdings are preserved but not updated — trigger retry.
+				err = fmt.Errorf("holdings sync partial failure: %v", holdingResult.Errors)
+			case len(holdingResult.SkippedIncomplete) > 0:
+				// Issue #1569 Task 4: some accounts were absent from Plaid's response
+				// (partial/incomplete), so their clear was skipped to preserve existing
+				// holdings. Retry so a transient partial response gets a chance to complete —
+				// this does NOT suppress the portfolio snapshot (see the snapshot gate in
+				// SyncHoldings, which checks Errors only).
+				err = fmt.Errorf("holdings sync incomplete: %v", holdingResult.SkippedIncomplete)
+			}
 		}
 	case "INVESTMENTS_TRANSACTIONS":
 		_, err = s.SyncInvestmentTransactions(ctx, linkedItem)
@@ -253,6 +264,14 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 	// Build plaid_account_id → internal account ID and user_account_id maps from our DB.
 	// userAccountMap is used to set user_account_id on each holding at insert time
 	// so the stable chain-expansion key is populated (Issue #1109).
+	//
+	// #1569 round 12 task 5: a round-11 commit message (4589ac99) called this
+	// GetByLinkedItemID call "the tenancy guard" — that framing is false. This query filters
+	// only linked_item_id and status='active'; it carries no user_id predicate at all. The
+	// real cross-user protection is the explicit `if a.UserID != linkedItem.UserID` check a
+	// few lines below (~:282-290), with a twin in SyncInvestmentTransactions (~:517-525).
+	// Harmless in effect either way — the real guard runs regardless of which fetch produced
+	// the row — but the description was wrong.
 	accounts, err := s.accountRepo.GetByLinkedItemID(ctx, linkedItem.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts for linked item: %w", err)
@@ -291,9 +310,42 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 		SecuritiesUpserted: len(domainSecurities),
 	}
 
+	// Issue #1569 Task 4: the only per-account completeness signal Plaid's
+	// /investments/holdings/get response exposes is presence in `accounts` (see
+	// plaid_completeness.go — the same reasoning as the liability sync applies here: no
+	// account-level error/status field, and item.error is documented as populated only by
+	// /item/get). An account absent from this set was not returned by Plaid on this call at all;
+	// zero holdings for it below is then a partial/degraded response, not a confirmed liquidation.
+	// (Task 5 reshaped the return value into PlaidAccountRoster — see plaid_completeness.go. This
+	// gate is unchanged: Present is the same plain membership test the bare set gave.)
+	roster := PlaidAccountRosterFrom(resp.Accounts, nil)
+
+	// The UTC day the row-level captures filed under, read from the SERVER by
+	// ReplaceForAccount. Zero until the first account is replaced — see the fallback below.
+	var latestCapturedDay time.Time
+
 	// For each internal account, replace holdings atomically
 	for plaidAccountID, internalAccountID := range accountMap {
-		plaidHoldings := holdingsByAccount[plaidAccountID] // empty if account was liquidated
+		plaidHoldings := holdingsByAccount[plaidAccountID] // empty if liquidated OR response is partial for this account
+
+		if len(plaidHoldings) == 0 {
+			if !roster.Present(plaidAccountID) {
+				observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("holdings").Inc()
+				s.logger.Warn("skipping holdings clear: account absent from Plaid's holdings response, preserving existing rows",
+					"account_id", internalAccountID,
+					"item_id", linkedItem.ID,
+				)
+				// Issue #1569 Task 4 fix round 1: this MUST be its own field, not result.Errors.
+				// Errors gates the portfolio snapshot upsert below — an account Plaid has
+				// permanently stopped returning (closed accounts are never re-reported, per
+				// AccountBase.AccountId's doc comment) would otherwise suppress this user's
+				// snapshot forever, even though the preserved holdings are exactly what the
+				// snapshot should be summing. SkippedIncomplete still drives the ProcessWebhook
+				// retry decision below without touching the snapshot gate.
+				result.SkippedIncomplete = append(result.SkippedIncomplete, fmt.Sprintf("account %s: skipped holdings clear, account absent from Plaid's response (partial/incomplete)", plaidAccountID))
+				continue
+			}
+		}
 
 		domainHoldings := make([]domain.Holding, 0, len(plaidHoldings))
 		skippedAny := false
@@ -334,8 +386,18 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 			continue
 		}
 
-		if err := s.holdingRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, domainHoldings); err != nil {
+		capturedDay, err := s.holdingRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, domainHoldings)
+		if err != nil {
 			return result, fmt.Errorf("failed to replace holdings for account %s: %w", internalAccountID, err)
+		}
+		// #1569 T9.1 item C: the aggregate below must be filed under the day the ROWS were filed
+		// under, and that day comes from Postgres. Keeping the LATEST is the choice for an item
+		// whose accounts straddle UTC midnight: both days then have partial coverage — which the
+		// repair reports honestly rather than silently rebuilding — and the aggregate names the
+		// more recent state, which is the one the next sync and the daily whole-user capture will
+		// complete.
+		if capturedDay.After(latestCapturedDay) {
+			latestCapturedDay = capturedDay
 		}
 		cacheBumpNeeded = true
 
@@ -359,11 +421,36 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 	}
 
 	// Issue #138: Upsert portfolio snapshot from committed holdings state.
-	// Skip when accounts were skipped (partial sync must not become a day-change baseline).
-	// Each per-item webhook recomputes the full-user aggregate via aggregate-at-write SQL,
-	// so concurrent multi-institution syncs converge to the correct total.
+	// Skip when accounts were skipped due to a real correctness problem — result.Errors, i.e.
+	// unmapped securities — a partial sync in that sense must not become a day-change baseline.
+	// Each per-item webhook recomputes the full-user aggregate via aggregate-at-write SQL, so
+	// concurrent multi-institution syncs converge to the correct total.
+	//
+	// Deliberately NOT gated on result.SkippedIncomplete (Issue #1569 Task 4 fix round 1): an
+	// account Plaid has permanently stopped returning is a stable state, not a repeated failure,
+	// and its holdings were correctly PRESERVED, not lost — they are exactly the rows this
+	// snapshot should be summing. Gating on SkippedIncomplete would suppress the snapshot forever
+	// for that account instead of just for one retriable sync.
 	if len(result.Errors) == 0 && s.portfolioSnapshotRepo != nil {
-		snapshotDate := time.Now().UTC().Truncate(24 * time.Hour)
+		// #1569 T9.1 item C: take the day from the capture, never from a second clock.
+		//
+		// The Go process and Postgres keep independent clocks, so a run that crosses UTC midnight
+		// while the other side has not files the holding_snapshots rows under day D and this
+		// aggregate under D+1 — an aggregate with nothing behind it, and a day of rows no
+		// aggregate names. portfolio_snapshot_repair.go excludes the current server day, so that
+		// orphan survives the next repair pass and is later refused for lack of coverage.
+		// portfolio_snapshot_worker.go already takes its day from CaptureForUser's return for
+		// exactly this reason; this path was the outlier.
+		//
+		// ⚠ The Go clock survives only as the no-capture fallback, and that case is not the bug:
+		// nothing was written this run, so there is no row-level day to agree with. Every path
+		// that DID write rows uses theirs. Do not "fix" the fallback by comparing the two clocks —
+		// the recorded skew between this host and the container is about a millisecond, so a
+		// comparison would be measuring noise.
+		snapshotDate := latestCapturedDay
+		if snapshotDate.IsZero() {
+			snapshotDate = time.Now().UTC().Truncate(24 * time.Hour)
+		}
 		if _, snapErr := s.portfolioSnapshotRepo.Upsert(ctx, linkedItem.UserID, snapshotDate); snapErr != nil {
 			s.logger.Warn("portfolio snapshot upsert failed (non-fatal)",
 				"user_id", linkedItem.UserID,
@@ -416,7 +503,17 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 	// userAccountMap carries the stable user_account_id (survives Plaid re-links)
 	// so investment transactions written here have the chain-expansion key set on
 	// insert (mirrors the banking UpsertBatch approach — Issue #1109).
-	accounts, err := s.accountRepo.GetByLinkedItemID(ctx, linkedItem.ID)
+	//
+	// Issue #1569 round 11 task 1: this MUST be GetByLinkedItemIDIncludingRetained, not
+	// GetByLinkedItemID. Unlike SyncHoldings above (which wipes-and-reinserts via
+	// ReplaceForAccount and must stay active-only), investment transactions are written by
+	// investmentTransactionRepository.UpsertBatch — a pure INSERT ... ON CONFLICT DO UPDATE,
+	// identical in shape to the banking path fixed by task 1b
+	// (transaction_sync_service.go:915). An active-only map here means a retained
+	// (removed/expired/replaced) brokerage account inside a still-live linked item drops out
+	// of accountMap, and mapPlaidInvestmentTransactions Warn+skips every transaction Plaid
+	// delivers for it, forever. See TestInvestmentSyncService_SyncInvestmentTransactions_RetainedAccount_StillStored.
+	accounts, err := s.accountRepo.GetByLinkedItemIDIncludingRetained(ctx, linkedItem.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts for linked item: %w", err)
 	}

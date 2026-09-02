@@ -57,6 +57,15 @@ import (
 // out (the HTTP response has already been written by this point).
 const bumpTimeout = 5 * time.Second
 
+// householdBumpAttempts/householdBumpBackoff bound the household bump's retry (see
+// gens.BumpWithRetry and the reordering below, #1569 round 11 item 3). Two tries, 100ms apart,
+// comfortably fits inside bumpTimeout's 5s budget alongside the household lookup and the
+// user-scope bump that follows it.
+const (
+	householdBumpAttempts = 2
+	householdBumpBackoff  = 100 * time.Millisecond
+)
+
 // HouseholdLookup resolves the household (if any) a user currently belongs to. Satisfied
 // structurally by *repository.householdRepository's GetHouseholdForUser (see main.go wiring).
 // This costs one indexed query, paid ONLY on the write path (mutating, authenticated requests) —
@@ -133,23 +142,36 @@ func NewCacheInvalidationMiddleware(gens *cache.Generations, hh HouseholdLookup,
 		bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(reqCtx), bumpTimeout)
 		defer cancel()
 
-		gens.Bump(bumpCtx, cache.ScopeUser, userID, "http_mutation")
+		// #1569 round 11 item 3: household FIRST, then the user-scope bump — reordered from this
+		// middleware's original "user, then household" shape. That original order meant a
+		// household lookup failure (or, before this fix, a bare Bump's own silent Redis SET
+		// failure) landed on the bump with the WORSE blast radius: it left ANOTHER, otherwise
+		// uninvolved household member reading stale money for up to the namespace TTL, while the
+		// acting user's own self-scoped bump had already gone through. Household work now runs
+		// first and gets BumpWithRetry (see that method's doc comment); the user-scope bump below
+		// still always runs, unconditionally, same as before.
+		//
+		// ⚠ Reordering alone does not survive a genuine Redis SET failure on the household bump —
+		// that is why this also switches to BumpWithRetry rather than Bump for the household half.
+		// The two are independent fixes for independent failure modes: the reorder addresses a
+		// household LOOKUP failure (which order genuinely changes the blast radius of); the retry
+		// addresses the household BUMP's own write failure (which order cannot affect at all, since
+		// a failing SET fails wherever it runs).
+		if hh != nil {
+			household, _, found, err := hh.GetHouseholdForUser(bumpCtx, userID)
+			if err != nil {
+				// Void by design (see cache.Generations.Bump's own doc comment for the same
+				// principle): the write already committed; a household lookup failure must never
+				// fail the request (which has already been written to the client by this point).
+				// The user-scope bump below still runs regardless.
+				logger.Error("cache invalidation middleware: household lookup failed; household-scoped "+
+					"cache may serve stale data until its namespace TTL", "user_id", userID, "error", err)
+			} else if found && household != nil {
+				gens.BumpWithRetry(bumpCtx, cache.ScopeHousehold, household.ID, "http_mutation",
+					householdBumpAttempts, householdBumpBackoff)
+			}
+		}
 
-		if hh == nil {
-			return
-		}
-		household, _, found, err := hh.GetHouseholdForUser(bumpCtx, userID)
-		if err != nil {
-			// Void by design (see cache.Generations.Bump's own doc comment for the same
-			// principle): the write already committed and the user-scope bump above already
-			// ran; a household lookup failure must never suppress that, nor fail the request
-			// (which has already been written to the client by this point).
-			logger.Error("cache invalidation middleware: household lookup failed; household-scoped "+
-				"cache may serve stale data until its namespace TTL", "user_id", userID, "error", err)
-			return
-		}
-		if found && household != nil {
-			gens.Bump(bumpCtx, cache.ScopeHousehold, household.ID, "http_mutation")
-		}
+		gens.Bump(bumpCtx, cache.ScopeUser, userID, "http_mutation")
 	}
 }

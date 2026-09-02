@@ -12,7 +12,7 @@
  * confirmation-dialog.test.tsx run in separate groups within test-conflict-files.sh.
  */
 
-import { describe, it, expect, mock, beforeEach, spyOn } from 'bun:test'
+import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { createLocationHarness } from '@/test/utils/locationProbe'
@@ -32,12 +32,22 @@ mock.module('./components/AccountCustomizationModal', () => ({
 import { STUB_CONFIRMATION_DIALOG } from '@/test/mocks/confirmation-dialog'
 mock.module('@/components/ui/confirmation-dialog', () => STUB_CONFIRMATION_DIALOG)
 
-// Simplify AccountCard — exposes a Delete button that calls onDelete with the full account object
+// Simplify AccountCard — exposes Disconnect and Purge buttons calling their respective handlers
+// with the full account object (Issue #1569, Task 6: the single Delete verb split in two).
 mock.module('./AccountCard', () => ({
-  AccountCard: ({ account, onDelete }: { account: { name: string; [key: string]: unknown }; onDelete?: (account: unknown) => void }) => (
+  AccountCard: ({
+    account,
+    onDisconnect,
+    onPurge,
+  }: {
+    account: { name: string; [key: string]: unknown }
+    onDisconnect?: (account: unknown) => void
+    onPurge?: (account: unknown) => void
+  }) => (
     <div data-testid="account-card">
       {account.name}
-      <button onClick={() => onDelete?.(account)}>Delete</button>
+      <button onClick={() => onDisconnect?.(account)}>Disconnect</button>
+      <button onClick={() => onPurge?.(account)}>Delete from history</button>
     </div>
   ),
 }))
@@ -115,12 +125,24 @@ mock.module('./hooks/useAccountCustomization', () => ({
   useAccountCustomization: () => ({ updateAccount: mock(async () => {}), isUpdating: false }),
 }))
 
-// Mock useAccountFilters
+// Mock useAccountFilters.
+//
+// Issue #1580: `balanceRange` and `sort` are read from a mutable stub object rather than being
+// hard-coded, so a test can exercise the page's own balance filter and balance sort — the two
+// call sites that used to coalesce a closed account's absent balance to 0. Both default to the
+// inert value, so every pre-existing test in this file is unaffected.
+export const accountFiltersStub: {
+  balanceRange: { min?: number; max?: number } | null
+  sort: { columnId: string; direction: 'asc' | 'desc' } | null
+} = { balanceRange: null, sort: null }
+
 mock.module('./hooks/useAccountFilters', () => ({
   useAccountFilters: () => ({
     institutionFilter: [],
     typeFilter: [],
-    balanceRange: undefined,
+    balanceRange: accountFiltersStub.balanceRange,
+    sort: accountFiltersStub.sort,
+    setSort: mock(() => {}),
     setInstitutionFilter: mock(() => {}),
     setTypeFilter: mock(() => {}),
     setBalanceRange: mock(() => {}),
@@ -137,7 +159,8 @@ import { AccountsPage } from './AccountsPage'
 import {
   mockUseGetAccounts,
   mockRefetchAccounts,
-  mockUseDeleteAccount,
+  mockUseDisconnectAccount,
+  mockUsePurgeAccount,
 } from '@/test/mocks/accounts-api'
 import {
   mockUseGetUserProfile,
@@ -149,6 +172,7 @@ import {
   mockUseExchangePublicToken,
   mockExchangePublicTokenMutateAsync,
 } from '@/test/mocks/plaid-api'
+import { mockToastError } from '@/test/mocks/sonner'
 // ============================================================================
 // Test helper
 // ============================================================================
@@ -194,7 +218,9 @@ describe('AccountsPage', () => {
     // Clear all mock call history
     resetLocationProbe()
     mockUseGetAccounts.mockClear()
-    mockUseDeleteAccount.mockClear()
+    mockUseDisconnectAccount.mockClear()
+    mockUsePurgeAccount.mockClear()
+    mockToastError.mockClear()
     mockUseGetUserProfile.mockClear()
     mockUseCreateLinkToken.mockClear()
     mockCreateLinkTokenMutateAsync.mockClear()
@@ -308,7 +334,100 @@ describe('AccountsPage', () => {
     })
   })
 
-  describe('delete dialog integration (Task 7)', () => {
+  // Issue #1569, Task 5D: retained (non-active) accounts have nowhere to be viewed today.
+  // AccountsPage now fetches status=all_statuses and locally splits active vs. closed, so a
+  // "Show closed accounts" toggle (mirroring the existing "Show Hidden" idiom) can surface them
+  // without padding the active list, the account count, or any picker.
+  describe('closed accounts (Task 5D)', () => {
+    const activeAccount = {
+      id: 'acc-active',
+      name: 'Chase Checking',
+      institution_name: 'Chase',
+      type: 'depository',
+      subtype: 'checking',
+      status: 'active',
+      is_hidden: false,
+      current_balance: 1000,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    }
+    // ⚠ NO current_balance, deliberately. A terminal account carries no current balance: every
+    // account read routes through accountBalanceProjection, which presents NULL — and
+    // domain.Account.CurrentBalance is a *float64 with `omitempty`, so the key is OMITTED from the
+    // JSON entirely. A fixture with `current_balance: 500` on a 'removed' account is a payload
+    // this API cannot produce. The child components are mocked here so nothing renders it either
+    // way, which is exactly why the wrong shape survived: a regression that forwarded a closed
+    // account's balance would leave these green. See utils.test.ts and
+    // ClosedAccountBalanceHistory.test.tsx for the tests that do render it.
+    const closedAccount = {
+      id: 'acc-closed',
+      name: 'Old Savings',
+      institution_name: 'Chase',
+      type: 'depository',
+      subtype: 'savings',
+      status: 'removed',
+      removed_at: '2026-03-01T00:00:00Z',
+      is_hidden: false,
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2026-03-01T00:00:00Z',
+    }
+
+    beforeEach(() => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [activeAccount, closedAccount] },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      })
+    })
+
+    it('fetches with status=all_statuses so closed accounts are available to split locally', () => {
+      renderAccountsPage()
+      expect(mockUseGetAccounts).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'all_statuses' })
+      )
+    })
+
+    it('does not show closed accounts in the default (active) list', () => {
+      renderAccountsPage()
+      expect(screen.getByText('Chase Checking')).toBeInTheDocument()
+      expect(screen.queryByText('Old Savings')).not.toBeInTheDocument()
+    })
+
+    it('does not count closed accounts toward the account count', () => {
+      renderAccountsPage()
+      expect(screen.getByText(/^1 account$/)).toBeInTheDocument()
+    })
+
+    it('shows a "Show closed accounts" toggle when closed accounts exist', () => {
+      renderAccountsPage()
+      expect(screen.getByRole('button', { name: /show closed accounts/i })).toBeInTheDocument()
+    })
+
+    it('does not show the toggle when there are no closed accounts', () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [activeAccount] },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      })
+      renderAccountsPage()
+      expect(screen.queryByRole('button', { name: /show closed accounts/i })).not.toBeInTheDocument()
+    })
+
+    it('reveals closed accounts when the toggle is clicked, still excluded from the count', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+
+      expect(screen.getByText('Old Savings')).toBeInTheDocument()
+      expect(screen.getByText(/^1 account$/)).toBeInTheDocument()
+    })
+  })
+
+  // Issue #1569, Task 6: the single "delete" dialog is split into disconnect (primary,
+  // non-destructive) and purge (destructive secondary, type-to-confirm).
+  describe('disconnect dialog integration (Task 7, split for #1569 Task 6)', () => {
     const mockAccount = {
       id: 'acc-1',
       linked_item_id: 'item-1',
@@ -329,7 +448,7 @@ describe('AccountsPage', () => {
         error: null,
         refetch: mockRefetchAccounts,
       })
-      mockUseDeleteAccount.mockReturnValue({
+      mockUseDisconnectAccount.mockReturnValue({
         mutateAsync: mock(() => Promise.resolve()),
         isPending: false,
         isError: false,
@@ -342,10 +461,10 @@ describe('AccountsPage', () => {
       expect(screen.queryByTestId('confirm-delete-dialog')).not.toBeInTheDocument()
     })
 
-    it('shows ConfirmationDialog when account delete is triggered from card', () => {
+    it('shows ConfirmationDialog when account disconnect is triggered from card', () => {
       renderAccountsPage()
 
-      fireEvent.click(screen.getByText('Delete'))
+      fireEvent.click(screen.getByText('Disconnect'))
 
       expect(screen.getByTestId('confirm-delete-dialog')).toBeInTheDocument()
     })
@@ -353,33 +472,35 @@ describe('AccountsPage', () => {
     it('passes correct title to ConfirmationDialog', () => {
       renderAccountsPage()
 
-      fireEvent.click(screen.getByText('Delete'))
+      fireEvent.click(screen.getByText('Disconnect'))
 
-      expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-title', 'Delete Account')
+      expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-title', 'Disconnect account')
     })
 
-    it('passes account name as confirmText to ConfirmationDialog', () => {
+    // Disconnect is the primary, non-destructive action: no type-to-confirm — confirmText is
+    // undefined, unlike purge below.
+    it('does not require type-to-confirm for disconnect', () => {
       renderAccountsPage()
 
-      fireEvent.click(screen.getByText('Delete'))
+      fireEvent.click(screen.getByText('Disconnect'))
 
-      expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-confirm-text', 'Chase Checking')
+      expect(screen.getByTestId('confirm-delete-dialog')).not.toHaveAttribute('data-confirm-text', 'Chase Checking')
     })
 
-    it('shows transaction-preserved and balance-removed messages in description', () => {
+    it('shows retained-history messaging in description', () => {
       renderAccountsPage()
 
-      fireEvent.click(screen.getByText('Delete'))
+      fireEvent.click(screen.getByText('Disconnect'))
 
       const desc = screen.getByTestId('dialog-description')
-      expect(desc.textContent).toContain('transactions will be preserved')
-      expect(desc.textContent).toContain('Balance history will be removed')
+      expect(desc.textContent).toContain('retained')
+      expect(desc.textContent).toContain('Closed accounts')
     })
 
     it('shows institution removal message when account is the last for its linked_item_id', () => {
       // Only one account → last for item-1
       renderAccountsPage()
-      fireEvent.click(screen.getByText('Delete'))
+      fireEvent.click(screen.getByText('Disconnect'))
 
       const desc = screen.getByTestId('dialog-description')
       expect(desc.textContent).toContain('bank connection to')
@@ -402,12 +523,233 @@ describe('AccountsPage', () => {
 
       renderAccountsPage()
 
-      // Click delete on the first card
-      const deleteButtons = screen.getAllByText('Delete')
-      fireEvent.click(deleteButtons[0])
+      // Click disconnect on the first card
+      const disconnectButtons = screen.getAllByText('Disconnect')
+      fireEvent.click(disconnectButtons[0])
 
       const desc = screen.getByTestId('dialog-description')
       expect(desc.textContent).not.toContain('bank connection')
+    })
+  })
+
+  describe('purge dialog integration (Issue #1569, Task 6: destructive, type-to-confirm)', () => {
+    // No current_balance — see the closed-accounts fixture above: a terminal account's balance key
+    // is omitted by the API, and a mocked child cannot catch a fixture that says otherwise.
+    const closedAccount = {
+      id: 'acc-1',
+      linked_item_id: 'item-1',
+      name: 'Chase Checking',
+      institution_name: 'Chase',
+      type: 'depository',
+      subtype: 'checking',
+      status: 'removed',
+      removed_at: '2026-03-01T00:00:00Z',
+      is_hidden: false,
+      created_at: '2025-01-01T00:00:00Z',
+    }
+
+    beforeEach(() => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [closedAccount] },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      })
+      mockUsePurgeAccount.mockReturnValue({
+        mutateAsync: mock(() => Promise.resolve()),
+        isPending: false,
+        isError: false,
+        error: null,
+      })
+    })
+
+    it('shows ConfirmationDialog when purge is triggered from card', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+      fireEvent.click(screen.getByText('Delete from history'))
+
+      expect(screen.getByTestId('confirm-delete-dialog')).toBeInTheDocument()
+    })
+
+    it('requires type-to-confirm with the account name', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+      fireEvent.click(screen.getByText('Delete from history'))
+
+      expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-confirm-text', 'Chase Checking')
+    })
+
+    // Issue #1569 whole-branch review, minor 1. "they remain visible" was unqualified and false
+    // in household scope: every solo analytics read is `LEFT JOIN accounts` while every
+    // household read is `JOIN accounts`, so once `transactions.account_id` is NULL the rows stay
+    // in personal analytics and vanish from household-scoped spending, income, cash-flow and
+    // savings-rate. That is semantically forced — a share cannot be resolved without the account
+    // row — but the user has to be told, not left to discover it.
+    function openPurgeDialogText(): string {
+      fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+      fireEvent.click(screen.getByText('Delete from history'))
+      return screen.getByTestId('dialog-description').textContent ?? ''
+    }
+
+    it('qualifies the transaction-survival promise for household scope', () => {
+      mockUseHousehold.mockReturnValue({ isInHousehold: true })
+      renderAccountsPage()
+
+      const text = openPurgeDialogText()
+      expect(text).toMatch(/stop counting towards shared totals/i)
+      // The survival claim must be scoped to the user's OWN views, never left absolute.
+      expect(text).not.toMatch(/otherwise they remain visible with no linked account/i)
+    })
+
+    // The residual on minor 1: the qualification shipped UNCONDITIONAL, so a solo user — who has
+    // no shared totals for anything to drop out of — was shown a paragraph about household scope.
+    it('omits the household qualification for a user known to be solo', () => {
+      mockUseHousehold.mockReturnValue({ isInHousehold: false, isLoading: false, error: null })
+      renderAccountsPage()
+
+      const text = openPurgeDialogText()
+      expect(text).not.toMatch(/household/i)
+      // …while everything true of EVERY user stays put. Gating must not have taken the
+      // transaction-survival sentence with it.
+      expect(text).toMatch(/stay in your own spending and reports with no linked account/i)
+    })
+
+    // ⚠ The gate is `!knownSolo`, not `isInHousehold`, and this is the case that forces it:
+    // `useGetMyHousehold` reports `isInHousehold: false` while still in flight and on error, so
+    // gating on it directly would HIDE a true warning about an irreversible action from a
+    // household member whose household request is slow or failing. Showing an irrelevant
+    // sentence costs a line; suppressing a relevant one costs the user their shared reporting.
+    it('keeps the household qualification while household membership is still unknown', () => {
+      mockUseHousehold.mockReturnValue({ isInHousehold: false, isLoading: true, error: null })
+      renderAccountsPage()
+      expect(openPurgeDialogText()).toMatch(/stop counting towards shared totals/i)
+    })
+
+    it('keeps the household qualification when the household request failed', () => {
+      mockUseHousehold.mockReturnValue({
+        isInHousehold: false,
+        isLoading: false,
+        error: new Error('boom'),
+      })
+      renderAccountsPage()
+      expect(openPurgeDialogText()).toMatch(/stop counting towards shared totals/i)
+    })
+
+    it('states the purge is permanent, that transactions survive, and that a savings goal blocks it', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+      fireEvent.click(screen.getByText('Delete from history'))
+
+      const desc = screen.getByTestId('dialog-description')
+      expect(desc.textContent).toContain('cannot be undone')
+      expect(desc.textContent).toContain('transactions will NOT be deleted')
+      expect(desc.textContent).toContain('savings goal')
+    })
+
+    // Issue #1569 T8: the investment-deletion sentence used to be gated on
+    // `account.type === 'investment'`, while fk_inv_txn_account_id — ON DELETE CASCADE — does not
+    // consult type at all. `brokerage` is NOT a value of `accounts.type` (backend/internal/
+    // domain/account.go:~237-243 has no `brokerage` — only depository, credit, loan, investment,
+    // other); it lives only on `user_accounts.primary_type` (domain/user_account.go:~100-111).
+    // The 'brokerage' literal used for `type` below is a test-only stand-in exercising "any type
+    // string, including one that is not a real `accounts.type` value" — the sentence's cascade
+    // doesn't consult type at all, so a brokerage-subtyped account holding investment
+    // transactions was warned about nothing under the old gate. `closedAccount` above is type
+    // 'depository', which is exactly the shape that used to render the sentence away, so a
+    // regression to ANY type gate turns the first case red.
+    it('warns that investment transactions are destroyed, whatever the account type', () => {
+      const openPurgeDialog = () => {
+        fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+        fireEvent.click(screen.getAllByText('Delete from history')[0])
+        return screen.getByTestId('dialog-description')
+      }
+
+      for (const type of ['depository', 'brokerage', 'investment']) {
+        mockUseGetAccounts.mockReturnValue({
+          data: { accounts: [{ ...closedAccount, type }] },
+          isLoading: false,
+          error: null,
+          refetch: mockRefetchAccounts,
+        })
+        const { unmount } = renderAccountsPage()
+        const text = openPurgeDialog().textContent ?? ''
+        expect(text).toContain('investment transactions')
+        // The claim must stay true of an account that holds none, so it is conditional in wording
+        // rather than conditional in rendering.
+        expect(text).toContain('Any investment transactions recorded against it')
+        unmount()
+      }
+    })
+
+    // Issue #1569 F5: the purge dialog used to end with "The bank connection to <bank> will also
+    // be disconnected", gated on isLastAccountForItem — a predicate that counts ACTIVE accounts.
+    // A purge target is by definition inactive, so it is never in that count, and the branch fired
+    // only when some OTHER account under the item was still active: the exact opposite of what the
+    // sentence says. It was also untrue on its own terms — PurgeAccount's item cleanup keys on
+    // "no ACTIVE accounts remain", which a purge of an already-inactive account cannot change. The
+    // branch is gone; this pins that it does not come back.
+    it('does not claim the bank connection will be disconnected, in either item shape', () => {
+      const openPurgeDialog = () => {
+        fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+        fireEvent.click(screen.getAllByText('Delete from history')[0])
+        return screen.getByTestId('dialog-description')
+      }
+
+      // Sole account under the item.
+      const { unmount } = renderAccountsPage()
+      expect(openPurgeDialog().textContent).not.toContain('bank connection')
+      unmount()
+
+      // Another, still-ACTIVE account under the same item — the shape that used to make the
+      // inverted predicate fire.
+      mockUseGetAccounts.mockReturnValue({
+        data: {
+          accounts: [
+            closedAccount,
+            { ...closedAccount, id: 'acc-2', name: 'Chase Savings', status: 'active', removed_at: undefined },
+          ],
+        },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      })
+      renderAccountsPage()
+      expect(openPurgeDialog().textContent).not.toContain('bank connection')
+    })
+
+    // Fix round 1, IMPORTANT 3: the backend's actionable 409 detail (e.g.
+    // repository.ErrPurgeBlockedBySavingsGoal's mapped message) lives at
+    // `err.response.data.detail`, not `err.message` (axios's `.message` for an HTTP error is the
+    // useless "Request failed with status code 409"). This proves it actually reaches the toast.
+    it('surfaces the backend detail message from a rejected purge, not a generic failure string', async () => {
+      const axiosLikeError = {
+        message: 'Request failed with status code 409',
+        response: {
+          status: 409,
+          data: { detail: 'A savings goal still references this account. Delete the goal first, then try again.' },
+        },
+      }
+      mockUsePurgeAccount.mockReturnValue({
+        mutateAsync: mock(() => Promise.reject(axiosLikeError)),
+        isPending: false,
+        isError: false,
+        error: null,
+      })
+
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+      fireEvent.click(screen.getByText('Delete from history'))
+      fireEvent.click(screen.getByTestId('confirm-delete-dialog').querySelector('button')!)
+
+      await waitFor(() => {
+        expect(mockToastError).toHaveBeenCalledWith(
+          'A savings goal still references this account. Delete the goal first, then try again.'
+        )
+      })
     })
   })
 
@@ -595,5 +937,108 @@ describe('AccountsPage', () => {
 
       consoleErrorSpy.mockRestore()
     })
+  })
+})
+
+// ── Issue #1580: the page must not invent a balance for an account that has none ─────────────
+//
+// A closed account carries no current balance (user ruling, #1569): accountBalanceProjection
+// emits NULL — not zero — for every terminal status. The page used to coalesce that to 0 before
+// filtering and before sorting, which made the defect run BOTH ways: a min-$1 filter EXCLUDED
+// closed accounts, a max-$100 filter INCLUDED them.
+//
+// The predicates themselves are unit-tested in utils.test.ts. These tests exist because those
+// unit tests cannot see the WIRING: reverting either call site here to `?? 0` leaves utils.test
+// entirely green. The card view is used because the table is stubbed at the top of this file.
+describe('balance filter and sort with a balance-less (closed) account', () => {
+  const funded = {
+    id: 'acc-funded',
+    name: 'Funded Checking',
+    linked_item_id: 'item-1',
+    institution_name: 'Chase',
+    type: 'depository',
+    status: 'active',
+    is_hidden: false,
+    current_balance: 2000,
+    created_at: '2025-01-01T00:00:00Z',
+  }
+  const overdrawn = {
+    ...funded,
+    id: 'acc-overdrawn',
+    name: 'Overdrawn Checking',
+    current_balance: -25,
+    created_at: '2025-01-02T00:00:00Z',
+  }
+  // Exactly what the API sends for a terminal-status account: both balance keys omitted.
+  const closed = {
+    id: 'acc-closed',
+    name: 'Closed Savings',
+    linked_item_id: 'item-1',
+    institution_name: 'Chase',
+    type: 'depository',
+    status: 'removed',
+    removed_at: '2025-05-01T00:00:00Z',
+    is_hidden: false,
+    created_at: '2025-01-03T00:00:00Z',
+  }
+
+  function renderWithClosedShown() {
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [funded, overdrawn, closed] },
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+    renderAccountsPage()
+    fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+  }
+
+  const renderedNames = () =>
+    screen.getAllByTestId('account-card').map((el) => el.textContent?.replace(/Disconnect|Delete from history/g, '').trim())
+
+  beforeEach(() => {
+    accountFiltersStub.balanceRange = null
+    accountFiltersStub.sort = null
+    // The table is stubbed at the top of this file, so ordering is only observable in the card
+    // view. An earlier test in this file flips the persisted view to 'table'.
+    localStorage.setItem('accounts-list-view', 'cards')
+  })
+
+  afterEach(() => {
+    accountFiltersStub.balanceRange = null
+    accountFiltersStub.sort = null
+  })
+
+  it('shows the closed account when no balance filter is applied', () => {
+    renderWithClosedShown()
+    expect(renderedNames()).toContain('Closed Savings')
+  })
+
+  it('excludes the closed account from a min-only balance filter', () => {
+    accountFiltersStub.balanceRange = { min: 1 }
+    renderWithClosedShown()
+    expect(renderedNames()).toEqual(['Funded Checking'])
+  })
+
+  it('excludes the closed account from a max-only balance filter — the direction `?? 0` got wrong', () => {
+    // With the old `?? 0`, the closed account compared as exactly $0 and passed `max: 100`,
+    // appearing in a list of accounts the user asked to see BECAUSE they hold under $100.
+    accountFiltersStub.balanceRange = { max: 100 }
+    renderWithClosedShown()
+    expect(renderedNames()).toEqual(['Overdrawn Checking'])
+  })
+
+  it('sorts the closed account last when sorting by balance ascending', () => {
+    accountFiltersStub.sort = { columnId: 'balance', direction: 'asc' }
+    renderWithClosedShown()
+    expect(renderedNames()).toEqual(['Overdrawn Checking', 'Funded Checking', 'Closed Savings'])
+  })
+
+  it('sorts the closed account last when sorting by balance descending too, not first', () => {
+    // With the old `?? 0` the closed account sat at zero, so a descending sort placed it above
+    // the overdrawn account — a row with no balance outranking one that has a real number.
+    accountFiltersStub.sort = { columnId: 'balance', direction: 'desc' }
+    renderWithClosedShown()
+    expect(renderedNames()).toEqual(['Funded Checking', 'Overdrawn Checking', 'Closed Savings'])
   })
 })

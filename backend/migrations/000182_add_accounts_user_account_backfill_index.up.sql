@@ -1,0 +1,129 @@
+-- #1569 round 15 task 9, defect C3 — the partial index that serves the accounts leg of
+-- BackfillUserAccountIDs. Second half of a two-file addition; see 000181 for why the conditional
+-- drop of an invalid leftover cannot share this file.
+--
+-- THE QUERY. backend/internal/database/backfill.go's fetchBackfillAccountPage:
+--
+--   SELECT ... FROM accounts a JOIN linked_items li ON a.linked_item_id = li.id
+--   WHERE a.user_account_id IS NULL
+--     AND ($1::timestamptz IS NULL OR a.created_at >= $1::timestamptz)
+--     AND ($2::uuid IS NULL OR (a.created_at, a.id) > ($1::timestamptz, $2::uuid))
+--   ORDER BY a.created_at, a.id
+--   OFFSET $3
+--   LIMIT $4
+--
+-- It runs SYNCHRONOUSLY at every boot, from cmd/server/main.go, which os.Exit(1)s on error.
+--
+-- ⚠ THIS BLOCK WAS STALE UNTIL #1569 ROUND 16 TASK 9 (D-3) — it still showed the single
+-- tuple-comparison predicate, which THIS MIGRATION'S OWN FIX had already replaced with the
+-- three-state form above (cold start: no position predicate; resume: `created_at >= T` with an
+-- OFFSET into the tie group; in-run: the exact keyset). The migration documented the shape the fix
+-- removed. THE INDEX ITSELF WAS RE-DERIVED AGAINST THE CURRENT SHAPE AND STILL SERVES IT — that was
+-- the correctness question.
+--
+-- WHY IT IS NEEDED — and the nuance matters, because the naive statement of this defect is wrong. In the STEADY STATE (a handful of candidate rows) there is
+-- already no sequential scan: idx_accounts_user_account (migration 000033) is a plain btree on
+-- user_account_id, btrees index NULLs, and `IS NULL` is an ordinary index condition. What no
+-- existing index provides is the ORDERING, so every page pays a sort of the WHOLE candidate set —
+-- which is free at five rows and is the entire problem at a backlog, and a backlog is the only
+-- condition under which this backfill does anything at all.
+--
+-- THE SHAPE, NOT A TABLE OF NUMBERS — AND THAT IS DELIBERATE (#1569 round 17 task 10, B-2). This
+-- comment used to carry a table of EXPLAIN (ANALYZE, BUFFERS) figures. They were re-measured on
+-- postgres:17.11 (this repo's own container) against a rebuilt worst-case dataset — the real
+-- schema, 300k accounts of which 100k are candidates ALL SHARING ONE created_at, ids random
+-- uuids, this file's query verbatim, one page of 500 — and only the SHAPE reproduced. The
+-- small-offset per-page counts landed within a buffer of the old ones; the no-index figure and the
+-- offset at which the plan flips did NOT reproduce at all. They cannot: a buffer count is a
+-- function of row width, heap correlation, shared_buffers, work_mem and
+-- max_parallel_workers_per_gather, none of which this file controls, so a number written here is a
+-- number that silently rots. What is stable, and is the whole justification:
+--
+--   cold start, no index:  Parallel Seq Scan over the WHOLE table + top-N heapsort — a cost in the
+--                          table's total block count, paid again for EVERY page.
+--   cold start, with it:   Index Scan in (created_at, id) order, roughly one buffer access per row
+--                          RETURNED (see the warning below for why that is a property of this
+--                          dataset, not a law). Bounded by the page, not by the table.
+--   resume, OFFSET k:      same plan, cost linear in k — Postgres genuinely walks and discards the
+--                          first k rows before returning anything.
+--   large enough k:        the planner ABANDONS this index for a bitmap scan of the whole candidate
+--                          set plus an external merge sort — the very sort the index exists to
+--                          prevent. Where that crossover sits is a planner decision against the
+--                          live statistics and settings, not a constant. Do not write it down.
+--   in-run keyset page:    Index Cond carries the ROW(created_at, id) > ROW(...) comparison, so the
+--                          page costs what the cold start's does.
+--
+-- ⚠ THE REASON THE ORIGINAL FIGURES WERE REPLACED IN ROUND 16 WAS ITSELF FALSE, and that is why
+-- there is no table here now. Round 16 declared an "OFFSET 1000 reads 20 shared buffers" reading
+-- impossible, on the grounds that "an Index Scan returning 500 heap rows costs at least 500 buffer
+-- accesses". IT DOES NOT, and the counter-example is one query on postgres:17.11: a 100k-row table
+-- whose ids ascend with physical order, `SELECT id, pad ... ORDER BY created_at, id OFFSET 1000
+-- LIMIT 500`, plan `Index Scan`, actual rows 1500 — 39 buffers. EXPLAIN (BUFFERS) counts
+-- accesses to 8 KB BLOCKS, many tuples share a block, and a heap block that is already the one the
+-- scan holds is not counted again. So the round-16 refutation was arithmetic on the wrong unit, and
+-- the original figures it discarded were never shown to be wrong. The roughly-one-per-row figure
+-- above is what THIS dataset's random-uuid ordering produces — an upper end for an uncorrelated
+-- heap, not a floor. Never re-derive a buffer count from a row count.
+--
+-- The index's justification survives the re-measurement intact — it is still the difference between
+-- an ordered Index Scan and a sort of the whole candidate set, per PAGE, at boot, before the server
+-- serves anything. What the re-measurement ADDS is the OFFSET's own cost, which is linear in the
+-- offset and past a planner crossover abandons this index for the very sort it exists to prevent.
+-- That residual is stated, weighed and accepted in backfill.go ("WHAT THIS DOES NOT BOUND"); it is a
+-- property of the resume position's shape, not a reason to drop this index.
+--
+-- WHY PARTIAL. The steady state of the candidate set is EMPTY — the backfill exists to repair a
+-- recurring write-path bug (#1306), not to run continuously — so a full index on (created_at, id)
+-- would be a large index on a large table maintained by every account write to serve a query whose
+-- answer is almost always nothing. The partial index holds only the candidate rows and shrinks to
+-- nothing as they are repaired.
+--
+-- WHY THE PREDICATE IS SPELLED EXACTLY LIKE THE QUERY'S. Postgres uses a partial index only when it
+-- can PROVE the query's WHERE implies the index's predicate. `a.user_account_id IS NULL` here and in
+-- fetchBackfillAccountPage must stay the same expression; a rewrite of either (say to a NOT EXISTS
+-- against user_accounts) silently returns boot to the sequential scan above.
+--
+-- WHY (created_at, id) IN THAT ORDER. It is the scan's ORDER BY, and both of the query's position
+-- shapes are range bounds on its leading column: a resumed page is `created_at >= T` with an OFFSET
+-- into the tie group, and an in-run page is `(created_at, id) > (T, id)`. The id column earns its
+-- place by making the in-run bound an index condition rather than a filter, and by keeping the sort
+-- exact within a timestamp — which is what makes the OFFSET a stable position at all.
+--
+-- SAFETY. CONCURRENTLY as this file's SOLE statement (mirrors 000077/000082/000138/000144).
+-- accounts is written by every Plaid sync, so a plain CREATE INDEX would hold a write-blocking
+-- ShareLock on it for the whole build. Squawk's require-concurrent-index-creation is in
+-- .squawk.toml's excluded_rules, so the linter would not have caught a non-concurrent form;
+-- CONCURRENTLY is used here on the merits. IF NOT EXISTS keeps it idempotent.
+--
+-- ⚠ "SOLE STATEMENT" IS ABOUT golang-migrate, AND IT IS NOT THE WHOLE EXECUTION STORY — an earlier
+-- version of this comment stopped there and was therefore a FALSE claim about this file's own
+-- execution (#1569 round 15 task 9 fix 1). golang-migrate sends a file as one simple query, which
+-- Postgres wraps in an implicit transaction only when it holds MORE than one statement; that is why
+-- a lone CONCURRENTLY works in production. But this repo ALSO re-executes every migration from
+-- 000149 to HEAD through scripts/test-migrations.sh's replay, and that replay passed `psql -1`
+-- unconditionally, which wraps even a single statement:
+--
+--     ERROR:  CREATE INDEX CONCURRENTLY cannot run inside a transaction block
+--
+-- No CONCURRENTLY migration had ever been inside that range before this one, so the composition had
+-- never run. The replay now decides per file (replay_file_runs_outside_a_transaction), which makes
+-- it match golang-migrate instead of contradicting it, and
+-- scripts/__tests__/replay-concurrently-transaction.test.sh executes both halves of that against a
+-- real database. If you add another CONCURRENTLY migration, you inherit that support; if you make
+-- this one non-concurrent, you take a write lock on accounts instead.
+--
+-- ⚠ THE RESIDUAL, STATED PLAINLY AND WITHOUT THE OVERCLAIM IT ORIGINALLY CARRIED: if THIS build is
+-- interrupted it leaves an INVALID index (inherent to CONCURRENTLY; no migration can prevent it),
+-- and golang-migrate additionally marks the database DIRTY at version 182. It does NOT self-heal:
+-- backend/scripts/docker-entrypoint.sh only retries `migrate up`, which refuses to run at all while
+-- the version is dirty, so the container fails to start rather than silently continuing. The repair
+-- is an operator action and it must go back to 180, not 181:
+--
+--     migrate -database "$DATABASE_URL" -path migrations force 180
+--     migrate -database "$DATABASE_URL" -path migrations up
+--
+-- Forcing to 181 instead would re-run only THIS file, whose IF NOT EXISTS matches on the NAME and
+-- would leave the invalid index in place reporting success. What 000181 buys is that the re-run
+-- from 180 genuinely repairs the state instead of hiding it — not that the repair is automatic.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_accounts_user_account_backfill
+    ON accounts (created_at, id) WHERE user_account_id IS NULL;

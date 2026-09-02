@@ -171,4 +171,169 @@ describe('AccountSummaryHeader', () => {
     expect(screen.getByTestId('badge')).toBeInTheDocument()
     expect(screen.getByText('****9999')).toBeInTheDocument()
   })
+
+  // Issue #1580: a closed account carries NO current balance — accountBalanceProjection emits
+  // NULL for every terminal status. The previous "Last known balance … as of <date>" affordance
+  // was built for a world where the closed account still held a frozen figure, so it survived as
+  // a label with nothing to label ("Last known balance: N/A … as of Jun 4, 2025"). It is gone;
+  // what remains says why the figure is absent.
+  describe('isClosed (a closed account has no current balance)', () => {
+    it('labels the balance "Current Balance" for a live account, with no closed-account note', () => {
+      render(<AccountSummaryHeader {...baseProps} />)
+      expect(screen.getByText('Current Balance')).toBeInTheDocument()
+      expect(screen.queryByText(/closed accounts/i)).toBeNull()
+    })
+
+    it('drops the live "Current Balance" label for a closed account', () => {
+      render(<AccountSummaryHeader {...baseProps} currentBalance={undefined} isClosed />)
+      expect(screen.queryByText('Current Balance')).toBeNull()
+      expect(screen.getByText('Balance')).toBeInTheDocument()
+    })
+
+    it('never renders a stranded "as of" caption, nor "Last known balance"', () => {
+      render(<AccountSummaryHeader {...baseProps} currentBalance={undefined} isClosed />)
+      expect(screen.queryByText(/as of/i)).toBeNull()
+      expect(screen.queryByText(/last known/i)).toBeNull()
+    })
+
+    it('explains WHY the figure is absent rather than leaving a bare N/A', () => {
+      render(<AccountSummaryHeader {...baseProps} currentBalance={undefined} isClosed />)
+      expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
+      expect(screen.getByText(/history is kept/i)).toBeInTheDocument()
+    })
+
+    // fix round 1, item 1: the closure date was lost when the "as of" caption went.
+    it('says WHEN the account closed', () => {
+      render(
+        <AccountSummaryHeader
+          {...baseProps}
+          currentBalance={undefined}
+          isClosed
+          closedOn="2026-03-01T00:00:00Z"
+        />
+      )
+      expect(screen.getByText(/closed on mar 1, 2026/i)).toBeInTheDocument()
+    })
+
+    it('still explains the absent balance when no closure date is available', () => {
+      render(<AccountSummaryHeader {...baseProps} currentBalance={undefined} isClosed />)
+      expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
+      expect(screen.queryByText(/closed on/i)).toBeNull()
+    })
+
+    it('shows no closure date for a live account', () => {
+      render(<AccountSummaryHeader {...baseProps} closedOn="2026-03-01T00:00:00Z" />)
+      expect(screen.queryByText(/closed on/i)).toBeNull()
+    })
+
+    it('refuses to render a balance even if one is somehow supplied for a closed account', () => {
+      // Defence in depth: the ruling is "a closed account carries no current balance", and this
+      // component must not restate a stale figure as a current one if a cached or hand-built
+      // payload ever carries one.
+      render(<AccountSummaryHeader {...baseProps} isClosed />)
+      expect(screen.queryByText('$2,500.50')).toBeNull()
+      expect(screen.queryByText('$0.00')).toBeNull()
+    })
+
+    it('hides the available-balance row for a closed account', () => {
+      render(
+        <AccountSummaryHeader {...baseProps} availableBalance={2000} isClosed />
+      )
+      expect(screen.queryByText(/available balance/i)).toBeNull()
+    })
+  })
+
+  // Issue #1591 — the figure T7 could not show, because it did not exist yet.
+  //
+  // `current_balance` is still absent for a closed account and always will be. What arrives now is
+  // a DIFFERENT pair, from balance_snapshots: an amount and the instant it was true. That can be
+  // stated honestly, so it is stated — and the three cases below must render differently from one
+  // another, because "$0.00 on a real date", "no snapshot on record" and "a live balance" are
+  // three different facts.
+  describe('lastKnownBalance (Issue #1591)', () => {
+    const closedWithHistory = {
+      ...baseProps,
+      currentBalance: undefined,
+      availableBalance: undefined,
+      isClosed: true,
+      closedOn: '2026-03-01T00:00:00Z',
+      lastKnownBalance: 4321,
+      lastKnownBalanceAt: '2026-02-24T00:00:00Z',
+    }
+
+    it('shows the figure, labelled as historical, with the date it was true', () => {
+      render(<AccountSummaryHeader {...closedWithHistory} />)
+      expect(screen.getByText('Last known balance')).toBeInTheDocument()
+      expect(screen.getByText('$4,321.00')).toBeInTheDocument()
+      expect(screen.getByText(/as of feb 24, 2026/i)).toBeInTheDocument()
+    })
+
+    it('keeps the current-balance row empty — the two are different claims', () => {
+      render(<AccountSummaryHeader {...closedWithHistory} />)
+      expect(screen.getByText('Balance')).toBeInTheDocument()
+      expect(screen.queryByText('Current Balance')).toBeNull()
+      expect(screen.getByText('—')).toBeInTheDocument()
+    })
+
+    it('masks the historical amount for session replay', () => {
+      // It is a real balance for a real account; rrweb records text verbatim unless masked.
+      render(<AccountSummaryHeader {...closedWithHistory} />)
+      const amount = screen.getByText('$4,321.00')
+      expect(amount.closest('[data-ph-mask]')).not.toBeNull()
+    })
+
+    it('renders a recorded ZERO as $0.00, not as an absence', () => {
+      render(<AccountSummaryHeader {...closedWithHistory} lastKnownBalance={0} />)
+      expect(screen.getByText('Last known balance')).toBeInTheDocument()
+      expect(screen.getByText('$0.00')).toBeInTheDocument()
+      expect(screen.getByText(/as of feb 24, 2026/i)).toBeInTheDocument()
+    })
+
+    it('renders NOTHING when there is no snapshot on record', () => {
+      // Distinguishable from the $0.00 case above by the absence of the whole row — never a
+      // caption with nothing under it, which is the failure T7 removed.
+      render(
+        <AccountSummaryHeader
+          {...closedWithHistory}
+          lastKnownBalance={undefined}
+          lastKnownBalanceAt={undefined}
+        />
+      )
+      expect(screen.queryByText(/last known balance/i)).toBeNull()
+      expect(screen.queryByText(/as of/i)).toBeNull()
+      expect(screen.getByText(/closed on mar 1, 2026/i)).toBeInTheDocument()
+    })
+
+    it('renders nothing when the amount arrives without its instant', () => {
+      render(<AccountSummaryHeader {...closedWithHistory} lastKnownBalanceAt={undefined} />)
+      expect(screen.queryByText(/last known balance/i)).toBeNull()
+      expect(screen.queryByText('$4,321.00')).toBeNull()
+    })
+
+    it('renders nothing when the instant arrives without its amount', () => {
+      render(<AccountSummaryHeader {...closedWithHistory} lastKnownBalance={undefined} />)
+      expect(screen.queryByText(/last known balance/i)).toBeNull()
+      expect(screen.queryByText(/as of/i)).toBeNull()
+    })
+
+    it('refuses to show one on a LIVE account, whatever the props say', () => {
+      // An active account already has a current balance. A second, older figure beside it is the
+      // "two balances, one account" confusion the ruling exists to prevent.
+      render(
+        <AccountSummaryHeader
+          {...baseProps}
+          lastKnownBalance={4321}
+          lastKnownBalanceAt="2026-02-24T00:00:00Z"
+        />
+      )
+      expect(screen.queryByText(/last known balance/i)).toBeNull()
+      expect(screen.queryByText('$4,321.00')).toBeNull()
+    })
+
+    it('says the figure is the last one recorded, not a current one', () => {
+      render(<AccountSummaryHeader {...closedWithHistory} />)
+      expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
+      expect(screen.getByText(/history is kept/i)).toBeInTheDocument()
+    })
+  })
 })

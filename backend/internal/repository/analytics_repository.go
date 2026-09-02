@@ -112,6 +112,7 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.pending = false
@@ -162,11 +163,12 @@ func (r *analyticsRepository) getCashFlowAggregationHousehold(ctx context.Contex
 			COUNT(CASE WHEN t.amount > 0 THEN 1 END) as expense_count
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
-		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
-		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		WHERE %s
+		  AND t.date >= $4::date
+		  AND t.deleted_at IS NULL
 		  AND t.date <= $5
 		  AND t.pending = false
-	`, householdAccountsCTE())
+	`, householdGrantsCTE(), householdSharedTransactionPredicate("t", "a"))
 
 	if len(filters.AccountTypes) > 0 {
 		placeholders := buildPlaceholders(len(filters.AccountTypes), argIndex)
@@ -227,6 +229,7 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.pending = false
@@ -310,11 +313,12 @@ func (r *analyticsRepository) getCashFlowGroupedHousehold(ctx context.Context, r
 			COUNT(*) as transaction_count
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
-		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
-		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		WHERE %s
+		  AND t.date >= $4::date
+		  AND t.deleted_at IS NULL
 		  AND t.date <= $5
 		  AND t.pending = false
-	`, householdAccountsCTE(), truncInterval)
+	`, householdGrantsCTE(), truncInterval, householdSharedTransactionPredicate("t", "a"))
 
 	if len(filters.AccountTypes) > 0 {
 		placeholders := buildPlaceholders(len(filters.AccountTypes), argIndex)
@@ -470,6 +474,43 @@ func effectiveCategoryDisplayExpr() string {
 	return `t.effective_category_name`
 }
 
+// ─── #1585: the spending reads' tiebreaker ───────────────────────────────────────────────────────
+//
+// The six spending reads (GetSpendingByCategory / GetSpendingByMerchant / GetSpendingTrends, each
+// with a household sibling) used to sort by `total` alone. Rows tied on total therefore came back
+// in whatever order the executor emitted them: a HashAggregate emits hash-bucket order, a
+// GroupAggregate emits GROUP BY key order, and Postgres's sort is not required to be stable. The
+// SAME data could answer the SAME question two ways once the plan changed — which is exactly how
+// this was found on #1569 T3 (identical result MULTISETS, different row ORDER inside equal totals).
+//
+// It matters beyond cosmetics because CLAUDE.md designs these methods to be tool-callable by an
+// in-app AI assistant, which has no way to know a reordering is meaningless, and because the
+// merchant reads apply a LIMIT — an unstable order makes the cut-off row arbitrary.
+//
+// The ruling is ALPHABETICAL BY NAME, applied identically to both members of every pair. NULL
+// ordering is left at the ASC default (NULLS LAST) deliberately: a NULL name sorts last, which is
+// itself deterministic. It is also unreachable today — `effective_category_name` is scanned into a
+// non-pointer string (a NULL already fails the scan), and the merchant name COALESCEs to the
+// literal 'Unknown'.
+//
+// ⚠ Alphabetical alone does NOT determinise the MERCHANT reads. Their name is an aggregate
+// (`MAX(COALESCE(...))`) whose chain bottoms out in the literal 'Unknown', while the GROUP BY is on
+// a merchant-KEY expression, not the name. Several distinct keys — a merchants row literally named
+// "Unknown", a raw `merchant_name = 'Unknown'`, and the no-merchant 'unknown' bucket — render the
+// same display name and tie again on it. So the merchant reads carry the grouped key as a THIRD
+// sort leg. Pinned by TestAnalyticsRepository_TieOrder_SpendingByMerchant_IsPlanIndependent.
+//
+// merchantGroupKeyExpr is that key. It is shared by GROUP BY and ORDER BY in both merchant reads so
+// the two can never drift apart — ordering by an expression the query does not actually group on
+// would be a planner error, not a silent reordering.
+const merchantGroupKeyExpr = `CASE
+		    WHEN t.merchant_id IS NOT NULL
+		      THEN 'merchant:' || COALESCE(mno.merged_into_merchant_id, t.merchant_id)::text
+		    WHEN NULLIF(t.merchant_name, '') IS NOT NULL
+		      THEN 'raw:' || t.merchant_name
+		    ELSE 'unknown'
+		  END`
+
 // effectiveTransferExpr returns the SQL expression for the effective PFC primary used
 // in transfer filtering. Reads the denormalized effective_pfc_primary column directly.
 // effective_pfc_primary is NULL for custom-kind rows (never match TRANSFER%), so
@@ -487,47 +528,185 @@ func buildPlaceholders(count, startIndex int) []string {
 	return placeholders
 }
 
-// householdAccountsCTE returns the canonical household-aggregation fan-out: for a given
-// household ($2) and its active member user IDs ($3), the set of user_accounts that are
-// currently shared into the household. Callers must supply exactly these three leading
-// args: $1 = requesting userID (kept as $1, unused here, so buildSpendingFilter's
-// custom-category subquery — `WHERE user_id = $1::uuid` — stays scoped to the requester
-// even in household mode), $2 = household ID, $3 = active member user IDs (uuid[]).
+// householdGrantsCTE returns the canonical household-aggregation fan-out: every grant that ever
+// made a member's account visible to household $2, as a half-open INTERVAL.
 //
-// Household inclusion is governed SOLELY by the share (visibility='shared',
-// revoked_at IS NULL) — is_hidden on user_accounts/accounts is the owner's own
-// personal-view control and is deliberately ignored here (Issue #1369 decision #3;
-// migration 000110's documented contract).
+// Household inclusion is governed SOLELY by the share (visibility=shared, and the interval below)
+// -- is_hidden on user_accounts/accounts is the owner's own personal-view control and is
+// deliberately ignored here (Issue #1369 decision #3; migration 000110's documented contract).
 //
-// Joint accounts (the same physical account linked and shared by two members) collapse to
-// one row via DISTINCT ON physical_account_blind_idx (falling back to user_account_id when
-// no fingerprint is recorded), keeping the EARLIEST-shared copy — deterministic, gives the
-// longest legitimate shared history, and a later revocation of that copy naturally falls
-// through to any surviving sharer (revoked rows are filtered by the WHERE clause before
-// DISTINCT ON ever sees them). share_started_at is exposed so callers can clip
-// time-ranged aggregations to when the account actually became household-visible
-// (Issue #1369 decision #2).
-func householdAccountsCTE() string {
+// ── #1569 T23: this CTE emits INTERVALS; the caller decides inclusion with a SEMI-JOIN ───────────
+//
+// It used to be `DISTINCT ON (COALESCE(has.physical_account_blind_idx, ua.id::text))` filtered by
+// `has.revoked_at IS NULL AND ua.user_id = ANY($3)`, and every caller JOINed to it. Two consequences,
+// one of them a bug this task exists to fix:
+//
+//   - A departed member's ENTIRE past vanished from household spending, income and savings-rate --
+//     not merely the part after they left. The balance/net-worth reads had already been fixed to
+//     honour the shared period (householdAccountsCTEForBalancesPerDay, ...AsOf); these nine reads
+//     had not, so the two answered about the same days and disagreed. They now agree.
+//   - Retaining closed grants under a JOIN would have been WORSE than the bug. The dedup key is the
+//     physical-account FINGERPRINT, not the user_account, so one user_account with two closed grants
+//     (a re-fingerprinted account) emits two rows; a JOIN on ha.user_account_id then matches every
+//     transaction twice and inflates SUM() and COUNT(). Silent money inflation across nine
+//     endpoints is worse than under-reporting.
+//
+// So the JOIN is gone. Callers use householdSharedTransactionPredicate, an EXISTS: a transaction is
+// included because SOME covering grant exists, and EXISTS yields at most one row no matter how many
+// grants cover it. The double-count is not collapsed away, it is unrepresentable.
+//
+// ── What this does NOT relax: the membership guard ───────────────────────────────────────────────
+//
+// `ua.user_id = ANY($3) OR has.revoked_at IS NOT NULL` keeps the pre-#1569 active-membership
+// requirement for OPEN grants and lifts it only for CLOSED ones -- identical to the balance CTEs,
+// see householdAccountsCTEForBalancesAsOf for the full reasoning. A closed grant can only exist for
+// someone who WAS accepted into this household (InsertShare runs in the accept fan-out and nowhere
+// else), and the caller's interval predicate bounds WHEN it applies, so admitting it cannot show a
+// stranger's data nor any day outside the window the household was legitimately shown.
+//
+// ── #1569 T3 (#1582): two performance properties this CTE carries ────────────────────────────────
+//
+//  1. `fingerprint_contested` — a window-computed flag saying whether MORE THAN ONE user_account
+//     in this household holds this fingerprint. The predicate's inner joint-account tiebreak is a
+//     correlated NOT EXISTS whose only matching condition is `g2.user_account_id <> g.user_account_id`
+//     on the SAME fingerprint, so when exactly one user_account holds the fingerprint the subquery
+//     is PROVABLY VACUOUS and skipping it is an identity, not an approximation. That is always the
+//     case for mask-less accounts, whose fingerprint COALESCEs to their own unique `ua.id`.
+//
+//     ⚠ It MUST be computed over EVERY grant, closed ones included. Deciding contestedness from the
+//     open grants alone makes a joint account whose winning copy has been revoked look uncontested,
+//     skips the tiebreak, and counts that account TWICE. Pinned by
+//     TestAnalyticsRepository_GetSpendingByCategory_Household_JointAccountWithClosedGrantCountedOnce,
+//     which fails at $120-vs-$60 under exactly that mutation.
+//
+//  2. `share_started_at` / `share_ended_at` are emitted ALREADY converted to UTC wall time, so the
+//     predicate's per-(transaction, grant) comparison does not re-convert them. The comparison rule
+//     itself is unchanged — see householdSharedTransactionPredicate, whose two bounds are
+//     mutation-pinned.
+//
+// ⚠ THE MEASUREMENTS, THE REJECTED ALTERNATIVES AND THE ANTI-JOIN REFUTATION ARE NOT HERE. They are
+// docs/decisions/2026-08-26-household-grants-cte-performance.md, which carries the round-5 psql
+// table and its per-measurement protocol (four of its six rows are hand-run and TestT3Bench cannot
+// reproduce them), the AS NOT MATERIALIZED and inline-derived-table results, the round-6 proof that
+// the `(fingerprint, day)` anti-join makes money DISAPPEAR, and the one direction still worth
+// trying. This block was ~180 lines of measurement history in-line and shifted every citation below
+// it three times on one branch; that churn is why it is an ADR now. Two facts a reader needs before
+// touching this function: #1582's "within ~2x" is NOT met at HEAD (6.00x), and option (b) is refuted
+// on OUTPUT, not on speed -- do not re-propose it in any transcription.
+//
+// Pinned by TestAnalyticsRepository_GetSpendingByCategory_Household_DepartedMemberSharedPeriodRetained.
+func householdGrantsCTE() string {
 	// The unused `$1::uuid AS _requesting_user_id` column exists solely to pin $1's type.
 	// $1 is not otherwise referenced by every household query variant (only
 	// buildSpendingFilter's custom-category subquery references it, and only when
-	// CustomCategoryIDs is non-empty) — without a typed reference somewhere in the query
+	// CustomCategoryIDs is non-empty) -- without a typed reference somewhere in the query
 	// text, Postgres's extended query protocol cannot infer $1's type and errors with
 	// "could not determine data type of parameter $1" (SQLSTATE 42P18).
-	return `household_accounts AS (
-		SELECT DISTINCT ON (COALESCE(has.physical_account_blind_idx, ua.id::text))
-			ua.id         AS user_account_id,
-			ua.user_id    AS owner_user_id,
-			has.shared_at AS share_started_at,
-			$1::uuid      AS _requesting_user_id
+	return `household_grants AS (
+		SELECT
+			ua.id                                                 AS user_account_id,
+			COALESCE(has.physical_account_blind_idx, ua.id::text) AS fingerprint,
+			(has.shared_at AT TIME ZONE 'UTC')                    AS share_started_at,
+			(has.revoked_at AT TIME ZONE 'UTC')                   AS share_ended_at,
+			MIN(ua.id::text) OVER (PARTITION BY COALESCE(has.physical_account_blind_idx, ua.id::text))
+			  <> MAX(ua.id::text) OVER (PARTITION BY COALESCE(has.physical_account_blind_idx, ua.id::text))
+			                                                      AS fingerprint_contested,
+			$1::uuid                                              AS _requesting_user_id
 		FROM household_account_shares has
 		JOIN user_accounts ua ON ua.id = has.user_account_id
 		WHERE has.household_id = $2
 		  AND has.visibility  = 'shared'
-		  AND has.revoked_at IS NULL
-		  AND ua.user_id = ANY($3)
-		ORDER BY COALESCE(has.physical_account_blind_idx, ua.id::text), has.shared_at ASC, ua.id
+		  AND (ua.user_id = ANY($3) OR has.revoked_at IS NOT NULL)
 	)`
+}
+
+// householdSharedTransactionPredicate returns the SQL boolean deciding whether one transaction row
+// belongs in a household aggregate. txAlias is the transactions alias (its `.date` is read),
+// accountAlias the accounts alias (its `.user_account_id` is read). It requires householdGrantsCTE
+// to be in scope as `household_grants`.
+//
+// ── Why EXISTS and not a JOIN ────────────────────────────────────────────────────────────────────
+//
+// A JOIN emits one output row per matching grant, so an account covered by two grant intervals on
+// the same day would have each of its transactions counted twice. EXISTS is a semi-join: it answers
+// yes-or-no once per transaction, so overlapping, re-issued and re-fingerprinted grants cannot
+// affect any SUM() or COUNT(). That is the property that made retaining closed grants safe here at
+// all, and it is structural rather than a rule someone has to remember.
+//
+// ── Clipping is at DATE resolution here, and at INSTANT resolution on the balance side ───────────
+//
+// This is a considered difference, not an inconsistency. The balance reads clip `bs.snapshot_at`,
+// a TIMESTAMPTZ, so they can and do compare instants. `transactions.date` is a DATE: a transaction
+// carries no time of day, so there is no instant to compare and an instant-resolution predicate
+// here would silently compare the day's midnight against the grant boundary -- exact-looking and
+// wrong. What a DATE genuinely denotes is the whole day [date, date+1).
+//
+// ── The rule, applied identically at BOTH ends ───────────────────────────────────────────────────
+//
+// A transaction is inside a grant when the DAY it denotes OVERLAPS the half-open grant interval
+// [share_started_at, share_ended_at):
+//
+//	day_end   > share_started_at   ->  (t.date + 1) > share_started_at
+//	day_start < share_ended_at     ->  t.date       < share_ended_at
+//
+// Task 15's F4 found a closing bound argued from a leak-prevention principle that was never applied
+// to the opening bound, which was quietly admitting pre-grant data. So both ends here are the SAME
+// interval-overlap test, with the same tolerance in the same direction: a boundary day counts if
+// ANY instant of it was shared. Being strict at one end and generous at the other is the defect,
+// not the fix.
+//
+// The opening leg is exactly equivalent to the `t.date >= share_started_at::date`
+// this replaced -- for a grant made at 18:00, the whole of that date was already included -- so the
+// share-start behaviour is unchanged and stays pinned by
+// TestAnalyticsRepository_GetSpendingByCategory_Household_ClipsToSharedAt. The closing leg is new,
+// and it correctly excludes a revocation timestamp of exactly midnight (no instant of that date was
+// shared) while including a revocation at 18:00.
+//
+// ── The joint-account winner is now resolved PER TRANSACTION ─────────────────────────────────────
+//
+// Two members who each link the SAME real-world bank account hold two different user_accounts with
+// two separate copies of the same transactions, so exactly one copy may be counted (migration
+// 000110's documented purpose for physical_account_blind_idx). The old CTE picked that winner ONCE,
+// globally, with DISTINCT ON. That cannot survive retention: a copy shared only for part of the
+// range would otherwise erase the other member's genuinely-earlier data from the whole range -- the
+// same defect householdAccountsCTEForBalancesPerDay had to solve per day.
+//
+// So the winner is chosen among the grants COVERING THAT TRANSACTION, by the same order the
+// DISTINCT ON used (earliest share_started_at, ties broken by user_account_id). The inner NOT EXISTS
+// says "no OTHER user_account with my fingerprint, also covering this day, outranks me". Because a
+// minimum is unique, exactly one user_account per (fingerprint, day) can pass -- so a joint account
+// is still counted once, and a re-fingerprinted account never loses to itself
+// (`g2.user_account_id <> g.user_account_id`).
+//
+// ── #1569 T3: the tiebreak is SKIPPED when the fingerprint is held by one user_account ───────────
+//
+// `NOT g.fingerprint_contested OR NOT EXISTS (...)` is not a fast path with a different answer: when
+// only one user_account in household_grants holds g's fingerprint, the inner query's
+// `g2.user_account_id <> g.user_account_id` can never be satisfied, so NOT EXISTS is already true.
+// The short-circuit removes an evaluation, never a row. See householdGrantsCTE for why
+// `fingerprint_contested` counts closed grants, and that function's cited ADR for the measurement.
+//
+// Pinned by TestAnalyticsRepository_GetSpendingByCategory_Household_JointAccountCountedOnce and
+// TestAnalyticsRepository_GetSpendingByCategory_Household_RefingerprintedClosedGrantsCountedOnce.
+func householdSharedTransactionPredicate(txAlias, accountAlias string) string {
+	covers := func(grantAlias string) string {
+		return fmt.Sprintf(
+			`(%[1]s.date + 1) > %[2]s.share_started_at
+			   AND (%[2]s.share_ended_at IS NULL OR %[1]s.date < %[2]s.share_ended_at)`,
+			txAlias, grantAlias)
+	}
+	return fmt.Sprintf(`EXISTS (
+			SELECT 1 FROM household_grants g
+			WHERE g.user_account_id = %[1]s.user_account_id
+			  AND %[2]s
+			  AND (NOT g.fingerprint_contested OR NOT EXISTS (
+			      SELECT 1 FROM household_grants g2
+			      WHERE g2.fingerprint = g.fingerprint
+			        AND g2.user_account_id <> g.user_account_id
+			        AND %[3]s
+			        AND (g2.share_started_at, g2.user_account_id) < (g.share_started_at, g.user_account_id)
+			  ))
+		)`, accountAlias, covers("g"), covers("g2"))
 }
 
 // householdScopeArgs returns the three leading args every household-aware query must pass,
@@ -543,59 +722,139 @@ func householdScopeArgs(requestingUserID string, scope *domain.HouseholdScope) [
 // erase the other member's genuinely-earlier data from the whole series (Codex adversarial
 // review P1-2, deferred fast-follow #1378). So this CTE does NOT collapse fingerprint
 // collisions to one row; it exposes every shared user_account_id along with its physical
-// fingerprint and its own share_started_at, leaving per-day dedup to the caller's
-// DISTINCT ON ((day), fingerprint). Same three leading args as householdAccountsCTE: $1 =
-// requesting userID (pins its type; unused otherwise here), $2 = household ID, $3 = active
-// member user IDs.
+// fingerprint and its own interval bounds, leaving all per-day resolution to the caller. Same
+// three leading args as householdGrantsCTE: $1 = requesting userID (pins its type; unused
+// otherwise here), $2 = household ID, $3 = active member user IDs.
+//
+// ── #1569 T7: this CTE emits INTERVALS, and the caller clips per day ─────────────────────────
+//
+// It used to filter `revoked_at IS NULL AND ua.user_id = ANY($3)` — two independent reasons a
+// departed member vanished from the household net-worth chart. Not clipped at the departure:
+// erased from every day BEFORE it too, so the series a household saw for a shared period went to
+// zero the moment someone left. That is the most visible instance of the defect #1569 exists to
+// fix, so this read now answers from the same interval, on the same half-open rule, at the same
+// instant resolution as the point-in-time one.
+//
+// The row therefore carries share_ended_at (the exclusive end, NULL when current) and
+// share_row_id, and the membership guard is relaxed for CLOSED intervals only — identical
+// reasoning to householdAccountsCTEForBalancesAsOf's, see there. What is NOT here is the
+// interval predicate itself: a range read applies it per row of the aggregation rather than once
+// for the query, so the clip lives in the caller's per-day stage. It is the SAME half-open
+// interval evaluated at the SAME instant resolution the point-in-time CTE uses — a date-resolution
+// clip would not mirror it, and got both bounds wrong in opposite directions before it was
+// corrected; see GetAggregatedHistoryForHousehold's per_account_per_day WHERE clause.
+//
+// ⚠ The consequence a caller MUST handle: one user_account can now match SEVERAL rows of this
+// CTE. Closed intervals are unconstrained by uq_household_account_shares_active and may overlap,
+// and a re-fingerprinted account produces rows whose `fingerprint` differs — so a caller that
+// keys its dedup on fingerprint alone drops ONE account into two buckets and sums its balance
+// twice. GetAggregatedHistoryForHousehold collapses per (day, user_account_id) first for exactly
+// this reason; any new consumer must do the same.
 func householdAccountsCTEForBalancesPerDay() string {
 	return `household_accounts AS (
 		SELECT
 			ua.id                                                 AS user_account_id,
 			COALESCE(has.physical_account_blind_idx, ua.id::text) AS fingerprint,
 			has.shared_at                                         AS share_started_at,
+			has.revoked_at                                        AS share_ended_at,
+			has.id                                                AS share_row_id,
 			$1::uuid                                              AS _requesting_user_id
 		FROM household_account_shares has
 		JOIN user_accounts ua ON ua.id = has.user_account_id
 		WHERE has.household_id = $2
 		  AND has.visibility  = 'shared'
-		  AND has.revoked_at IS NULL
-		  AND ua.user_id = ANY($3)
+		  AND (ua.user_id = ANY($3) OR has.revoked_at IS NOT NULL)
 	)`
 }
 
 // householdAccountsCTEForBalancesAsOf is the asOf-bounded, single-instant sibling of
 // householdAccountsCTEForBalancesPerDay, used by point-in-time balance lookups
-// (GetSnapshotsAsOfForHousehold) that are evaluated at a specific instant — both the
-// "current" call (asOf=now) and a "previous period" call (asOf=now-30d) reuse this same
-// query, so the joint-account fingerprint winner must be picked using "latest snapshot AT
-// OR BEFORE asOf ($4)", not "latest snapshot ever". Without this bound, a previous-period
-// query could pick the globally-freshest member's copy even when THAT copy has no snapshot
-// before the cutoff, silently returning zero data for the joint account instead of falling
-// back to the other member's genuinely earlier balance (Codex adversarial review, P1-2).
-// Unlike the per-day variant, this CTE collapses to ONE winner via DISTINCT ON, which is
-// correct here because the whole query only ever evaluates a single instant. Same three
-// leading args as householdAccountsCTEForBalancesPerDay, PLUS $4 = the asOf cutoff (reused
-// both for the winner-selection bound here and the caller's own snapshot_at <= $4 filter in
-// the outer query).
+// (GetSnapshotsAsOfForHousehold, GetForHouseholdScopeActiveNow, GetForHouseholdScopeLiveAsOf) that are
+// evaluated at a specific instant — both the "current" call (asOf=now) and a "previous period"
+// call (asOf=now-30d) reuse this same query, so the joint-account fingerprint winner must be
+// picked using "latest snapshot AT OR BEFORE asOf ($4)", not "latest snapshot ever". Without
+// that bound, a previous-period query could pick the globally-freshest member's copy even when
+// THAT copy has no snapshot before the cutoff, silently returning zero data for the joint
+// account instead of falling back to the other member's genuinely earlier balance (Codex
+// adversarial review, P1-2). Same three leading args as householdAccountsCTEForBalancesPerDay,
+// PLUS $4 = the asOf cutoff (reused both for the winner-selection bound here and the caller's
+// own snapshot_at <= $4 filter in the outer query).
+//
+// ── #1569 T7: the grant is a HALF-OPEN INTERVAL, and this read honours it ────────────────────
+//
+// A household_account_shares row is not a boolean "is this shared right now?". It is the
+// household's own record that user_account X was visible to it over [shared_at, revoked_at) —
+// inclusive at shared_at, EXCLUSIVE at revoked_at, the same shape account_status_history uses
+// for [valid_from, valid_to). This CTE used to read `revoked_at IS NULL` — i.e. it answered
+// "shared TODAY?" for every asOf, including asOf values months in the past. The product
+// decision is the opposite: a member leaves and the remaining members keep what was shared FOR
+// THE SHARED PERIOD ONLY. They must not gain visibility of anything after the member left, and
+// must not LOSE visibility of the period when sharing was live. `shared_at <= $4 AND
+// (revoked_at IS NULL OR revoked_at > $4)` is exactly that, in both directions.
+//
+// The boundary is load-bearing and easy to get wrong (an earlier task on this branch shipped a
+// `valid_to >` vs `>=` bug that a whole integration package missed): asOf == revoked_at is
+// OUTSIDE. Pinned by TestHouseholdShareAsOf_IntervalIsHalfOpen.
+//
+// ── What this does NOT relax: the membership guard ───────────────────────────────────────────
+//
+// `ua.user_id = ANY($3) OR has.revoked_at IS NOT NULL` deliberately keeps the pre-#1569
+// active-membership requirement for OPEN grants and lifts it only for CLOSED ones. A closed
+// grant can only exist for someone who WAS accepted into this household (InsertShare runs in
+// the accept fan-out and nowhere else), and the interval predicate above already bounds WHEN it
+// applies — so admitting it cannot show a stranger's data, nor any instant outside the window
+// the household was legitimately shown. Meanwhile an OPEN grant still requires active
+// membership, exactly as before — pinned by
+// TestHouseholdShareAsOf_OpenGrantStillRequiresActiveMembership.
+//
+// Precisely, for a "current" call (asOf = the read's own instant) the only rows the relaxed
+// clause can add are grants revoked AFTER that instant, i.e. revoked concurrently with the
+// request. Those were open at the instant the caller asked about, so including them is the
+// point-in-time answer, not a widening of who may be seen: the departed member's membership
+// was live at asOf too. Anything revoked before asOf is filtered by the interval predicate
+// before the membership clause is ever reached.
+//
+// ── Why the dedup is now two-stage ───────────────────────────────────────────────────────────
+//
+// uq_household_account_shares_active constrains OPEN rows only. Once closed rows are retained
+// (they are — PurgeRemovedMembership no longer deletes them; see its own comment), a single
+// asOf instant can match SEVERAL rows for one (household, user_account): re-shares overlap, and
+// a re-fingerprinted account produces rows whose physical_account_blind_idx differs. Keying the
+// joint-account dedup on the fingerprint alone would then drop that one account into two
+// buckets and emit it TWICE. household_grants_asof collapses to one row per user_account FIRST,
+// picking the interval actually in force (latest shared_at <= asOf, ties broken by has.id so
+// the answer never varies between runs) — a nondeterministic as-of answer is worse than a
+// missing one. household_accounts then does the joint-account fingerprint dedup on top, exactly
+// as before. Pinned by TestHouseholdShareAsOf_OverlappingHistoricalRowsAreDeterministic.
 func householdAccountsCTEForBalancesAsOf() string {
-	return `household_accounts AS (
-		SELECT DISTINCT ON (COALESCE(has.physical_account_blind_idx, ua.id::text))
-			ua.id         AS user_account_id,
-			ua.user_id    AS owner_user_id,
-			has.shared_at AS share_started_at,
-			$1::uuid      AS _requesting_user_id
+	return `household_grants_asof AS (
+		SELECT DISTINCT ON (has.user_account_id)
+			has.user_account_id,
+			has.physical_account_blind_idx,
+			has.shared_at
 		FROM household_account_shares has
 		JOIN user_accounts ua ON ua.id = has.user_account_id
+		WHERE has.household_id = $2
+		  AND has.visibility  = 'shared'
+		  AND has.shared_at  <= $4
+		  AND (has.revoked_at IS NULL OR has.revoked_at > $4)
+		  AND (ua.user_id = ANY($3) OR has.revoked_at IS NOT NULL)
+		ORDER BY has.user_account_id, has.shared_at DESC, has.id
+	),
+	household_accounts AS (
+		SELECT DISTINCT ON (COALESCE(g.physical_account_blind_idx, ua.id::text))
+			ua.id        AS user_account_id,
+			ua.user_id   AS owner_user_id,
+			g.shared_at  AS share_started_at,
+			$1::uuid     AS _requesting_user_id
+		FROM household_grants_asof g
+		JOIN user_accounts ua ON ua.id = g.user_account_id
 		LEFT JOIN LATERAL (
 			SELECT MAX(bs.snapshot_at) AS latest_snapshot_at
 			FROM balance_snapshots bs
 			WHERE bs.user_account_id = ua.id AND bs.snapshot_at <= $4
 		) latest ON true
-		WHERE has.household_id = $2
-		  AND has.visibility  = 'shared'
-		  AND has.revoked_at IS NULL
-		  AND ua.user_id = ANY($3)
-		ORDER BY COALESCE(has.physical_account_blind_idx, ua.id::text), latest.latest_snapshot_at DESC NULLS LAST, ua.id
+		ORDER BY COALESCE(g.physical_account_blind_idx, ua.id::text), latest.latest_snapshot_at DESC NULLS LAST, ua.id
 	)`
 }
 
@@ -630,7 +889,11 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 		if filters.RollUpChildren {
 			clause += fmt.Sprintf(
 				" AND t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-					"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s)))",
+					"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s)))"+
+					" /* tombstone-exempt(custom_categories): HISTORY FILTER (#1569 Task 9). Analytics answer questions"+
+					" about the past. A report scoped to a category the user has since deleted must"+
+					" still return the spend that happened in it; filtering here would quietly"+
+					" restate a closed month. */",
 				idList, idList,
 			)
 		} else {
@@ -641,7 +904,9 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 			// live — namespace it the same way, without the parent_id OR-widening.
 			clause += fmt.Sprintf(
 				" AND t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-					"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND id::text IN (%s))",
+					"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND id::text IN (%s))"+
+					" /* tombstone-exempt(custom_categories): HISTORY FILTER (#1569 Task 9) — same as the RollUpChildren"+
+					" branch above, without the parent_id widening. */",
 				idList,
 			)
 		}
@@ -650,7 +915,8 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 	return clause, args, argIndex
 }
 
-// GetSpendingByCategory returns expense totals grouped by effective primary category.
+// GetSpendingByCategory returns expense totals grouped by effective primary category, ordered by
+// total descending and then alphabetically by category display name (#1585).
 // When filters.Category is non-empty, returns the detailed subcategory breakdown.
 func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
 	if filters.HouseholdScope != nil {
@@ -680,13 +946,14 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
 		  AND t.pending = false
 		%s%s
 		GROUP BY category, category_display
-		ORDER BY total DESC
+		ORDER BY total DESC, category_display ASC
 	`, catExpr, displayExpr, categoryFilter, extraClause)
 
 	rows, err := r.db.Query(ctx, query, args...)
@@ -743,15 +1010,16 @@ func (r *analyticsRepository) getSpendingByCategoryHousehold(ctx context.Context
 			COUNT(*) as transaction_count
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
-		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
-		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		WHERE %s
+		  AND t.date >= $4::date
+		  AND t.deleted_at IS NULL
 		  AND t.date <= $5
 		  AND t.amount > 0
 		  AND t.pending = false
 		%s%s
 		GROUP BY category, category_display
-		ORDER BY total DESC
-	`, householdAccountsCTE(), catExpr, displayExpr, categoryFilter, extraClause)
+		ORDER BY total DESC, category_display ASC
+	`, householdGrantsCTE(), catExpr, displayExpr, householdSharedTransactionPredicate("t", "a"), categoryFilter, extraClause)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -775,7 +1043,9 @@ func (r *analyticsRepository) getSpendingByCategoryHousehold(ctx context.Context
 	return results, nil
 }
 
-// GetSpendingByMerchant returns expense totals grouped by effective merchant, ordered by total descending.
+// GetSpendingByMerchant returns expense totals grouped by effective merchant, ordered by total
+// descending, ties broken alphabetically by merchant name and then by the grouped merchant key
+// (#1585 — see merchantGroupKeyExpr for why the name alone is not enough here).
 // Merchants renamed or merged by the user are grouped under their canonical (target) display name.
 // Groups by a synthetic key: 'merchant:<id>', 'raw:<name>', or 'unknown' — so renamed/merged variants
 // collapse into one row. merchant_id is NULL for unlinked/unknown groups (preserves "not clickable" frontend behavior).
@@ -800,20 +1070,14 @@ func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID 
 		LEFT JOIN accounts a ON t.account_id = a.id
 		` + merchantSortJoins + `
 		WHERE t.user_id = $1::uuid
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
 		  AND t.pending = false
 		` + extraClause + `
-		GROUP BY
-		  CASE
-		    WHEN t.merchant_id IS NOT NULL
-		      THEN 'merchant:' || COALESCE(mno.merged_into_merchant_id, t.merchant_id)::text
-		    WHEN NULLIF(t.merchant_name, '') IS NOT NULL
-		      THEN 'raw:' || t.merchant_name
-		    ELSE 'unknown'
-		  END
-		ORDER BY total DESC
+		GROUP BY ` + merchantGroupKeyExpr + `
+		ORDER BY total DESC, merchant_name ASC, ` + merchantGroupKeyExpr + ` ASC
 		LIMIT ` + limitPlaceholder
 
 	rows, err := r.db.Query(ctx, query, args...)
@@ -852,7 +1116,7 @@ func (r *analyticsRepository) getSpendingByMerchantHousehold(ctx context.Context
 	// `LIKE 'TRANSFER%'`), which fmt.Sprintf would misinterpret as a format verb and
 	// corrupt the query (matches the personal-path GetSpendingByMerchant above, which
 	// concatenates for the same reason).
-	query := "WITH " + householdAccountsCTE() + `
+	query := "WITH " + householdGrantsCTE() + `
 		SELECT
 			MAX(COALESCE(mno_t.display_name, NULLIF(m2.normalized_name, ''), m2.name, NULLIF(t.merchant_name, ''), 'Unknown')) AS merchant_name,
 			MAX(COALESCE(mno.merged_into_merchant_id, t.merchant_id)::text)                                                    AS merchant_id,
@@ -860,22 +1124,16 @@ func (r *analyticsRepository) getSpendingByMerchantHousehold(ctx context.Context
 			COUNT(*)                                                                                                            AS transaction_count
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
-		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		` + merchantSortJoins + `
-		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		WHERE t.deleted_at IS NULL
+		  AND ` + householdSharedTransactionPredicate("t", "a") + `
+		  AND t.date >= $4::date
 		  AND t.date <= $5
 		  AND t.amount > 0
 		  AND t.pending = false
 		` + extraClause + `
-		GROUP BY
-		  CASE
-		    WHEN t.merchant_id IS NOT NULL
-		      THEN 'merchant:' || COALESCE(mno.merged_into_merchant_id, t.merchant_id)::text
-		    WHEN NULLIF(t.merchant_name, '') IS NOT NULL
-		      THEN 'raw:' || t.merchant_name
-		    ELSE 'unknown'
-		  END
-		ORDER BY total DESC
+		GROUP BY ` + merchantGroupKeyExpr + `
+		ORDER BY total DESC, merchant_name ASC, ` + merchantGroupKeyExpr + ` ASC
 		LIMIT ` + limitPlaceholder
 
 	rows, err := r.db.Query(ctx, query, args...)
@@ -901,7 +1159,8 @@ func (r *analyticsRepository) getSpendingByMerchantHousehold(ctx context.Context
 }
 
 // GetSpendingTrends returns monthly expense totals per category for trend chart data.
-// Results are ordered by period_start ASC, total DESC.
+// Results are ordered by period_start ASC, total DESC, then alphabetically by category display
+// name so that equal-total categories have a documented, plan-independent order (#1585).
 func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error) {
 	if filters.HouseholdScope != nil {
 		return r.getSpendingTrendsHousehold(ctx, userID, filters)
@@ -921,13 +1180,14 @@ func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID stri
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
 		  AND t.pending = false
 		%s
 		GROUP BY period_start, category, category_display
-		ORDER BY period_start ASC, total DESC
+		ORDER BY period_start ASC, total DESC, category_display ASC
 	`, catExpr, displayExprTrends, extraClause)
 
 	rows, err := r.db.Query(ctx, query, args...)
@@ -970,15 +1230,16 @@ func (r *analyticsRepository) getSpendingTrendsHousehold(ctx context.Context, re
 			COALESCE(SUM(ABS(t.amount)), 0) as total
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
-		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
-		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		WHERE %s
+		  AND t.date >= $4::date
+		  AND t.deleted_at IS NULL
 		  AND t.date <= $5
 		  AND t.amount > 0
 		  AND t.pending = false
 		%s
 		GROUP BY period_start, category, category_display
-		ORDER BY period_start ASC, total DESC
-	`, householdAccountsCTE(), catExpr, displayExprTrends, extraClause)
+		ORDER BY period_start ASC, total DESC, category_display ASC
+	`, householdGrantsCTE(), catExpr, displayExprTrends, householdSharedTransactionPredicate("t", "a"), extraClause)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1014,6 +1275,7 @@ func (r *analyticsRepository) GetCategoryTotalForPeriod(ctx context.Context, use
 			COUNT(*)                   as transaction_count
 		FROM transactions t
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
@@ -1046,6 +1308,7 @@ func (r *analyticsRepository) GetTopExpense(ctx context.Context, userID string, 
 			t.date
 		FROM transactions t
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
@@ -1086,6 +1349,7 @@ func (r *analyticsRepository) GetAverageMonthlySpend(ctx context.Context, userID
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
@@ -1113,13 +1377,14 @@ func (r *analyticsRepository) getAverageMonthlySpendHousehold(ctx context.Contex
 		SELECT COALESCE(SUM(t.amount), 0) as total
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
-		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
-		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		WHERE %s
+		  AND t.date >= $4::date
+		  AND t.deleted_at IS NULL
 		  AND t.date <= $5
 		  AND t.amount > 0
 		  AND t.pending = false
 		  %s
-	`, householdAccountsCTE(), filterClause)
+	`, householdGrantsCTE(), householdSharedTransactionPredicate("t", "a"), filterClause)
 
 	var row domain.AverageMonthlySpendRow
 	err := r.db.QueryRow(ctx, query, args...).Scan(&row.Total)
@@ -1145,6 +1410,7 @@ func (r *analyticsRepository) GetRecurringSubscriptions(ctx context.Context, use
 				) AS prev_date
 			FROM transactions t
 			WHERE t.user_id = $1
+			  AND t.deleted_at IS NULL
 			  AND t.amount > 0
 			  AND t.pending = false
 			  AND t.date >= $2
@@ -1221,6 +1487,7 @@ func (r *analyticsRepository) GetSavingsRateForPeriod(ctx context.Context, userI
 			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) AS expenses
 		FROM transactions t
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.pending = false
@@ -1244,11 +1511,12 @@ func (r *analyticsRepository) getSavingsRateForPeriodHousehold(ctx context.Conte
 			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) AS expenses
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
-		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
-		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		WHERE %s
+		  AND t.date >= $4::date
+		  AND t.deleted_at IS NULL
 		  AND t.date <= $5
 		  AND t.pending = false
-	`, householdAccountsCTE())
+	`, householdGrantsCTE(), householdSharedTransactionPredicate("t", "a"))
 
 	args := householdScopeArgs(requestingUserID, scope)
 	args = append(args, startDate, endDate)
@@ -1290,6 +1558,7 @@ func (r *analyticsRepository) GetMonthOverMonthSpending(ctx context.Context, use
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.amount > 0
 		  AND t.pending = false
@@ -1347,15 +1616,16 @@ func (r *analyticsRepository) getMonthOverMonthSpendingHousehold(ctx context.Con
 		SELECT DATE_TRUNC('month', t.date)::date AS month, COALESCE(SUM(t.amount), 0) AS total
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
-		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
-		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		WHERE %s
+		  AND t.date >= $4::date
+		  AND t.deleted_at IS NULL
 		  AND t.amount > 0
 		  AND t.pending = false
 		  %s
 		  %s
 		GROUP BY DATE_TRUNC('month', t.date)
 		ORDER BY month ASC
-	`, householdAccountsCTE(), categoryFilter, filterClause)
+	`, householdGrantsCTE(), householdSharedTransactionPredicate("t", "a"), categoryFilter, filterClause)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1394,6 +1664,7 @@ func (r *analyticsRepository) GetLargestTransactionsForPeriod(ctx context.Contex
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
@@ -1439,6 +1710,7 @@ func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Contex
 		LEFT JOIN accounts a ON t.account_id = a.id
 		%s
 		WHERE t.user_id = $1::uuid
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
@@ -1487,6 +1759,7 @@ func (r *analyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, user
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount < 0
@@ -1531,15 +1804,16 @@ func (r *analyticsRepository) getIncomeSourceBreakdownHousehold(ctx context.Cont
 		SELECT (%s) AS category, ABS(SUM(t.amount)) AS total, COUNT(*) AS count
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
-		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
-		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		WHERE %s
+		  AND t.date >= $4::date
+		  AND t.deleted_at IS NULL
 		  AND t.date <= $5
 		  AND t.amount < 0
 		  AND t.pending = false
 		  %s
 		GROUP BY (%s)
 		ORDER BY ABS(SUM(t.amount)) DESC
-	`, householdAccountsCTE(), catExpr, filterClause, catExpr)
+	`, householdGrantsCTE(), catExpr, householdSharedTransactionPredicate("t", "a"), filterClause, catExpr)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1579,6 +1853,7 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 				COUNT(*)                                                    AS sample_count
 			FROM transactions t
 			WHERE t.user_id = $1
+			  AND t.deleted_at IS NULL
 			  AND t.date >= $2
 			  AND t.date < $3
 			  AND t.amount > 0
@@ -1598,6 +1873,7 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 		FROM transactions t
 		JOIN baseline b ON (%s) = b.category
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $3
 		  AND t.date <= $4
 		  AND t.amount > 0
@@ -1651,10 +1927,11 @@ func (r *analyticsRepository) GetBudgetVsActual(ctx context.Context, userID, per
 			COALESCE(SUM(bc.allocated_amount), 0) AS allocated_amount,
 			COALESCE(SUM(bc.spent_amount), 0)     AS spent_amount
 		FROM budgets b
-		LEFT JOIN budget_categories bc ON bc.budget_id = b.id
+		LEFT JOIN budget_categories bc ON bc.budget_id = b.id AND bc.deleted_at IS NULL
 		WHERE b.user_id = $1
 		  AND b.is_active = true
 		  AND b.period = $2
+		  AND b.deleted_at IS NULL
 		GROUP BY b.id, b.name, b.period
 		ORDER BY b.name ASC
 	`

@@ -263,7 +263,7 @@ func TestHoldingRepository_ReplaceForAccount_CrossTenantHolding_Rejected_Integra
 	require.NoError(t, err, "seed actor holding")
 
 	repo := NewHoldingRepository(tx)
-	err = repo.ReplaceForAccount(ctx, actorAcct.String(), actorID.String(), []domain.Holding{{
+	_, err = repo.ReplaceForAccount(ctx, actorAcct.String(), actorID.String(), []domain.Holding{{
 		UserID:     victimID.String(),
 		AccountID:  victimAcct.String(),
 		SecurityID: securityID.String(),
@@ -427,7 +427,7 @@ func TestReplaceForAccount_SameTenantForeignAccount_Rejected_Integration(t *test
 		`, userID, acctA, securityID)
 		require.NoError(t, err, "seed holding on account A")
 
-		err = NewHoldingRepository(tx).ReplaceForAccount(ctx, acctA.String(), userID.String(),
+		_, err = NewHoldingRepository(tx).ReplaceForAccount(ctx, acctA.String(), userID.String(),
 			[]domain.Holding{{
 				UserID:     userID.String(),
 				AccountID:  acctB.String(),

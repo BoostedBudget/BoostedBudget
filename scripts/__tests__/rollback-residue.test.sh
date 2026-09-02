@@ -20,6 +20,15 @@
 # here, directly against the pure comparison function, is the only way to exercise that path at all.
 set -uo pipefail
 
+# PROSE-ASSERTION AUDIT (#1569 task 7.1). "unexpected residue not on the allowlist", "is stale",
+# and the "FUNCTION update_updated_at_column()" / "EXTENSION pg_trgm" object-name checks below are
+# kept verbatim. Decision: CONTRACT for the first two — the guard's entire job is to say exactly
+# "unexpected residue" / "is stale" when it rejects, so that text IS the thing under test, not
+# incidental narration. The object-name strings are literal Postgres identifiers pulled from a
+# real inventory diff, not prose the author could word differently — nothing to loosen. None of
+# these describe a computed scope the way the typecheck gate's "in test files" did, so none carry
+# that failure mode. Left unchanged.
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="$SCRIPT_DIR/test-migrations.sh"
 

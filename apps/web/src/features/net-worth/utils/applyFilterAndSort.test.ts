@@ -2,7 +2,9 @@ import { describe, it, expect } from 'bun:test'
 import type { AccountBreakdownRow } from '../types'
 import type { NetWorthBreakdownFilters } from '../hooks/useNetWorthBreakdownFilters'
 
-const { applyFilterAndSort } = await import('./applyFilterAndSort')
+const { applyFilterAndSort, getNumericValue, getStringValue } = await import(
+  './applyFilterAndSort'
+)
 
 function makeRow(overrides: Partial<AccountBreakdownRow>): AccountBreakdownRow {
   return {
@@ -166,5 +168,104 @@ describe('applyFilterAndSort', () => {
     expect(result).toHaveLength(2)
     expect(result[0].id).toBe('r-1') // Chase, highest balance
     expect(result[1].id).toBe('r-3') // Chase, lower balance
+  })
+
+  // Issue #1569 whole-branch review, I1. A row can carry NO balance (an active account whose
+  // first sync has not landed). `null` compares false against BOTH bounds — `null < 1` and
+  // `null > 100` are each false — so a bare comparison silently ADMITS such a row to every
+  // range while reading as correct. The Accounts page settled this: no balance is not a
+  // quantity, so it satisfies no bounded range and sorts into its own group, last, in BOTH
+  // directions. These rows go through the same shared helpers, so the two surfaces cannot drift
+  // apart again.
+  describe('a row with no balance', () => {
+    const noBalance = makeRow({ id: 'r-nb', currentBalance: null, percentOfSide: null })
+    const funded = makeRow({ id: 'r-f', currentBalance: 50, percentOfSide: 50 })
+
+    it('is excluded by a minimum bound', () => {
+      const result = applyFilterAndSort([noBalance, funded], { ...emptyFilters, balanceMin: 1 }, null)
+      expect(result.map((r) => r.id)).toEqual(['r-f'])
+    })
+
+    it('is excluded by a maximum bound — not admitted by it', () => {
+      const result = applyFilterAndSort([noBalance, funded], { ...emptyFilters, balanceMax: 100 }, null)
+      expect(result.map((r) => r.id)).toEqual(['r-f'])
+    })
+
+    it('is excluded by a two-sided range', () => {
+      const result = applyFilterAndSort(
+        [noBalance, funded],
+        { ...emptyFilters, balanceMin: 1, balanceMax: 100 },
+        null
+      )
+      expect(result.map((r) => r.id)).toEqual(['r-f'])
+    })
+
+    it('survives a range with neither bound (that is not a predicate)', () => {
+      const result = applyFilterAndSort([noBalance, funded], emptyFilters, null)
+      expect(result.map((r) => r.id)).toEqual(['r-nb', 'r-f'])
+    })
+
+    it('sorts last ascending, below a negative-magnitude row', () => {
+      const overdrawn = makeRow({ id: 'r-o', currentBalance: -10, percentOfSide: 10 })
+      const result = applyFilterAndSort(
+        [noBalance, funded, overdrawn],
+        emptyFilters,
+        { column: 'balance', direction: 'asc' }
+      )
+      expect(result.map((r) => r.id)).toEqual(['r-o', 'r-f', 'r-nb'])
+    })
+
+    it('sorts last DESCENDING too — it is neither the largest nor the smallest', () => {
+      const overdrawn = makeRow({ id: 'r-o', currentBalance: -10, percentOfSide: 10 })
+      const result = applyFilterAndSort(
+        [noBalance, funded, overdrawn],
+        emptyFilters,
+        { column: 'balance', direction: 'desc' }
+      )
+      expect(result.map((r) => r.id)).toEqual(['r-f', 'r-o', 'r-nb'])
+    })
+
+    it('sorts last on the percent column in both directions', () => {
+      const asc = applyFilterAndSort([noBalance, funded], emptyFilters, {
+        column: 'percent',
+        direction: 'asc',
+      })
+      expect(asc.map((r) => r.id)).toEqual(['r-f', 'r-nb'])
+      const desc = applyFilterAndSort([noBalance, funded], emptyFilters, {
+        column: 'percent',
+        direction: 'desc',
+      })
+      expect(desc.map((r) => r.id)).toEqual(['r-f', 'r-nb'])
+    })
+  })
+})
+
+// Issue #1569 whole-branch review, residual to I1. Both column accessors used to end in a
+// fallback (`default: return 0` / `default: return ''`). Unreachable today — the five members of
+// `SortColumn` are all handled — but the fallback IS the failure mode: add a sixth numeric column
+// and it sorts at 0, i.e. between the overdrawn rows and the funded ones, instead of grouping last
+// with "no balance". That is I1's bug arriving by a different route.
+//
+// ⚠ THE PRIMARY GUARD FOR THIS IS THE COMPILER, NOT THIS FILE, and that is not a cop-out — it is
+// forced. `apps/web/tsconfig.json` EXCLUDES `**/*.test.ts`, so a `@ts-expect-error` written here
+// is never evaluated by `bun run typecheck` and pins nothing at all; a first draft of these tests
+// used exactly that and was silently vacuous. The real pin is `assertNever(col)` in the source
+// file: adding a member to `SortColumn` without adding a case to the matching accessor is a
+// COMPILE error in `applyFilterAndSort.ts` itself, which typecheck does see. Verified by adding a
+// sixth column and watching `bun run typecheck` go red (TS2345), and green again once handled.
+//
+// What IS testable at runtime is below: the accessors throw rather than answering a plausible
+// wrong value when the type system has been bypassed by a cast.
+describe('column accessors have no silent fallback value', () => {
+  const row = makeRow({})
+
+  // A wrong sort order is invisible to the user; an exception is not. `0` and `''` were both
+  // plausible-looking answers that would have shipped a mis-sorted table.
+  it('throws rather than answering 0 for a numeric column it does not handle', () => {
+    expect(() => getNumericValue(row, 'institution' as never)).toThrow(/unhandled sort column/)
+  })
+
+  it("throws rather than answering '' for a text column it does not handle", () => {
+    expect(() => getStringValue(row, 'balance' as never)).toThrow(/unhandled sort column/)
   })
 })

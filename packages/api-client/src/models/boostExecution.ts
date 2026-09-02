@@ -34,8 +34,10 @@
 export interface BoostExecution {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
-  boost_id: string;
+  boost_id?: string;
+  boost_name?: string;
   completed_at?: string;
+  definition_snapshot?: unknown;
   error_code?: string;
   error_message?: string;
   execution_duration_ms?: number;
@@ -47,4 +49,5 @@ export interface BoostExecution {
   started_at: string;
   status: string;
   trigger_context: unknown;
+  user_id: string;
 }

@@ -1,0 +1,65 @@
+-- Issue #1569 T8: drop idx_household_account_shares_active_visible, which no query can use.
+--
+-- THE ARGUMENT IS STATIC, NOT EMPIRICAL. Read this whole header before re-measuring anything --
+-- two separate empirical claims about this index were made during #1569 and BOTH WERE FALSE:
+--
+--   * "the planner prefers uq_household_account_shares_active even with enable_seqscan=off" --
+--     FALSE. Asked directly, the planner chose THIS index.
+--   * "idx_scan = 0 for it versus 274 for the unique index" -- MEANINGLESS. All five indexes on
+--     the table read idx_scan = 0, pg_stat_database.stats_reset is NULL, and the table holds
+--     ZERO ROWS in every environment available locally. Both numbers were artefacts of a scratch
+--     database, and the EXPLAIN above ran against an empty table.
+--
+-- Nobody should re-run either experiment expecting an answer. The reason the index is dead does
+-- not depend on statistics at all.
+--
+-- WHY IT IS UNUSABLE. It is a PARTIAL index:
+--
+--     CREATE INDEX idx_household_account_shares_active_visible
+--         ON household_account_shares (household_id, user_account_id)
+--         WHERE revoked_at IS NULL AND visibility = 'shared';       -- migration 000110:109
+--
+-- Postgres may only use a partial index when the query's own WHERE clause IMPLIES that predicate.
+-- Every production statement against this table fails that test, and they fail it in three
+-- distinct ways. Re-derived from the tree rather than inherited (six sites, not the five an
+-- earlier note counted -- 3 + 2 + 1 is 6):
+--
+--   1. NO `visibility` PREDICATE AT ALL (2 sites)
+--      household_share_repository.go RevokeSharesForUser  -- household_id + revoked_at IS NULL
+--                                                            + user_account_id IN (...)
+--      household_share_repository.go ListMyAccountShares  -- LEFT JOIN on household_id
+--                                                            + revoked_at IS NULL
+--
+--   2. `visibility <> $3`, NOT `= 'shared'` (1 site)
+--      household_share_repository.go SetShareVisibility, the close-the-interval UPDATE. An
+--      inequality cannot imply an equality.
+--
+--   3. REVOKED ROWS DELIBERATELY INCLUDED (3 sites)
+--      analytics_repository.go, the householdAccountsCTE family. All three DO carry
+--      `has.visibility = 'shared'` -- and all three pair it with
+--      `AND (ua.user_id = ANY($3) OR has.revoked_at IS NOT NULL)`, which is satisfied BY revoked
+--      rows. `revoked_at IS NULL` is therefore not implied; it is contradicted on purpose.
+--      ⚠ #1569 ITSELF rewrote that path, to make a departed member's shared interval readable.
+--      So this is not a stale query awaiting a fix -- it is the current, intended behaviour, and
+--      the index was left describing the shape the code no longer has.
+--
+-- WHAT IT COSTS. Nothing reads it; the table's four write statements -- two INSERTs and two
+-- UPDATEs, all in household_share_repository.go -- maintain it on every write, and it occupies
+-- pages in every backup and every replica. A write cost with no read benefit.
+--
+-- ⚠ ONE THING THAT LOOKS LIKE A CONSUMER AND IS NOT. SetShareVisibility's upsert carries
+-- `ON CONFLICT (household_id, user_account_id) WHERE revoked_at IS NULL`. That arbiter matches
+-- uq_household_account_shares_active EXACTLY -- same columns, same predicate -- and an
+-- ON CONFLICT arbiter can only ever bind to a UNIQUE index, which this one is not. Dropping it
+-- cannot affect that statement.
+--
+-- REVERSIBILITY. The .down.sql recreates it verbatim from 000110. If a future query is written
+-- whose WHERE implies the predicate -- an active-and-shared aggregate with no revoked leg --
+-- recreating the index is one statement, and it should be recreated then, on evidence, rather
+-- than kept now on the hope of it.
+--
+-- uq_household_account_shares_active is UNTOUCHED. It shares this index's key columns and a
+-- weaker predicate, it is the correctness constraint for "one active grant per
+-- (household, user_account)", and migration 000165's error text names it to the user.
+
+DROP INDEX IF EXISTS idx_household_account_shares_active_visible;

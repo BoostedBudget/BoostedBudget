@@ -141,6 +141,31 @@ describe('toAuditEntry (R5-19)', () => {
     expect(entry.confirmationConfirmed).toBe(false)
   })
 
+  // #1569 Task 16, F6. execute.ts now records capability.class verbatim, so a confirmed
+  // destructive call arrives here as operationClass 'destructive'. toAuditEntry tested
+  // `operationClass === 'write'`, which is false for it — every confirmed destructive operation
+  // would have been recorded as UNCONFIRMED, the exact opposite of the audit story the tier
+  // exists to tell. RED-verified: reverting audit-mapping.ts to `=== 'write'` fails this
+  // assertion with `Expected: true / Received: false`.
+  it('maps a destructive/success (confirmed) event — confirmationConfirmed=true (#1569 T16)', () => {
+    const entry = toAuditEntry({ operationId: 'deleteTag', operationClass: 'destructive', result: 'success' }, actor)
+
+    expect(entry.operationClass).toBe('destructive')
+    expect(entry.confirmationPresented).toBe(false)
+    expect(entry.confirmationConfirmed).toBe(true)
+  })
+
+  it('maps a destructive/confirmation_required event — confirmationConfirmed=false', () => {
+    // The control for the case above: `!== 'read'` must not confirm a call that never ran.
+    const entry = toAuditEntry(
+      { operationId: 'deleteTag', operationClass: 'destructive', result: 'confirmation_required' },
+      actor
+    )
+
+    expect(entry.confirmationPresented).toBe(true)
+    expect(entry.confirmationConfirmed).toBe(false)
+  })
+
   it('maps a write/success (confirmed) event — confirmationConfirmed=true', () => {
     const entry = toAuditEntry({ operationId: 'updateTransactionCategory', operationClass: 'write', result: 'success' }, actor)
     expect(entry.confirmationPresented).toBe(false)

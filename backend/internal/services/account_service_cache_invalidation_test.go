@@ -95,7 +95,7 @@ func newFingerprintReleaseHarness(t *testing.T) (
 			ItemStatus:      domain.LinkedItemStatusDisconnected,
 			StatusChangedAt: &statusChangedAt,
 		}, nil)
-	mockAccountRepo.On("ExpireAccountsByFingerprint", ctx, expectedPersistentBlind).Return(nil)
+	mockAccountRepo.On("ExpireAccountsByFingerprint", ctx, expectedPersistentBlind).Return(nil, nil)
 	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedFallbackBlind, userID).Return(nil, nil)
 
 	newItemID := uuid.New().String()
@@ -115,6 +115,7 @@ func newFingerprintReleaseHarness(t *testing.T) (
 		mockUserRepo,
 		nil,
 		WithEncryptor(enc),
+		WithUserAccountService(newPermissiveUserAccountService(userID)),
 		WithAccountServiceLogger(slog.Default()),
 	)
 

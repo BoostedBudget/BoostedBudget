@@ -162,6 +162,23 @@ type GetBoostExecutionsOutput struct {
 	Body *domain.BoostExecutionsResponse
 }
 
+// GetUserBoostExecutionsInput represents the input for the account-wide automation history.
+//
+// Issue #1569 Task 14: deliberately has NO id path parameter. Every boost-scoped read filters on
+// boost_id, and fk_boost_executions_boost_id is ON DELETE SET NULL, so an execution whose boost has
+// been purged can only ever be reached by a read keyed on the user.
+type GetUserBoostExecutionsInput struct {
+	inputs.AuthenticatedInput
+	Status string `query:"status" doc:"Filter by status: pending, running, completed, failed"`
+	Limit  int    `query:"limit" default:"20" minimum:"1" maximum:"100" doc:"Maximum number of results"`
+	Offset int    `query:"offset" default:"0" minimum:"0" doc:"Number of results to skip"`
+}
+
+// GetUserBoostExecutionsOutput represents the account-wide automation history response.
+type GetUserBoostExecutionsOutput struct {
+	Body *domain.BoostExecutionsResponse
+}
+
 // --- Handler Methods ---
 
 // validBoostTypeValues lists the allowed boost_type query values for the list endpoint.
@@ -377,6 +394,44 @@ func (h *BoostHandler) GetBoostExecutions(ctx context.Context, input *GetBoostEx
 	}, nil
 }
 
+// GetUserBoostExecutions handles GET /api/v1/boosts/executions requests.
+//
+// Issue #1569 Task 14. This is the account-wide automation history, and the only read path that can
+// surface an execution whose boost has been purged (boost_id NULL). Such a row carries boost_name
+// and definition_snapshot, captured at execution time, so a client can still say what the
+// automation was and what it did.
+//
+// Tenancy: there is deliberately no boost-ownership check, because an orphan has no boost to own.
+// Scoping is the authenticated user id, taken from AuthenticatedInput and passed straight to the
+// service, which filters on the execution row's own denormalised user_id. Nothing client-supplied
+// reaches that filter.
+func (h *BoostHandler) GetUserBoostExecutions(ctx context.Context, input *GetUserBoostExecutionsInput) (*GetUserBoostExecutionsOutput, error) {
+	if h.executionService == nil {
+		return nil, huma.Error500InternalServerError("Boost execution service not available")
+	}
+
+	var statusFilter *domain.ExecutionStatus
+	if input.Status != "" {
+		status := domain.ExecutionStatus(input.Status)
+		statusFilter = &status
+	}
+
+	executions, total, err := h.executionService.GetUserExecutionHistory(
+		ctx, input.UserID, statusFilter, input.Limit, input.Offset)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return &GetUserBoostExecutionsOutput{
+		Body: &domain.BoostExecutionsResponse{
+			Executions: executions,
+			Total:      total,
+			Limit:      input.Limit,
+			Offset:     input.Offset,
+		},
+	}, nil
+}
+
 // RegisterBoostRoutes registers boost routes with the Huma API.
 // Note: These routes require the Clerk middleware to be applied.
 func RegisterBoostRoutes(api huma.API, handler *BoostHandler) {
@@ -508,4 +563,43 @@ func RegisterBoostRoutes(api huma.API, handler *BoostHandler) {
 		Tags:        []string{"Boosts"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetBoostExecutions)
+
+	// GET /api/v1/boost-executions - Account-wide automation history, orphans included.
+	//
+	// Issue #1569 Task 14, ATTRIBUTION CORRECTED in task 19. The path is a SIBLING of /api/v1/boosts
+	// rather than a child. This was first registered as /api/v1/boosts/executions, and
+	// TestBoostRoutes_ExecutionsPathIsNotSwallowedByTheIDWildcard showed the request being matched by
+	// /api/v1/boosts/{id} with id="executions" and reaching GetBoostByID.
+	//
+	// ⚠ That observation was real but it was NOT production behaviour, and the original comment here
+	// blamed the wrong router. That test builds its API with humatest.New, which is registration-order
+	// sensitive: a literal registered AFTER a {param} sibling loses. Production builds the API with
+	// humaecho.NewV4 (cmd/server/main.go) — Echo v4's radix tree, where static beats param in EITHER
+	// registration order. Measured both ways in
+	// TestRouterPrecedence_ProductionEchoAlwaysPrefersTheLiteralSegment and
+	// TestRouterPrecedence_HumatestIsRegistrationOrderSensitive (cmd/server).
+	//
+	// So /api/v1/boosts/executions would have worked in production; the hyphenated sibling is a
+	// convention choice, not a defect fix. It stays because it matches the existing convention
+	// (/api/v1/savings-goals, /api/v1/transfer-suggestions, /api/v1/user-accounts) and because
+	// changing a shipped path to prove a point is not worth a migration. Do NOT generalise the
+	// original claim: a literal route sharing a prefix with a {param} sibling is not dead here.
+	huma.Register(api, huma.Operation{
+		OperationID: "getUserBoostExecutions",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/boost-executions",
+		Summary:     "Get account-wide boost execution history",
+		Description: "Retrieves every boost execution for the authenticated user with an optional " +
+			"status filter. Unlike /boosts/{id}/executions this also returns executions whose boost " +
+			"has since been deleted. Every row carries boost_name and definition_snapshot, captured " +
+			"at execution time, so it is readable with or without its parent. Do NOT key \"deleted " +
+			"boost\" off boost_id being null: normal deletion TOMBSTONES the boost, so those " +
+			"executions keep their original non-null boost_id and the boost simply stops appearing " +
+			"in GET /boosts. boost_id is null only when the boost ROW itself was destroyed (the FK " +
+			"is ON DELETE SET NULL), which today means a purge or GDPR erasure. To mark a row as " +
+			"coming from a deleted boost, treat a null boost_id OR a boost_id absent from GET " +
+			"/boosts as deleted.",
+		Tags:     []string{"Boosts"},
+		Security: []map[string][]string{{"clerk": {}}},
+	}, handler.GetUserBoostExecutions)
 }

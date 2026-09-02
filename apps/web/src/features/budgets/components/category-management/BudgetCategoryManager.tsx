@@ -410,7 +410,16 @@ export function BudgetCategoryManager({
         totalAllocatedExcludingCurrent={totalAllocatedExcludingCurrent}
       />
 
-      {/* Delete Confirmation Dialog — Issue #960 */}
+      {/*
+        Delete Confirmation Dialog — Issue #960.
+
+        Issue #1569: this dialog was silent about what survives. `DeleteCategory` tombstones the
+        row (`deleted_at = NOW()`), and the spending already recorded against it — along with the
+        `budget_period_events` and `rollover_history` rows — is kept. "This action cannot be undone"
+        stays because it is true: nothing in this system sets `deleted_at = NULL`. Retained is not
+        recoverable, so the copy says the history is kept and promises nothing about getting the
+        category itself back.
+      */}
       <ConfirmationDialog
         open={deleteDialog.isOpen}
         onOpenChange={(open) => !open && handleCloseDeleteDialog()}
@@ -418,7 +427,7 @@ export function BudgetCategoryManager({
         title="Delete Category"
         description={
           deleteDialog.category ? (
-            <>Are you sure you want to delete the category &ldquo;<span data-ph-mask>{categoryDisplayLabel(deleteDialog.category)}</span>&rdquo;? This action cannot be undone.</>
+            <>Are you sure you want to delete the category &ldquo;<span data-ph-mask>{categoryDisplayLabel(deleteDialog.category)}</span>&rdquo;? It leaves this budget, but nothing is thrown away &mdash; the spending already recorded against it is kept. This action cannot be undone.</>
           ) : ''
         }
         variant="destructive"

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,21 +25,21 @@ func ptrStr(s string) *string { return &s }
 
 // mockBudgetService is a mock implementation of services.BudgetService
 type mockBudgetService struct {
-	budget             *domain.Budget
-	budgets            []*domain.Budget
-	category           *domain.BudgetCategory
-	categories         []string
-	createErr          error
-	getErr             error
-	getBudgetsErr      error
-	getCurrentErr      error
-	updateErr          error
-	deleteErr          error
-	addCategoryErr     error
-	updateCategoryErr  error
-	deleteCategoryErr  error
-	getCategoriesErr   error
-	createCallCount    int // tracks CreateBudget invocations (R9-7)
+	budget            *domain.Budget
+	budgets           []*domain.Budget
+	category          *domain.BudgetCategory
+	categories        []string
+	createErr         error
+	getErr            error
+	getBudgetsErr     error
+	getCurrentErr     error
+	updateErr         error
+	deleteErr         error
+	addCategoryErr    error
+	updateCategoryErr error
+	deleteCategoryErr error
+	getCategoriesErr  error
+	createCallCount   int // tracks CreateBudget invocations (R9-7)
 }
 
 func (m *mockBudgetService) CreateBudget(ctx context.Context, userID string, req *domain.CreateBudgetRequest) (*domain.Budget, error) {
@@ -114,6 +115,8 @@ func (m *mockBudgetService) SetGoalRepo(_ services.ActiveGoalRepo) {}
 
 func (m *mockBudgetService) SetGoalOwnershipChecker(_ services.GoalOwnershipChecker) {}
 
+func (m *mockBudgetService) SetAuditLogRepository(_ repository.AuditLogRepository) {}
+
 func (m *mockBudgetService) BackfillManagedCategories(_ context.Context, _ string) error {
 	return nil
 }
@@ -158,30 +161,76 @@ func (m *mockTransactionRepoForBudget) GetTransactionsForBudgetCategory(ctx cont
 func (m *mockTransactionRepoForBudget) CreateBatch(ctx context.Context, txs []domain.Transaction) (map[string]bool, error) {
 	return nil, nil
 }
-func (m *mockTransactionRepoForBudget) Update(ctx context.Context, tx *domain.Transaction) error { return nil }
-func (m *mockTransactionRepoForBudget) DeleteByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) error { return nil }
-func (m *mockTransactionRepoForBudget) GetByUserID(ctx context.Context, userID string, limit, offset int) ([]domain.Transaction, error) { return nil, nil }
-func (m *mockTransactionRepoForBudget) GetByAccountID(ctx context.Context, accountID string) ([]domain.Transaction, error) { return nil, nil }
-func (m *mockTransactionRepoForBudget) GetBySource(ctx context.Context, source domain.TransactionSource, userID string) ([]domain.Transaction, error) { return nil, nil }
-func (m *mockTransactionRepoForBudget) GetByUserIDWithFilters(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) ([]domain.Transaction, error) { return nil, nil }
-func (m *mockTransactionRepoForBudget) CountByUserID(ctx context.Context, userID string, filters domain.TransactionFilters) (int, error) { return 0, nil }
-func (m *mockTransactionRepoForBudget) GetByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) (*domain.Transaction, error) { return nil, nil }
-func (m *mockTransactionRepoForBudget) GetByID(ctx context.Context, id string) (*domain.Transaction, error) { return nil, nil }
-func (m *mockTransactionRepoForBudget) UpdateTags(ctx context.Context, id string, userID string, tags []string, tagsSource []domain.TagSource) error { return nil }
-func (m *mockTransactionRepoForBudget) UpdateCategory(ctx context.Context, id string, userID string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) error { return nil }
-func (m *mockTransactionRepoForBudget) SetReviewed(_ context.Context, _ string, _ []string, _ bool) (int64, error) { return 0, nil }
-func (m *mockTransactionRepoForBudget) BulkUpdateCategory(_ context.Context, _ string, _ []string, _ *string, _ *string, _ *string, _ *string, _ domain.CategorySource) (int64, error) { return 0, nil }
-func (m *mockTransactionRepoForBudget) GetReviewSummary(_ context.Context, _ string, _ domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error) { return &domain.ReviewSummaryResponse{TopUnreviewedCategories: []domain.TopUnreviewedCategory{}}, nil }
-func (m *mockTransactionRepoForBudget) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) { return nil, nil }
-func (m *mockTransactionRepoForBudget) GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error) { return 0, nil }
-func (m *mockTransactionRepoForBudget) GetIncomeSumByTag(ctx context.Context, userID string, tag string, startDate, endDate time.Time) (float64, error) { return 0, nil }
-func (m *mockTransactionRepoForBudget) GetSpentSumForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time) (float64, error) { return 0, nil }
-func (m *mockTransactionRepoForBudget) GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) { return 0, 0, nil }
+func (m *mockTransactionRepoForBudget) Update(ctx context.Context, tx *domain.Transaction) error {
+	return nil
+}
+func (m *mockTransactionRepoForBudget) PullForwardSettledPendingAnnotations(ctx context.Context, userID string, transactionIDs []string) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockTransactionRepoForBudget) TombstoneByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string, deletedBy string) (domain.TransactionDeletedReason, error) {
+	return domain.TxnDeletedProviderRemovedPosted, nil
+}
+func (m *mockTransactionRepoForBudget) GetByUserID(ctx context.Context, userID string, limit, offset int) ([]domain.Transaction, error) {
+	return nil, nil
+}
+func (m *mockTransactionRepoForBudget) GetByAccountID(ctx context.Context, accountID string) ([]domain.Transaction, error) {
+	return nil, nil
+}
+func (m *mockTransactionRepoForBudget) GetBySource(ctx context.Context, source domain.TransactionSource, userID string) ([]domain.Transaction, error) {
+	return nil, nil
+}
+func (m *mockTransactionRepoForBudget) GetByUserIDWithFilters(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) ([]domain.Transaction, error) {
+	return nil, nil
+}
+func (m *mockTransactionRepoForBudget) CountByUserID(ctx context.Context, userID string, filters domain.TransactionFilters) (int, error) {
+	return 0, nil
+}
+func (m *mockTransactionRepoForBudget) GetByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) (*domain.Transaction, error) {
+	return nil, nil
+}
+func (m *mockTransactionRepoForBudget) GetByID(ctx context.Context, id string) (*domain.Transaction, error) {
+	return nil, nil
+}
+func (m *mockTransactionRepoForBudget) UpdateTags(ctx context.Context, id string, userID string, tags []string, tagsSource []domain.TagSource) error {
+	return nil
+}
+func (m *mockTransactionRepoForBudget) UpdateCategory(ctx context.Context, id string, userID string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) error {
+	return nil
+}
+func (m *mockTransactionRepoForBudget) SetReviewed(_ context.Context, _ string, _ []string, _ bool) (int64, error) {
+	return 0, nil
+}
+func (m *mockTransactionRepoForBudget) BulkUpdateCategory(_ context.Context, _ string, _ []string, _ *string, _ *string, _ *string, _ *string, _ domain.CategorySource) (int64, error) {
+	return 0, nil
+}
+func (m *mockTransactionRepoForBudget) GetReviewSummary(_ context.Context, _ string, _ domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error) {
+	return &domain.ReviewSummaryResponse{TopUnreviewedCategories: []domain.TopUnreviewedCategory{}}, nil
+}
+func (m *mockTransactionRepoForBudget) GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error) {
+	return nil, nil
+}
+func (m *mockTransactionRepoForBudget) GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error) {
+	return 0, nil
+}
+func (m *mockTransactionRepoForBudget) GetIncomeSumByTag(ctx context.Context, userID string, tag string, startDate, endDate time.Time) (float64, error) {
+	return 0, nil
+}
+func (m *mockTransactionRepoForBudget) GetSpentSumForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time) (float64, error) {
+	return 0, nil
+}
+func (m *mockTransactionRepoForBudget) GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) {
+	return 0, 0, nil
+}
 
 // GetByUserAccountID retrieves all transactions for a user_account.
 // Issue #171 - Plaid Re-Link Handling
-func (m *mockTransactionRepoForBudget) GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error) { return nil, nil }
-func (m *mockTransactionRepoForBudget) UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID string, customCategoryID string) (int64, error) { return 0, nil }
+func (m *mockTransactionRepoForBudget) GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error) {
+	return nil, nil
+}
+func (m *mockTransactionRepoForBudget) UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID string, customCategoryID string) (int64, error) {
+	return 0, nil
+}
 func (m *mockTransactionRepoForBudget) GetByUserIDKeyset(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]domain.Transaction, *domain.TransactionCursor, error) {
 	return nil, nil, nil
 }
@@ -227,6 +276,9 @@ func (m *mockCustomCategoryRepoForBudget) CountByUserID(ctx context.Context, use
 func (m *mockCustomCategoryRepoForBudget) GetNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error) {
 	return map[string]string{}, nil
 }
+func (m *mockCustomCategoryRepoForBudget) GetLiveNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
 func (m *mockCustomCategoryRepoForBudget) GetChildren(ctx context.Context, parentID string) ([]*domain.CustomCategory, error) {
 	return nil, nil
 }
@@ -236,7 +288,7 @@ func (m *mockCustomCategoryRepoForBudget) HasChildren(ctx context.Context, id st
 func (m *mockCustomCategoryRepoForBudget) GetCategoryUsage(ctx context.Context, userID, categoryID string) (*domain.CategoryUsage, error) {
 	return &domain.CategoryUsage{}, nil
 }
-func (m *mockCustomCategoryRepoForBudget) DeleteWithReassignment(ctx context.Context, userID, categoryID string) error {
+func (m *mockCustomCategoryRepoForBudget) DeleteWithReassignment(ctx context.Context, userID, categoryID string, auditLog repository.AuditLogRepository) error {
 	return nil
 }
 
@@ -592,7 +644,6 @@ func TestGetCategoryTransactions_EnrichesPFCDisplay(t *testing.T) {
 	assert.Equal(t, "Food And Drink", *tx.PFCPrimaryDisplay)
 }
 
-
 // TestGetCategoryTransactions_WrapsServiceError tests that a service/repo error
 // is mapped to a 500 response by the handler.
 func TestGetCategoryTransactions_WrapsServiceError(t *testing.T) {
@@ -855,7 +906,7 @@ func TestCreateBudget_BothFieldsProvided_ExpectedIncomeWins(t *testing.T) {
 		Name:           "Monthly Budget",
 		Period:         domain.BudgetPeriodMonthly,
 		StartDate:      time.Now(),
-		Amount:         100.00,          // lower value
+		Amount:         100.00, // lower value
 		CurrencyCode:   "USD",
 		ExpectedIncome: &expectedIncome, // higher value — should win
 	}
@@ -969,14 +1020,14 @@ func (m *mockMCPAuditRepositoryFailForBudget) RecordInTx(_ context.Context, _ pg
 // testBudget returns a minimal domain.Budget for use in tests.
 func testBudget() *domain.Budget {
 	return &domain.Budget{
-		ID:          "budget-test-1",
-		UserID:      "user-mcp-budget",
-		Name:        "Test Budget",
-		Amount:      1000,
-		Period:      domain.BudgetPeriodMonthly,
-		IsActive:    true,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:        "budget-test-1",
+		UserID:    "user-mcp-budget",
+		Name:      "Test Budget",
+		Amount:    1000,
+		Period:    domain.BudgetPeriodMonthly,
+		IsActive:  true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 }
 
@@ -1123,9 +1174,9 @@ func TestCreateBudget_MCPOrigin_SavingsGoalIDOR(t *testing.T) {
 			&mockBudgetSyncService{},
 			services.NewTransactionService(&mockTransactionRepoForBudget{}, &mockCustomCategoryRepoForBudget{}),
 			BudgetHandlerDeps{
-				DB:              db,
-				MCPAuditRepo:    auditRepo,
-				MCPWorkerSecret: workerSecret,
+				DB:                   db,
+				MCPAuditRepo:         auditRepo,
+				MCPWorkerSecret:      workerSecret,
 				GoalOwnershipChecker: checker,
 			},
 		)

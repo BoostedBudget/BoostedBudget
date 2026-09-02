@@ -13,6 +13,7 @@ import {
   useDeleteSavingsGoal,
   getGetSavingsGoalsQueryKey,
   getGetActiveSavingsGoalsQueryKey,
+  getGetDeletedSavingsGoalsQueryKey,
 } from '@boostedbudget/api-client/endpoints/savings-goals/savings-goals';
 import { computeSavingsProgress } from '../types';
 import type {
@@ -111,9 +112,22 @@ export function useSavingsGoals(options: UseSavingsGoalsOptions = {}): UseSaving
   const deleteGoal = useCallback(
     async (id: string): Promise<void> => {
       await deleteMutation.mutateAsync({ id });
+      // The deleted-goals listing is now wrong, and NOTHING else will notice (#1569, Codex
+      // finding 4). main.tsx sets a global five-minute staleTime, so React Query happily serves
+      // the cached listing — and in the case that matters most, deleting the LAST goal,
+      // SavingsPage switches to its empty branch and mounts <DeletedGoalsPanel> for the FIRST
+      // time against exactly that stale entry. The panel self-hides on an empty listing, so the
+      // user was shown "No savings goals yet", the purge affordance was unreachable, and the
+      // confirm dialog's promise that their contributions were kept had nothing behind it.
+      // Invalidated BEFORE the live-goals refetch below, so the panel's first mount already finds
+      // the entry stale. Pinned at the cache level by useSavingsGoalsDeletedCache.test.tsx — a
+      // test that mocks this hook cannot see this defect, because the defect IS the cache.
+      await queryClient.invalidateQueries({
+        queryKey: getGetDeletedSavingsGoalsQueryKey(),
+      });
       await refetch();
     },
-    [deleteMutation, refetch]
+    [deleteMutation, queryClient, refetch]
   );
 
   const goalsWithProgress = useMemo<SavingsGoalWithProgress[]>(() => {

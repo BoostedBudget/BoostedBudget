@@ -93,8 +93,8 @@ func (m *MockLinkedItemRepository) GetByIDAndUser(ctx context.Context, id, userI
 	return args.Get(0).(*domain.LinkedItem), args.Error(1)
 }
 
-func (m *MockLinkedItemRepository) DeleteByUser(ctx context.Context, id, userID string) error {
-	args := m.Called(ctx, id, userID)
+func (m *MockLinkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID, userID string, auditLog repository.AuditLogRepository) error {
+	args := m.Called(ctx, linkedItemID, userID, auditLog)
 	return args.Error(0)
 }
 
@@ -196,10 +196,23 @@ func (m *MockTransactionRepository) Update(ctx context.Context, transaction *dom
 	return args.Error(0)
 }
 
-func (m *MockTransactionRepository) DeleteByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) error {
-	args := m.Called(ctx, source, externalID, userID)
-	return args.Error(0)
+// PullForwardSettledPendingAnnotations — #1586.
+func (m *MockTransactionRepository) PullForwardSettledPendingAnnotations(ctx context.Context, userID string, transactionIDs []string) (int64, error) {
+	args := m.Called(ctx, userID, transactionIDs)
+	if n, ok := args.Get(0).(int64); ok {
+		return n, args.Error(1)
+	}
+	return 0, args.Error(1)
 }
+
+func (m *MockTransactionRepository) TombstoneByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string, deletedBy string) (domain.TransactionDeletedReason, error) {
+	args := m.Called(ctx, source, externalID, userID, deletedBy)
+	if r, ok := args.Get(0).(domain.TransactionDeletedReason); ok {
+		return r, args.Error(1)
+	}
+	return "", args.Error(1)
+}
+
 
 func (m *MockTransactionRepository) GetByUserID(ctx context.Context, userID string, limit, offset int) ([]domain.Transaction, error) {
 	args := m.Called(ctx, userID, limit, offset)

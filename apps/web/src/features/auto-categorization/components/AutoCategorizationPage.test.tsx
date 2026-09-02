@@ -25,6 +25,8 @@ import {
   mockUseDeleteRule,
   mockToggleRuleMutateAsync,
   mockUseToggleRule,
+  mockUseGetUserRuleExecutions,
+  mockRefetchUserRuleExecutions,
 } from '@/test/mocks/auto-categorization-api'
 
 function renderWithProviders(ui: React.ReactElement) {
@@ -333,4 +335,120 @@ describe('AutoCategorizationPage', () => {
     })
   })
 
+})
+
+/**
+ * Issue #1569 T9.4 — where the retained rule-run history is REACHABLE from.
+ *
+ * ⚠ THE ZERO-RULES BRANCH IS THE LOAD-BEARING ONE. `AutoCategorizationPage` early-returns an
+ * "No rules yet" empty state when the user has no live rules, and that is EXACTLY the state a user
+ * who has deleted all their rules is in — the state in which the retained history matters most and
+ * had, before this, no reachable surface at all. Mounting the panel only in the happy path would
+ * have shipped a seat that vanishes at the moment it is needed.
+ *
+ * The error branch is included for the same reason the boost page includes it: the history is a
+ * SEPARATE query with its own loading, error and empty handling, so a blip on the live rules list
+ * is no reason to also erase every record of what the user's automations already did.
+ */
+describe('AutoCategorizationPage — retained rule run history (#1569 T9.4)', () => {
+  const mockPageRule: CategorizationRule = {
+    id: 'rule-page-1',
+    user_id: 'user-1',
+    name: 'Coffee Shops',
+    enabled: true,
+    priority: 10,
+    conditions: [{ type: 'merchant_contains', value: 'starbucks' }],
+    condition_logic: 'AND',
+    target_kind: 'pfc',
+    target_pfc_primary: 'FOOD_AND_DRINK',
+    tag_behavior: 'add',
+    source: 'manual',
+    match_count: 5,
+    override_count: 1,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-15T10:00:00Z',
+  }
+
+  const execution = {
+    id: 'exec-page-1',
+    rule_id: null,
+    transaction_id: 'txn-1',
+    user_id: 'user-1',
+    rule_name: 'Old rainy-day rule',
+    action_type: 'category',
+    result: 'applied',
+    executed_at: '2026-02-01T10:00:00Z',
+    definition_snapshot: {
+      condition_logic: 'AND',
+      conditions: [{ type: 'merchant_contains', value: 'starbucks' }],
+    },
+  }
+
+  beforeEach(() => {
+    mockUseGetUserRules.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchUserRules,
+    } as unknown as ReturnType<typeof mockUseGetUserRules>)
+    mockUseGetUserRuleExecutions.mockReturnValue({
+      data: { executions: [execution], total: 1, limit: 20, offset: 0 },
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchUserRuleExecutions,
+    } as ReturnType<typeof mockUseGetUserRuleExecutions>)
+  })
+
+  afterEach(() => {
+    // mock.module is process-global; restore the preloaded empty-page default.
+    mockUseGetUserRuleExecutions.mockReturnValue({
+      data: { executions: [], total: 0, limit: 20, offset: 0 },
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchUserRuleExecutions,
+    } as ReturnType<typeof mockUseGetUserRuleExecutions>)
+  })
+
+  it('is reachable when the user has deleted every rule (the "No rules yet" state)', async () => {
+    renderWithProviders(<AutoCategorizationPage categories={[]} />)
+    expect(screen.getByText(/no rules yet/i)).toBeInTheDocument()
+
+    const toggle = await screen.findByRole('button', { name: /rule run history/i })
+    fireEvent.click(toggle)
+    expect(await screen.findByText('Old rainy-day rule')).toBeInTheDocument()
+    expect(screen.getByText('Deleted rule')).toBeInTheDocument()
+  })
+
+  it('is reachable alongside the user’s live rules', async () => {
+    mockUseGetUserRules.mockReturnValue({
+      data: [mockPageRule],
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchUserRules,
+    } as unknown as ReturnType<typeof mockUseGetUserRules>)
+    renderWithProviders(<AutoCategorizationPage categories={[]} />)
+    expect(await screen.findByRole('button', { name: /rule run history/i })).toBeInTheDocument()
+  })
+
+  it('survives a failure of the LIVE rules query', async () => {
+    mockUseGetUserRules.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('rules unavailable'),
+      refetch: mockRefetchUserRules,
+    } as unknown as ReturnType<typeof mockUseGetUserRules>)
+    renderWithProviders(<AutoCategorizationPage categories={[]} />)
+    expect(await screen.findByRole('button', { name: /rule run history/i })).toBeInTheDocument()
+  })
+
+  it('renders no history seat at all when nothing has ever run', () => {
+    mockUseGetUserRuleExecutions.mockReturnValue({
+      data: { executions: [], total: 0, limit: 20, offset: 0 },
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchUserRuleExecutions,
+    } as ReturnType<typeof mockUseGetUserRuleExecutions>)
+    renderWithProviders(<AutoCategorizationPage categories={[]} />)
+    expect(screen.queryByRole('button', { name: /rule run history/i })).not.toBeInTheDocument()
+  })
 })

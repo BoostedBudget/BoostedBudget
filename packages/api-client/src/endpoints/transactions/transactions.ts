@@ -58,10 +58,12 @@ import type {
   GetTransactionReviewSummaryParams,
   GetTransactionsOutputBody,
   GetTransactionsParams,
+  GetUserTransactionAnnotationHistoryParams,
   ReviewSummaryResponse,
   SetTransactionReviewedInputBody,
   SetTransactionReviewedOutputBody,
   Transaction,
+  TransactionAnnotationHistoryResponse,
   UpdateTransactionCategoryBody,
   UpdateTransactionTagsBody
 } from '../../models';
@@ -115,6 +117,104 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
   }
   return result;
 };
+
+/**
+ * Retrieves the before/after record of every change to a transaction's category, review state or tags for the authenticated user, newest first. A row exists for each write that actually changed a tracked value; re-writing the identical value records nothing. Changes made to a transaction that has since been removed are still returned.
+ *
+ * `change_source` answers *what was asked for*, and has five values. Two are the user acting on their own transaction: 'category' — a recategorisation, which ALSO rewrites `reviewed`/`reviewed_at` as a side effect, so a review timestamp can be lost by a write the user thought was only about the category; and 'review' — a review-state write, single or bulk, which leaves the category alone. 'tags' is a whole-array tag replace: every tag dropped is gone the moment it returns and the previous set survives nowhere else, so `prior_tags` here is the only record of it; category fields are unchanged on these rows by construction.
+ *
+ * The remaining two record changes the user did NOT ask for, which is exactly why they are not filed under 'category'. 'settlement' is written when a pending charge posts and the sync carries the manual category from the pending row onto the posted twin, replacing whatever the twin had — it explains why the twin no longer agrees with the rule_execution_history entry for the rule that categorised it moments earlier. 'erasure' is the one source whose cause is another user: when a different user exercises GDPR erasure their custom categories are hard-deleted, and a surviving user's transaction pointing at one has its override cleared. That row is the ONLY explanation anywhere for a category changing under a user who did nothing — no other record of it exists, and none is written for the erased user's own transactions, which are deleted in the same database transaction.
+ * @summary Get transaction annotation change history
+ */
+export const getUserTransactionAnnotationHistory = (
+    params?: GetUserTransactionAnnotationHistoryParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<TransactionAnnotationHistoryResponse>(
+      {url: `/api/v1/transaction-annotation-history`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetUserTransactionAnnotationHistoryQueryKey = (params?: GetUserTransactionAnnotationHistoryParams,) => {
+    return [
+    `/api/v1/transaction-annotation-history`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetUserTransactionAnnotationHistoryQueryOptions = <TData = Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>, TError = ErrorType<ErrorModel>>(params?: GetUserTransactionAnnotationHistoryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetUserTransactionAnnotationHistoryQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>> = ({ signal }) => getUserTransactionAnnotationHistory(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetUserTransactionAnnotationHistoryQueryResult = NonNullable<Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>>
+export type GetUserTransactionAnnotationHistoryQueryError = ErrorType<ErrorModel>
+
+
+export function useGetUserTransactionAnnotationHistory<TData = Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>, TError = ErrorType<ErrorModel>>(
+ params: undefined |  GetUserTransactionAnnotationHistoryParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>,
+          TError,
+          Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetUserTransactionAnnotationHistory<TData = Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>, TError = ErrorType<ErrorModel>>(
+ params?: GetUserTransactionAnnotationHistoryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>,
+          TError,
+          Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetUserTransactionAnnotationHistory<TData = Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>, TError = ErrorType<ErrorModel>>(
+ params?: GetUserTransactionAnnotationHistoryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get transaction annotation change history
+ */
+
+export function useGetUserTransactionAnnotationHistory<TData = Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>, TError = ErrorType<ErrorModel>>(
+ params?: GetUserTransactionAnnotationHistoryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserTransactionAnnotationHistory>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetUserTransactionAnnotationHistoryQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
 
 /**
  * Retrieves transactions for the authenticated user with optional filters and pagination.

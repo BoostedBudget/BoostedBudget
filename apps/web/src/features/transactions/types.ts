@@ -124,6 +124,18 @@ export interface BankingTransaction {
   tags?: string[] | null
   data_source?: string | null
   sort_date?: string
+  /**
+   * Issue #1569: the PROVIDER withdrew this transaction after it had already POSTED — a bank
+   * reversal or correction. Only ever true when the request set include_reversed; the API
+   * excludes tombstoned rows otherwise.
+   *
+   * A row removed while still PENDING is a different thing entirely and never appears here at
+   * any value of the flag: its posted twin is already in the feed, so surfacing it would
+   * double-count the same money. Two independent backend gates enforce that (the query and
+   * Transaction.Reversed()); there is no client parameter that can ask for one.
+   */
+  reversed?: boolean | null
+  reversed_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -185,6 +197,27 @@ export function isInvestmentRow(t: FeedRow): t is InvestmentActivity {
 }
 
 /**
+ * Issue #1569: a row the provider withdrew while it was STILL PENDING.
+ *
+ * This is not a reversal and must render nowhere. Its posted twin is already in the feed, so
+ * showing it double-counts the same money against a total the user may have reconciled — the one
+ * failure mode in this issue worth a redundant client-side check.
+ *
+ * The backend gates it twice (the query never selects `provider_removed_pending`, and
+ * Transaction.Reversed() returns false for it), and
+ * TestTombstone_SettledPendingIsNeverSurfaced_Integration pins that. This is a THIRD gate, added
+ * after measuring what the UI actually did when one was fed in anyway: reversed badge shown,
+ * pending badge suppressed by the reversed branch, amount rendered — indistinguishable from an
+ * ordinary posted reversal sitting next to the transaction it duplicates.
+ *
+ * It deliberately does NOT try to re-derive which tombstone class a row belongs to; it keys on
+ * the one combination the API contract says cannot occur, and refuses to render it.
+ */
+export function isSettledPending(t: FeedRow): boolean {
+  return !isInvestmentRow(t) && t.reversed === true && t.pending === true
+}
+
+/**
  * Optional filters for querying transactions
  * All fields are optional - null/undefined means no filter
  */
@@ -207,6 +240,14 @@ export interface TransactionFilters {
   // Issue #1299: Investment transactions in unified feed
   include_investment_activity?: boolean // default: true (absence means true)
   activity_types?: ActivityType[] // Filter by investment activity type
+  /**
+   * Issue #1569: opt in to transactions the bank REVERSED after they posted. Default false, and
+   * that default is the decision, not caution — an unrequested tombstoned row landing in a list
+   * the user has already reconciled is the same silent change this issue exists to stop.
+   * Serialized only when true (canonicalization: `false` is the default and stays out of the URL
+   * and off the wire).
+   */
+  include_reversed?: boolean
 }
 
 /**

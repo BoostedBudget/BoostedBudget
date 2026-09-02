@@ -5,7 +5,7 @@
  * TDD RED: Tests written before implementation.
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import React from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router'
@@ -94,5 +94,38 @@ describe('BoostDetailPage', () => {
     renderDetail('nonexistent-id')
     const bodyText = document.body.textContent ?? ''
     expect(/not found|not exist|couldn't find/i.test(bodyText)).toBe(true)
+  })
+
+  // Issue #1569 T9.5 — "Boost not found" on a failed read tells the user their boost does not
+  // exist. AccountDetailPage already separates the two; this page did not.
+  describe('failed read', () => {
+    it('reports the failed read and does not say the boost was not found', () => {
+      mockUseGetBoostByID.mockReturnValue({
+        data: null,
+        isLoading: false,
+        // Widened: the mock is typed from its default `error: null`.
+        error: new Error('network down') as unknown as null,
+        refetch: mock(() => Promise.resolve()),
+      })
+      renderDetail()
+      expect(screen.getByRole('alert')).toBeTruthy()
+      expect(screen.getByText(/couldn't load/i)).toBeTruthy()
+      expect(screen.queryByText(/Boost not found/i)).toBeNull()
+    })
+
+    it('still says the boost was not found when the server says 404', () => {
+      mockUseGetBoostByID.mockReturnValue({
+        data: null,
+        isLoading: false,
+        // A 404 is the one error that really does mean the boost is not there.
+        error: Object.assign(new Error('not found'), {
+          response: { status: 404 },
+        }) as unknown as null,
+        refetch: mock(() => Promise.resolve()),
+      })
+      renderDetail()
+      expect(screen.getByText(/Boost not found/i)).toBeTruthy()
+      expect(screen.queryByText(/couldn't load/i)).toBeNull()
+    })
   })
 })

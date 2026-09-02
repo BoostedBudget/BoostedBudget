@@ -192,9 +192,9 @@ describe('AccountCard', () => {
       expect(link).toHaveAttribute('href', `/accounts/${mockAccount.id}`)
     })
 
-    it('Edit and Delete buttons are NOT nested inside the summary link', () => {
+    it('Edit and Disconnect buttons are NOT nested inside the summary link', () => {
       renderWithRouter(
-        <AccountCard account={mockAccount} onEdit={mock(() => {})} onDelete={mock(() => {})} />
+        <AccountCard account={mockAccount} onEdit={mock(() => {})} onDisconnect={mock(() => {})} />
       )
 
       const link = screen.getByRole('link', { name: /view bank account - checking account ending in 0000 details/i })
@@ -212,13 +212,13 @@ describe('AccountCard', () => {
       expect(link.contains(editButton)).toBe(false)
     })
 
-    it('Delete button is present as a sibling outside the link', () => {
-      const onDelete = mock(() => {})
-      renderWithRouter(<AccountCard account={mockAccount} onDelete={onDelete} />)
+    it('Disconnect button is present as a sibling outside the link', () => {
+      const onDisconnect = mock(() => {})
+      renderWithRouter(<AccountCard account={mockAccount} onDisconnect={onDisconnect} />)
 
       const link = screen.getByRole('link', { name: /view bank account - checking account ending in 0000 details/i })
-      const deleteButton = screen.getByText('Delete Account')
-      expect(link.contains(deleteButton)).toBe(false)
+      const disconnectButton = screen.getByText('Disconnect')
+      expect(link.contains(disconnectButton)).toBe(false)
     })
   })
 
@@ -320,16 +320,170 @@ describe('AccountCard', () => {
     })
   })
 
-  describe('onDelete behavior (Task 8: remove window.confirm)', () => {
-    it('calls onDelete with the full account object when Delete Account is clicked', () => {
-      const onDelete = mock(() => {})
-      renderWithRouter(<AccountCard account={mockAccount} onDelete={onDelete} />)
+  describe('closed accounts (Issue #1569: retained but no longer active)', () => {
+    it('shows a "Closed" badge for a removed account', () => {
+      const removedAccount: Account = {
+        ...mockAccount,
+        status: 'removed',
+        removed_at: '2026-03-01T00:00:00Z',
+      }
 
-      fireEvent.click(screen.getByText('Delete Account'))
+      renderWithRouter(<AccountCard account={removedAccount} />)
 
-      expect(onDelete).toHaveBeenCalledTimes(1)
-      expect(onDelete).toHaveBeenCalledWith(mockAccount)
+      expect(screen.getByText('Closed')).toBeInTheDocument()
     })
 
+    // #1569 T8.5 — NEGATIVE assertion is the point. `removed` has three causes
+    // (user_disconnect / provider_absent / link_removed) and `isInactive` also covers `replaced`
+    // and `expired`, but accounts.removed_reason is not on the wire. The old tooltip told every
+    // such user "This account was disconnected", which is a false attribution for a bank that
+    // stopped reporting the account or for our own orphan sweep. Asserting only what the copy
+    // SAYS would let that sentence be restored with this test still green.
+    it('does not tell the user they disconnected an account whose cause it cannot know', () => {
+      const removedAccount: Account = {
+        ...mockAccount,
+        status: 'removed',
+        removed_at: '2026-03-01T00:00:00Z',
+      }
+      renderWithRouter(<AccountCard account={removedAccount} />)
+
+      const badge = screen.getByText('Closed')
+      const titled = badge.closest('[title]')
+      const title = titled?.getAttribute('title') ?? ''
+
+      expect(title).not.toMatch(/was disconnected/i)
+      expect(title).toMatch(/no longer active/i)
+      expect(title).toMatch(/history is retained/i)
+    })
+
+    it('does not show a "Closed" badge for an active account', () => {
+      renderWithRouter(<AccountCard account={mockAccount} />)
+      expect(screen.queryByText('Closed')).toBeNull()
+    })
+
+    // Issue #1580. This test used to assert 'Last known balance' + /as of/ against a fixture
+    // where a REMOVED account still carried current_balance: 2500.50 — a shape production cannot
+    // produce (accountBalanceProjection nulls both balance columns for every terminal status).
+    // The real rendering was "Last known balance: N/A … as of Mar 1, 2026": a label, and a date,
+    // with nothing between them.
+    it('shows no "last known" label and no as-of date for a removed account', () => {
+      const removedAccount: Account = {
+        ...mockAccount,
+        status: 'removed',
+        removed_at: '2026-03-01T00:00:00Z',
+        current_balance: undefined,
+        available_balance: undefined,
+      }
+
+      renderWithRouter(<AccountCard account={removedAccount} />)
+
+      expect(screen.queryByText(/last known/i)).toBeNull()
+      expect(screen.queryByText(/as of/i)).toBeNull()
+      expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
+      // fix round 1, item 1: and the card still tells the user WHEN.
+      expect(screen.getByText(/closed on mar 1, 2026/i)).toBeInTheDocument()
+    })
+
+    // Issue #1591 — the label comes back, but only when there is a figure AND an instant to
+    // attach it to. The fixture keeps current_balance/available_balance undefined, because that is
+    // the only shape production can produce for a terminal account.
+    it('shows the last known balance and its date when a snapshot is on record', () => {
+      const removedAccount: Account = {
+        ...mockAccount,
+        status: 'removed',
+        removed_at: '2026-03-01T00:00:00Z',
+        current_balance: undefined,
+        available_balance: undefined,
+        last_known_balance: 4321,
+        last_known_balance_at: '2026-02-24T00:00:00Z',
+      }
+
+      renderWithRouter(<AccountCard account={removedAccount} />)
+
+      expect(screen.getByText('Last known balance')).toBeInTheDocument()
+      expect(screen.getByText('$4,321.00')).toBeInTheDocument()
+      expect(screen.getByText(/as of feb 24, 2026/i)).toBeInTheDocument()
+      // And the current-side ruling is untouched: no current balance is claimed.
+      expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
+    })
+
+    // Issue #1569 task 21, item D. The user's ruling: "If account is closed, treat as empty
+    // balance, we don't want orphaned balances." The API now OMITS current_balance and
+    // available_balance for a terminal-status account, so the card receives `undefined` for both.
+    //
+    // The thing that must not happen is a rendered "$0.00": that is a positive claim that the
+    // account is empty, which is a different and false statement from "we no longer know". The
+    // fixtures in the two tests above both still carry a balance, so neither of them would notice
+    // if this regressed.
+    it('renders no balance at all — and no misleading $0.00 — for a closed account', () => {
+      const closedAccount: Account = {
+        ...mockAccount,
+        status: 'removed',
+        removed_at: '2026-03-01T00:00:00Z',
+        current_balance: undefined,
+        available_balance: undefined,
+      }
+
+      renderWithRouter(<AccountCard account={closedAccount} />)
+
+      expect(screen.queryByText('$0.00')).toBeNull()
+      expect(screen.queryByText(/\$2,500/)).toBeNull()
+      // Issue #1580: and the reason is stated, rather than left as a bare N/A the user has to
+      // interpret.
+      expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
+    })
+  })
+
+  describe('onDisconnect behavior (Task 8: remove window.confirm)', () => {
+    it('calls onDisconnect with the full account object when Disconnect is clicked', () => {
+      const onDisconnect = mock(() => {})
+      renderWithRouter(<AccountCard account={mockAccount} onDisconnect={onDisconnect} />)
+
+      fireEvent.click(screen.getByText('Disconnect'))
+
+      expect(onDisconnect).toHaveBeenCalledTimes(1)
+      expect(onDisconnect).toHaveBeenCalledWith(mockAccount)
+    })
+  })
+
+  // Issue #1569, Task 6: a closed account's actions are purge-only — Edit/Disconnect both act on
+  // a LIVE account and must not render for one that is already closed (carried-over Task 5
+  // reviewer finding: closed rows previously kept working Edit/Delete actions that harmlessly
+  // re-ran UpdateStatus(removed)).
+  describe('closed account actions (Issue #1569, Task 6: purge-only)', () => {
+    const closedAccount: Account = {
+      ...mockAccount,
+      status: 'removed',
+      removed_at: '2026-03-01T00:00:00Z',
+    }
+
+    it('does not render Edit or Disconnect for a closed account', () => {
+      renderWithRouter(
+        <AccountCard
+          account={closedAccount}
+          onEdit={mock(() => {})}
+          onDisconnect={mock(() => {})}
+          onPurge={mock(() => {})}
+        />
+      )
+
+      expect(screen.queryByRole('button', { name: /edit account/i })).toBeNull()
+      expect(screen.queryByText('Disconnect')).toBeNull()
+    })
+
+    it('renders a "Delete from history" purge action for a closed account', () => {
+      const onPurge = mock(() => {})
+      renderWithRouter(<AccountCard account={closedAccount} onPurge={onPurge} />)
+
+      fireEvent.click(screen.getByText('Delete from history'))
+
+      expect(onPurge).toHaveBeenCalledTimes(1)
+      expect(onPurge).toHaveBeenCalledWith(closedAccount)
+    })
+
+    it('does not render the purge action for an active account', () => {
+      renderWithRouter(<AccountCard account={mockAccount} onPurge={mock(() => {})} />)
+      expect(screen.queryByText('Delete from history')).toBeNull()
+    })
   })
 })

@@ -171,7 +171,7 @@ func TestPaddleTransactionGetByTransactionID_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, transaction_id`)).
-		WithArgs(pgxmock.AnyArg()). // blind index value
+		WithArgs(pgxmock.AnyArg()).                 // blind index value
 		WillReturnRows(pgxmock.NewRows([]string{})) // empty result set triggers ErrNoRows
 
 	result, err := repo.GetByTransactionID(ctx, "txn_nonexistent")

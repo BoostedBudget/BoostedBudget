@@ -56,6 +56,9 @@ func (m *MockTransactionSyncServiceForWorker) SetSavingsDetectionServices(_ serv
 func (m *MockTransactionSyncServiceForWorker) SetCacheInvalidation(_ *cache.Generations, _ services.SyncCacheHouseholdLookup) {
 }
 
+// SetAuditLogger satisfies the TransactionSyncService interface (Issue #1569 Task 5).
+func (m *MockTransactionSyncServiceForWorker) SetAuditLogger(_ services.AuditLogger) {}
+
 // MockItemErrorServiceForWorker for testing
 type MockItemErrorServiceForWorker struct {
 	mock.Mock

@@ -101,16 +101,47 @@ squawk migrations/*.sql --pg-version=17
 
 ### Rollback Migrations
 
+**Rollback ONE migration: use `make migrate-down`, not the raw command below.**
+(#1569 round 13 task 1) `make migrate-down` (`backend/Makefile`) runs the same
+`backend/scripts/assert-migrate-reset-target-disposable.sh` guard as `migrate-reset` before
+`down 1` — repeated `make migrate-down` walks all the way back through every `.down.sql` in
+reverse, exactly like `down -all` does in one shot, and can land on a migration whose `.down.sql`
+unconditionally destroys retained history (e.g. 000035's) with no guard of its own. The raw command
+below **deliberately bypasses that guard**:
+
 ```bash
-# Rollback last migration
+# ⚠ BYPASSES the migrate-down disposability guard entirely. Prefer `make migrate-down`.
 migrate -database "$DATABASE_URL" -path migrations down 1
 
-# Rollback specific number
+# Rollback specific number — same bypass applies
 migrate -database "$DATABASE_URL" -path migrations down 3
+```
 
-# Rollback ALL migrations
+**Rollback ALL migrations: use `make migrate-reset`, not the raw command below.**
+(#1569 round 12 task 7) `make migrate-reset` (`backend/Makefile`) runs
+`backend/scripts/assert-migrate-reset-target-disposable.sh` before `down -all`, refusing to run
+against a database that holds real data and was not explicitly marked disposable — round 12 found
+that per-migration rollback refusal guards (e.g. 000151's) can be bypassed entirely by `down -all`'s
+reverse execution order, so this is the only place the protection actually lives. The raw command
+below **deliberately bypasses that guard** — it does not go through the Makefile at all — so only
+run it directly against a database you have already confirmed is disposable (or a database you are
+willing to lose everything in):
+
+```bash
+# ⚠ BYPASSES the migrate-reset disposability guard entirely. Prefer `make migrate-reset`.
 migrate -database "$DATABASE_URL" -path migrations down -all
 ```
+
+⚠ `scripts/assert-no-ungated-migrate-down-invocation.sh` (part of `make test-scripts`) checks every
+`.sh`/Makefile/GitHub Actions workflow/Dockerfile/extensionless shell-shebang script in this repo
+for an ungated `migrate ... down` invocation, and fails the build the moment a new one appears, or
+an existing gated one (both raw commands above, `make migrate-down`, `make migrate-reset`) loses
+its gate call. **It does NOT reach**: a raw invocation typed directly at a shell (why the warnings
+above still matter), a `.mjs`/`.js`/`.ts`/`.cjs` bun/npm script (a shell command there is
+necessarily inside a string literal, which the detector cannot distinguish from prose without
+risking false positives), or variable/`eval` indirection (`MIGRATE_BIN=migrate; "$MIGRATE_BIN"
+... down`) even within the scanned file types — see the script's own header comment for the full,
+current list of what is and is not covered.
 
 ### Force Version (Recovery)
 
@@ -182,15 +213,25 @@ squawk migrations/000031_*.sql --pg-version=17
 
 ### Rollback Commands
 
-```bash
-# Rollback last migration
-migrate -database "$DATABASE_URL" -path migrations down 1
+**Rollback last migration: use `make migrate-down`.** (#1569 round 13 task 1) It runs the same
+disposability guard as `migrate-reset` before `down 1`; the raw command below bypasses it:
 
-# Rollback to clean state (all migrations)
-migrate -database "$DATABASE_URL" -path migrations down -all
+```bash
+# ⚠ BYPASSES the migrate-down disposability guard entirely. Prefer `make migrate-down`.
+migrate -database "$DATABASE_URL" -path migrations down 1
 
 # Check current state
 migrate -database "$DATABASE_URL" -path migrations version
+```
+
+**Rollback to a clean state (all migrations): use `make migrate-reset`.** It runs the
+disposability guard described above before rolling back everything; the raw
+`migrate ... down -all` **bypasses that guard** and should only be run directly against a database
+already confirmed disposable:
+
+```bash
+# ⚠ BYPASSES the migrate-reset disposability guard entirely. Prefer `make migrate-reset`.
+migrate -database "$DATABASE_URL" -path migrations down -all
 ```
 
 ### Rollback Safety Checklist
@@ -335,8 +376,8 @@ Migrations are tested and linted automatically on every PR:
 |-----------|---------|
 | Apply all | `migrate -database "$DB_URL" -path migrations up` |
 | Apply N | `migrate -database "$DB_URL" -path migrations up N` |
-| Rollback 1 | `migrate -database "$DB_URL" -path migrations down 1` |
-| Rollback all | `migrate -database "$DB_URL" -path migrations down -all` |
+| Rollback 1 | `make migrate-down` (guarded — raw `migrate -database "$DB_URL" -path migrations down 1` bypasses the disposability guard) |
+| Rollback all | `make migrate-reset` (guarded — see Rollback Migrations above; raw `migrate -database "$DB_URL" -path migrations down -all` bypasses the disposability guard) |
 | Check version | `migrate -database "$DB_URL" -path migrations version` |
 | Force version | `migrate -database "$DB_URL" -path migrations force N` |
 | Lint | `squawk migrations/*.sql --pg-version=17` |

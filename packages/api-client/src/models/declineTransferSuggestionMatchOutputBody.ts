@@ -36,5 +36,5 @@ export interface DeclineTransferSuggestionMatchOutputBody {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   message: string;
-  suggestion: TransferSuggestion;
+  suggestion?: TransferSuggestion;
 }

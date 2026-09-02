@@ -12,6 +12,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -102,38 +103,138 @@ func TestDeadLetterJobRepository_RetryClaimInTx_Integration(t *testing.T) {
 	})
 }
 
+// TestListDLQSort_Integration exercises the dynamic `ORDER BY %s %s%s` in ListAll — including the
+// NULLS LAST that only the nullable `retried_at` column carries — against a real planner.
+//
+// ⚠ #1569 r17: this test SEEDS. It used to assert over whatever `dead_letter_jobs` happened to
+// hold, and every INSERT in this file belongs to a *different* top-level test that pairs it with a
+// `t.Cleanup` DELETE — so by the time this test ran the table was empty, both loops iterated zero
+// times, and the test could not fail for an inverted direction, a dropped ORDER BY, or a dropped
+// NULLS LAST. The old `seenNull` form had a second, independent hole: it asserted `Nil` on the very
+// row that SET `seenNull`, so it was trivially satisfied by any single-row (or zero-row) result.
+//
+// Isolation: the fixtures are stamped with a unique far-future `failed_at` window and every call
+// filters on that window, so the assertions are about EXACTLY these rows on a shared database.
+// The window is in the FUTURE deliberately — a past one would make these rows the oldest
+// unresolved jobs in the table and perturb GetOldestJobAge for the age-alarm test below.
 func TestListDLQSort_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	repo := NewDeadLetterJobRepository(pool)
+	// ⚠ NOT t.Context(): the cleanup below must outlive this test's own context, or the fixture rows
+	// leak into the shared integration database and corrupt OTHER packages' whole-table aggregates.
 	ctx := context.Background()
 
-	t.Run("retried_at asc NULLS LAST puts non-null values before nulls", func(t *testing.T) {
-		filters := domain.DeadLetterJobFilters{SortBy: "retried_at", SortDir: "asc"}
-		jobs, _, err := repo.ListAll(ctx, filters, 100, 0)
-		require.NoError(t, err)
+	nonce := time.Now().UnixNano()
+	kindPrefix := fmt.Sprintf("dlq_sort_%d_", nonce)
+	base := time.Now().UTC().
+		Add(1000 * 24 * time.Hour).
+		Add(time.Duration(nonce%1_000_000) * time.Second).
+		Truncate(time.Millisecond)
+	windowStart := base.Add(-time.Minute)
+	windowEnd := base.Add(24 * time.Hour)
 
-		// Once we see a NULL retried_at, all subsequent rows must also be NULL (NULLS LAST).
-		seenNull := false
-		for _, j := range jobs {
-			if j.RetriedAt == nil {
-				seenNull = true
-			}
-			if seenNull {
-				assert.Nil(t, j.RetriedAt, "expected all NULL retried_at rows after first NULL (NULLS LAST)")
-			}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM dead_letter_jobs WHERE kind LIKE $1`, kindPrefix+"%")
+	})
+
+	// Every fixture carries a DISTINCT kind and a DISTINCT (or NULL) retried_at: equal sort keys
+	// satisfy an ordering assertion in any order, so uniform values would make the whole test
+	// cosmetic. Insertion order deliberately matches NEITHER expected output order.
+	seeds := []struct {
+		kind      string
+		retriedAt *time.Time
+		retryJob  *int64
+	}{
+		{kindPrefix + "alpha", ptrTime(base.Add(2 * time.Hour)), ptrInt64(101)},
+		{kindPrefix + "bravo", nil, nil},
+		{kindPrefix + "charlie", ptrTime(base.Add(1 * time.Hour)), ptrInt64(102)},
+		{kindPrefix + "delta", nil, nil},
+	}
+	for _, sd := range seeds {
+		_, err := pool.Exec(ctx, `
+			INSERT INTO dead_letter_jobs (original_job_id, kind, queue, args, errors, max_attempts,
+			                              created_at, failed_at, retried_at, retry_job_id)
+			VALUES (0, $1, 'default', '{}'::jsonb, '[]'::jsonb, 5, $2, $2, $3, $4)`,
+			sd.kind, base, sd.retriedAt, sd.retryJob)
+		require.NoError(t, err)
+	}
+
+	window := func(sortBy, sortDir string) domain.DeadLetterJobFilters {
+		return domain.DeadLetterJobFilters{
+			StartDate: &windowStart,
+			EndDate:   &windowEnd,
+			SortBy:    sortBy,
+			SortDir:   sortDir,
 		}
+	}
+	kinds := func(jobs []*domain.DeadLetterJob) []string {
+		out := make([]string, 0, len(jobs))
+		for _, j := range jobs {
+			out = append(out, j.Kind)
+		}
+		return out
+	}
+	nullness := func(jobs []*domain.DeadLetterJob) []bool {
+		out := make([]bool, 0, len(jobs))
+		for _, j := range jobs {
+			out = append(out, j.RetriedAt == nil)
+		}
+		return out
+	}
+
+	t.Run("retried_at asc NULLS LAST puts non-null values before nulls", func(t *testing.T) {
+		jobs, total, err := repo.ListAll(ctx, window("retried_at", "asc"), 100, 0)
+		require.NoError(t, err)
+		// The floor: without it every assertion below is vacuous again the moment seeding breaks.
+		require.Len(t, jobs, len(seeds), "the fixtures must be visible or the ordering assertion proves nothing")
+		require.Equal(t, len(seeds), total)
+
+		assert.Equal(t, []bool{false, false, true, true}, nullness(jobs),
+			"NULL retried_at rows must sort last under ASC")
+		// The two non-null rows must additionally be in ascending order among themselves. The two
+		// NULL rows have no defined order relative to each other, so only their position is pinned.
+		assert.Equal(t, []string{kindPrefix + "charlie", kindPrefix + "alpha"}, kinds(jobs)[:2],
+			"expected ascending retried_at among the non-null rows")
+	})
+
+	// ⚠ SIBLING, MANDATORY: DESC is the direction where NULLS LAST actually does work. PostgreSQL's
+	// default for DESC is NULLS FIRST, so dropping the explicit ` NULLS LAST` changes DESC and
+	// leaves ASC untouched — an ASC-only test cannot see that mutation at all.
+	t.Run("retried_at desc still puts nulls last", func(t *testing.T) {
+		jobs, _, err := repo.ListAll(ctx, window("retried_at", "desc"), 100, 0)
+		require.NoError(t, err)
+		require.Len(t, jobs, len(seeds))
+
+		assert.Equal(t, []bool{false, false, true, true}, nullness(jobs),
+			"NULL retried_at rows must sort last under DESC too — that is what NULLS LAST buys")
+		assert.Equal(t, []string{kindPrefix + "alpha", kindPrefix + "charlie"}, kinds(jobs)[:2],
+			"expected descending retried_at among the non-null rows")
 	})
 
 	t.Run("kind asc produces alphabetical order", func(t *testing.T) {
-		filters := domain.DeadLetterJobFilters{SortBy: "kind", SortDir: "asc"}
-		jobs, _, err := repo.ListAll(ctx, filters, 100, 0)
+		jobs, _, err := repo.ListAll(ctx, window("kind", "asc"), 100, 0)
 		require.NoError(t, err)
-		for i := 1; i < len(jobs); i++ {
-			assert.LessOrEqual(t, jobs[i-1].Kind, jobs[i].Kind,
-				"expected ascending alphabetical kind order")
-		}
+		require.Len(t, jobs, len(seeds))
+
+		assert.Equal(t, []string{
+			kindPrefix + "alpha", kindPrefix + "bravo", kindPrefix + "charlie", kindPrefix + "delta",
+		}, kinds(jobs), "expected ascending alphabetical kind order")
+	})
+
+	t.Run("kind desc produces reverse alphabetical order", func(t *testing.T) {
+		jobs, _, err := repo.ListAll(ctx, window("kind", "desc"), 100, 0)
+		require.NoError(t, err)
+		require.Len(t, jobs, len(seeds))
+
+		assert.Equal(t, []string{
+			kindPrefix + "delta", kindPrefix + "charlie", kindPrefix + "bravo", kindPrefix + "alpha",
+		}, kinds(jobs), "expected descending alphabetical kind order")
 	})
 }
+
+func ptrTime(t time.Time) *time.Time { return &t }
+
+func ptrInt64(v int64) *int64 { return &v }
 
 // ─── Round 15, Tier E item 6: the stranded retry_job_id = 0 rows ─────────────────────────────────
 //
