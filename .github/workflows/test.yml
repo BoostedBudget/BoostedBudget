@@ -2918,65 +2918,129 @@ jobs:
   # =============================================================================
   # Lighthouse CI Audit (Performance, Accessibility, Best Practices, SEO)
   # =============================================================================
-  # DISABLED: Lighthouse CI has macOS-specific Chrome isolation issues on self-hosted
-  # Mac Mini runners (LHCI uses --headless=new which interferes with running Chrome
-  # sessions). Re-enable when migrating CI to Ubicloud Linux runners (#996).
-  # Audits the landing page with 3 runs (median scoring) against hard thresholds:
+  # Audits the landing page and /mcp with 3 runs (median scoring) against hard thresholds:
   #   Performance >= 80, Accessibility >= 95, Best Practices >= 90, SEO >= 95
-  # Uses dynamic port allocation (45000-49900) to prevent concurrent run collisions.
-  # No artifacts stored — assertions only, workspace cleaned up after.
+  #
+  # RE-ENABLED on Linux runners by #1598, closing #996. This job was dark from 2026-04-07
+  # (commit 2ce659b6) until then, because Chrome headless under LHCI shared a process group with
+  # the Mac Mini's own browser session and LHCI SIGKILLs that group after an audit -- taking the
+  # developer's browser with it.
+  #
+  # ⚠ The exact FLAG mechanism is recorded inconsistently across the repo and was NOT re-verified
+  # here, so do not quote either version as established. #996 says LHCI "always appends
+  # `--headless=new`". But .lighthouserc.js's chromeFlags comment says plain `--headless` was
+  # chosen precisely BECAUSE `--headless=new` caused EPERM/WebSocket failures on the macOS
+  # runners -- which would be pointless if LHCI overrode it unconditionally. Both cannot be true.
+  # What IS certain is that the conflict was macOS process-group behaviour, which Linux does not
+  # share, and that is the reason this job had to wait for the Ubicloud migration.
   lighthouse-audit:
     name: Lighthouse CI Audit
     needs: detect-changes
-    if: false  # Disabled — re-enable on Ubicloud Linux runners (#996)
-    runs-on: [self-hosted, macOS, mac-mini]
-    env:
-      UNIQUE_WORKSPACE: workspace-lighthouse-${{ github.run_id }}
+    if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    runs-on: ubicloud-standard-2
+    # NEW in #1598. This job had no timeout at all, so it inherited GitHub's 360-minute default:
+    # a wedged LHCI run would have billed six hours of runner time. 20 minutes is a wedge bound,
+    # not a performance target -- a frontend build plus 3 audit runs over 2 URLs is minutes.
+    timeout-minutes: 20
 
     steps:
-      - name: Clean workspace
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-
+      # No `sudo rm -rf` and no `path:`/`clean: false`: those existed so concurrent jobs on one
+      # Mac Mini could not collide. This VM is created for this job and destroyed after it.
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          path: ${{ env.UNIQUE_WORKSPACE }}
-          clean: false
           fetch-depth: 1
 
+      # LHCI launches a real Chrome through chrome-launcher, and this job installs no browser --
+      # on the Mac Mini it silently used the desktop Chrome at /Applications. Ubicloud documents
+      # nothing about its image contents, and its published Arm image inventory omits Chrome
+      # entirely, so resolve it explicitly: a runner image without Chrome must fail here with a
+      # clear message rather than inside `lhci autorun`.
+      #
+      # The version is echoed on purpose. Chrome 132 REMOVED old headless, so on a current
+      # browser the `--headless` flag in .lighthouserc.js selects new headless regardless of what
+      # that file's comment says. That is fine on Linux (the process-group conflict was
+      # macOS-specific), but the version is the only way to know which mode actually ran.
+      - name: Preflight — resolve Chrome
+        run: |
+          set -euo pipefail
+          for candidate in google-chrome google-chrome-stable chromium-browser chromium; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+              echo "CHROME_PATH=$(command -v "$candidate")" >> "$GITHUB_ENV"
+              "$candidate" --version
+              exit 0
+            fi
+          done
+          echo "::error::no Chrome/Chromium on this runner image — install one before lhci autorun"
+          exit 1
+
       - name: Setup Bun
+        id: setup-bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: latest
+          # From package.json's packageManager field, not `latest` -- see e2e-test's Setup Bun.
+          bun-version-file: package.json
+
+      # `npx lhci` and `npx serve` both need a predictable Node; this job previously had none and
+      # used whatever the Mac Mini happened to provide.
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Same key as e2e-test and warm-ci-cache.yml. Keep the three byte-identical.
+      - name: Restore Bun package store
+        id: cache-bun
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-bun.outputs.bun-version }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-bun.outputs.bun-version }}-
 
       - name: Install workspace dependencies
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bun install --frozen-lockfile
 
       - name: Build frontend
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        working-directory: apps/web
         run: bun run build
 
-      - name: Allocate dynamic LHCI port
-        env:
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          # Derive isolated port range from GITHUB_RUN_ID (same pattern as E2E tests)
-          # LHCI range: 45000-49900 (50 ranges of 100 ports, supports 50 concurrent jobs)
-          PORT_OFFSET=$(( (${RUN_ID:-0} % 50) * 100 ))
-          LHCI_PORT=$(( 45000 + PORT_OFFSET ))
-          echo "LHCI_PORT=${LHCI_PORT}" >> "$GITHUB_ENV"
-          echo "Allocated LHCI port ${LHCI_PORT}"
+      - name: Allocate LHCI port
+        # Was `45000 + (run_id % 50) * 100`, to keep 50 concurrent jobs from colliding on one
+        # shared Mac Mini. This runner is a dedicated ephemeral VM with no siblings, so the
+        # arithmetic bought nothing -- and its range (45000-49900) sits INSIDE Linux's default
+        # ip_local_port_range (32768-60999), meaning the kernel could hand the same port to an
+        # outbound socket while `npx serve` was trying to bind it. 31000 is below the 32768
+        # floor, so it is unreachable by ephemeral allocation and needs no sysctl change.
+        run: echo "LHCI_PORT=31000" >> "$GITHUB_ENV"
 
       - name: Run Lighthouse CI
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         env:
           LHCI_PORT: ${{ env.LHCI_PORT }}
         run: npx lhci autorun
 
-      - name: Final workspace cleanup
-        if: always()
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+      # .lighthouserc.js writes its reports to /tmp/lhci-reports, which vanishes with the VM.
+      # Without this, a threshold failure leaves nothing to look at -- and the thresholds were
+      # calibrated on completely different hardware, so the first failures are the ones most
+      # worth reading.
+      - name: Upload Lighthouse reports
+        id: upload-lighthouse-reports
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: lighthouse-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/lhci-reports
+          retention-days: 3
+          if-no-files-found: warn
+
+      - name: Save Bun package store
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-bun.outputs.bun-version }}-${{ hashFiles('bun.lock') }}
 
   # =============================================================================
   # Bundle Size Check (size-limit + orphan-chunk guard)
