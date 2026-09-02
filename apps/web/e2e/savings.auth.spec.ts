@@ -70,9 +70,68 @@ const FIXTURE_ACCOUNT = {
 type PageArg = Parameters<typeof mockAuthDependencies>[0]
 
 /** Mock the savings-goals endpoints with the given list body. GET = list, POST = 201, PUT/PATCH = 200, DELETE = 204. */
-async function mockSavingsGoals(page: PageArg, body: unknown) {
+/**
+ * Issue #1569 T12: SavingsPage now also calls GET /api/v1/savings-goals/deleted for the
+ * DeletedGoalsPanel. The `**\/api/v1/savings-goals**` glob below matches that path too, so
+ * without this branch every one of these fixtures would be served back as a list of DELETED
+ * goals and the panel would render the user's live goals as things they had thrown away — and,
+ * in the tests that count GET calls, would consume a fetch the assertion is counting.
+ * Returns an empty listing so the panel renders nothing, which is the state these tests assume.
+ */
+function isDeletedGoalsRequest(url: string): boolean {
+  return new URL(url).pathname.endsWith('/savings-goals/deleted')
+}
+
+/**
+ * Issue #1569 T13: SavingsPage now also calls GET /api/v1/savings-goals/progress-summary for
+ * the disconnected-account explanation. The `**\/api/v1/savings-goals**` glob below matches
+ * that path too, and without this branch it served back the GOALS ARRAY as the summary body —
+ * so `data?.goals` was `undefined`, the freshness map was always empty, and the badge could
+ * not render under ANY fixture. Every assertion about it would have been vacuously true.
+ */
+function isProgressSummaryRequest(url: string): boolean {
+  return new URL(url).pathname.endsWith('/savings-goals/progress-summary')
+}
+
+/** An otherwise-healthy summary: no goal is annotated. */
+function healthySummary(goals: Array<{ id: string }>) {
+  return {
+    goals: goals.map((g) => ({
+      goal_id: g.id,
+      goal_name: 'x',
+      current_amount: 0,
+      target_amount: 1,
+      percent_complete: 0,
+      progress_basis: 'balance',
+      computed_from: 'account_balance',
+      confirmed_contributions_total: 0,
+      freshness: 'fresh',
+    })),
+    total_saved: 0,
+    total_target: 1,
+    overall_percent_complete: 0,
+    goal_count: goals.length,
+    completed_goal_count: 0,
+  }
+}
+
+async function mockSavingsGoals(page: PageArg, body: unknown, summaryBody?: unknown) {
   await page.route('**/api/v1/savings-goals**', (route) => {
     const method = route.request().method()
+    if (isDeletedGoalsRequest(route.request().url())) {
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+      return
+    }
+    if (isProgressSummaryRequest(route.request().url())) {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          summaryBody ?? healthySummary(Array.isArray(body) ? (body as Array<{ id: string }>) : []),
+        ),
+      })
+      return
+    }
     if (method === 'GET') {
       route.fulfill({
         status: 200,
@@ -297,6 +356,10 @@ test.describe('Savings Page - Create Flow', () => {
     let callCount = 0
     await page.route('**/api/v1/savings-goals**', (route) => {
       const method = route.request().method()
+    if (isDeletedGoalsRequest(route.request().url())) {
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+      return
+    }
       if (method === 'GET') {
         callCount++
         const body = callCount === 1 ? EMPTY_GOALS_RESPONSE : [NEW_GOAL]
@@ -367,6 +430,10 @@ test.describe('Savings Page - Edit Flow', () => {
     let fetchCount = 0
     await page.route('**/api/v1/savings-goals**', (route) => {
       const method = route.request().method()
+    if (isDeletedGoalsRequest(route.request().url())) {
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+      return
+    }
       if (method === 'GET') {
         fetchCount++
         const goals = fetchCount === 1
@@ -434,8 +501,20 @@ test.describe('Savings Page - Delete Flow', () => {
     await expect(dialog).toBeVisible()
     // toContainText concatenates descendant text nodes, so the data-ph-mask <span>
     // wrap around the goal name does not split the match.
-    await expect(dialog).toContainText(/are you sure you want to delete/i)
+    // #1569 T12: the copy changed and had to. Deleting a goal RETAINS it and every
+    // contribution logged against it (task 8), so "This cannot be undone" was false — and it was
+    // the reason no user would ever go looking for the Deleted goals section that reclaims them.
+    // #1569 T8.5: the unscoped "Nothing is thrown away — every contribution you logged is kept"
+    // was FALSE once the user had explicitly deleted an individual contribution, which HARD-deletes
+    // it (savings_contribution_repository.DeleteContribution). The claim is now scoped to what
+    // deleting the GOAL does. The NEGATIVE assertions below are the load-bearing half: a positive
+    // check alone would stay green if the false unscoped sentence were restored.
+    await expect(dialog).toContainText(/remove/i)
+    await expect(dialog).toContainText(/on its own/i)
     await expect(dialog).toContainText('Vacation Fund')
+    const dialogText = (await dialog.textContent()) ?? ''
+    expect(dialogText).not.toMatch(/nothing is thrown away/i)
+    expect(dialogText).not.toMatch(/every contribution you logged is kept/i)
   })
 
   test('confirming delete removes goal from grid', async ({ page }) => {
@@ -444,6 +523,10 @@ test.describe('Savings Page - Delete Flow', () => {
     let fetchCount = 0
     await page.route('**/api/v1/savings-goals**', (route) => {
       const method = route.request().method()
+    if (isDeletedGoalsRequest(route.request().url())) {
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+      return
+    }
       if (method === 'GET') {
         fetchCount++
         const goals = fetchCount === 1
@@ -580,5 +663,89 @@ test.describe('Savings Page - Mobile', () => {
       expect(box.width).toBeGreaterThan(200)
       expect(box.x + box.width).toBeLessThanOrEqual(375 + 4) // allow 4px rounding tolerance
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Disconnected-account explanation (Issue #1569 T13 / E14)
+// ---------------------------------------------------------------------------
+
+test.describe('Savings Page - disconnected basis account', () => {
+  test.beforeEach(async ({ page }) => {
+    await acceptCookieConsent(page)
+  })
+
+  /** A summary in which exactly one goal's basis account is gone for good. */
+  function summaryWithDisconnected(disconnectedGoalId: string) {
+    const summary = healthySummary(GOALS_LIST_RESPONSE)
+    for (const item of summary.goals) {
+      if (item.goal_id === disconnectedGoalId) {
+        item.freshness = 'basis_account_disconnected'
+      }
+    }
+    return summary
+  }
+
+  test('explains the frozen amount on the goal whose basis account is disconnected', async ({
+    page,
+  }) => {
+    await mockAuthDependencies(page)
+    await mockSavingsGoals(page, GOALS_LIST_RESPONSE, summaryWithDisconnected(FIXTURE_GOAL_ACTIVE.id))
+
+    await page.goto('/savings')
+    await page.waitForLoadState('networkidle')
+
+    const badge = page.getByTestId('savings-goal-disconnected-badge')
+    await expect(badge).toHaveCount(1)
+    await expect(badge).toBeVisible()
+    await expect(badge).toHaveText(/account disconnected/i)
+
+    // Information must not be carried by colour alone: the reason and the remedy are text, and
+    // the badge points at them.
+    const noticeId = await badge.getAttribute('aria-describedby')
+    expect(noticeId).toBeTruthy()
+    const notice = page.locator(`#${noticeId}`)
+    await expect(notice).toBeVisible()
+    await expect(notice).toContainText(/no longer connected/i)
+    await expect(notice).toContainText(/reconnect/i)
+  })
+
+  test('leaves a healthy goal unannotated', async ({ page }) => {
+    await mockAuthDependencies(page)
+    await mockSavingsGoals(page, GOALS_LIST_RESPONSE)
+
+    await page.goto('/savings')
+    await page.waitForLoadState('networkidle')
+
+    // The goal itself must still be on screen — otherwise "no badge" would pass on an empty page.
+    await expect(page.getByText(FIXTURE_GOAL_ACTIVE.name)).toBeVisible()
+    await expect(page.getByTestId('savings-goal-disconnected-badge')).toHaveCount(0)
+  })
+
+  test('renders the goals list normally when the summary request fails', async ({ page }) => {
+    await mockAuthDependencies(page)
+    await page.route('**/api/v1/savings-goals**', (route) => {
+      const url = route.request().url()
+      if (new URL(url).pathname.endsWith('/savings-goals/deleted')) {
+        route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+        return
+      }
+      if (new URL(url).pathname.endsWith('/savings-goals/progress-summary')) {
+        route.fulfill({ status: 500, contentType: 'application/json', body: '{}' })
+        return
+      }
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(GOALS_LIST_RESPONSE),
+      })
+    })
+
+    await page.goto('/savings')
+    await page.waitForLoadState('networkidle')
+
+    // The summary is a secondary signal: its failure must not take the page down with it.
+    await expect(page.getByText(FIXTURE_GOAL_ACTIVE.name)).toBeVisible()
+    await expect(page.getByTestId('savings-goal-disconnected-badge')).toHaveCount(0)
   })
 })

@@ -27,26 +27,30 @@ export function useAccountBreakdown(): UseAccountBreakdownResult {
   const result = useMemo(() => {
     // Issue #1109: exclude replaced accounts so breakdown matches GetNetWorth
     const accounts = filterActiveAccounts(data?.accounts ?? [])
-    const rawAssets: Array<{ account: (typeof accounts)[number]; balance: number }> = []
-    const rawLiabs: Array<{ account: (typeof accounts)[number]; balance: number }> = []
+    const rawAssets: Array<{ account: (typeof accounts)[number]; balance: number | null }> = []
+    const rawLiabs: Array<{ account: (typeof accounts)[number]; balance: number | null }> = []
     let assetsTotal = 0
     let liabilitiesTotal = 0
 
     for (const account of accounts) {
       if (account.is_hidden) continue
-      const balance = account.current_balance ?? 0
+      // Issue #1569 whole-branch review, I1: the row keeps "no balance" as `null`. `?? 0` lives
+      // ONLY in the accumulators below, where treating an unknown amount as contributing nothing
+      // is the only available answer — it must not leak onto the row, where it would render as
+      // "$0 at 0.0%" and disagree with the Accounts page's em dash for the same account.
+      const balance = account.current_balance ?? null
       const side = classifyAccount(account.type)
       if (side === 'assets') {
         rawAssets.push({ account, balance })
-        assetsTotal += assetContrib(balance)
+        assetsTotal += assetContrib(balance ?? 0)
       } else {
         rawLiabs.push({ account, balance })
-        liabilitiesTotal += liabContrib(balance)
+        liabilitiesTotal += liabContrib(balance ?? 0)
       }
     }
 
     const toRow = (
-      { account, balance }: { account: (typeof accounts)[number]; balance: number },
+      { account, balance }: { account: (typeof accounts)[number]; balance: number | null },
       side: 'assets' | 'liabilities'
     ): AccountBreakdownRow => ({
       id: account.id,
@@ -56,13 +60,15 @@ export function useAccountBreakdown(): UseAccountBreakdownResult {
       currencyCode: account.currency_code,
       currentBalance: balance,
       percentOfSide:
-        side === 'assets'
-          ? assetsTotal === 0
-            ? 0
-            : (assetContrib(balance) / assetsTotal) * 100
-          : liabilitiesTotal === 0
-            ? 0
-            : (liabContrib(balance) / liabilitiesTotal) * 100,
+        balance === null
+          ? null
+          : side === 'assets'
+            ? assetsTotal === 0
+              ? 0
+              : (assetContrib(balance) / assetsTotal) * 100
+            : liabilitiesTotal === 0
+              ? 0
+              : (liabContrib(balance) / liabilitiesTotal) * 100,
       side,
     })
 

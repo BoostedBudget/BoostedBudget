@@ -203,7 +203,12 @@ describe('ShareNewAccountsDialog', () => {
     const switches = screen.getAllByRole('switch')
     expect(switches).toHaveLength(2)
     expect(switches[0]).toBeDisabled()
-    expect(switches[0]).toHaveAttribute('aria-checked', 'true')
+    // ⚠ #1569 T10-FIX item 8: this used to assert 'true'. AcceptInvite builds the shareable set
+    // from `user_accounts`, so an account with no user_account_id can never enter
+    // household_account_shares. Labelling it "Shared" under-shares AND misstates what happens.
+    expect(switches[0]).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByText(HOUSEHOLD_SHARE_CONSENT_COPY.unshareableStatus)).toBeInTheDocument()
+    expect(screen.getByText(HOUSEHOLD_SHARE_CONSENT_COPY.unshareableNote)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /save (&|and) continue/i }))
 
@@ -218,6 +223,60 @@ describe('ShareNewAccountsDialog', () => {
     await waitFor(() => {
       expect(onOpenChange).toHaveBeenCalledWith(false)
     })
+  })
+
+  // ── #1569 T10-FIX item 5: two accounts, ONE sharing preference ────────────────────────────
+  //
+  // ConsentPreview was fixed for this in T10.3 item C; this dialog, its sibling consent surface,
+  // was not. It rendered a switch per ACCOUNT while calling setVisibility(user_account_id, …), so
+  // two maskless accounts at one institution — forced to share a user_accounts row by migration
+  // 000100 — gave the user two controls over one backend value, and Save issued two writes for it.
+  it('renders ONE control per sharing unit when two accounts share a user_account_id', () => {
+    const accounts = [
+      makeAccount({ id: 'account-ira', user_account_id: 'ua-shared', name: 'IRA', official_name: 'Retirement IRA', mask: undefined }),
+      makeAccount({ id: 'account-brokerage', user_account_id: 'ua-shared', name: 'Brokerage', official_name: 'Taxable Brokerage', mask: undefined }),
+    ]
+    renderDialog(accounts)
+
+    expect(screen.getAllByRole('switch')).toHaveLength(1)
+    // Neither account is hidden from the user — they are told what the one control covers.
+    expect(screen.getByText('Retirement IRA')).toBeInTheDocument()
+    expect(screen.getByText('Taxable Brokerage')).toBeInTheDocument()
+    expect(screen.getByText(HOUSEHOLD_SHARE_CONSENT_COPY.sharedUnitNote)).toBeInTheDocument()
+  })
+
+  it('writes a shared unit ONCE, and its analytics counts it once', async () => {
+    const onOpenChange = mock(() => {})
+    const accounts = [
+      makeAccount({ id: 'account-ira', user_account_id: 'ua-shared', name: 'IRA', official_name: 'Retirement IRA', mask: undefined }),
+      makeAccount({ id: 'account-brokerage', user_account_id: 'ua-shared', name: 'Brokerage', official_name: 'Taxable Brokerage', mask: undefined }),
+      makeAccount({ id: 'account-solo', user_account_id: 'ua-solo', name: 'Checking' }),
+    ]
+    renderDialog(accounts, onOpenChange)
+
+    const switches = screen.getAllByRole('switch')
+    expect(switches).toHaveLength(2)
+    fireEvent.click(switches[0]) // hide the shared unit
+
+    fireEvent.click(screen.getByRole('button', { name: /save (&|and) continue/i }))
+
+    await waitFor(() => {
+      expect(mockSetHouseholdShareVisibilityMutateAsync).toHaveBeenCalledTimes(2)
+    })
+    // Two writes for three accounts: two PUTs at one key is a race whose winner decides the value.
+    expect(mockSetHouseholdShareVisibilityMutateAsync).toHaveBeenCalledWith({
+      id: 'ua-shared',
+      data: { visibility: 'hidden' },
+    })
+    expect(mockSetHouseholdShareVisibilityMutateAsync).toHaveBeenCalledWith({
+      id: 'ua-solo',
+      data: { visibility: 'shared' },
+    })
+
+    expect(mockTrackEvent).toHaveBeenCalledWith(
+      ANALYTICS_EVENTS.HOUSEHOLD_NEW_ACCOUNTS_SHARE_SAVED,
+      { method: 'save', shared_count: 1, hidden_count: 1 }
+    )
   })
 
   it('surfaces an error and does NOT close the dialog when a write fails', async () => {

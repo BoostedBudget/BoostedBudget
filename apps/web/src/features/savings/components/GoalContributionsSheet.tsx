@@ -5,7 +5,10 @@
  * Displays all contributions (proposed + confirmed) for a goal in a slide-over sheet.
  * Proposed contributions show Confirm + Reject actions (D6 source-b/c user review).
  *   Reject sets status='rejected' (sticky tombstone — R3-7: prevents re-proposal on sync).
- * Confirmed contributions show a Delete action only.
+ * Confirmed contributions show a Delete action only, behind a confirmation dialog: Delete is a
+ *   PERMANENT hard delete (repository DeleteContribution — `DELETE FROM
+ *   savings_goal_contributions`, no tombstone), and #1569 R18 T1 found it was the only
+ *   explicit-destruction path on this branch reachable in a single click with no confirmation.
  * Rejected contributions are not shown (tombstone is server-side only).
  * All amounts are masked with data-ph-mask (PII policy).
  */
@@ -29,6 +32,8 @@ import {
 import type { SavingsGoalContribution } from '@boostedbudget/api-client/models'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
+import { ErrorState } from '@/components/ui/error-state'
 import { LogContributionDialog } from './LogContributionDialog'
 
 export interface GoalContributionsSheetProps {
@@ -74,16 +79,25 @@ interface ContributionRowProps {
   onConfirmed: () => void
   onRejected: () => void
   onDeleted: () => void
+  /**
+   * The listing this row came from survived a failed refetch, so it is real but unverified
+   * (#1569 T9-FIX item 7). Every verb here writes against a contribution id we can no longer
+   * vouch for — Reject leaves a sticky tombstone and Delete destroys a hand-logged amount — so
+   * all three are disarmed rather than the rows hidden. Same call DeletedGoalsPanel made in
+   * round 8, for the same reason.
+   */
+  disarmed?: boolean
 }
 
-function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDeleted }: ContributionRowProps) {
+function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDeleted, disarmed }: ContributionRowProps) {
   const trackEvent = useTrackEvent()
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
   const { mutateAsync: confirmMutate, isPending: confirming } = useConfirmSavingsGoalContribution()
   const { mutateAsync: rejectMutate, isPending: rejecting } = useRejectSavingsGoalContribution()
   const { mutateAsync: deleteMutate, isPending: deleting } = useDeleteSavingsGoalContribution()
 
   const isProposed = contribution.status === 'proposed'
-  const busy = confirming || rejecting || deleting
+  const busy = confirming || rejecting || deleting || disarmed === true
 
   const handleConfirm = useCallback(async () => {
     await confirmMutate({ goalID: goalId, id: contribution.id })
@@ -100,6 +114,7 @@ function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDele
   const handleDelete = useCallback(async () => {
     await deleteMutate({ goalID: goalId, id: contribution.id })
     trackEvent(ANALYTICS_EVENTS.SAVINGS_CONTRIBUTION_DELETED, { goal_id: goalId, contribution_id: contribution.id })
+    setConfirmingDelete(false)
     onDeleted()
   }, [goalId, contribution.id, deleteMutate, trackEvent, onDeleted])
 
@@ -150,7 +165,7 @@ function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDele
           <Button
             size="sm"
             variant="destructive"
-            onClick={() => void handleDelete()}
+            onClick={() => setConfirmingDelete(true)}
             disabled={busy}
             aria-label="Delete"
             className="h-auto px-2 py-1 text-xs"
@@ -160,6 +175,37 @@ function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDele
           </Button>
         )}
       </div>
+
+      {/*
+        `&& !disarmed` is the second half of the existing disarm, and leaving it out is the hole
+        DeletedGoalsPanel's first draft left behind: the dialog can already be OPEN when the
+        refetch fails, and its confirm button is not the one the row's `disabled` prop touches.
+
+        The copy names the amount and the date and says only what the endpoint does. It must NOT
+        say the contribution can be restored — nothing on this branch restores one, and a false
+        retention claim is the exact class #1569 keeps having to remove. It also must not
+        editorialise about knock-on effects (goal progress, other contributions) that have not
+        been verified here.
+      */}
+      <ConfirmationDialog
+        open={confirmingDelete && !disarmed}
+        onOpenChange={(open) => {
+          if (!open) setConfirmingDelete(false)
+        }}
+        onConfirm={() => void handleDelete()}
+        title="Delete this contribution?"
+        description={
+          <span>
+            This permanently deletes the{' '}
+            <strong data-ph-mask>{formatCurrency(contribution.amount)}</strong> contribution
+            recorded on {formatDate(contribution.occurred_on)}. The amount is not kept anywhere
+            afterwards, and there is no way to bring it back.
+          </span>
+        }
+        variant="destructive"
+        confirmButtonText="Delete forever"
+        loading={deleting}
+      />
     </li>
   )
 }
@@ -174,7 +220,7 @@ export function GoalContributionsSheet({
   const trackEvent = useTrackEvent()
   const [logDialogOpen, setLogDialogOpen] = useState(false)
 
-  const { data: contributions, isLoading, refetch } = useListSavingsGoalContributions(goalId, {
+  const { data: contributions, isLoading, error, refetch } = useListSavingsGoalContributions(goalId, {
     query: { enabled: open },
   })
 
@@ -222,7 +268,49 @@ export function GoalContributionsSheet({
               </div>
             )}
 
-            {!isLoading && visibleContributions.length === 0 && (
+            {/*
+              Issue #1569 T9.5 — a failed read must not fall through to "No contributions yet".
+              This sheet's twin, DeletedGoalContributions, already refuses to; the live ledger
+              did not. The copy says the read failed and offers a retry — it makes no claim
+              either way about what the ledger holds, which the client cannot know.
+            */}
+            {!isLoading && error && visibleContributions.length === 0 && (
+              <ErrorState
+                title="We couldn't load these contributions"
+                description="The request failed. Try again in a moment."
+                onRetry={() => void refetch()}
+                className="border-0 bg-transparent"
+              />
+            )}
+
+            {/*
+              #1569 T9-FIX item 7. React Query keeps the last successful listing when a later
+              refetch fails, so rows and `error` coexist. The rows stay — they are the user's, and
+              blanking them is the same false "nothing here" by another route — but they are
+              presented as UNVERIFIED, and role="status" rather than "alert" because what is on
+              screen is still readable. The full ErrorState above is for the case where there is
+              nothing to read at all.
+
+              The claim is scoped to what the failure actually did: the LISTING may be stale. An
+              unscoped "everything is still kept" here would be the new false retention claim this
+              branch keeps having to remove.
+            */}
+            {!isLoading && error && visibleContributions.length > 0 && (
+              <div
+                role="status"
+                className="mx-1 mt-2 flex flex-col items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+              >
+                <p className="m-0">
+                  We could not refresh this list just now, so it may be out of date. Confirming,
+                  rejecting and deleting are paused until we can check again.
+                </p>
+                <Button size="sm" variant="outline" onClick={() => void refetch()}>
+                  Try again
+                </Button>
+              </div>
+            )}
+
+            {!isLoading && !error && visibleContributions.length === 0 && (
               <p className="py-8 text-center text-sm text-muted-foreground">
                 No contributions yet. Use "Log contribution" to record one manually,
                 or sync a linked account to detect transfers.
@@ -247,6 +335,7 @@ export function GoalContributionsSheet({
                       onConfirmed={handleChanged}
                       onRejected={handleChanged}
                       onDeleted={handleChanged}
+                      disarmed={!!error}
                     />
                   ))}
               </ul>

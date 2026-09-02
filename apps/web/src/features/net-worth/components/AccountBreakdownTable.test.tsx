@@ -377,4 +377,65 @@ describe('AccountBreakdownTable', () => {
     const sortedTh = container.querySelector('th[aria-sort="ascending"]')
     expect(sortedTh).not.toBeNull()
   })
+
+  // Issue #1569 whole-branch review, I1. An active account whose first sync has not landed has
+  // no current balance. Rendering "$0" and "0.0%" for it states a figure the app does not have,
+  // and disagrees with the Accounts page, which renders an em dash for exactly this row.
+  describe('a row with no balance', () => {
+    const noBalance: AccountBreakdownRow = {
+      id: 'acc-nb',
+      name: 'Pending Checking',
+      type: 'depository',
+      institutionName: 'Chase',
+      currencyCode: 'USD',
+      currentBalance: null,
+      percentOfSide: null,
+      side: 'assets',
+    }
+
+    function renderWithNoBalanceRow() {
+      return render(
+        <AccountBreakdownTable
+          assets={[noBalance, asset]}
+          liabilities={[]}
+          assetsTotal={5000}
+          liabilitiesTotal={0}
+          loading={false}
+          error={null}
+          {...defaultSortState}
+        />
+      )
+    }
+
+    it('renders an em dash for the balance, not a zero amount', () => {
+      const { container } = renderWithNoBalanceRow()
+      const row = container.querySelector('tr[data-row-key="acc-nb"]') ?? screen.getByText('Pending Checking').closest('tr')!
+      expect(row.textContent).toContain('\u2014')
+      expect(row.textContent).not.toMatch(/\$0\b/)
+    })
+
+    it('renders an em dash for the percentage, not 0.0%', () => {
+      renderWithNoBalanceRow()
+      const percentCell = screen.getByTestId('breakdown-percent-acc-nb')
+      expect(percentCell.textContent).toBe('\u2014')
+      expect(percentCell.textContent).not.toContain('0.0%')
+    })
+
+    it('gives the percentage cell an accessible name that claims no figure', () => {
+      renderWithNoBalanceRow()
+      const percentCell = screen.getByTestId('breakdown-percent-acc-nb')
+      // The aria-label is an ATTRIBUTE — session replay records it verbatim and no mask covers
+      // it — so it must stay structural. It must also not assert "0.0% of assets".
+      const label = percentCell.getAttribute('aria-label') ?? ''
+      expect(label).not.toContain('0.0%')
+      expect(label).toMatch(/not available|unavailable|unknown/i)
+    })
+
+    it('still renders a real balance and percentage on a funded row', () => {
+      renderWithNoBalanceRow()
+      const percentCell = screen.getByTestId('breakdown-percent-acc-1')
+      expect(percentCell.textContent).toBe('50.0%')
+      expect(percentCell.getAttribute('aria-label')).toBe('50.0% of assets')
+    })
+  })
 })

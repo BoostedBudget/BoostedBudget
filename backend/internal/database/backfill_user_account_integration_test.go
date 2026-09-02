@@ -230,7 +230,26 @@ func TestBackfillUserAccountIDs_NoMatch_Integration(t *testing.T) {
 	// Backfill must not abort even though this account has no matching user_account.
 	require.NoError(t, BackfillUserAccountIDs(ctx, pool, enc))
 
+	// ⚠ CONTRACT INVERTED BY #1569. This assertion used to be `assert.Nil` — "must remain NULL
+	// (self-heals on next re-link)". That was defensible while an identity-less account was
+	// eventually cascade-deleted, so the NULL was temporary by construction. Under
+	// history-retained-by-default the row is retained forever, so "self-heals on next re-link"
+	// became "stays a permanent re-link double-count seed" (dashboard_service.go:35-73) and blocks
+	// the accounts.user_account_id NOT NULL constraint the retention model depends on.
+	// The backfill now MINTS an identity instead of skipping.
 	var got *string
 	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM accounts WHERE id = $1", accID).Scan(&got))
-	assert.Nil(t, got, "account with no matching user_account must remain NULL (self-heals on next re-link)")
+	require.NotNil(t, got, "an account with no matching user_account must have one minted, not be left NULL")
+	assert.NotEmpty(t, *got)
+
+	// #1569 round 11 task 3: the minted identity is not just non-NULL, it must carry the frozen
+	// identity_type/identity_subtype columns populated from the SAME founding account's own
+	// type/subtype (never from a later, mutable primary_type write).
+	var identityType, identitySubtype *string
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT identity_type, identity_subtype FROM user_accounts WHERE id = $1", *got,
+	).Scan(&identityType, &identitySubtype))
+	require.NotNil(t, identityType, "a synthesised identity must carry identity_type from the founding account")
+	assert.Equal(t, "depository", *identityType)
+	assert.Nil(t, identitySubtype, "the founding account had no subtype, so identity_subtype must stay NULL rather than inventing one")
 }

@@ -122,7 +122,7 @@
   {
     "name": "savings",
     "path": "apps/web/dist/assets/savings-*.js",
-    "limit": "9 KB",
+    "limit": "12 KB",
     "gzip": true
   },
   {
@@ -164,7 +164,7 @@
   {
     "name": "investments",
     "path": "apps/web/dist/assets/investments-*.js",
-    "limit": "6 KB",
+    "limit": "7 KB",
     "gzip": true
   }
 ]

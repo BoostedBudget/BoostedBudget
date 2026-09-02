@@ -111,12 +111,26 @@ export const mockUseGetBoostExecutions = mock(() => ({
   error: null,
 }))
 
+/**
+ * Issue #1569 Task 7.3: GET /api/v1/boost-executions — the account-wide read, and the ONLY one
+ * that can return an execution whose boost has been deleted. Every boost-scoped read filters on
+ * boost_id and `GetBoostExecutions` first calls `GetBoostByID`, which excludes tombstoned rows.
+ */
+export const mockRefetchUserBoostExecutions = mock(() => Promise.resolve())
+export const mockUseGetUserBoostExecutions = mock(() => ({
+  data: { executions: [], total: 0, limit: 20, offset: 0 },
+  isLoading: false,
+  error: null,
+  refetch: mockRefetchUserBoostExecutions,
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/boosts/boosts', () => ({
   ...RealBoostsModule,
   useGetBoosts: mockUseGetBoosts,
   useGetBoostByID: mockUseGetBoostByID,
   useGetBoostExecutions: mockUseGetBoostExecutions,
+  useGetUserBoostExecutions: mockUseGetUserBoostExecutions,
   useCreateBoost: mockUseCreateBoost,
   useUpdateBoost: mockUseUpdateBoost,
   useDeleteBoost: mockUseDeleteBoost,

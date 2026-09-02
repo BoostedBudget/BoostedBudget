@@ -81,12 +81,18 @@ func TestBalanceSnapshotRepository_GetSnapshotsAsOfForHousehold_JointAccountUses
 	now := time.Now().UTC()
 	fingerprint := "joint-fp-" + hh
 
-	// Re-share both with the SAME fingerprint (simulating a joint account).
-	shareRepo := repository.NewHouseholdShareRepository(pool)
-	require.NoError(t, shareRepo.RevokeSharesForUser(ctx, hh, owner))
-	require.NoError(t, shareRepo.RevokeSharesForUser(ctx, hh, member))
-	require.NoError(t, shareRepo.InsertShare(ctx, hh, ownerAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared))
-	require.NoError(t, shareRepo.InsertShare(ctx, hh, memberAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared))
+	// Re-share both under the SAME fingerprint (simulating a joint account), with EXPLICIT
+	// interval boundaries. #1569 T7 made the as-of read honour [shared_at, revoked_at), so a
+	// re-share stamped with the database's now() is not in force at any asOf the test computes
+	// from Go's clock, and the individual grants it replaced are still retained and still in
+	// force at a past cutoff. Anchoring the swap 50 days back — inside the 2-month-old original
+	// grants opened by setupTwoMemberSharedHousehold, and before every asOf asserted below —
+	// keeps this test exercising fingerprint dedup rather than clock skew.
+	jointFrom := now.AddDate(0, 0, -50)
+	revokeShareAt(t, pool, hh, ownerAcct.UserAccountID, jointFrom)
+	revokeShareAt(t, pool, hh, memberAcct.UserAccountID, jointFrom)
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, jointFrom)
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, jointFrom)
 
 	// Owner's copy is STALE (synced 10 days ago); member's copy is FRESH (synced today).
 	// Balance dedup must pick the freshest, not the earliest-shared (Codex P1-8).
@@ -116,11 +122,18 @@ func TestBalanceSnapshotRepository_GetSnapshotsAsOfForHousehold_JointAccountWinn
 	now := time.Now().UTC()
 	fingerprint := "joint-fp-" + hh
 
-	shareRepo := repository.NewHouseholdShareRepository(pool)
-	require.NoError(t, shareRepo.RevokeSharesForUser(ctx, hh, owner))
-	require.NoError(t, shareRepo.RevokeSharesForUser(ctx, hh, member))
-	require.NoError(t, shareRepo.InsertShare(ctx, hh, ownerAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared))
-	require.NoError(t, shareRepo.InsertShare(ctx, hh, memberAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared))
+	// Re-share both under the SAME fingerprint (simulating a joint account), with EXPLICIT
+	// interval boundaries. #1569 T7 made the as-of read honour [shared_at, revoked_at), so a
+	// re-share stamped with the database's now() is not in force at any asOf the test computes
+	// from Go's clock, and the individual grants it replaced are still retained and still in
+	// force at a past cutoff. Anchoring the swap 50 days back — inside the 2-month-old original
+	// grants opened by setupTwoMemberSharedHousehold, and before every asOf asserted below —
+	// keeps this test exercising fingerprint dedup rather than clock skew.
+	jointFrom := now.AddDate(0, 0, -50)
+	revokeShareAt(t, pool, hh, ownerAcct.UserAccountID, jointFrom)
+	revokeShareAt(t, pool, hh, memberAcct.UserAccountID, jointFrom)
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, jointFrom)
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, jointFrom)
 
 	// Owner's copy: only has an OLD snapshot (40 days ago) — no recent activity.
 	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 100, now.AddDate(0, 0, -40))
@@ -412,23 +425,36 @@ func TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccount
 // on `a.id` — an arbitrary UUID — so the balance could be attributed to a REPLACED account's type,
 // and with an accountTypes filter applied it could be dropped from the result entirely.
 //
-// WHAT THE FIX IS, stated exactly, because this comment previously argued for the wrong instrument.
-// It reads as though the fix restored the JOIN PREDICATE. It did not, and restoring it would have
-// reintroduced a second bug: when NO active row shares the user_account_id — what
-// ExpireAccountsByFingerprint leaves behind for a whole fingerprint — a filtered join yields a NULL
-// `a.type`, which NULL never satisfies `= ANY`, so the accountTypes filter drops those snapshots
-// outright while personal scope keeps them. The join is therefore UNFILTERED
-// (`LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id`,
-// balance_snapshot_repository.go:320) and the preference lives in the ORDER BY:
-// `(a.status = 'active') DESC NULLS LAST, a.id` (:313) — active wins, any chain member's type is the
-// fallback, `a.id` only breaks ties within a status class. Both halves are pinned: this test (active
-// wins) and TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory
-// (fallback).
+// ⚠ #1569 T10.2 REMOVED THE INSTRUMENT THIS COMMENT DESCRIBED, and the test now passes for a
+// simpler reason. The history is kept because both of its dead ends are still dead ends.
 //
-// The active account's type is the authoritative one. This test seeds an active `depository` and a
-// replaced `credit` account on the SAME user_account_id, with the replaced account given a
-// deliberately LOWER uuid so the `a.id` tiebreak would choose it — making the pre-fix failure
-// deterministic rather than a coin flip.
+// The fix WAS: leave the accounts join unfiltered (a filtered join yields a NULL `a.type` when no
+// active row shares the user_account_id — what ExpireAccountsByFingerprint leaves behind for a
+// whole fingerprint — and NULL never satisfies `= ANY`, so the accountTypes filter would drop
+// those snapshots outright while personal scope keeps them), and express the preference as an
+// ORDER BY term preferring an active row, with `a.id` breaking ties within a status class.
+//
+// The fix IS: join the snapshot's OWN account, `LEFT JOIN accounts a ON a.id = bs.account_id`
+// (balance_snapshot_repository.go). Both dead ends close by construction rather than by tie-break.
+// A snapshot knows which account produced it, so there is no chain-wide ambiguity to prefer
+// between; and an expired account still HAS a row, so `a.type` is not NULL and the type filter
+// still matches. That change came with T10.2 because the whole query moved to the account grain:
+// keying anything here on the user_account deletes one of two maskless accounts, which the chain-
+// wide join and its status preference both presupposed was impossible.
+//
+// ⚠ WHAT THIS TEST DOES AND DOES NOT PROVE (#1569 T10-FIX item 6). It seeds an active `depository`
+// and a replaced `credit` account on the SAME user_account_id, with the replaced account given a
+// deliberately LOWER uuid, and inserts a snapshot for the ACTIVE account only. Because the
+// pre-T10.2 chain-wide join ALSO preferred the active member, both assertions below hold under
+// EITHER join: this test passes for a reason unrelated to the change it was rewritten for. It is
+// kept because it is a real regression guard for the low-uuid trap, and its claim is narrowed to
+// what it can support.
+//
+// The property the account-grain join actually adds — a snapshot belonging to the REPLACED member
+// keeps THAT member's type — needs a snapshot on the replaced account, and is pinned by
+// TestGetAggregatedHistoryForHousehold_RelinkChain_ASnapshotKeepsItsOwnAccountsType. The
+// no-active-member fallback is pinned by
+// TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory.
 func TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
@@ -480,6 +506,88 @@ func TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType(t *t
 	}
 }
 
+// TestGetAggregatedHistoryForHousehold_RelinkChain_ASnapshotKeepsItsOwnAccountsType is #1569
+// T10-FIX item 6, and it exists because the test ABOVE cannot prove what its own comment claims.
+//
+// That fixture seeds a replaced 'credit' account and an active 'depository' account on one chain,
+// then inserts a snapshot for the ACTIVE one only. The pre-T10.2 chain-wide join ALSO preferred the
+// active member, so it would have produced 'depository' too: the assertions pass identically before
+// and after the change they were rewritten to pin. The row that separates the two joins — a
+// snapshot belonging to the REPLACED member — was never in the fixture.
+//
+// Here it is. Under the account-grain join (a.id = bs.account_id) each snapshot carries its OWN
+// account's type, so the chain reports $500 of depository AND $300 of credit. Under any chain-wide
+// join the $300 is attributed to whichever member the preference picks, and a 'credit' filter — the
+// one a user applies to see what they owe — returns nothing at all.
+func TestGetAggregatedHistoryForHousehold_RelinkChain_ASnapshotKeepsItsOwnAccountsType(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ua := insertTestUserAccount(t, pool, owner)
+	li := insertTestLinkedItem(t, pool, owner)
+
+	var replacedID string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, user_account_id,
+		                      status, replaced_at)
+		VALUES (gen_random_uuid(), $1, $2, 'plaid_'||gen_random_uuid()::text, 'Old Card', 'credit', $3,
+		        'replaced', now())
+		RETURNING id::text`, li, owner, ua).Scan(&replacedID)
+	require.NoError(t, err, "seed the replaced chain member")
+
+	activeID := insertTestAccount(t, pool, li, owner, ua)
+
+	now := time.Now().UTC()
+	insertHouseholdShare(t, pool, hh, ua, nil, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+
+	// ⚠ The row the rewritten test omitted: a snapshot that BELONGS to the replaced member. Both
+	// land on the same day, so the two accounts are two rows of one day's bucket set — which is
+	// only possible at all because stage 1 collapses per ACCOUNT rather than per user_account.
+	day := now.AddDate(0, 0, -1)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO balance_snapshots (account_id, user_id, user_account_id, current_balance, snapshot_at,
+		                               currency_code, source)
+		VALUES ($1, $2, $3, 500.00, $4, 'USD', 'plaid'),
+		       ($5::uuid, $2, $3, 300.00, $4, 'USD', 'plaid')`,
+		activeID, owner, ua, day, replacedID)
+	require.NoError(t, err, "seed one snapshot per chain member")
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
+	rows, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, now.AddDate(0, 0, -7), now, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, rows)
+
+	byType := map[string]float64{}
+	var total float64
+	for _, r := range rows {
+		for k, v := range r.ByType {
+			byType[k] += v
+		}
+		total += r.TotalBalance
+	}
+	assert.InDelta(t, 500.0, byType["depository"], 0.01,
+		"the active member's snapshot keeps the active member's type. Got %v", byType)
+	assert.InDelta(t, 300.0, byType["credit"], 0.01,
+		"the REPLACED member's snapshot must keep the REPLACED member's type. 0 here — with 800 "+
+			"under 'depository' — is the chain-wide join attributing one account's balance to "+
+			"another account's type. Got %v", byType)
+	assert.InDelta(t, 800.0, total, 0.01, "neither snapshot may be dropped")
+
+	// The filter is where the misattribution becomes a disappearance: a user asking what they owe
+	// gets nothing back if the credit balance was filed under 'depository'.
+	filtered, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, now.AddDate(0, 0, -7), now, []string{"credit"})
+	require.NoError(t, err)
+	var filteredTotal float64
+	for _, p := range filtered {
+		filteredTotal += p.TotalBalance
+	}
+	assert.InDelta(t, 300.0, filteredTotal, 0.01,
+		"a 'credit' filter must return the credit account's own history. Got %v", filtered)
+}
+
 // TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory encodes the
 // adversarial-review claim about the counterpart of the 58920ae3 case: when NO active row shares
 // the snapshot's user_account_id — exactly the state AccountRepository.ExpireAccountsByFingerprint
@@ -500,7 +608,9 @@ func TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHist
 	// The only accounts row for this user_account_id is 'depository' and has been EXPIRED, as
 	// ExpireAccountsByFingerprint does to every active row sharing a fingerprint.
 	acctID := insertTestAccount(t, pool, li, owner, ua)
-	_, err := pool.Exec(ctx, `UPDATE accounts SET status = 'expired' WHERE id = $1`, acctID)
+	// accounts_expired_at_consistency (migration 000155, Issue #1569 Task 6) requires expired_at
+	// whenever status = 'expired'.
+	_, err := pool.Exec(ctx, `UPDATE accounts SET status = 'expired', expired_at = NOW() WHERE id = $1`, acctID)
 	require.NoError(t, err, "expire the only chain member")
 
 	now := time.Now().UTC()

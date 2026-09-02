@@ -2,15 +2,15 @@ package repository
 
 import (
 	"context"
-	
+
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +36,7 @@ func createTestRule(userID string) *domain.CategorizationRule {
 		Priority:       10,
 		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "starbucks"}},
 		ConditionLogic: "AND",
-		TargetKind: func() *string { s := "pfc"; return &s }(),
+		TargetKind:     func() *string { s := "pfc"; return &s }(),
 		TargetTags:     []string{"recurring"},
 		TagBehavior:    "add",
 		Source:         "manual",
@@ -63,11 +63,11 @@ func TestCategorizationRuleRepository_Create(t *testing.T) {
 		rule.Priority,
 		pgxmock.AnyArg(), // conditions (JSON)
 		rule.ConditionLogic,
-		rule.TargetKind,          // target_kind
-		pgxmock.AnyArg(),         // target_pfc_primary
-		pgxmock.AnyArg(),         // target_pfc_detailed
-		pgxmock.AnyArg(),         // target_custom_category_id
-		pgxmock.AnyArg(),         // target_tags (JSON)
+		rule.TargetKind,  // target_kind
+		pgxmock.AnyArg(), // target_pfc_primary
+		pgxmock.AnyArg(), // target_pfc_detailed
+		pgxmock.AnyArg(), // target_custom_category_id
+		pgxmock.AnyArg(), // target_tags (JSON)
 		rule.TagBehavior,
 		rule.Source,
 		rule.MatchCount,

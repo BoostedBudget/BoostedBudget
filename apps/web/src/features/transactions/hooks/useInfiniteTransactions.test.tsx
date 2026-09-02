@@ -240,6 +240,73 @@ describe('useInfiniteTransactions', () => {
       expect(callParams.include_investment_activity).toBe('false')
     })
 
+    // ── #1569 T12 gap 1: reversals are OPT-IN ────────────────────────────────────────────
+    //
+    // The backend defaults include_reversed to false because a tombstoned row appearing in a
+    // list the user has already reconciled is the same silent change #1569 exists to stop,
+    // arriving from the other side. The client must not quietly opt in for them.
+    it('omits include_reversed by default, so reversals stay out unless asked for', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const { result } = renderHook(() => useInfiniteTransactions(defaultOpts), {
+        wrapper: createWrapper(),
+      })
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.include_reversed).toBeUndefined()
+    })
+
+    it('omits include_reversed when explicitly false, rather than sending "false"', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const { result } = renderHook(
+        () => useInfiniteTransactions({ ...defaultOpts, filters: { include_reversed: false } }),
+        { wrapper: createWrapper() },
+      )
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.include_reversed).toBeUndefined()
+    })
+
+    it('sends include_reversed=true when the user opts in', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const { result } = renderHook(
+        () => useInfiniteTransactions({ ...defaultOpts, filters: { include_reversed: true } }),
+        { wrapper: createWrapper() },
+      )
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.include_reversed).toBe('true')
+    })
+
+    // #1569 T12 (I2): dropped at the boundary, so it reaches NO consumer — not just the table.
+    it('drops a settled pending before it reaches any consumer', async () => {
+      mockGetTransactions.mockResolvedValue({
+        transactions: [
+          { ...makeTxn('txn-settled-pending'), pending: true, reversed: true },
+          { ...makeTxn('txn-posted-reversal'), pending: false, reversed: true },
+          makeTxn('txn-ordinary'),
+        ],
+        limit: 50,
+        next_cursor: undefined,
+      } as unknown as GetTransactionsOutputBody)
+
+      const { result } = renderHook(() => useInfiniteTransactions(defaultOpts), {
+        wrapper: createWrapper(),
+      })
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const ids = result.current.transactions.map((t) => t.id)
+      expect(ids).not.toContain('txn-settled-pending')
+      // A POSTED reversal is a different thing and must survive.
+      expect(ids).toContain('txn-posted-reversal')
+      expect(ids).toContain('txn-ordinary')
+    })
+
     it('forwards activity_types filter to getTransactions API call as comma-separated string', async () => {
       mockGetTransactions.mockResolvedValue(page1Response)
 

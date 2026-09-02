@@ -39,6 +39,12 @@
 # Exit 0 on all assertions passing, non-zero on any failure.
 set -euo pipefail
 
+# PROSE-ASSERTION AUDIT (#1569 task 7.1). "rows match for both MCP jobs" and "deploy rows match"
+# below assert a stable PREFIX of a templated line (check-mcp-job-triggers.py interpolates counts
+# after it), not the full dynamic sentence — already the pattern this task asks for elsewhere.
+# Decision: CONTRACT for the prefix — it names the mechanism (rows matched); the interpolated
+# numbers are correctly left unasserted. Left unchanged.
+
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="$ROOT/scripts/check-mcp-job-triggers.py"
 WORKFLOW="$ROOT/.github/workflows/test.yml"

@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -272,17 +273,29 @@ func (p *plaidSyncProvider) processModified(ctx context.Context, linkedItem *dom
 	return len(plaidTxns), nil
 }
 
-// processRemoved handles removed transactions from Plaid
+// processRemoved TOMBSTONES the transactions Plaid reports as removed. Issue #1569.
+//
+// This provider is not wired into production (see the banner at the top of this file), so the
+// change that matters is in services/transactionSyncService.processRemovedTransactions. It is
+// mirrored here because the two paths were CONVERGENT — both hard-deleted — and leaving one of
+// them able to destroy user-authored work would silently un-fix #1569 the day the multi-provider
+// abstraction is wired up. The banner's own warning is that these two are similar enough to be
+// mistaken for each other and are kept in sync by nothing.
+//
+// ErrTransactionNotFound is tolerated for the same reason the service tolerates it: a removal for
+// a row that was never stored, or a re-delivery of one already tombstoned, is the idempotent case,
+// not a failure. Every other error still aborts the page.
 func (p *plaidSyncProvider) processRemoved(ctx context.Context, linkedItem *domain.LinkedItem, plaidTxns []plaid.RemovedTransaction) (int, error) {
 	for _, plaidTxn := range plaidTxns {
 		externalID := plaidTxn.GetTransactionId()
 
-		// Delete from database
-		if err := p.txnRepo.DeleteByExternalID(ctx, domain.SourcePlaid, externalID, linkedItem.UserID); err != nil {
-			return 0, fmt.Errorf("failed to delete transaction: %w", err)
+		_, err := p.txnRepo.TombstoneByExternalID(
+			ctx, domain.SourcePlaid, externalID, linkedItem.UserID, domain.TxnDeletedByPlaidSync)
+		if err != nil && !errors.Is(err, repository.ErrTransactionNotFound) {
+			return 0, fmt.Errorf("failed to tombstone transaction: %w", err)
 		}
 
-		// Emit event (with minimal transaction data since it's deleted)
+		// Emit event (the row is retained but no longer live, so the payload stays minimal)
 		event := events.TransactionEvent{
 			Type: events.EventTypeRemoved,
 			Transaction: &domain.Transaction{
@@ -295,7 +308,7 @@ func (p *plaidSyncProvider) processRemoved(ctx context.Context, linkedItem *doma
 			Timestamp: time.Now(),
 		}
 		if err := p.eventEmitter.Emit(ctx, event); err != nil {
-			// Non-fatal: the delete is already committed. Log and continue.
+			// Non-fatal: the tombstone is already committed. Log and continue.
 			slog.ErrorContext(ctx, "failed to emit transaction event",
 				"error", err,
 				"event_type", events.EventTypeRemoved,

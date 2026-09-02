@@ -128,8 +128,8 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 
 	// Issue #1514 item 3: this guard is defensive/structural, not a reachable production state.
 	// In the wired deployment (backend/cmd/server/main.go) HandlePlaidWebhook is only ever
-	// registered with a non-nil WebhookRepo: both registration branches (main.go:2001-2024 when
-	// plaidService is configured, and the fallback main.go:2025-2043 when it isn't) unconditionally
+	// registered with a non-nil WebhookRepo: both registration branches (main.go:2018-2041 when
+	// plaidService is configured, and the fallback main.go:2042-2060 when it isn't) unconditionally
 	// construct `repository.NewWebhookRepository(db, fieldEncryptor)` and pass it as WebhookRepo —
 	// neither branch is reachable unless db != nil, and NewWebhookRepository never returns nil.
 	// There is no route registration path in main.go that wires a handler with a nil repo.

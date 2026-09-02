@@ -22,7 +22,7 @@
         {
           "name": "status",
           "in": "query",
-          "description": "Filter by account status: 'active' (default), 'replaced', or 'all'",
+          "description": "Filter by account status: 'active' (default), 'replaced', 'all' (active+replaced — a misnomer inherited from history, see AccountFilterOptions.StatusFilter), or 'all_statuses' (every status: active, replaced, expired, removed — for surfaces like the closed-accounts view that need the full universe)",
           "type": "string"
         },
         {
@@ -35,6 +35,12 @@
           "name": "user_account_id",
           "in": "query",
           "description": "When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set.",
+          "type": "string"
+        },
+        {
+          "name": "as_of_date",
+          "in": "query",
+          "description": "Get accounts as of a specific date (YYYY-MM-DD) — which accounts were live that day. Cannot be combined with status=all, status=replaced, or include_replaced=true.",
           "type": "string"
         }
       ]
@@ -73,16 +79,70 @@
       ]
     },
     {
-      "operationId": "deleteAccount",
+      "operationId": "purgeAccount",
       "method": "DELETE",
       "path": "/api/v1/accounts/{id}",
-      "summary": "Delete account",
+      "summary": "Purge account",
+      "tags": [
+        "Accounts"
+      ],
+      "manifestClass": "destructive",
+      "excluded": true,
+      "description": "Permanently destroys a single account and everything derived from it — balance history, holdings, liabilities, AND investment transactions (buys, sells, dividends) for an investment account — with ownership validation. This cannot be undone. Bank transactions (from a checking/savings/credit account) are NOT destroyed; investment transactions ARE, since they have no independent existence apart from the account. Refuses if a savings goal still references this account, and refuses unless the account was already disconnected (POST .../disconnect first) — a live account cannot be purged, since the next Plaid sync would recreate it.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Account ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "getAccountBalanceHistory",
+      "method": "GET",
+      "path": "/api/v1/accounts/{id}/balance-history",
+      "summary": "Get an account's retained balance history",
       "tags": [
         "Accounts"
       ],
       "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns one account's retained day-by-day balances, oldest day first, with the UTC day each balance was true on (Issue #1569). Removing a linked bank account or disconnecting a bank connection retains its balance history rather than erasing it, and this is the only endpoint that reads it back per account: getBalanceHistory answers an aggregated CURRENT-STATE question, takes account_types rather than an account id, and deliberately excludes closed accounts. An account with nothing retained returns an empty series rather than 404. ⚠ These are HISTORICAL figures. Each is inseparable from its date and none of them is what the account holds now — a closed account has no current balance at all.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Account whose retained balance history to read.",
+          "type": "string"
+        },
+        {
+          "name": "start_date",
+          "in": "query",
+          "description": "Inclusive UTC calendar day (YYYY-MM-DD) to read from. Omit for the earliest day retained.",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "description": "Inclusive UTC calendar day (YYYY-MM-DD) to read to. Omit for the most recent day retained.",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "disconnectAccount",
+      "method": "POST",
+      "path": "/api/v1/accounts/{id}/disconnect",
+      "summary": "Disconnect account",
+      "tags": [
+        "Accounts"
+      ],
+      "manifestClass": "write",
       "excluded": true,
-      "description": "Deletes a single account with ownership validation.",
+      "description": "Stops a single account from syncing and retains its financial history. Does not destroy any data — use DELETE to permanently purge an account and its history.",
       "parameters": [
         {
           "name": "id",
@@ -177,7 +237,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "destructive",
       "excluded": true
     },
     {
@@ -210,7 +270,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "destructive",
       "excluded": true
     },
     {
@@ -232,7 +292,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true
     },
     {
@@ -243,7 +303,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true
     },
     {
@@ -280,7 +340,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Fires a Plaid webhook for testing. Requires Clerk authentication and admin authorization. Reachable in every environment, but only functions when PLAID_ENV=sandbox; it returns an error otherwise."
     },
@@ -318,7 +378,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Records that YOU removed this Plaid Item yourself in Plaid's dashboard. This is an UNVERIFIED attestation, not a proved removal: it is stored against your admin identity with your note, moves the record to admin_state 'operator_attested' so nobody is asked to redo the work, and deliberately does NOT set resolved_at (which means Plaid itself confirmed the removal), does NOT destroy the retained access token, and does NOT stop the automated retry sweep — the sweep is what can eventually confirm your claim. First-wins: if the record is already attested this returns 409 and your note is not stored. Requires admin role.",
       "parameters": [
@@ -332,6 +392,38 @@
       ]
     },
     {
+      "operationId": "listAdminRetentionWithheld",
+      "method": "GET",
+      "path": "/api/v1/admin/retention/withheld",
+      "summary": "List accounts withheld from retention deletion (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Returns inactive or cancelled accounts whose data-retention window has expired but which the pre-deletion-notice gate is refusing to hard-delete, because at least one of the 30-day and 7-day notices promised by the privacy policy was never recorded. What is blocked is the retention sweep, and only it: the notice queries select only users whose retention clock has not yet run out, so no existing path can send the missing notice and the retention sweep will hold these accounts indefinitely. A user-requested GDPR erasure is a separate authorisation and still deletes them normally; requesting deletion also removes the account from this listing. This is a read-only view — it sends nothing, extends no retention clock and waives no notice; choosing between those remedies is an open decision and will land as its own endpoint. has_email_on_file is reported per account because it is the one withholding reason the retention_deletions_withheld metric cannot separate. No email address is returned. withheld_total and the returned page come from two separate queries and are eventually consistent: a notice marker, a deletion request or a retention clock crossing the current instant between them can make the total disagree with the page by any number of rows — the gap is not bounded. as_of is when the response was calculated, after both queries returned. Keyset-paginated: pass next_cursor's two fields back as cursor_expires_at and cursor_user_id; next_cursor is absent on the final page. Requires admin role.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Number of accounts to return",
+          "type": "integer"
+        },
+        {
+          "name": "cursor_expires_at",
+          "in": "query",
+          "description": "Keyset cursor: retention_expires_at of the last account on the previous page (RFC3339). Must be sent together with cursor_user_id.",
+          "type": "string"
+        },
+        {
+          "name": "cursor_user_id",
+          "in": "query",
+          "description": "Keyset cursor: user_id of the last account on the previous page. Must be sent together with cursor_expires_at.",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "operationId": "grantTrial",
       "method": "POST",
       "path": "/api/v1/admin/subscription/grant-trial",
@@ -339,7 +431,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but deliberately available in every environment — any admin can already change subscriptions through the other admin endpoints. Returns success if the user already has or had a trial."
     },
@@ -465,7 +557,7 @@
       "tags": [
         "Admin Subscriptions"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Create a per-user resource limit override (e.g. transaction_history_days). Requires admin privileges.",
       "parameters": [
@@ -486,7 +578,7 @@
       "tags": [
         "Admin Subscriptions"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Manually override a user's subscription tier. Requires admin privileges.",
       "parameters": [
@@ -507,7 +599,7 @@
       "tags": [
         "Admin Subscriptions"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Clear a user's manual tier override, restoring their raw subscription tier and status. Idempotent — returns removed=false if no override exists. Requires admin privileges.",
       "parameters": [
@@ -621,7 +713,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true
     },
     {
@@ -1451,7 +1543,7 @@
       "tags": [
         "Auto-Categorization"
       ],
-      "manifestClass": "write",
+      "manifestClass": "destructive",
       "excluded": false,
       "description": "Removes a categorization rule.",
       "parameters": [
@@ -1486,6 +1578,38 @@
       ]
     },
     {
+      "operationId": "getUserBoostExecutions",
+      "method": "GET",
+      "path": "/api/v1/boost-executions",
+      "summary": "Get account-wide boost execution history",
+      "tags": [
+        "Boosts"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Retrieves every boost execution for the authenticated user with an optional status filter. Unlike /boosts/{id}/executions this also returns executions whose boost has since been deleted. Every row carries boost_name and definition_snapshot, captured at execution time, so it is readable with or without its parent. Do NOT key \"deleted boost\" off boost_id being null: normal deletion TOMBSTONES the boost, so those executions keep their original non-null boost_id and the boost simply stops appearing in GET /boosts. boost_id is null only when the boost ROW itself was destroyed (the FK is ON DELETE SET NULL), which today means a purge or GDPR erasure. To mark a row as coming from a deleted boost, treat a null boost_id OR a boost_id absent from GET /boosts as deleted.",
+      "parameters": [
+        {
+          "name": "status",
+          "in": "query",
+          "description": "Filter by status: pending, running, completed, failed",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Maximum number of results",
+          "type": "integer"
+        },
+        {
+          "name": "offset",
+          "in": "query",
+          "description": "Number of results to skip",
+          "type": "integer"
+        }
+      ]
+    },
+    {
       "operationId": "getBoosts",
       "method": "GET",
       "path": "/api/v1/boosts",
@@ -1513,7 +1637,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Creates a new boost for the authenticated user."
     },
@@ -1546,7 +1670,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Updates a boost's configuration.",
       "parameters": [
@@ -1567,7 +1691,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Removes a boost.",
       "parameters": [
@@ -1588,7 +1712,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Disables a boost from execution.",
       "parameters": [
@@ -1609,7 +1733,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Enables a boost for execution.",
       "parameters": [
@@ -1669,7 +1793,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Executes a dry-run of the boost to preview results without persisting changes.",
       "parameters": [
@@ -1690,7 +1814,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Enables or disables a boost.",
       "parameters": [
@@ -1711,7 +1835,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Triggers a boost for immediate execution with optional custom data.",
       "parameters": [
@@ -2341,7 +2465,7 @@
       "tags": [
         "Dashboard"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Saves the user's dashboard layout preferences."
     },
@@ -2353,7 +2477,7 @@
       "tags": [
         "Dashboard"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Resets the user's dashboard layout to the default configuration."
     },
@@ -2377,7 +2501,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Creates a new household with the caller as owner."
     },
@@ -2410,7 +2534,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "parameters": [
         {
@@ -2430,7 +2554,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "parameters": [
         {
@@ -2461,7 +2585,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true
     },
     {
@@ -2472,7 +2596,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "destructive",
       "excluded": true,
       "description": "Owner-only. Without ?force=true, requires zero active non-owner members (409 otherwise). With ?force=true (#1371), force-removes every active non-owner member (with removal email) before dissolving the household.",
       "parameters": [
@@ -2527,7 +2651,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true
     },
     {
@@ -2538,7 +2662,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "parameters": [
         {
@@ -2569,7 +2693,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "parameters": [
         {
@@ -2597,6 +2721,33 @@
           "name": "account_id",
           "in": "query",
           "description": "Filter holdings to a specific account ID (chain-expanded via user_account_id). Optional.",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "getAccountHoldingsHistory",
+      "method": "GET",
+      "path": "/api/v1/investments/holdings/history",
+      "summary": "Get an account's retained holdings history",
+      "tags": [
+        "Investments"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns the investment positions retained for one account as they stood on a past UTC day, with the list of every other day that can be asked for and the day's pre-computed total value (Issue #1569). Removing a linked bank account retains its holdings history rather than erasing it, and this is the only endpoint that reads it back: GET /investments/holdings answers a CURRENT-STATE question and deliberately returns nothing for a closed account. Omit as_of for the most recent retained day. A day NOTHING was retained for returns 404 rather than an empty list, because \"we kept nothing for that day\" is not \"the account held nothing that day\" — and the second fact has its own answer: a day on which the account was observed holding nothing (a completed liquidation, whose rows are retained and marked absent) is listed in available_dates and returns 200 with an empty positions list. ⚠ These are HISTORICAL figures. They carry no day-change, because day-change is measured against today's prior close, and they must never be presented as what the account holds now.",
+      "parameters": [
+        {
+          "name": "account_id",
+          "in": "query",
+          "required": true,
+          "description": "Account whose retained holdings history to read. Required — this endpoint is per-account by design; there is no whole-portfolio historical read, because a portfolio total mixing live and closed accounts is a current-state figure.",
+          "type": "string"
+        },
+        {
+          "name": "as_of",
+          "in": "query",
+          "description": "UTC calendar day (YYYY-MM-DD) to read. Omit for the most recent retained day. A day nothing was retained for returns 404 rather than an empty list; a day the account was observed holding nothing returns 200 with an empty position list, because those are different facts.",
           "type": "string"
         }
       ]
@@ -2799,16 +2950,37 @@
       ]
     },
     {
-      "operationId": "disconnectInstitution",
+      "operationId": "purgeInstitution",
       "method": "DELETE",
       "path": "/api/v1/linked-items/{id}",
+      "summary": "Purge institution",
+      "tags": [
+        "Accounts"
+      ],
+      "manifestClass": "destructive",
+      "excluded": true,
+      "description": "Permanently destroys a linked item and every account under it — balance history, holdings, liabilities, AND investment transactions (buys, sells, dividends) for any investment account — with ownership validation. This cannot be undone. Bank transactions are NOT destroyed; investment transactions ARE, since they have no independent existence apart from the account. Refuses if a savings goal still references one of its accounts, and refuses unless the institution was already disconnected. Use POST .../disconnect first.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Linked item ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "disconnectInstitution",
+      "method": "POST",
+      "path": "/api/v1/linked-items/{id}/disconnect",
       "summary": "Disconnect institution",
       "tags": [
         "Accounts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
-      "description": "Disconnects an institution and all associated accounts.",
+      "description": "Disconnects an institution (stops Plaid sync/billing) and retains all of its accounts' financial history. Does not destroy any data — use DELETE to permanently purge the institution and its accounts.",
       "parameters": [
         {
           "name": "id",
@@ -2827,7 +2999,7 @@
       "tags": [
         "MCP Audit"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Records a security audit entry for an MCP operation. Called by the trusted MCP Worker; authenticated by CloudflareOnly middleware (X-Origin-Secret), not end-user Clerk JWT."
     },
@@ -2903,7 +3075,7 @@
       "tags": [
         "MCP Recipes"
       ],
-      "manifestClass": "write",
+      "manifestClass": "destructive",
       "excluded": false,
       "parameters": [
         {
@@ -3025,7 +3197,7 @@
       "tags": [
         "Merchants"
       ],
-      "manifestClass": "write",
+      "manifestClass": "destructive",
       "excluded": false,
       "description": "Removes the per-user override for a merchant, reverting to the system normalized name.",
       "parameters": [
@@ -3111,7 +3283,7 @@
       "tags": [
         "Plaid"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Exchanges a Plaid public token for an access token and links bank accounts."
     },
@@ -3123,7 +3295,7 @@
       "tags": [
         "Plaid"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Generates a Plaid Link token for initiating bank account connection flow."
     },
@@ -3135,7 +3307,7 @@
       "tags": [
         "QA"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Creates a Clerk sign-in token URL for QA test users. Only available in QA/Staging environments."
     },
@@ -3150,6 +3322,32 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns all available data residency regions. Use this to populate region selectors. This is a public endpoint."
+    },
+    {
+      "operationId": "getUserRuleExecutions",
+      "method": "GET",
+      "path": "/api/v1/rule-executions",
+      "summary": "Get automation rule execution history",
+      "tags": [
+        "Auto-Categorization"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Retrieves categorization-rule executions for the authenticated user, newest first. A row exists for each time a rule actually CHANGED a transaction's category or tags; a rule that matched but changed nothing is counted in the rule's match_count and is not recorded here. Executions whose rule has since been deleted are still returned, carrying rule_id = null plus rule_name and definition_snapshot captured at execution time. One class is withheld: an execution against a pending transaction the provider removed when it settled, whose posted twin carries its own execution — showing both would report one charge as two automation runs. Executions against a transaction the provider reversed AFTER it posted ARE returned, because that transaction has no twin and is itself still surfacable.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Maximum number of results",
+          "type": "integer"
+        },
+        {
+          "name": "offset",
+          "in": "query",
+          "description": "Number of results to skip",
+          "type": "integer"
+        }
+      ]
     },
     {
       "operationId": "getSavingsGoals",
@@ -3188,6 +3386,40 @@
       "description": "Retrieves all active (not completed) savings goals for the authenticated user."
     },
     {
+      "operationId": "getDeletedSavingsGoals",
+      "method": "GET",
+      "path": "/api/v1/savings-goals/deleted",
+      "summary": "Get deleted savings goals",
+      "tags": [
+        "Savings Goals"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Lists savings goals the user has deleted. Deleting a goal retains it and every contribution STILL logged against it (Issue #1569) — a contribution the user explicitly deleted earlier via DELETE /savings-goals/{goalID}/contributions/{id} was destroyed then and does not come back here. This endpoint is how the client shows what was kept and offers POST /savings-goals/{id}/purge, which refuses unless the goal is already deleted. Each entry carries deleted_at."
+    },
+    {
+      "operationId": "listDeletedSavingsGoalContributions",
+      "method": "GET",
+      "path": "/api/v1/savings-goals/deleted/{goalID}/contributions",
+      "summary": "List a deleted savings goal's retained contributions",
+      "tags": [
+        "Savings Goals",
+        "Contributions"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns the contributions retained under a goal the user has DELETED, newest first, with their confirmed total (Issue #1569). Deleting a goal tombstones it and keeps every contribution STILL logged against it — including amounts the user entered by hand, which no provider can supply again. A contribution the user explicitly deleted earlier via DELETE /savings-goals/{goalID}/contributions/{id} was destroyed then and is not listed here. This is the only endpoint that can read the retained ones back; the live GET /savings-goals/{goalID}/contributions deliberately returns nothing for a deleted goal. Returns an empty list for a goal that is not deleted. Pair it with GET /savings-goals/deleted, and with POST /savings-goals/{id}/purge to destroy them for good.",
+      "parameters": [
+        {
+          "name": "goalID",
+          "in": "path",
+          "required": true,
+          "description": "ID of a savings goal the user has already deleted",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "operationId": "getSavingsProgressSummary",
       "method": "GET",
       "path": "/api/v1/savings-goals/progress-summary",
@@ -3211,7 +3443,7 @@
       ],
       "manifestClass": "read",
       "excluded": false,
-      "description": "Returns all confirmed and proposed contributions for a savings goal, newest first.",
+      "description": "Returns all confirmed and proposed contributions for a savings goal, newest first. Returns an empty list for a goal the user has DELETED — the contributions still logged against it are retained and are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).",
       "parameters": [
         {
           "name": "goalID",
@@ -3253,9 +3485,9 @@
         "Savings Goals",
         "Contributions"
       ],
-      "manifestClass": "write",
-      "excluded": false,
-      "description": "Removes a contribution (proposed or confirmed). Triggers goal progress recomputation.",
+      "manifestClass": "destructive",
+      "excluded": true,
+      "description": "PERMANENTLY DESTROYS a contribution (proposed or confirmed) and triggers goal progress recomputation. This is a hard delete, not a tombstone, and it is one of the sanctioned explicit-destruction exceptions under the retain-by-default rule (#1569): a hand-logged amount erased here cannot be recovered and no provider can supply it again. Deleting the GOAL does not do this — that retains every contribution still logged against it.",
       "parameters": [
         {
           "name": "goalID",
@@ -3383,7 +3615,28 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Removes a savings goal from the user's collection.",
+      "description": "Removes a savings goal from the user's collection. Destroys nothing ON ITS OWN — every contribution still logged against the goal is retained and stays readable at GET /savings-goals/deleted/{goalID}/contributions (the live GET /savings-goals/{goalID}/contributions returns nothing once the goal is deleted). It does not resurrect a contribution the user had already deleted explicitly, which was destroyed at that point. Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its remaining contributions.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "purgeSavingsGoal",
+      "method": "POST",
+      "path": "/api/v1/savings-goals/{id}/purge",
+      "summary": "Purge savings goal",
+      "tags": [
+        "Savings Goals"
+      ],
+      "manifestClass": "destructive",
+      "excluded": true,
+      "description": "Permanently destroys a savings goal and every contribution logged against it — including amounts the user entered by hand, which no provider can supply again. This cannot be undone. Refuses with 409 unless the goal has already been deleted (DELETE /savings-goals/{id} first); that two-step is the confirmation.",
       "parameters": [
         {
           "name": "id",
@@ -3440,7 +3693,7 @@
         "Subscription",
         "Paddle"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Cancels subscription at end of current billing period. User retains access until period ends."
     },
@@ -3453,7 +3706,7 @@
         "Subscription",
         "Paddle"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Creates a Paddle checkout session for purchasing a subscription. Returns checkout URL to open in Paddle.js Overlay or as redirect."
     },
@@ -3479,7 +3732,7 @@
         "Subscription",
         "Paddle"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details."
     },
@@ -3504,7 +3757,7 @@
         "Subscription",
         "Paddle"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Updates subscription to a different tier or billing interval. Handles proration automatically."
     },
@@ -3582,7 +3835,7 @@
       "tags": [
         "Tags"
       ],
-      "manifestClass": "write",
+      "manifestClass": "destructive",
       "excluded": false,
       "description": "Removes a tag from the user's collection.",
       "parameters": [
@@ -3592,6 +3845,32 @@
           "required": true,
           "description": "Tag UUID",
           "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "getUserTransactionAnnotationHistory",
+      "method": "GET",
+      "path": "/api/v1/transaction-annotation-history",
+      "summary": "Get transaction annotation change history",
+      "tags": [
+        "Transactions"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Retrieves the before/after record of every change to a transaction's category, review state or tags for the authenticated user, newest first. A row exists for each write that actually changed a tracked value; re-writing the identical value records nothing. Changes made to a transaction that has since been removed are still returned.\n\n`change_source` answers *what was asked for*, and has five values. Two are the user acting on their own transaction: 'category' — a recategorisation, which ALSO rewrites `reviewed`/`reviewed_at` as a side effect, so a review timestamp can be lost by a write the user thought was only about the category; and 'review' — a review-state write, single or bulk, which leaves the category alone. 'tags' is a whole-array tag replace: every tag dropped is gone the moment it returns and the previous set survives nowhere else, so `prior_tags` here is the only record of it; category fields are unchanged on these rows by construction.\n\nThe remaining two record changes the user did NOT ask for, which is exactly why they are not filed under 'category'. 'settlement' is written when a pending charge posts and the sync carries the manual category from the pending row onto the posted twin, replacing whatever the twin had — it explains why the twin no longer agrees with the rule_execution_history entry for the rule that categorised it moments earlier. 'erasure' is the one source whose cause is another user: when a different user exercises GDPR erasure their custom categories are hard-deleted, and a surviving user's transaction pointing at one has its override cleared. That row is the ONLY explanation anywhere for a category changing under a user who did nothing — no other record of it exists, and none is written for the erased user's own transactions, which are deleted in the same database transaction.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Maximum number of results",
+          "type": "integer"
+        },
+        {
+          "name": "offset",
+          "in": "query",
+          "description": "Number of results to skip",
+          "type": "integer"
         }
       ]
     },
@@ -3677,6 +3956,12 @@
           "name": "reviewed",
           "in": "query",
           "description": "Filter by review state: true (reviewed), false (unreviewed inbox), omit for both",
+          "type": "string"
+        },
+        {
+          "name": "include_reversed",
+          "in": "query",
+          "description": "Include transactions the bank REVERSED after they posted (default false). Reversed rows are returned with reversed=true and reversed_at set, and MUST be rendered distinctly — an unlabelled reversal reads as a live transaction. Transactions removed while still pending are never returned, by any value of this flag: their posted twin is already in the feed. Issue #1569.",
           "type": "string"
         },
         {
@@ -4117,7 +4402,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Toggles whether this account is included in the household aggregate seen by other members. Active-member-only; the caller must own the account. Returns 404 if the caller is not an active member of a household, 403 if the account does not belong to the caller.",
       "parameters": [
@@ -4131,6 +4416,18 @@
       ]
     },
     {
+      "operationId": "getDataExport",
+      "method": "GET",
+      "path": "/api/v1/user/data-export",
+      "summary": "Export my data",
+      "tags": [
+        "Privacy"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Returns a machine-readable JSON export of the authenticated user's own data (GDPR Article 20, right to data portability). Scoped strictly to the caller: rows belonging to household peers are never included, and credentials, encrypted-at-rest secrets and third-party authentication identifiers are excluded."
+    },
+    {
       "operationId": "requestDeletion",
       "method": "POST",
       "path": "/api/v1/user/delete",
@@ -4138,7 +4435,7 @@
       "tags": [
         "User"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Initiates account deletion with 30-day grace period. User will receive email with cancellation link."
     },
@@ -4183,7 +4480,7 @@
       "tags": [
         "Privacy"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Updates the authenticated user's privacy settings with GDPR validation."
     },
@@ -4207,7 +4504,7 @@
       "tags": [
         "Profile"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Updates the authenticated user's profile with validated data."
     },
@@ -4232,7 +4529,7 @@
         "Webhooks",
         "Paddle"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Public endpoint for Paddle to send subscription and payment event notifications. Verifies HMAC-SHA256 signature, stores in database, and enqueues async processing job."
     },
@@ -4244,7 +4541,7 @@
       "tags": [
         "Webhooks"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Receives and processes webhook notifications from Plaid. Validates JWT signature and stores for async processing."
     }

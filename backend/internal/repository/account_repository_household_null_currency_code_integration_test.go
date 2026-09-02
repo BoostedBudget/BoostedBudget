@@ -5,24 +5,24 @@ package repository_test
 // Integration test for Issue #1444 ("Grep for the same shape elsewhere"): accounts.currency_code
 // is nullable (migration 000007_create_accounts_table.up.sql:22 — DEFAULT 'USD' but no NOT NULL
 // constraint) and is scanned into a bare (non-pointer) domain.Account.CurrencyCode field in
-// GetForHouseholdScope, same as every other currency_code-scanning query in this package (see
+// GetForHouseholdScopeActiveNow, same as every other currency_code-scanning query in this package (see
 // account_repository_null_currency_code_integration_test.go for the other 8 sites). This test
 // lives in the household-scoped external test package (package repository_test) to reuse the
 // setupTwoMemberSharedHousehold fixture helpers already established for
-// TestAccountRepository_GetForHouseholdScope_* in account_repository_household_integration_test.go.
+// TestAccountRepository_GetForHouseholdScopeActiveNow_* in account_repository_household_integration_test.go.
 //
 // The fixture setup (setupTwoMemberSharedHousehold and friends) runs directly against the shared
 // pool, matching this file's own established convention (each helper registers its own t.Cleanup
 // delete). But the NULL-out mutation itself is scoped to its own transaction and rolled back at the
 // end (Codex adversarial review: a raw pool.Exec UPDATE with no Begin/Rollback left the mutation
 // committed against the shared dev DB for however long it took the fixture's own cleanup hooks to
-// cascade-delete the row) — GetForHouseholdScope is called through the SAME transaction so it still
+// cascade-delete the row) — GetForHouseholdScopeActiveNow is called through the SAME transaction so it still
 // observes its own uncommitted write (Postgres read-your-own-writes), and the rollback guarantees
 // zero residue regardless of cleanup ordering.
 //
 // Run with:
 //
-//	DATABASE_URL=postgres://... go test ./internal/repository/... -run TestAccountRepository_NullCurrencyCode_GetForHouseholdScope -tags integration -v
+//	DATABASE_URL=postgres://... go test ./internal/repository/... -run TestAccountRepository_NullCurrencyCode_GetForHouseholdScopeActiveNow -tags integration -v
 
 import (
 	"context"
@@ -35,7 +35,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAccountRepository_NullCurrencyCode_GetForHouseholdScope(t *testing.T) {
+func TestAccountRepository_NullCurrencyCode_GetForHouseholdScopeActiveNow(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
 
@@ -49,7 +49,7 @@ func TestAccountRepository_NullCurrencyCode_GetForHouseholdScope(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := repository.NewAccountRepository(tx, newTestFieldEncryptor(t))
-	accounts, err := repo.GetForHouseholdScope(ctx, owner, &domain.HouseholdScope{
+	accounts, err := repo.GetForHouseholdScopeActiveNow(ctx, owner, &domain.HouseholdScope{
 		HouseholdID:   hh,
 		MemberUserIDs: []string{owner, member},
 	}, time.Now().UTC())

@@ -55,7 +55,7 @@ func TestManualProvider_TriggerBoost_Success(t *testing.T) {
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		BoostID: "rule-1",
+		BoostID: ptrS("rule-1"),
 		Status: domain.ExecutionStatusCompleted,
 	}
 
@@ -85,7 +85,7 @@ func TestManualProvider_TriggerBoost_WithUserData(t *testing.T) {
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		BoostID: "rule-1",
+		BoostID: ptrS("rule-1"),
 		Status: domain.ExecutionStatusCompleted,
 	}
 
@@ -161,7 +161,7 @@ func TestManualProvider_TriggerBoost_ExecutorError(t *testing.T) {
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		BoostID: "rule-1",
+		BoostID: ptrS("rule-1"),
 		Status: domain.ExecutionStatusFailed,
 	}
 
@@ -201,7 +201,7 @@ func TestManualProvider_TriggerBoost_UpdatesExecutionStats(t *testing.T) {
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		BoostID: "rule-1",
+		BoostID: ptrS("rule-1"),
 		Status: domain.ExecutionStatusCompleted,
 	}
 
@@ -229,7 +229,7 @@ func TestManualProvider_TriggerBoost_FailedExecution_NoLastSuccessful(t *testing
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		BoostID: "rule-1",
+		BoostID: ptrS("rule-1"),
 		Status: domain.ExecutionStatusFailed,
 	}
 
@@ -256,7 +256,7 @@ func TestManualProvider_TriggerBoost_VerifiesUserOwnership(t *testing.T) {
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		BoostID: "rule-1",
+		BoostID: ptrS("rule-1"),
 		Status: domain.ExecutionStatusCompleted,
 	}
 
@@ -282,7 +282,7 @@ func TestManualProvider_TriggerBoost_MergesTriggerDataCorrectly(t *testing.T) {
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		BoostID: "rule-1",
+		BoostID: ptrS("rule-1"),
 		Status: domain.ExecutionStatusCompleted,
 	}
 
@@ -328,7 +328,7 @@ func TestManualProvider_TriggerBoost_HandlesEmptyTriggerData(t *testing.T) {
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		BoostID: "rule-1",
+		BoostID: ptrS("rule-1"),
 		Status: domain.ExecutionStatusCompleted,
 	}
 
@@ -367,7 +367,7 @@ func TestManualProvider_TriggerBoost_SerializesTriggerDataForExecution(t *testin
 		capturedTriggerData = args.Get(2).(map[string]interface{})
 	}).Return(&domain.BoostExecution{
 		ID:     "exec-1",
-		BoostID: "rule-1",
+		BoostID: ptrS("rule-1"),
 		Status: domain.ExecutionStatusCompleted,
 	}, nil)
 

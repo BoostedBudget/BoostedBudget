@@ -183,7 +183,7 @@ func TestGetSpendingByCategoryHousehold_SingleRoundTrip(t *testing.T) {
 		AddRow("FOOD_AND_DRINK", "Food and Drink", 150.0, 3)
 	// Args: requestingUserID, householdID, memberUserIDs ($1-$3 via householdScopeArgs),
 	// plus StartDate/EndDate ($4-$5) — see getSpendingByCategoryHousehold.
-	mock.ExpectQuery(`WITH household_accounts`).
+	mock.ExpectQuery(`WITH household_grants`).
 		WithArgs(userID, filters.HouseholdScope.HouseholdID, filters.HouseholdScope.MemberUserIDs, filters.StartDate, filters.EndDate).
 		WillReturnRows(rows)
 

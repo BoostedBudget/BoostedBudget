@@ -2,7 +2,9 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,40 +159,8 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory(t *testing.T) {
 		AddRow(time.Date(2024, 11, 2, 0, 0, 0, 0, time.UTC), "depository", 5150.00).
 		AddRow(time.Date(2024, 11, 3, 0, 0, 0, 0, time.UTC), "depository", 5300.00)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		WITH latest_per_account_per_day AS (
-		    SELECT
-		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
-		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id::text) AS latest_id
-		    FROM balance_snapshots bs
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		      AND bs.snapshot_at >= $2
-		      AND bs.snapshot_at <= $3
-		      AND a.type = ANY($4)
-		    GROUP BY snapshot_date, chain_key
-		),
-		deduped AS (
-		    SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		           bs.current_balance, a.type AS account_type
-		    FROM balance_snapshots bs
-		    JOIN latest_per_account_per_day l
-		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
-		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
-		      AND bs.snapshot_at = l.latest_at
-      AND bs.id::text = l.latest_id
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		)
-		SELECT snapshot_date,
-		       COALESCE(account_type, '') AS account_type,
-		       SUM(current_balance) AS type_balance
-		FROM deduped
-		GROUP BY snapshot_date, account_type
-		ORDER BY snapshot_date ASC, account_type ASC
-	`)).WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(aggregatedHistorySQLBase, "AND a.type = ANY($4)"))).
+		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).WillReturnRows(rows)
 
 	history, err := repo.GetAggregatedHistory(ctx, userID, startDate, endDate, accountTypes)
 
@@ -218,39 +188,8 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_AllAccountTypes(t *testi
 		AddRow(time.Date(2024, 11, 2, 0, 0, 0, 0, time.UTC), "depository", 10200.00)
 
 	// When accountTypes is nil or empty, query uses the unfiltered variant (no AND a.type clause).
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		WITH latest_per_account_per_day AS (
-		    SELECT
-		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
-		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id::text) AS latest_id
-		    FROM balance_snapshots bs
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		      AND bs.snapshot_at >= $2
-		      AND bs.snapshot_at <= $3
-		    GROUP BY snapshot_date, chain_key
-		),
-		deduped AS (
-		    SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		           bs.current_balance, a.type AS account_type
-		    FROM balance_snapshots bs
-		    JOIN latest_per_account_per_day l
-		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
-		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
-		      AND bs.snapshot_at = l.latest_at
-      AND bs.id::text = l.latest_id
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		)
-		SELECT snapshot_date,
-		       COALESCE(account_type, '') AS account_type,
-		       SUM(current_balance) AS type_balance
-		FROM deduped
-		GROUP BY snapshot_date, account_type
-		ORDER BY snapshot_date ASC, account_type ASC
-	`)).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(aggregatedHistorySQLBase, ""))).
+		WithArgs(userID, startDate, endDate).WillReturnRows(rows)
 
 	history, err := repo.GetAggregatedHistory(ctx, userID, startDate, endDate, nil)
 
@@ -289,14 +228,7 @@ func TestBalanceSnapshotRepository_GetLatestByUserID(t *testing.T) {
 			"USD", time.Date(2024, 11, 15, 14, 30, 0, 0, time.UTC), "plaid_webhook", time.Now(),
 		)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT DISTINCT ON (COALESCE(user_account_id::text, account_id::text))
-		       id, account_id, user_account_id, user_id, current_balance, available_balance,
-		       currency_code, snapshot_at, source, created_at
-		FROM balance_snapshots
-		WHERE user_id = $1
-		ORDER BY COALESCE(user_account_id::text, account_id::text), snapshot_at DESC
-	`)).WithArgs(userID).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta(personalLatestSnapshotSQL(""))).WithArgs(userID).WillReturnRows(rows)
 
 	// Execute
 	snapshots, err := repo.GetLatestByUserID(ctx, userID)
@@ -447,39 +379,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_MultipleSnapshotsPerDay(
 	rows := pgxmock.NewRows([]string{"snapshot_date", "account_type", "type_balance"}).
 		AddRow(time.Date(2024, 11, 15, 0, 0, 0, 0, time.UTC), "depository", 3300.00)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		WITH latest_per_account_per_day AS (
-		    SELECT
-		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
-		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id::text) AS latest_id
-		    FROM balance_snapshots bs
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		      AND bs.snapshot_at >= $2
-		      AND bs.snapshot_at <= $3
-		    GROUP BY snapshot_date, chain_key
-		),
-		deduped AS (
-		    SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		           bs.current_balance, a.type AS account_type
-		    FROM balance_snapshots bs
-		    JOIN latest_per_account_per_day l
-		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
-		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
-		      AND bs.snapshot_at = l.latest_at
-      AND bs.id::text = l.latest_id
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		)
-		SELECT snapshot_date,
-		       COALESCE(account_type, '') AS account_type,
-		       SUM(current_balance) AS type_balance
-		FROM deduped
-		GROUP BY snapshot_date, account_type
-		ORDER BY snapshot_date ASC, account_type ASC
-	`)).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(aggregatedHistorySQLBase, ""))).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
 
 	history, err := repo.GetAggregatedHistory(ctx, userID, startDate, endDate, nil)
 
@@ -507,39 +407,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_TimezoneConsistency(t *t
 		AddRow(time.Date(2024, 11, 15, 0, 0, 0, 0, time.UTC), "depository", 2000.00).
 		AddRow(time.Date(2024, 11, 16, 0, 0, 0, 0, time.UTC), "depository", 3000.00)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		WITH latest_per_account_per_day AS (
-		    SELECT
-		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
-		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id::text) AS latest_id
-		    FROM balance_snapshots bs
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		      AND bs.snapshot_at >= $2
-		      AND bs.snapshot_at <= $3
-		    GROUP BY snapshot_date, chain_key
-		),
-		deduped AS (
-		    SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		           bs.current_balance, a.type AS account_type
-		    FROM balance_snapshots bs
-		    JOIN latest_per_account_per_day l
-		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
-		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
-		      AND bs.snapshot_at = l.latest_at
-      AND bs.id::text = l.latest_id
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		)
-		SELECT snapshot_date,
-		       COALESCE(account_type, '') AS account_type,
-		       SUM(current_balance) AS type_balance
-		FROM deduped
-		GROUP BY snapshot_date, account_type
-		ORDER BY snapshot_date ASC, account_type ASC
-	`)).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(aggregatedHistorySQLBase, ""))).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
 
 	history, err := repo.GetAggregatedHistory(ctx, userID, startDate, endDate, nil)
 
@@ -581,14 +449,7 @@ func TestBalanceSnapshotRepository_GetLatestByUserID_ChainDepth2(t *testing.T) {
 	)
 	_ = oldAccountID // used to clarify test setup intent
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT DISTINCT ON (COALESCE(user_account_id::text, account_id::text))
-		       id, account_id, user_account_id, user_id, current_balance, available_balance,
-		       currency_code, snapshot_at, source, created_at
-		FROM balance_snapshots
-		WHERE user_id = $1
-		ORDER BY COALESCE(user_account_id::text, account_id::text), snapshot_at DESC
-	`)).WithArgs(userID).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta(personalLatestSnapshotSQL(""))).WithArgs(userID).WillReturnRows(rows)
 
 	snapshots, err := repo.GetLatestByUserID(ctx, userID)
 
@@ -619,39 +480,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_NoDoubleCountOnRelinkDay
 		AddRow(time.Date(2024, 11, 15, 0, 0, 0, 0, time.UTC), "depository", 1050.00).
 		AddRow(time.Date(2024, 11, 20, 0, 0, 0, 0, time.UTC), "depository", 1100.00)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		WITH latest_per_account_per_day AS (
-		    SELECT
-		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
-		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id::text) AS latest_id
-		    FROM balance_snapshots bs
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		      AND bs.snapshot_at >= $2
-		      AND bs.snapshot_at <= $3
-		    GROUP BY snapshot_date, chain_key
-		),
-		deduped AS (
-		    SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		           bs.current_balance, a.type AS account_type
-		    FROM balance_snapshots bs
-		    JOIN latest_per_account_per_day l
-		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
-		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
-		      AND bs.snapshot_at = l.latest_at
-      AND bs.id::text = l.latest_id
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		)
-		SELECT snapshot_date,
-		       COALESCE(account_type, '') AS account_type,
-		       SUM(current_balance) AS type_balance
-		FROM deduped
-		GROUP BY snapshot_date, account_type
-		ORDER BY snapshot_date ASC, account_type ASC
-	`)).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(aggregatedHistorySQLBase, ""))).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
 
 	history, err := repo.GetAggregatedHistory(ctx, userID, startDate, endDate, nil)
 
@@ -678,39 +507,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_LegacyNullUserAccountID(
 		AddRow(time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC), "depository", 5000.00).
 		AddRow(time.Date(2024, 11, 15, 0, 0, 0, 0, time.UTC), "depository", 5200.00)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		WITH latest_per_account_per_day AS (
-		    SELECT
-		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
-		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id::text) AS latest_id
-		    FROM balance_snapshots bs
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		      AND bs.snapshot_at >= $2
-		      AND bs.snapshot_at <= $3
-		    GROUP BY snapshot_date, chain_key
-		),
-		deduped AS (
-		    SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		           bs.current_balance, a.type AS account_type
-		    FROM balance_snapshots bs
-		    JOIN latest_per_account_per_day l
-		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
-		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
-		      AND bs.snapshot_at = l.latest_at
-      AND bs.id::text = l.latest_id
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		)
-		SELECT snapshot_date,
-		       COALESCE(account_type, '') AS account_type,
-		       SUM(current_balance) AS type_balance
-		FROM deduped
-		GROUP BY snapshot_date, account_type
-		ORDER BY snapshot_date ASC, account_type ASC
-	`)).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(aggregatedHistorySQLBase, ""))).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
 
 	history, err := repo.GetAggregatedHistory(ctx, userID, startDate, endDate, nil)
 
@@ -740,39 +537,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_PopulatesByType(t *testi
 		AddRow(day1, "depository", 5000.00).
 		AddRow(day1, "investment", 8000.00)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		WITH latest_per_account_per_day AS (
-		    SELECT
-		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
-		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id::text) AS latest_id
-		    FROM balance_snapshots bs
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		      AND bs.snapshot_at >= $2
-		      AND bs.snapshot_at <= $3
-		    GROUP BY snapshot_date, chain_key
-		),
-		deduped AS (
-		    SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		           bs.current_balance, a.type AS account_type
-		    FROM balance_snapshots bs
-		    JOIN latest_per_account_per_day l
-		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
-		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
-		      AND bs.snapshot_at = l.latest_at
-      AND bs.id::text = l.latest_id
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		)
-		SELECT snapshot_date,
-		       COALESCE(account_type, '') AS account_type,
-		       SUM(current_balance) AS type_balance
-		FROM deduped
-		GROUP BY snapshot_date, account_type
-		ORDER BY snapshot_date ASC, account_type ASC
-	`)).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(aggregatedHistorySQLBase, ""))).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
 
 	history, err := repo.GetAggregatedHistory(ctx, userID, startDate, endDate, nil)
 
@@ -803,40 +568,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_AccountTypesFilter_Popul
 		AddRow(day1, "depository", 5000.00).
 		AddRow(day1, "investment", 8000.00)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		WITH latest_per_account_per_day AS (
-		    SELECT
-		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
-		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id::text) AS latest_id
-		    FROM balance_snapshots bs
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		      AND bs.snapshot_at >= $2
-		      AND bs.snapshot_at <= $3
-		      AND a.type = ANY($4)
-		    GROUP BY snapshot_date, chain_key
-		),
-		deduped AS (
-		    SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		           bs.current_balance, a.type AS account_type
-		    FROM balance_snapshots bs
-		    JOIN latest_per_account_per_day l
-		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
-		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
-		      AND bs.snapshot_at = l.latest_at
-      AND bs.id::text = l.latest_id
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		)
-		SELECT snapshot_date,
-		       COALESCE(account_type, '') AS account_type,
-		       SUM(current_balance) AS type_balance
-		FROM deduped
-		GROUP BY snapshot_date, account_type
-		ORDER BY snapshot_date ASC, account_type ASC
-	`)).WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(aggregatedHistorySQLBase, "AND a.type = ANY($4)"))).WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).WillReturnRows(rows)
 
 	history, err := repo.GetAggregatedHistory(ctx, userID, startDate, endDate, accountTypes)
 
@@ -865,39 +597,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_OrphanSnapshot(t *testin
 	rows := pgxmock.NewRows([]string{"snapshot_date", "account_type", "type_balance"}).
 		AddRow(day1, "", 3000.00)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		WITH latest_per_account_per_day AS (
-		    SELECT
-		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
-		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id::text) AS latest_id
-		    FROM balance_snapshots bs
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		      AND bs.snapshot_at >= $2
-		      AND bs.snapshot_at <= $3
-		    GROUP BY snapshot_date, chain_key
-		),
-		deduped AS (
-		    SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		           bs.current_balance, a.type AS account_type
-		    FROM balance_snapshots bs
-		    JOIN latest_per_account_per_day l
-		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
-		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
-		      AND bs.snapshot_at = l.latest_at
-      AND bs.id::text = l.latest_id
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
-		)
-		SELECT snapshot_date,
-		       COALESCE(account_type, '') AS account_type,
-		       SUM(current_balance) AS type_balance
-		FROM deduped
-		GROUP BY snapshot_date, account_type
-		ORDER BY snapshot_date ASC, account_type ASC
-	`)).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(aggregatedHistorySQLBase, ""))).WithArgs(userID, startDate, endDate).WillReturnRows(rows)
 
 	history, err := repo.GetAggregatedHistory(ctx, userID, startDate, endDate, nil)
 
@@ -949,4 +649,51 @@ func TestBalanceSnapshotRepository_GetLatestByAccountID_SubSecondPrecision(t *te
 	assert.Equal(t, snapshotAt, snapshot.SnapshotAt)
 	assert.Equal(t, 999999000, snapshot.SnapshotAt.Nanosecond())
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ── #1569 T10-FIX item 7: what the pgxmock expectations above can and cannot catch ─────────────
+//
+// Every GetAggregatedHistory test in this file builds its ExpectQuery from `aggregatedHistorySQLBase`
+// — the SAME package-level template production renders. That is deliberate (a hand-copied 90-line
+// statement is its own maintenance trap) and it has a consequence that must be stated where the
+// tests are, not inferred: a regression in the template updates production and the expectation
+// TOGETHER, and every one of those tests stays green. They pin the Go-side plumbing — the argument
+// list, the row scan, the grouping into BalanceHistoryPoint, the type-filter branch choosing the
+// right rendering — and nothing whatsoever about whether the SQL is correct.
+//
+// The real protection for the SQL is the integration suite, against a real table:
+// TestMasklessPair_PersonalBalanceReads_CountBothAccounts,
+// TestGetAggregatedHistoryForHousehold_RelinkChain_ASnapshotKeepsItsOwnAccountsType and the
+// portfolio chain-topology family. If you change this statement, that is where you find out.
+//
+// TestAggregatedHistorySQLBase_PinsItsLoadBearingFragments is the cheap half of the gap: the four
+// decisions in the template that a silent edit could reverse are asserted here as literal
+// fragments, so at least those cannot move in lockstep with an expectation.
+func TestAggregatedHistorySQLBase_PinsItsLoadBearingFragments(t *testing.T) {
+	sql := aggregatedHistorySQLBase
+
+	// 1. The grain is the PHYSICAL ACCOUNT. Collapsing to the chain key deletes one of two maskless
+	//    siblings from every chart point (#1569 T10.2).
+	assert.Contains(t, sql, "DISTINCT ON ((bs.snapshot_at AT TIME ZONE 'UTC')::date, "+snapshotIdentityKey+")",
+		"the per-day dedup must be per physical account")
+	assert.Equal(t, "COALESCE(bs.account_id::text, bs.user_account_id::text, '')", snapshotIdentityKey,
+		"all three COALESCE arms are load-bearing — see snapshotIdentityKey. A bare bs.account_id "+
+			"puts every orphaned snapshot in ONE DISTINCT ON bucket and deletes all but one")
+
+	// 2. The type comes from the snapshot's OWN account, not from any chain member.
+	assert.Contains(t, sql, "LEFT JOIN accounts a ON a.id = bs.account_id",
+		"a chain-wide join needs a preference to pick a type, and that preference has been wrong "+
+			"in both directions once each")
+	assert.NotContains(t, sql, "a.user_account_id = bs.user_account_id",
+		"the chain-wide join must not come back")
+
+	// 3. Succession is applied, and by the shared rule rather than a second copy of it.
+	assert.Contains(t, sql, accountChainSupersessionCTESQL("TRUE"),
+		"there is ONE succession rule in the backend; a second copy is how the balance side and "+
+			"the portfolio side came to disagree about the same two rows")
+	assert.Contains(t, sql, "SELECT 1 FROM superseded x",
+		"the superseded rows must actually be filtered out, not merely computed")
+
+	// 4. The optional predicate is the ONLY hole, so the type filter cannot be rendered anywhere else.
+	assert.Equal(t, 1, strings.Count(sql, "%s"), "exactly one format hole")
 }

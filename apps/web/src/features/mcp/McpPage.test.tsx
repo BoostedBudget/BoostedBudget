@@ -246,6 +246,33 @@ describe('McpPage', () => {
     expect(chip).toBeInTheDocument()
   })
 
+  // #1569 task 20 (A5). capabilitySummary.json has carried destructiveWriteOperations since task
+  // 16 and NOTHING read it: McpPage destructured allowedOperations, readOperations,
+  // writeOperations and publicBoundaries, and stopped. So a public page whose whole subject is
+  // "what can an agent do to my money" could not say that four of the capabilities it advertises
+  // permanently delete something.
+  it('tells the reader how many capabilities permanently delete data', () => {
+    render(<McpPage />)
+    const n = capabilitySummary.destructiveWriteOperations
+    expect(n).toBeGreaterThan(0) // a zero would make the sentence below vacuously satisfiable
+    // The lookbehind matters: "134 capabilities" also ends in a 4, and a bare `4\\b` would match
+    // inside it. The number must be its own token.
+    expect(document.body.textContent).toMatch(
+      new RegExp(`(?<![0-9])${n}\\b[^.]*permanently delete`, 'i')
+    )
+  })
+
+  // The arithmetic the page's own sentence depends on. writeOperations deliberately means
+  // write-OR-destructive so that allowed === read + write holds; the destructive count is a SUBSET
+  // of writeOperations, never a fourth bucket added alongside it. Asserted here because the
+  // tempting way to surface the new number is to subtract it out, which would silently make the
+  // sentence above the chip wrong.
+  it('keeps allowed === read + write, with destructive a subset of write', () => {
+    const s = capabilitySummary
+    expect(s.readOperations + s.writeOperations).toBe(s.allowedOperations)
+    expect(s.destructiveWriteOperations).toBeLessThanOrEqual(s.writeOperations)
+  })
+
   it('does not claim the agent writes and runs code against your finances', () => {
     render(<McpPage />)
     expect(document.body.textContent).not.toMatch(/writes and runs code/i)

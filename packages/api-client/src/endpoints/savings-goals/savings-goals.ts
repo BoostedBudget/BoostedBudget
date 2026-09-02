@@ -51,6 +51,7 @@ import type {
 
 import type {
   CreateSavingsGoalRequest,
+  DeletedGoalContributionsBody,
   ErrorModel,
   LogContributionRequest,
   SavingsGoal,
@@ -361,6 +362,192 @@ export function useGetActiveSavingsGoals<TData = Awaited<ReturnType<typeof getAc
 
 
 /**
+ * Lists savings goals the user has deleted. Deleting a goal retains it and every contribution STILL logged against it (Issue #1569) — a contribution the user explicitly deleted earlier via DELETE /savings-goals/{goalID}/contributions/{id} was destroyed then and does not come back here. This endpoint is how the client shows what was kept and offers POST /savings-goals/{id}/purge, which refuses unless the goal is already deleted. Each entry carries deleted_at.
+ * @summary Get deleted savings goals
+ */
+export const getDeletedSavingsGoals = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<SavingsGoal[] | null>(
+      {url: `/api/v1/savings-goals/deleted`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetDeletedSavingsGoalsQueryKey = () => {
+    return [
+    `/api/v1/savings-goals/deleted`
+    ] as const;
+    }
+
+
+export const getGetDeletedSavingsGoalsQueryOptions = <TData = Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetDeletedSavingsGoalsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDeletedSavingsGoals>>> = ({ signal }) => getDeletedSavingsGoals(requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetDeletedSavingsGoalsQueryResult = NonNullable<Awaited<ReturnType<typeof getDeletedSavingsGoals>>>
+export type GetDeletedSavingsGoalsQueryError = ErrorType<ErrorModel>
+
+
+export function useGetDeletedSavingsGoals<TData = Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError = ErrorType<ErrorModel>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getDeletedSavingsGoals>>,
+          TError,
+          Awaited<ReturnType<typeof getDeletedSavingsGoals>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetDeletedSavingsGoals<TData = Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getDeletedSavingsGoals>>,
+          TError,
+          Awaited<ReturnType<typeof getDeletedSavingsGoals>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetDeletedSavingsGoals<TData = Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get deleted savings goals
+ */
+
+export function useGetDeletedSavingsGoals<TData = Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetDeletedSavingsGoalsQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Returns the contributions retained under a goal the user has DELETED, newest first, with their confirmed total (Issue #1569). Deleting a goal tombstones it and keeps every contribution STILL logged against it — including amounts the user entered by hand, which no provider can supply again. A contribution the user explicitly deleted earlier via DELETE /savings-goals/{goalID}/contributions/{id} was destroyed then and is not listed here. This is the only endpoint that can read the retained ones back; the live GET /savings-goals/{goalID}/contributions deliberately returns nothing for a deleted goal. Returns an empty list for a goal that is not deleted. Pair it with GET /savings-goals/deleted, and with POST /savings-goals/{id}/purge to destroy them for good.
+ * @summary List a deleted savings goal's retained contributions
+ */
+export const listDeletedSavingsGoalContributions = (
+    goalID: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<DeletedGoalContributionsBody>(
+      {url: `/api/v1/savings-goals/deleted/${goalID}/contributions`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getListDeletedSavingsGoalContributionsQueryKey = (goalID: string,) => {
+    return [
+    `/api/v1/savings-goals/deleted/${goalID}/contributions`
+    ] as const;
+    }
+
+
+export const getListDeletedSavingsGoalContributionsQueryOptions = <TData = Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>, TError = ErrorType<ErrorModel>>(goalID: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListDeletedSavingsGoalContributionsQueryKey(goalID);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>> = ({ signal }) => listDeletedSavingsGoalContributions(goalID, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: goalID !== null && goalID !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListDeletedSavingsGoalContributionsQueryResult = NonNullable<Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>>
+export type ListDeletedSavingsGoalContributionsQueryError = ErrorType<ErrorModel>
+
+
+export function useListDeletedSavingsGoalContributions<TData = Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>, TError = ErrorType<ErrorModel>>(
+ goalID: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>,
+          TError,
+          Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListDeletedSavingsGoalContributions<TData = Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>, TError = ErrorType<ErrorModel>>(
+ goalID: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>,
+          TError,
+          Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListDeletedSavingsGoalContributions<TData = Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>, TError = ErrorType<ErrorModel>>(
+ goalID: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List a deleted savings goal's retained contributions
+ */
+
+export function useListDeletedSavingsGoalContributions<TData = Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>, TError = ErrorType<ErrorModel>>(
+ goalID: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listDeletedSavingsGoalContributions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getListDeletedSavingsGoalContributionsQueryOptions(goalID,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
  * Returns basis-aware savings progress for all active goals plus portfolio totals. Each goal exposes progress_basis, computed_from, freshness, and confirmed_contributions_total so AI/MCP consumers can interpret mixed-basis current_amount values correctly (Issue #1300 Codex C11).
  * @summary Get savings progress summary
  */
@@ -454,7 +641,7 @@ export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof g
 
 
 /**
- * Returns all confirmed and proposed contributions for a savings goal, newest first.
+ * Returns all confirmed and proposed contributions for a savings goal, newest first. Returns an empty list for a goal the user has DELETED — the contributions still logged against it are retained and are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).
  * @summary List savings goal contributions
  */
 export const listSavingsGoalContributions = (
@@ -613,7 +800,7 @@ export const useLogSavingsGoalContribution = <TError = ErrorType<ErrorModel>,
       return useMutation(getLogSavingsGoalContributionMutationOptions(options), queryClient);
     }
     /**
- * Removes a contribution (proposed or confirmed). Triggers goal progress recomputation.
+ * PERMANENTLY DESTROYS a contribution (proposed or confirmed) and triggers goal progress recomputation. This is a hard delete, not a tombstone, and it is one of the sanctioned explicit-destruction exceptions under the retain-by-default rule (#1569): a hand-logged amount erased here cannot be recovered and no provider can supply it again. Deleting the GOAL does not do this — that retains every contribution still logged against it.
  * @summary Delete a savings goal contribution
  */
 export const deleteSavingsGoalContribution = (
@@ -805,7 +992,7 @@ export const useRejectSavingsGoalContribution = <TError = ErrorType<ErrorModel>,
       return useMutation(getRejectSavingsGoalContributionMutationOptions(options), queryClient);
     }
     /**
- * Removes a savings goal from the user's collection.
+ * Removes a savings goal from the user's collection. Destroys nothing ON ITS OWN — every contribution still logged against the goal is retained and stays readable at GET /savings-goals/deleted/{goalID}/contributions (the live GET /savings-goals/{goalID}/contributions returns nothing once the goal is deleted). It does not resurrect a contribution the user had already deleted explicitly, which was destroyed at that point. Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its remaining contributions.
  * @summary Delete savings goal
  */
 export const deleteSavingsGoal = (
@@ -1025,4 +1212,67 @@ export const useUpdateSavingsGoal = <TError = ErrorType<ErrorModel>,
         TContext
       > => {
       return useMutation(getUpdateSavingsGoalMutationOptions(options), queryClient);
+    }
+    /**
+ * Permanently destroys a savings goal and every contribution logged against it — including amounts the user entered by hand, which no provider can supply again. This cannot be undone. Refuses with 409 unless the goal has already been deleted (DELETE /savings-goals/{id} first); that two-step is the confirmation.
+ * @summary Purge savings goal
+ */
+export const purgeSavingsGoal = (
+    id: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<void>(
+      {url: `/api/v1/savings-goals/${id}/purge`, method: 'POST', signal
+    },
+      options);
+    }
+
+
+
+
+export const getPurgeSavingsGoalMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof purgeSavingsGoal>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof purgeSavingsGoal>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['purgeSavingsGoal'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof purgeSavingsGoal>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  purgeSavingsGoal(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PurgeSavingsGoalMutationResult = NonNullable<Awaited<ReturnType<typeof purgeSavingsGoal>>>
+
+    export type PurgeSavingsGoalMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Purge savings goal
+ */
+export const usePurgeSavingsGoal = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof purgeSavingsGoal>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof purgeSavingsGoal>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+      return useMutation(getPurgeSavingsGoalMutationOptions(options), queryClient);
     }

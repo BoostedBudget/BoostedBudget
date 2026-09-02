@@ -1,0 +1,423 @@
+package database
+
+// #1569 round 14 task 8 item 4 — the accounts leg of BackfillUserAccountIDs is called
+// SYNCHRONOUSLY from cmd/server/main.go on every boot, with os.Exit(1) on any row's error. Before
+// this test it issued ONE unbounded `SELECT ... WHERE a.user_account_id IS NULL`, materialised
+// every match, and looped serially doing decrypt + lookup + INSERT + UPDATE per row. Steady state
+// is a cheap indexed no-op, but the backfill exists to repair a KNOWN RECURRING write-path bug
+// (#1306); if that recurs and accumulates a large backlog, every rolling restart reprocesses the
+// whole backlog before the process accepts traffic, and fails CLOSED.
+//
+// These two tests pin the bound, not the repair (the repair is covered by
+// TestBackfillUserAccountIDs_MultipleMatch_Warns and the integration tests):
+//
+//  1. the scan is a keyset-paged query — LIMIT plus a `(created_at, id) > $cursor` position — and a
+//     FULL page is followed by another query starting after the last row it returned;
+//  2. one run stops at backfillAccountsMaxRowsPerRun and WARNs, instead of draining the backlog;
+//  3. #1569 round 14 task 9: the run LOADS its resume position before the first page, SAVES it when
+//     it stops at the cap, and CLEARS it when the scan is exhausted.
+//
+// ⚠ WHAT THESE TESTS CANNOT DO, stated here because a previous round's version of them implied
+// otherwise: pgxmock does not evaluate the SQL predicate. It matches the query text and the
+// ARGUMENTS, so it can prove the second page is asked for with the first page's last (created_at,
+// id) — and the old version could not even do that, because it generated the second page's id
+// randomly, leaving it not necessarily greater than the cursor. It can never prove the query
+// actually SELECTs the right rows. That is what
+// backfill_user_account_cursor_integration_test.go exists for, against real PostgreSQL.
+//
+// ⚠ Failure semantics are DELIBERATELY UNCHANGED: an error still propagates and main.go still
+// exits. Bounding the work per boot is not the same decision as degrading instead of exiting, and
+// only the first was in scope.
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log/slog"
+	"regexp"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/pashagolub/pgxmock/v4"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
+)
+
+// withBackfillPageBounds temporarily shrinks the paging constants so a test can express "a full
+// page" in two rows instead of five hundred. Restored via t.Cleanup.
+func withBackfillPageBounds(t *testing.T, pageSize, maxRows int) {
+	t.Helper()
+	origPage, origMax := backfillAccountsPageSize, backfillAccountsMaxRowsPerRun
+	backfillAccountsPageSize, backfillAccountsMaxRowsPerRun = pageSize, maxRows
+	t.Cleanup(func() {
+		backfillAccountsPageSize, backfillAccountsMaxRowsPerRun = origPage, origMax
+	})
+}
+
+// backfillPageRow is one seeded row of a mocked page: an EXPLICIT (created_at, id) pair, because
+// (created_at, id) is the scan's sort key and therefore its cursor. Both components are pinned
+// rather than random — the previous version of this file generated the second page's id randomly,
+// so it was not guaranteed to be greater than the cursor and the test could pass over a fixture the
+// real query would never produce.
+type backfillPageRow struct {
+	id        string
+	createdAt time.Time
+}
+
+// backfillPageRows returns n rows whose ids ascend within a single created_at instant, then the
+// next instant, so the fixture is a valid ordering under `ORDER BY a.created_at, a.id`.
+func backfillPageRows(base time.Time, n int) []backfillPageRow {
+	out := make([]backfillPageRow, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, backfillPageRow{
+			id:        fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1),
+			createdAt: base.Add(time.Duration(i) * time.Minute),
+		})
+	}
+	return out
+}
+
+// expectCursorLoad queues the sweep_cursors read every run issues before its first page. `ts` nil
+// means "no stored position" (the row is absent), which is how absence is encoded. `offset` is the
+// stored ts1_offset — how many rows of ts1's group a previous run already consumed; a nil offset is
+// a row written before migration 000183 and reads as 0.
+func expectCursorLoad(mock pgxmock.PgxPoolIface, ts *time.Time, offset *int32) {
+	rows := pgxmock.NewRows([]string{"ts1", "ts1_offset"})
+	if ts != nil {
+		rows.AddRow(ts, offset)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ts1, ts1_offset FROM sweep_cursors`)).
+		WithArgs(backfillAccountsSweepCursorName).
+		WillReturnRows(rows)
+}
+
+// expectCursorSave queues the upsert a CAPPED run performs. What is persisted is the timestamp and
+// a COUNT of rows consumed at it — never a row id.
+func expectCursorSave(mock pgxmock.PgxPoolIface, ts time.Time, offset int) {
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO sweep_cursors`)).
+		WithArgs(backfillAccountsSweepCursorName, ts, offset).
+		WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
+}
+
+// expectCursorClear queues the delete a run performs when it reaches the end of its scan.
+func expectCursorClear(mock pgxmock.PgxPoolIface) {
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM sweep_cursors`)).
+		WithArgs(backfillAccountsSweepCursorName).
+		WillReturnResult(pgconn.NewCommandTag("DELETE 1"))
+}
+
+// expectRepairablePage queues the mocks for one page of accounts that each resolve to an existing
+// user_accounts row and get UPDATEd, asserting the page was asked for at exactly `cursor` (nil =
+// from the beginning, which carries no position predicate).
+func expectRepairablePage(t *testing.T, mock pgxmock.PgxPoolIface, enc *appcrypto.FieldEncryptor, cursor *backfillAccountsCursor, page []backfillPageRow) {
+	t.Helper()
+	acctType, acctSubtype := "depository", "checking"
+	rows := pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id", "type", "subtype", "created_at"})
+	type pending struct{ id, userID, instBlind, uaID string }
+	var queued []pending
+	for _, r := range page {
+		userID := uuid.New().String()
+		plainInstID := "ins-" + r.id[:8]
+		encInstID, err := enc.EncryptString(plainInstID)
+		require.NoError(t, err)
+		encInstIDPtr := &encInstID
+		// mask is NULL, so the backfill takes lookupUserAccountID's mask_blind_idx IS NULL branch,
+		// whose args are (user_id, institution_id_blind_idx, identity_type, identity_subtype).
+		rows.AddRow(r.id, userID, (*string)(nil), encInstIDPtr, &acctType, &acctSubtype, r.createdAt)
+		queued = append(queued, pending{
+			id:        r.id,
+			userID:    userID,
+			instBlind: enc.BlindIndex(plainInstID),
+			uaID:      uuid.New().String(),
+		})
+	}
+	var (
+		cursorTS *time.Time
+		cursorID *string
+		offset   int
+	)
+	if cursor != nil {
+		ts := cursor.createdAt
+		cursorTS = &ts
+		if cursor.id != "" {
+			id := cursor.id
+			cursorID = &id
+		} else {
+			offset = cursor.offset
+		}
+	}
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT a.id, a.user_id, a.mask, li.institution_id`)).
+		WithArgs(cursorTS, cursorID, offset, backfillAccountsPageSize).
+		WillReturnRows(rows)
+	for _, p := range queued {
+		mock.ExpectQuery(regexp.QuoteMeta(`SELECT id FROM user_accounts`)).
+			WithArgs(p.userID, p.instBlind, &acctType, &acctSubtype).
+			WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow(p.uaID))
+		mock.ExpectExec(regexp.QuoteMeta(`UPDATE accounts SET user_account_id`)).
+			WithArgs(p.uaID, p.id).
+			WillReturnResult(pgconn.NewCommandTag("UPDATE 1"))
+	}
+}
+
+// TestBackfillAccounts_PagesWithAKeysetCursor proves the scan is bounded AND that it makes
+// progress: a full page is followed by a second query whose cursor is the last (created_at, id) of
+// the first page, and the run ends when a short page comes back.
+//
+// RED before the fix: the unbounded query took no arguments at all, so WithArgs could not match and
+// no second query was ever issued.
+func TestBackfillAccounts_PagesWithAKeysetCursor(t *testing.T) {
+	enc := newBackfillTestEnc2(t)
+	ctx := context.Background()
+	withBackfillPageBounds(t, 2, 100)
+
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	base := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	firstPage := backfillPageRows(base, 2)
+	expectCursorLoad(mock, nil, nil)
+	expectRepairablePage(t, mock, enc, nil, firstPage)
+	// The second page starts strictly after the last row of the first, and comes back short (one
+	// row), which ends the run without a third query.
+	last := firstPage[len(firstPage)-1]
+	secondPage := backfillPageRows(base.Add(time.Hour), 1)
+	expectRepairablePage(t, mock, enc, &backfillAccountsCursor{createdAt: last.createdAt, id: last.id}, secondPage)
+	// The scan was exhausted, so the run stores nothing — it CLEARS, which is what makes a
+	// past-the-end watermark an unrepresentable state.
+	expectCursorClear(mock)
+
+	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, mock, enc))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBackfillAccounts_StopsAtTheRunCap proves ONE boot cannot be made arbitrarily long by a large
+// backlog: the run stops at backfillAccountsMaxRowsPerRun and says so, rather than draining — and
+// PERSISTS where it stopped, so the next boot does not re-read the same rows.
+//
+// RED before the fix: there was no cap, so a second page was fetched and the WARN never appeared.
+// RED before task 9: nothing was persisted, so the Save expectation could not be met.
+func TestBackfillAccounts_StopsAtTheRunCap(t *testing.T) {
+	enc := newBackfillTestEnc2(t)
+	ctx := context.Background()
+	withBackfillPageBounds(t, 2, 2)
+
+	var logBuf bytes.Buffer
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(origLogger) })
+
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	// Exactly one full page is fetched. The cap is reached, so no second page query is queued — and
+	// pgxmock is in ordered mode, so an unexpected extra query fails the run.
+	base := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	page := backfillPageRows(base, 2)
+	expectCursorLoad(mock, nil, nil)
+	expectRepairablePage(t, mock, enc, nil, page)
+	// The persisted position is the last row's timestamp plus a COUNT of rows consumed at it. Here
+	// backfillPageRows puts each row at its own minute, so exactly one row shares the last one's
+	// timestamp and the offset is 1 — the next boot resumes AFTER that row without ever being told
+	// which row it was.
+	expectCursorSave(mock, page[len(page)-1].createdAt, 1)
+
+	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, mock, enc))
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	assert.Contains(t, logBuf.String(), "per-run cap",
+		"hitting the cap must WARN so a persistent backlog is visible rather than silent")
+}
+
+// TestBackfillAccounts_ResumesFromTheStoredPosition proves the stored watermark is turned back into
+// a scan position and handed to the FIRST page query — the whole point of persisting it. The stored
+// form is a timestamp plus a COUNT (sweep_cursors.ts1_offset), which the query applies as
+// `created_at >= T` with that many rows skipped. No id is stored and none is synthesized.
+func TestBackfillAccounts_ResumesFromTheStoredPosition(t *testing.T) {
+	enc := newBackfillTestEnc2(t)
+	ctx := context.Background()
+	withBackfillPageBounds(t, 2, 100)
+
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	stored := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	expectCursorLoad(mock, &stored, nil)
+	expectRepairablePage(t, mock, enc,
+		&backfillAccountsCursor{createdAt: stored},
+		backfillPageRows(stored.Add(time.Hour), 1))
+	expectCursorClear(mock)
+
+	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, mock, enc))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBackfillAccounts_CapReachedInsideATieGroupSavesAnOffsetIntoIt pins #1569 round 15 task 9's
+// answer to defect C2 — and fix 1's replacement for it — at the query level.
+//
+// The case: a run reaches its per-run cap with the scan still INSIDE one created_at. A
+// timestamp-only watermark has no spelling for that. "Resume at T" replays the identical page on
+// every future boot (the starvation this cursor exists to remove); "resume after T" steps over the
+// rows of the group the run never looked at, and nothing ever comes back for them. The position
+// therefore carries a COUNT: resume at T, having consumed 2 of it. That is exact while the consumed
+// prefix is still there, which is precisely the case that makes a group sticky — the rows a run
+// could not repair do not leave the candidate set.
+//
+// ⚠ Note what is NOT here: no second page query past the cap. The previous fix drained the whole
+// tie group in-run, which was up to five times the cap of synchronous work at boot; the offset
+// removes the need for it.
+func TestBackfillAccounts_CapReachedInsideATieGroupSavesAnOffsetIntoIt(t *testing.T) {
+	enc := newBackfillTestEnc2(t)
+	ctx := context.Background()
+	withBackfillPageBounds(t, 2, 2)
+
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	stored := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	tie := []backfillPageRow{
+		{id: "00000000-0000-4000-8000-000000000001", createdAt: stored},
+		{id: "00000000-0000-4000-8000-000000000002", createdAt: stored},
+	}
+	expectCursorLoad(mock, &stored, nil)
+	expectRepairablePage(t, mock, enc, &backfillAccountsCursor{createdAt: stored}, tie)
+	expectCursorSave(mock, stored, 2)
+
+	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, mock, enc))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBackfillAccounts_StoredOffsetAccumulatesAcrossRuns is the other half of the same mechanism:
+// a run that RESUMES at an offset and consumes more rows of the same timestamp must save the SUM,
+// not its own count. Saving its own count would peg the cursor at one page's worth forever and the
+// group would never be walked past — the C2 starvation with extra steps.
+func TestBackfillAccounts_StoredOffsetAccumulatesAcrossRuns(t *testing.T) {
+	enc := newBackfillTestEnc2(t)
+	ctx := context.Background()
+	withBackfillPageBounds(t, 2, 2)
+
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	stored := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	storedOffset := int32(4)
+	tie := []backfillPageRow{
+		{id: "00000000-0000-4000-8000-000000000005", createdAt: stored},
+		{id: "00000000-0000-4000-8000-000000000006", createdAt: stored},
+	}
+	expectCursorLoad(mock, &stored, &storedOffset)
+	expectRepairablePage(t, mock, enc, &backfillAccountsCursor{createdAt: stored, offset: 4}, tie)
+	expectCursorSave(mock, stored, 6)
+
+	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, mock, enc))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBackfillAccounts_StoredOffsetResetsAtATimestampBoundary is the BOUND on the mechanism the
+// test above pins the accumulation of, and it is what makes the OFFSET's database-side cost
+// analysable at all (#1569 round 16 task 9, D-2).
+//
+// The persisted position is `created_at >= T` plus `OFFSET k`, and the database really does discard
+// k index entries before returning the resumed run's first page — the per-run cap of 1000 bounds
+// the GO-side work only. The reason that is acceptable rather than unbounded is precisely this
+// reset: `advanceBackfillTail` restarts the count at 1 the moment a row's created_at differs, so k
+// is never a count of rows SCANNED, only a count of rows sharing ONE timestamp. k is therefore
+// bounded by the size of a single tie group, and a run that walks past a timestamp pays nothing for
+// the rows before it.
+//
+// A refactor that folded the page into the tail without the reset — accumulating across timestamps
+// — would keep every assertion in the accumulation test above green while making k grow without
+// limit across boots, which is the one shape that turns a documented residual into an unbounded
+// synchronous boot cost. Mutating the `continue`/reset branch out of advanceBackfillTail fails this
+// test (saved offset 6 instead of 1) and nothing else in the package.
+func TestBackfillAccounts_StoredOffsetResetsAtATimestampBoundary(t *testing.T) {
+	enc := newBackfillTestEnc2(t)
+	ctx := context.Background()
+	withBackfillPageBounds(t, 2, 2)
+
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	stored := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	next := stored.Add(time.Second)
+	storedOffset := int32(4)
+	// The page STRADDLES the boundary: the last row of T's group, then the first row of the next
+	// timestamp. The saved offset must describe the NEW timestamp's group (1), not 4+2.
+	straddling := []backfillPageRow{
+		{id: "00000000-0000-4000-8000-000000000005", createdAt: stored},
+		{id: "00000000-0000-4000-8000-000000000006", createdAt: next},
+	}
+	expectCursorLoad(mock, &stored, &storedOffset)
+	expectRepairablePage(t, mock, enc, &backfillAccountsCursor{createdAt: stored, offset: 4}, straddling)
+	expectCursorSave(mock, next, 1)
+
+	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, mock, enc))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBackfillAccounts_LegacyExclusiveRowResumesAtTheStartOfItsGroup pins the deploy path. A cursor
+// row written by the PREVIOUS code carries `exclusive` and no ts1_offset. This sweep no longer reads
+// `exclusive` at all, and a NULL offset reads as 0 — so such a row resumes at the START of its
+// timestamp's group and RE-READS rows rather than skipping them. That direction is the safe one and
+// it is deliberate: honouring a legacy `exclusive = true` would step over the remainder of that tie
+// group, which is the defect being removed.
+func TestBackfillAccounts_LegacyExclusiveRowResumesAtTheStartOfItsGroup(t *testing.T) {
+	enc := newBackfillTestEnc2(t)
+	ctx := context.Background()
+	withBackfillPageBounds(t, 2, 100)
+
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	stored := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	// The load selects ts1 and ts1_offset only — `exclusive` is not in the projection, so a legacy
+	// TRUE cannot reach the position at all.
+	expectCursorLoad(mock, &stored, nil)
+	expectRepairablePage(t, mock, enc, &backfillAccountsCursor{createdAt: stored, offset: 0},
+		[]backfillPageRow{{id: "00000000-0000-4000-8000-000000000001", createdAt: stored}})
+	expectCursorClear(mock)
+
+	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, mock, enc))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBackfillAccounts_StaleWatermarkWrapsWithinTheRun pins the reset half of the mechanism at the
+// query level: a stored position whose first page comes back EMPTY is a stale watermark, not "no
+// work to do". The run clears it and re-asks FROM THE BEGINNING within the same run, so a row
+// sorting behind the watermark is repaired on that boot rather than never.
+//
+// Without this, a forward-only persisted cursor would sit past the end of the scan permanently and
+// starve every later row at the tail — the same defect at the other end.
+func TestBackfillAccounts_StaleWatermarkWrapsWithinTheRun(t *testing.T) {
+	enc := newBackfillTestEnc2(t)
+	ctx := context.Background()
+	withBackfillPageBounds(t, 2, 100)
+
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	stored := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	expectCursorLoad(mock, &stored, nil)
+	// Resumed page: empty.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT a.id, a.user_id, a.mask, li.institution_id`)).
+		WithArgs(&stored, (*string)(nil), 0, backfillAccountsPageSize).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id", "type", "subtype", "created_at"}))
+	// The wrap: clear, then re-ask with NO position at all.
+	expectCursorClear(mock)
+	expectRepairablePage(t, mock, enc, nil, backfillPageRows(stored.Add(-24*time.Hour), 1))
+	expectCursorClear(mock)
+
+	require.NoError(t, backfillAccountsUserAccountIDsWithDB(ctx, mock, enc))
+	require.NoError(t, mock.ExpectationsWereMet())
+}

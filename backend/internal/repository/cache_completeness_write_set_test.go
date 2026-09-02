@@ -34,6 +34,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -71,18 +72,31 @@ var cachedReadRepoFiles = []string{
 // stays hermetic. TestDeleteCascadeMapMatchesLiveSchema (integration build tag) recomputes it from
 // the live catalogue and fails on drift, so a new FK or a changed ON DELETE action cannot silently
 // invalidate a derived disposition. Do not hand-edit: regenerate it.
+//
+// Issue #1569, migration 000150: accounts.savings_goals was widened from ON DELETE CASCADE to
+// RESTRICT (so a DELETE on accounts no longer reaches budget_categories through savings_goals —
+// RESTRICT edges are excluded entirely from this derivation's `confdeltype IN ('c','n','d')`
+// filter), and balance_snapshots.account_id changed from CASCADE to SET NULL (so recursion through
+// it stops there rather than continuing). Both "accounts" and "linked_items" (which reaches
+// budget_categories only transitively, through accounts) lost "budget_categories" from their
+// reachable-cached-tables set as a result. Regenerated against the live schema post-migration
+// (see TestDeleteCascadeMapMatchesLiveSchema, which caught the drift).
 var deleteCascadeReachesCachedTables = map[string][]string{
-	"accounts":          {"balance_snapshots", "budget_categories", "transactions"},
+	"accounts":          {"balance_snapshots", "transactions"},
 	"budgets":           {"budget_categories"},
 	"custom_categories": {"budget_categories"},
 	"households":        {"household_account_shares"},
-	"linked_items":      {"accounts", "balance_snapshots", "budget_categories", "transactions"},
+	"linked_items":      {"accounts", "balance_snapshots", "transactions"},
 	"merchants":         {"merchant_name_overrides"},
 	"savings_goals":     {"budget_categories"},
 	"user_accounts":     {"balance_snapshots", "household_account_shares"},
+	// linked_items joined this list in #1569 T10.2 — not because any FK changed, but because
+	// linked_items became a CACHED-READ table (see expectedCachedReadTables). This map records
+	// only the cascade targets that a cached read can observe, so widening that set widens this
+	// one. Re-derived from pg_constraint by TestDeleteCascadeMapMatchesLiveSchema.
 	"users": {"accounts", "balance_snapshots", "budget_categories", "budgets", "custom_categories",
-		"household_account_shares", "merchant_name_overrides", "transactions", "user_accounts",
-		"user_dashboard_preferences", "user_identities"},
+		"household_account_shares", "linked_items", "merchant_name_overrides", "transactions",
+		"user_accounts", "user_dashboard_preferences", "user_identities"},
 }
 
 var (
@@ -186,10 +200,26 @@ func packageSQLFragments(t *testing.T, srcs map[string]string) map[string]string
 
 // fragmentsUsedIn returns the SQL fragment values whose identifiers appear in text as word boundaries.
 // Consolidates the common pattern of finding which fragments are referenced in a text blob.
+//
+// ⚠ #1569 Round 11 Task 5: a bare `\bname\b` match alone is NOT sufficient. This package follows a
+// real convention — a const `fooCTE` paired with a wrapper func `fooCTESQL(observedExpr string)
+// string` that call sites invoke as `fooCTESQL(...)` rather than referencing the bare const — and
+// `\b` does NOT fire between "CTE" and the immediately-following "SQL(" because both sides are word
+// characters. Before this fix, `accountChainSupersessionCTESQL("TRUE")`'s four real call sites in
+// balance_snapshot_repository.go never triggered fragment expansion at all; the CTE text reached the
+// corpus ONLY because three unrelated comments happened to spell the bare const name followed by a
+// non-word character ("accountChainSupersessionCTE." / "accountChainSupersessionCTE walks"), and
+// comments are not stripped on this read path. VALIDATED BY MUTATION: editing those three comments to
+// remove the bare name reproducibly turned TestCachedReadTableSetMatchesExpected red ("LOST 1
+// table(s): [linked_items]"); restoring them turned it green again. The second alternative below
+// closes that hole by also matching the `nameSQL(` call form directly, so the corpus no longer
+// depends on comment text at all.
 func fragmentsUsedIn(text string, frags map[string]string) []string {
 	var result []string
 	for name, val := range frags {
-		if regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`).MatchString(text) {
+		quoted := regexp.QuoteMeta(name)
+		pattern := `\b` + quoted + `\b|\b` + quoted + `SQL\(`
+		if regexp.MustCompile(pattern).MatchString(text) {
 			result = append(result, val)
 		}
 	}
@@ -470,9 +500,45 @@ func nonTestRepoSources(t *testing.T) map[string]string {
 	return out
 }
 
+// resolveWriteSetsOnce/resolveWriteSetsCache memoize resolveWriteSets for the lifetime of the test
+// binary (#1569 round 14 task 2). Before this, TestCachedReadTableSetMatchesExpected,
+// TestEveryMutatingMethodWriteSetResolves and TestDerivedNoCacheImpactIsActuallyDisjoint each
+// recomputed the ENTIRE derivation independently — re-reading every non-test .go file in this
+// package, re-parsing every migration for schemaTables, and re-running the regex-based function-body
+// and interface-method extraction three times — 38.6s of the package's 126s under `go test -race`
+// for work that produces the identical answer every time within one run.
+//
+// This is a caching fix, not the AST-sharing fix: this file does not use go/ast at all (it works on
+// raw source text via regexp, unlike the tombstone/history-delete/encrypted-column guards), so there
+// is no argument-aware unit boundary to share here. The nil-check below is deliberate: if the first
+// call Fatals partway through resolveWriteSetsUncached (a t.Fatalf inside it Goexits the calling
+// test's goroutine, which still runs the deferred sync.Once bookkeeping and marks the Once "done"
+// without ever assigning the cache), a LATER caller must not read that as "computed, zero entries" —
+// that would manufacture exactly the "guard that cannot fail" failure mode this round exists to
+// close. It instead Fatals again, naming which corpus never got established.
+var (
+	resolveWriteSetsOnce       sync.Once
+	resolveWriteSetsWrites     map[string]map[string]bool
+	resolveWriteSetsResolved   map[string]bool
+	resolveWriteSetsReadTables map[string]bool
+)
+
 // resolveWriteSets returns, for every key in repoMethodDispositions, the tables it writes and
-// whether extraction resolved anything at all.
+// whether extraction resolved anything at all. Memoized — see resolveWriteSetsOnce above.
 func resolveWriteSets(t *testing.T) (map[string]map[string]bool, map[string]bool, map[string]bool) {
+	t.Helper()
+	resolveWriteSetsOnce.Do(func() {
+		resolveWriteSetsWrites, resolveWriteSetsResolved, resolveWriteSetsReadTables = resolveWriteSetsUncached(t)
+	})
+	if resolveWriteSetsWrites == nil {
+		t.Fatalf("resolveWriteSets' shared computation never completed (a prior call must have " +
+			"Fatal'd partway through) — this test cannot proceed without the shared corpus; see the " +
+			"first test in this binary run that failed")
+	}
+	return resolveWriteSetsWrites, resolveWriteSetsResolved, resolveWriteSetsReadTables
+}
+
+func resolveWriteSetsUncached(t *testing.T) (map[string]map[string]bool, map[string]bool, map[string]bool) {
 	t.Helper()
 	srcs := nonTestRepoSources(t)
 	frags := packageSQLFragments(t, srcs)
@@ -516,10 +582,69 @@ func sortedKeys(m map[string]bool) []string {
 // see. Two independent derivations (this scan, and a hand trace of all 19 cache.GetOrLoad sites)
 // produced exactly this list, so a mismatch means one of them broke — investigate, do not just
 // update the literal.
+//
+// ⚠ `linked_items` joined this list in #1569 T10.2 and it is the newest and least obvious member.
+// The balance reads no longer collapse a re-link chain by DISTINCT ON; they apply
+// accountChainSupersessionCTE, whose item_closure layer walks `linked_items.replaced_by_id`. A
+// cached balance/net-worth answer is therefore sensitive to that ONE column — see
+// linkedItemsSuccessionColumnsOnly and TestCachedReadsReadOnlyTheSuccessionColumnsOfLinkedItems,
+// which is what makes the nine column-scoped dispositions below re-derivable rather than asserted.
 var expectedCachedReadTables = []string{
 	"accounts", "balance_snapshots", "budget_categories", "budgets", "custom_categories",
-	"household_account_shares", "merchant_name_overrides", "merchants", "transactions",
-	"user_accounts", "user_dashboard_preferences", "user_identities",
+	"household_account_shares", "linked_items", "merchant_name_overrides", "merchants",
+	"transactions", "user_accounts", "user_dashboard_preferences", "user_identities",
+}
+
+// linkedItemsSuccessionColumnsOnly is the premise every column-scoped `linked_items` disposition
+// rests on: the ONLY columns of that table any cached read touches are `id` and `replaced_by_id`.
+// A write that changes neither cannot change a cached answer, however loudly the table-grained
+// write-set derivation says otherwise.
+//
+// It is a machine-checked premise, not a claim — that is the whole point of stating it here rather
+// than repeating a sentence in ten map entries. See TestCachedReadsReadOnlyTheSuccessionColumnsOfLinkedItems.
+var linkedItemsSuccessionColumnsOnly = map[string]bool{"id": true, "replaced_by_id": true}
+
+// TestCachedReadsReadOnlyTheSuccessionColumnsOfLinkedItems proves the premise above by scanning the
+// same expanded SQL corpus the write-set derivation scans. Every `<alias>.<column>` reference whose
+// alias is bound to `linked_items` must name a column in linkedItemsSuccessionColumnsOnly.
+//
+// The failure direction matters: if a cached read starts reading `linked_items.status` (say), this
+// goes red and the nine dispositions below lose their justification IN THE SAME RUN, rather than
+// quietly becoming false the way a prose reason would.
+func TestCachedReadsReadOnlyTheSuccessionColumnsOfLinkedItems(t *testing.T) {
+	srcs := nonTestRepoSources(t)
+	frags := packageSQLFragments(t, srcs)
+	aliasRe := regexp.MustCompile(`(?i)\blinked_items\s+(?:AS\s+)?([a-z_][a-z0-9_]*)\b`)
+	checked := 0
+	for _, f := range cachedReadRepoFiles {
+		src, ok := srcs[f]
+		if !ok {
+			t.Fatalf("cachedReadRepoFiles names %q, which does not exist", f)
+		}
+		text := normalizeSQL(expandFragments(src, frags))
+		for _, m := range aliasRe.FindAllStringSubmatch(text, -1) {
+			alias := m[1]
+			if strings.EqualFold(alias, "SET") || strings.EqualFold(alias, "WHERE") {
+				continue
+			}
+			colRe := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(alias) + `\.([a-z_][a-z0-9_]*)`)
+			for _, c := range colRe.FindAllStringSubmatch(text, -1) {
+				checked++
+				if !linkedItemsSuccessionColumnsOnly[strings.ToLower(c[1])] {
+					t.Errorf("cached read in %s references linked_items.%s via alias %q. Only %v are "+
+						"allowed: the ten LinkedItemRepository dispositions in "+
+						"cache_completeness_repo_test.go are column-scoped and rest on this. Either "+
+						"revert the read, or re-classify every one of them.",
+						f, c[1], alias, sortedKeys(linkedItemsSuccessionColumnsOnly))
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no linked_items column references found in the cached-read corpus — this guard " +
+			"would pass vacuously. If the succession walk no longer reads linked_items, drop " +
+			"linked_items from expectedCachedReadTables and restore the derived dispositions.")
+	}
 }
 
 func TestCachedReadTableSetMatchesExpected(t *testing.T) {

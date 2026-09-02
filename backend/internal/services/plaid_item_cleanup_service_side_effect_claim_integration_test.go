@@ -130,10 +130,16 @@ func TestPlaidCleanupService_Integration_SideEffectClaim_TwoFlowsRacing_OnlyOneC
 	holder := &blockingPlaidCollaborator{release: make(chan struct{}), entered: make(chan struct{})}
 	holderSvc := NewPlaidItemCleanupService(&fakeLinkedItemRepoForRace{item: item}, holder)
 	holderSvc.SetWorkClaimsRepo(claimsRepo)
+	// Issue #1569 Task 20: a no-op account-repository stand-in — see the note in
+	// plaid_item_cleanup_service_null_status_integration_test.go.
+	holderSvc.SetAccountRepo(permissiveAccountRepoForCleanup{})
 
 	racer := &countingPlaidCollaborator{}
 	racerSvc := NewPlaidItemCleanupService(&fakeLinkedItemRepoForRace{item: item}, racer)
 	racerSvc.SetWorkClaimsRepo(claimsRepo)
+	// Issue #1569 Task 20: a no-op account-repository stand-in — see the note in
+	// plaid_item_cleanup_service_null_status_integration_test.go.
+	racerSvc.SetAccountRepo(permissiveAccountRepoForCleanup{})
 
 	holderErrCh := make(chan error, 1)
 	go func() {

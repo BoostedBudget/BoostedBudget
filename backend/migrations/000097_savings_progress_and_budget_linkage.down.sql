@@ -85,6 +85,28 @@ DROP TABLE IF EXISTS savings_goal_category_detach;
 -- =============================================================================
 -- PART 2 reversal: drop savings_goal_contributions table
 -- =============================================================================
+--
+-- ⚠⚠ THIS FILE IS A HISTORY-DESTRUCTION PATH (#1569 round 12 task 4). savings_goal_contributions
+-- is the contributions that make up a goal's progress, entered by the user by hand or matched from
+-- a transaction -- no provider re-reports them. 000180's down.sql already refuses while any row is
+-- TOMBSTONED (deleted_at IS NOT NULL), but that leaves an ordinary LIVE row unprotected against
+-- THIS statement: if 000180's rollback ran first and no row happened to be tombstoned, this DROP
+-- TABLE would still destroy every live contribution. Same mechanism, wider predicate: refuse while
+-- any row at all exists.
+
+DO $$
+DECLARE
+    n BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO n FROM savings_goal_contributions;
+    IF n > 0 THEN
+        RAISE EXCEPTION
+            'refusing to roll back 000097: savings_goal_contributions holds % row(s), and this '
+            'rollback DROPs the table. These are the contributions that make up a goal''s '
+            'progress, entered by hand or matched from a transaction; nothing reconstructs them. '
+            'Export them, or empty the table deliberately, before retrying.', n;
+    END IF;
+END $$;
 
 DROP TABLE IF EXISTS savings_goal_contributions;
 

@@ -248,9 +248,29 @@ else
           exit 1
         fi
 
-        # Seed test data (if seed file exists and Clerk user ID available)
-        if ! seed_e2e_data "$DATABASE_URL"; then
-          echo "   ⚠️  Test data seeding skipped or failed (tests may have limited data)"
+        # Seed test data (if seed file exists and Clerk user ID available).
+        #
+        # #1569 task 20 (A1): "skipped or failed" used to be one warning covering both, and a seed
+        # that aborted on a SQL error was therefore indistinguishable from a developer running
+        # without CLERK_SECRET_KEY. The whole suite then ran against an empty database and the
+        # resulting spec failures looked like application bugs. seed_e2e_data now returns 1 for a
+        # real failure and 2 for an absent precondition; only 2 is survivable.
+        # `|| SEED_STATUS=$?`, NOT a bare call followed by `SEED_STATUS=$?`. #1569 task 20,
+        # review round 1: line 17 of this script is `set -Eeuo pipefail`, so a bare call that
+        # returns non-zero kills the script AT THE CALL SITE — before `SEED_STATUS=$?` runs, and
+        # therefore before either branch below. Every message here was unreachable for the one
+        # case it exists to explain. Verified with a probe: bare call -> subshell exit 3 with no
+        # diagnostic; `|| st=$?` -> status captured and the branch taken.
+        SEED_STATUS=0
+        seed_e2e_data "$DATABASE_URL" || SEED_STATUS=$?
+        if [ "$SEED_STATUS" -eq 1 ]; then
+          echo ""
+          echo "❌ Test data seeding FAILED — refusing to run E2E against an unseeded database."
+          echo "   Re-run the seed by hand to see the SQL error:"
+          echo "     psql -v ON_ERROR_STOP=1 \"\$DATABASE_URL\" -f apps/web/scripts/seed-e2e-data.sql"
+          exit 1
+        elif [ "$SEED_STATUS" -eq 2 ]; then
+          echo "   ⚠️  Test data seeding SKIPPED (no seed file or no Clerk user ID); authenticated specs will fail"
         fi
 
         echo ""
