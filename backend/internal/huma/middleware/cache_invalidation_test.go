@@ -43,6 +43,12 @@ type fakeHumaCtx struct {
 	op     *huma.Operation
 	ctx    context.Context
 	status int
+
+	// bodyWriter models the response body writer. Left nil by every test that does not care
+	// about the response-write path, so BodyWriter() keeps panicking for those — the tripwire
+	// this fake was built around. Set it to assert on WHEN bytes reach the client relative to
+	// the cache bump (see TestCacheInvalidation_UserGenerationIsBumpedBeforeTheResponseIsWritten).
+	bodyWriter io.Writer
 }
 
 func (f *fakeHumaCtx) Operation() *huma.Operation { return f.op }
@@ -65,7 +71,12 @@ func (f *fakeHumaCtx) GetMultipartForm() (*multipart.Form, error) { panic("not u
 func (f *fakeHumaCtx) SetReadDeadline(time.Time) error            { panic("not used") }
 func (f *fakeHumaCtx) SetHeader(string, string)                   {}
 func (f *fakeHumaCtx) AppendHeader(string, string)                {}
-func (f *fakeHumaCtx) BodyWriter() io.Writer                      { panic("not used") }
+func (f *fakeHumaCtx) BodyWriter() io.Writer {
+	if f.bodyWriter == nil {
+		panic("not used")
+	}
+	return f.bodyWriter
+}
 
 var _ huma.Context = (*fakeHumaCtx)(nil)
 
@@ -410,10 +421,31 @@ func TestCacheInvalidation_BumpsAfterRequestContextCancelled(t *testing.T) {
 }
 
 // TestCacheInvalidation_HouseholdBumpedBeforeUser (#1569 round 11 item 3) pins the reordering:
-// the household generation key is written to Redis BEFORE the user's. Before this fix the order
-// was user-then-household, which meant a shared-budget failure (or a household lookup failure)
-// landed on the higher-blast-radius household bump — see cache_invalidation.go's doc comment on
-// the reorder for the full reasoning.
+// within the post-next block, the household generation key is written to Redis BEFORE the user's.
+// Before that fix the order was user-then-household, which meant a truncated bump budget landed
+// on the higher-blast-radius household scope — see cache_invalidation.go's doc comment on the
+// reorder for the full reasoning.
+//
+// ⚠ AMENDED BY #1600, and the amendment is the interesting part. The user scope is now ALSO
+// bumped before the response is flushed, so the full SET sequence is:
+//
+//	user (pre-flush)  ->  household (post-next)  ->  user (post-next fallback)
+//
+// The literal "household is written first" no longer holds, and it cannot: closing #1600's
+// read-after-write window requires the acting user's bump to precede the flush, while the
+// household bump depends on a DB lookup that must not be on the response path. Those two
+// requirements are simply incompatible.
+//
+// What #1569 actually protects IS preserved, and that is why this test was amended rather than
+// deleted. Its concern was priority under a TRUNCATED budget: if the post-commit work is cut
+// short (bumpTimeout, 5s), the scope with the wider blast radius — the household, whose staleness
+// hits an uninvolved member — should already have been written. Inside the post-next block that
+// ordering is untouched. The pre-flush user bump happens before that budget even starts and is
+// strictly ADDITIONAL invalidation, never less, so it cannot cause a scope to go unbumped.
+//
+// Note also that the ordering never affected a household LOOKUP failure either way: the user
+// bump runs unconditionally afterward, so a failed lookup leaves the household stale and the user
+// fresh regardless of which SET came first.
 func TestCacheInvalidation_HouseholdBumpedBeforeUser(t *testing.T) {
 	client := &flakySetClient{Fake: redisclient.NewFake("cache")}
 	gens := cache.NewGenerations(client)
@@ -424,9 +456,18 @@ func TestCacheInvalidation_HouseholdBumpedBeforeUser(t *testing.T) {
 
 	userKey := cache.GenerationKey(cache.ScopeTag(cache.ScopeUser, "u1"))
 	hhKey := cache.GenerationKey(cache.ScopeTag(cache.ScopeHousehold, "hh1"))
-	require.Len(t, client.setCalls, 2, "exactly one SET per scope")
-	assert.Equal(t, hhKey, client.setCalls[0], "the household generation must be written FIRST")
-	assert.Equal(t, userKey, client.setCalls[1], "the user generation must be written SECOND")
+	require.Len(t, client.setCalls, 3,
+		"expected the pre-flush user bump, then the post-next household bump, then the post-next "+
+			"user fallback — got %v", client.setCalls)
+	assert.Equal(t, userKey, client.setCalls[0],
+		"the acting user's generation must be written FIRST, before the response is flushed (#1600)")
+
+	// The property #1569 exists for: within the post-next block, household precedes user.
+	assert.Equal(t, hhKey, client.setCalls[1],
+		"inside the post-next block the household generation must still be written BEFORE the "+
+			"user fallback, so a truncated bump budget favours the wider blast radius (#1569)")
+	assert.Equal(t, userKey, client.setCalls[2],
+		"the post-next user bump remains as a fallback for a failed pre-flush bump")
 }
 
 // TestCacheInvalidation_HouseholdBumpRecoversFromTransientSetFailure (#1569 round 11 item 3) is
@@ -449,4 +490,117 @@ func TestCacheInvalidation_HouseholdBumpRecoversFromTransientSetFailure(t *testi
 	require.NoError(t, err)
 	assert.NotEqual(t, beforeHH, afterHH,
 		"the household bump must recover from a single transient Redis SET failure via retry")
+}
+
+// generationWatchingWriter records the user-scope generation token at the instant the FIRST byte
+// of the response body is written. That instant is the one that matters: it is when a client can
+// observe the write succeeded and issue its next read. Anything the middleware does after this
+// point is racing that client.
+type generationWatchingWriter struct {
+	gens   *cache.Generations
+	userID string
+	seen   string
+	wrote  bool
+}
+
+func (w *generationWatchingWriter) Write(p []byte) (int, error) {
+	if !w.wrote {
+		w.wrote = true
+		w.seen, _ = w.gens.Get(context.Background(), cache.ScopeUser, w.userID)
+	}
+	return len(p), nil
+}
+
+// Issue #1600. The acting user's cache generation must be bumped BEFORE the response body reaches
+// the client, not after.
+//
+// The bug this pins: the middleware's bump work runs after next(ctx) returns, but the handler
+// flushes the response INSIDE next(ctx). Between those two moments sit an uncached two-table JOIN
+// (GetHouseholdForUser) and a retrying Redis write with 100ms backoff, so a client that reads
+// immediately after its write can be served from the old generation — stale financial data.
+//
+// This was invisible for as long as CI ran on a loaded four-runner Mac Mini, where the client's
+// next request never won that race. It reproduced deterministically (2 runs, 2 failures) the
+// moment e2e-test moved to a dedicated Ubicloud VM, as
+// apps/web/e2e/cache-freshness.auth.spec.ts:75 asserting "the dashboard is serving stale data".
+//
+// This test is the unit-level detector for it, because the E2E suite takes 16 minutes and cannot
+// drive a fix.
+func TestCacheInvalidation_UserGenerationIsBumpedBeforeTheResponseIsWritten(t *testing.T) {
+	gens, _ := newTestGenerations()
+	mw := humamiddleware.NewCacheInvalidationMiddleware(gens, nil, nil)
+
+	const userID = "user-1600"
+	before, err := gens.Get(context.Background(), cache.ScopeUser, userID)
+	require.NoError(t, err)
+
+	watcher := &generationWatchingWriter{gens: gens, userID: userID}
+	fc := &fakeHumaCtx{op: securedOp(http.MethodPut), ctx: ctxWithUser(userID), bodyWriter: watcher}
+
+	mw(fc, func(c huma.Context) {
+		// Exactly what huma does for a normal response: set the status, then marshal the body
+		// into the writer (huma.go:538-540). The handler's DB commit has already happened by the
+		// time huma reaches either call.
+		c.SetStatus(http.StatusOK)
+		_, _ = c.BodyWriter().Write([]byte(`{"ok":true}`))
+	})
+
+	require.True(t, watcher.wrote, "the test handler never wrote a body, so this asserts nothing")
+	assert.NotEqual(t, before, watcher.seen,
+		"the user-scope generation was still the pre-write value at the moment the response body "+
+			"was written — a client reading immediately after its own write would be served stale "+
+			"data (#1600)")
+}
+
+// The pre-flush bump must NOT fire for a genuine 4xx, matching the policy the post-next block has
+// always applied: a 4xx is assumed to mean the handler never reached a commit, so bumping only
+// costs hit rate. Pinned separately because the pre-flush trigger sees the status at SetStatus
+// time and could easily be written to bump unconditionally.
+func TestCacheInvalidation_4xxIsNotBumpedBeforeTheResponseIsWritten(t *testing.T) {
+	gens, _ := newTestGenerations()
+	mw := humamiddleware.NewCacheInvalidationMiddleware(gens, nil, nil)
+
+	const userID = "user-1600-4xx"
+	before, err := gens.Get(context.Background(), cache.ScopeUser, userID)
+	require.NoError(t, err)
+
+	watcher := &generationWatchingWriter{gens: gens, userID: userID}
+	fc := &fakeHumaCtx{op: securedOp(http.MethodPut), ctx: ctxWithUser(userID), bodyWriter: watcher}
+
+	mw(fc, func(c huma.Context) {
+		c.SetStatus(http.StatusUnprocessableEntity)
+		_, _ = c.BodyWriter().Write([]byte(`{"error":"nope"}`))
+	})
+
+	require.True(t, watcher.wrote)
+	assert.Equal(t, before, watcher.seen,
+		"a genuine 4xx must not bump the generation before the response is written")
+
+	after, err := gens.Get(context.Background(), cache.ScopeUser, userID)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "a genuine 4xx must not bump the generation at all")
+}
+
+// A handler that writes a body without ever calling SetStatus (the Status()==0 / unknown case the
+// package doc concedes) must still be bumped before the write. Over-invalidating costs hit rate;
+// under-invalidating serves stale money.
+func TestCacheInvalidation_UnknownStatusIsBumpedBeforeTheResponseIsWritten(t *testing.T) {
+	gens, _ := newTestGenerations()
+	mw := humamiddleware.NewCacheInvalidationMiddleware(gens, nil, nil)
+
+	const userID = "user-1600-unknown"
+	before, err := gens.Get(context.Background(), cache.ScopeUser, userID)
+	require.NoError(t, err)
+
+	watcher := &generationWatchingWriter{gens: gens, userID: userID}
+	fc := &fakeHumaCtx{op: securedOp(http.MethodPost), ctx: ctxWithUser(userID), bodyWriter: watcher}
+
+	mw(fc, func(c huma.Context) {
+		// No SetStatus at all — only a body write.
+		_, _ = c.BodyWriter().Write([]byte(`{"ok":true}`))
+	})
+
+	require.True(t, watcher.wrote)
+	assert.NotEqual(t, before, watcher.seen,
+		"an unwritten/unknown status must still bump before the response is written")
 }
