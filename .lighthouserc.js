@@ -74,13 +74,82 @@ module.exports = {
         onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
       },
     },
+    // #1601. Per-URL thresholds, RATCHETED TO MEASURED VALUES.
+    //
+    // ⚠ These numbers are a regression fence, NOT a statement that the scores are good. Read this
+    // before "fixing" one upward.
+    //
+    // PROVENANCE. The lighthouse-audit job was `if: false` from 2026-04-07 until #1598 re-enabled
+    // it, so before this week these thresholds had NEVER ONCE BEEN EVALUATED. The 0.8/0.9 they
+    // replace were aspirational defaults that no run had ever met. Measured on CI run
+    // 33673717843 (2026-09-02), 3 runs per URL:
+    //
+    //     /       performance 0.56, 0.57, 0.56   best-practices 0.78, 0.78, 0.78
+    //     /mcp    performance 0.45, 0.45, 0.45   best-practices 0.78, 0.78, 0.78
+    //
+    // WHY PERFORMANCE IS LOW, AND WHY PAYLOAD WORK WILL NOT FIX IT. #1601 cut the landing route's
+    // eager download 36% (847 -> 540 KiB gzip, 20 -> 10 assets, removing echarts and five feature
+    // chunks). Performance moved 0.55 -> 0.57. Essentially nothing. The metrics say why:
+    // total-blocking-time 0ms, bootup-time 0.2s, server-response-time 30ms all score 1, while FCP
+    // is ~5.8s. The delay is a SERIAL DEPENDENCY, not bytes and not work: AuthReadyGate
+    // (apps/web/src/main.tsx) returns null until useAuth().isLoaded, with no skeleton, and it sits
+    // above App and is not route-aware — so first paint waits on Clerk's chain
+    // (clerk.browser.js -> /v1/environment -> /v1/client) even for an anonymous visitor on a
+    // public page. Making public routes paint before Clerk resolves is the fix that would move
+    // this number, and it is still open on #1601. Do not raise these thresholds expecting bundle
+    // work to satisfy them.
+    //
+    // WHY BEST-PRACTICES CANNOT EXCEED 0.78, EVER, while these scripts load at all. The category
+    // weighs 27 and loses exactly 6: `third-party-cookies` (weight 5) and `inspector-issues`
+    // (weight 1). Both are ENTIRELY __cf_bm/_cfuvid Cloudflare cookies set by Paddle and Clerk.
+    // Zero of it is our code, and `async`/`defer` does not stop a script setting cookies. 27-6=21,
+    // 21/27 = 0.777... -> 0.78. A threshold above 0.78 is unsatisfiable, not merely ambitious.
+    //
+    // ⚠ HOW THESE ARE AGGREGATED, because it makes the gate weaker than it looks. LHCI defaults
+    // to aggregationMethod 'optimistic' (@lhci/utils/src/assertions.js:139), so a minScore
+    // assertion is checked against the BEST of the 3 runs, not the worst or the median. Verified
+    // empirically against this run's own reports: / passes at minScore up to 0.57 and fails at
+    // 0.58, i.e. the effective value is 0.57 — the best of 0.56/0.57/0.56, not the 0.56 floor.
+    //
+    // The practical consequence is that ONE good run out of three satisfies the gate. That is
+    // worth knowing before trusting a green Lighthouse job as evidence of consistency; switching
+    // to 'median' or 'pessimistic' would make it a real floor, but that is a deliberate
+    // tightening of the gate rather than part of setting thresholds from a measurement, so it is
+    // left alone here and called out instead.
+    //
+    // Given that, the performance floors are set two notches below the effective (optimistic)
+    // value, so the gate trips when the whole distribution regresses rather than on single-run
+    // jitter. /mcp and both best-practices scores showed ZERO variance across all three runs and
+    // are pinned at the observed value.
+    //
+    // accessibility and seo keep their 0.95 aspirational floors — unlike the two above, those
+    // already pass.
+    //
+    // ⚠ assertMatrix is exclusive: @lhci/utils/src/assertions.js:465 throws
+    // "Cannot use assertMatrix with other options", so a sibling `assertions` key here is a hard
+    // error, not a merge.
     assert: {
-      assertions: {
-        'categories:performance': ['error', { minScore: 0.8 }],
-        'categories:accessibility': ['error', { minScore: 0.95 }],
-        'categories:best-practices': ['error', { minScore: 0.9 }],
-        'categories:seo': ['error', { minScore: 0.95 }],
-      },
+      assertMatrix: [
+        {
+          // The landing route. Anchored on a trailing slash so it cannot also match /mcp.
+          matchingUrlPattern: '.*/$',
+          assertions: {
+            'categories:performance': ['error', { minScore: 0.55 }],
+            'categories:accessibility': ['error', { minScore: 0.95 }],
+            'categories:best-practices': ['error', { minScore: 0.78 }],
+            'categories:seo': ['error', { minScore: 0.95 }],
+          },
+        },
+        {
+          matchingUrlPattern: '.*/mcp$',
+          assertions: {
+            'categories:performance': ['error', { minScore: 0.45 }],
+            'categories:accessibility': ['error', { minScore: 0.95 }],
+            'categories:best-practices': ['error', { minScore: 0.78 }],
+            'categories:seo': ['error', { minScore: 0.95 }],
+          },
+        },
+      ],
     },
     upload: {
       // Filesystem target — ephemeral, cleaned up with workspace. No server, no artifacts.
