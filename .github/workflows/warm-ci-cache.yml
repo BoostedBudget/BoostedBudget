@@ -31,6 +31,23 @@ name: Warm CI Cache
 #   PY
 #
 # Every key printed for warm-ci-cache must also appear for test.yml.
+#
+# ⚠ HOW TO VERIFY THIS IS WORKING -- and how NOT to. Ubicloud's Transparent Cache is enabled by
+# default and intercepts the GitHub Actions cache protocol, so entries written from a Ubicloud
+# runner do NOT appear in GitHub's own cache list (the Actions cache API, or Settings > Actions >
+# Caches). Measured on #1598: the e2e-test job logged "Cache saved successfully" for three keys
+# while `gh api .../actions/caches` listed 103 entries and ZERO matching `Linux-X64` -- the
+# mac-mini jobs' caches were all there, the Ubicloud ones were not. Querying that API and finding
+# nothing is therefore NOT evidence of a broken cache, and it is the check a reader would
+# naturally reach for first.
+#
+# The only sound check is a restore HIT in a run log:
+#   "Cache restored from key: gocache-e2e-Linux-X64-go1.26.6-..."   <- working
+#   "Cache not found for input keys: ..."                            <- cold (or broken)
+#
+# Ubicloud does preserve GitHub's branch scoping ("workflow runs can only access caches created
+# on the current branch/tag or the default branch"), which is what makes this workflow's
+# default-branch writes visible to PR runs at all.
 on:
   push:
     branches: [staging, main]
