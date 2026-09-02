@@ -23,7 +23,13 @@ ANCHOR = "      - run: bun run test:e2e\n"
 if ANCHOR not in text:
     sys.exit("fixture invalid: the e2e-test anchor line is missing")
 
-path.write_text(text.replace(ANCHOR, ANCHOR + "      - run: " + step + "\n", 1))
+# Emitted as a BLOCK SCALAR (`run: |`), not an inline value, so a leading `#` or `//` survives.
+# An inline `run: # foo` is parsed as a YAML comment and the run body comes back empty — which
+# this script's own validation below catches as "mutation did not land", and did.
+block = "      - run: |\n" + "\n".join(
+    "          " + line for line in step.splitlines()
+) + "\n"
+path.write_text(text.replace(ANCHOR, ANCHOR + block, 1))
 
 job = yaml.safe_load(path.read_text())["jobs"]["e2e-test"]
 bodies = "\n".join(str(s.get("run", "")) for s in job["steps"])

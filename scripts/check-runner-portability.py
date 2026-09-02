@@ -122,29 +122,43 @@ EPHEMERAL_FLOOR = re.compile(
 )
 
 
-def strip_shell_comments(text):
-    """Drop comment lines from a run body.
-
-    A `# sudo sysctl …` line is documentation, not an executed command, and treating the two as
-    equivalent is how a string-matching guard silently stops guarding.
-    """
-    return "\n".join(
-        line for line in text.splitlines() if not line.lstrip().startswith("#")
-    )
-
-
 def steps_of(job):
     return [s for s in (job.get("steps") or []) if isinstance(s, dict)]
 
 
 def job_text(job):
-    """Every `run:` body in a job, with shell line-continuations folded.
+    """Every `run:` body in a job, folded and with comment lines removed.
 
-    Folding matters for R2: `playwright install \\` followed by `  --with-deps chromium` is
-    correct, but a per-line check would flag it. That false positive was caught in review.
+    TWO normalisations, each for a defect this guard actually shipped:
+
+    1. Shell line-continuations are folded. `playwright install \\` followed by
+       `  --with-deps chromium` is correct, but a per-line check flags it. Caught in review.
+
+    2. Comment lines are STRIPPED -- both `#` (shell) and `//` (JavaScript, which appears inside
+       the `node --input-type=module -e "..."` blocks this repo uses in `run:` bodies).
+
+       Every rule below matches text, and prose describing an anti-pattern reads identically to
+       the anti-pattern. This guard flagged its own documentation twice: R7 matched a commented-out
+       `sysctl` (found by Codex), and R2 failed CI on the sentence "This job never runs `playwright
+       install` (only e2e-test does)" -- a `//` comment explaining why a browser is launched by
+       path. scripts/check-portable-sed.sh hit the identical problem and solved it the same way.
+
+       ⚠ Stripping BOTH comment syntaxes matters: the R2 false positive was a `//` line, so
+       handling only `#` would have left it broken. Applied HERE, once, so a rule added later
+       inherits it rather than rediscovering this.
+
+       A comment line in a `run:` body cannot execute. YAML-level comments are already gone by the
+       time yaml.safe_load returns.
     """
     raw = "\n".join(str(s.get("run", "")) for s in steps_of(job))
-    return re.sub(r"\\\n\s*", " ", raw)
+    folded = re.sub(r"\\\n\s*", " ", raw)
+    kept = []
+    for line in folded.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("#") or stripped.startswith("//"):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def check_workflow(path, seen):
@@ -229,7 +243,7 @@ def check_workflow(path, seen):
                 f"`docker run` -- see #1598."
             )
         if RUNS_E2E_SUITE.search(text):  # R7
-            floor_match = EPHEMERAL_FLOOR.search(strip_shell_comments(text))
+            floor_match = EPHEMERAL_FLOOR.search(text)
             if not floor_match:
                 findings.append(
                     f"{path.name}: Linux job '{job_id}' runs the E2E suite (port block reaches "
