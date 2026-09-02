@@ -53,6 +53,30 @@ import { apiClient } from './helpers/api/client'
 // methods miss the invalidation while the other correctly reflects it), by asserting BOTH move by
 // the exact same dollar amount from the SAME single write.
 
+// #1598. Every in-spec wait scales with the runner, from ONE constant.
+//
+// This spec's waits were calibrated on the Mac Mini pool. When the job moved to a 2-vCPU
+// Ubicloud runner (#1598) they became marginal, and fixing them one at a time made the binding
+// constraint hop: raising the whole-test budget from 120s just moved the failure to a 15s
+// `waitForResponse`, which is what failed on run 33669941623 (the run also took 27m against a
+// 17.4m baseline and produced 21 flakes across 16 unrelated specs, so the runner really is
+// slower, not just this spec).
+//
+// A single multiplier keeps them from drifting apart again. It is NOT a licence to out-wait a
+// real hang: the whole-test budget below still bounds the spec, and every wait here is for one
+// specific network response or element, never a bare sleep.
+const CI_WAIT_FACTOR = process.env.CI ? 3 : 1
+const WAIT_RESPONSE_MS = 15_000 * CI_WAIT_FACTOR
+const WAIT_ELEMENT_MS = 10_000 * CI_WAIT_FACTOR
+// The already-persisted-widget probe. Missing it is not fatal but is EXPENSIVE: the spec falls
+// through to the six-interaction Add-Widget dialog flow, which is what consumed the whole-test
+// budget on run 33660693375. Waiting longer here is strictly cheaper than falling through.
+const WAIT_WIDGET_MS = 5_000 * CI_WAIT_FACTOR
+// Whole-test budget, from the same factor. Six full page loads against a real backend plus a PUT
+// and a revert; the finally-block's revert inherits whatever is left, and on run 33660693375 it
+// inherited an already-expired deadline and logged "category cleanup failed (non-fatal)".
+const TEST_BUDGET_MS = 120_000 * CI_WAIT_FACTOR
+
 const CHIPOTLE_AMOUNT = 45.0
 const ORIGINAL_PFC_PRIMARY = 'FOOD_AND_DRINK'
 const ORIGINAL_PFC_DETAILED = 'FOOD_AND_DRINK_RESTAURANTS'
@@ -89,7 +113,7 @@ test.describe('Cache freshness after a real transaction-category write (#1531)',
     // Locally the whole spec file completes in ~49s, so 300_000 on CI is roughly 2x the observed
     // CI cost rather than an arbitrary round number. Kept at 120_000 locally so a genuine hang
     // still surfaces quickly on a dev machine.
-    testInfo.setTimeout(process.env.CI ? 300_000 : 120_000)
+    testInfo.setTimeout(TEST_BUDGET_MS)
 
     // A page.goto is required BEFORE any apiClient() call: apiClient reads the auth token from
     // window.Clerk.session in the browser context (helpers/api/client.ts), which doesn't exist
@@ -107,7 +131,7 @@ test.describe('Cache freshness after a real transaction-category write (#1531)',
           const clerk = (window as unknown as { Clerk?: { session?: { id?: string } } }).Clerk
           return clerk?.session?.id != null
         },
-        { timeout: 15000 }
+        { timeout: WAIT_RESPONSE_MS }
       )
     } catch {
       // Fall through to apiClient's own retry loop, which will surface a clear failure below if
@@ -341,7 +365,7 @@ async function captureCashFlowSummary(
     // the 2-vCPU runner that regularly exceeds 5s. Missing the wait sends the test into the
     // Add-Widget dialog flow — six more interactions — which is what consumed the whole-test
     // budget above. Waiting longer here is strictly cheaper than falling through.
-    .waitFor({ state: 'visible', timeout: process.env.CI ? 20_000 : 5_000 })
+    .waitFor({ state: 'visible', timeout: WAIT_WIDGET_MS })
     .then(() => true)
     .catch(() => false)
   if (!widgetAlreadyPresent) {
@@ -350,7 +374,7 @@ async function captureCashFlowSummary(
     const catalogDialog = page.getByRole('dialog')
     await expect(catalogDialog.getByRole('heading', { name: 'Add Widget' })).toBeVisible()
     await catalogDialog.getByText('Cash Flow Summary', { exact: true }).click()
-    await expect(catalogDialog).not.toBeVisible({ timeout: 10000 })
+    await expect(catalogDialog).not.toBeVisible({ timeout: WAIT_ELEMENT_MS })
     await page.getByRole('button', { name: 'Done' }).click()
     await page.waitForTimeout(500) // debounced layout save (useDashboardLayout SAVE_DEBOUNCE_MS)
   }
@@ -363,7 +387,7 @@ async function captureCashFlowSummary(
   // when the widget-add branch's own reload discarded the original response before it was read).
   const responsePromise = page.waitForResponse(
     (r) => r.url().includes('/api/v1/analytics/cash-flow-summary') && r.request().method() === 'GET',
-    { timeout: 15000 }
+    { timeout: WAIT_RESPONSE_MS }
   )
   await page.reload()
   await page.waitForLoadState('domcontentloaded')
@@ -382,7 +406,7 @@ async function captureSpendingByCategory(
   const responsePromise = page.waitForResponse(
     (r) =>
       r.url().includes('/api/v1/analytics/spending-by-category') && r.request().method() === 'GET',
-    { timeout: 15000 }
+    { timeout: WAIT_RESPONSE_MS }
   )
 
   await page.goto('/reports')
