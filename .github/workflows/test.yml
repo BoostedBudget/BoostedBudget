@@ -631,6 +631,41 @@ jobs:
           fi
           psql --version
 
+      # #1598, added after a Codex review of the migration commit flagged it. The E2E port block
+      # runs to 44999 (apps/web/scripts/find-available-ports.js), and Linux's default
+      # net.ipv4.ip_local_port_range starts at 32768 -- so the kernel can hand an OUTBOUND socket
+      # a port in 32768-44999 in the window between find-available-ports.js probing it and
+      # Playwright's webServer binding the backend to 0.0.0.0:<that port>
+      # (backend/cmd/server/main.go:2606). The result is an intermittent, load-dependent
+      # EADDRINUSE or webServer startup failure that reads as test flake rather than as a
+      # port-allocation bug. This job makes plenty of outbound connections (Clerk, the staging MCP
+      # worker, the Docker registry), so the window is not theoretical. macOS never had the
+      # problem: its ephemeral floor is 49152, which is why the allocator's ceiling was chosen.
+      #
+      # ⚠ SCOPE, precisely. This controls KERNEL selection for outbound sockets, and nothing else.
+      # It does NOT move Docker's own host-port allocator, which reads its range when `dockerd`
+      # starts -- an earlier draft of this migration claimed it did, and that claim was wrong.
+      # That no longer matters here: this job starts no containers of its own, and the Postgres and
+      # Redis service containers are already started and bound before the first step runs, so
+      # raising the floor afterwards cannot disturb them.
+      #
+      # Prevention rather than detection, deliberately. The local path guards this with an `lsof`
+      # preflight (run-e2e-with-ports.sh:200-219), which run-e2e-ci.sh does not carry: moving the
+      # range so the collision cannot occur is strictly better than racing to notice it, and
+      # non-root `lsof` on Linux cannot see a root-owned listener anyway.
+      - name: Raise kernel ephemeral port floor above the E2E port block
+        run: |
+          set -euo pipefail
+          sudo sysctl -w net.ipv4.ip_local_port_range="49152 60999"
+          floor="$(sysctl -n net.ipv4.ip_local_port_range | awk '{print $1}')"
+          # Assert the property, not the command: a sysctl that silently no-ops (a restricted
+          # container, a changed key) must fail here rather than leave the hazard in place.
+          [ "$floor" -gt 44999 ] || {
+            echo "::error::kernel ephemeral floor is $floor, which still overlaps the E2E port block (max 44999)"
+            exit 1
+          }
+          echo "ephemeral floor now $floor (E2E block ceiling 44999)"
+
       - name: Run E2E tests
         working-directory: apps/web
         env:

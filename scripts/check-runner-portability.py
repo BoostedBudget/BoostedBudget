@@ -31,6 +31,13 @@ them would have kept passing on a developer's Mac:
   R5  no `docker run` in a Linux job
         The corollary of R4, and the rule that keeps the plumbing from creeping back one
         container at a time.
+  R7  a Linux job running the E2E suite must raise the kernel's ephemeral port floor
+        find-available-ports.js hands out ports up to 44999, chosen against macOS's ephemeral
+        floor of 49152. Linux defaults to 32768, so the kernel can give an outbound socket a port
+        the backend is about to bind to 0.0.0.0 -- intermittent EADDRINUSE that reads as flake.
+        Found by a Codex review of the migration commit AFTER an earlier draft of this guard had
+        dropped the rule; it is mechanised again so the same hole cannot be reopened by editing
+        the workflow.
   R6  `lighthouse-audit` must not be disabled with `if: false`
         It sat `if: false` from 2026-04-07 until this migration. #996 is the ticket that had to
         exist because nothing noticed for four months.
@@ -100,6 +107,7 @@ DOCKER_RUN = re.compile(r"\bdocker\s+run\b")
 # self-test in main() asserts the pattern still matches the real corpus, because a rename of that
 # script would otherwise disarm R4 in silence.
 RUNS_E2E_SUITE = re.compile(r"\btest:e2e\b|run-e2e-ci\.sh|run-e2e-with-ports\.sh")
+EPHEMERAL_FLOOR = re.compile(r"ip_local_port_range")
 
 
 def steps_of(job):
@@ -196,6 +204,13 @@ def check_workflow(path, seen):
                 f"{path.name}: Linux job '{job_id}' runs the E2E suite but declares no "
                 f"`services:`. Postgres and Redis are provisioned by Actions, not by "
                 f"`docker run` -- see #1598."
+            )
+        if RUNS_E2E_SUITE.search(text) and not EPHEMERAL_FLOOR.search(text):  # R7
+            findings.append(
+                f"{path.name}: Linux job '{job_id}' runs the E2E suite (port block reaches "
+                f"44999) but never raises net.ipv4.ip_local_port_range, whose Linux default "
+                f"floor of 32768 overlaps it. An outbound socket can take a port the backend is "
+                f"about to bind."
             )
         if DOCKER_RUN.search(text):  # R5
             findings.append(
