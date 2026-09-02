@@ -3183,9 +3183,18 @@ jobs:
       # Without this, a threshold failure leaves nothing to look at -- and the thresholds were
       # calibrated on completely different hardware, so the first failures are the ones most
       # worth reading.
+      # ⚠ `always()`, not `failure()` (#1601). Uploading only on failure made a PASSING run's
+      # scores unobservable, and that became a real gap the moment the thresholds were ratcheted
+      # to measured values (0.55 / 0.45 performance, 0.78 best-practices): a run sitting at 0.56
+      # against a 0.55 floor is one point from red and looks identical to one at 0.79. LHCI prints
+      # category values only for assertions that FAIL, so a green job's log says nothing either.
+      #
+      # Concretely: I could not tell from a passing run whether deferring the Paddle SDK had moved
+      # performance at all — the question the change was made to answer. Six reports at ~800KB
+      # with 3-day retention is a negligible price for being able to see headroom trend.
       - name: Upload Lighthouse reports
         id: upload-lighthouse-reports
-        if: failure()
+        if: always()
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
