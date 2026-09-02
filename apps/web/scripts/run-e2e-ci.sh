@@ -41,8 +41,11 @@ fail() { echo "❌ $*" >&2; exit 1; }
 # These come from the workflow's services block and secrets. Failing here, loudly, beats failing
 # 20 minutes later inside Playwright with a connection error.
 for var in DATABASE_URL CACHE_REDIS_URL RATE_LIMIT_REDIS_URL; do
-  eval "value=\${${var}:-}"
-  [ -n "$value" ] || fail "${var} must be set by the workflow's services block"
+  # ⚠ `${!var:-}`, NOT `${!var}`. Under `set -u` the unguarded form aborts with
+  # "!var: unbound variable" on exactly the case this loop exists to catch -- an unset
+  # DATABASE_URL -- replacing the clear message below with a cryptic bash error. Indirect
+  # expansion itself is fine on bash 3.2; only the missing default is the trap.
+  [ -n "${!var:-}" ] || fail "${var} must be set by the workflow's services block"
 done
 command -v psql >/dev/null 2>&1 || fail "psql not found (install postgresql-client in the workflow)"
 command -v migrate >/dev/null 2>&1 || fail "golang-migrate not found on PATH"
@@ -118,4 +121,8 @@ echo "   seeded"
 # (apps/web/playwright.config.ts), which is why this script must NOT start it.
 echo "▶ running Playwright"
 cd "${REPO_ROOT}/apps/web"
-exec bunx playwright test
+# "$@" is forwarded, matching run-e2e-with-ports.sh:323. The workflow passes no arguments today,
+# but the local path supports narrowing a run (CLAUDE.md's own workflow uses
+# `bun run test:e2e -- --reporter=line`), and silently dropping that here would be a gratuitous
+# difference between the two drivers.
+exec bunx playwright test "$@"
