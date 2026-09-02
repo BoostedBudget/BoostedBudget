@@ -628,6 +628,14 @@ function App() {
               {/* Issue #1497 — path matches ADMIN_ROUTES.PLAID_ORPHANED_ITEMS and the endpoint it reads. */}
               <Route path="plaid/orphaned-items" element={<Suspense fallback={<PageSkeleton />}><PlaidOrphanedItemsPage /></Suspense>} />
             </Route>
+            {/* Belt and braces for the same bug the ClerkProvider comment in main.tsx describes.
+                signInUrl/signUpUrl stop Clerk GENERATING these paths; these routes make them
+                harmless if they arrive anyway — a stale bookmark, an emailed link, a Clerk flow
+                we have not configured, or a future SDK default. Landing on the page that hosts
+                the sign-in modal is always better than a 404 for a URL whose whole purpose is
+                signing in. */}
+            <Route path="/sign-in" element={<Navigate to="/" replace />} />
+            <Route path="/sign-up" element={<Navigate to="/" replace />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>
