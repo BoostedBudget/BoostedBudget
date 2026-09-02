@@ -120,6 +120,24 @@ jobs:
     name: E2E Tests
     if: always() && !cancelled()
     runs-on: ubicloud-standard-2
+    # ⚠⚠ READ THIS FIRST (#1598). Everything below was written about the self-hosted Mac Mini pool,
+    # which this job NO LONGER RUNS ON. It is retained verbatim as history, not deleted, for two
+    # reasons: the 45 was set by an explicit user authorisation that should not be quietly undone,
+    # and there is not yet a single completed Ubicloud run to derive a replacement from. Deleting
+    # the reasoning before its replacement exists would leave a bare number with no provenance at
+    # all, which is worse than a number with stale provenance.
+    #
+    # What survives the move: nothing here is a MEASUREMENT of this job on Ubicloud. The 4.6-17.7
+    # minute range, the 35 -> 45 override, the "quarter of the capacity" argument and the
+    # #1489 host-load framing all describe a machine with four concurrent runners and 15GB of 16GB
+    # used at idle. This job now gets a dedicated 2-vCPU VM to itself.
+    #
+    # What to do about it: after ~10 completed Ubicloud runs, re-derive this from the observed
+    # maximum and REPLACE the block below, citing those runs. Until then 45 stands as an upper
+    # bound that is certainly generous rather than a bound that is right. Tracked in #1598's
+    # follow-up.
+    #
+    # ── History (Mac Mini pool, pre-#1598) ──────────────────────────────────────────────────────
     # Bound a wedged run. Without this the job inherits GitHub's 360-minute default, and this is a
     # SELF-HOSTED pool of four runners on one Mac Mini -- so one stuck E2E job can hold a quarter of
     # the capacity for six hours, slowing every sibling job and making the load-induced timeouts of
