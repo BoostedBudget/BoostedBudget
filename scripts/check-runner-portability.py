@@ -107,7 +107,30 @@ DOCKER_RUN = re.compile(r"\bdocker\s+run\b")
 # self-test in main() asserts the pattern still matches the real corpus, because a rename of that
 # script would otherwise disarm R4 in silence.
 RUNS_E2E_SUITE = re.compile(r"\btest:e2e\b|run-e2e-ci\.sh|run-e2e-with-ports\.sh")
-EPHEMERAL_FLOOR = re.compile(r"ip_local_port_range")
+# ⚠ Must match an EXECUTED `sysctl -w`, not the mere mention of the key. The first version of
+# this was `re.compile(r"ip_local_port_range")`, which a Codex review showed was satisfied by a
+# shell comment or an `echo ip_local_port_range` inside a `run: |` body -- YAML comments are
+# stripped by the parser, but comments INSIDE a run body are part of the string. So the guard
+# would have passed a job that never touched the kernel setting, which is exactly the failure it
+# exists to prevent.
+#
+# The floor is also captured and checked, not just the command's presence: setting the range to
+# something that still overlaps the E2E block (max 44999) satisfies the letter of the rule while
+# leaving the hazard in place.
+EPHEMERAL_FLOOR = re.compile(
+    r"sysctl\s+(?:-\w+\s+)*-w\s+net\.ipv4\.ip_local_port_range\s*=\s*[\"']?(\d+)"
+)
+
+
+def strip_shell_comments(text):
+    """Drop comment lines from a run body.
+
+    A `# sudo sysctl …` line is documentation, not an executed command, and treating the two as
+    equivalent is how a string-matching guard silently stops guarding.
+    """
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
 
 
 def steps_of(job):
@@ -205,13 +228,22 @@ def check_workflow(path, seen):
                 f"`services:`. Postgres and Redis are provisioned by Actions, not by "
                 f"`docker run` -- see #1598."
             )
-        if RUNS_E2E_SUITE.search(text) and not EPHEMERAL_FLOOR.search(text):  # R7
-            findings.append(
-                f"{path.name}: Linux job '{job_id}' runs the E2E suite (port block reaches "
-                f"44999) but never raises net.ipv4.ip_local_port_range, whose Linux default "
-                f"floor of 32768 overlaps it. An outbound socket can take a port the backend is "
-                f"about to bind."
-            )
+        if RUNS_E2E_SUITE.search(text):  # R7
+            floor_match = EPHEMERAL_FLOOR.search(strip_shell_comments(text))
+            if not floor_match:
+                findings.append(
+                    f"{path.name}: Linux job '{job_id}' runs the E2E suite (port block reaches "
+                    f"44999) but has no executed `sysctl -w net.ipv4.ip_local_port_range=...`, "
+                    f"and Linux's default floor of 32768 overlaps it. An outbound socket can take "
+                    f"a port the backend is about to bind. (A commented-out sysctl does not "
+                    f"count.)"
+                )
+            elif int(floor_match.group(1)) <= 44999:
+                findings.append(
+                    f"{path.name}: Linux job '{job_id}' sets the ephemeral floor to "
+                    f"{floor_match.group(1)}, which still overlaps the E2E port block (max "
+                    f"44999). It must be above 44999."
+                )
         if DOCKER_RUN.search(text):  # R5
             findings.append(
                 f"{path.name}: Linux job '{job_id}' calls `docker run`. Use a `services:` "

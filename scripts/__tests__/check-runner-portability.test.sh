@@ -103,7 +103,7 @@ p.write_text(n)
 PY
 }
 
-echo "1/13: the clean synthetic workflow set passes"
+echo "1/14: the clean synthetic workflow set passes"
 write_clean "$TMP/c1"
 if guard_passes "$TMP/c1"; then
   ok "clean set passes"
@@ -112,7 +112,7 @@ else
   bad "clean fixture rejected -- every case below is now meaningless"
 fi
 
-echo "2/13: a migrated job moved back to mac-mini is caught"
+echo "2/14: a migrated job moved back to mac-mini is caught"
 write_clean "$TMP/c2"
 mutate "$TMP/c2/test.yml" "  e2e-test:
     if: always() && !cancelled()
@@ -121,14 +121,14 @@ mutate "$TMP/c2/test.yml" "  e2e-test:
     runs-on: [self-hosted, macOS, mac-mini]"
 if guard_passes "$TMP/c2"; then bad "accepted a migrated job back on mac"; else ok "detected"; fi
 
-echo "3/13: an unlisted job on a ubicloud label is caught"
+echo "3/14: an unlisted job on a ubicloud label is caught"
 write_clean "$TMP/c3"
 mutate "$TMP/c3/test.yml" "  backend-test:
     runs-on: [self-hosted, macOS, mac-mini]" "  backend-test:
     runs-on: ubicloud-standard-2"
 if guard_passes "$TMP/c3"; then bad "accepted an unlisted ubicloud job"; else ok "detected"; fi
 
-echo "4/13: a RENAMED listed job is caught (the one-directional-reconciliation hole)"
+echo "4/14: a RENAMED listed job is caught (the one-directional-reconciliation hole)"
 write_clean "$TMP/c4"
 mutate "$TMP/c4/test.yml" "  e2e-test:" "  e2e-tests:"
 if guard_passes "$TMP/c4"; then
@@ -137,11 +137,11 @@ else
   ok "detected"
 fi
 
-echo "5/13: a DELETED workflow holding a listed job is caught"
+echo "5/14: a DELETED workflow holding a listed job is caught"
 write_clean "$TMP/c5"; rm -f "$TMP/c5/warm-ci-cache.yml"
 if guard_passes "$TMP/c5"; then bad "a listed job in a deleted workflow passed silently"; else ok "detected"; fi
 
-echo "6/13: an off-grammar ubicloud label is caught, and valid variants are accepted"
+echo "6/14: an off-grammar ubicloud label is caught, and valid variants are accepted"
 write_clean "$TMP/c6"
 mutate "$TMP/c6/test.yml" "  lighthouse-audit:
     if: needs.detect-changes.outputs.frontend == 'true'
@@ -159,7 +159,7 @@ for label in ubicloud-standard-4 ubicloud-standard-30 ubicloud-standard-2-arm ub
   if guard_passes "$TMP/c6b"; then ok "valid label accepted: $label"; else bad "rejected the valid label $label"; fi
 done
 
-echo "7/13: a darwin artefact or shasum in a Linux job is caught (R1)"
+echo "7/14: a darwin artefact or shasum in a Linux job is caught (R1)"
 write_clean "$TMP/c7"
 inject_into_e2e "$TMP/c7/test.yml" 'curl -O migrate.darwin-arm64.tar.gz'
 if guard_passes "$TMP/c7"; then bad "accepted a darwin artefact in a Linux job"; else ok "darwin artefact detected"; fi
@@ -170,7 +170,7 @@ if guard_passes "$TMP/c7b"; then bad "accepted BSD shasum in a Linux job"; else 
 # already contains sudo rm -rf, shasum and docker run, and case 1 passes. That is the negative
 # control for R1/R3/R5 scoping.
 
-echo "8/13: playwright install without --with-deps is caught, line-continued form is not (R2)"
+echo "8/14: playwright install without --with-deps is caught, line-continued form is not (R2)"
 write_clean "$TMP/c8"
 mutate "$TMP/c8/test.yml" "playwright install --with-deps chromium webkit" "playwright install chromium webkit"
 if guard_passes "$TMP/c8"; then bad "accepted an install missing --with-deps"; else ok "missing --with-deps detected"; fi
@@ -180,7 +180,7 @@ mutate "$TMP/c8b/test.yml" "      - run: bunx playwright install --with-deps chr
             --with-deps chromium webkit"
 if guard_passes "$TMP/c8b"; then ok "line-continued install not flagged"; else bad "FALSE POSITIVE on a correct line-continued install"; fi
 
-echo "9/13: mac scaffolding in a Linux job is caught (R3)"
+echo "9/14: mac scaffolding in a Linux job is caught (R3)"
 for frag in 'sudo rm -rf "$GITHUB_WORKSPACE/ws"' ; do
   write_clean "$TMP/c9"; inject_into_e2e "$TMP/c9/test.yml" "$frag"
   if guard_passes "$TMP/c9"; then bad "accepted sudo rm -rf in a Linux job"; else ok "sudo rm -rf detected"; fi
@@ -198,7 +198,7 @@ mutate "$TMP/c9c/test.yml" "    runs-on: ubicloud-standard-2
     services:"
 if guard_passes "$TMP/c9c"; then bad "accepted UNIQUE_WORKSPACE in a Linux job"; else ok "UNIQUE_WORKSPACE detected"; fi
 
-echo "10/13: an E2E Linux job with no services: is caught (R4)"
+echo "10/14: an E2E Linux job with no services: is caught (R4)"
 write_clean "$TMP/c10"
 mutate "$TMP/c10/test.yml" "    services:
       postgres:
@@ -208,12 +208,12 @@ mutate "$TMP/c10/test.yml" "    services:
 " ""
 if guard_passes "$TMP/c10"; then bad "accepted an E2E job with no services block"; else ok "detected"; fi
 
-echo "11/13: docker run in a Linux job is caught (R5)"
+echo "11/14: docker run in a Linux job is caught (R5)"
 write_clean "$TMP/c11"
 inject_into_e2e "$TMP/c11/test.yml" 'docker run -d -p 6379 redis:7-alpine'
 if guard_passes "$TMP/c11"; then bad "accepted docker run in a Linux job"; else ok "detected"; fi
 
-echo "12/13: an E2E Linux job that never raises the ephemeral port floor is caught (R7)"
+echo "12/14: an E2E Linux job that never raises the ephemeral port floor is caught (R7)"
 # find-available-ports.js hands out ports up to 44999, a ceiling chosen against macOS's ephemeral
 # floor of 49152. Linux defaults to 32768, so without that step the kernel can give an outbound
 # socket a port the backend is about to bind to 0.0.0.0. An earlier draft of this guard dropped
@@ -227,7 +227,36 @@ else
   ok "detected"
 fi
 
-echo "13/13: lighthouse-audit re-disabled is caught (R6)"
+echo "13/14: R7 cannot be satisfied by a comment, an echo, or a too-low floor"
+# A Codex review found the first version of R7 matched the bare string `ip_local_port_range`, so
+# a shell comment inside a `run: |` body satisfied it while the kernel setting went untouched.
+# YAML comments are stripped by the parser, but comments INSIDE a run body are part of the string.
+# All three evasions are pinned here, because a guard that matches documentation instead of
+# behaviour is worse than no guard: it reports success.
+SYSCTL_LINE='      - run: sudo sysctl -w net.ipv4.ip_local_port_range="49152 60999"'
+
+# (a) commented out
+write_clean "$TMP/c13a"
+mutate "$TMP/c13a/test.yml" "$SYSCTL_LINE" '      - run: |
+          # sudo sysctl -w net.ipv4.ip_local_port_range="49152 60999"
+          echo not-actually-set'
+if guard_passes "$TMP/c13a"; then bad "accepted a COMMENTED-OUT sysctl"; else ok "commented-out sysctl detected"; fi
+
+# (b) merely mentioning the key
+write_clean "$TMP/c13b"
+mutate "$TMP/c13b/test.yml" "$SYSCTL_LINE" '      - run: echo ip_local_port_range'
+if guard_passes "$TMP/c13b"; then bad "accepted a bare echo of the key name"; else ok "bare echo detected"; fi
+
+# (c) a real sysctl, but to a floor that still overlaps the E2E block (max 44999)
+write_clean "$TMP/c13c"
+mutate "$TMP/c13c/test.yml" "$SYSCTL_LINE" '      - run: sudo sysctl -w net.ipv4.ip_local_port_range="32768 60999"'
+if guard_passes "$TMP/c13c"; then bad "accepted a floor of 32768, which still overlaps the block"; else ok "too-low floor detected"; fi
+
+# (d) and the correct form is still accepted -- the rule must not have become unsatisfiable
+write_clean "$TMP/c13d"
+if guard_passes "$TMP/c13d"; then ok "a real sysctl above 44999 is accepted"; else bad "R7 is now unsatisfiable"; fi
+
+echo "14/14: lighthouse-audit re-disabled is caught (R6)"
 write_clean "$TMP/c12"
 mutate "$TMP/c12/test.yml" "    if: needs.detect-changes.outputs.frontend == 'true'" "    if: false"
 if guard_passes "$TMP/c12"; then bad "accepted lighthouse-audit if: false"; else ok "detected"; fi
