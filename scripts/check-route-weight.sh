@@ -4,17 +4,23 @@
 #
 # WHY THIS EXISTS
 #
-# `make check-bundle-size` passes today with ~848 KiB gzip on `/`, and it is not broken — it
-# simply answers a different question. It has two parts and neither models a route:
+# Before this guard, `make check-bundle-size` passed with 847 KiB gzip on `/`, and it was not
+# broken — it simply answers a different question. It has two parts and neither models a route:
 #
 #   * scripts/check-orphan-chunks.sh asserts every emitted chunk HAS a budget.
 #   * size-limit checks each chunk IN ISOLATION against that budget.
 #
-# Nothing in the repo knew which chunks a route actually downloads, so a barrel import could add
-# a 222 KiB chunk to the landing page's critical path while every per-chunk budget stayed green.
-# That blind spot is how the cascade documented in #1601 grew unnoticed, and it is the reason
-# Lighthouse reported FCP 5.8s with total-blocking-time 0ms: the delay was a dependency chain,
-# not work.
+# Nothing in the repo knew which chunks a route actually downloads, so a 216 KiB charting chunk
+# sat on the landing page's critical path while every per-chunk budget stayed green. That blind
+# spot is how the cascade documented in #1601 grew unnoticed, and it is the reason Lighthouse
+# reported FCP 5.8s with total-blocking-time 0ms: the delay was a dependency chain, not work.
+#
+# The cascade's actual root turned out to be invisible to every existing check and to code review
+# alike: react-datepicker declares date-fns-tz as an OPTIONAL peer, it was not installed, and
+# rolldown materialised a throwing resolution stub for it inside the `admin` chunk — after which
+# `vendor` statically imported that chunk, giving
+# entry -> vendor -> admin -> household -> accounts -> investments -> charts. Installing the peer
+# removed 307 KiB from this route. Only a route-level measurement surfaces that class of bug.
 #
 # WHAT IT MEASURES
 #
@@ -40,17 +46,19 @@ INDEX_HTML="${DIST_DIR}/index.html"
 # Budget in KiB of gzip. Overridable for the regression suite; the committed default is the
 # ratchet. Raising it is a decision that belongs in a commit message, not an env var.
 #
-# 848 is a RATCHET AT THE FIRST MEASUREMENT, not a statement that 848 KiB is acceptable — it is
-# roughly fifty times the landing page's own 17 KiB of code. Measured 2026-09-02 on this repo's
-# build at 867,876 bytes (847.54 KiB) across 20 assets; 848 is that value rounded up, so any
-# growth at all trips it while today's tree passes.
+# 541 is a RATCHET AT THE MEASURED VALUE, not a statement that 541 KiB is good. Measured
+# 2026-09-02 after #1601 Task 2 at 553,584 bytes (540.61 KiB) across 10 assets, down from
+# 867,876 bytes (847.54 KiB) across 20 — a 36% cut. 541 is that value rounded up, so any growth
+# at all trips it.
 #
-# The TARGET is 400. #1601 Task 2 breaks the three static-import edges that put ~700 KiB of
-# feature and charting code on this route (the `features/admin` barrel, `Header`'s imports on a
-# route that never renders Header, and echarts being swept into the `shared` chunk) and tightens
-# this number in the same commit that earns it. Do not tighten it ahead of the work: a guard that
-# is red on main teaches people to ignore guards.
-BUDGET_KIB="${ROUTE_WEIGHT_BUDGET_KIB:-848}"
+# The original target was 400, and it is NOT reachable by removing eager app code, because
+# `vendor` alone is 446 KiB of the remaining 541. Getting under 400 requires splitting vendor
+# itself (dnd-kit and TanStack Table are only needed by lazy features), which is separate work.
+# What remains here is close to the floor of the current chunking:
+#   vendor 446 · shared 34 · css 18+3 · entry 14 · billing 11 · api-client 7 · shared-2 2
+# billing is deliberate — SubscriptionManagementSkeleton and SubscriptionErrorState are a
+# Suspense fallback and an error-boundary fallback, which must resolve synchronously.
+BUDGET_KIB="${ROUTE_WEIGHT_BUDGET_KIB:-541}"
 
 fail() {
   printf '❌ %s\n' "$1" >&2

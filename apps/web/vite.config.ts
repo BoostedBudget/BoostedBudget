@@ -83,6 +83,31 @@ export default defineConfig({
               test: /node_modules\/(echarts|zrender|echarts-for-react)\//,
               priority: 15, // echarts (~500 KB raw) isolated from vendor
             },
+            // #1601. Isolating echarts from `vendor` was NOT enough to keep it off the landing
+            // route, because our own wrappers around it live under src/shared/charts/ — which the
+            // `shared` group (priority 7) swept into the eagerly-imported shared chunk. The
+            // shared chunk therefore statically imported echarts, and `/` downloaded 216 KiB gzip
+            // of charting to render a page with no chart on it. Confirmed from the built output's
+            // own import graph, which showed a literal `shared -> charts` edge.
+            //
+            // Only the four modules with a RUNTIME echarts dependency move, and the list is
+            // exact rather than a directory glob:
+            //   echarts-setup  — imports echarts/core, charts, components, renderers
+            //   themes         — imports echarts-setup for its registerTheme() side effects
+            //   EChartsChart   — imports echarts-setup and echarts-for-react
+            //   index          — re-exports EChartsChart, so leaving it behind would preserve
+            //                    the exact edge this group exists to cut
+            //
+            // formatters/colors/escapeHtml/useDarkMode/types and options/* deliberately STAY in
+            // `shared`: options/* import only `type { EChartsOption }`, which is erased at build
+            // and creates no runtime edge, and formatters is imported directly by chunks that are
+            // themselves on the eager path — moving it would drag this chunk straight back onto
+            // the critical path, which is the failure this comment exists to prevent.
+            {
+              name: 'charts',
+              test: /\/apps\/web\/src\/shared\/charts\/(echarts-setup|themes|EChartsChart|index)\./,
+              priority: 15,
+            },
             {
               name: 'vendor',
               test: /node_modules\//,
@@ -95,6 +120,64 @@ export default defineConfig({
               name: 'api-client',
               test: /\/packages\/(api-client|shared-types)\//,
               priority: 8, // Generated React Query hooks + types
+            },
+            // #1601. MUST stay above `shared` (7), and the file list is deliberately explicit.
+            //
+            // These four are the authenticated top-nav chrome. They live under src/components/,
+            // so `shared` below would sweep them into the eagerly-imported shared chunk — and
+            // Header statically imports @/features/notifications and
+            // @/features/transactions/hooks/useReviewSummary, so `shared` then reached
+            // transactions -> accounts -> investments/net-worth/household/profile/admin ->
+            // dashboard -> echarts. That one edge was most of the landing route's 847 KiB, for
+            // chrome that `!isLandingPage` stops from rendering on / at all.
+            //
+            // Groups assign chunks by PATH, not by import graph, so lazy()-ing Header in App.tsx
+            // is not sufficient on its own — without this group the module stays in an eager
+            // chunk and its static imports come with it. Both halves are required.
+            //
+            // AppFooter is pointedly NOT here: it renders on the landing page, so it belongs in
+            // the eager `shared` chunk. Adding it would put this whole chunk back on the
+            // critical path and silently undo the split. Enforced by
+            // scripts/check-route-weight.sh, which fails if this chunk reappears in /'s eager set.
+            {
+              name: 'layout-chrome',
+              test: /\/apps\/web\/src\/components\/layout\/(Header|Navigation|UserDropdown|MobileNav)\./,
+              priority: 9,
+            },
+            // #1601. The KEYSTONE of the landing route's cascade — ONE group, deliberately.
+            //
+            // These are all light modules that eager code needs but which lived in heavy feature
+            // chunks, so importing one dragged its whole feature along. They are consolidated
+            // into a single group because rolldown honours only the FIRST group matching a given
+            // name: three separate `name: 'shared'` entries silently left the 2nd and 3rd
+            // unapplied, which measured as no change at all and cost a debugging round.
+            //
+            //   profile/hooks/*        — useProfile is a thin api-client wrapper, but the profile
+            //                            chunk also holds ProfilePage, which imports the admin
+            //                            and household BARRELS. Two eager consumers reached it:
+            //                            PremiumRoute (src/auth/ -> `entry`) and
+            //                            usePostHogIdentify (src/shared/hooks/).
+            //   admin chrome           — AdminRoute/AdminLayout are the `element` of the /admin
+            //                            route branch, so App.tsx needs them statically; a guard
+            //                            cannot be lazy without a Suspense boundary above what it
+            //                            guards. AdminSidebar/useIsAdmin/useAdminMode/constants
+            //                            come with them.
+            //   billing fallbacks      — a Suspense fallback and an error-boundary fallback, which
+            //                            must resolve synchronously by definition.
+            //
+            // Together these held profile -> household -> accounts -> {investments, net-worth} ->
+            // dashboard -> charts on a page that renders none of it. Runtime guards do not help:
+            // usePostHogIdentify already passes { enabled: !!user }, but chunk membership is
+            // STATIC — the import exists whether or not the query runs.
+            //
+            // Every module matched here was checked to import nothing heavier than react-router,
+            // lucide icons, cn(), a constant, or an api-client endpoint. The heavy pages
+            // (ProfilePage, UsersPage, HealthDashboardPage, ...) stay in their feature chunks and
+            // remain lazily loaded by their own routes.
+            {
+              name: 'shared',
+              test: /\/apps\/web\/src\/features\/(profile\/hooks\/|admin\/(components\/(AdminRoute|AdminLayout|AdminSidebar)|hooks\/(useIsAdmin|useAdminMode)|constants)\.|billing\/components\/(SubscriptionManagementSkeleton|SubscriptionErrorState)\.)/,
+              priority: 8,
             },
             {
               name: 'shared',
