@@ -604,3 +604,35 @@ func TestCacheInvalidation_UnknownStatusIsBumpedBeforeTheResponseIsWritten(t *te
 	assert.NotEqual(t, before, watcher.seen,
 		"an unwritten/unknown status must still bump before the response is written")
 }
+
+// flushRecordingWriter is an io.Writer that also implements http.Flusher, so a test can prove the
+// middleware's body-writer wrapper stays transparent to a streaming caller.
+type flushRecordingWriter struct {
+	flushed int
+}
+
+func (w *flushRecordingWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (w *flushRecordingWriter) Flush()                      { w.flushed++ }
+
+// The wrapper added for #1600 sits between huma and the real response writer. huma's own
+// StreamResponse example does `if f, ok := writer.(http.Flusher); ok { f.Flush() }`, so a wrapper
+// that implements only io.Writer would make that assertion fail and silently disable flushing on
+// any future streaming mutation — a stalled response with no error to trace. Nothing needs this
+// today; the test exists so that stays true.
+func TestCacheInvalidation_BodyWriterWrapperForwardsFlush(t *testing.T) {
+	gens, _ := newTestGenerations()
+	mw := humamiddleware.NewCacheInvalidationMiddleware(gens, nil, nil)
+
+	inner := &flushRecordingWriter{}
+	fc := &fakeHumaCtx{op: securedOp(http.MethodPost), ctx: ctxWithUser("u-flush"), bodyWriter: inner}
+
+	mw(fc, func(c huma.Context) {
+		w := c.BodyWriter()
+		_, _ = w.Write([]byte("chunk"))
+		f, ok := w.(http.Flusher)
+		require.True(t, ok, "the wrapped body writer must still satisfy http.Flusher")
+		f.Flush()
+	})
+
+	assert.Equal(t, 1, inner.flushed, "Flush must reach the underlying writer, not be swallowed")
+}
