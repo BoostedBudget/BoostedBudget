@@ -17,13 +17,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make dev                    # Docker-compose up
 make test-fast              # Backend+frontend tests, NO e2e (~2min)
 make test-all               # ALL tests including e2e (~4min)
-make test-scripts           # The 21 shell guard suites: 19 in scripts/__tests__/, one in
+make test-scripts           # The 23 shell guard suites: 21 in scripts/__tests__/, one in
                              # apps/web/scripts/__tests__/, and — ⚠ do not drop this one when
                              # re-deriving the count from the two __tests__ globs, which is how
                              # this line came to say 19 — scripts/check-frontend-coverage.test.sh,
                              # which sits beside its subject rather than in a __tests__ dir.
                              # Verified #1569 r19: every on-disk suite is invoked by the target
-                             # (no orphans), and the target's own "N/21:" labels agree.
+                             # (no orphans), and the target's own "N/23:" labels agree.
                              # Separate CI steps, NOT covered by
                              # test-fast/test-all/bun run test. Fails on the first red. Docker/
                              # Postgres-dependent suites skip with a visible warning if unavailable
@@ -39,12 +39,35 @@ make test-scripts           # The 21 shell guard suites: 19 in scripts/__tests__
                              # ⚠ Re-verified #1569 r19 (Codex): 21 suites, 21 individual CI steps,
                              # and set comparison found NO suite in the target missing from CI and
                              # none in CI absent from the target.
+                             # ⚠ Re-verified #1598: now 23 suites, 23 individual CI steps, both set
+                             # comparisons still empty in both directions. The two added are
+                             # check-portable-sed and check-runner-portability, both hosted in
+                             # e2e-test and both also in check-ungated-guard-steps.py's
+                             # REQUIRED_UNGATED_STEPS (which now pins 12 step names, not 8), so
+                             # they cannot be silently unwired. Re-derive with:
+                             #   git ls-files -- '*__tests__/*.test.sh' 'scripts/*.test.sh' | wc -l
+                             # and NOT by grepping the Makefile, which returns 46 because every
+                             # suite appears twice there — once in its "N/23:" label and once as
+                             # the invoked path.
                              # Adding a suite to this target therefore does NOT put it in CI; add a
                              # step too. **CI is the ONLY authoritative gate** —
                              # there is no pre-push hook in this repo (`core.hooksPath` is
                              # `.git/hooks`, `.sample` files only; no husky, no lefthook), and none
                              # should be the sole home of a guard: a hook is bypassable with
                              # `--no-verify` and does not exist in a fresh clone.
+                             # ⚠ **CI is not a single platform any more** (#1598). `e2e-test` and
+                             # `lighthouse-audit` run on ephemeral Ubuntu (`ubicloud-standard-2`);
+                             # the other 38 jobs stay on the macOS pool. A shell guard that runs
+                             # in e2e-test must therefore work under BOTH bash 3.2/BSD (the Mac,
+                             # and `make test-scripts` locally) and bash 5/GNU (the runner). This
+                             # is one-directional and easy to ship broken: a bash-4 or GNU-only
+                             # construct passes CI and fails only on a developer's machine, while
+                             # a BSD-only one does the reverse. `scripts/check-portable-sed.sh`
+                             # mechanises the sed case specifically; for everything else, verify
+                             # with `/bin/bash <script>` (3.2.57 here), not `bash`.
+                             # Runner placement is enforced by
+                             # `scripts/check-runner-portability.py` and documented in
+                             # `.github/workflows/README.md` § Runner placement.
 
 # Backend (from /backend)
 go test ./... -v            # All tests
