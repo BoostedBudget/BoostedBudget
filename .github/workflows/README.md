@@ -186,6 +186,35 @@ that differs by one character writes an entry nothing will ever restore, and the
 silent — you keep paying for cold runs while a "warm cache" workflow reports success. The parity
 check is in that file's header.
 
+**Decision: no more caching (#1601).** The Ubicloud migration brief asked to "optimally utilise
+Ubicloud caching." Having measured it, the honest answer is that it already is, and the two jobs'
+warm-run step costs (job 33694477386) show why adding more would cost correctness for well under
+30 seconds:
+
+| E2E job (~19 min total) | | Lighthouse job (2.8 min total) | |
+|---|---|---|---|
+| `Run E2E tests` | 928 s | `Run Lighthouse CI` | 87 s |
+| Playwright OS deps (apt, uncached by design) | 31 s | `Build frontend` | 24 s |
+| `Save Bun package store` | 24 s | `Restore Bun package store` | 15 s |
+| `Set up Go` | 20 s | `Set up Node` | 12 s |
+| all cache restore/save ops | ~60 s | | |
+
+Four things are deliberately **not cached**, each for a reason stronger than the time saved:
+- **The Go backend binary** — under 5 s warm (it doesn't even appear in the job's top 14 steps by
+  duration). Caching it risks the worst failure mode available here: a stale binary silently
+  running the entire E2E suite.
+- **`golang-migrate`** — also under 5 s warm, and under shared-branch caching a cached binary would
+  still need re-verifying against its checksum before use, which erases most of the saved time
+  anyway.
+- **The Vite frontend build** — 24 s of a 2.8 min job, but it must stay a *real* build: the render
+  guard and the route-weight ratchet both need an actual build to measure.
+- **`postgresql-client` / apt** — already guarded by `command -v psql`, so a redundant install
+  never runs.
+
+Corollary: non-test time is already down to roughly 3.7 minutes across both jobs combined. The
+only levers left that matter are the 928 s `Run E2E tests` step itself and not running the job at
+all on PRs it cannot affect — not adding more cache entries.
+
 ## Deployment Flow
 
 ### Normal release
