@@ -407,6 +407,16 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
+          # `cache:` intentionally LEFT UNSET, unlike setup-go's explicit `cache: false` below --
+          # the two are not parallel. setup-go's `cache` input defaults to true and silently
+          # caches GOMODCACHE under its own key if you don't turn it off; setup-node's `cache`
+          # input only recognizes 'npm' | 'yarn' | 'pnpm' and does nothing (no caching, no error)
+          # when omitted -- but passing the LITERAL boolean `false` serializes to the string
+          # "false" over the Actions input protocol, which setup-node treats as an unrecognized
+          # package manager and fails the step with "Caching for 'false' is not supported". This
+          # repo uses bun, not any of the three, so its dependency cache is the explicit
+          # `bun-store-*` actions/cache step above/below -- setup-node's own cache has nothing to
+          # do here regardless of this input's value.
 
       # ── Caches ──────────────────────────────────────────────────────────────────────────────
       # Ephemeral runners start cold, so these are new with #1598. Every key carries
@@ -510,14 +520,19 @@ jobs:
           # A COMPILATION-INPUT hash, never github.sha. backend-test's "Save Go build cache" step
           # records why the github.sha version was itself a bug: it minted a new entry on every
           # commit, including ones that cannot change compiled output, evicting warm entries under
-          # a capped quota. That argument survives the move to Ubicloud with different numbers
-          # Ubicloud's cache quota is 30 GB per repository -- a STANDING cap on total stored
-          # bytes, not a weekly transfer allowance, which is how an earlier version of these
-          # comments described it. Measured from the Ubicloud console on #1598: the four keys this
-          # branch writes occupy 848.8 MB of that 30 GB (playwright 363.7, bun-store 203.9,
-          # go-modules 156.1, gocache-e2e 125.0), so eviction pressure is not currently a concern
-          # -- but a per-commit key would still churn entries for no benefit, which is the actual
-          # argument.
+          # a capped quota. That argument survives the move to Ubicloud with different numbers --
+          # Ubicloud's quota is 30 GB free PER REPOSITORY PER WEEK (a rolling write budget, not a
+          # standing cap on total stored bytes, which is how an earlier version of these comments
+          # described it), AND it evicts any entry unaccessed for 7 days. Measured from the
+          # Ubicloud console on #1598: the four keys this branch writes occupy 848.8 MB (playwright
+          # 363.7, bun-store 203.9, go-modules 156.1, gocache-e2e 125.0) -- well under the weekly
+          # write budget, so THAT axis is not currently a concern. The 7-day eviction is the one
+          # that matters here: it is why warm-ci-cache.yml's keys must stay byte-identical to
+          # these (R9 in scripts/check-runner-portability.py) -- a quiet week ages an entry out,
+          # and a mismatched key means the "warm" save never lands on the key a PR run restores,
+          # so every run pays the cold-start cost regardless of how recently the warm job ran. A
+          # per-commit key would also churn entries for no benefit, which is the actual argument
+          # against `github.sha`.
           key: gocache-e2e-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
           restore-keys: |
             gocache-e2e-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-
@@ -3098,6 +3113,12 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
+          # `cache:` intentionally LEFT UNSET -- see e2e-test's Set up Node for the full
+          # argument. In short: unlike setup-go, omitting setup-node's `cache` input is already
+          # a no-op (no caching, no error), while the literal boolean `false` is NOT a no-op --
+          # it serializes to the string "false", which setup-node rejects as an unsupported
+          # package manager. This job uses bun, not npm/yarn/pnpm, so this input has nothing to
+          # cache regardless.
 
       # Same key as e2e-test and warm-ci-cache.yml. Keep the three byte-identical.
       #

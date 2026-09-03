@@ -86,8 +86,13 @@ MIGRATED_JOBS = {
         "with the host's browser session, which LHCI then SIGKILLs. See #996."
     ),
     ("warm-ci-cache.yml", "warm"): (
-        "Exists only to write default-branch cache entries for the two jobs above, so it must "
-        "run on the same runner and architecture they do or its cache keys cannot match."
+        "Must run on the same runner and architecture as the two jobs above, or its cache keys "
+        "cannot match theirs (`runner.os`/`runner.arch` are baked into every key -- see R9). "
+        "It is no longer about writing a DEFAULT-BRANCH entry: this account has Ubicloud "
+        "shared-branch caching (branch protection off), so any branch's save already serves "
+        "every branch, and this workflow's own `push:` trigger is gone -- it is manual-only "
+        "(workflow_dispatch), run by hand after a quiet week lets the shared pool's entries age "
+        "out past Ubicloud's 7-day unaccessed-entry eviction."
     ),
 }
 
@@ -159,6 +164,36 @@ def job_text(job):
             continue
         kept.append(line)
     return "\n".join(kept)
+
+
+def cache_keys_by_prefix(job):
+    """Map each cache key's static prefix (the literal text before its first `${{`) to every
+    full key string used by that prefix in this job's `actions/cache*` steps.
+
+    Comparing by prefix rather than by step name lets R9 line up test.yml's `restore` steps
+    against warm-ci-cache.yml's `save` steps for the SAME cache without caring what either step
+    is called. `gocache-e2e-` is a distinct prefix from `gocache-backend-test-` and
+    `gocache-backend-integration-`, so those never collide with the e2e keys R9 checks.
+
+    ⚠ The prefix is NOT a full disambiguator on its own: `go-modules-` here (with `runner.arch`)
+    and backend-test's own `go-modules-` key (without it) collapse into the SAME bucket, and both
+    land in `test_keys` for that prefix in check_workflow. R9's comparison still cannot be fooled
+    by this, though -- it requires warm-ci-cache.yml's key to appear byte-for-byte among the
+    bucket's values, not merely to share the bucket, so an unrelated key with the same prefix is
+    simply ignored rather than accepted as a false match.
+    """
+    keys = {}
+    for step in steps_of(job):
+        uses = str(step.get("uses", ""))
+        if not uses.startswith("actions/cache"):
+            continue
+        with_ = step.get("with") or {}
+        key = with_.get("key")
+        if not isinstance(key, str):
+            continue
+        prefix = key.split("${{", 1)[0]
+        keys.setdefault(prefix, []).append(key)
+    return keys
 
 
 def check_workflow(path, seen):
@@ -314,6 +349,49 @@ def check_workflow(path, seen):
                         f"({job_minutes}m). Leave at least 5m for artifact upload and cache "
                         f"saves, or a timed-out run still loses its diagnostics."
                     )
+
+    # R9 (#1598). The four cache keys warm-ci-cache.yml writes must be byte-identical to the
+    # keys this workflow's own jobs restore/save under the same prefix.
+    #
+    # warm-ci-cache.yml's entire product is these four entries; a key that differs by even one
+    # character (a typo, a dropped `runner.arch`, ...) writes an entry nothing will ever
+    # restore, and the failure is completely silent -- `actions/cache/save` reports success
+    # either way, and the only symptom is that every PR run stays cold, forever.
+    #
+    # Resolved from the WORKFLOW's location (a sibling of `path`), not the CWD, so this
+    # self-skips for a synthetic fixture tree that never writes a warm-ci-cache.yml, or writes
+    # one with no `actions/cache` steps at all -- matching R8's pattern above, and keeping the
+    # suite's verdicts independent of this repo's actual keys.
+    if path.name == "test.yml":
+        warm_path = path.parent / "warm-ci-cache.yml"
+        if warm_path.is_file():
+            warm_doc = yaml.safe_load(warm_path.read_text()) or {}
+            warm_job = (warm_doc.get("jobs") or {}).get("warm")
+            if isinstance(warm_job, dict):
+                warm_keys = cache_keys_by_prefix(warm_job)
+                test_keys = {}
+                for other_job in jobs.values():
+                    if not isinstance(other_job, dict):
+                        continue
+                    for prefix, vals in cache_keys_by_prefix(other_job).items():
+                        test_keys.setdefault(prefix, set()).update(vals)
+                for prefix, warm_vals in sorted(warm_keys.items()):
+                    warm_key = warm_vals[0]
+                    test_vals = test_keys.get(prefix)
+                    if not test_vals:
+                        findings.append(
+                            f"{path.name}: R9 -- warm-ci-cache.yml writes a cache key with "
+                            f"prefix {prefix!r} ({warm_key!r}) but no job in {path.name} "
+                            f"restores or saves any key with that prefix. That warm entry can "
+                            f"never be consumed."
+                        )
+                    elif warm_key not in test_vals:
+                        findings.append(
+                            f"{path.name}: R9 -- warm-ci-cache.yml's cache key {warm_key!r} "
+                            f"does not byte-match any key in {path.name} with the same prefix "
+                            f"(found: {sorted(test_vals)!r}). A mismatched key writes an entry "
+                            f"nothing will ever restore, silently."
+                        )
 
     lighthouse = jobs.get("lighthouse-audit")  # R6
     if isinstance(lighthouse, dict) and lighthouse.get("if") in (False, "false"):

@@ -29,20 +29,11 @@ name: Warm CI Cache
 #
 # ⚠ THE CACHE KEYS BELOW MUST STAY BYTE-IDENTICAL TO test.yml's. A key that differs by one
 # character writes an entry nothing will ever restore, and the failure is completely silent --
-# you would simply keep paying for cold runs while a "warm cache" workflow reported success. The
-# check that catches it:
-#
-#   python3 - <<'PY'
-#   import yaml, pathlib
-#   for f in ('.github/workflows/test.yml', '.github/workflows/warm-ci-cache.yml'):
-#       d = yaml.safe_load(pathlib.Path(f).read_text())
-#       for jid, j in d['jobs'].items():
-#           for s in j.get('steps') or []:
-#               if 'actions/cache' in str(s.get('uses', '')):
-#                   print(f, jid, (s.get('with') or {}).get('key'))
-#   PY
-#
-# Every key printed for warm-ci-cache must also appear for test.yml.
+# you would simply keep paying for cold runs while a "warm cache" workflow reported success. This
+# used to be a hand-run Python snippet you had to remember to run; it is now mechanised as R9 in
+# scripts/check-runner-portability.py (scripts/__tests__/check-runner-portability.test.sh case
+# 17/17), which runs on every push via check-ungated-guard-steps.py's ungated-step requirement --
+# no more remembering to check it by hand.
 #
 # ⚠ HOW TO VERIFY THIS IS WORKING -- and how NOT to. Ubicloud's Transparent Cache is enabled by
 # default and intercepts the GitHub Actions cache protocol, so entries written from a Ubicloud

@@ -11,7 +11,7 @@
     "test:watch": "bun test --timeout 30000 --watch src/",
     "test:integration": "bun test --timeout 30000 scripts/integration/",
     "test:e2e": "bash scripts/run-e2e-with-ports.sh",
-    "test:e2e:ci": "bash scripts/run-e2e-with-ports.sh",
+    "test:e2e:ci": "bash scripts/run-e2e-ci.sh",
     "test:e2e:ui": "bash scripts/run-e2e-with-ports.sh --ui",
     "test:e2e:headed": "bash scripts/run-e2e-with-ports.sh --headed",
     "test:e2e:debug": "bash scripts/run-e2e-with-ports.sh --debug",

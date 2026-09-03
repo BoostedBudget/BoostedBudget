@@ -103,7 +103,7 @@ p.write_text(n)
 PY
 }
 
-echo "1/16: the clean synthetic workflow set passes"
+echo "1/17: the clean synthetic workflow set passes"
 write_clean "$TMP/c1"
 if guard_passes "$TMP/c1"; then
   ok "clean set passes"
@@ -112,7 +112,7 @@ else
   bad "clean fixture rejected -- every case below is now meaningless"
 fi
 
-echo "2/16: a migrated job moved back to mac-mini is caught"
+echo "2/17: a migrated job moved back to mac-mini is caught"
 write_clean "$TMP/c2"
 mutate "$TMP/c2/test.yml" "  e2e-test:
     if: always() && !cancelled()
@@ -121,14 +121,14 @@ mutate "$TMP/c2/test.yml" "  e2e-test:
     runs-on: [self-hosted, macOS, mac-mini]"
 if guard_passes "$TMP/c2"; then bad "accepted a migrated job back on mac"; else ok "detected"; fi
 
-echo "3/16: an unlisted job on a ubicloud label is caught"
+echo "3/17: an unlisted job on a ubicloud label is caught"
 write_clean "$TMP/c3"
 mutate "$TMP/c3/test.yml" "  backend-test:
     runs-on: [self-hosted, macOS, mac-mini]" "  backend-test:
     runs-on: ubicloud-standard-2"
 if guard_passes "$TMP/c3"; then bad "accepted an unlisted ubicloud job"; else ok "detected"; fi
 
-echo "4/16: a RENAMED listed job is caught (the one-directional-reconciliation hole)"
+echo "4/17: a RENAMED listed job is caught (the one-directional-reconciliation hole)"
 write_clean "$TMP/c4"
 mutate "$TMP/c4/test.yml" "  e2e-test:" "  e2e-tests:"
 if guard_passes "$TMP/c4"; then
@@ -137,11 +137,11 @@ else
   ok "detected"
 fi
 
-echo "5/16: a DELETED workflow holding a listed job is caught"
+echo "5/17: a DELETED workflow holding a listed job is caught"
 write_clean "$TMP/c5"; rm -f "$TMP/c5/warm-ci-cache.yml"
 if guard_passes "$TMP/c5"; then bad "a listed job in a deleted workflow passed silently"; else ok "detected"; fi
 
-echo "6/16: an off-grammar ubicloud label is caught, and valid variants are accepted"
+echo "6/17: an off-grammar ubicloud label is caught, and valid variants are accepted"
 write_clean "$TMP/c6"
 mutate "$TMP/c6/test.yml" "  lighthouse-audit:
     if: needs.detect-changes.outputs.frontend == 'true'
@@ -159,7 +159,7 @@ for label in ubicloud-standard-4 ubicloud-standard-30 ubicloud-standard-2-arm ub
   if guard_passes "$TMP/c6b"; then ok "valid label accepted: $label"; else bad "rejected the valid label $label"; fi
 done
 
-echo "7/16: a darwin artefact or shasum in a Linux job is caught (R1)"
+echo "7/17: a darwin artefact or shasum in a Linux job is caught (R1)"
 write_clean "$TMP/c7"
 inject_into_e2e "$TMP/c7/test.yml" 'curl -O migrate.darwin-arm64.tar.gz'
 if guard_passes "$TMP/c7"; then bad "accepted a darwin artefact in a Linux job"; else ok "darwin artefact detected"; fi
@@ -170,7 +170,7 @@ if guard_passes "$TMP/c7b"; then bad "accepted BSD shasum in a Linux job"; else 
 # already contains sudo rm -rf, shasum and docker run, and case 1 passes. That is the negative
 # control for R1/R3/R5 scoping.
 
-echo "8/16: playwright install without --with-deps is caught, line-continued form is not (R2)"
+echo "8/17: playwright install without --with-deps is caught, line-continued form is not (R2)"
 write_clean "$TMP/c8"
 mutate "$TMP/c8/test.yml" "playwright install --with-deps chromium webkit" "playwright install chromium webkit"
 if guard_passes "$TMP/c8"; then bad "accepted an install missing --with-deps"; else ok "missing --with-deps detected"; fi
@@ -180,7 +180,7 @@ mutate "$TMP/c8b/test.yml" "      - run: bunx playwright install --with-deps chr
             --with-deps chromium webkit"
 if guard_passes "$TMP/c8b"; then ok "line-continued install not flagged"; else bad "FALSE POSITIVE on a correct line-continued install"; fi
 
-echo "9/16: mac scaffolding in a Linux job is caught (R3)"
+echo "9/17: mac scaffolding in a Linux job is caught (R3)"
 for frag in 'sudo rm -rf "$GITHUB_WORKSPACE/ws"' ; do
   write_clean "$TMP/c9"; inject_into_e2e "$TMP/c9/test.yml" "$frag"
   if guard_passes "$TMP/c9"; then bad "accepted sudo rm -rf in a Linux job"; else ok "sudo rm -rf detected"; fi
@@ -198,7 +198,7 @@ mutate "$TMP/c9c/test.yml" "    runs-on: ubicloud-standard-2
     services:"
 if guard_passes "$TMP/c9c"; then bad "accepted UNIQUE_WORKSPACE in a Linux job"; else ok "UNIQUE_WORKSPACE detected"; fi
 
-echo "10/16: an E2E Linux job with no services: is caught (R4)"
+echo "10/17: an E2E Linux job with no services: is caught (R4)"
 write_clean "$TMP/c10"
 mutate "$TMP/c10/test.yml" "    services:
       postgres:
@@ -208,12 +208,12 @@ mutate "$TMP/c10/test.yml" "    services:
 " ""
 if guard_passes "$TMP/c10"; then bad "accepted an E2E job with no services block"; else ok "detected"; fi
 
-echo "11/16: docker run in a Linux job is caught (R5)"
+echo "11/17: docker run in a Linux job is caught (R5)"
 write_clean "$TMP/c11"
 inject_into_e2e "$TMP/c11/test.yml" 'docker run -d -p 6379 redis:7-alpine'
 if guard_passes "$TMP/c11"; then bad "accepted docker run in a Linux job"; else ok "detected"; fi
 
-echo "12/16: an E2E Linux job that never raises the ephemeral port floor is caught (R7)"
+echo "12/17: an E2E Linux job that never raises the ephemeral port floor is caught (R7)"
 # find-available-ports.js hands out ports up to 44999, a ceiling chosen against macOS's ephemeral
 # floor of 49152. Linux defaults to 32768, so without that step the kernel can give an outbound
 # socket a port the backend is about to bind to 0.0.0.0. An earlier draft of this guard dropped
@@ -227,7 +227,7 @@ else
   ok "detected"
 fi
 
-echo "13/16: R7 cannot be satisfied by a comment, an echo, or a too-low floor"
+echo "13/17: R7 cannot be satisfied by a comment, an echo, or a too-low floor"
 # A Codex review found the first version of R7 matched the bare string `ip_local_port_range`, so
 # a shell comment inside a `run: |` body satisfied it while the kernel setting went untouched.
 # YAML comments are stripped by the parser, but comments INSIDE a run body are part of the string.
@@ -256,7 +256,7 @@ if guard_passes "$TMP/c13c"; then bad "accepted a floor of 32768, which still ov
 write_clean "$TMP/c13d"
 if guard_passes "$TMP/c13d"; then ok "a real sysctl above 44999 is accepted"; else bad "R7 is now unsatisfiable"; fi
 
-echo "14/16: prose in a run: body does not trip a rule, but the same text as code still does"
+echo "14/17: prose in a run: body does not trip a rule, but the same text as code still does"
 # Every rule matches text, and a comment describing an anti-pattern reads exactly like the
 # anti-pattern. This guard failed CI twice on its own documentation: R7 on a commented-out
 # sysctl, and R2 on the sentence "This job never runs `playwright install` (only e2e-test does)"
@@ -281,7 +281,7 @@ write_clean "$TMP/c14d"
 inject_into_e2e "$TMP/c14d/test.yml" 'playwright install chromium'
 if guard_passes "$TMP/c14d"; then bad "stripping went too far — real code is no longer scanned"; else ok "the same text as CODE is still flagged"; fi
 
-echo "15/16: globalTimeout must stay below the e2e-test job timeout (R8)"
+echo "15/17: globalTimeout must stay below the e2e-test job timeout (R8)"
 # Why this rule exists: `globalTimeout` firing lets Playwright WRITE ITS REPORT, so the upload
 # steps run. The JOB timeout firing has GitHub cancel the job, which SKIPS them. On run
 # 33678171305 that lost the HTML report, the videos and the skipped-count guard on the one run
@@ -345,10 +345,147 @@ else
   bad "a MISSING globalTimeout raised no finding — a hung run would be cancelled with no report"
 fi
 
-echo "16/16: lighthouse-audit re-disabled is caught (R6)"
+echo "16/17: lighthouse-audit re-disabled is caught (R6)"
 write_clean "$TMP/c12"
 mutate "$TMP/c12/test.yml" "    if: needs.detect-changes.outputs.frontend == 'true'" "    if: false"
 if guard_passes "$TMP/c12"; then bad "accepted lighthouse-audit if: false"; else ok "detected"; fi
+
+echo "17/17: warm-ci-cache.yml's four cache keys must byte-match test.yml's (R9)"
+# warm-ci-cache.yml's ONLY product is these four cache entries; test.yml is what ever restores
+# or saves them again. A key that differs by even one character writes an entry nothing will
+# ever restore -- completely silently, since actions/cache/save reports success either way.
+#
+# The fixture mirrors the real layout (.github/workflows/test.yml + warm-ci-cache.yml side by
+# side) because R9 resolves warm-ci-cache.yml relative to the WORKFLOW's own path, not the CWD,
+# so it self-skips for a synthetic tree with no warm-ci-cache.yml (or one with no actions/cache
+# steps at all) -- matching R8's pattern above.
+BUN_KEY="bun-store-\${{ runner.os }}-\${{ runner.arch }}-\${{ steps.setup-bun.outputs.bun-version }}-\${{ hashFiles('bun.lock') }}"
+PW_KEY="playwright-\${{ runner.os }}-\${{ runner.arch }}-\${{ steps.playwright.outputs.version }}"
+GOMOD_KEY="go-modules-\${{ runner.os }}-\${{ runner.arch }}-go\${{ env.GO_VERSION }}-\${{ hashFiles('**/go.sum') }}"
+GOCACHE_KEY="gocache-e2e-\${{ runner.os }}-\${{ runner.arch }}-go\${{ env.GO_VERSION }}-\${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}"
+
+r9_write_test() { # $1=dir $2=bun $3=pw $4=gomod $5=gocache
+  mkdir -p "$1/.github/workflows"
+  cat > "$1/.github/workflows/test.yml" <<YML
+on: pull_request
+jobs:
+  e2e-test:
+    runs-on: ubicloud-standard-2
+    services:
+      postgres:
+        image: postgres:17@sha256:aaa
+    steps:
+      - run: sudo sysctl -w net.ipv4.ip_local_port_range="49152 60999"
+      - run: bunx playwright install --with-deps chromium webkit
+      - run: bun run test:e2e
+      - uses: actions/cache/restore@v6
+        with:
+          key: $2
+      - uses: actions/cache/restore@v6
+        with:
+          key: $3
+      - uses: actions/cache/restore@v6
+        with:
+          key: $4
+      - uses: actions/cache/restore@v6
+        with:
+          key: $5
+  lighthouse-audit:
+    runs-on: ubicloud-standard-2
+    steps:
+      - run: npx lhci autorun
+YML
+}
+
+r9_write_warm() { # $1=dir $2=bun $3=pw $4=gomod $5=gocache
+  mkdir -p "$1/.github/workflows"
+  cat > "$1/.github/workflows/warm-ci-cache.yml" <<YML
+on:
+  workflow_dispatch: {}
+jobs:
+  warm:
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/cache/save@v6
+        with:
+          key: $2
+      - uses: actions/cache/save@v6
+        with:
+          key: $3
+      - uses: actions/cache/save@v6
+        with:
+          key: $4
+      - uses: actions/cache/save@v6
+        with:
+          key: $5
+YML
+}
+
+r9_findings() { python3 "$REPO_ROOT/scripts/check-runner-portability.py" "$1/.github/workflows" 2>&1 | /usr/bin/grep -c "R9 --" || true; }
+
+# 17a: both files byte-identical -- no R9 finding.
+D="$TMP/r9a"; rm -rf "$D"
+r9_write_test "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
+r9_write_warm "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
+if [ "$(r9_findings "$D")" = "0" ]; then
+  ok "byte-identical keys raise no R9 finding"
+else
+  bad "matching keys were flagged: $(python3 "$REPO_ROOT/scripts/check-runner-portability.py" "$D/.github/workflows" 2>&1 | /usr/bin/grep 'R9 --' | head -1)"
+fi
+
+# 17b: no warm-ci-cache.yml at all in the tree -- self-skips rather than erroring.
+D="$TMP/r9skip"; rm -rf "$D"
+r9_write_test "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
+if [ "$(r9_findings "$D")" = "0" ]; then
+  ok "a synthetic tree with no warm-ci-cache.yml self-skips R9"
+else
+  bad "a missing warm-ci-cache.yml raised an R9 finding instead of self-skipping"
+fi
+
+# 17c: mutate each of the four keys in turn (one character each), on the warm-ci-cache.yml side,
+# and confirm R9 fires on that key and ONLY that key. Each mutated string is asserted to actually
+# differ from the original first -- an invalid mutation would fake both a hole and a guard.
+assert_differs() {
+  python3 - "$1" "$2" <<'PY'
+import sys
+a, b = sys.argv[1], sys.argv[2]
+assert a != b, f"mutation is invalid, assertion would be vacuous: {a[:70]!r}"
+PY
+}
+
+BUN_KEY_BAD="bun-store-\${{ runner.os }}-\${{ runner.arch }}-\${{ steps.setup-bun.outputs.bun-version }}-\${{ hashFiles('bun.lonk') }}"
+assert_differs "$BUN_KEY" "$BUN_KEY_BAD"
+D="$TMP/r9_bun"; rm -rf "$D"
+r9_write_test "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
+r9_write_warm "$D" "$BUN_KEY_BAD" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
+if [ "$(r9_findings "$D")" != "0" ]; then ok "a one-character bun-store key mismatch is caught"; else bad "a mismatched bun-store key raised no R9 finding"; fi
+
+PW_KEY_BAD="playwright-\${{ runner.os }}-\${{ runner.arch }}-\${{ steps.playwright.outputs.versian }}"
+assert_differs "$PW_KEY" "$PW_KEY_BAD"
+D="$TMP/r9_pw"; rm -rf "$D"
+r9_write_test "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
+r9_write_warm "$D" "$BUN_KEY" "$PW_KEY_BAD" "$GOMOD_KEY" "$GOCACHE_KEY"
+if [ "$(r9_findings "$D")" != "0" ]; then ok "a one-character playwright key mismatch is caught"; else bad "a mismatched playwright key raised no R9 finding"; fi
+
+GOMOD_KEY_BAD="go-modules-\${{ runner.os }}-\${{ runner.arch }}-go\${{ env.GO_VERSION }}-\${{ hashFiles('**/go.sun') }}"
+assert_differs "$GOMOD_KEY" "$GOMOD_KEY_BAD"
+D="$TMP/r9_gomod"; rm -rf "$D"
+r9_write_test "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
+r9_write_warm "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY_BAD" "$GOCACHE_KEY"
+if [ "$(r9_findings "$D")" != "0" ]; then ok "a one-character go-modules key mismatch is caught"; else bad "a mismatched go-modules key raised no R9 finding"; fi
+
+GOCACHE_KEY_BAD="gocache-e2e-\${{ runner.os }}-\${{ runner.arch }}-go\${{ env.GO_VERSION }}-\${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.jsan') }}"
+assert_differs "$GOCACHE_KEY" "$GOCACHE_KEY_BAD"
+D="$TMP/r9_gocache"; rm -rf "$D"
+r9_write_test "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
+r9_write_warm "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY_BAD"
+if [ "$(r9_findings "$D")" != "0" ]; then ok "a one-character gocache-e2e key mismatch is caught"; else bad "a mismatched gocache-e2e key raised no R9 finding"; fi
+
+# 17d: restored to matching keys is green again (the mutations above did not leave R9 unsatisfiable).
+D="$TMP/r9_restored"; rm -rf "$D"
+r9_write_test "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
+r9_write_warm "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
+if [ "$(r9_findings "$D")" = "0" ]; then ok "restoring byte-identical keys clears R9"; else bad "R9 still fires after keys were restored to matching"; fi
 
 echo "check-runner-portability.test.sh: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
