@@ -3100,6 +3100,15 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       # Same key as e2e-test and warm-ci-cache.yml. Keep the three byte-identical.
+      #
+      # Restore-only here: this job does NOT save this cache. e2e-test and lighthouse-audit run
+      # concurrently on the same PR, install the same --frozen-lockfile deps from the same
+      # bun.lock, and would therefore always write a byte-identical entry -- one job's save was
+      # observed losing the race in real CI ("Failed to save: Unable to reserve cache with key
+      # bun-store-Linux-X64-1.3.14-... another job may be creating this cache"), wasting a 203.9 MB
+      # upload attempt (~24s) for zero benefit. Under Ubicloud's shared-branch caching (see
+      # "Caching" below), any branch's save already serves every branch, so e2e-test alone is a
+      # sufficient sole writer (#1598).
       - name: Restore Bun package store
         id: cache-bun
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -3229,14 +3238,6 @@ jobs:
           path: /tmp/lhci-reports
           retention-days: 3
           if-no-files-found: warn
-
-      - name: Save Bun package store
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ~/.bun/install/cache
-          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-bun.outputs.bun-version }}-${{ hashFiles('bun.lock') }}
 
   # =============================================================================
   # Bundle Size Check (size-limit + orphan-chunk guard)
