@@ -359,12 +359,25 @@ echo "17/17: warm-ci-cache.yml's four cache keys must byte-match test.yml's (R9)
 # side) because R9 resolves warm-ci-cache.yml relative to the WORKFLOW's own path, not the CWD,
 # so it self-skips for a synthetic tree with no warm-ci-cache.yml (or one with no actions/cache
 # steps at all) -- matching R8's pattern above.
+#
+# The e2e-test/lighthouse-audit/backend-test shape below mirrors the REAL tree's topology on
+# purpose, not for realism's own sake: bun-store-* has TWO Ubicloud restorers (e2e-test and
+# lighthouse-audit) in production, and go-modules-* is shared by a Ubicloud key (with
+# runner.arch) and a mac-pool key (without it) under the same literal prefix. A fixture with only
+# one Ubicloud restorer per prefix, or no mac job at all, cannot exercise either shape a real
+# regression could hide in -- see case 17e and 17f below.
 BUN_KEY="bun-store-\${{ runner.os }}-\${{ runner.arch }}-\${{ steps.setup-bun.outputs.bun-version }}-\${{ hashFiles('bun.lock') }}"
 PW_KEY="playwright-\${{ runner.os }}-\${{ runner.arch }}-\${{ steps.playwright.outputs.version }}"
 GOMOD_KEY="go-modules-\${{ runner.os }}-\${{ runner.arch }}-go\${{ env.GO_VERSION }}-\${{ hashFiles('**/go.sum') }}"
 GOCACHE_KEY="gocache-e2e-\${{ runner.os }}-\${{ runner.arch }}-go\${{ env.GO_VERSION }}-\${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}"
+# The mac pool's OWN go-modules key: same literal prefix ("go-modules-"), deliberately missing
+# runner.arch. It must NEVER be required to match warm's key -- that divergence is intentional,
+# and case 17f pins it as the false-fail direction the per-job/Ubicloud-only scoping must not
+# break.
+MAC_GOMOD_KEY="go-modules-\${{ runner.os }}-go\${{ env.GO_VERSION }}-\${{ hashFiles('**/go.sum') }}"
 
-r9_write_test() { # $1=dir $2=bun $3=pw $4=gomod $5=gocache
+r9_write_test() { # $1=dir $2=bun(e2e-test) $3=pw $4=gomod $5=gocache $6=bun(lighthouse-audit, optional, defaults to $2)
+  local lh_bun="${6:-$2}"
   mkdir -p "$1/.github/workflows"
   cat > "$1/.github/workflows/test.yml" <<YML
 on: pull_request
@@ -393,7 +406,21 @@ jobs:
   lighthouse-audit:
     runs-on: ubicloud-standard-2
     steps:
+      # Same prefix ("bun-store-") as e2e-test's restore above -- the real tree's lighthouse-audit
+      # job restores this cache too, restore-only. This is the SECOND restorer in the bucket that
+      # the union-based comparison could not see drift in.
+      - uses: actions/cache/restore@v6
+        with:
+          key: $lh_bun
       - run: npx lhci autorun
+  backend-test:
+    runs-on: [self-hosted, macOS, mac-mini]
+    steps:
+      # Mac's own go-modules key, missing runner.arch -- a DIFFERENT namespace under the same
+      # literal prefix as $GOMOD_KEY above. Never expected to match warm-ci-cache.yml's key.
+      - uses: actions/cache/restore@v6
+        with:
+          key: $MAC_GOMOD_KEY
 YML
 }
 
@@ -481,7 +508,38 @@ r9_write_test "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
 r9_write_warm "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY_BAD"
 if [ "$(r9_findings "$D")" != "0" ]; then ok "a one-character gocache-e2e key mismatch is caught"; else bad "a mismatched gocache-e2e key raised no R9 finding"; fi
 
-# 17d: restored to matching keys is green again (the mutations above did not leave R9 unsatisfiable).
+# 17e: TWO Ubicloud jobs share the bun-store- prefix (e2e-test and lighthouse-audit, as in the
+# real tree); only lighthouse-audit's copy has drifted. This is the exact false-pass a reviewer
+# and the coordinator independently reproduced against the real tree: an earlier draft of R9
+# compared warm's key against the UNION of every job's key for a prefix, so as long as e2e-test's
+# copy still matched, lighthouse-audit's drifted copy went undetected. Per-job comparison must
+# catch it.
+D="$TMP/r9_two_restorer"; rm -rf "$D"
+r9_write_test "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY" "$BUN_KEY_BAD"
+r9_write_warm "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
+if [ "$(r9_findings "$D")" != "0" ]; then
+  ok "a SECOND Ubicloud job's drifted key is caught even though the first job's still matches"
+else
+  bad "the union false-pass reproduced: lighthouse-audit's drifted bun-store key went undetected because e2e-test's still matched"
+fi
+
+# 17f: the false-FAIL direction. The mac-pool job's go-modules key (MAC_GOMOD_KEY, no
+# runner.arch) is baked into every r9_write_test fixture above and has never matched
+# warm-ci-cache.yml's go-modules key (which carries runner.arch) in any of them -- yet every
+# preceding case in this section reported 0 R9 findings when everything else matched. This case
+# makes that assertion explicit: it is the same base fixture as 17a with no additional mutation,
+# so a regression that started comparing bucket-wide instead of scoping to Ubicloud jobs would
+# turn this red.
+D="$TMP/r9_mac_divergence"; rm -rf "$D"
+r9_write_test "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
+r9_write_warm "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
+if [ "$(r9_findings "$D")" = "0" ]; then
+  ok "the mac pool's arch-less go-modules key is never compared against warm's -- accepted"
+else
+  bad "the mac pool's intentionally-separate go-modules key was wrongly compared against warm's: $(python3 "$REPO_ROOT/scripts/check-runner-portability.py" "$D/.github/workflows" 2>&1 | /usr/bin/grep 'R9 --' | head -1)"
+fi
+
+# 17g: restored to matching keys is green again (the mutations above did not leave R9 unsatisfiable).
 D="$TMP/r9_restored"; rm -rf "$D"
 r9_write_test "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"
 r9_write_warm "$D" "$BUN_KEY" "$PW_KEY" "$GOMOD_KEY" "$GOCACHE_KEY"

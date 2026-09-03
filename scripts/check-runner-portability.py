@@ -170,17 +170,19 @@ def cache_keys_by_prefix(job):
     """Map each cache key's static prefix (the literal text before its first `${{`) to every
     full key string used by that prefix in this job's `actions/cache*` steps.
 
-    Comparing by prefix rather than by step name lets R9 line up test.yml's `restore` steps
-    against warm-ci-cache.yml's `save` steps for the SAME cache without caring what either step
-    is called. `gocache-e2e-` is a distinct prefix from `gocache-backend-test-` and
-    `gocache-backend-integration-`, so those never collide with the e2e keys R9 checks.
+    Grouping by prefix rather than by step name lets R9 line up a job's `restore` step against
+    warm-ci-cache.yml's `save` step for the SAME cache regardless of what either step is named.
+    `gocache-e2e-` is a distinct prefix from `gocache-backend-test-` and
+    `gocache-backend-integration-`, so those never collide.
 
-    ⚠ The prefix is NOT a full disambiguator on its own: `go-modules-` here (with `runner.arch`)
-    and backend-test's own `go-modules-` key (without it) collapse into the SAME bucket, and both
-    land in `test_keys` for that prefix in check_workflow. R9's comparison still cannot be fooled
-    by this, though -- it requires warm-ci-cache.yml's key to appear byte-for-byte among the
-    bucket's values, not merely to share the bucket, so an unrelated key with the same prefix is
-    simply ignored rather than accepted as a false match.
+    ⚠ The prefix alone does NOT guarantee two keys sharing it are the same cache: `go-modules-`
+    here (carrying `runner.arch`) and backend-test's own `go-modules-` key (which does not) share
+    a literal prefix but are a deliberately SEPARATE namespace -- one per runner pool. This
+    function does not resolve that ambiguity; it is a plain bucketing utility. R9 resolves it at
+    the CALL SITE instead, by invoking this only on warm-ci-cache.yml's job and on Ubicloud jobs
+    -- the mac-pool job where the divergent key actually lives is never passed in, so the
+    namespaces never mix. Reuse this function against a job set that is not pre-filtered to one
+    runner pool and that guarantee no longer holds.
     """
     keys = {}
     for step in steps_of(job):
@@ -350,13 +352,34 @@ def check_workflow(path, seen):
                         f"saves, or a timed-out run still loses its diagnostics."
                     )
 
-    # R9 (#1598). The four cache keys warm-ci-cache.yml writes must be byte-identical to the
-    # keys this workflow's own jobs restore/save under the same prefix.
+    # R9 (#1598). Every UBICLOUD job's cache key of a given prefix must be byte-identical to
+    # warm-ci-cache.yml's key for that same prefix.
     #
     # warm-ci-cache.yml's entire product is these four entries; a key that differs by even one
     # character (a typo, a dropped `runner.arch`, ...) writes an entry nothing will ever
     # restore, and the failure is completely silent -- `actions/cache/save` reports success
     # either way, and the only symptom is that every PR run stays cold, forever.
+    #
+    # ⚠ Scoped to Ubicloud jobs ONLY, and checked per-job rather than against a prefix-wide
+    # union. Both restrictions are load-bearing, not stylistic:
+    #
+    # 1. PER-JOB, not "does at least one job with this prefix match". A prefix bucket can hold
+    #    more than one job (bun-store-* is restored by both e2e-test AND lighthouse-audit in the
+    #    real tree). An early draft compared warm's key against the UNION of every job's keys
+    #    for that prefix, which is an OR: it stayed silent as long as ANY one job still matched,
+    #    even while a DIFFERENT job in the same bucket had drifted and would silently miss its
+    #    own cache. Reproduced against the real tree: mutating only e2e-test's bun-store key
+    #    while leaving lighthouse-audit's identical copy untouched still reported OK. Requiring
+    #    every candidate job to individually match closes that hole.
+    # 2. UBICLOUD-ONLY, not "every job carrying this prefix, mac included". warm-ci-cache.yml
+    #    exists to warm the Ubicloud jobs specifically -- MIGRATED_JOBS enumerates exactly which
+    #    ones -- and the mac pool deliberately uses a SEPARATE, arch-less key namespace under the
+    #    same literal prefix (e.g. backend-test's `go-modules-${{ runner.os }}-go...`, with no
+    #    `runner.arch`, vs. e2e-test's `go-modules-${{ runner.os }}-${{ runner.arch }}-go...`).
+    #    That divergence is intentional, not a defect: comparing bucket-wide (or requiring
+    #    universal agreement across the whole prefix) would flag it as a mismatch and make the
+    #    rule unsatisfiable by design. Scoping to Ubicloud jobs keeps mac's separate namespace
+    #    out of R9 entirely, by construction, rather than by tolerating it as a special case.
     #
     # Resolved from the WORKFLOW's location (a sibling of `path`), not the CWD, so this
     # self-skips for a synthetic fixture tree that never writes a warm-ci-cache.yml, or writes
@@ -369,28 +392,36 @@ def check_workflow(path, seen):
             warm_job = (warm_doc.get("jobs") or {}).get("warm")
             if isinstance(warm_job, dict):
                 warm_keys = cache_keys_by_prefix(warm_job)
-                test_keys = {}
-                for other_job in jobs.values():
-                    if not isinstance(other_job, dict):
-                        continue
-                    for prefix, vals in cache_keys_by_prefix(other_job).items():
-                        test_keys.setdefault(prefix, set()).update(vals)
+                ubicloud_jobs = {
+                    job_id: j
+                    for job_id, j in jobs.items()
+                    if isinstance(j, dict)
+                    and isinstance(j.get("runs-on"), str)
+                    and j.get("runs-on").startswith("ubicloud-")
+                }
                 for prefix, warm_vals in sorted(warm_keys.items()):
                     warm_key = warm_vals[0]
-                    test_vals = test_keys.get(prefix)
-                    if not test_vals:
+                    matched_any_job = False
+                    for job_id, job in sorted(ubicloud_jobs.items()):
+                        job_vals = cache_keys_by_prefix(job).get(prefix)
+                        if not job_vals:
+                            continue
+                        matched_any_job = True
+                        for job_key in job_vals:
+                            if job_key != warm_key:
+                                findings.append(
+                                    f"{path.name}: R9 -- Ubicloud job {job_id!r}'s cache key "
+                                    f"{job_key!r} (prefix {prefix!r}) does not byte-match "
+                                    f"warm-ci-cache.yml's key {warm_key!r} for the same prefix. "
+                                    f"A mismatched key writes an entry nothing will ever "
+                                    f"restore, silently."
+                                )
+                    if not matched_any_job:
                         findings.append(
                             f"{path.name}: R9 -- warm-ci-cache.yml writes a cache key with "
-                            f"prefix {prefix!r} ({warm_key!r}) but no job in {path.name} "
-                            f"restores or saves any key with that prefix. That warm entry can "
-                            f"never be consumed."
-                        )
-                    elif warm_key not in test_vals:
-                        findings.append(
-                            f"{path.name}: R9 -- warm-ci-cache.yml's cache key {warm_key!r} "
-                            f"does not byte-match any key in {path.name} with the same prefix "
-                            f"(found: {sorted(test_vals)!r}). A mismatched key writes an entry "
-                            f"nothing will ever restore, silently."
+                            f"prefix {prefix!r} ({warm_key!r}) but no Ubicloud job in "
+                            f"{path.name} restores or saves any key with that prefix. That warm "
+                            f"entry can never be consumed."
                         )
 
     lighthouse = jobs.get("lighthouse-audit")  # R6
