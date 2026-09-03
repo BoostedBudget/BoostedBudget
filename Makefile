@@ -16,7 +16,7 @@ help:
 	@echo "  make test-ci          - Run CI tests with coverage enforcement"
 	@echo "  make backend-test     - Run backend tests only"
 	@echo "  make frontend-test    - Run frontend tests only"
-	@echo "  make test-scripts     - Run the 21 shell regression suites (scripts/**, apps/web/scripts/**)"
+	@echo "  make test-scripts     - Run the 24 shell regression suites (scripts/**, apps/web/scripts/**)"
 	@echo ""
 	@echo "Backend:"
 	@echo "  make backend-build    - Build backend binary"

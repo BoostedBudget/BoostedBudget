@@ -92,10 +92,12 @@ module.exports = {
     // chunks). Performance moved 0.55 -> 0.57. Essentially nothing. The metrics say why:
     // total-blocking-time 0ms, bootup-time 0.2s, server-response-time 30ms all score 1, while FCP
     // is ~5.8s. The delay is a SERIAL DEPENDENCY, not bytes and not work: AuthReadyGate
-    // (apps/web/src/main.tsx) returns null until useAuth().isLoaded, with no skeleton, and it sits
-    // above App and is not route-aware — so first paint waits on Clerk's chain
-    // (clerk.browser.js -> /v1/environment -> /v1/client) even for an anonymous visitor on a
-    // public page. Making public routes paint before Clerk resolves is the fix that would move
+    // (apps/web/src/main.tsx) paints a header shell (matching the real header's geometry) while
+    // useAuth().isLoaded is false, but the REAL content behind it — everything AuthReadyGate
+    // gates — still waits on `isLoaded`, and it sits above App and is not route-aware. So the
+    // page's actual content, and with it LCP, still wait on Clerk's chain (clerk.browser.js ->
+    // /v1/environment -> /v1/client) even for an anonymous visitor on a public page. Making
+    // public routes paint their real content before Clerk resolves is the fix that would move
     // this number, and it is still open on #1601. Do not raise these thresholds expecting bundle
     // work to satisfy them.
     //
