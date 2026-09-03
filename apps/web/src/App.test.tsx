@@ -139,13 +139,22 @@ describe('App', () => {
       mockUseClerk.mockReturnValue(createMockClerk())
     })
 
+    // #1601: Header is React.lazy() (see App.tsx), so its arrival is a genuine async
+    // boundary — a dynamic import resolving, not a synchronous render — and the user
+    // menu button lives inside it. Before Header became lazy this waitFor's default
+    // 1000ms budget was never really exercised; under CI load a lazy chunk can take
+    // longer than that to resolve, so this and every other Header-dependent assertion
+    // below use the file's established { timeout: 10000 } instead of the bare default.
     it('should render user menu button', async () => {
       const Wrapper = createWrapper()
       render(<App />, { wrapper: Wrapper })
 
-      await waitFor(() => {
-        expect(screen.getByRole('button', { name: /user menu/i })).toBeInTheDocument()
-      })
+      await waitFor(
+        () => {
+          expect(screen.getByRole('button', { name: /user menu/i })).toBeInTheDocument()
+        },
+        { timeout: 10000 }
+      )
     })
 
     // #1601 review finding 6: Header became React.lazy(), and nothing exercised the BOUNDARY —
@@ -164,8 +173,11 @@ describe('App', () => {
       render(<App />, { wrapper: Wrapper })
 
       // The lazy boundary genuinely resolves: without this the header never arrives and every
-      // authenticated route renders headless.
-      await waitFor(() => expect(screen.getByRole('banner')).toBeInTheDocument())
+      // authenticated route renders headless. Explicit timeout: this is an async import
+      // resolving, not a synchronous render.
+      await waitFor(() => expect(screen.getByRole('banner')).toBeInTheDocument(), {
+        timeout: 10000,
+      })
       const headerClass = screen.getByRole('banner').className
 
       // Render the stand-in on its own and compare geometry. Asserted on BOTH sides rather than
@@ -324,11 +336,16 @@ describe('App', () => {
         const Wrapper = createWrapper()
         render(<App />, { wrapper: Wrapper })
 
-        await waitFor(() => {
-          const transactionsLink = screen.getByRole('link', { name: /transactions/i })
-          expect(transactionsLink).toBeInTheDocument()
-          expect(transactionsLink).toHaveAttribute('href', '/transactions')
-        })
+        // The transactions link lives inside the lazy-loaded Header — explicit timeout,
+        // same reasoning as the Header assertions above.
+        await waitFor(
+          () => {
+            const transactionsLink = screen.getByRole('link', { name: /transactions/i })
+            expect(transactionsLink).toBeInTheDocument()
+            expect(transactionsLink).toHaveAttribute('href', '/transactions')
+          },
+          { timeout: 10000 }
+        )
       })
     })
 
@@ -408,12 +425,16 @@ describe('App', () => {
 
         // McpPage is lazy — its "Capabilities" section (id="capabilities") does not
         // exist in the DOM until the dynamic import resolves and Suspense swaps in the
-        // real content in place of <PageSkeleton />.
-        await waitFor(() => {
-          expect(
-            screen.getByRole('heading', { level: 2, name: "What it can and can't do" })
-          ).toBeInTheDocument()
-        })
+        // real content in place of <PageSkeleton />. This route also sits behind the
+        // lazy Header (non-landing shell), compounding the wait — explicit timeout.
+        await waitFor(
+          () => {
+            expect(
+              screen.getByRole('heading', { level: 2, name: "What it can and can't do" })
+            ).toBeInTheDocument()
+          },
+          { timeout: 10000 }
+        )
 
         await waitFor(() => {
           expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth' })
@@ -503,11 +524,16 @@ describe('App', () => {
       const Wrapper = createMemoryWrapper(['/mcp'])
       const { container } = render(<App />, { wrapper: Wrapper })
 
-      await waitFor(() => {
-        expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
-          /your finances, in the agent you already use/i
-        )
-      })
+      // McpPage and the shared Header (non-landing shell) are both lazy — explicit
+      // timeout, same reasoning as the other Header/lazy-route assertions in this file.
+      await waitFor(
+        () => {
+          expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+            /your finances, in the agent you already use/i
+          )
+        },
+        { timeout: 10000 }
+      )
 
       // Prove this is the non-landing app shell, not just "some banner/footer exist"
       // (LandingHeader also has role="banner", and AppFooter renders unconditionally
