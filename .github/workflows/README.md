@@ -187,9 +187,9 @@ silent — you keep paying for cold runs while a "warm cache" workflow reports s
 check is in that file's header.
 
 **Decision: no more caching (#1601).** The Ubicloud migration brief asked to "optimally utilise
-Ubicloud caching." Having measured it, the honest answer is that it already is, and the two jobs'
-warm-run step costs (job 33694477386) show why adding more would cost correctness for well under
-30 seconds:
+Ubicloud caching." The honest answer is that it already is: measured from job 33694477386's step
+timings (GitHub Actions API), the two jobs' warm-run step costs below show why adding more would
+cost correctness for well under 30 seconds:
 
 | E2E job (~19 min total) | | Lighthouse job (2.8 min total) | |
 |---|---|---|---|
