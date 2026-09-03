@@ -53,6 +53,8 @@ jobs:
               - 'package.json'
               - 'bun.lock'
               - 'scripts/**'
+              - '.lighthouserc.js'
+              - '.size-limit.json'
             api:
               - 'api/**'
               - 'api/openapi.yaml'
@@ -429,6 +431,7 @@ jobs:
             bun-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-bun.outputs.bun-version }}-
 
       - name: Install workspace dependencies
+        id: install-deps
         run: bun install --frozen-lockfile
 
       - name: Resolve Playwright version
@@ -463,6 +466,7 @@ jobs:
       # so a browser-cache hit would skip them -- shipping a job that is green on its first run
       # and broken on every cached run afterwards.
       - name: Install Playwright browsers and OS dependencies
+        id: install-playwright-browsers
         working-directory: apps/web
         run: bunx playwright install --with-deps chromium webkit
 
@@ -530,6 +534,7 @@ jobs:
       # The `chmod +x` step that used to follow is gone: it was always dead, because `go build`
       # writes mode 0755.
       - name: Build backend binary
+        id: build-backend
         working-directory: backend
         run: |
           mkdir -p bin
@@ -865,7 +870,7 @@ jobs:
         run: echo "::warning::E2E videos upload failed (storage quota/network). Test results valid."
 
       # ── Cache saves (#1598) ─────────────────────────────────────────────────────────────────
-      # Two guards on every one of these, each for a different reason:
+      # Three guards on every one of these, each for a different reason:
       #
       #   `if: ${{ !cancelled() }}` -- NOT `always()`. `always()` also fires on CANCELLATION, and
       #     cancellation is this job's normal recent outcome: all eleven of its most recent runs
@@ -873,17 +878,32 @@ jobs:
       #     upload a cache built by a job that was killed mid-compile, then paying again to
       #     download it into the next run.
       #
+      #   `&& steps.<producer>.outcome == 'success'` (#1598 G10) -- `!cancelled()` ALONE still lets
+      #     a FAILED producer's save run: a step that errors out (a broken lockfile, a Playwright
+      #     install that dies partway through OS deps, a Go compile failure) is neither cancelled
+      #     nor skipped, so without this the save step still executes and uploads whatever partial
+      #     or empty directory the failed step left behind. Cache entries are IMMUTABLE -- once a
+      #     key exists, no later successful run can overwrite it, only wait ~7 days for it to age
+      #     out on its own -- and this repo has Ubicloud shared-branch caching enabled, so a
+      #     poisoned entry written on one branch is served to EVERY branch that restores the same
+      #     key, not just the one that produced it. Each save below is therefore gated on the
+      #     specific step that actually populates its cached path having `outcome == 'success'`,
+      #     not merely on the job not having been cancelled.
+      #
       #   `continue-on-error: true` -- actions/cache/save fails outright if its exact key already
       #     exists, which is EXPECTED on a rerun of the same commit, or on a second commit that
       #     changes no cached input. That must not redden the job; a persistent failure (a real
       #     quota or network problem) still surfaces as a workflow warning rather than silence.
+      #     Kept even after adding the producer-outcome check above: colliding with an existing key
+      #     is a normal rerun, not evidence the producer is unhealthy, and the two failure modes
+      #     must stay distinguishable.
       #
       # Deliberately NOT guarded on `steps.<id>.outputs.cache-hit != 'true'`: `cache-hit` is true
       # only on an EXACT primary-key match, so guarding a save on it freezes the entry at
       # whatever the first save contained. backend-test's "Save Go build cache" step documents
       # that bug at length; do not reintroduce it here.
       - name: Save Bun package store
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install-deps.outcome == 'success' }}
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -891,15 +911,22 @@ jobs:
           key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-bun.outputs.bun-version }}-${{ hashFiles('bun.lock') }}
 
       - name: Save Playwright browsers
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install-playwright-browsers.outcome == 'success' }}
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}
 
+      # Go modules AND Go build cache are both gated on "Build backend binary", not on a
+      # dedicated `go mod download` step -- this job has none. `go build` resolves and downloads
+      # any missing modules into ~/go/pkg/mod before it compiles, and it is also the first Go
+      # invocation in the job (it runs before the "Guard -- whole-tree corpus guards" `go test`
+      # step further down), so it is the step that actually populates both cached paths for a run
+      # starting cold. If it fails -- a broken go.sum, a network failure resolving a module, a
+      # real compile error -- neither cache should be trusted as complete.
       - name: Save Go modules cache
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.build-backend.outcome == 'success' }}
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -907,7 +934,7 @@ jobs:
           key: go-modules-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
 
       - name: Save Go build cache
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.build-backend.outcome == 'success' }}
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
