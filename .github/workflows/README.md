@@ -20,9 +20,9 @@ PR to staging/main ──► test.yml          (CI: backend + frontend + E2E + l
 push to staging ──────► deploy-to-staging.yaml     ◄── manual dispatch
 push to QA branch ────► deploy-qa.yml              ◄── manual dispatch
 
-push to staging/main ─► warm-ci-cache.yml
-                        (writes default-branch cache entries for test.yml's
-                         Ubicloud jobs; runs no tests, never a required check)
+manual dispatch only ─► warm-ci-cache.yml
+                        (re-warms test.yml's Ubicloud caches after a quiet
+                         period; runs no tests, never a required check)
 ```
 
 ---
@@ -105,12 +105,15 @@ Builds and deploys the current `staging` branch to the staging Fly.io / Cloudfla
 
 ### `warm-ci-cache.yml` — Warm CI Caches
 
-**Trigger:** push to `staging` / `main` (paths-gated on cache-relevant inputs), or manual dispatch.
+**Trigger:** manual dispatch (`workflow_dispatch`) ONLY — it must never auto-run.
 **Runner:** `ubicloud-standard-2`.
 
 Populates and saves the four caches `test.yml`'s Ubicloud jobs restore — Bun package store,
-Playwright browsers, Go modules, Go build — into the **default-branch** cache scope, which is the
-only scope a pull_request run can fall back to. Runs no tests and asserts nothing.
+Playwright browsers, Go modules, Go build. It used to also run `on: push` to `staging`/`main` to
+write those entries into the default-branch cache scope, back when that was the only scope a
+pull_request run could fall back to. That reasoning is now void (see "Caching" below), and the
+`push:` trigger was removed in #1598 U2 so that merging a PR can never re-kick this job. Runs no
+tests and asserts nothing.
 
 **Must never be a required check**, and every save step carries `continue-on-error` so it can
 never fail the default branch. See *Runner placement → Caching* above for why it exists.
@@ -132,7 +135,7 @@ documenting which stay self-hosted and why.
 |---|---|---|
 | `test.yml` → `e2e-test` | `ubicloud-standard-2` | The heaviest job in the matrix, on a host whose memory is permanently saturated (`infra/runners/README.md:101-122`). Its last eleven runs on the Mac pool took 11–46 minutes and **every one ended `cancelled`**. Moving it is direct relief for #1489. |
 | `test.yml` → `lighthouse-audit` | `ubicloud-standard-2` | Cannot run on macOS at all: Chrome headless under LHCI shared a process group with the Mac Mini's own browser session, which LHCI SIGKILLs after an audit. Disabled 2026-04-07, re-enabled by #1598. See #996. |
-| `warm-ci-cache.yml` → `warm` | `ubicloud-standard-2` | Exists only to write default-branch cache entries for the two jobs above, so it must run on the same runner *and architecture* or its cache keys cannot match. Runs no tests; **must never be a required check**. |
+| `warm-ci-cache.yml` → `warm` | `ubicloud-standard-2` | Manual-only re-warm of the shared cache pool the two jobs above use, so it must run on the same runner *and architecture* or its cache keys cannot match. Runs no tests; **must never be a required check**; `push:` trigger removed in #1598 U2 so merges never re-kick it. |
 | Everything else (38 jobs) | `[self-hosted, macOS, mac-mini]` | Not yet migrated. Tracked in #614. |
 | `deploy-qa.yml` → `deploy-to-mac-mini` | `[self-hosted, macOS, mac-mini]` | **Never migrates.** It deploys to the QA environment hosted *on* that machine; there is nothing to deploy to from a cloud VM. |
 
@@ -159,10 +162,24 @@ GitHub-managed service container is a failure mode worth making structurally imp
 
 ### Caching
 
-`test.yml` is `on: pull_request` only, and a cache written by a pull_request run is scoped to that
-PR. The only cross-PR fallback scope is the **default branch**, which for this repo is `staging`.
-That is what `warm-ci-cache.yml` exists for: before it, nothing wrote a default-branch cache
-entry, so every new PR's first `e2e-test` run started fully cold.
+Ubicloud's shared-branch caching is enabled for this account, with cache branch protection OFF.
+That means every branch reads and writes ONE shared cache pool — a save from any feature branch's
+`test.yml` run already serves every other branch, including the next PR's. This supersedes
+GitHub's own default cache scoping rule (a pull_request-scoped cache is normally only visible to
+that PR, with the default branch as the one cross-PR fallback), which is the rule that motivated
+`warm-ci-cache.yml` when it was written.
+
+Two Ubicloud limits still apply to that shared pool: an entry is **evicted after 7 days unused**,
+and the account has a **30 GB-per-repository-per-week** write quota (a rolling budget, not a
+standing cap). So a quiet week with no branch activity can let an entry age out, and the next PR to
+touch it pays one cold run.
+
+`warm-ci-cache.yml` exists to repair exactly that: a **manual-only** (`workflow_dispatch`) remedy
+you run by hand after a quiet period, never on push. It must never auto-run — the repo owner asked
+that merging a PR never re-kick CI jobs, and shared-branch caching removed the case for an
+automatic default-branch warm anyway (#1598 U2). The accepted tradeoff: with the warmer disabled,
+cache freshness now depends entirely on branch activity, and the cost of a quiet week is one cold
+run (~4 min extra) rather than a standing risk.
 
 Its four cache keys must stay **byte-identical** to `test.yml`'s, `runner.arch` included. A key
 that differs by one character writes an entry nothing will ever restore, and the failure is
