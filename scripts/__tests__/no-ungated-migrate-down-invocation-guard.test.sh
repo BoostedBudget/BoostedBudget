@@ -17,6 +17,27 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
+# Portable in-place edit (#1598). This suite runs on the developer's macOS machine AND inside the
+# e2e-test CI job, which now runs on a Linux runner. The BSD in-place form -- the -i flag with an
+# empty '' argument -- is macOS-only: GNU sed reads that empty string as the script's filename and
+# errors out. So the four mutations below would have failed on Linux while continuing to pass
+# locally, and the failure would have looked like a defect in the guard under test rather than in
+# this suite. The GNU form (-i followed directly by the expression) is the mirror trap. The
+# temp-file form below is the only one that behaves identically on both, and it is now enforced
+# tree-wide by scripts/check-portable-sed.sh.
+sed_inplace() {
+    local expr="$1" file="$2"
+    # `cat tmp > file`, NOT `mv tmp file`. `mv` replaces the file, so the rewritten copy carries
+    # the temp file's umask-derived mode (0644) instead of the original's -- which silently
+    # stripped the executable bit off scripts/test-migrations.sh, a directly-invoked script. The
+    # BSD form this replaces edited in place and preserved the mode, so `mv` would have been a
+    # regression introduced by the portability fix itself. Redirecting into the existing path
+    # keeps its inode, mode and ownership.
+    sed "$expr" "$file" > "${file}.portable.tmp" \
+        && cat "${file}.portable.tmp" > "$file" \
+        && rm -f "${file}.portable.tmp"
+}
 GUARD="$REPO_ROOT/scripts/assert-no-ungated-migrate-down-invocation.sh"
 PASS=0
 FAIL=0
@@ -96,7 +117,7 @@ fi
 
 # ── Test 3 (mutant): deleting the gate call from backend/Makefile's migrate-down recipe is caught ──
 echo "Test 3 (mutant): deleting migrate-down's gate call from backend/Makefile is caught"
-sed -i '' '/assert-migrate-reset-target-disposable\.sh migrate-down$/d' "$REPO_ROOT/backend/Makefile"
+sed_inplace '/assert-migrate-reset-target-disposable\.sh migrate-down$/d' "$REPO_ROOT/backend/Makefile"
 if diff -q "$BACKUP_DIR/Makefile" "$REPO_ROOT/backend/Makefile" > /dev/null 2>&1; then
     fail "mutation was a no-op: migrate-down's gate call line not found in backend/Makefile"
 else
@@ -113,7 +134,7 @@ cp "$BACKUP_DIR/Makefile" "$REPO_ROOT/backend/Makefile"
 
 # ── Test 4 (mutant): deleting the gate call from backend/Makefile's migrate-reset recipe is caught ──
 echo "Test 4 (mutant): deleting migrate-reset's gate call from backend/Makefile is caught"
-sed -i '' '/assert-migrate-reset-target-disposable\.sh migrate-reset$/d' "$REPO_ROOT/backend/Makefile"
+sed_inplace '/assert-migrate-reset-target-disposable\.sh migrate-reset$/d' "$REPO_ROOT/backend/Makefile"
 if diff -q "$BACKUP_DIR/Makefile" "$REPO_ROOT/backend/Makefile" > /dev/null 2>&1; then
     fail "mutation was a no-op: migrate-reset's gate call line not found in backend/Makefile"
 else
@@ -134,7 +155,7 @@ cp "$BACKUP_DIR/Makefile" "$REPO_ROOT/backend/Makefile"
 # of whether the real invocation is present, and a naive substring scan across ALL lines (including
 # comments) is satisfied by the comment alone even after the real gate-invocation line is deleted. ──
 echo "Test 5 (regression): a comment merely naming the gate script does not count as gating it"
-sed -i '' '/assert-migrate-reset-target-disposable\.sh migrate-down$/d' "$REPO_ROOT/backend/Makefile"
+sed_inplace '/assert-migrate-reset-target-disposable\.sh migrate-down$/d' "$REPO_ROOT/backend/Makefile"
 # Sanity: the migrate-down recipe still carries its explanatory comment mentioning the script name.
 if ! grep -A12 "^migrate-down:" "$REPO_ROOT/backend/Makefile" | grep -q "assert-migrate-reset-target-disposable.sh"; then
     fail "test setup invalid: migrate-down's recipe no longer mentions the gate script in its comment either"
@@ -152,7 +173,7 @@ cp "$BACKUP_DIR/Makefile" "$REPO_ROOT/backend/Makefile"
 
 # ── Test 6 (mutant): deleting one of scripts/test-migrations.sh's three guard calls is caught ──
 echo "Test 6 (mutant): deleting assert_target_cluster_is_disposable's call in scripts/test-migrations.sh is caught"
-sed -i '' '/^    assert_target_cluster_is_disposable$/d' "$REPO_ROOT/scripts/test-migrations.sh"
+sed_inplace '/^    assert_target_cluster_is_disposable$/d' "$REPO_ROOT/scripts/test-migrations.sh"
 if diff -q "$BACKUP_DIR/test-migrations.sh" "$REPO_ROOT/scripts/test-migrations.sh" > /dev/null 2>&1; then
     fail "mutation was a no-op: the bare call to assert_target_cluster_is_disposable was not found"
 else
