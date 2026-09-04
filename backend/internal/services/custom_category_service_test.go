@@ -6,6 +6,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -63,6 +64,14 @@ func (m *MockCustomCategoryRepository) GetNamesByIDs(ctx context.Context, userID
 	return args.Get(0).(map[string]string), args.Error(1)
 }
 
+func (m *MockCustomCategoryRepository) GetLiveNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error) {
+	args := m.Called(ctx, userID, ids)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string]string), args.Error(1)
+}
+
 func (m *MockCustomCategoryRepository) GetChildren(ctx context.Context, parentID string) ([]*domain.CustomCategory, error) {
 	args := m.Called(ctx, parentID)
 	if args.Get(0) == nil {
@@ -84,8 +93,8 @@ func (m *MockCustomCategoryRepository) GetCategoryUsage(ctx context.Context, use
 	return args.Get(0).(*domain.CategoryUsage), args.Error(1)
 }
 
-func (m *MockCustomCategoryRepository) DeleteWithReassignment(ctx context.Context, userID, categoryID string) error {
-	args := m.Called(ctx, userID, categoryID)
+func (m *MockCustomCategoryRepository) DeleteWithReassignment(ctx context.Context, userID, categoryID string, auditLog repository.AuditLogRepository) error {
+	args := m.Called(ctx, userID, categoryID, auditLog)
 	return args.Error(0)
 }
 
@@ -382,7 +391,9 @@ func TestCustomCategoryService_DeleteCategory(t *testing.T) {
 	}
 
 	mockCategoryRepo.On("GetByID", ctx, categoryID).Return(existingCategory, nil)
-	mockCategoryRepo.On("DeleteWithReassignment", ctx, userID, categoryID).Return(nil)
+	// nil audit repo: SetAuditLogRepository is not wired in this test, and the delete must still
+	// work without one (#1569 Task 9).
+	mockCategoryRepo.On("DeleteWithReassignment", ctx, userID, categoryID, repository.AuditLogRepository(nil)).Return(nil)
 
 	// Execute
 	err := service.DeleteCategory(ctx, userID, categoryID)

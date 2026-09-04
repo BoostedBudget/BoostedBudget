@@ -8,6 +8,7 @@ import {
   escapeHtml,
 } from '@/shared/charts'
 import { useGetPortfolioHistory } from '@boostedbudget/api-client/endpoints/investments/investments'
+import { ErrorState } from '@/components/ui/error-state'
 
 interface PortfolioValueChartProps {
   dateRange: { start_date: string; end_date: string }
@@ -16,7 +17,7 @@ interface PortfolioValueChartProps {
 export function PortfolioValueChart({ dateRange }: PortfolioValueChartProps) {
   const isDark = useDarkMode()
 
-  const { data, isLoading } = useGetPortfolioHistory({
+  const { data, isLoading, isError, refetch } = useGetPortfolioHistory({
     start_date: dateRange.start_date,
     end_date: dateRange.end_date,
   })
@@ -54,6 +55,13 @@ export function PortfolioValueChart({ dateRange }: PortfolioValueChartProps) {
         <div className="animate-spin rounded-full size-6 border-b-2 border-primary" />
       </div>
     )
+  }
+
+  // Issue #1569 T9.5 — a failed read is not an empty range. "Not enough data for this range"
+  // tells the user their portfolio has no history here; a request that never returned cannot
+  // support that.
+  if (isError) {
+    return <ErrorState title="We couldn't load this chart" onRetry={refetch} />
   }
 
   if (history.length < 2) {

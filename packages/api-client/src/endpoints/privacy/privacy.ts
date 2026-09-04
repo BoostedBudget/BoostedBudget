@@ -50,6 +50,7 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  DataExport,
   ErrorModel,
   PrivacySettings,
   UpdatePrivacySettingsRequest
@@ -104,6 +105,99 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
   }
   return result;
 };
+
+/**
+ * Returns a machine-readable JSON export of the authenticated user's own data (GDPR Article 20, right to data portability). Scoped strictly to the caller: rows belonging to household peers are never included, and credentials, encrypted-at-rest secrets and third-party authentication identifiers are excluded.
+ * @summary Export my data
+ */
+export const getDataExport = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<DataExport>(
+      {url: `/api/v1/user/data-export`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetDataExportQueryKey = () => {
+    return [
+    `/api/v1/user/data-export`
+    ] as const;
+    }
+
+
+export const getGetDataExportQueryOptions = <TData = Awaited<ReturnType<typeof getDataExport>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDataExport>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetDataExportQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDataExport>>> = ({ signal }) => getDataExport(requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getDataExport>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetDataExportQueryResult = NonNullable<Awaited<ReturnType<typeof getDataExport>>>
+export type GetDataExportQueryError = ErrorType<ErrorModel>
+
+
+export function useGetDataExport<TData = Awaited<ReturnType<typeof getDataExport>>, TError = ErrorType<ErrorModel>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDataExport>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getDataExport>>,
+          TError,
+          Awaited<ReturnType<typeof getDataExport>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetDataExport<TData = Awaited<ReturnType<typeof getDataExport>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDataExport>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getDataExport>>,
+          TError,
+          Awaited<ReturnType<typeof getDataExport>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetDataExport<TData = Awaited<ReturnType<typeof getDataExport>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDataExport>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Export my data
+ */
+
+export function useGetDataExport<TData = Awaited<ReturnType<typeof getDataExport>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDataExport>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetDataExportQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
 
 /**
  * Retrieves the authenticated user's privacy settings, creating defaults if none exist.

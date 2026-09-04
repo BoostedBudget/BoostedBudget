@@ -30,8 +30,9 @@ import (
 //
 // ⚠ The blank write must stay legal on ONE path: the PlaidErrorInvalidCursor branch resets the
 // cursor to "" deliberately, to force exactly that full re-sync. TestSyncTransactions_InvalidCursor…
-// pins it, and it must keep passing — which is why the guard belongs at the per-page update site and
-// NOT inside UpdateCursor.
+// pins it, and it must keep passing — which is why the guard belongs at the cursor-selection site in
+// the pagination loop and NOT inside UpdateCursor. (#1570 moved the WRITE to a single post-storage
+// call; the guard stayed in the loop, where it decides what that write will carry.)
 func TestSyncTransactions_BlankNextCursor_DoesNotOverwriteStoredCursor(t *testing.T) {
 	ctx := context.Background()
 
@@ -65,7 +66,7 @@ func TestSyncTransactions_BlankNextCursor_DoesNotOverwriteStoredCursor(t *testin
 		Cursor:      &goodCursor,
 	}
 
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-123").
 		Return([]domain.Account{{ID: "acc-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: "user-123"}}, nil)
 
 	// A successful page that carries NO next_cursor. This is the shape under test.
@@ -142,7 +143,7 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_FailsClosedWithoutLooping(t
 		Cursor:      &goodCursor,
 	}
 
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-loop").
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-loop").
 		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-loop"}}, nil).Maybe()
 
 	// Response 1: the contract violation under test — more pages promised, no cursor to fetch them with.
@@ -192,13 +193,15 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_FailsClosedWithoutLooping(t
 // fix missed, and it is the third time this branch has traded one failure mode for a worse one.
 // Issue #1537 round 11.
 //
-// THE LOSS. `UpdateCursor` runs INSIDE the pagination loop (per page), while storage happens AFTER it.
+// THE LOSS (as it stood in round 11 — #1570 has since removed the per-page write entirely; this
+// paragraph describes the world the break-instead-of-error decision was made in).
+// `UpdateCursor` ran INSIDE the pagination loop (per page), while storage happens AFTER it.
 // So on a two-page sync where page 1 succeeds and page 2 returns has_more=true with an empty cursor:
 //
-//	1. page 1's transactions are appended to `result` and page 1's cursor is PERSISTED;
-//	2. round 10's guard returned an error before any storage;
-//	3. the worker reads `result` only on the success path (queue/jobs/plaid_sync.go) — on error it is
-//	   discarded entirely.
+//  1. page 1's transactions are appended to `result` and page 1's cursor is PERSISTED;
+//  2. round 10's guard returned an error before any storage;
+//  3. the worker reads `result` only on the success path (queue/jobs/plaid_sync.go) — on error it is
+//     discarded entirely.
 //
 // The retry then resumes from page 1's cursor, and /transactions/sync does not re-deliver page 1. Those
 // transactions are gone. The condition is server-side and deterministic on retry, so all five attempts
@@ -245,7 +248,7 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 		Cursor:      &startCursor,
 	}
 
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-multipage").
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-multipage").
 		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-multipage"}}, nil).Maybe()
 
 	page1 := &plaid.TransactionsSyncResponse{
@@ -280,8 +283,8 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 	mockTransactionRepo.On("GetByExternalID", mock.Anything, domain.SourcePlaid, "txn-page2-mod", "user-multipage").
 		Return(&domain.Transaction{ID: "existing-mod", ExternalTransactionID: stringPtr("txn-page2-mod")}, nil).Maybe()
 	mockTransactionRepo.On("Update", mock.Anything, mock.Anything).Return(nil).Maybe()
-	mockTransactionRepo.On("DeleteByExternalID", mock.Anything, domain.SourcePlaid, "txn-page2-rem", "user-multipage").
-		Return(nil).Maybe()
+	mockTransactionRepo.On("TombstoneByExternalID", mock.Anything, domain.SourcePlaid, "txn-page2-rem", "user-multipage", domain.TxnDeletedByPlaidSync).
+		Return(domain.TxnDeletedProviderRemovedPosted, nil).Maybe()
 
 	result, err := service.SyncTransactions(ctx, linkedItem)
 
@@ -315,7 +318,7 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 			"the break, so dropping it here would be silent loss of the last page")
 	// The page-2 modify/delete are what the break branch actually commits beyond page 1.
 	mockTransactionRepo.AssertCalled(t, "Update", mock.Anything, mock.Anything)
-	mockTransactionRepo.AssertCalled(t, "DeleteByExternalID", mock.Anything, domain.SourcePlaid, "txn-page2-rem", "user-multipage")
+	mockTransactionRepo.AssertCalled(t, "TombstoneByExternalID", mock.Anything, domain.SourcePlaid, "txn-page2-rem", "user-multipage", domain.TxnDeletedByPlaidSync)
 
 	// ------------------------------------------------------------------
 	// T97 second sync: the cursor lags one page, so Plaid re-delivers page 2. This is the

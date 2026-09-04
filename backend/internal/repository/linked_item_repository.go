@@ -19,6 +19,13 @@ var (
 	ErrLinkedItemNotFound = errors.New("linked item not found")
 	// ErrDuplicateLinkedItem is returned when attempting to create a linked item that already exists
 	ErrDuplicateLinkedItem = errors.New("linked item already exists for this user")
+	// ErrLinkedItemNotDisconnected is returned by PurgeLinkedItem when the item's Plaid side has
+	// not yet been stopped (plaid_removed_at IS NULL). Purging first would permanently destroy the
+	// only local record of a Plaid Item that may still be billing, with no way to find or remove
+	// it afterward — so a purge must be preceded by a successful disconnect (POST
+	// /linked-items/{id}/disconnect), exactly as the closed-accounts surface always reaches it.
+	// Issue #1569, Task 6.
+	ErrLinkedItemNotDisconnected = errors.New("institution must be disconnected before it can be purged")
 	// ErrNoLinkedItemsUpdated is returned by MarkItemsDisconnected when its UPDATE affected ZERO
 	// rows despite being given a non-empty ids slice (Issue #1413 Medium finding, PR #1443 Codex
 	// review round 4): before this fix, RowsAffected was never inspected, so a write that silently
@@ -89,14 +96,30 @@ type LinkedItemRepository interface {
 	// Returns ErrLinkedItemNotFound if the item doesn't exist or belongs to a different user.
 	GetByIDAndUser(ctx context.Context, id, userID string) (*domain.LinkedItem, error)
 
-	// DeleteByUser removes a linked item with ownership validation.
-	// The item is only deleted if both the item ID and user ID match (WHERE id = $1 AND user_id = $2).
-	// This prevents users from deleting items they don't own.
+	// PurgeLinkedItem permanently and transactionally destroys the linked item and every account
+	// under it: balance_snapshots for those accounts (explicit — SET NULL, migration 000150), then
+	// the linked_items row itself, which CASCADEs to its accounts (fk_accounts_linked_item_id,
+	// unchanged since creation) and from there to holdings/investment_transactions/liabilities/
+	// account_status_history for each. transactions survive (SET NULL on both account_id and
+	// linked_item_id, migration 000035). Issue #1569, Task 6.
 	//
-	// Returns ErrLinkedItemNotFound if:
-	//   - The item doesn't exist
-	//   - The item exists but belongs to a different user (ownership check fails)
-	DeleteByUser(ctx context.Context, id, userID string) error
+	// Refuses with ErrLinkedItemNotDisconnected unless BOTH plaid_removed_at is already stamped
+	// AND no account under the item is still status='active'. A purge must never be the FIRST
+	// thing that happens to an item, or it destroys the only local record of a Plaid Item that
+	// might still be billing; and the stamp alone is not proof the user disconnected anything,
+	// because the billing cleanup sweep stamps errored/stale items without touching their
+	// accounts (#1569 residual E9 — see the implementation for the full argument). Call the
+	// disconnect endpoint first.
+	//
+	// Refuses with ErrPurgeBlockedBySavingsGoal, doing and changing nothing, while a savings goal
+	// still references any account under this item (migration 000150's RESTRICT constraint).
+	//
+	// auditLog, when non-nil, writes a "linked_item.history_purged" entry inside the same
+	// transaction via LogInTx — see AccountRepository.PurgeAccount's doc comment for why that is
+	// safe here (no FOR UPDATE lock on any users row).
+	//
+	// Returns ErrLinkedItemNotFound if the item doesn't exist or isn't owned by userID.
+	PurgeLinkedItem(ctx context.Context, linkedItemID, userID string, auditLog AuditLogRepository) error
 
 	// GetByIDForUpdate retrieves a linked item by ID with a row-level exclusive lock.
 	// Use this in sync workers to prevent concurrent syncs for the same item.
@@ -760,32 +783,153 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 	return &item, nil
 }
 
-// DeleteByUser removes a linked item with ownership validation.
-//
-// Security: This method validates ownership via the WHERE clause (id AND user_id must match).
-// A user can only delete items they own. If the item doesn't exist or belongs to
-// a different user, the DELETE will affect 0 rows and ErrLinkedItemNotFound is returned.
-//
-// Use case: Called when a user disconnects an institution from the UI.
-// Note: CASCADE DELETE automatically removes all associated accounts.
-func (r *linkedItemRepository) DeleteByUser(ctx context.Context, id, userID string) error {
-	query := `
-		DELETE FROM linked_items
-		WHERE id = $1 AND user_id = $2
-	`
-
-	ct, err := r.db.Exec(ctx, query, id, userID)
+// PurgeLinkedItem implements LinkedItemRepository.PurgeLinkedItem — see that method's doc comment
+// for the full contract.
+func (r *linkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID, userID string, auditLog AuditLogRepository) error {
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
-	// Check if any rows were affected (validates ownership and existence)
+	// Lock the row and read plaid_removed_at before doing anything destructive. FOR UPDATE here
+	// is a row lock on linked_items, not users — it cannot participate in the users-row lock
+	// cycle LogInTx's doc comment warns about.
+	var plaidRemovedAt *time.Time
+	err = tx.QueryRow(ctx,
+		`SELECT plaid_removed_at FROM linked_items WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+		linkedItemID, userID,
+	).Scan(&plaidRemovedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrLinkedItemNotFound
+		}
+		return fmt.Errorf("purge linked item %s: %w", linkedItemID, err)
+	}
+	if plaidRemovedAt == nil {
+		return ErrLinkedItemNotDisconnected
+	}
+
+	// ⚠ plaid_removed_at is not by itself proof the USER disconnected this institution — #1569
+	// residual E9. The billing cleanup sweep stamps it too, for items that are merely in an error
+	// state or stale (cleanupCandidateReasonPredicate above).
+	//
+	// ⚠⚠ WHAT THIS SECOND LEG DOES AND NO LONGER DOES (#1569 task 20, A2). It used to also mean
+	// "a background job cannot reach this precondition", because PlaidItemCleanupService left every
+	// account under a swept item at status='active' and so this count was never zero for one.
+	// THAT IS NO LONGER TRUE, and deliberately so: leaving those accounts 'active' was a defect —
+	// they had stopped syncing, so their balances were frozen figures rendered as current ones with
+	// no "as of" date. The service now transitions them to 'removed' with
+	// removed_reason = 'link_removed', which means a swept item CAN now satisfy both legs of this
+	// guard without the user ever having pressed Disconnect.
+	//
+	// Accepted, with the reasoning stated rather than assumed. This guard is a PRECONDITION, not an
+	// authorisation: nothing here is reachable except through the explicit, type-to-confirm
+	// user-initiated purge operation, and the precondition it encodes ("the connection must be
+	// stopped before its history may be destroyed") is genuinely satisfied for a swept item — the
+	// Plaid Item is gone and cannot be revived. What changed is only that the user is no longer
+	// asked to press Disconnect on a connection this product already severed. If a future task wants
+	// "the USER stopped it" specifically, the queryable fact for that is now
+	// accounts.removed_reason = 'user_disconnect' versus 'link_removed' (migration 000167), NOT the
+	// account count — and it should be added as a third leg here rather than inferred.
+	//
+	// This is the institution-level equal of PurgeAccount's `status == active -> refuse` guard
+	// (account_repository.go), and it shares its sentinel with the stamp check above because the
+	// user-facing answer is identical: disconnect first. That is not a dead end —
+	// DisconnectInstitution is idempotent against an already-removed Plaid item (ITEM_NOT_FOUND
+	// maps to success) and marks the accounts removed on its way through. Note that its
+	// MarkRemovedByLinkedItemID call is scoped `AND status = 'active'`, so running it over an
+	// already-swept item leaves the existing 'link_removed' reasons in place rather than rewriting
+	// them to 'user_disconnect' — the earlier, machine-written cause is the true one and is kept.
+	//
+	// Read inside the same transaction, after the FOR UPDATE on linked_items. That lock does not
+	// cover the accounts rows, so a disconnect committing concurrently could still flip one to
+	// 'removed' between this SELECT and the deletes — which only ever turns a permitted purge into
+	// a refused one, never the reverse.
+	var liveAccounts int
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM accounts WHERE linked_item_id = $1 AND status = 'active'`,
+		linkedItemID,
+	).Scan(&liveAccounts); err != nil {
+		return fmt.Errorf("purge linked item %s: counting live accounts: %w", linkedItemID, err)
+	}
+	if liveAccounts > 0 {
+		return ErrLinkedItemNotDisconnected
+	}
+
+	// Both replaced_by_id columns are `REFERENCES ...(id)` with no explicit ON DELETE action
+	// (defaults to NO ACTION, migrations 000032/000033). If an older item/account was replaced by
+	// one under this item on a re-link, the deletes below would fail with a dangling foreign-key
+	// violation as an opaque error. Mirrors DeleteUserCascade's identical fix
+	// (profile_repository.go) for the same two columns, scoped here to just this item's accounts
+	// and this item itself rather than a whole user. Nulling unconditionally is harmless: both
+	// columns are nullable and carry no meaning once their target is gone.
+	if _, err := tx.Exec(ctx, `
+		UPDATE accounts SET replaced_by_id = NULL
+		WHERE replaced_by_id IN (SELECT id FROM accounts WHERE linked_item_id = $1)
+	`, linkedItemID); err != nil {
+		return fmt.Errorf("purge linked item %s: clearing dangling accounts.replaced_by_id references: %w", linkedItemID, err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE linked_items SET replaced_by_id = NULL WHERE replaced_by_id = $1`, linkedItemID); err != nil {
+		return fmt.Errorf("purge linked item %s: clearing dangling linked_items.replaced_by_id references: %w", linkedItemID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM balance_snapshots
+		WHERE account_id IN (SELECT id FROM accounts WHERE linked_item_id = $1)
+	`, linkedItemID); err != nil {
+		return fmt.Errorf("purge linked item %s: deleting balance snapshots: %w", linkedItemID, err)
+	}
+
+	// Tombstoned savings goals go with the accounts under this item; live ones still block it —
+	// see PurgeAccount's identical block (account_repository.go) for the full reasoning. Issue
+	// #1569, task 21 (defect C1). Without this, the institution-level purge is dead for exactly the
+	// same population as the account-level one, and for exactly the same reason.
+	if _, err := tx.Exec(ctx, `
+		-- tombstone-exempt(write:savings_goals): inverted predicate, identical to PurgeAccount's block --
+		-- see account_repository.go PurgeAccount for the full reasoning (#1569 T8 write-target audit).
+		DELETE FROM savings_goals
+		WHERE user_id = $2
+		  AND deleted_at IS NOT NULL
+		  AND account_id IN (SELECT id FROM accounts WHERE linked_item_id = $1)
+	`, linkedItemID, userID); err != nil {
+		return fmt.Errorf("purge linked item %s: deleting tombstoned savings goals: %w", linkedItemID, err)
+	}
+
+	// Both legs of this function's precondition are restated here (#1569 round 14) so they are
+	// mechanically pinned by TestEveryAllowlistedHistoryDeleteStillCarriesItsPredicate rather than
+	// living only in the Go `if`s above, which no guard can see. `plaid_removed_at IS NOT NULL`
+	// mirrors the SELECT ... FOR UPDATE's check; the NOT EXISTS mirrors the live-accounts count
+	// check. The FOR UPDATE lock on linked_items already prevents any concurrent write from
+	// un-removing this item between that SELECT and this DELETE (a concurrent account going live
+	// under it is the one race the doc comment above already calls out as merely turning a
+	// permitted purge into a refused one, never the reverse) — restating the legs here is defense
+	// against a future edit removing a Go check, not against a race. If either leg ever disagreed
+	// with its Go counterpart, this DELETE would affect zero rows and fail closed below rather than
+	// destroying a live institution's history.
+	ct, err := tx.Exec(ctx, `
+		DELETE FROM linked_items
+		WHERE id = $1 AND user_id = $2 AND plaid_removed_at IS NOT NULL
+		  AND NOT EXISTS (
+		      SELECT 1 FROM accounts WHERE linked_item_id = linked_items.id AND status = 'active'
+		  )`, linkedItemID, userID)
+	if err != nil {
+		if isForeignKeyViolation(err, "fk_savings_goals_account_id") {
+			return ErrPurgeBlockedBySavingsGoal
+		}
+		return fmt.Errorf("purge linked item %s: %w", linkedItemID, err)
+	}
 	if ct.RowsAffected() == 0 {
-		// Item not found OR user doesn't own it (both cases return same error for security)
 		return ErrLinkedItemNotFound
 	}
 
-	return nil
+	if auditLog != nil {
+		if err := auditLog.LogInTx(ctx, tx, "linked_item.history_purged", "linked_item", linkedItemID); err != nil {
+			return fmt.Errorf("purge linked item %s: audit log: %w", linkedItemID, err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 // GetByIDForUpdate retrieves a linked item by ID with a row-level exclusive lock.

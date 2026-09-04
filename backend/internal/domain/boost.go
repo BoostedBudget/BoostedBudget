@@ -699,8 +699,26 @@ func (b *Boost) ParseSavingsGoalAction() (*SavingsGoalAction, error) {
 
 // BoostExecution tracks a single execution of a boost.
 type BoostExecution struct {
-	ID                  string          `json:"id" db:"id"`
-	BoostID              string          `json:"boost_id" db:"boost_id"`
+	ID string `json:"id" db:"id"`
+	// BoostID is a POINTER because fk_boost_executions_boost_id is ON DELETE SET NULL since Issue
+	// #1569 Task 14 (migration 000164). NULL means "the boost that ran has since been purged",
+	// never "no boost" -- every row was written for a real one. BoostName and DefinitionSnapshot
+	// are what a reader shows in its place.
+	//
+	// ⚠ NON-NULL DOES NOT MEAN THE BOOST IS STILL THERE. boostsRepository.Delete TOMBSTONES
+	// (deleted_at), so a normally-deleted boost's executions keep this pointer set and the row
+	// still looks parented. A reader deciding "came from a deleted boost" must compare against the
+	// LIVE boost listing, not against nil -- see BoostAutomationHistoryPanel.tsx, which does.
+	BoostID *string `json:"boost_id,omitempty" db:"boost_id"`
+	// UserID is denormalised onto the execution row. It is the row's own ON DELETE CASCADE path to
+	// users (so GDPR erasure still reaches it once boost_id can be NULL) AND the key GetByUserID
+	// reads it by (so an orphan is not invisible to every list in the app).
+	UserID string `json:"user_id" db:"user_id"`
+	// BoostName and DefinitionSnapshot are written once, at execution time, and never updated.
+	// They record the definition AS IT WAS THEN -- editing or deleting the boost afterwards does
+	// not rewrite history.
+	BoostName           *string         `json:"boost_name,omitempty" db:"boost_name"`
+	DefinitionSnapshot  json.RawMessage `json:"definition_snapshot,omitempty" db:"-"`
 	Status              ExecutionStatus `json:"status" db:"status"`
 	StartedAt           time.Time       `json:"started_at" db:"started_at"`
 	CompletedAt         *time.Time      `json:"completed_at,omitempty" db:"completed_at"`

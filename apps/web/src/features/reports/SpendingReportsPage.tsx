@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 import { BarChart3, Eye, EyeOff } from 'lucide-react'
 import { Card } from '@/components/ui/card'
@@ -8,6 +9,7 @@ import type { DatePreset } from '@/shared/dates'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ErrorState } from '@/components/ui/error-state'
 import { useSpendingByCategory } from './hooks/useSpendingByCategory'
 import { useSpendingByMerchant } from './hooks/useSpendingByMerchant'
 import { useSpendingTrends } from './hooks/useSpendingTrends'
@@ -19,6 +21,22 @@ import { CashFlowSankeyChart } from './components/CashFlowSankeyChart'
 import { SpendingTrendsChart } from './components/SpendingTrendsChart'
 import { TopMerchantsTable } from './components/TopMerchantsTable'
 import type { SortState } from '@/shared/components/DataTable'
+
+// Issue #1569 T9.5 — every read on this page is a read of the user's money, and a failed read
+// must never fall through to a chart's own no-data copy: "No spending data for this period" is a
+// claim about the user's finances that a failed request cannot support. All five reads share this
+// one render path — five separate error blocks would not fit the reports bundle budget.
+function readOrError(error: string | null, onRetry: () => void, chart: ReactNode): ReactNode {
+  if (!error) return chart
+  return (
+    <ErrorState
+      title="We couldn't load this"
+      description="The request failed. Try again in a moment."
+      onRetry={onRetry}
+      className="border-0 bg-transparent"
+    />
+  )
+}
 
 export function SpendingReportsPage() {
   const navigate = useNavigate()
@@ -43,26 +61,51 @@ export function SpendingReportsPage() {
   const filters = { startDate, endDate }
   const enabled = Boolean(startDate && endDate)
 
-  const { data: incomeData, loading: incomeLoading } = useIncomeSourceBreakdown({ filters, enabled })
+  const {
+    data: incomeData,
+    loading: incomeLoading,
+    error: incomeError,
+    refetch: refetchIncome,
+  } = useIncomeSourceBreakdown({ filters, enabled })
 
   // Top-level fetch (no drilldown) used by the Sankey so drilling into a category
   // doesn't corrupt the expense universe shown in the chart.
-  const { data: sankeyTopLevelData, loading: sankeyTopLevelLoading } = useSpendingByCategory({
+  const {
+    data: sankeyTopLevelData,
+    loading: sankeyTopLevelLoading,
+    error: sankeyTopLevelError,
+    refetch: refetchSankeyTopLevel,
+  } = useSpendingByCategory({
     filters: { ...filters, customCategoryIds },
     enabled,
   })
 
-  const { data: categoryData, loading: categoryLoading } = useSpendingByCategory({
+  const {
+    data: categoryData,
+    loading: categoryLoading,
+    error: categoryError,
+    refetch: refetchCategory,
+  } = useSpendingByCategory({
     filters: { ...filters, category: drilldown?.category, customCategoryIds },
     enabled,
   })
 
-  const { data: merchantData, loading: merchantLoading } = useSpendingByMerchant({
+  const {
+    data: merchantData,
+    loading: merchantLoading,
+    error: merchantError,
+    refetch: refetchMerchant,
+  } = useSpendingByMerchant({
     filters,
     enabled,
   })
 
-  const { data: trendsData, loading: trendsLoading } = useSpendingTrends({
+  const {
+    data: trendsData,
+    loading: trendsLoading,
+    error: trendsError,
+    refetch: refetchTrends,
+  } = useSpendingTrends({
     filters,
     enabled,
   })
@@ -165,14 +208,21 @@ export function SpendingReportsPage() {
               </button>
             </div>
             <Card>
-              <CashFlowSankeyChart
-                incomeData={incomeData}
-                categoryData={sankeyTopLevelData}
-                loading={incomeLoading || sankeyTopLevelLoading}
-                privacyMode={privacyMode}
-                startDate={startDate}
-                endDate={endDate}
-              />
+              {readOrError(
+                incomeError ?? sankeyTopLevelError,
+                () => {
+                  void refetchIncome()
+                  void refetchSankeyTopLevel()
+                },
+                <CashFlowSankeyChart
+                  incomeData={incomeData}
+                  categoryData={sankeyTopLevelData}
+                  loading={incomeLoading || sankeyTopLevelLoading}
+                  privacyMode={privacyMode}
+                  startDate={startDate}
+                  endDate={endDate}
+                />,
+              )}
             </Card>
           </section>
 
@@ -186,11 +236,15 @@ export function SpendingReportsPage() {
               </p>
             </div>
             <Card>
-              <CategoryBreakdownChart
-                data={categoryData}
-                loading={categoryLoading}
-                onCategoryClick={handleCategoryClick}
-              />
+              {readOrError(
+                categoryError,
+                () => void refetchCategory(),
+                <CategoryBreakdownChart
+                  data={categoryData}
+                  loading={categoryLoading}
+                  onCategoryClick={handleCategoryClick}
+                />,
+              )}
             </Card>
           </section>
 
@@ -204,10 +258,14 @@ export function SpendingReportsPage() {
               </p>
             </div>
             <Card>
-              <SpendingTrendsChart
-                data={trendsData}
-                loading={trendsLoading}
-              />
+              {readOrError(
+                trendsError,
+                () => void refetchTrends(),
+                <SpendingTrendsChart
+                  data={trendsData}
+                  loading={trendsLoading}
+                />,
+              )}
             </Card>
           </section>
 
@@ -221,13 +279,17 @@ export function SpendingReportsPage() {
               </p>
             </div>
             <Card>
-              <TopMerchantsTable
-                data={merchantData}
-                loading={merchantLoading}
-                onMerchantClick={handleMerchantClick}
-                sort={merchantSort}
-                onSortChange={setMerchantSort}
-              />
+              {readOrError(
+                merchantError,
+                () => void refetchMerchant(),
+                <TopMerchantsTable
+                  data={merchantData}
+                  loading={merchantLoading}
+                  onMerchantClick={handleMerchantClick}
+                  sort={merchantSort}
+                  onSortChange={setMerchantSort}
+                />,
+              )}
             </Card>
           </section>
         </div>

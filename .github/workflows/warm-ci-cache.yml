@@ -1,0 +1,173 @@
+name: Warm CI Cache
+
+# WHY THIS EXISTS (#1598), AND WHY IT IS MANUAL-ONLY (#1598 U2).
+#
+# This job's ONLY product is the four cache entries (Bun store, Playwright browsers, Go modules,
+# Go build) that test.yml's Ubicloud jobs restore. It runs no tests and asserts nothing, so:
+#   - it must never be a required check, and
+#   - it must never be able to fail the branch (hence continue-on-error on every save).
+#
+# It used to also run `on: push` to staging/main, on the theory that a pull_request-scoped cache
+# needs a default-branch write to be visible cross-PR. THAT ARGUMENT IS NOW VOID: Ubicloud
+# shared-branch caching is enabled for this account, with cache branch protection OFF, so every
+# branch already reads and writes ONE shared cache pool -- a save from any feature branch already
+# serves every other branch, not just its own PR. There is no longer a "default-branch scope" to
+# warm.
+#
+# What IS still true: Ubicloud evicts a cache entry that goes unused for 7 days, and the quota is
+# 30 GB per repository per WEEK (a rolling write budget, not a standing cap -- do not repeat that
+# error here). So after a quiet week with no branch activity, the shared pool's entries for these
+# keys can age out, and the next PR's e2e-test run pays one cold run (~4 min extra) to repopulate
+# them. That is this workflow's entire remaining purpose: a MANUAL remedy you run by hand
+# (workflow_dispatch) after a quiet period, not a routine one.
+#
+# It must NEVER auto-run. Merging this PR touches five of the six `push:` path filters this job
+# used to have, and the repo owner asked that landing it not re-kick any CI jobs on staging/main --
+# `push:` is gone for exactly that reason. Accept the tradeoff honestly: with no automatic warmer,
+# cache freshness now depends entirely on branch activity. A quiet week means the next run after it
+# is cold, once. That is a deliberate choice to avoid re-kicking jobs on every merge, not a defect.
+#
+# ⚠ THE CACHE KEYS BELOW MUST STAY BYTE-IDENTICAL TO test.yml's. A key that differs by one
+# character writes an entry nothing will ever restore, and the failure is completely silent --
+# you would simply keep paying for cold runs while a "warm cache" workflow reported success. This
+# used to be a hand-run Python snippet you had to remember to run; it is now mechanised as R9 in
+# scripts/check-runner-portability.py (scripts/__tests__/check-runner-portability.test.sh case
+# 17/17), which runs on every push via check-ungated-guard-steps.py's ungated-step requirement --
+# no more remembering to check it by hand.
+#
+# ⚠ HOW TO VERIFY THIS IS WORKING -- and how NOT to. Ubicloud's Transparent Cache is enabled by
+# default and intercepts the GitHub Actions cache protocol, so entries written from a Ubicloud
+# runner do NOT appear in GitHub's own cache list (the Actions cache API, or Settings > Actions >
+# Caches). Measured on #1598: the e2e-test job logged "Cache saved successfully" for three keys
+# while `gh api .../actions/caches` listed 103 entries and ZERO matching `Linux-X64` -- the
+# mac-mini jobs' caches were all there, the Ubicloud ones were not. Querying that API and finding
+# nothing is therefore NOT evidence of a broken cache, and it is the check a reader would
+# naturally reach for first.
+#
+# There are two sound checks. A restore HIT in a run log:
+#   "Cache restored from key: gocache-e2e-Linux-X64-go1.26.6-..."   <- working
+#   "Cache not found for input keys: ..."                            <- cold (or broken)
+# and the Ubicloud console (Project > GitHub Runners > Caches), which lists the entries GitHub's
+# API cannot see, with a per-entry "last used" timestamp -- the most direct evidence that a key is
+# actually being CONSUMED and not merely written. Confirmed there on #1598: all four keys present
+# for this branch, each "last used" within minutes of the run that restored them.
+#
+# Ubicloud's shared-branch caching (cache branch protection OFF for this account) is what makes a
+# save from ANY branch visible to every other branch's runs -- superseding GitHub's own default
+# GitHub Actions cache scoping rule ("workflow runs can only access caches created on the current
+# branch/tag or the default branch"), which is what this file's header used to rely on instead.
+on:
+  # Manual-only, deliberately. See the header: shared-branch caching removed the case for an
+  # automatic warm, and merging must never re-kick CI jobs.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Supersede an in-flight warm-up: only the newest run's saved entries are worth keeping.
+  group: warm-ci-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Declared here rather than referenced from test.yml -- workflows cannot share an env block,
+  # and these must match test.yml's values or the keys they feed will not match either.
+  GO_VERSION: '1.26.6'
+  NODE_VERSION: '20'
+
+jobs:
+  warm:
+    name: Warm caches
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 1
+
+      - name: Setup Bun
+        id: setup-bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          # EXPLICIT false, matching e2e-test. This input defaults to TRUE, and left at the
+          # default it would write its own go.sum-keyed entry alongside the two below -- the same
+          # bytes twice against Ubicloud's 30 GB cache quota. See e2e-test's Set up Go for the
+          # full argument.
+          cache: false
+
+      # ── Populate ────────────────────────────────────────────────────────────────────────────
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download Go modules
+        working-directory: backend
+        run: go mod download
+
+      - name: Build Go packages
+        working-directory: backend
+        # One real compile, so the build cache holds compiled packages and not merely modules.
+        # `go build ./...` rather than `./cmd/server` on purpose: e2e-test's cache is consumed by
+        # a build of cmd/server AND by the corpus-guard step's `go test`, which compiles
+        # internal/repository and internal/testsupport/citations.
+        run: go build ./...
+
+      - name: Resolve Playwright version
+        id: playwright
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./apps/web/node_modules/@playwright/test/package.json').version")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Playwright ${version}"
+
+      - name: Install Playwright browsers and OS dependencies
+        working-directory: apps/web
+        run: bunx playwright install --with-deps chromium webkit
+
+      # ── Save ────────────────────────────────────────────────────────────────────────────────
+      # `!cancelled()` rather than `always()`, and continue-on-error throughout: a key collision
+      # is expected whenever nothing cached-relevant changed, and this workflow must never fail
+      # the default branch. See e2e-test's save steps for the reasoning in full.
+      - name: Save Bun package store
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-bun.outputs.bun-version }}-${{ hashFiles('bun.lock') }}
+
+      - name: Save Playwright browsers
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}
+
+      - name: Save Go modules cache
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/go/pkg/mod
+          key: go-modules-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+
+      - name: Save Go build cache
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/go-build
+          key: gocache-e2e-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}

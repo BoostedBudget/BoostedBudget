@@ -5,6 +5,8 @@ package operations
 // Provides four endpoints for managing savings goal contributions:
 //   - POST   /api/v1/savings-goals/{goalID}/contributions        — manually log a contribution
 //   - GET    /api/v1/savings-goals/{goalID}/contributions        — list all contributions for a goal
+//   - GET    /api/v1/savings-goals/deleted/{goalID}/contributions — the retained ledger of a
+//     goal the user has deleted (#1569 T2; the live listing above excludes tombstoned goals)
 //   - POST   /api/v1/savings-goals/{goalID}/contributions/{id}/confirm — confirm a proposed contribution
 //   - DELETE /api/v1/savings-goals/{goalID}/contributions/{id}   — remove a contribution
 
@@ -43,6 +45,28 @@ type ContributionHandler struct {
 	contribRepo     repository.SavingsContributionRepository
 	progressService ContributionProgressRecomputer // optional; nil = skip goal recompute after write
 	goalReader      ContributionGoalReader         // optional; nil = skip basis gate (tests only)
+
+	// auditLogRepo records the savings_goal_contribution.history_purged entry INSIDE
+	// DeleteContribution's own transaction (#1569 round 17 task 6, ADR explicit-destruction
+	// control 2). Wired by SetAuditLogRepository rather than a fourth constructor parameter — same
+	// setter pattern as savingsGoalService.auditLogRepo, and it keeps the ~25 existing
+	// NewContributionHandler call sites untouched.
+	//
+	// ⚠ REQUIRED FOR DeleteContribution, and this comment said "nil = no audit row" until #1569
+	// round 17 corrected it. Since round 17 task 11 the handler REFUSES — repository.
+	// ErrAuditLogRepositoryNotWired, mapped to a 500 — rather than destroying a contribution with
+	// no trail. Every OTHER handler method is unaffected and still works with this nil, which is
+	// why the ~25 constructor call sites did not have to change.
+	//
+	// ⚠ contribRepo.DeleteContribution is STILL nil-tolerant one layer down: it skips the audit
+	// write when the sink is nil, so the hardening integration tests can pass nil. The check in
+	// this handler is the only thing that makes the control mandatory.
+	auditLogRepo repository.AuditLogRepository
+}
+
+// SetAuditLogRepository wires the audit-log repository used by DeleteContribution. See the field.
+func (h *ContributionHandler) SetAuditLogRepository(ar repository.AuditLogRepository) {
+	h.auditLogRepo = ar
 }
 
 // NewContributionHandler creates a new ContributionHandler.
@@ -85,6 +109,27 @@ type ListContributionsInput struct {
 // ListContributionsOutput wraps the list of contributions.
 type ListContributionsOutput struct {
 	Body []*domain.SavingsGoalContribution
+}
+
+// ListDeletedGoalContributionsInput is the request for listing a TOMBSTONED goal's contributions.
+type ListDeletedGoalContributionsInput struct {
+	inputs.AuthenticatedInput
+	GoalID string `path:"goalID" doc:"ID of a savings goal the user has already deleted"`
+}
+
+// DeletedGoalContributionsBody is the payload of the deleted-goal ledger.
+//
+// It carries the total alongside the entries because the deleted-goal surface has nothing else to
+// derive it from: savings_goals.current_amount is frozen at whatever the last recompute wrote, and
+// no live read will ever touch a tombstoned goal again.
+type DeletedGoalContributionsBody struct {
+	Contributions  []*domain.SavingsGoalContribution `json:"contributions" doc:"Every contribution still logged against the deleted goal, newest first. A contribution the user explicitly deleted earlier was destroyed at that point and is not here"`
+	TotalConfirmed float64                           `json:"total_confirmed" doc:"Sum of the confirmed contributions; proposed and rejected rows are excluded"`
+}
+
+// ListDeletedGoalContributionsOutput wraps the deleted goal's retained ledger.
+type ListDeletedGoalContributionsOutput struct {
+	Body DeletedGoalContributionsBody
 }
 
 // ConfirmContributionInput is the request for confirming a proposed contribution.
@@ -226,6 +271,43 @@ func (h *ContributionHandler) ListContributions(ctx context.Context, input *List
 	return &ListContributionsOutput{Body: contribs}, nil
 }
 
+// ListDeletedGoalContributions handles
+// GET /api/v1/savings-goals/deleted/{goalID}/contributions (Issue #1569 T2).
+//
+// The DELETE endpoint promises that "every contribution still logged against the goal is
+// retained" — still logged, because deleting one contribution explicitly is a hard delete.
+// This is the read that makes that promise checkable: without it the rows survive in the table and
+// are visible to nobody, which is the "retention that reads as deletion" failure #1569 is named
+// for — and it lands on hand-logged amounts no provider can ever supply again.
+//
+// A DISTINCT ROUTE, not a flag on the live listing, on purpose:
+//   - deleted goals already have their own surface (GET /savings-goals/deleted, rendered by
+//     DeletedGoalsPanel, from which the purge verb is reached) and this belongs beside it;
+//   - the live path stays incapable of returning a tombstoned goal, so nothing can widen by
+//     accident later — a query flag would put that decision one boolean away in every caller;
+//   - the response shape differs (it carries the total), which a flag could not express cleanly.
+//
+// Tenancy is enforced in SQL by the repository, identically to the live listing.
+func (h *ContributionHandler) ListDeletedGoalContributions(ctx context.Context, input *ListDeletedGoalContributionsInput) (*ListDeletedGoalContributionsOutput, error) {
+	contribs, err := h.contribRepo.ListByDeletedGoal(ctx, input.UserID, input.GoalID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	total, err := h.contribRepo.SumConfirmedByDeletedGoal(ctx, input.UserID, input.GoalID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	if contribs == nil {
+		// A nil slice marshals as `null`, which the client cannot tell from a failed read — the
+		// same ambiguity this endpoint exists to remove.
+		contribs = []*domain.SavingsGoalContribution{}
+	}
+	return &ListDeletedGoalContributionsOutput{Body: DeletedGoalContributionsBody{
+		Contributions:  contribs,
+		TotalConfirmed: total,
+	}}, nil
+}
+
 // ConfirmContribution handles POST /api/v1/savings-goals/{goalID}/contributions/{id}/confirm.
 // Promotes a proposed contribution to confirmed status. Re-checks allocation capacity under lock.
 func (h *ContributionHandler) ConfirmContribution(ctx context.Context, input *ConfirmContributionInput) (*ConfirmContributionOutput, error) {
@@ -283,9 +365,20 @@ func (h *ContributionHandler) RejectContribution(ctx context.Context, input *Rej
 }
 
 // DeleteContribution handles DELETE /api/v1/savings-goals/{goalID}/contributions/{id}.
-// Removes a contribution row. The user may delete both proposed and confirmed rows.
+// PERMANENTLY DESTROYS a contribution row: the user may delete proposed and confirmed rows.
+//
+// 404 now also covers three deliberate refusals — a tombstoned goal, a tombstoned contribution and
+// a 'rejected' sticky tombstone — none of which the caller can see in any product surface. See the
+// repository method's doc comment (#1569 round 17 task 6) for why "not found" is the honest answer
+// for all three and what the refusal does NOT protect.
 func (h *ContributionHandler) DeleteContribution(ctx context.Context, input *DeleteContributionInput) (*struct{}, error) {
-	if err := h.contribRepo.DeleteContribution(ctx, input.UserID, input.ID); err != nil {
+	// Control 2 is not optional: refuse rather than destroy un-audited. See
+	// repository.ErrAuditLogRepositoryNotWired.
+	if h.auditLogRepo == nil {
+		return nil, humaerrors.LoggingMapError(ctx, repository.ErrAuditLogRepositoryNotWired)
+	}
+
+	if err := h.contribRepo.DeleteContribution(ctx, input.UserID, input.ID, h.auditLogRepo); err != nil {
 		if err == domain.ErrContributionNotFound {
 			return nil, huma.Error404NotFound("contribution not found")
 		}
@@ -327,10 +420,32 @@ func RegisterContributionRoutes(api huma.API, handler *ContributionHandler) {
 		Method:      http.MethodGet,
 		Path:        "/api/v1/savings-goals/{goalID}/contributions",
 		Summary:     "List savings goal contributions",
-		Description: "Returns all confirmed and proposed contributions for a savings goal, newest first.",
+		Description: "Returns all confirmed and proposed contributions for a savings goal, newest first. " +
+			"Returns an empty list for a goal the user has DELETED — the contributions still logged " +
+			"against it are retained and are read through " +
+			"GET /savings-goals/deleted/{goalID}/contributions instead (#1569).",
 		Tags:        []string{"Savings Goals", "Contributions"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.ListContributions)
+
+	// GET /api/v1/savings-goals/deleted/{goalID}/contributions — deleted goal's retained ledger
+	huma.Register(api, huma.Operation{
+		OperationID: "listDeletedSavingsGoalContributions",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/savings-goals/deleted/{goalID}/contributions",
+		Summary:     "List a deleted savings goal's retained contributions",
+		Description: "Returns the contributions retained under a goal the user has DELETED, newest first, " +
+			"with their confirmed total (Issue #1569). Deleting a goal tombstones it and keeps every " +
+			"contribution STILL logged against it — including amounts the user entered by hand, which no " +
+			"provider can supply again. A contribution the user explicitly deleted earlier via DELETE " +
+			"/savings-goals/{goalID}/contributions/{id} was destroyed then and is not listed here. This " +
+			"is the only endpoint that can read the retained ones back; the live " +
+			"GET /savings-goals/{goalID}/contributions deliberately returns nothing for a deleted goal. " +
+			"Returns an empty list for a goal that is not deleted. Pair it with " +
+			"GET /savings-goals/deleted, and with POST /savings-goals/{id}/purge to destroy them for good.",
+		Tags:     []string{"Savings Goals", "Contributions"},
+		Security: []map[string][]string{{"clerk": {}}},
+	}, handler.ListDeletedGoalContributions)
 
 	// POST /api/v1/savings-goals/{goalID}/contributions/{id}/confirm — confirm proposed
 	huma.Register(api, huma.Operation{
@@ -363,7 +478,7 @@ func RegisterContributionRoutes(api huma.API, handler *ContributionHandler) {
 		Method:        http.MethodDelete,
 		Path:          "/api/v1/savings-goals/{goalID}/contributions/{id}",
 		Summary:       "Delete a savings goal contribution",
-		Description:   "Removes a contribution (proposed or confirmed). Triggers goal progress recomputation.",
+		Description:   "PERMANENTLY DESTROYS a contribution (proposed or confirmed) and triggers goal progress recomputation. This is a hard delete, not a tombstone, and it is one of the sanctioned explicit-destruction exceptions under the retain-by-default rule (#1569): a hand-logged amount erased here cannot be recovered and no provider can supply it again. Deleting the GOAL does not do this — that retains every contribution still logged against it.",
 		Tags:          []string{"Savings Goals", "Contributions"},
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,

@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -92,9 +93,21 @@ func TestBackfillUserAccountIDs_MultipleMatch_Warns(t *testing.T) {
 	// mask and institution_id are *string (nullable) — pass pointers so pgxmock scans them correctly.
 	encMaskPtr := &encMask
 	encInstIDPtr := &encInstID
-	accountRows := pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id"}).
-		AddRow(accountID, userID, encMaskPtr, encInstIDPtr)
+	// #1569 widened this SELECT with a.type/a.subtype so a synthesised identity is not typeless.
+	acctType, acctSubtype := "depository", "checking"
+	// #1569 round 14 task 9: the scan's sort key — and therefore its cursor — is (created_at, id),
+	// so created_at is selected too.
+	createdAt := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	accountRows := pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id", "type", "subtype", "created_at"}).
+		AddRow(accountID, userID, encMaskPtr, encInstIDPtr, &acctType, &acctSubtype, createdAt)
+	// #1569 round 14: the run first LOADS its persisted resume position (absent here), then the scan
+	// is paged, so it carries (cursor timestamp, cursor id, offset, limit). A nil timestamp AND a nil
+	// id are "from the beginning" and carry no position predicate at all. One row comes back, which
+	// is a SHORT page, so the run ends without a second page query — and CLEARS the cursor, the scan
+	// being exhausted.
+	expectCursorLoad(mock, nil, nil)
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT a.id, a.user_id, a.mask, li.institution_id`)).
+		WithArgs((*time.Time)(nil), (*string)(nil), 0, backfillAccountsPageSize).
 		WillReturnRows(accountRows)
 
 	// Second mock: the user_accounts lookup — returns TWO rows (the multiple-match scenario).
@@ -104,13 +117,15 @@ func TestBackfillUserAccountIDs_MultipleMatch_Warns(t *testing.T) {
 		AddRow(uaID1).
 		AddRow(uaID2)
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id FROM user_accounts`)).
-		WithArgs(userID, instBlind, maskBlind).
+		WithArgs(userID, instBlind, maskBlind, &acctType, &acctSubtype).
 		WillReturnRows(uaRows)
 
 	// Third mock: the UPDATE accounts exec — must use uaID1 (the first row).
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE accounts SET user_account_id`)).
 		WithArgs(uaID1, accountID).
 		WillReturnResult(pgconn.NewCommandTag("UPDATE 1"))
+
+	expectCursorClear(mock)
 
 	// Run backfillAccountsUserAccountIDsWithDB — the refactored helper that accepts the interface.
 	err = backfillAccountsUserAccountIDsWithDB(ctx, mock, enc)

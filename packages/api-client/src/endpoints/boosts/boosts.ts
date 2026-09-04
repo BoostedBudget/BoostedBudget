@@ -58,6 +58,7 @@ import type {
   ErrorModel,
   GetBoostExecutionsParams,
   GetBoostsParams,
+  GetUserBoostExecutionsParams,
   TestBoostInputBody,
   ToggleBoostInputBody,
   TriggerBoostInputBody,
@@ -113,6 +114,100 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
   }
   return result;
 };
+
+/**
+ * Retrieves every boost execution for the authenticated user with an optional status filter. Unlike /boosts/{id}/executions this also returns executions whose boost has since been deleted. Every row carries boost_name and definition_snapshot, captured at execution time, so it is readable with or without its parent. Do NOT key "deleted boost" off boost_id being null: normal deletion TOMBSTONES the boost, so those executions keep their original non-null boost_id and the boost simply stops appearing in GET /boosts. boost_id is null only when the boost ROW itself was destroyed (the FK is ON DELETE SET NULL), which today means a purge or GDPR erasure. To mark a row as coming from a deleted boost, treat a null boost_id OR a boost_id absent from GET /boosts as deleted.
+ * @summary Get account-wide boost execution history
+ */
+export const getUserBoostExecutions = (
+    params?: GetUserBoostExecutionsParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<BoostExecutionsResponse>(
+      {url: `/api/v1/boost-executions`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetUserBoostExecutionsQueryKey = (params?: GetUserBoostExecutionsParams,) => {
+    return [
+    `/api/v1/boost-executions`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetUserBoostExecutionsQueryOptions = <TData = Awaited<ReturnType<typeof getUserBoostExecutions>>, TError = ErrorType<ErrorModel>>(params?: GetUserBoostExecutionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserBoostExecutions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetUserBoostExecutionsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getUserBoostExecutions>>> = ({ signal }) => getUserBoostExecutions(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getUserBoostExecutions>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetUserBoostExecutionsQueryResult = NonNullable<Awaited<ReturnType<typeof getUserBoostExecutions>>>
+export type GetUserBoostExecutionsQueryError = ErrorType<ErrorModel>
+
+
+export function useGetUserBoostExecutions<TData = Awaited<ReturnType<typeof getUserBoostExecutions>>, TError = ErrorType<ErrorModel>>(
+ params: undefined |  GetUserBoostExecutionsParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserBoostExecutions>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getUserBoostExecutions>>,
+          TError,
+          Awaited<ReturnType<typeof getUserBoostExecutions>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetUserBoostExecutions<TData = Awaited<ReturnType<typeof getUserBoostExecutions>>, TError = ErrorType<ErrorModel>>(
+ params?: GetUserBoostExecutionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserBoostExecutions>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getUserBoostExecutions>>,
+          TError,
+          Awaited<ReturnType<typeof getUserBoostExecutions>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetUserBoostExecutions<TData = Awaited<ReturnType<typeof getUserBoostExecutions>>, TError = ErrorType<ErrorModel>>(
+ params?: GetUserBoostExecutionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserBoostExecutions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get account-wide boost execution history
+ */
+
+export function useGetUserBoostExecutions<TData = Awaited<ReturnType<typeof getUserBoostExecutions>>, TError = ErrorType<ErrorModel>>(
+ params?: GetUserBoostExecutionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserBoostExecutions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetUserBoostExecutionsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
 
 /**
  * Retrieves boosts for the authenticated user, ordered by priority. Use the repeatable `boost_type` query parameter to filter by type. Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal. Transfer-generating types are transfer_suggestion and savings_goal. When omitted, all boost types are returned.

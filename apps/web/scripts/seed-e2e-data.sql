@@ -298,20 +298,43 @@ BEGIN
     -- row from before this fix self-heals on the next seed run. Any additional accounts
     -- seeded at this same institution (ins_e2e_test) MUST also get a distinct
     -- mask_blind_idx to avoid re-triggering this exact collision.
+    --
+    -- #1569 round 11 task 4 (coordinator round 2 fix): the ON CONFLICT arbiter below was
+    -- (user_id, institution_id, mask) — migration 000031's unique_user_account_identity, a
+    -- PLAIN constraint on the (here plaintext) institution_id/mask columns. That constraint was
+    -- DROPPED by migration 000178: it predates encryption/blind-indexes, was already documented
+    -- (000100) as practically inert for real (independently encrypted) inserts, and directly
+    -- blocked migration 000178's own masked-collision split (a migration-minted sibling row
+    -- copies the surviving row's ciphertext verbatim, so it is BYTE-IDENTICAL institution_id/mask
+    -- for a masked pair — see 000178's Step 1 comment). The arbiter is now the surviving
+    -- narrowed blind-index constraint, unique_user_accounts_inst_mask_identity_blind
+    -- (user_id, institution_id_blind_idx, mask_blind_idx, identity_type, identity_subtype),
+    -- repeating its partial-index WHERE predicate as Postgres requires for arbiter inference
+    -- (SQLSTATE 42P10 otherwise). This script never sets identity_type/identity_subtype, so
+    -- they stay NULL on every row here — harmless for THIS script's own idempotent re-run
+    -- (each of the three rows below already has a distinct, non-NULL mask_blind_idx, so they
+    -- never collide with each other regardless of identity), but see the same "distinct
+    -- mask_blind_idx" rule above before adding a fourth account at this institution.
     -- =============================================================================
     INSERT INTO user_accounts (user_id, institution_id, mask, account_name_hint, primary_type, primary_subtype, institution_id_blind_idx, mask_blind_idx)
     VALUES (v_user_id, v_institution_id, '1234', 'E2E Checking', 'depository', 'checking', md5(v_institution_id), md5('1234'))
-    ON CONFLICT (user_id, institution_id, mask) DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx, mask_blind_idx = EXCLUDED.mask_blind_idx
+    ON CONFLICT (user_id, institution_id_blind_idx, mask_blind_idx, identity_type, identity_subtype)
+        WHERE institution_id_blind_idx IS NOT NULL
+        DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx, mask_blind_idx = EXCLUDED.mask_blind_idx
     RETURNING id INTO v_checking_ua_id;
 
     INSERT INTO user_accounts (user_id, institution_id, mask, account_name_hint, primary_type, primary_subtype, institution_id_blind_idx, mask_blind_idx)
     VALUES (v_user_id, v_institution_id, '5678', 'E2E Savings', 'depository', 'savings', md5(v_institution_id), md5('5678'))
-    ON CONFLICT (user_id, institution_id, mask) DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx, mask_blind_idx = EXCLUDED.mask_blind_idx
+    ON CONFLICT (user_id, institution_id_blind_idx, mask_blind_idx, identity_type, identity_subtype)
+        WHERE institution_id_blind_idx IS NOT NULL
+        DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx, mask_blind_idx = EXCLUDED.mask_blind_idx
     RETURNING id INTO v_savings_ua_id;
 
     INSERT INTO user_accounts (user_id, institution_id, mask, account_name_hint, primary_type, primary_subtype, institution_id_blind_idx, mask_blind_idx)
     VALUES (v_user_id, v_institution_id, '9012', 'E2E Credit Card', 'credit', 'credit card', md5(v_institution_id), md5('9012'))
-    ON CONFLICT (user_id, institution_id, mask) DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx, mask_blind_idx = EXCLUDED.mask_blind_idx
+    ON CONFLICT (user_id, institution_id_blind_idx, mask_blind_idx, identity_type, identity_subtype)
+        WHERE institution_id_blind_idx IS NOT NULL
+        DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx, mask_blind_idx = EXCLUDED.mask_blind_idx
     RETURNING id INTO v_credit_ua_id;
 
     UPDATE accounts SET user_account_id = v_checking_ua_id WHERE id = v_checking_id;
@@ -364,8 +387,44 @@ BEGIN
      '["groceries", "essentials"]'::jsonb, 'plaid'),
 
     -- Restaurants
+    --
+    -- ⚠ This row's date is CLAMPED into the current calendar month, and that is load-bearing —
+    -- do NOT "simplify" it back to a bare CURRENT_DATE - INTERVAL '2 days'.
+    --
+    -- cache-freshness.auth.spec.ts moves THIS transaction's category and then asserts that the
+    -- dashboard's Cash Flow Summary widget's Expenses total drops by exactly $45. That widget
+    -- has no way to choose its own window: DashboardContext defaults `timeframe` to 'this_month'
+    -- (startOfMonth..endOfMonth, src/shared/dates/presets.ts) and the preset lives in plain
+    -- useState with no URL or localStorage persistence, so the spec's `page.reload()` always
+    -- lands back on the current month. A transaction dated 2 days ago falls in the PREVIOUS
+    -- month on the 1st and 2nd of every month, putting it outside the only window the widget
+    -- will ever request — the move then changes September's total by $0 and the spec fails with
+    -- "the dashboard is serving stale data", blaming the cache for a calendar artifact. That is
+    -- exactly what happened on 2026-09-02.
+    --
+    -- GREATEST() keeps the intended "2 days ago" recency on every other day of the month and
+    -- only pulls the date forward to the 1st when 2 days ago would cross the boundary. Verified
+    -- against real PostgreSQL 17.11 over all 365 days of 2026: 0 future-dated results, 0 landing
+    -- in the wrong month, and the clamp engaging on exactly 24 days -- the 1st and 2nd of each
+    -- month. The ::date result type was confirmed there too, not inferred.
+    --
+    -- Early in the month this can collide with the '1 day' rows above; no spec asserts an
+    -- ordering over seeded transaction dates (url-sort.auth.spec.ts runs against
+    -- mockTransactionPage, not this fixture), and cache-freshness finds this row by amount, not
+    -- by date or position.
+    --
+    -- UTC is explicit rather than inherited. Three clocks have to agree for the assertion to mean
+    -- anything, and only two of them are UTC by default: the Playwright browser is PINNED to UTC
+    -- (playwright.config.ts `timezoneId: 'UTC'`) and computes the widget's window with
+    -- startOfMonth(new Date()); this container happens to run UTC, but a bare CURRENT_DATE would
+    -- silently follow a non-UTC session timezone and could disagree with the browser by a day at
+    -- the boundary. Naming UTC here removes that dependency instead of relying on a default.
     (v_user_id, v_checking_id, v_linked_item_id, 'plaid', 'e2e-txn-002',
-     45.00, CURRENT_DATE - INTERVAL '2 days', 'Chipotle Mexican Grill', 'Chipotle',
+     45.00, GREATEST(
+       (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date - INTERVAL '2 days',
+       date_trunc('month', (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date)
+     )::date,
+     'Chipotle Mexican Grill', 'Chipotle',
      'FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANTS', 'in store', false,
      '["dining"]'::jsonb, 'plaid'),
 
@@ -480,7 +539,14 @@ BEGIN
         (v_user_id, 'Work Expenses', 'GENERAL_SERVICES', 'briefcase', '#607D8B', 0),
         (v_user_id, 'Side Hustle', 'INCOME', 'trending-up', '#00BCD4', 0),
         (v_user_id, 'Pet Supplies', 'GENERAL_MERCHANDISE', 'heart', '#E91E63', 0)
-    ON CONFLICT (user_id, name) DO NOTHING;
+    -- #1569 Task 20 (A1): the arbiter MUST carry `WHERE deleted_at IS NULL`.
+    -- Migration 000159 (this issue's task 9) dropped the UNIQUE CONSTRAINT
+    -- `unique_user_category_name` and recreated it as a PARTIAL unique index of the same name.
+    -- Postgres will not infer a partial index from a bare `ON CONFLICT (user_id, name)`; it
+    -- raises `there is no unique or exclusion constraint matching the ON CONFLICT specification`,
+    -- which aborts this whole DO block and rolls back all thirteen seeded inserts. The index
+    -- predicate must be restated here verbatim for inference to succeed.
+    ON CONFLICT (user_id, name) WHERE deleted_at IS NULL DO NOTHING;
 
     -- =============================================================================
     -- Step 7: Create E2E fixture budget + categories (description='e2e-fixture-v1' marker)
@@ -503,7 +569,9 @@ BEGIN
         true,
         v_series_id
     )
-    ON CONFLICT (user_id, name) DO UPDATE SET
+    -- #1569 Task 20 (A1): partial-index arbiter, same reason as custom_categories above --
+    -- migration 000158 turned `unique_budget_name_per_user` into a partial unique index.
+    ON CONFLICT (user_id, name) WHERE deleted_at IS NULL DO UPDATE SET
         description = EXCLUDED.description,
         amount = EXCLUDED.amount,
         expected_income = EXCLUDED.expected_income,

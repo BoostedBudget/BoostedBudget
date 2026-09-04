@@ -112,9 +112,9 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 	// Issue #1514 item 3: this guard is defensive/structural, not a reachable production state.
 	// In the wired deployment (backend/cmd/server/main.go) HandlePaddleWebhook is only ever
 	// registered with a non-nil WebhookRepo: the branch that supplies a non-nil WebhookService
-	// (main.go:2048-2064) is nested inside the same `db != nil && cfg.ClerkSecretKey != ""` block
+	// (main.go:2065-2081) is nested inside the same `db != nil && cfg.ClerkSecretKey != ""` block
 	// that unconditionally assigns paddleWebhookRepo (main.go:365,441), so WebhookService != nil
-	// implies WebhookRepo != nil there; and the fallback, unverified branch (main.go:2065-2079)
+	// implies WebhookRepo != nil there; and the fallback, unverified branch (main.go:2082-2096)
 	// checks `paddleWebhookRepo != nil` explicitly before registering. There is no route
 	// registration path in main.go that wires a verified/unverified handler with a nil repo.
 	//

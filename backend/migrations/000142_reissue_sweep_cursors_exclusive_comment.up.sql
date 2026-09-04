@@ -10,11 +10,24 @@
 -- "Until the next wrap" is false. A wrap restarts the sweep at the BEGINNING of its candidate set,
 -- which re-reads the same first cap-worth of the same tie group and stops in the same place, so the
 -- rows behind that first cap-worth are reached on NO run -- not a later one, and not a post-wrap one.
+--
+-- ⚠ WITH ONE PRECONDITION, WHICH THIS PARAGRAPH LEFT IMPLICIT: "stops in the same place" holds only
+-- while that first cap-worth keeps FAILING, since failing is what makes those head rows keep
+-- consuming the whole cap. The moment they succeed they leave the candidate set, the tail behind
+-- them becomes the new head, and it is reached. Nothing above is withdrawn -- "until the next wrap"
+-- is still false, because a wrap does not repair the case where the head keeps failing -- but the
+-- omission is named here rather than 25 lines down, because the identical omission in the catalogue
+-- body was corrected and this restatement of it was not.
+--
 -- That is precisely why the advance goes exclusive in the first place: an inclusive resume would
 -- replay the identical page forever. The old text therefore promised a bound that the mechanism it
 -- describes cannot deliver, and a reader budgeting for "one extra cycle of latency" would have been
 -- reading a permanent omission as a delay. repository.NextPosition states the same price correctly
--- and has done since it was written; it was only the catalogue-facing wording that was wrong.
+-- and has done since it was written; it was only 000140's DOCUMENTATION that was wrong, never the
+-- code. ⚠ Read "documentation" precisely, because this line has been misread as a narrower claim:
+-- the false sentence lived in 000140's `--` NARRATIVE only. Its catalogue COMMENT did not carry that
+-- sentence at all -- it simply omitted the price, which is why the replacement below is so much
+-- longer than the text it replaces rather than a like-for-like retraction of it.
 --
 -- WHY A NEW FILE RATHER THAN AN EDIT. 000140 has already been applied to running databases and
 -- golang-migrate never re-runs an applied version, so editing it in place would leave every QA and
@@ -29,6 +42,21 @@
 -- below says only WHICH ROWS ARE AFFECTED and WHAT IS AND IS NOT TRUE OF THEM -- a property of the
 -- position that stays true however many sweeps exist, whatever their caps are, and whether or not the
 -- wrap, the cap constants or the candidate predicates are later changed.
+--
+-- ⚠ THIS FILE'S OWN REPLACEMENT TEXT WAS LATER FOUND INCOMPLETE AND IS CORRECTED IN PLACE BELOW.
+-- It stated the over-cap sacrifice with NO precondition ("...are then reached on no run at all"),
+-- which overstates it: the sacrifice lasts only while the group's first cap-worth keeps FAILING and
+-- so keeps consuming the whole cap; when those head rows succeed they leave the candidate set and
+-- the tail becomes the new head. repository.NextPosition carries this precondition -- and flags that
+-- its own earlier wording got it wrong and was corrected in place ("AND THE PRECONDITION IS NOT WHAT
+-- THIS COMMENT USED TO SAY"), so it is not a source that was right all along either. Migration 000184
+-- re-issues the corrected body for databases that had already applied this file.
+-- ⚠ The SAME un-preconditioned form also stood in this file's own NARRATIVE above and was missed on
+-- the first correction pass, because the guard compares catalogue BODIES and never narrative. It is
+-- marked there too, in place.
+-- TestReissuedColumnCommentsDoNotDrift holds 000140, this file and 000184 in agreement -- comparing
+-- the bodies with whitespace COLLAPSED, so re-wrapping is not drift but any change of word or
+-- punctuation is. It is not a byte comparison, and the three files' indentation already differs.
 --
 -- SCOPE: one comment. No column, constraint, index, default or datum is touched, and no behaviour
 -- changes -- the mechanism was always correct, only its description was not. Squawk: this repo runs
@@ -60,9 +88,13 @@ BEGIN
         'CANNOT BE MISREAD AS A DELAY: whichever rows sit behind the first cap-worth of that one '
         'identical-timestamp-key group are then reached on no run at all -- not on a later run, and '
         'not by restarting the sweep from the beginning, because restarting re-reads that same first '
-        'cap-worth and stops in the same place. 000140 said those rows were reached "until the next '
-        'wrap"; that recovery does not exist and this comment retracts it. Everything RANKED BEHIND '
-        'the group is reached, which is what the exclusive advance buys. The authoritative statement, '
-        'with the test that demonstrates it, is repository.NextPosition.';
+        'cap-worth and stops in the same place. THE PRECONDITION IS THE HEAD, NOT THE GROUP, and this '
+        'comment used to omit it: the sacrifice lasts only while that first cap-worth keeps FAILING and '
+        'so keeps consuming the whole cap. The moment those head rows succeed they leave the candidate '
+        'set, the tail behind them becomes the new head, and it is reached. 000140 said the sacrificed '
+        'rows were reached "until the next wrap"; that recovery does not exist and this comment '
+        'retracts it. Everything RANKED BEHIND the group is reached unconditionally, which is what the '
+        'exclusive advance buys. The authoritative statement, with the precondition and the test that '
+        'constructs it, is repository.NextPosition.';
     END IF;
 END $$;

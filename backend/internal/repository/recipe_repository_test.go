@@ -33,10 +33,10 @@ func makeRecipeRow(id, userID, name string) []interface{} {
 		id,
 		userID,
 		name,
-		"",          // description
-		[]byte("[]"), // spec JSONB (empty array)
+		"",             // description
+		[]byte("[]"),   // spec JSONB (empty array)
 		(*string)(nil), // schedule (nil)
-		true,         // enabled
+		true,           // enabled
 		time.Now(),
 		time.Now(),
 	}

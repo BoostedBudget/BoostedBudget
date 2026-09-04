@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -363,5 +364,29 @@ func TestValidAccountIcons(t *testing.T) {
 		if ValidAccountIcons[icon] {
 			t.Errorf("Expected icon '%s' to be invalid", icon)
 		}
+	}
+}
+
+// TestAccount_StatusFieldEnumeratesAllFourValues pins the OpenAPI schema for Account.Status to
+// the full four-value set. Huma's schema reflector reads the `enum` struct tag verbatim (it does
+// not special-case named string types), so this is what makes orval emit
+// 'active' | 'replaced' | 'expired' | 'removed' instead of an untyped `string` on the generated
+// client (packages/api-client/src/models/account.ts). Before this test, the field carried no enum
+// tag at all, and the frontend bug in useActiveAccounts.ts (isReplaced testing only 'replaced',
+// silently treating 'expired'/'removed' as live) went unnoticed for exactly that reason. Issue #1569.
+func TestAccount_StatusFieldEnumeratesAllFourValues(t *testing.T) {
+	field, ok := reflect.TypeOf(Account{}).FieldByName("Status")
+	if !ok {
+		t.Fatal("Account.Status field not found")
+	}
+
+	enumTag, ok := field.Tag.Lookup("enum")
+	if !ok {
+		t.Fatal("Account.Status field is missing an `enum` struct tag")
+	}
+
+	want := "active,replaced,expired,removed"
+	if enumTag != want {
+		t.Errorf("Account.Status enum tag = %q, want %q", enumTag, want)
 	}
 }

@@ -1,0 +1,38 @@
+-- #1569 T7-FIX, finding G: accounts.removed_at's COMMENT described a user action that never
+-- happened for two of the three ways a row reaches status = 'removed'.
+--
+-- 000149 introduced the column with "Timestamp when the user deliberately disconnected this
+-- account". That was true on the day it was written. Migration 000154 then added removed_reason,
+-- and #1569 Task 20 added a third value, so there are now THREE causes:
+--
+--   user_disconnect  the user asked (DisconnectAccount / DisconnectInstitution)
+--   provider_absent  a confirmed-complete Plaid /accounts/get stopped returning the account —
+--                    the bank closed it. The ONLY cause RestoreProviderRemovedAccount will undo.
+--   link_removed     one of this product's own flows removed the account's Plaid Item; the
+--                    orphaned-Plaid-item sweep passes this. A background sweep is not a user
+--                    disconnect, and calling it one would falsify the user's intent.
+--
+-- AccountRepository.MarkRemovedByProvider and MarkRemovedByLinkedItemID both stamp removed_at, so
+-- a provider-removed or sweep-removed account carried a comment attributing it to the user. On an
+-- issue whose thesis is that we do not destroy or misattribute a user's financial history, a
+-- schema comment that invents an intent the user never expressed is the wrong thing to leave in
+-- pg_description.
+--
+-- WHY A NEW MIGRATION RATHER THAN AN EDIT. 000149's file was corrected in place too, which fixes
+-- what a FRESH database gets. Every database that already ran 000149 (local freshcheck, staging,
+-- production) still carries the old text, because golang-migrate never re-runs an applied version.
+-- 000174 hit exactly this and set the precedent; the false sentence was in fact copied verbatim
+-- INTO 000174, so it now needs re-issuing from both. The text below is copied verbatim from the
+-- corrected 000149 up file -- do not re-word it here independently, or the two will drift apart
+-- again, which is how this defect survived two rounds.
+--
+-- Idempotent by construction: COMMENT ON COLUMN replaces any existing comment on that column
+-- outright (there is no "already commented" state to guard against), so no IF NOT EXISTS / DO $$
+-- wrapper is needed -- running this file twice, or a thousand times, converges on the same
+-- pg_description row every time.
+--
+-- expired_at and replaced_at are NOT touched here: 000174 corrected them and their text is still
+-- accurate. Re-issuing them would only widen the blast radius of a documentation fix.
+
+COMMENT ON COLUMN accounts.removed_at IS
+$COMMENT$Timestamp when this account stopped being connected (status = 'removed'). NOT necessarily a user action: 'removed' has THREE causes and removed_reason (migration 000154) records which one -- 'user_disconnect' (the user asked, via DisconnectAccount or DisconnectInstitution), 'provider_absent' (a confirmed-complete Plaid /accounts/get stopped returning it, i.e. the bank closed it) or 'link_removed' (one of this product's own flows removed the account's Plaid Item). A NULL reason predates 000154 and is treated as a user disconnect. Never NULL while status = 'removed' -- accounts_removed_at_consistency requires it. Left NULL by every Go writer that moves the row to another status, but that direction is a code convention, NOT a constraint: the CHECK is one-directional (see 000155's Step 3 header). Distinct from replaced_at (re-link) and the TTL clock behind 'expired' (linked_items.status_changed_at).$COMMENT$;

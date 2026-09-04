@@ -110,7 +110,7 @@ func TestSyncTransactions_BumpsAfterSyncContextCancelled(t *testing.T) {
 	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, linkedItem.ID, "cursor-after").
 		Run(func(mock.Arguments) { cancel() }).
 		Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", mock.Anything, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", mock.Anything, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	client := &ctxCheckingRedisClient{Fake: redisclient.NewFake("cache")}
 	gens := cache.NewGenerations(client)

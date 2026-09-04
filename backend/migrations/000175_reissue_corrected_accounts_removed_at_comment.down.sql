@@ -1,0 +1,14 @@
+-- Deliberately NOT a symmetric rollback, for the same reason 000174's down.sql is not.
+--
+-- The textbook "down" here would re-issue the OLD comment text this up migration replaces -- the
+-- claim that removed_at records a deliberate user disconnect, which is false for the
+-- 'provider_absent' and 'link_removed' causes. Restoring it would put a known-false attribution of
+-- the user's intent back into pg_description, silently, as a side effect of a rollback whose
+-- purpose looks purely mechanical.
+--
+-- This migration only ever corrects documentation; there is no schema, data, or behavior for a
+-- rollback to undo, so reversing it has no value that outweighs reintroducing a falsehood.
+--
+-- This file intentionally does nothing: the comment is left at its corrected text after a rollback
+-- of this migration. If a future change legitimately needs the old wording back (it should not),
+-- that is a new, explicit migration that says so, not this one running in reverse.

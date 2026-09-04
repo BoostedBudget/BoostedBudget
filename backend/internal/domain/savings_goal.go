@@ -28,14 +28,14 @@ type SavingsGoal struct {
 	TargetAmount  float64    `json:"target_amount" db:"target_amount"`
 	CurrentAmount float64    `json:"current_amount" db:"current_amount"` // Computed per ProgressBasis; stored for fast reads
 	CurrencyCode  string     `json:"currency_code" db:"currency_code"`
-	AccountID     string     `json:"account_id" db:"account_id"` // Required linked account
+	AccountID     string     `json:"account_id" db:"account_id"`                     // Required linked account
 	UserAccountID *string    `json:"user_account_id,omitempty" db:"user_account_id"` // Stable reference surviving re-links (Issue #1109)
 	Deadline      *time.Time `json:"deadline,omitempty" db:"deadline"`
 	IsCompleted   bool       `json:"is_completed" db:"is_completed"`
 	// CompletedAt is sticky once set — never cleared by a later computed drop (Issue #1300 Codex C5).
-	CompletedAt     *time.Time `json:"completed_at,omitempty" db:"completed_at"`
-	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at" db:"updated_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty" db:"completed_at"`
+	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at"`
 
 	// Progress tracking configuration (Issue #1300).
 	// ProgressBasis determines how current_amount is derived.
@@ -47,6 +47,13 @@ type SavingsGoal struct {
 	// BalanceAsOf records the account's last_synced_at at the time of last recompute
 	// (for balance/account_percentage bases — freshness signal for API/MCP consumers).
 	BalanceAsOf *time.Time `json:"balance_as_of,omitempty" db:"balance_as_of"`
+
+	// DeletedAt is the tombstone marker (#1569 Task 8). NULL on every live goal, and every
+	// ordinary read carries `deleted_at IS NULL` — enforced mechanically by
+	// TestNoConfigReadForgetsTheTombstoneFilter. It is serialised (omitempty, so live goals are
+	// unchanged on the wire) for exactly one consumer: the deleted-goals listing added in Task 12,
+	// which has to tell the user WHEN they deleted a goal before offering to destroy it for good.
+	DeletedAt *time.Time `json:"deleted_at,omitempty" db:"deleted_at"`
 
 	// Associated data (populated on demand, not stored in DB)
 	Account *Account `json:"account,omitempty" db:"-"`
@@ -123,12 +130,12 @@ func (sg *SavingsGoal) Validate() error {
 // Contributions are split-capable: one transaction may be allocated across multiple goals
 // via the partial unique constraint (transaction_id, savings_goal_id).
 type SavingsGoalContribution struct {
-	ID            string  `json:"id" db:"id"`
-	SavingsGoalID string  `json:"savings_goal_id" db:"savings_goal_id"`
+	ID            string `json:"id" db:"id"`
+	SavingsGoalID string `json:"savings_goal_id" db:"savings_goal_id"`
 	// TransactionID is nil for manually entered contributions.
 	TransactionID *string `json:"transaction_id,omitempty" db:"transaction_id"`
 	// Amount is always positive (stored as ABS of the original transaction magnitude).
-	Amount     float64 `json:"amount" db:"amount"`
+	Amount float64 `json:"amount" db:"amount"`
 	// Source records the contribution origin: manual (user-entered), confirmed_transfer
 	// (user confirmed a detected TRANSFER_IN), or boost_match (auto-confirmed via
 	// TransferSuggestion.MatchedTransactionID).
@@ -231,37 +238,49 @@ const (
 	FreshnessFresh         = "fresh"          // balance_as_of within 24 h
 	FreshnessStale         = "stale"          // balance_as_of older than 24 h
 	FreshnessUnknown       = "unknown"        // balance_as_of not yet recorded
+	// FreshnessBasisAccountDisconnected marks a balance/account_percentage-basis goal whose
+	// linked account is no longer active (status replaced, expired, or removed — Issue #1569).
+	// The backend stops updating that account's current_balance once it leaves 'active', so
+	// recompute freezes current_amount rather than reporting a stale figure as if it were live.
+	// Distinct from FreshnessStale, which means "the balance IS still being updated, just not
+	// recently" — a disconnected account's balance will NEVER update again.
+	FreshnessBasisAccountDisconnected = "basis_account_disconnected"
 )
 
 // ComputedFrom constants label the progress source for MCP consumers.
 const (
-	ComputedFromManual               = "manual"
-	ComputedFromConfirmedContribs    = "confirmed_contributions"
-	ComputedFromAccountBalance       = "account_balance"
-	ComputedFromAccountPercentage    = "account_percentage"
+	ComputedFromManual            = "manual"
+	ComputedFromConfirmedContribs = "confirmed_contributions"
+	ComputedFromAccountBalance    = "account_balance"
+	ComputedFromAccountPercentage = "account_percentage"
 )
 
 // SavingsGoalProgressItem contains basis-aware progress details for a single goal.
 // Designed for LLM/MCP consumption — all semantics are explicit (Codex C11).
 type SavingsGoalProgressItem struct {
-	GoalID      string `json:"goal_id"`
-	GoalName    string `json:"goal_name"`
-	AccountID   string `json:"account_id,omitempty"`
+	GoalID    string `json:"goal_id"`
+	GoalName  string `json:"goal_name"`
+	AccountID string `json:"account_id,omitempty"`
 	// Amounts
 	CurrentAmount float64 `json:"current_amount"`
 	TargetAmount  float64 `json:"target_amount"`
 	// Percent 0–100 (clamped)
 	PercentComplete float64 `json:"percent_complete"`
 	// Basis semantics — consumers MUST use these to interpret current_amount correctly
-	ProgressBasis string `json:"progress_basis"`  // manual|contributions|balance|account_percentage
-	ComputedFrom  string `json:"computed_from"`   // human-readable, see ComputedFrom* constants
+	ProgressBasis string `json:"progress_basis"` // manual|contributions|balance|account_percentage
+	ComputedFrom  string `json:"computed_from"`  // human-readable, see ComputedFrom* constants
 	// Always returned — even for non-contributions bases — so consumers can compare approaches
 	ConfirmedContributionsTotal float64 `json:"confirmed_contributions_total"`
 	// Balance-only fields (non-nil when basis = balance or account_percentage)
-	LinkedBalance     *float64   `json:"linked_balance,omitempty"`
-	BalanceAsOf       *time.Time `json:"balance_as_of,omitempty"`
-	Freshness         string     `json:"freshness"` // fresh|stale|unknown|not_applicable
-	AccountPercentage *float64   `json:"account_percentage,omitempty"` // non-nil when basis=account_percentage
+	LinkedBalance *float64   `json:"linked_balance,omitempty"`
+	BalanceAsOf   *time.Time `json:"balance_as_of,omitempty"`
+	// Freshness is enumerated so orval emits a TypeScript union rather than a bare `string`
+	// (Issue #1569 Task 13). Without the enum the frontend has to hand-duplicate the literal
+	// "basis_account_disconnected", and a rename here would leave tsc and both test suites
+	// green while the UI silently stopped rendering the explanation — exactly the silent-drift
+	// class this flag was surfaced to prevent. Keep in sync with the Freshness* constants above.
+	Freshness         string   `json:"freshness" enum:"fresh,stale,unknown,not_applicable,basis_account_disconnected"`
+	AccountPercentage *float64 `json:"account_percentage,omitempty"` // non-nil when basis=account_percentage
 	// Completion
 	CompletedAt *time.Time `json:"completed_at,omitempty"` // sticky; nil until first completion
 	Deadline    *time.Time `json:"deadline,omitempty"`
@@ -274,8 +293,16 @@ type SavingsProgressSummary struct {
 	TotalSaved             float64 `json:"total_saved"`
 	TotalTarget            float64 `json:"total_target"`
 	OverallPercentComplete float64 `json:"overall_percent_complete"` // 0–100
-	GoalCount              int     `json:"goal_count"`
-	CompletedGoalCount     int     `json:"completed_goal_count"`
+	// GoalCount is the number of ACTIVE goals — the same universe as Goals, TotalSaved and
+	// TotalTarget. It is NOT the user's total number of goals. GoalCount + CompletedGoalCount is,
+	// for a user with no tombstoned goals.
+	GoalCount int `json:"goal_count"`
+	// CompletedGoalCount is the number of COMPLETED goals, counted OUTSIDE the active universe
+	// above (Issue #1569 Task 20). It was previously derived by counting IsCompleted within that
+	// universe, whose query filters `is_completed = false`, so it was structurally always 0 — a
+	// required field of the JSON contract answering "how many goals have I completed?" with a
+	// confident wrong zero.
+	CompletedGoalCount int `json:"completed_goal_count"`
 }
 
 // IsOnTrack returns true if the goal is on track to be completed by deadline.
@@ -424,6 +451,13 @@ type SavingsInflowTransaction struct {
 var (
 	ErrSavingsGoalNotFound      = errors.New("savings goal not found")
 	ErrSavingsGoalAlreadyExists = errors.New("savings goal with this name already exists")
+
+	// ErrSavingsGoalNotDeleted is returned by the purge path when the goal is still live.
+	// Purging is the second half of a two-step: DELETE /savings-goals/{id} tombstones the goal and
+	// keeps every contribution; POST /savings-goals/{id}/purge is what actually destroys them, and
+	// it refuses on a goal the user has not already deleted. Same precondition shape as
+	// repository.ErrAccountNotDisconnected on the account purge (Issue #1569, Task 6). Issue #1569.
+	ErrSavingsGoalNotDeleted = errors.New("savings goal must be deleted before it can be purged")
 
 	// ErrContributionNotFound is returned when a savings_goal_contribution is not found.
 	ErrContributionNotFound = errors.New("savings goal contribution not found")

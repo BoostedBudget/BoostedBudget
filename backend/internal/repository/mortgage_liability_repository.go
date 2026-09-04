@@ -146,6 +146,12 @@ func (r *mortgageLiabilityRepository) ReplaceForAccount(ctx context.Context, acc
 
 	// nil means delete-only (clear stale data when Plaid no longer reports this liability)
 	if liability == nil {
+		// #1569 T6 fix round 1: record the absence rather than leaving today's earlier statement
+		// standing as the day's answer. Flips `present` only — the row keeps its details (rate, balances, the encrypted address) so
+		// the clear is preserved as history rather than erasing it. Earlier days are untouched.
+		if err := markLiabilityStatementAbsent(ctx, tx, accountID, userID, domain.LiabilityTypeMortgage); err != nil {
+			return err
+		}
 		return tx.Commit(ctx)
 	}
 
@@ -180,6 +186,15 @@ func (r *mortgageLiabilityRepository) ReplaceForAccount(ctx context.Context, acc
 		return err
 	}
 
+	// #1569 T6: capture the committed row into liability_statements, in this same transaction and
+	// IN ADDITION to the replace above. `details` is to_jsonb() of the row as stored, so the
+	// address/account-number columns are copied AS CIPHERTEXT — same ciphertext, same database,
+	// decryptable by the same FieldEncryptor; the capture never handles plaintext. The delete-only
+	// path returns earlier and captures nothing, leaving already-recorded days intact.
+	if err := captureMortgageLiabilityStatement(ctx, tx, accountID, userID); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 
@@ -204,7 +219,8 @@ func (r *mortgageLiabilityRepository) GetByUserID(ctx context.Context, userID st
 		FROM mortgage_liabilities
 		JOIN accounts a ON a.id = mortgage_liabilities.account_id
 		WHERE mortgage_liabilities.user_id = $1
-		  AND a.status = 'active'
+		  -- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		  AND ` + currentStateAccountLeg("a") + `
 		ORDER BY mortgage_liabilities.account_id
 	`
 

@@ -393,9 +393,35 @@ func (s *transactionService) UpdateTransactionTags(ctx context.Context, userID, 
 		return nil, err
 	}
 
-	// Build tags source - all manual for now
+	// Issue #1569 Task 20 (S11). This used to read "Build tags source - all manual for now" and
+	// stamp Source: "manual" on every entry, which relabelled every rule-applied tag the moment the
+	// user touched the list for any reason — including adding an unrelated one.
+	//
+	// tags_source exists to say which tags the USER chose and which a RULE chose, and to name the
+	// rule. Losing that is not cosmetic: ruleApplicationService.applyTagsToTransaction's entire
+	// merge is "manual tags are always preserved, rule tags are re-derived", so a relabel converts
+	// rule output into user intent that no later rule run may touch. And it is not recomputable —
+	// once the row says "manual", nothing records that a rule ever put the tag there.
+	//
+	// ⚠ THE AMBIGUITY THE FIX CANNOT REMOVE, stated rather than papered over. This endpoint takes a
+	// whole tag LIST, not a delta, so "the user kept the rule's tag" and "the user typed the same
+	// word" arrive as the identical request. The rule below preserves the recorded source for a tag
+	// that already had one, and marks only genuinely NEW tags manual. That is the direction that
+	// loses no information: a wrongly-kept "rule" is correctable by removing the tag, a wrongly
+	// written "manual" is correctable by nothing.
+	//
+	// Removing a tag DOES drop its entry — the result is keyed on the incoming list, not merged
+	// into the old slice — so tags_source cannot accumulate entries for tags that no longer exist.
+	priorSource := make(map[string]domain.TagSource, len(tx.TagsSource))
+	for _, ts := range tx.TagsSource {
+		priorSource[ts.Tag] = ts
+	}
 	tagsSource := make([]domain.TagSource, len(tags))
 	for i, tag := range tags {
+		if prior, ok := priorSource[tag]; ok {
+			tagsSource[i] = prior
+			continue
+		}
 		tagsSource[i] = domain.TagSource{
 			Tag:    tag,
 			Source: "manual",

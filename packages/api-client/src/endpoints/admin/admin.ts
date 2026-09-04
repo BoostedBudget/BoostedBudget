@@ -71,6 +71,8 @@ import type {
   ListAdminDeadLetterJobsParams,
   ListAdminPaddleWebhooksParams,
   ListAdminPlaidOrphanedItemsParams,
+  ListAdminRetentionWithheldOutputBody,
+  ListAdminRetentionWithheldParams,
   ListAdminUsersParams,
   ListPlaidOrphanedItemsOutputBody,
   PaddleWebhookEvent,
@@ -1167,6 +1169,100 @@ export const useRecordAdminPlaidOrphanedItemOperatorResolution = <TError = Error
       return useMutation(getRecordAdminPlaidOrphanedItemOperatorResolutionMutationOptions(options), queryClient);
     }
     /**
+ * Returns inactive or cancelled accounts whose data-retention window has expired but which the pre-deletion-notice gate is refusing to hard-delete, because at least one of the 30-day and 7-day notices promised by the privacy policy was never recorded. What is blocked is the retention sweep, and only it: the notice queries select only users whose retention clock has not yet run out, so no existing path can send the missing notice and the retention sweep will hold these accounts indefinitely. A user-requested GDPR erasure is a separate authorisation and still deletes them normally; requesting deletion also removes the account from this listing. This is a read-only view — it sends nothing, extends no retention clock and waives no notice; choosing between those remedies is an open decision and will land as its own endpoint. has_email_on_file is reported per account because it is the one withholding reason the retention_deletions_withheld metric cannot separate. No email address is returned. withheld_total and the returned page come from two separate queries and are eventually consistent: a notice marker, a deletion request or a retention clock crossing the current instant between them can make the total disagree with the page by any number of rows — the gap is not bounded. as_of is when the response was calculated, after both queries returned. Keyset-paginated: pass next_cursor's two fields back as cursor_expires_at and cursor_user_id; next_cursor is absent on the final page. Requires admin role.
+ * @summary List accounts withheld from retention deletion (admin)
+ */
+export const listAdminRetentionWithheld = (
+    params?: ListAdminRetentionWithheldParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<ListAdminRetentionWithheldOutputBody>(
+      {url: `/api/v1/admin/retention/withheld`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getListAdminRetentionWithheldQueryKey = (params?: ListAdminRetentionWithheldParams,) => {
+    return [
+    `/api/v1/admin/retention/withheld`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListAdminRetentionWithheldQueryOptions = <TData = Awaited<ReturnType<typeof listAdminRetentionWithheld>>, TError = ErrorType<ErrorModel>>(params?: ListAdminRetentionWithheldParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminRetentionWithheld>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListAdminRetentionWithheldQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listAdminRetentionWithheld>>> = ({ signal }) => listAdminRetentionWithheld(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listAdminRetentionWithheld>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListAdminRetentionWithheldQueryResult = NonNullable<Awaited<ReturnType<typeof listAdminRetentionWithheld>>>
+export type ListAdminRetentionWithheldQueryError = ErrorType<ErrorModel>
+
+
+export function useListAdminRetentionWithheld<TData = Awaited<ReturnType<typeof listAdminRetentionWithheld>>, TError = ErrorType<ErrorModel>>(
+ params: undefined |  ListAdminRetentionWithheldParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminRetentionWithheld>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminRetentionWithheld>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminRetentionWithheld>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListAdminRetentionWithheld<TData = Awaited<ReturnType<typeof listAdminRetentionWithheld>>, TError = ErrorType<ErrorModel>>(
+ params?: ListAdminRetentionWithheldParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminRetentionWithheld>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminRetentionWithheld>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminRetentionWithheld>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListAdminRetentionWithheld<TData = Awaited<ReturnType<typeof listAdminRetentionWithheld>>, TError = ErrorType<ErrorModel>>(
+ params?: ListAdminRetentionWithheldParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminRetentionWithheld>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List accounts withheld from retention deletion (admin)
+ */
+
+export function useListAdminRetentionWithheld<TData = Awaited<ReturnType<typeof listAdminRetentionWithheld>>, TError = ErrorType<ErrorModel>>(
+ params?: ListAdminRetentionWithheldParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminRetentionWithheld>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getListAdminRetentionWithheldQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
  * Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but deliberately available in every environment — any admin can already change subscriptions through the other admin endpoints. Returns success if the user already has or had a trial.
  * @summary Grant trial subscription (admin)
  */

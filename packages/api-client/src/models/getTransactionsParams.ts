@@ -87,6 +87,10 @@ pending?: string;
  */
 reviewed?: string;
 /**
+ * Include transactions the bank REVERSED after they posted (default false). Reversed rows are returned with reversed=true and reversed_at set, and MUST be rendered distinctly — an unlabelled reversal reads as a live transaction. Transactions removed while still pending are never returned, by any value of this flag: their posted twin is already in the feed. Issue #1569.
+ */
+include_reversed?: string;
+/**
  * Filter by category origin (comma-separated): plaid, rule, manual
  */
 category_source?: string;

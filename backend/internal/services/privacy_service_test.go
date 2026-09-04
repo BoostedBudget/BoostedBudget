@@ -108,8 +108,8 @@ func TestGetPrivacySettings_NotFound_CreatesDefaults(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, settings)
 	assert.Equal(t, userID, settings.UserID)
-	assert.True(t, settings.GDPRNecessaryConsent) // GDPR compliance check
-	assert.False(t, settings.GDPRAnalyticsConsent) // Opt-in model
+	assert.True(t, settings.GDPRNecessaryConsent)    // GDPR compliance check
+	assert.False(t, settings.GDPRAnalyticsConsent)   // Opt-in model
 	assert.False(t, settings.GDPRAdvertisingConsent) // Opt-in model
 	mockRepo.AssertExpectations(t)
 	mockRepo.AssertCalled(t, "Create", ctx, mock.Anything)
@@ -332,7 +332,7 @@ func TestUpdatePrivacySettings_PartialUpdate(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, settings)
-	assert.True(t, settings.GDPRAnalyticsConsent) // Changed
+	assert.True(t, settings.GDPRAnalyticsConsent)    // Changed
 	assert.False(t, settings.MarketingEmailsEnabled) // Unchanged
 	mockRepo.AssertExpectations(t)
 }

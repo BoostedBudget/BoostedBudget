@@ -176,7 +176,21 @@ type HoldingSyncResult struct {
 	SecuritiesUpserted int
 	HoldingsReplaced   int
 	AccountsProcessed  int
-	Errors             []string // accounts skipped due to unmapped securities
+	// Errors records accounts skipped due to unmapped securities — a real per-sync correctness
+	// problem, not a stable state. This field gates the portfolio snapshot upsert
+	// (investment_sync_service.go SyncHoldings): a non-empty Errors means the sync could not
+	// safely produce a full-user aggregate this run, so the snapshot must wait for a clean sync.
+	Errors []string
+	// SkippedIncomplete records accounts whose holdings clear was skipped because the account was
+	// absent from Plaid's response (Issue #1569 Task 4 — partial/incomplete response, not a
+	// confirmed liquidation). This is DELIBERATELY a separate field from Errors: an account that
+	// Plaid has permanently stopped returning (e.g. closed — Plaid does not re-report closed
+	// accounts) would otherwise sit in Errors forever, and Errors gates the portfolio snapshot.
+	// That would suppress the user's snapshot indefinitely for a stable, expected state, even
+	// though the preserved holdings are exactly the rows the snapshot should be summing.
+	// SkippedIncomplete still drives ProcessWebhook's retry decision (so a transient partial
+	// response gets retried) without touching the snapshot gate.
+	SkippedIncomplete []string
 }
 
 // InvestmentTransactionSyncResult contains the results of an investment transaction sync.

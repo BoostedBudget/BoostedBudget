@@ -3,7 +3,7 @@
 #
 # Run: bash scripts/__tests__/check-isolated-test-lists.test.sh
 #
-# The same 22 test-file paths are hand-maintained in TWO places:
+# The same 23 test-file paths are hand-maintained in TWO places:
 #
 #   apps/web/scripts/test-conflict-files.sh  GROUP_*_FILES — files that must run in their OWN bun
 #                                            process, because bun's mock.module() is process-global

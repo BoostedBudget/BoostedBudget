@@ -67,7 +67,7 @@ import (
 
 // householdMember is a parityFixture-equivalent for household-scope tests: it additionally seeds
 // a user_accounts row and points its `accounts` row at it via user_account_id, which
-// household_accounts (analytics_repository.go's householdAccountsCTE) joins on. Personal-scope
+// household_grants (analytics_repository.go's householdGrantsCTE) gates on. Personal-scope
 // queries are untouched by this — they still filter on transactions.user_id directly.
 type householdMember struct {
 	pool          *pgxpool.Pool

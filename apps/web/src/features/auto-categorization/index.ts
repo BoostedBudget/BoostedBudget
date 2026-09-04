@@ -37,3 +37,6 @@ export { AutoCategorizationPage } from './components/AutoCategorizationPage'
 export type { AutoCategorizationPageProps } from './components/AutoCategorizationPage'
 
 export { AutoCategorizationPageWrapper } from './components/AutoCategorizationPageWrapper'
+
+// Issue #1569 T9.4: the retained automation audit trail (GET /api/v1/rule-executions).
+export { RuleAutomationHistoryPanel } from './components/RuleAutomationHistoryPanel'

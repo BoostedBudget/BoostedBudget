@@ -19,6 +19,10 @@ PR to staging/main ──► test.yml          (CI: backend + frontend + E2E + l
 
 push to staging ──────► deploy-to-staging.yaml     ◄── manual dispatch
 push to QA branch ────► deploy-qa.yml              ◄── manual dispatch
+
+manual dispatch only ─► warm-ci-cache.yml
+                        (re-warms test.yml's Ubicloud caches after a quiet
+                         period; runs no tests, never a required check)
 ```
 
 ---
@@ -99,6 +103,21 @@ Builds and deploys the current `staging` branch to the staging Fly.io / Cloudfla
 
 ---
 
+### `warm-ci-cache.yml` — Warm CI Caches
+
+**Trigger:** manual dispatch (`workflow_dispatch`) ONLY — it must never auto-run.
+**Runner:** `ubicloud-standard-2`.
+
+Populates and saves the four caches `test.yml`'s Ubicloud jobs restore — Bun package store,
+Playwright browsers, Go modules, Go build. It used to also run `on: push` to `staging`/`main` to
+write those entries into the default-branch cache scope, back when that was the only scope a
+pull_request run could fall back to. That reasoning is now void (see "Caching" below), and the
+`push:` trigger was removed in #1598 U2 so that merging a PR can never re-kick this job. Runs no
+tests and asserts nothing.
+
+**Must never be a required check**, and every save step carries `continue-on-error` so it can
+never fail the default branch. See *Runner placement → Caching* above for why it exists.
+
 ### `deploy-qa.yml` — Deploy to QA
 
 Builds and deploys to the QA environment (Mac Mini self-hosted runner).
@@ -106,6 +125,95 @@ Builds and deploys to the QA environment (Mac Mini self-hosted runner).
 **Trigger:** `workflow_dispatch` (manual only)
 
 ---
+
+## Runner placement
+
+Every job runs on one of exactly two runner targets. #614's acceptance criteria require
+documenting which stay self-hosted and why.
+
+| Job | Runner | Why |
+|---|---|---|
+| `test.yml` → `e2e-test` | `ubicloud-standard-2` | The heaviest job in the matrix, on a host whose memory is permanently saturated (`infra/runners/README.md:101-122`). Its last eleven runs on the Mac pool took 11–46 minutes and **every one ended `cancelled`**. Moving it is direct relief for #1489. |
+| `test.yml` → `lighthouse-audit` | `ubicloud-standard-2` | Cannot run on macOS at all: Chrome headless under LHCI shared a process group with the Mac Mini's own browser session, which LHCI SIGKILLs after an audit. Disabled 2026-04-07, re-enabled by #1598. See #996. |
+| `warm-ci-cache.yml` → `warm` | `ubicloud-standard-2` | Manual-only re-warm of the shared cache pool the two jobs above use, so it must run on the same runner *and architecture* or its cache keys cannot match. Runs no tests; **must never be a required check**; `push:` trigger removed in #1598 U2 so merges never re-kick it. |
+| Everything else (38 jobs) | `[self-hosted, macOS, mac-mini]` | Not yet migrated. Tracked in #614. |
+| `deploy-qa.yml` → `deploy-to-mac-mini` | `[self-hosted, macOS, mac-mini]` | **Never migrates.** It deploys to the QA environment hosted *on* that machine; there is nothing to deploy to from a cloud VM. |
+
+Placement is enforced by `scripts/check-runner-portability.py`, whose `MIGRATED_JOBS` map is the
+authoritative record and is reconciled in **both** directions — a job on a Ubicloud label that
+isn't listed fails, and so does a listed job that was renamed, deleted, or moved back. It also
+enforces that a Linux job carries no macOS-only artefacts, no mac-pool workspace scaffolding, and
+no hand-rolled `docker run` containers.
+
+`.github/actionlint.yaml` declares `mac-mini` and the `ubicloud-*` labels so `actionlint` stops
+reporting them as unknown; it teaches actionlint that the labels exist and nothing more.
+
+### Databases in CI
+
+The two migrated jobs provision Postgres and Redis as Actions **`services:`** containers,
+digest-pinned. Nothing in them calls `docker run`.
+
+Local E2E is unchanged and still uses `apps/web/scripts/run-e2e-with-ports.sh`, which owns its
+own containers end to end. CI uses `apps/web/scripts/run-e2e-ci.sh`, which assumes the services
+already exist and reuses that path's `run_migrations` and `_get_clerk_user_id` by sourcing
+`e2e-postgres.sh`. Two scripts rather than a flag, because the local one creates, `docker exec`s
+into, `docker cp`s to, watchdogs and `docker rm`s its containers — and `docker rm`-ing a
+GitHub-managed service container is a failure mode worth making structurally impossible.
+
+### Caching
+
+Ubicloud's shared-branch caching is enabled for this account, with cache branch protection OFF.
+That means every branch reads and writes ONE shared cache pool — a save from any feature branch's
+`test.yml` run already serves every other branch, including the next PR's. This supersedes
+GitHub's own default cache scoping rule (a pull_request-scoped cache is normally only visible to
+that PR, with the default branch as the one cross-PR fallback), which is the rule that motivated
+`warm-ci-cache.yml` when it was written.
+
+Two Ubicloud limits still apply to that shared pool: an entry is **evicted after 7 days unused**,
+and the account has a **30 GB-per-repository-per-week** write quota (a rolling budget, not a
+standing cap). So a quiet week with no branch activity can let an entry age out, and the next PR to
+touch it pays one cold run.
+
+`warm-ci-cache.yml` exists to repair exactly that: a **manual-only** (`workflow_dispatch`) remedy
+you run by hand after a quiet period, never on push. It must never auto-run — the repo owner asked
+that merging a PR never re-kick CI jobs, and shared-branch caching removed the case for an
+automatic default-branch warm anyway (#1598 U2). The accepted tradeoff: with the warmer disabled,
+cache freshness now depends entirely on branch activity, and the cost of a quiet week is one cold
+run (~4 min extra) rather than a standing risk.
+
+Its four cache keys must stay **byte-identical** to `test.yml`'s, `runner.arch` included. A key
+that differs by one character writes an entry nothing will ever restore, and the failure is
+silent — you keep paying for cold runs while a "warm cache" workflow reports success. The parity
+check is in that file's header.
+
+**Decision: no more caching (#1601).** The Ubicloud migration brief asked to "optimally utilise
+Ubicloud caching." The honest answer is that it already is: measured from job 33694477386's step
+timings (GitHub Actions API), the two jobs' warm-run step costs below show why adding more would
+cost correctness for well under 30 seconds:
+
+| E2E job (~19 min total) | | Lighthouse job (2.8 min total) | |
+|---|---|---|---|
+| `Run E2E tests` | 928 s | `Run Lighthouse CI` | 87 s |
+| Playwright OS deps (apt, uncached by design) | 31 s | `Build frontend` | 24 s |
+| `Save Bun package store` | 24 s | `Restore Bun package store` | 15 s |
+| `Set up Go` | 20 s | `Set up Node` | 12 s |
+| all cache restore/save ops | ~60 s | | |
+
+Four things are deliberately **not cached**, each for a reason stronger than the time saved:
+- **The Go backend binary** — under 5 s warm (it doesn't even appear in the job's top 14 steps by
+  duration). Caching it risks the worst failure mode available here: a stale binary silently
+  running the entire E2E suite.
+- **`golang-migrate`** — also under 5 s warm, and under shared-branch caching a cached binary would
+  still need re-verifying against its checksum before use, which erases most of the saved time
+  anyway.
+- **The Vite frontend build** — 24 s of a 2.8 min job, but it must stay a *real* build: the render
+  guard and the route-weight ratchet both need an actual build to measure.
+- **`postgresql-client` / apt** — already guarded by `command -v psql`, so a redundant install
+  never runs.
+
+Corollary: non-test time is already down to roughly 3.7 minutes across both jobs combined. The
+only levers left that matter are the 928 s `Run E2E tests` step itself and not running the job at
+all on PRs it cannot affect — not adding more cache entries.
 
 ## Deployment Flow
 
@@ -151,11 +259,25 @@ REGISTRY: 'ghcr.io'     # Container registry
 
 ## Branch Protection
 
-See `../branch-protection-setup.md` for configuration instructions.
+⚠ **None is currently in force, and it cannot be.** Verified #1598:
 
-**Required checks for `staging` / `main` PRs:**
-- ✅ `test` job must pass
-- ✅ Branch must be up to date
+```
+$ gh api repos/BoostedBudget/BoostedBudget/branches/staging/protection
+HTTP 403: Upgrade to GitHub Pro or make this repository public to enable this feature.
+```
+
+Branch protection is not available on a private repository on this plan, so the list below —
+and `../branch-protection-setup.md` — describe **intent, not live configuration**. Nothing
+enforces a required check today; a red CI run does not block a merge.
+
+Two practical consequences worth knowing before changing CI:
+- Renaming or re-labelling a job cannot break a merge gate, because there is no gate. That is
+  what made #1598's runner migration low-risk on this axis.
+- Conversely, **CI being green is a human responsibility here.** Do not assume a merge was gated.
+
+**Intended required checks for `staging` / `main` PRs (aspirational):**
+- `test` job must pass
+- Branch must be up to date
 
 ## Local Testing
 
