@@ -44,8 +44,11 @@ import (
 // with middleware missing, which is #1560 reintroduced through the guard:
 //
 //   - the RECEIVER of UseMiddleware was never checked, so `internalHumaAPI.UseMiddleware(cache…)` —
-//     a one-token typo on main.go:1892 — left the anchor at 2018 and the guard green while every
-//     post-anchor secured mutating route ran with no cache invalidation. A UseMiddleware call now
+//     a one-token typo at the cache-invalidation UseMiddleware call — left the anchor stuck at the
+//     PREVIOUS middleware call and the guard green while every post-anchor secured mutating route
+//     ran with no cache invalidation. (Deliberately no line numbers: this records a demonstration
+//     run against a main.go that has since moved, and #1569 T1 shifted every line below 1050 by
+//     +17. Half-shifted numbers in a historical narrative are worse than none.) A UseMiddleware call now
 //     counts toward the chain only when its receiver is the identifier the guarded routes register
 //     on (guardedAPIIdent); anything else is recorded in middlewareOtherReceiver and FAILS.
 //   - an anchor could be found OUTSIDE func main(). Hoisting the four calls into
@@ -543,9 +546,23 @@ func main() {
 		// Pin the real anchor and the three new fail-closed lists: the fixes must not start
 		// failing on correct code, and a guard that reports problems against today's main.go is
 		// as broken as one that reports none against a mutated one.
-		if got, want := scan.anchor, 2018; got != want {
-			t.Errorf("anchor = %d (label %q), want %d — main.go's last UseMiddleware call is the "+
-				"admin middleware on line %d", got, scan.anchorLabel, want, want)
+		// ⚠ THIS USED TO PIN THE LINE NUMBER, AND THE LINE NUMBER IS NOT THE PROPERTY.
+		// It has been re-numbered seven times during #1569 alone — 2041, 2048, 2059, 2065, 2072,
+		// 2089, 2094 — and on the seventh a THREE-LINE COMMENT edit in main.go turned it red, so a
+		// substantive clause was deleted from main.go to restore a line count. That is the pin
+		// damaging the code it watches. What the assertion is for is that the anchor is the ADMIN
+		// middleware, the last link in the chain, and scan.anchorLabel says exactly that; it was
+		// already computed and already printed in the old failure message.
+		if scan.anchorLabel != "admin" {
+			t.Errorf("anchor label = %q at line %d, want \"admin\" — main.go's last UseMiddleware "+
+				"call is the admin middleware, and an anchor computed anywhere else declares the "+
+				"chain complete early", scan.anchorLabel, scan.anchor)
+		}
+		// The label alone would be satisfied by an anchor of 0, so keep a floor — a range, not a
+		// point, so ordinary edits cannot move it.
+		if scan.anchor < 1000 {
+			t.Errorf("anchor = %d, which is too early in a 2000+ line main.go to be the admin "+
+				"middleware; the scan is finding the wrong call", scan.anchor)
 		}
 		if len(scan.unrecognisedMiddleware) != 0 || len(scan.middlewareOtherReceiver) != 0 ||
 			len(scan.middlewareOutsideMain) != 0 {
@@ -688,7 +705,7 @@ func main() {
 		if got, want := scan.anchor, 7; got != want {
 			t.Errorf("anchor = %d (label %q), want %d — the admin middleware is the LAST link in "+
 				"main.go's chain, and an anchor computed as a max over a marker list that omits it "+
-				"declares the chain complete early. main.go's real admin call is at line 2018 while "+
+				"declares the chain complete early. main.go's real admin call is at line 2035 while "+
 				"the anchor sat at 1892.", got, scan.anchorLabel, want)
 		}
 	})

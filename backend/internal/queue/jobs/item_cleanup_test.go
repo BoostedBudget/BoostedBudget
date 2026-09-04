@@ -75,6 +75,11 @@ func (m *MockPlaidCleanupService) DisconnectAllUserItemsIfEligible(ctx context.C
 // task (the package would otherwise fail to compile) — see the #1413 P3 report for detail.
 func (m *MockPlaidCleanupService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {}
 
+// SetAccountRepo (Issue #1569 Task 20) is likewise never called through this mock: these tests
+// stand in for the whole cleanup service, so the account transition it performs is covered where
+// that service is the subject, in services/plaid_item_cleanup_accounts_removed_test.go.
+func (m *MockPlaidCleanupService) SetAccountRepo(repo services.AccountRepoForCleanup) {}
+
 // MockLinkedItemRepoForCleanup mocks the LinkedItemCleanupRepository interface
 // Named to avoid conflict with MockLinkedItemCleanupRepo in item_cleanup_check_test.go
 type MockLinkedItemRepoForCleanup struct {

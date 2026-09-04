@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -126,8 +127,10 @@ const expiredRetentionPageSize = 500
 // comparable: ScheduledDeletionCheckWorker's loop body is a single River enqueue (cheap, and the
 // actual deletion happens later in AccountDeletionWorker, still gated by ExecuteDeletion's claim),
 // whereas this loop body IS the deletion — a synchronous ExecuteDeletion per row, which acquires a
-// work claim, disconnects Plaid, and runs DeleteUserCascade's `DELETE FROM users` against ~37
-// cascading foreign keys. Nothing between this loop and irreversible data loss.
+// work claim, disconnects Plaid, and runs DeleteUserCascade's `DELETE FROM users` against 44
+// cascading foreign keys spanning 42 tables directly, 48 transitively (measured by walking
+// pg_constraint on the live schema, #1569 T8 — the "~37" this comment used to quote was stale).
+// Nothing between this loop and irreversible data loss.
 //
 // Derivation of 1,000:
 //   - Upper side: 1,000 is a ceiling **per sweep invocation**, and deliberately not described as a
@@ -357,6 +360,16 @@ type RetentionProfileRepository interface {
 	// Deliberately NOT part of the broad canonical ProfileRepository interface, for the same reason
 	// as its siblings above.
 	GetOrphanedFKlessUserScopedRowCounts(ctx context.Context) (repository.OrphanedFKlessUserScopedRowCounts, error)
+
+	// CountRetentionDeletionsWithheld is Issue #1569 T1's monitoring query, called by
+	// monitorRetentionDeletionsWithheld at Step 2b of every Work() pass. It reports the accounts
+	// the notice gate is refusing to hard-delete, split from the healthy population whose retention
+	// clock is still running. See its full doc comment on profileRepository
+	// (profile_repository.go) for why that split is the whole value of the metric.
+	//
+	// Deliberately NOT part of the broad canonical ProfileRepository interface, for the same reason
+	// as its siblings above.
+	CountRetentionDeletionsWithheld(ctx context.Context) (repository.RetentionWithholdingCounts, error)
 }
 
 // RetentionDeletionService defines the deletion methods needed for retention cleanup.
@@ -683,6 +696,19 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 		// Don't fail job — continue with other steps
 	}
 
+	// Step 2b: Issue #1569 T1 monitoring pass — report how many accounts Step 3 is REFUSING to
+	// delete because a promised pre-deletion notice was never recorded, and why. Runs immediately
+	// before Step 3 because it measures exactly what Step 3 is about to decline to do. Non-fatal
+	// for the same reason Steps 0c/0d/0e are: this is an observability check that makes no write,
+	// and must never block GDPR notices or expired-account deletion.
+	if monitorErr := w.monitorRetentionDeletionsWithheld(ctx, job.ID); monitorErr != nil {
+		w.logger.Error("failed to count retention hard-deletions withheld for want of a pre-deletion notice",
+			"job_id", job.ID,
+			"error", monitorErr,
+		)
+		// Don't fail job — continue with other steps
+	}
+
 	// Step 3: Auto-delete users with expired retention
 	// Propagate partial failure so River retries — failed users will be picked up again
 	if deleteErr := w.deleteExpiredAccounts(ctx, job.ID); deleteErr != nil {
@@ -703,6 +729,177 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 
 	return err
 }
+
+// retentionDeletionItem is one line of the enumeration both retention notices carry: a phrase the
+// user reads, and the set of live tables that phrase claims to cover.
+//
+// Issue #1581. The notices exist to be the "published retention policy" that
+// docs/decisions/2026-08-24-financial-history-retained-by-default.md Decision 3 requires before an
+// AUTOMATIC destroyer is permitted at all. That justification is only as good as the enumeration:
+// #1569 newly RETAINS a large amount of financial history past a disconnect, a goal deletion and a
+// budget deletion, which means this sweep is newly the thing that DESTROYS it. Naming three
+// categories while destroying fifty-odd tables invalidated the branch's own argument.
+//
+// The `tables` field is not decoration. TestRetentionNoticeEnumerationCoversEverythingDeleted
+// re-derives what DeleteUserCascade actually destroys — the transitive ON DELETE CASCADE closure
+// from `users` in the LIVE schema, plus the explicit `DELETE FROM`s in DeleteUserCascade's own
+// source — and fails when any destroyed table is not claimed by some phrase here. A new migration
+// that hangs a cascading table off `users` therefore cannot land without someone TOUCHING this
+// list.
+//
+// ⚠ Precisely that, and no more: the guard checks COVERAGE and STALENESS, not TRUTHFULNESS. Adding
+// a table name to an existing item's `tables` turns the suite green with zero words of copy
+// changed — falsified deliberately by a reviewer with a probe table live. Nothing mechanical can
+// decide whether a phrase honestly describes the rows it claims; that judgement is the reviewer's,
+// and the two most elastic phrases (the internal-records item and "saved automation recipes") are
+// the ones to re-read first.
+//
+// ⚠ Twelve of these thirteen phrases used to be pinned by nothing at all — issue #1593. Apart from
+// the audit_logs item, which was singled out by name, every assertion on `phrase` was either a
+// non-emptiness check or require.Contains(body, item.phrase) — and `body` is RENDERED from these
+// phrases, so it contains them by construction. An assertion that renders from the source it
+// checks cannot detect a change to that source: item 2's phrase was replaced with the outright lie
+// "nothing at all, we keep your balance history forever" and the whole package stayed green
+// (re-confirmed here before the fix). The pin is now testdata/retention_notice.golden — a reviewed snapshot of both rendered bodies plus
+// the phrase -> tables mapping — that pins all thirteen, backed by the per-item `mustMention` floor
+// below. If you edit a phrase, expect TestRetentionNoticeMatchesReviewedGolden to fail; that is the
+// point, and its failure message says what to check before promoting the new text.
+//
+// ⚠ Still not truthfulness. The golden forces a HUMAN to look at a copy change to a legal notice;
+// it cannot decide whether the new words honestly describe the rows. Neither can mustMention. That
+// judgement has no mechanical substitute and is not going to get one.
+type retentionDeletionItem struct {
+	phrase string
+	tables []string
+	// mustMention are terms the phrase must still contain, matched case-insensitively by
+	// TestEveryRetentionDeletionItemNamesItsSubject (#1593). Each must be at least three
+	// characters and appear in no more than three of the thirteen phrases, so that a term is
+	// capable of failing and capable of telling THIS item apart from its siblings.
+	//
+	// ⚠ This is a floor, not a truth check, and it is the deliberately WEAK half of the #1593 pin.
+	// Measured, not guessed: for twelve of the thirteen items a "we keep this forever" inversion
+	// retains every term here and is caught by the GOLDEN alone. Item 13 is the exception, and
+	// only because its term is the QUALIFICATION rather than a subject noun — which is the better
+	// pattern to copy when a phrase has something falsifiable to hold onto.
+	//
+	// Its one job the golden cannot do is SURVIVE a thoughtless golden regeneration: it lives here,
+	// next to the phrase, and nothing regenerates it. If you reword a phrase, update these in the
+	// same edit — and prefer a term the inverted sentence could not keep.
+	mustMention []string
+}
+
+// retentionDeletionItems is the enumeration. Order is the order the user reads it in: the money
+// first, the settings last.
+//
+// Wording is deliberately CATEGORY-level rather than table-level — the user has never heard of
+// `holding_snapshots`. What the guard requires is that every destroyed table is honestly covered by
+// some phrase, not that each one gets its own bullet; a phrase may therefore claim several tables,
+// but it may not claim a table a reader would not recognise in it.
+//
+// ⚠ `audit_logs` is the one case where the notice must NOT claim plain destruction, and an earlier
+// draft of this list got it backwards. `audit_logs.user_id` is ON DELETE SET NULL — which is why
+// the table is absent from the CASCADE closure — and DeleteUserCascade deletes only the
+// deletion-residue rows (`resource_id = $1 AND action LIKE $2`, profile_repository.go) and blanks
+// `changes` on the rest. Every other audit row SURVIVES, still carrying action, resource_type,
+// resource_id, ip_address, user_agent, request_id, error_message and created_at.
+//
+// The earlier draft reasoned that understating what survives is the safe direction for a warning.
+// That holds only under the warning-about-LOSS reading. Under the erasure-PROMISE reading — the one
+// a regulator applies to a deletion notice — over-claiming erasure is the unsafe direction: the
+// user would be told their IP addresses and user agents are gone when they are retained. Item 13
+// and the categorical sentence are both qualified accordingly, and the qualification also carries
+// the privacy policy's own carve-outs (§8.2 anonymised retention, §8.3 90-day encrypted backups,
+// §8.4 legal retention), which an unqualified "everything" silently dropped.
+var retentionDeletionItems = []retentionDeletionItem{
+	{
+		phrase:      "your bank connections and every account on them, including accounts you have already closed or disconnected, and the record of when each one was connected, disconnected or closed",
+		tables:      []string{"linked_items", "accounts", "user_accounts", "account_status_history"},
+		mustMention: []string{"bank connections", "accounts"},
+	},
+	{
+		phrase:      "your day-by-day balance history for every account",
+		tables:      []string{"balance_snapshots"},
+		mustMention: []string{"balance history"},
+	},
+	{
+		phrase:      "your transactions, together with every category, note, tag and merchant name you set on them, and the record of those edits",
+		tables:      []string{"transactions", "transaction_annotation_history", "user_tags", "merchant_name_overrides", "custom_categories"},
+		mustMention: []string{"transactions", "tag", "merchant"},
+	},
+	{
+		phrase:      "your investment holdings and their day-by-day snapshots, every buy and sell recorded against them, and your portfolio value history",
+		tables:      []string{"holdings", "holding_snapshots", "holding_observations", "investment_transactions", "portfolio_snapshots", "portfolio_snapshot_repairs"},
+		mustMention: []string{"holdings", "portfolio"},
+	},
+	{
+		phrase:      "your credit card, mortgage and student loan records, including their statements and APR schedules",
+		tables:      []string{"credit_liabilities", "credit_liability_aprs", "liability_statements", "mortgage_liabilities", "student_loan_liabilities"},
+		mustMention: []string{"credit card", "mortgage", "student loan", "statements"},
+	},
+	{
+		phrase:      "your budgets, their categories, their period history and every rollover",
+		tables:      []string{"budgets", "budget_categories", "budget_period_events", "rollover_history"},
+		mustMention: []string{"budgets", "rollover"},
+	},
+	{
+		phrase:      "your savings goals and every contribution you logged against them by hand",
+		tables:      []string{"savings_goals", "savings_goal_contributions", "savings_goal_category_detach"},
+		mustMention: []string{"savings goals", "contribution"},
+	},
+	{
+		phrase:      "your boosts and the record of every boost that ran",
+		tables:      []string{"boosts", "boost_executions"},
+		mustMention: []string{"boosts"},
+	},
+	{
+		phrase:      "your automation rules, the record of every rule that ran, and your transfer suggestions",
+		tables:      []string{"categorization_rules", "rule_execution_history", "transfer_suggestions"},
+		mustMention: []string{"automation rules", "transfer suggestions"},
+	},
+	{
+		phrase:      "your membership of a household, its invitations, its sharing consents, and the accounts shared into it (and the household itself, if you are its only member)",
+		tables:      []string{"households", "household_members", "household_invites", "household_share_consents", "household_account_shares"},
+		mustMention: []string{"household"},
+	},
+	{
+		phrase:      "your subscription, billing and payment records, and your referrals",
+		tables:      []string{"subscription_entitlements", "paddle_transactions", "user_subscription_overrides", "referrals", "referral_codes"},
+		mustMention: []string{"subscription", "billing", "referrals"},
+	},
+	{
+		phrase:      "your profile and sign-in identities, notifications, dashboard layout, privacy settings and saved automation recipes",
+		tables:      []string{"users", "user_identities", "user_email_prefix_indices", "notifications", "user_dashboard_preferences", "privacy_settings", "mcp_recipes"},
+		mustMention: []string{"profile", "notifications", "dashboard", "privacy settings"},
+	},
+	{
+		phrase:      "the internal job and activity records tied to your account — deleted, or stripped of their contents and disconnected from you where we are required to keep a record",
+		tables:      []string{"audit_logs", "dead_letter_jobs", "idempotency_keys", "mcp_audit_log"},
+		mustMention: []string{"required to keep a record"},
+	},
+}
+
+// retentionNoticeEnumeration renders retentionDeletionItems into the notice bodies. Rendering it
+// rather than hand-writing it twice is what keeps the 30-day and 7-day notices from drifting apart,
+// and what keeps either of them from drifting from the table coverage the guard checks.
+func retentionNoticeEnumeration() string {
+	phrases := make([]string, 0, len(retentionDeletionItems))
+	for _, item := range retentionDeletionItems {
+		phrases = append(phrases, item.phrase)
+	}
+	return "\n- " + strings.Join(phrases, "\n- ") + "\n"
+}
+
+// retentionNotice30dBody / retentionNotice7dBody are the notice bodies, exposed as package-level
+// values so a test can read the exact text that is sent rather than a paraphrase of it.
+var retentionNotice30dBody = "Your account data is preserved in read-only mode. In 30 days, unless you resubscribe, " +
+	"we will permanently delete everything in your BoostedBudget account, except where the law requires us to keep " +
+	"a record. This cannot be undone, and there is no way to restore it afterwards. In full, we will delete:\n" + retentionNoticeEnumeration() +
+	"\nIf you want to keep any of this, resubscribe at boostedbudget.com/pricing to restore full access."
+
+var retentionNotice7dBody = "This is your final warning. In 7 days, we will permanently delete everything in your " +
+	"BoostedBudget account, except where the law requires us to keep a record. This cannot be undone, and there is " +
+	"no way to restore it afterwards. In full, we will delete:\n" + retentionNoticeEnumeration() +
+	"\nIf you want to keep any of this, resubscribe at boostedbudget.com/pricing within the next 7 days."
 
 // retentionNoticeSpec parameterizes processRetentionNotices over the 30-day/7-day notice
 // variants, which differ only in: the work_claims action, the log/email copy, the eligibility
@@ -736,7 +933,9 @@ func (w *RetentionCleanupCheckWorker) send30dNotices(ctx context.Context, jobID 
 		action:     repository.ActionRetentionNotice30d,
 		noticeName: "30d",
 		subject:    "Your BoostedBudget data will be deleted in 30 days",
-		body:       "Your account data is preserved in read-only mode. Your data will be permanently deleted in 30 days unless you resubscribe. Visit boostedbudget.com/pricing to restore full access.",
+		// Issue #1569/#1581: names what gets deleted, item by item, instead of the vague "your
+		// data" — see retentionDeletionItems for why the list is derived rather than written here.
+		body:       retentionNotice30dBody,
 		isEligible: w.profileRepo.IsRetentionNotice30dEligibleForOccurrence,
 		markSent:   w.profileRepo.SetRetentionNotice30dSent,
 	})
@@ -762,7 +961,8 @@ func (w *RetentionCleanupCheckWorker) send7dNotices(ctx context.Context, jobID i
 		action:     repository.ActionRetentionNotice7d,
 		noticeName: "7d",
 		subject:    "Final notice: BoostedBudget data deletion in 7 days",
-		body:       "This is your final warning. Your BoostedBudget account data will be permanently deleted in 7 days. Resubscribe at boostedbudget.com/pricing to keep your data.",
+		// Issue #1569/#1581: same disclosure sharpening as the 30-day notice above.
+		body:       retentionNotice7dBody,
 		isEligible: w.profileRepo.IsRetentionNotice7dEligibleForOccurrence,
 		markSent:   w.profileRepo.SetRetentionNotice7dSent,
 	})
@@ -1532,6 +1732,109 @@ func (w *RetentionCleanupCheckWorker) monitorOrphanedFKlessRows(ctx context.Cont
 		"dead_letter_jobs_orphaned", counts.DeadLetterJobs,
 		"idempotency_keys_orphaned", counts.IdempotencyKeys,
 		"mcp_audit_log_orphaned", counts.MCPAuditLog,
+	)
+	return nil
+}
+
+// monitorRetentionDeletionsWithheld is Issue #1569 T1's alerting pass (Step 2b) — THE HALF OF THAT
+// FIX THAT IS NOT OPTIONAL.
+//
+// WHAT T1 CHANGED AND WHAT IT COST. apps/web/src/legal/PrivacyPolicy.tsx promises a cancelled user
+// notice at 30 days and again at 7 days before their data is destroyed. Nothing enforced it: the
+// hard-delete sweep never referenced retention_notice_30d_sent_at / _7d_sent_at, and no EmailService
+// is passed to this worker in ANY environment (cmd/server/main.go), so canSendRetentionNotice
+// returns false before the work-claim is taken and the markers stay NULL forever. Accounts were
+// hard-deleted having been warned zero times. retentionNoticesDeliveredPredicate now gates the sweep
+// and the claim — which is the safe direction to fail, and which converts a silent DESTRUCTION into
+// a silent RETENTION. This pass is what stops the second one being silent.
+//
+// ⚠ WHY THE REASON MATTERS MORE THAN THE COUNT. A NULL marker means two unrelated things, and an
+// alert on the undifferentiated NULL count would fire on every ordinary cancellation:
+//   - the retention clock is still RUNNING, so GetUsersNeedingRetention30dNotice and its 7d sibling
+//     can still select this user (both bound their population by retention_expires_at > NOW()). The
+//     notice is simply not due yet. Healthy, and normally the largest number here.
+//   - the clock has RUN OUT, so those two queries can never select the user again — their bound is
+//     the opposite one. Nothing existing will ever send the missing notice, so the gate holds the
+//     account indefinitely. That is the alert.
+// The SQL half of that split is CountRetentionDeletionsWithheld's; the process half — whether an
+// email service is wired at all — is not visible to SQL and is applied here.
+//
+// REASON PRECEDENCE, deliberate: a nil emailService is a process-wide cause that dominates every
+// per-user one, so when it holds, the ENTIRE withheld population is reported under
+// RetentionWithheldNoEmailService. Wiring the service is the single remedy for all of them, and
+// splitting the number would suggest several. With a service wired, the same population reports as
+// RetentionWithheldWindowPassed: the notice queries require retention_expires_at > NOW(), so a
+// wired service still cannot reach these users.
+//
+// ⚠ A THIRD REASON EXISTS AND IS NOT REPORTED SEPARATELY *BY THIS GAUGE*: a withheld user with no
+// address on file, which canSendRetentionNotice checks a few lines above on the DECRYPTED value. It
+// is folded into whichever of the two labels applies. See CountRetentionDeletionsWithheld's own doc
+// comment for why no SQL predicate can single it out (users.email is ciphertext and
+// EncryptString("") is still "ENC$"+ct) and why the one column that could — email_blind_idx — is not
+// worth a label: migration 000061's UNIQUE index caps that population at one row database-wide.
+// Since Issue #1584 the state IS reported, per account rather than per label, by
+// GetRetentionDeletionsWithheldPage's HasEmailOnFile — that read decrypts, so neither obstacle
+// applies to it. The gauge is unchanged and should stay that way.
+//
+// ⚠ THE ACCOUNTS UNDER RetentionWithheldWindowPassed ARE A BACKLOG NOTHING DRAINS — but they are no
+// longer a backlog nothing can SELECT (Issue #1584 closed that half, and an earlier version of this
+// note, a TODO(#1569 T9 / email work), said otherwise). GetRetentionDeletionsWithheldPage
+// enumerates them and GET /api/v1/admin/retention/withheld publishes the list beside this count.
+// What is still missing is a DECISION, not a query: wiring an email service is necessary but not
+// sufficient, because GetUsersNeedingRetention30dNotice and its 7d sibling both require
+// retention_expires_at > NOW() and these users are past that, so whoever implements the notice
+// email must also choose for this population between sending late against a re-armed clock,
+// recording an explicit waiver and permitting deletion, and notifying out of band. That choice is
+// parked until after go-live with beta. Until it is made they are retained indefinitely, counted
+// here and enumerable there.
+//
+// ⚠ EVERY REASON LABEL MUST BE Set ON EVERY PASS. The enumeration below is by hand and the compiler
+// will not say so — a GaugeVec label that is never Set does not exist in the scrape, so an omitted
+// reason does not fail loudly: its accounts simply vanish and the gauge stops summing to the
+// population. Same hazard, and the same warning, as monitorOrphanedPlaidItems's admin_state loop.
+//
+// NOTHING IS PUBLISHED ON A FAILED READ. Setting the gauges to 0 would tell an alert "no account is
+// being withheld", which is a claim nothing checked — the same unknown-is-not-zero rule Steps 0c and
+// 0e already apply. The gauges keep their last reading, and staleness/absent() plus the Error log
+// the caller writes are what report the breakage.
+//
+// Deliberately GAUGES reset to 0 on a clean pass: an operator who wires the email service and lets
+// the backlog drain must see the alert CLEAR. A counter, or a gauge only ever written when non-zero,
+// would latch forever.
+func (w *RetentionCleanupCheckWorker) monitorRetentionDeletionsWithheld(ctx context.Context, jobID int64) error {
+	counts, err := w.profileRepo.CountRetentionDeletionsWithheld(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to count retention hard-deletions withheld for want of a notice: %w", err)
+	}
+
+	noEmailService, windowPassed := 0, 0
+	if w.emailService == nil {
+		noEmailService = counts.WithheldNoticeMissing
+	} else {
+		windowPassed = counts.WithheldNoticeMissing
+	}
+
+	observability.RetentionDeletionsWithheld.
+		WithLabelValues(observability.RetentionWithheldNoticePending).Set(float64(counts.NoticePending))
+	observability.RetentionDeletionsWithheld.
+		WithLabelValues(observability.RetentionWithheldNoEmailService).Set(float64(noEmailService))
+	observability.RetentionDeletionsWithheld.
+		WithLabelValues(observability.RetentionWithheldWindowPassed).Set(float64(windowPassed))
+
+	if counts.WithheldNoticeMissing == 0 {
+		return nil
+	}
+
+	// Logged as well as gauged, because a gauge nobody has wired an alert to is still invisible, and
+	// this repo has no alert-rule file (see observability.RetentionDeletionsWithheld). No user id or
+	// address is logged: the population is identifiable from the database by an operator who needs
+	// it, and a log line is not an authenticated surface.
+	w.logger.Warn("retention hard-deletions are being WITHHELD because the promised 30d/7d pre-deletion notices were never recorded — these accounts are retained past their stated window and no existing path can send the missing notice",
+		"job_id", jobID,
+		"withheld_total", counts.WithheldNoticeMissing,
+		"withheld_no_email_service", noEmailService,
+		"withheld_window_passed", windowPassed,
+		"notice_pending_healthy", counts.NoticePending,
 	)
 	return nil
 }

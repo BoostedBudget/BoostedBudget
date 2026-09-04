@@ -35,6 +35,12 @@ export type { BoostTestResultsProps } from './BoostTestResults'
 export { BoostExecutionHistory } from './BoostExecutionHistory'
 export type { BoostExecutionHistoryProps } from './BoostExecutionHistory'
 
+export { BoostExecutionTable } from './BoostExecutionTable'
+export type { BoostExecutionTableProps } from './BoostExecutionTable'
+
+// #1569: account-wide history — the only surface that reaches a DELETED boost's retained runs.
+export { BoostAutomationHistoryPanel } from './BoostAutomationHistoryPanel'
+
 // Existing boosts page components
 export { BoostsPage } from './BoostsPage'
 export { BoostsTab } from './BoostsTab'

@@ -4,7 +4,7 @@
  * TDD: tests written before implementation.
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import '@/test/mocks/shared-charts'
 import { mockUseDarkMode, MockEChartsChart, MOCK_CATEGORY_COLORS } from '@/test/mocks/shared-charts'
@@ -485,5 +485,30 @@ describe('AllocationDonutChart', () => {
       expect(result).toContain('$')
       expect(result).toContain('%')
     }
+  })
+})
+
+// Issue #1569 T9.5 — "No allocation data" on a failed read tells the user they hold nothing.
+describe('AllocationDonutChart failed read', () => {
+  beforeEach(() => {
+    mockUseDarkMode.mockReturnValue(false)
+  })
+
+  // The API mock is process-global; leave it as other files expect to find it.
+  afterEach(() => {
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({ data: undefined, isLoading: false, isError: false })
+  })
+
+  it('reports the failed read and does not claim there is no allocation data', () => {
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    })
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+    expect(screen.getByRole('alert')).toBeDefined()
+    expect(screen.getByText(/couldn't load/i)).toBeDefined()
+    expect(screen.queryByText(/no allocation data/i)).toBeNull()
+    expect(screen.queryByTestId('echarts-chart')).toBeNull()
   })
 })

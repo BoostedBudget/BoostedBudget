@@ -31,9 +31,26 @@ export const mockUseUpdatePrivacySettings = mock(() => ({
   reset: mock(() => {}),
 }))
 
+// === getDataExport (Issue #1587, GDPR Article 20) ===
+// The IMPERATIVE function, not a query hook: the export is requested on a click, never on mount.
+// It lives in this file rather than in its own because mock.module() is keyed by specifier and
+// process-global — a second call for this same specifier elsewhere would replace, not merge with,
+// the overrides above.
+export const mockGetDataExport = mock(() =>
+  Promise.resolve({
+    export_version: 1,
+    generated_at: '2026-08-25T12:00:00Z',
+    user_id: 'user-123',
+    sections: {},
+    excluded_tables: {},
+    row_count: 0,
+  })
+)
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/privacy/privacy', () => ({
   ...RealPrivacyModule,
   useGetPrivacySettings: mockUseGetPrivacySettings,
   useUpdatePrivacySettings: mockUseUpdatePrivacySettings,
+  getDataExport: mockGetDataExport,
 }))

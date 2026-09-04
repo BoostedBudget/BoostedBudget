@@ -357,6 +357,61 @@ describe('BudgetsPage', () => {
     })
   })
 
+  /**
+   * Issue #1569 Task 7.3, item 2 — the dialog claimed DESTRUCTION where the code RETAINS.
+   *
+   * `budgetRepository.Delete` issues `UPDATE budgets SET deleted_at = NOW()` and then tombstones
+   * the categories; `budget_period_events` and `rollover_history` survive by design. Nothing is
+   * deleted. Telling a user their financial data was destroyed when it was kept is the worse
+   * direction to be wrong in for a privacy claim, so the copy has to say what actually happens.
+   *
+   * "This action cannot be undone" is SEPARATELY TRUE and is deliberately kept: no restore
+   * endpoint exists anywhere and nothing sets `deleted_at = NULL`. Retained is not recoverable.
+   *
+   * The negative assertions are the point of this test. A previous round shipped a copy fix whose
+   * test asserted only strings that already existed, so restoring the false copy left it green.
+   */
+  describe('Delete Budget copy tells the truth about retention (Issue #1569)', () => {
+    async function openDeleteDialog() {
+      const user = userEvent.setup()
+      setupMocks({ budgets: [mockActiveBudget] })
+      renderBudgetsPage()
+      await user.click(screen.getByTestId('delete-budget-budget-1'))
+      return screen.getByRole('alertdialog')
+    }
+
+    it('does not claim the budget or its categories are permanently deleted', async () => {
+      const dialog = await openDeleteDialog()
+      expect(dialog.textContent ?? '').not.toMatch(/permanently deleted/i)
+      expect(dialog.textContent ?? '').not.toMatch(/will be deleted/i)
+      expect(dialog.textContent ?? '').not.toMatch(/erased|destroyed|wiped/i)
+    })
+
+    it('says the recorded history is kept', async () => {
+      const dialog = await openDeleteDialog()
+      expect(dialog.textContent ?? '').toMatch(/nothing is thrown away/i)
+      expect(dialog.textContent ?? '').toMatch(/kept/i)
+    })
+
+    it('still warns the delete cannot be undone, because no restore path exists', async () => {
+      const dialog = await openDeleteDialog()
+      expect(dialog.textContent ?? '').toMatch(/cannot be undone/i)
+    })
+
+    it('does not promise a "deleted budgets" surface or a purge verb, neither of which exists', async () => {
+      const dialog = await openDeleteDialog()
+      expect(dialog.textContent ?? '').not.toMatch(/deleted budgets/i)
+      expect(dialog.textContent ?? '').not.toMatch(/restore|recover|undelete/i)
+      expect(dialog.textContent ?? '').not.toMatch(/for good/i)
+    })
+
+    it('still names the budget and its category count', async () => {
+      const dialog = await openDeleteDialog()
+      expect(dialog.textContent ?? '').toMatch(/Monthly Budget/)
+      expect(dialog.textContent ?? '').toMatch(/categor(y|ies)/i)
+    })
+  })
+
   describe('Table Navigation (Issue #1051)', () => {
     beforeEach(() => {
       resetLocationProbe()

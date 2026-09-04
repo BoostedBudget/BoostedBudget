@@ -738,3 +738,51 @@ func TestTierConfig_Validation_InvalidPastDue(t *testing.T) {
 		})
 	}
 }
+
+// Issue #1569 Task 20 (S10) — the census claim, RE-DERIVED AND NOT REPRODUCED, then made loud.
+//
+// THE CLAIM: "daysRequested applies only when cursor == "", so a tier upgrade never deepens
+// history and no upgrade-triggered re-sync exists."
+//
+// The mechanism is real. transactionSyncService's sync loop computes daysRequested only on the
+// FIRST sync (`if cursor == ""`) and passes 0 on every re-sync, and plaidService only calls
+// SetDaysRequested when the cursor is empty. Nothing in the tree re-syncs an item when a user's
+// tier changes.
+//
+// The CONSEQUENCE does not exist, because there is no upgrade that would deepen anything: every
+// tier in config/subscription_tiers.yaml declares transaction_history_days: 730, and there is no
+// free tier (the config's own header says so — "Removed free tier entirely", "Only 1 configurable
+// limit remains"). GetHistoricalDepthLimit returns the same 730 for premium and for household_5,
+// so moving between tiers changes the depth by nothing and there is nothing for a re-sync to
+// fetch. The item is deleted rather than fixed.
+//
+// What survives is a LATENT trap, and this test is what converts it into a loud one: the moment
+// the tiers stop agreeing, the missing upgrade re-sync becomes a real defect — a user who paid for
+// deeper history would keep the shallower window until they re-linked the bank, with no error and
+// nothing to tell them. Differentiating the depths is a legitimate product decision; doing it
+// WITHOUT the re-sync is the trap. This test fails on the former so the latter has to be thought
+// about at the same time.
+func TestTierConfig_HistoricalDepthIsUniform_OrTheUpgradeResyncMustExistFirst(t *testing.T) {
+	config, err := LoadTierConfig()
+	require.NoError(t, err)
+
+	tiers := config.Tiers
+	require.NotEmpty(t, tiers, "no tiers loaded — a vacuous pass here would read as protection")
+
+	depths := map[int][]string{}
+	for name, tier := range tiers {
+		depths[tier.Limits.TransactionHistoryDays] = append(depths[tier.Limits.TransactionHistoryDays], string(name))
+	}
+
+	if len(depths) > 1 {
+		t.Fatalf("tiers now declare %d different transaction_history_days values (%v).\n\n"+
+			"That makes an upgrade able to DEEPEN a user's history — and nothing fetches the extra "+
+			"days. transactionSyncService's sync loop computes daysRequested only when the cursor is "+
+			"empty (its `if cursor == \"\"` branch) and passes 0 on every re-sync, plaidService "+
+			"calls SetDaysRequested only when the cursor is empty, and no code path re-syncs an item "+
+			"on a tier change. A user who upgraded would keep the shallower window until they "+
+			"re-linked the bank, silently.\n\n"+
+			"If differentiating the depths is the intent, land the upgrade-triggered re-sync in the "+
+			"same change and then delete this test. Issue #1569 task 20 (S10).", len(depths), depths)
+	}
+}

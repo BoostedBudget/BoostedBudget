@@ -64,6 +64,13 @@ func (m *MockBalanceSnapshotRepository) GetLatestByAccountID(ctx context.Context
 	return args.Get(0).(*domain.BalanceSnapshot), args.Error(1)
 }
 
+// #1569: the per-account retained balance history is a HISTORICAL read served by its own service.
+// The dashboard answers current-state and aggregate questions and must never reach it, so this
+// panics rather than returning a zero value a mistaken caller could silently consume.
+func (m *MockBalanceSnapshotRepository) GetAccountBalanceHistory(context.Context, string, string, *time.Time, *time.Time) ([]domain.AccountBalanceHistoryPoint, error) {
+	panic("the dashboard must not read per-account retained balance history")
+}
+
 func (m *MockBalanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
 	args := m.Called(ctx, requestingUserID, scope, asOf)
 	if args.Get(0) == nil {
@@ -161,8 +168,8 @@ func TestGetBalanceSummary_Success(t *testing.T) {
 
 	// Check period comparison
 	assert.NotNil(t, result.PeriodComparison)
-	assert.Equal(t, 3800.00, result.PeriodComparison.PreviousBalance) // 1400 + 2400
-	assert.Equal(t, 200.00, result.PeriodComparison.ChangeAmount)     // 4000 - 3800
+	assert.Equal(t, 3800.00, result.PeriodComparison.PreviousBalance)    // 1400 + 2400
+	assert.Equal(t, 200.00, result.PeriodComparison.ChangeAmount)        // 4000 - 3800
 	assert.InDelta(t, 5.26, result.PeriodComparison.ChangePercent, 0.01) // (200/3800)*100
 
 	mockSnapshotRepo.AssertExpectations(t)
@@ -650,9 +657,9 @@ func TestGetNetWorth_OnlyAssets(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, 10000.00, result.NetWorth)        // 3000 + 7000
-	assert.Equal(t, 10000.00, result.TotalAssets)     // All assets
-	assert.Equal(t, 0.00, result.TotalLiabilities)    // No liabilities
+	assert.Equal(t, 10000.00, result.NetWorth)     // 3000 + 7000
+	assert.Equal(t, 10000.00, result.TotalAssets)  // All assets
+	assert.Equal(t, 0.00, result.TotalLiabilities) // No liabilities
 	assert.Contains(t, result.ByCategory, "assets")
 	assert.NotContains(t, result.ByCategory, "liabilities") // No liabilities category
 
@@ -695,10 +702,10 @@ func TestGetNetWorth_OnlyLiabilities(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, -25000.00, result.NetWorth)         // 0 - 25000 = -25000
-	assert.Equal(t, 0.00, result.TotalAssets)           // No assets
-	assert.Equal(t, 25000.00, result.TotalLiabilities)  // 5000 + 20000
-	assert.NotContains(t, result.ByCategory, "assets")  // No assets category
+	assert.Equal(t, -25000.00, result.NetWorth)        // 0 - 25000 = -25000
+	assert.Equal(t, 0.00, result.TotalAssets)          // No assets
+	assert.Equal(t, 25000.00, result.TotalLiabilities) // 5000 + 20000
+	assert.NotContains(t, result.ByCategory, "assets") // No assets category
 	assert.Contains(t, result.ByCategory, "liabilities")
 
 	mockSnapshotRepo.AssertExpectations(t)
@@ -1235,6 +1242,15 @@ func TestDashboardService_GetNetWorth_PreviousPeriodResolvesChain(t *testing.T) 
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
 		Return([]domain.BalanceSnapshot{previousSnapshot}, nil)
+	// #1569 T10-FIX item 2: the baseline universe is now resolved whenever a snapshot's OWN
+	// accounts row is missing from the current map — which is exactly this snapshot's situation —
+	// rather than only when its chain key misses too. The predecessor was live at the cutoff.
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
+		mock.MatchedBy(asOfBaselineOpts(defaultBaselineCutoff()))).
+		Return([]domain.Account{activeAccount, {
+			ID: "account-replaced-id", UserID: userID, Name: "Checking (old)", Type: "depository",
+			Status: domain.AccountStatusReplaced, UserAccountID: &stableUA,
+		}}, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 
@@ -1277,15 +1293,15 @@ func TestGetBalanceSummary_PreviousPeriodChainDedup(t *testing.T) {
 	// Two previous-period snapshots for the SAME logical account (one per chain member).
 	// If both are summed the result is 1000; correct dedup gives 500.
 	prevSnapReplaced := domain.BalanceSnapshot{
-		ID:            "prev-replaced",
-		AccountID:     "account-replaced",
-		UserAccountID: &stableUA,
+		ID:             "prev-replaced",
+		AccountID:      "account-replaced",
+		UserAccountID:  &stableUA,
 		CurrentBalance: &prevBalanceReplaced,
 	}
 	prevSnapActive := domain.BalanceSnapshot{
-		ID:            "prev-active",
-		AccountID:     "account-active",
-		UserAccountID: &stableUA,
+		ID:             "prev-active",
+		AccountID:      "account-active",
+		UserAccountID:  &stableUA,
 		CurrentBalance: &prevBalanceActive,
 	}
 
@@ -1305,6 +1321,15 @@ func TestGetBalanceSummary_PreviousPeriodChainDedup(t *testing.T) {
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
 		Return([]domain.BalanceSnapshot{prevSnapReplaced, prevSnapActive}, nil)
+	// #1569 T10-FIX item 2: the baseline universe now resolves whenever a snapshot's OWN accounts
+	// row is missing. Supplying the predecessor as 'replaced' is what lets the collapse below
+	// happen for the RIGHT reason — a recorded predecessor deferring to its live successor.
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
+		mock.MatchedBy(asOfBaselineOpts(defaultBaselineCutoff()))).
+		Return([]domain.Account{activeAccount, {
+			ID: "account-replaced", UserID: userID, Name: "Checking (old)", Type: "depository",
+			Status: domain.AccountStatusReplaced, UserAccountID: &stableUA,
+		}}, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 
@@ -1340,15 +1365,15 @@ func TestGetNetWorth_PreviousPeriodChainDedup(t *testing.T) {
 	}
 
 	prevSnapReplaced := domain.BalanceSnapshot{
-		ID:            "prev-replaced",
-		AccountID:     "account-replaced",
-		UserAccountID: &stableUA,
+		ID:             "prev-replaced",
+		AccountID:      "account-replaced",
+		UserAccountID:  &stableUA,
 		CurrentBalance: &prevBalance,
 	}
 	prevSnapActive := domain.BalanceSnapshot{
-		ID:            "prev-active",
-		AccountID:     "account-active",
-		UserAccountID: &stableUA,
+		ID:             "prev-active",
+		AccountID:      "account-active",
+		UserAccountID:  &stableUA,
 		CurrentBalance: &prevBalance,
 	}
 
@@ -1368,6 +1393,14 @@ func TestGetNetWorth_PreviousPeriodChainDedup(t *testing.T) {
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
 		Return([]domain.BalanceSnapshot{prevSnapReplaced, prevSnapActive}, nil)
+	// #1569 T10-FIX item 2: see the balance-summary twin — the predecessor must be in the baseline
+	// universe for the collapse to happen for the right reason.
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
+		mock.MatchedBy(asOfBaselineOpts(defaultBaselineCutoff()))).
+		Return([]domain.Account{activeAccount, {
+			ID: "account-replaced", UserID: userID, Name: "Checking (old)", Type: "depository",
+			Status: domain.AccountStatusReplaced, UserAccountID: &stableUA,
+		}}, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 
@@ -1385,7 +1418,7 @@ func TestGetNetWorth_PreviousPeriodChainDedup(t *testing.T) {
 
 // ─── #1369 — Phase 5: household balance/net-worth aggregation ───────────────
 //
-// Household mode must use GetSnapshotsAsOfForHousehold / GetForHouseholdScope — NOT
+// Household mode must use GetSnapshotsAsOfForHousehold / GetForHouseholdScopeActiveNow — NOT
 // GetLatestByUserID / GetByUserID (and GetByUserIDAndDateRange, deleted in #1537) — single-user, and
 // would silently drop every non-requester member's data (Codex adversarial review,
 // P0-2/P0-3). These are pure-Go aggregation tests (repo correctness is covered by
@@ -1412,7 +1445,7 @@ func TestGetBalanceSummary_Household_AggregatesAcrossMembers(t *testing.T) {
 	mockAccountRepo := new(MockAccountRepository)
 
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(snapshots, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(accounts, nil)
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(accounts, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 	filters := &domain.DashboardFilters{HouseholdScope: scope}
@@ -1450,7 +1483,7 @@ func TestGetNetWorth_Household_AggregatesAcrossMembers(t *testing.T) {
 	mockAccountRepo := new(MockAccountRepository)
 
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(snapshots, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(accounts, nil)
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(accounts, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 	filters := &domain.DashboardFilters{HouseholdScope: scope}
@@ -1499,7 +1532,7 @@ func TestGetNetWorth_Household_PreviousPeriod_JointAccountResolvesViaMatchingAsO
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, mock.MatchedBy(func(tm time.Time) bool {
 		return time.Since(tm) < time.Minute // "now"-ish call
 	})).Return(currentSnapshots, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.MatchedBy(func(tm time.Time) bool {
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope, mock.MatchedBy(func(tm time.Time) bool {
 		return time.Since(tm) < time.Minute
 	})).Return(currentAccounts, nil)
 
@@ -1507,7 +1540,7 @@ func TestGetNetWorth_Household_PreviousPeriod_JointAccountResolvesViaMatchingAsO
 		d := time.Since(tm)
 		return d > 29*24*time.Hour && d < 31*24*time.Hour // ~30-days-ago call
 	})).Return(previousSnapshots, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.MatchedBy(func(tm time.Time) bool {
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope, mock.MatchedBy(func(tm time.Time) bool {
 		d := time.Since(tm)
 		return d > 29*24*time.Hour && d < 31*24*time.Hour
 	})).Return(previousAccounts, nil)

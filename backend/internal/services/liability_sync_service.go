@@ -10,6 +10,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 )
@@ -247,6 +248,17 @@ func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *
 		}
 	}
 
+	// Issue #1569 Task 4: the only per-account completeness signal Plaid's /liabilities/get
+	// response exposes is presence in `accounts` (see plaid_completeness.go for why — Plaid does
+	// not document, and its own sample responses don't support, any stronger per-account or
+	// per-category status). An account absent from this set was not returned by Plaid on this
+	// call at all; that is a partial/degraded response for that account, and the delete-only
+	// clear below MUST be skipped rather than treated as "confirmed no liability."
+	// (Task 5 reshaped the return value into PlaidAccountRoster so the inverse question — "is this
+	// account provably GONE?" — cannot be asked of an empty or errored response. Nothing about
+	// these gates changed: Present is the same plain membership test the bare set gave.)
+	roster := PlaidAccountRosterFrom(resp.Accounts, nil)
+
 	// Surface Plaid accounts with no matching internal account (Medium Codex finding #910).
 	for plaidID := range creditMap {
 		if _, ok := accountMap[plaidID]; !ok {
@@ -283,11 +295,17 @@ func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *
 			cacheBumpNeeded = true
 			result.CreditProcessed++
 			result.AccountsProcessed++
-		} else {
+		} else if roster.Present(plaidAccountID) {
 			if err := s.creditRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, nil); err != nil {
 				return result, fmt.Errorf("failed to clear credit liability for account %s: %w", internalAccountID, err)
 			}
 			cacheBumpNeeded = true
+		} else {
+			observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("credit_liability").Inc()
+			s.logger.Warn("skipping credit liability clear: account absent from Plaid's liabilities response, preserving existing rows",
+				"account_id", internalAccountID,
+				"item_id", linkedItem.ID,
+			)
 		}
 
 		// Mortgage
@@ -299,11 +317,17 @@ func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *
 			cacheBumpNeeded = true
 			result.MortgageProcessed++
 			result.AccountsProcessed++
-		} else {
+		} else if roster.Present(plaidAccountID) {
 			if err := s.mortgageRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, nil); err != nil {
 				return result, fmt.Errorf("failed to clear mortgage liability for account %s: %w", internalAccountID, err)
 			}
 			cacheBumpNeeded = true
+		} else {
+			observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("mortgage_liability").Inc()
+			s.logger.Warn("skipping mortgage liability clear: account absent from Plaid's liabilities response, preserving existing rows",
+				"account_id", internalAccountID,
+				"item_id", linkedItem.ID,
+			)
 		}
 
 		// Student loan
@@ -315,11 +339,17 @@ func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *
 			cacheBumpNeeded = true
 			result.StudentLoansProcessed++
 			result.AccountsProcessed++
-		} else {
+		} else if roster.Present(plaidAccountID) {
 			if err := s.studentLoanRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, nil); err != nil {
 				return result, fmt.Errorf("failed to clear student loan liability for account %s: %w", internalAccountID, err)
 			}
 			cacheBumpNeeded = true
+		} else {
+			observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("student_loan_liability").Inc()
+			s.logger.Warn("skipping student loan liability clear: account absent from Plaid's liabilities response, preserving existing rows",
+				"account_id", internalAccountID,
+				"item_id", linkedItem.ID,
+			)
 		}
 	}
 

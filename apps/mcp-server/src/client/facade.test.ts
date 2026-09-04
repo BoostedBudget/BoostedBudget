@@ -86,7 +86,7 @@ describe('createApiClient', () => {
     )
   })
 
-  it('contains exactly 133 allowed operation methods', () => {
+  it('contains exactly 138 allowed operation methods', () => {
     const mutator = mock(() => Promise.resolve({})) as unknown as FetchMutator
     const client = createApiClient(mutator)
 
@@ -106,6 +106,13 @@ describe('createApiClient', () => {
     //                +8 excluded (household mutations — deliberate in-app action)
     // +1 from #1368 Phase 4: listMyAccountShares allowed (read); setHouseholdShareVisibility
     //               excluded (privacy/consent decision — deliberate in-app action)
-    expect(count).toBe(133)
+    // +1 net from #1569 Task 16: getDeletedSavingsGoals and getUserBoostExecutions classified
+    //                as read (both were already in api/openapi.yaml but in no manifest entry),
+    //                and deleteSavingsGoalContribution excluded — it hard-deletes a savings
+    //                ledger row, so the facade must no longer be able to reach it. purgeSavingsGoal
+    //                is also newly classified but excluded, so it adds no facade method.
+    // +1 from #1569: getAccountBalanceHistory (read) — the reader for balance_snapshots, which
+    //                was written by every sync and had no per-account reader at all.
+    expect(count).toBe(139)
   })
 })

@@ -173,13 +173,9 @@ describe('SubscriptionOverrideModal', () => {
         mockUseGetAdminUserSubscription.mockClear()
         mockUseUpdateAdminUserTier.mockClear()
         mockUseRemoveAdminUserTierOverride.mockClear()
-        // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
         mockToastSuccess.mockClear()
-        // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
         mockToastError.mockClear()
-        // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
         mockToastWarning.mockClear()
-        // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
         mockToastInfo.mockClear()
         mockTrackEvent.mockClear()
         mockUseRemoveAdminUserTierOverride.mockReturnValue({ mutate: () => { }, isPending: false })
@@ -506,7 +502,6 @@ describe('SubscriptionOverrideModal', () => {
 
         await waitFor(() => {
             expect(mockMutate).toHaveBeenCalled()
-            // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
             expect(mockToastSuccess).toHaveBeenCalled()
             expect(onClose).toHaveBeenCalled()
         })
@@ -568,9 +563,7 @@ describe('SubscriptionOverrideModal', () => {
             fireEvent.click(screen.getByRole('button', { name: /save override/i }))
 
             await waitFor(() => {
-                // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
                 expect(mockToastWarning).toHaveBeenCalledWith(expect.stringContaining('Warning:'))
-                // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
                 expect(mockToastSuccess).not.toHaveBeenCalled()
                 expect(onClose).toHaveBeenCalled()
             })
@@ -593,9 +586,7 @@ describe('SubscriptionOverrideModal', () => {
             fireEvent.click(screen.getByRole('button', { name: /save override/i }))
 
             await waitFor(() => {
-                // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
                 expect(mockToastSuccess).toHaveBeenCalledWith('Subscription tier updated successfully')
-                // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
                 expect(mockToastWarning).not.toHaveBeenCalled()
             })
         })
@@ -881,7 +872,6 @@ describe('SubscriptionOverrideModal', () => {
             fireEvent.click(within(dialog).getByRole('button', { name: /remove override/i }))
 
             await waitFor(() => {
-                // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
                 expect(mockToastSuccess).toHaveBeenCalled()
                 expect(onClose).toHaveBeenCalled()
             })
@@ -906,7 +896,6 @@ describe('SubscriptionOverrideModal', () => {
             fireEvent.click(within(dialog).getByRole('button', { name: /remove override/i }))
 
             await waitFor(() => {
-                // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
                 expect(mockToastError).toHaveBeenCalled()
             })
             expect(onClose).not.toHaveBeenCalled()
@@ -981,14 +970,12 @@ describe('SubscriptionOverrideModal', () => {
                 // interaction, not a pending one — but it must not claim a removal happened.
                 expect(onClose).toHaveBeenCalled()
             })
-            // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
             expect(mockToastSuccess).not.toHaveBeenCalled()
             expect(mockTrackEvent).not.toHaveBeenCalledWith(
                 ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED,
                 expect.anything()
             )
             // A truthful message must still reach the admin instead of silence.
-            // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
             expect(mockToastInfo).toHaveBeenCalledWith(expect.stringMatching(/no override/i))
         })
 
@@ -1021,12 +1008,9 @@ describe('SubscriptionOverrideModal', () => {
             fireEvent.click(within(dialog).getByRole('button', { name: /remove override/i }))
 
             await waitFor(() => {
-                // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
                 expect(mockToastError).toHaveBeenCalledWith(expect.stringMatching(/unexpected response/i))
             })
-            // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
             expect(mockToastSuccess).not.toHaveBeenCalled()
-            // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
             expect(mockToastInfo).not.toHaveBeenCalled()
             expect(mockTrackEvent).not.toHaveBeenCalledWith(
                 ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED,

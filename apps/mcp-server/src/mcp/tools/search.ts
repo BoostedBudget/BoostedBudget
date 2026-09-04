@@ -16,7 +16,10 @@ import type { SpecEntry, SpecIndex } from '../../spec/search-runtime'
 
 const SearchInputSchema = z.object({
   query: z.string().default(''),
-  class: z.enum(['read', 'write']).optional(),
+  // #1569 Task 16: 'destructive' is the third capability class — operations that permanently
+  // destroy stored data. Agents must be able to filter FOR it (to ask before calling) and
+  // AGAINST it, so it belongs in the discoverable enum.
+  class: z.enum(['read', 'write', 'destructive']).optional(),
   tag: z.string().optional(),
   limit: z.number().int().min(1).default(20).transform((v) => Math.min(v, 50)),
 })

@@ -8,7 +8,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/plaid/plaid-go/v23/plaid"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -149,10 +151,18 @@ func makeWebhookEventForLiabilities(webhookType, itemID string) *domain.WebhookE
 // Plaid SDK Helpers for Liabilities
 // ============================================================================
 
-func makePlaidLiabilitiesResponse(credit []plaid.CreditCardLiability, mortgage []plaid.MortgageLiability, student []plaid.StudentLoan) *plaid.LiabilitiesGetResponse {
+// makePlaidLiabilitiesResponse builds a LiabilitiesGetResponse. presentPlaidAccountIDs populates
+// the response's `accounts` array — the only per-account completeness signal Plaid exposes here
+// (see plaid_completeness.go). Tests that need to simulate a partial/incomplete response for a
+// given account must omit that account's plaid_account_id from presentPlaidAccountIDs.
+func makePlaidLiabilitiesResponse(credit []plaid.CreditCardLiability, mortgage []plaid.MortgageLiability, student []plaid.StudentLoan, presentPlaidAccountIDs ...string) *plaid.LiabilitiesGetResponse {
 	liabilities := plaid.NewLiabilitiesObject(credit, mortgage, student)
+	accounts := make([]plaid.AccountBase, 0, len(presentPlaidAccountIDs))
+	for _, id := range presentPlaidAccountIDs {
+		accounts = append(accounts, plaid.AccountBase{AccountId: id})
+	}
 	return plaid.NewLiabilitiesGetResponse(
-		[]plaid.AccountBase{},
+		accounts,
 		*plaid.NewItemWithDefaults(),
 		*liabilities,
 		"req-liab-001",
@@ -169,9 +179,9 @@ func makePlaidCreditLiability(plaidAccountID string) plaid.CreditCardLiability {
 	lastStatementIssueDate := plaidNullStr("2024-01-01")
 	lastStatementBalance := plaidNullFloat(500.0)
 	apr := plaid.APR{
-		AprPercentage:       19.99,
-		AprType:             "purchase",
-		BalanceSubjectToApr: plaidNullFloat(480.0),
+		AprPercentage:        19.99,
+		AprType:              "purchase",
+		BalanceSubjectToApr:  plaidNullFloat(480.0),
 		InterestChargeAmount: plaidNullFloat(7.99),
 	}
 	return plaid.CreditCardLiability{
@@ -342,6 +352,7 @@ func TestLiabilitySyncService_ProcessWebhook_Success(t *testing.T) {
 		[]plaid.CreditCardLiability{credit},
 		[]plaid.MortgageLiability{},
 		[]plaid.StudentLoan{},
+		plaidAccountID,
 	)
 	deps.plaidSvc.On("LiabilitiesGet", ctx, linkedItem.AccessToken).Return(resp, nil)
 
@@ -409,13 +420,12 @@ func TestLiabilitySyncService_SyncLiabilities_CreditHappyPath(t *testing.T) {
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-
 	credit := makePlaidCreditLiability(plaidAccountID)
 	resp := makePlaidLiabilitiesResponse(
 		[]plaid.CreditCardLiability{credit},
 		[]plaid.MortgageLiability{},
 		[]plaid.StudentLoan{},
+		plaidAccountID,
 	)
 	deps.plaidSvc.On("LiabilitiesGet", ctx, "tok").Return(resp, nil)
 
@@ -453,13 +463,12 @@ func TestLiabilitySyncService_SyncLiabilities_MortgageHappyPath(t *testing.T) {
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-
 	mortgage := makePlaidMortgageLiability(plaidAccountID)
 	resp := makePlaidLiabilitiesResponse(
 		[]plaid.CreditCardLiability{},
 		[]plaid.MortgageLiability{mortgage},
 		[]plaid.StudentLoan{},
+		plaidAccountID,
 	)
 	deps.plaidSvc.On("LiabilitiesGet", ctx, "tok").Return(resp, nil)
 
@@ -493,13 +502,12 @@ func TestLiabilitySyncService_SyncLiabilities_StudentLoanHappyPath(t *testing.T)
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-
 	student := makePlaidStudentLoan(plaidAccountID)
 	resp := makePlaidLiabilitiesResponse(
 		[]plaid.CreditCardLiability{},
 		[]plaid.MortgageLiability{},
 		[]plaid.StudentLoan{student},
+		plaidAccountID,
 	)
 	deps.plaidSvc.On("LiabilitiesGet", ctx, "tok").Return(resp, nil)
 
@@ -535,12 +543,15 @@ func TestLiabilitySyncService_SyncLiabilities_UnmappedAccountSkipped(t *testing.
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", "user-001")
 
-
 	credit := makePlaidCreditLiability("unknown-plaid-account")
+	// "some-other-account" (the internal account's actual plaid_account_id) is present in the
+	// response's accounts array — Plaid enumerated it this call, it just reported no liability
+	// data for it — so the clear below is confirmed-complete, not a partial-response guess.
 	resp := makePlaidLiabilitiesResponse(
 		[]plaid.CreditCardLiability{credit},
 		[]plaid.MortgageLiability{},
 		[]plaid.StudentLoan{},
+		"unknown-plaid-account", "some-other-account",
 	)
 	deps.plaidSvc.On("LiabilitiesGet", ctx, "tok").Return(resp, nil)
 
@@ -580,12 +591,11 @@ func TestLiabilitySyncService_SyncLiabilities_MixedTypes(t *testing.T) {
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-multi", userID)
 
-
-
 	resp := makePlaidLiabilitiesResponse(
 		[]plaid.CreditCardLiability{makePlaidCreditLiability(plaidCCID)},
 		[]plaid.MortgageLiability{makePlaidMortgageLiability(plaidMortID)},
 		[]plaid.StudentLoan{makePlaidStudentLoan(plaidSLID)},
+		plaidCCID, plaidMortID, plaidSLID,
 	)
 	deps.plaidSvc.On("LiabilitiesGet", ctx, "tok").Return(resp, nil)
 
@@ -632,13 +642,14 @@ func TestLiabilitySyncService_SyncLiabilities_EmptyArrayClearsData(t *testing.T)
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-
-	// All arrays empty — Plaid no longer reports any liabilities for this item
+	// All arrays empty AND the account is present in the response's accounts array — Plaid
+	// confirms it enumerated this account this call and reported no liabilities, a genuine
+	// complete-empty response, not a partial one.
 	resp := makePlaidLiabilitiesResponse(
 		[]plaid.CreditCardLiability{},
 		[]plaid.MortgageLiability{},
 		[]plaid.StudentLoan{},
+		plaidAccountID,
 	)
 	deps.plaidSvc.On("LiabilitiesGet", ctx, "tok").Return(resp, nil)
 
@@ -661,6 +672,171 @@ func TestLiabilitySyncService_SyncLiabilities_EmptyArrayClearsData(t *testing.T)
 	deps.studentLoanRepo.AssertExpectations(t)
 }
 
+// ============================================================================
+// Issue #1569 Task 4: Absent ≠ empty — partial Plaid responses must not wipe
+// ============================================================================
+
+// TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesCreditLiability verifies
+// that when an internal account is absent from Plaid's response `accounts` array (i.e. Plaid's
+// /liabilities/get call did not enumerate that account on this call at all — the only per-account
+// signal the response exposes, see plaid_completeness.go), the credit liability clear-on-absence
+// path is SKIPPED, leaving any existing credit_liabilities/credit_liability_aprs rows untouched.
+// Without the completeness gate this account's absence from creditMap alone would trigger
+// ReplaceForAccount(..., nil) — a hard delete — on every partial response.
+func TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesCreditLiability(t *testing.T) {
+	svc, deps := setupLiabilitySyncService(t)
+	ctx := context.Background()
+
+	before := testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("credit_liability"))
+
+	plaidAccountID := "plaid-cc-partial"
+	internalAccountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-001", userID)
+
+	// Plaid's response says nothing about this account at all (absent from `accounts`), and
+	// naturally has no credit data for it either. This is what a partial/degraded response
+	// looks like — NOT the same as "accounts present but reports no liability."
+	resp := makePlaidLiabilitiesResponse(
+		[]plaid.CreditCardLiability{},
+		[]plaid.MortgageLiability{},
+		[]plaid.StudentLoan{},
+		// no plaidAccountID here — simulates the partial/incomplete response
+	)
+	deps.plaidSvc.On("LiabilitiesGet", ctx, "tok").Return(resp, nil)
+
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+	}, nil)
+
+	deps.linkedItemRepo.On("UpdateLiabilitiesLastSyncedAt", ctx, linkedItem.ID, mock.Anything).Return(nil)
+
+	result, err := svc.SyncLiabilities(ctx, linkedItem)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.AccountsProcessed)
+	// The credit clear must NEVER be called for this account — existing rows are preserved.
+	deps.creditRepo.AssertNotCalled(t, "ReplaceForAccount", ctx, internalAccountID, userID, (*domain.CreditLiability)(nil))
+	assert.Equal(t, before+1, testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("credit_liability")),
+		"a refactor that silently drops the .Inc() call must be visible here, not just in the log line")
+}
+
+// TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesMortgageLiability mirrors
+// the credit test above for mortgage liabilities (brief item 3: "both of the above for mortgage
+// and student-loan liabilities").
+func TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesMortgageLiability(t *testing.T) {
+	svc, deps := setupLiabilitySyncService(t)
+	ctx := context.Background()
+
+	before := testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("mortgage_liability"))
+
+	plaidAccountID := "plaid-mort-partial"
+	internalAccountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-001", userID)
+
+	resp := makePlaidLiabilitiesResponse(
+		[]plaid.CreditCardLiability{},
+		[]plaid.MortgageLiability{},
+		[]plaid.StudentLoan{},
+		// account absent from `accounts` — partial/incomplete response
+	)
+	deps.plaidSvc.On("LiabilitiesGet", ctx, "tok").Return(resp, nil)
+
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+	}, nil)
+
+	deps.linkedItemRepo.On("UpdateLiabilitiesLastSyncedAt", ctx, linkedItem.ID, mock.Anything).Return(nil)
+
+	result, err := svc.SyncLiabilities(ctx, linkedItem)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.AccountsProcessed)
+	deps.mortgageRepo.AssertNotCalled(t, "ReplaceForAccount", ctx, internalAccountID, userID, (*domain.MortgageLiability)(nil))
+	assert.Equal(t, before+1, testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("mortgage_liability")))
+}
+
+// TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesStudentLoanLiability mirrors
+// the credit test above for student loan liabilities.
+func TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesStudentLoanLiability(t *testing.T) {
+	svc, deps := setupLiabilitySyncService(t)
+	ctx := context.Background()
+
+	before := testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("student_loan_liability"))
+
+	plaidAccountID := "plaid-sl-partial"
+	internalAccountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-001", userID)
+
+	resp := makePlaidLiabilitiesResponse(
+		[]plaid.CreditCardLiability{},
+		[]plaid.MortgageLiability{},
+		[]plaid.StudentLoan{},
+		// account absent from `accounts` — partial/incomplete response
+	)
+	deps.plaidSvc.On("LiabilitiesGet", ctx, "tok").Return(resp, nil)
+
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+	}, nil)
+
+	deps.linkedItemRepo.On("UpdateLiabilitiesLastSyncedAt", ctx, linkedItem.ID, mock.Anything).Return(nil)
+
+	result, err := svc.SyncLiabilities(ctx, linkedItem)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.AccountsProcessed)
+	deps.studentLoanRepo.AssertNotCalled(t, "ReplaceForAccount", ctx, internalAccountID, userID, (*domain.StudentLoanLiability)(nil))
+	assert.Equal(t, before+1, testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("student_loan_liability")))
+}
+
+// TestLiabilitySyncService_SyncLiabilities_PartialResponse_MixedAccounts verifies per-account
+// isolation: one account present in the response's `accounts` array gets its confirmed-complete
+// clears, while a second account absent from `accounts` is left completely untouched — proving
+// the completeness gate is evaluated per account, not once for the whole sync.
+func TestLiabilitySyncService_SyncLiabilities_PartialResponse_MixedAccounts(t *testing.T) {
+	svc, deps := setupLiabilitySyncService(t)
+	ctx := context.Background()
+
+	completePlaidID := "plaid-complete-001"
+	partialPlaidID := "plaid-partial-001"
+	completeAcctID := uuid.New().String()
+	partialAcctID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-mixed", userID)
+
+	// Both categories empty for both accounts, but only completePlaidID is present in `accounts`.
+	resp := makePlaidLiabilitiesResponse(
+		[]plaid.CreditCardLiability{},
+		[]plaid.MortgageLiability{},
+		[]plaid.StudentLoan{},
+		completePlaidID,
+	)
+	deps.plaidSvc.On("LiabilitiesGet", ctx, "tok").Return(resp, nil)
+
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: completeAcctID, PlaidAccountID: completePlaidID, UserID: userID},
+		{ID: partialAcctID, PlaidAccountID: partialPlaidID, UserID: userID},
+	}, nil)
+
+	// The confirmed-complete account gets cleared on all three categories.
+	deps.creditRepo.On("ReplaceForAccount", ctx, completeAcctID, userID, (*domain.CreditLiability)(nil)).Return(nil)
+	deps.mortgageRepo.On("ReplaceForAccount", ctx, completeAcctID, userID, (*domain.MortgageLiability)(nil)).Return(nil)
+	deps.studentLoanRepo.On("ReplaceForAccount", ctx, completeAcctID, userID, (*domain.StudentLoanLiability)(nil)).Return(nil)
+
+	deps.linkedItemRepo.On("UpdateLiabilitiesLastSyncedAt", ctx, linkedItem.ID, mock.Anything).Return(nil)
+
+	result, err := svc.SyncLiabilities(ctx, linkedItem)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.AccountsProcessed)
+	deps.creditRepo.AssertExpectations(t)
+	deps.mortgageRepo.AssertExpectations(t)
+	deps.studentLoanRepo.AssertExpectations(t)
+	// The partial account must never be touched by any category's clear path.
+	deps.creditRepo.AssertNotCalled(t, "ReplaceForAccount", ctx, partialAcctID, userID, (*domain.CreditLiability)(nil))
+	deps.mortgageRepo.AssertNotCalled(t, "ReplaceForAccount", ctx, partialAcctID, userID, (*domain.MortgageLiability)(nil))
+	deps.studentLoanRepo.AssertNotCalled(t, "ReplaceForAccount", ctx, partialAcctID, userID, (*domain.StudentLoanLiability)(nil))
+}
+
 // TestLiabilitySyncService_SyncLiabilities_UpdatesLastSyncedAt verifies that
 // liabilities_last_synced_at is updated after a successful sync.
 func TestLiabilitySyncService_SyncLiabilities_UpdatesLastSyncedAt(t *testing.T) {
@@ -668,7 +844,6 @@ func TestLiabilitySyncService_SyncLiabilities_UpdatesLastSyncedAt(t *testing.T) 
 	ctx := context.Background()
 
 	linkedItem := makeLinkedItem("item-001", "user-001")
-
 
 	resp := makePlaidLiabilitiesResponse(
 		[]plaid.CreditCardLiability{},
@@ -701,8 +876,6 @@ func TestLiabilitySyncService_SyncLiabilities_CreditRepoError(t *testing.T) {
 	internalAccountID := uuid.New().String()
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
-
-
 
 	credit := makePlaidCreditLiability(plaidAccountID)
 	resp := makePlaidLiabilitiesResponse(

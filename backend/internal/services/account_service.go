@@ -12,6 +12,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
@@ -106,6 +107,18 @@ var (
 	// ErrNoAccountsAvailable is returned when Plaid returns zero accounts during linking
 	// Issue #668: Zero-account item prevention - prevents creating billable items with no accounts
 	ErrNoAccountsAvailable = errors.New("no accounts available from institution")
+	// ErrStableAccountIdentityUnavailable is returned when a stable user_accounts identity cannot
+	// be established for an account being linked.
+	//
+	// Issue #1569: this path used to log and CONTINUE, persisting an account with a NULL
+	// user_account_id. That is no longer survivable. Under history-retained-by-default an
+	// identity-less account is never cascade-deleted, so it lives forever as a chain member that
+	// accountChainKey cannot canonicalise — the permanent double-count seed described at
+	// dashboard_service.go:35-73 — and it blocks the accounts.user_account_id NOT NULL constraint
+	// that the retention model depends on. Refusing the link is the lesser failure: the user sees
+	// an actionable error and can retry, instead of silently acquiring an account whose history
+	// can never be tracked across a re-link.
+	ErrStableAccountIdentityUnavailable = errors.New("could not establish a stable account identity")
 )
 
 // AccountService handles account linking and management
@@ -138,10 +151,28 @@ type AccountService interface {
 	// Issue #1109: re-link chain transparency — callers should prefer this over GetByUserID.
 	ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error)
 
-	// DeleteAccount deletes a single account with ownership validation.
-	// Only the account owner can delete their account.
+	// DisconnectAccount stops a single account from syncing and soft-removes it (status='removed'),
+	// retaining every row derived from it. Only the account owner may disconnect their account.
+	// Issue #1569, Task 6: renamed from DeleteAccount, whose name promised the destructive verb
+	// this method has never performed since Task 2 — the DELETE HTTP route this backs is now
+	// POST /accounts/{id}/disconnect. The genuinely destructive verb is PurgeAccount below.
 	// Returns repository.ErrAccountNotFound if account doesn't exist or user doesn't own it.
-	DeleteAccount(ctx context.Context, accountID, userID string) error
+	DisconnectAccount(ctx context.Context, accountID, userID string) error
+
+	// PurgeAccount permanently and transactionally destroys accountID and every row derived from
+	// it (balance_snapshots, holdings, investment_transactions, liabilities) — see
+	// repository.AccountRepository.PurgeAccount's doc comment for the exact contract. Only the
+	// account owner may purge their account. Issue #1569, Task 6.
+	//
+	// Transactions are NOT destroyed (orphaned via ON DELETE SET NULL) and a LIVE savings goal
+	// still referencing this account BLOCKS the purge (repository.ErrPurgeBlockedBySavingsGoal) —
+	// callers must delete the goal first, and doing so is now sufficient. A goal the user has
+	// already deleted is a tombstone that still carries account_id; the purge destroys it (and its
+	// contributions, exactly as POST /savings-goals/{id}/purge would) rather than being blocked by
+	// it forever. Issue #1569, task 21 (defect C1).
+	//
+	// Returns repository.ErrAccountNotFound if account doesn't exist or user doesn't own it.
+	PurgeAccount(ctx context.Context, accountID, userID string) error
 
 	// DisconnectInstitution disconnects an institution (linked item) and all associated accounts.
 	// This also calls Plaid /item/remove to stop monthly billing.
@@ -152,6 +183,18 @@ type AccountService interface {
 	// for any reason other than ITEM_NOT_FOUND — the Item would still be live and still billing, and
 	// the local row is the only record of it. See the implementation's doc comment.
 	DisconnectInstitution(ctx context.Context, linkedItemID, userID string) error
+
+	// PurgeInstitution permanently and transactionally destroys the linked item and every account
+	// under it — see repository.LinkedItemRepository.PurgeLinkedItem's doc comment for the exact
+	// contract. Only the institution owner may purge it. Issue #1569, Task 6.
+	//
+	// Refuses with repository.ErrLinkedItemNotDisconnected unless the item has already been
+	// disconnected (Plaid billing already stopped via DisconnectInstitution) — a purge must never
+	// be the first thing that happens to a linked item, or it destroys the only local record of a
+	// Plaid Item that might still be billing.
+	//
+	// Returns repository.ErrLinkedItemNotFound if item doesn't exist or user doesn't own it.
+	PurgeInstitution(ctx context.Context, linkedItemID, userID string) error
 
 	// SetJobQueue sets the job queue for auto-sync after linking (Issue #658).
 	// This is needed because of circular dependency: service must be created before
@@ -172,6 +215,36 @@ type AccountService interface {
 	// here directly rather than redefined, since the shape is identical and both live in this
 	// package).
 	SetCacheInvalidation(gens *cache.Generations, hh SyncCacheHouseholdLookup)
+
+	// SetAuditLogger wires the GDPR/security audit trail for account.removed and
+	// institution.disconnected entries (Issue #1569, Task 5G). Nil-safe optional dependency —
+	// see the auditLogger field's doc comment on accountService for why this takes the plain
+	// AuditLogger (Log), not AuditLogRepository's LogInTx.
+	SetAuditLogger(al AuditLogger)
+
+	// SetAuditLogRepository wires the account.history_purged / linked_item.history_purged audit
+	// entries written by PurgeAccount/PurgeInstitution (Issue #1569, Task 6).
+	//
+	// ⚠ NOT OPTIONAL SINCE #1569 ROUND 17 TASK 11, and this comment said "nil-safe optional
+	// dependency" until round 17 corrected it. PurgeAccount and PurgeInstitution now REFUSE with
+	// repository.ErrAuditLogRepositoryNotWired — a 500 — when this has not been called, rather
+	// than destroying financial history with no trail. Leaving it unwired does not degrade the
+	// audit trail; it disables both purge endpoints. Every other Set* on this interface really is
+	// optional; this one is a construction requirement, and
+	// TestExplicitDestructionAuditSinkIsWiredInMain fails in CI if main.go stops calling it.
+	//
+	// ⚠ THE REPOSITORY LAYER IS STILL NIL-TOLERANT, deliberately. accountRepo.PurgeAccount and
+	// linkedItemRepo.PurgeLinkedItem take the sink as a parameter and skip the audit write when it
+	// is nil, so ~19 integration tests can exercise the destruction without an audit fixture. The
+	// refusal above is the ONLY thing standing between a nil sink and an unaudited destroy, which
+	// is why it lives in every service-layer caller and not in one place.
+	//
+	// Distinct from SetAuditLogger: those two writes MUST land inside the same
+	// transaction as the destruction they describe (repository.AuditLogRepository.LogInTx), which
+	// requires the full repository interface rather than the plain Log-only AuditLogger — see
+	// LogInTx's own doc comment for why that is safe here (this transaction never takes FOR UPDATE
+	// on a users row).
+	SetAuditLogRepository(ar repository.AuditLogRepository)
 }
 
 // LinkAccountsResult contains the results of linking bank accounts
@@ -192,6 +265,26 @@ type accountService struct {
 	jobQueue       queue.JobQueue            // Issue #658: For auto-sync after linking (can be nil)
 	enc            *appcrypto.FieldEncryptor // Issue #1010: For fingerprint computation (can be nil)
 	logger         *slog.Logger
+
+	// auditLogger records account.removed / institution.disconnected entries (Issue #1569, Task
+	// 5G — nothing was audit-logged on either path before this). Nil-safe optional dependency,
+	// same setter-injection pattern as jobQueue/cacheGens: SetAuditLogger. Uses the plain
+	// AuditLogger.Log, NOT AuditLogRepository.LogInTx — LogInTx's safety rests specifically on
+	// running inside DeleteUserCascade's transaction with a NULL actor (see its own doc comment);
+	// DeleteAccount/DisconnectInstitution have no such transaction (accountRepo.UpdateStatus and
+	// MarkRemovedByLinkedItemID are already-documented standalone autocommit statements), and
+	// these are self-service, user-initiated actions — the same class RequestDeletion/
+	// CancelDeletion/RegisterUser already log via plain Log rather than LogInTx.
+	auditLogger AuditLogger
+
+	// auditLogRepo records account.history_purged / linked_item.history_purged entries INSIDE
+	// PurgeAccount/PurgeInstitution's own transaction (Issue #1569, Task 6), via LogInTx — unlike
+	// auditLogger above, which is intentionally the non-transactional Log.
+	//
+	// ⚠ REQUIRED, not optional: while this is nil both PurgeAccount and PurgeInstitution return
+	// repository.ErrAuditLogRepositoryNotWired instead of running (#1569 round 17 task 11). Wired
+	// by SetAuditLogRepository — see that method's doc for what is still nil-tolerant below it.
+	auditLogRepo repository.AuditLogRepository
 
 	// Issue #1531 Blocker 1: cache invalidation for the dispossessed owner on fingerprint release
 	// (both optional; nil = skip that bump entirely).
@@ -276,8 +369,34 @@ func (s *accountService) checkFingerprintOwnership(ctx context.Context, blindIdx
 			"other_item_id", ownership.LinkedItemID,
 			"status_changed_at", ownership.StatusChangedAt,
 		)
-		if err := s.accountRepo.ExpireAccountsByFingerprint(ctx, blindIdx); err != nil {
+		expiredAccountIDs, err := s.accountRepo.ExpireAccountsByFingerprint(ctx, blindIdx)
+		if err != nil {
 			return fmt.Errorf("failed to expire accounts by fingerprint: %w", err)
+		}
+
+		// Issue #1569 Task 6: audit-log each expired account. Nothing was logged on this path
+		// before — the gap plaid_account_reconciliation.go's own audit call explicitly calls out
+		// ("the expiry path does not, which is precisely the gap this repeats rather than copies").
+		//
+		// THE ACTOR PROBLEM: this account belongs to ownership.UserID (the dispossessed owner), but
+		// the write was triggered by userID (the caller linking a conflicting fingerprint). Logging
+		// this as something ownership.UserID did, or as something userID did TO their own account,
+		// would both be false — userID never touched this account, and ownership.UserID took no
+		// action at all; their dormant account was flipped by someone else's link. AuditLogger.Log
+		// has no actor parameter at all (see its doc comment on writeAuditLogEntry: user_id is
+		// always written NULL, "the honest reading" for exactly this kind of action nobody
+		// performed on the resource). That absence is deliberate here, not an oversight — do not
+		// widen this call to pass userID as if it were the actor.
+		//
+		// Non-fatal, same "already committed, don't abort" reasoning as every other audit call in
+		// this file: the expiry already happened, so a logging failure must not surface as a
+		// LinkAccounts error.
+		if s.auditLogger != nil {
+			for _, expiredID := range expiredAccountIDs {
+				if auditErr := s.auditLogger.Log(ctx, "account.expired_by_fingerprint_release", "account", expiredID); auditErr != nil {
+					logAuditFailure(ctx, auditErr, "account.expired_by_fingerprint_release", ownership.UserID)
+				}
+			}
 		}
 		// Issue #1531 Blocker 1: ExpireAccountsByFingerprint just flipped a DIFFERENT user's
 		// (ownership.UserID's) accounts from active to expired — the whole point of this method,
@@ -286,29 +405,33 @@ func (s *accountService) checkFingerprintOwnership(ctx context.Context, blindIdx
 		// any cached read of that owner's is status-sensitive, this explicit bump is the only thing
 		// that closes the gap. Called AFTER the write above has committed (commit-then-bump).
 		//
-		// ⚠ #1561 NARROWED THIS. The original justification claimed "every cached analytics query
-		// filters accounts.status = 'active'", so the owner's net-worth, cash-flow AND spending
-		// aggregates all went stale; #1561 removed those nine household-scope predicates (personal
-		// scope has had none since #1109). The #1561 CORRECTION that replaced it was then wrong in
-		// turn: it said "the only status filter any of them can reach is
-		// GetAggregatedHistoryForHousehold's account-type join". There is no such filter. That join
-		// is unfiltered — `LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id`
-		// (repository/balance_snapshot_repository.go:320) — and status appears only as the first
-		// DISTINCT ON tiebreak, `(a.status = 'active') DESC NULLS LAST, a.id` (:313).
+		// ⚠ THIS JUSTIFICATION HAS NOW BEEN WRONG THREE TIMES, each time because the tree moved and
+		// the prose did not. Recorded rather than replaced silently:
+		//   1. "every cached analytics query filters accounts.status = 'active'" — #1561 removed the
+		//      nine household-scope predicates and personal scope had had none since #1109.
+		//   2. "the only status filter any of them can reach is GetAggregatedHistoryForHousehold's
+		//      account-type join" — that join was never filtered; status was a DISTINCT ON
+		//      preference, not a predicate.
+		//   3. "that preference is what makes this write cache-relevant" — #1569 T10.2 deleted the
+		//      preference. GetAggregatedHistoryForHousehold now joins the snapshot's OWN account
+		//      (a.id = bs.account_id) instead of every member of its chain, so there is nothing left
+		//      to prefer between.
 		//
-		// Re-derived, and stated as a preference rather than a filter: the three cached wrappers are
-		// analytics_service_cached.go, dashboard_preferences_service_cached.go and
-		// identity_resolver_cached.go; NONE of the queries they reach FILTERS on accounts.status, and
-		// exactly one of them — GetAggregatedHistoryForHousehold, via GetNetWorthTrend — PREFERS an
-		// active row when choosing which chain member's a.type a household balance is attributed to.
-		// That preference is what makes this write cache-relevant. The accounts LIST does filter
-		// status, but it is not a cached read (called directly from GetAccountsFiltered at :960).
+		// WHAT IS TRUE NOW, and re-derivable in one grep: NO cached read references accounts.status
+		// in any form — not as a filter, not as an ordering term. The four files a cache.GetOrLoad
+		// site can reach are pinned as cachedReadRepoFiles in
+		// repository/cache_completeness_write_set_test.go, and a qualified .status reference does
+		// not appear in any of them outside a comment.
 		//
-		// So the bump is still correct, on a much narrower basis: it covers the owner's HOUSEHOLD
-		// net-worth history, where expiring their accounts changes which a.type their balances are
-		// attributed to. For an owner in no household it now invalidates nothing — kept anyway,
-		// because over-invalidation costs one cache miss and this is a cross-user write the
-		// middleware structurally cannot see.
+		// So this write — `SET status = 'expired', expired_at = NOW()`, and nothing else — changes
+		// no cached answer at all. The bump is KEPT anyway and is not dead weight: over-invalidation
+		// costs one cache miss, this is a CROSS-USER write the HTTP middleware structurally cannot
+		// see, and the day someone adds a status-sensitive cached read this is the only thing
+		// standing between that read and a stale cross-user answer. Removing it would be trading a
+		// cache miss for a silent correctness cliff.
+		//
+		// The accounts LIST does filter status, but it is not a cached read (called directly from
+		// GetAccountsFiltered).
 		s.bumpCacheForDispossessedOwner(ctx, ownership.UserID)
 		return nil
 	}
@@ -476,7 +599,89 @@ func (s *accountService) LinkAccounts(
 		return nil, fmt.Errorf("failed to create linked item: %w", err)
 	}
 
-	// Step 5b: Issue #171 and #896 — If this is a re-link, soft-delete the old linked_item and accounts
+	// Step 6: Convert Plaid accounts to domain accounts with user_account_id
+	institutionIDFromPlaid := plaidItem.GetInstitutionId()
+	accounts := make([]domain.Account, len(plaidAccounts))
+	for i, plaidAccount := range plaidAccounts {
+		account := convertPlaidAccount(plaidAccount, linkedItem.ID, user.ID)
+
+		// Issue #171: Match or create user_account for stable reference across re-links.
+		// Issue #1569: a missing stable identity now FAILS the link — see
+		// ErrStableAccountIdentityUnavailable for why continuing is not survivable under
+		// history-retained-by-default.
+		if s.userAccountSvc == nil {
+			s.logger.Error("user_account service is not wired; refusing to link identity-less accounts",
+				"plaid_account_id", plaidAccount.GetAccountId(),
+				"user_id", user.ID,
+			)
+			observability.AccountLinkRefusedNoStableIdentity.WithLabelValues("service_unwired").Inc()
+			return nil, fmt.Errorf("%w: user_account service unavailable", ErrStableAccountIdentityUnavailable)
+		}
+
+		accountType := string(plaidAccount.GetType())
+		accountSubtype := ""
+		if subtype, ok := plaidAccount.GetSubtypeOk(); ok && subtype != nil {
+			accountSubtype = string(*subtype)
+		}
+
+		userAccount, err := s.userAccountSvc.MatchOrCreate(
+			ctx,
+			user.ID,
+			institutionID,
+			account.Mask,
+			plaidAccount.GetName(),
+			accountType,
+			accountSubtype,
+		)
+		if err != nil {
+			s.logger.Error("failed to match/create user_account; refusing the link",
+				"plaid_account_id", plaidAccount.GetAccountId(),
+				"user_id", user.ID,
+				"error", err,
+			)
+			observability.AccountLinkRefusedNoStableIdentity.WithLabelValues("match_or_create_failed").Inc()
+			return nil, fmt.Errorf("%w: %v", ErrStableAccountIdentityUnavailable, err)
+		}
+		account.UserAccountID = &userAccount.ID
+
+		// Issue #1010: Compute fingerprint blind indices for storage
+		if s.enc != nil {
+			mask := "__NO_MASK__"
+			if account.Mask != nil {
+				mask = *account.Mask
+			}
+			subtype := "__NO_SUBTYPE__"
+			if account.Subtype != nil {
+				subtype = *account.Subtype
+			}
+			if account.PersistentAccountID != nil {
+				blind := computePersistentBlind(*account.PersistentAccountID, s.enc)
+				account.PersistentAccountIDBlindIdx = &blind
+			}
+			fallbackBlind := computeFallbackBlind(institutionIDFromPlaid, mask, account.Type, subtype, s.enc)
+			account.FallbackFingerprintBlindIdx = &fallbackBlind
+		}
+
+		accounts[i] = account
+	}
+
+	// Step 6b-pre: Issue #171 and #896 — retire the predecessor, IMMEDIATELY before the successor
+	// rows are written.
+	//
+	// ⚠ #1569 T10-FIX item 1: THIS USED TO RUN AS "STEP 5B", BEFORE THE CONVERSION LOOP ABOVE, AND
+	// THAT ORDERING COULD STRAND EVERY BALANCE AT THE INSTITUTION. The loop refuses the whole link
+	// when any account has no stable identity (ErrStableAccountIdentityUnavailable), and on that
+	// path the predecessor had already been retired: old item 'replaced', every old account
+	// 'replaced', the new item holding NO accounts, and no successor pointer anywhere. Neither
+	// repair mechanism can reach that state — supersedeStrandedChainSiblings and the succession
+	// closure both run INSIDE CreateBatch, which never executes. Retirement is now the last thing
+	// before the write it belongs to, so an early return leaves the user's live connection intact.
+	// Pinned by TestLinkAccounts_RelinkRefused_LeavesThePredecessorLive.
+	//
+	// It stays BEFORE CreateBatch rather than after: the successor insert needs the predecessor's
+	// fingerprint released, and the backstop is a repair for a retirement that FAILED, not a
+	// substitute for one that never ran (TestLinkAccounts_RelinkSucceeds_StillRetiresThePredecessor
+	// pins the order).
 	if existingLinkedItem != nil {
 		s.logger.Info("re-link detected, soft-deleting old linked item",
 			"old_item_id", existingLinkedItem.ID,
@@ -506,70 +711,34 @@ func (s *accountService) LinkAccounts(
 				"error", err,
 			)
 		} else {
+			// ⚠ FAIL-OPEN, and deliberately left that way — #1569 task 9.1 item B.
+			//
+			// This loop runs BEFORE the successor rows exist (step 6b), and returning here would
+			// throw away a bank connection the user just authorised in order to fix a bookkeeping
+			// row. Until this task it was also UNBACKED: a transient failure left two 'active'
+			// accounts sharing one user_account_id with nothing recording it, and every
+			// current-state read — live holdings, the four investment-analytics SUMs — counted
+			// one logical position twice, permanently.
+			//
+			// It is now backed by the write that would otherwise create the second active row:
+			// accountRepository.CreateBatch supersedes any stranded sibling of the chain INSIDE
+			// the transaction that inserts the successor (supersedeStrandedChainSiblings). So a
+			// failure here degrades to "the tombstone lands a few seconds later, atomically",
+			// which is why this stays a log and not a return.
+			//
+			// Still logged at Error: CreateBatch can itself fail, in which case the predecessor is
+			// left 'replaced' with no successor to supersede it. That is the one window the
+			// reordering above does NOT close — it is two statements wide instead of the whole
+			// conversion loop — and a database write failing is worth surfacing on its own.
 			for _, oldAcct := range oldAccounts {
 				if err := s.accountRepo.UpdateStatus(ctx, oldAcct.ID, user.ID, domain.AccountStatusReplaced, nil); err != nil {
-					s.logger.Error("failed to soft-delete old account",
+					s.logger.Error("failed to mark the re-linked predecessor account 'replaced'; CreateBatch will supersede it atomically when the successor is inserted",
 						"account_id", oldAcct.ID,
 						"error", err,
 					)
 				}
 			}
 		}
-	}
-
-	// Step 6: Convert Plaid accounts to domain accounts with user_account_id
-	institutionIDFromPlaid := plaidItem.GetInstitutionId()
-	accounts := make([]domain.Account, len(plaidAccounts))
-	for i, plaidAccount := range plaidAccounts {
-		account := convertPlaidAccount(plaidAccount, linkedItem.ID, user.ID)
-
-		// Issue #171: Match or create user_account for stable reference across re-links
-		if s.userAccountSvc != nil {
-			accountType := string(plaidAccount.GetType())
-			accountSubtype := ""
-			if subtype, ok := plaidAccount.GetSubtypeOk(); ok && subtype != nil {
-				accountSubtype = string(*subtype)
-			}
-
-			userAccount, err := s.userAccountSvc.MatchOrCreate(
-				ctx,
-				user.ID,
-				institutionID,
-				account.Mask,
-				plaidAccount.GetName(),
-				accountType,
-				accountSubtype,
-			)
-			if err != nil {
-				s.logger.Error("failed to match/create user_account",
-					"plaid_account_id", plaidAccount.GetAccountId(),
-					"error", err,
-				)
-				// Continue without user_account_id - transactions can still be synced
-			} else {
-				account.UserAccountID = &userAccount.ID
-			}
-		}
-
-		// Issue #1010: Compute fingerprint blind indices for storage
-		if s.enc != nil {
-			mask := "__NO_MASK__"
-			if account.Mask != nil {
-				mask = *account.Mask
-			}
-			subtype := "__NO_SUBTYPE__"
-			if account.Subtype != nil {
-				subtype = *account.Subtype
-			}
-			if account.PersistentAccountID != nil {
-				blind := computePersistentBlind(*account.PersistentAccountID, s.enc)
-				account.PersistentAccountIDBlindIdx = &blind
-			}
-			fallbackBlind := computeFallbackBlind(institutionIDFromPlaid, mask, account.Type, subtype, s.enc)
-			account.FallbackFingerprintBlindIdx = &fallbackBlind
-		}
-
-		accounts[i] = account
 	}
 
 	// Step 6b: Create accounts in batch
@@ -662,13 +831,18 @@ func (s *accountService) GetAccounts(ctx context.Context, userID string) ([]doma
 	return accounts, nil
 }
 
-// DeleteAccount deletes a single account with ownership validation.
+// DisconnectAccount stops a single account from syncing with ownership validation.
 //
 // This method:
 // 1. Gets the account to retrieve its linked_item_id
-// 2. Delegates to the repository layer which validates ownership via WHERE id = $1 AND user_id = $2
-// 3. After deletion, checks if the linked item now has zero active accounts
+// 2. Soft-removes it (status='removed') — ownership validated via WHERE id = $1 AND user_id = $2
+// 3. After the soft-remove, checks if the linked item now has zero active accounts
 // 4. If zero accounts remain, stamps cleanup_scheduled_at and enqueues a Plaid-item cleanup job
+//
+// Issue #1569, Task 6: renamed from DeleteAccount — this method has soft-removed rather than
+// hard-deleted since Task 2, so the name no longer matched what it did. The DELETE HTTP route it
+// used to back is now POST /accounts/{id}/disconnect; the genuinely destructive verb lives in
+// PurgeAccount below. Nothing about this method's behavior changed in that rename.
 //
 // Issue #1486 — step 4's stamp (MarkForCleanup) is NOT optional and must precede the enqueue:
 // ItemCleanupWorker re-verifies eligibility before calling Plaid and requires the item to still be
@@ -681,20 +855,94 @@ func (s *accountService) GetAccounts(ctx context.Context, userID string) ([]doma
 // Issue #668: Zero-account item detection and cleanup - proactively remove Plaid items
 // when all accounts are deleted to stop unnecessary billing.
 //
-// Returns repository.ErrAccountNotFound if account doesn't exist or user doesn't own it.
-func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID string) error {
-	// Step 1: Get the account to retrieve linked_item_id before deletion
+// Returns repository.ErrAccountNotFound if account doesn't exist or user doesn't own it, and
+// repository.ErrAccountAlreadyDisconnected if the account is already 'replaced' or 'expired' — a
+// genuinely different transition already happened, so 409 is the right answer. A REPEAT disconnect
+// on an account that is already 'removed' is deliberately NOT an error (fix round 1 of Task 2,
+// Issue #1569): the caller's desired end state is already reality, so this returns nil — idempotent
+// success, matching this endpoint's DefaultStatus of 204 with no distinguishable body either way.
+func (s *accountService) DisconnectAccount(ctx context.Context, accountID, userID string) error {
+	// Step 1: Get the account to retrieve linked_item_id before soft-removing it
 	account, err := s.accountRepo.GetByIDAndUser(ctx, accountID, userID)
 	if err != nil {
 		return err // Returns ErrAccountNotFound if not found or not owned
 	}
 	linkedItemID := account.LinkedItemID
 
-	// Step 2: Delete the account
-	if err := s.accountRepo.Delete(ctx, accountID, userID); err != nil {
+	// Step 2: Soft-remove the account (Issue #1569) — set status='removed' + removed_at rather
+	// than hard-deleting the row. Before this fix, accountRepo.Delete hard-deleted the account,
+	// which CASCADE-deleted its balance_snapshots, holdings, investment transactions, and (via
+	// migration 000150's now-RESTRICT FK) would have started failing outright once a savings_goal
+	// pointed at it. Retaining the row means that history now survives a single-account removal,
+	// matching the institution-level DisconnectInstitution behavior below.
+	if err := s.accountRepo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusRemoved, nil); err != nil {
+		// Idempotency case, not an error (fix round 1 of Task 2): the account is ALREADY exactly
+		// what this call wants it to be. Return success immediately — no audit log (nothing
+		// happened to log), no cleanup pass below (nothing changed for it to react to). Critically,
+		// this must NOT fall through to a retried UpdateStatus call: the whole point of the
+		// repository guard is that a repeat disconnect never writes, and "success" here must mean
+		// that too, not a second attempt that happens to look different.
+		if errors.Is(err, repository.ErrAccountAlreadyRemoved) {
+			return nil
+		}
 		return err
 	}
 
+	// Issue #1569, Task 5G: audit-log the removal. Non-fatal — the account is already removed by
+	// this point, so an audit-write failure must not be reported back to the caller as a failed
+	// deletion (same "already committed, don't abort" reasoning as RequestDeletion/
+	// CancelDeletion's own audit calls — see AuditLogger's doc comment).
+	if s.auditLogger != nil {
+		if auditErr := s.auditLogger.Log(ctx, "account.removed", "account", accountID); auditErr != nil {
+			logAuditFailure(ctx, auditErr, "account.removed", userID)
+		}
+	}
+
+	s.cleanupAfterAccountRemoval(ctx, accountID, userID, linkedItemID, account.UserAccountID)
+
+	return nil
+}
+
+// PurgeAccount permanently and transactionally destroys accountID and everything derived from it.
+// See repository.AccountRepository.PurgeAccount's doc comment for the full contract (what is
+// destroyed, what survives, and why the audit write shares that transaction). Issue #1569, Task 6.
+//
+// After the purge, this runs the SAME zero-account-item cleanup and orphaned-user_account hiding
+// as DisconnectAccount — if this was the last account under its linked item, the Plaid item still
+// needs its billing stopped, exactly as it would after a soft disconnect. Fetching the account
+// BEFORE the purge (rather than after, when the row is gone) is what makes that possible.
+//
+// Returns repository.ErrAccountNotFound if account doesn't exist or user doesn't own it, or
+// repository.ErrPurgeBlockedBySavingsGoal if a savings goal still references it.
+func (s *accountService) PurgeAccount(ctx context.Context, accountID, userID string) error {
+	// Control 2 is not optional: refuse rather than destroy un-audited. See
+	// repository.ErrAuditLogRepositoryNotWired for why a nil sink is reachable at all.
+	if s.auditLogRepo == nil {
+		return repository.ErrAuditLogRepositoryNotWired
+	}
+
+	// Step 1: Get the account to retrieve linked_item_id/user_account_id BEFORE it is destroyed.
+	account, err := s.accountRepo.GetByIDAndUser(ctx, accountID, userID)
+	if err != nil {
+		return err
+	}
+	linkedItemID := account.LinkedItemID
+
+	if err := s.accountRepo.PurgeAccount(ctx, accountID, userID, s.auditLogRepo); err != nil {
+		return err
+	}
+
+	s.cleanupAfterAccountRemoval(ctx, accountID, userID, linkedItemID, account.UserAccountID)
+
+	return nil
+}
+
+// cleanupAfterAccountRemoval runs the bookkeeping shared by DisconnectAccount and PurgeAccount
+// once accountID has stopped being an active account (soft-removed or hard-purged): zero-account
+// Plaid-item cleanup, and hiding an orphaned user_account. Both callers fetch the account BEFORE
+// removing it so linkedItemID/userAccountID are still available here. Best-effort throughout —
+// every failure here is logged, never returned, matching the two callers' pre-extraction behavior.
+func (s *accountService) cleanupAfterAccountRemoval(ctx context.Context, accountID, userID, linkedItemID string, userAccountID *string) {
 	// Steps 4-5: Zero-account item cleanup (requires job queue)
 	if s.jobQueue != nil {
 		// Step 4: Count remaining active accounts for this linked item
@@ -738,10 +986,10 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 			// not land, so the job would be a guaranteed silent no-op — do not create it; leave the
 			// item to the sweep, which can still see it precisely because the stamp failed.
 			//
-			// NON-ATOMIC, disclosed rather than fixed: accountRepo.Delete above is a standalone
+			// NON-ATOMIC, disclosed rather than fixed: accountRepo.UpdateStatus above is a standalone
 			// autocommit Exec, so it has already committed by the time this stamp runs as a separate
-			// statement. A crash in that window leaves the account gone, cleanup_scheduled_at NULL and
-			// no job — the sweep re-selects most such items, but not a 'replaced'/'disconnected' one
+			// statement. A crash in that window leaves the account marked 'removed', cleanup_scheduled_at
+			// NULL and no job — the sweep re-selects most such items, but not a 'replaced'/'disconnected' one
 			// (it excludes both statuses), which is then stranded and still billing. Pre-existing in
 			// kind — the same window previously sat between Delete and Enqueue — and widened by this
 			// one statement, so not a regression; closing it would need a transaction spanning the
@@ -827,47 +1075,49 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 	}
 
 	// Step 6: Hide UserAccount if no other active accounts reference it.
-	// account.UserAccountID is populated by GetByIDAndUser (Task 1 fix).
+	// userAccountID is populated by the caller from GetByIDAndUser (Task 1 fix).
 	// This is best-effort: log on failure, never return an error.
-	if s.userAccountSvc != nil && account.UserAccountID != nil {
-		remaining, err := s.accountRepo.GetByUserAccountAndStatus(ctx, *account.UserAccountID, string(domain.AccountStatusActive))
+	if s.userAccountSvc != nil && userAccountID != nil {
+		remaining, err := s.accountRepo.GetByUserAccountAndStatus(ctx, *userAccountID, string(domain.AccountStatusActive), userID)
 		if err != nil {
 			if s.logger != nil {
 				s.logger.Warn("failed to check remaining accounts for user_account",
-					"user_account_id", *account.UserAccountID,
+					"user_account_id", *userAccountID,
 					"error", err,
 				)
 			}
 		} else if len(remaining) == 0 {
-			if hideErr := s.userAccountSvc.SetHidden(ctx, *account.UserAccountID, userID, true); hideErr != nil {
+			if hideErr := s.userAccountSvc.SetHidden(ctx, *userAccountID, userID, true); hideErr != nil {
 				if s.logger != nil {
 					s.logger.Warn("failed to hide user_account after last account deletion",
-						"user_account_id", *account.UserAccountID,
+						"user_account_id", *userAccountID,
 						"error", hideErr,
 					)
 				}
 			} else if s.logger != nil {
 				s.logger.Info("hid user_account after last account deletion",
-					"user_account_id", *account.UserAccountID,
+					"user_account_id", *userAccountID,
 				)
 			}
 		}
 	}
-
-	return nil
 }
 
-// DisconnectInstitution disconnects an institution (linked item) and all associated accounts.
+// DisconnectInstitution disconnects an institution (linked item) while RETAINING the item's row
+// and its accounts' financial history (Issue #1569).
 //
 // This method performs the following steps:
-// 1. Retrieve the linked item with ownership validation
-// 2. Decrypt the Plaid access token
-// 3. Call Plaid /item/remove to stop monthly billing (critical for cost control - Issue #226)
-// 4. Delete the linked item from database (CASCADE deletes all associated accounts)
+//  1. Retrieve the linked item with ownership validation
+//  2. Decrypt the Plaid access token
+//  3. Call Plaid /item/remove to stop monthly billing (critical for cost control - Issue #226)
+//  4. Mark the item 'disconnected', stamp plaid_removed_at, and mark its accounts 'removed' —
+//     see the "Issue #1569" paragraph below for why this replaced a hard DeleteByUser.
 //
-// Issue #1486 follow-up part F: step 4 is CONDITIONAL on step 3 having succeeded. Until this fix a
+// Issue #1486 follow-up part F: step 4 is CONDITIONAL on step 3 having succeeded. Until that fix a
 // Plaid failure was logged and the row deleted anyway, which is the same defect as parts A/B
-// (PlaidItemCleanupService.RemoveItem) on a second, user-initiated path.
+// (PlaidItemCleanupService.RemoveItem) on a second, user-initiated path. That condition is
+// unchanged by the #1569 rewrite below: step 4 still does not run unless step 3 succeeded (or
+// ITEM_NOT_FOUND, see below).
 //
 // On FREQUENCY, since an earlier version of this comment claimed this path "runs far more often than
 // the daily cleanup sweep": that was asserted, not measured, and it is currently FALSE. The frontend
@@ -877,27 +1127,41 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 // being identical and irreversible, which needs no frequency argument. Do not reintroduce a frequency
 // claim here without a measurement.
 //
-// Deleting here CASCADE-deletes the accounts too,
-// leaving a live, still-billing Plaid Item with no local record it ever existed, and
-// DeleteUserCascade's C2 guard (repository.uncleanedLinkedItemExistsClause, an EXISTS over
-// linked_items) with nothing left to see.
+// Issue #1569: step 4 used to call linkedItemRepo.DeleteByUser, which hard-deleted the linked_items
+// row and, via accounts.linked_item_id ON DELETE CASCADE, every account under it — and through
+// those accounts, every balance_snapshot, holding, investment transaction, and liability row. That
+// is the literal "I changed banks" action irreversibly destroying the user's financial history, so
+// it is replaced with the same claim → remove → stamp → disconnect contract
+// PlaidItemCleanupService.RemoveItem already implements for the cleanup worker (see that method,
+// and item_cleanup.go's Work): mark the item 'disconnected' (MarkItemsDisconnected, the status this
+// repo has carried since migration 000032 — "'disconnected': User manually disconnected, data
+// preserved" — designed years ago and bypassed by DeleteByUser ever since), stamp
+// plaid_removed_at (MarkPlaidRemoved), and transition the item's accounts to status='removed' with
+// removed_at set (accountRepo.MarkRemovedByLinkedItemID). Nothing is deleted.
 //
-// The inherited rationale — "the access token is likely already invalid, so delete anyway; this
-// prevents orphaned database records" — traded a harmless orphan (a local row) for a harmful one (a
-// billing Plaid Item nobody can find), and rested on plaidService.RemoveItem's doc comment, which
-// asserted the same thing and is corrected alongside this. Plaid bills per ITEM: an Item with an
-// unusable token is still an Item until /item/remove succeeds.
+// The plaid_removed_at stamp is NOT bookkeeping — DeleteUserCascade's C2 guard
+// (repository.uncleanedLinkedItemExistsClause) checks plaid_removed_at IS NULL, not item status,
+// and refuses to erase a user while any item still owes Plaid-side cleanup. A stamp failure here is
+// therefore propagated, exactly as it is in RemoveItem, rather than logged and dropped: leaving it
+// unstamped would silently block that user's GDPR erasure forever.
+//
+// The inherited rationale for the OLD hard delete — "the access token is likely already invalid, so
+// delete anyway; this prevents orphaned database records" — traded a harmless orphan (a local row)
+// for a harmful one (a billing Plaid Item nobody can find) AND for destroyed history, and rested on
+// plaidService.RemoveItem's doc comment, which asserted the same thing and was corrected alongside
+// the #1486 fix. Plaid bills per ITEM: an Item with an unusable token is still an Item until
+// /item/remove succeeds.
 //
 // The ONE Plaid failure still treated as success is ITEM_NOT_FOUND (isPlaidItemAlreadyGone): Plaid
 // has already forgotten the Item, so billing has stopped and there is nothing left to remove.
 // Without that branch this method would refuse forever for any such item and the user could never
 // clear it from their UI — the same asymmetry parts A and B close in RemoveItem.
 //
-// On a genuine failure the row and its accounts are LEFT IN PLACE and the error is returned to the
-// caller (a 500 via the handler). Recovery is the ordinary one: the user retries the disconnect.
-// Note the cleanup sweep will NOT retry it automatically — a healthy, recently-synced item is not a
-// cleanup candidate — which is precisely why the failure must surface rather than be swallowed into
-// a false success.
+// On a genuine Plaid failure the row and its accounts are LEFT IN PLACE, still 'active', and the
+// error is returned to the caller (a 500 via the handler). Recovery is the ordinary one: the user
+// retries the disconnect. Note the cleanup sweep will NOT retry it automatically — a healthy,
+// recently-synced item is not a cleanup candidate — which is precisely why the failure must surface
+// rather than be swallowed into a false success.
 //
 // Returns repository.ErrLinkedItemNotFound if item doesn't exist or user doesn't own it.
 func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID, userID string) error {
@@ -912,7 +1176,7 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 	if removeErr := s.plaidService.RemoveItem(ctx, linkedItem.AccessToken); removeErr != nil {
 		if !isPlaidItemAlreadyGone(removeErr) {
 			if s.logger != nil {
-				s.logger.Error("plaid RemoveItem failed; NOT deleting the linked item, which is the only local record of a still-billing Plaid Item",
+				s.logger.Error("plaid RemoveItem failed; NOT disconnecting the linked item locally, since Plaid billing has not stopped",
 					"item_id", linkedItemID,
 					"user_id", userID,
 					"error", removeErr,
@@ -928,9 +1192,82 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 		}
 	}
 
-	// Step 4: Delete from database (CASCADE deletes all accounts). Reached only when Plaid billing
-	// really has stopped — see the doc comment.
-	return s.linkedItemRepo.DeleteByUser(ctx, linkedItemID, userID)
+	// Step 4: Retain the row and its history — reached only when Plaid billing really has stopped
+	// (see the doc comment). Mirrors PlaidItemCleanupService.RemoveItem's order, which is
+	// load-bearing there for the same reason: stamp plaid_removed_at BEFORE marking 'disconnected'.
+	// A crash between the two leaves status live, so a retried DisconnectInstitution call reaches
+	// this line again (RemoveItem answers ITEM_NOT_FOUND on the retry) and the stamp still lands.
+	// In the reverse order, a crash after 'disconnected' but before the stamp would still be
+	// recoverable here — cleanupCandidateSelectQuery's sweep does not exclude 'disconnected', only
+	// 'replaced' — but matching RemoveItem's order keeps this path from becoming a second place
+	// that has to reason about that independently.
+	//
+	// MarkPlaidRemoved failure is NOT swallowed: see the doc comment's GDPR paragraph. A genuine
+	// failure here must surface so the caller can retry, not be logged and dropped.
+	if stampErr := s.linkedItemRepo.MarkPlaidRemoved(ctx, []string{linkedItemID}); stampErr != nil &&
+		!errors.Is(stampErr, repository.ErrNoLinkedItemsUpdated) {
+		// ErrNoLinkedItemsUpdated means the row is already gone (MarkPlaidRemoved has no status
+		// guard that could otherwise filter it out) — nothing left to stamp, and nothing left for
+		// uncleanedLinkedItemExistsClause to see. Any OTHER error must propagate.
+		if s.logger != nil {
+			s.logger.Error("plaid removal succeeded but stamping plaid_removed_at failed; NOT proceeding to mark the item disconnected",
+				"item_id", linkedItemID,
+				"user_id", userID,
+				"error", stampErr,
+			)
+		}
+		return fmt.Errorf("failed to record plaid_removed_at for item %s after Plaid removal: %w", linkedItemID, stampErr)
+	}
+
+	if markErr := s.linkedItemRepo.MarkItemsDisconnected(ctx, []string{linkedItemID}); markErr != nil &&
+		!errors.Is(markErr, repository.ErrNoLinkedItemsUpdated) {
+		// ErrNoLinkedItemsUpdated is a legitimate no-op — the row is already 'disconnected' or
+		// 'replaced' (MarkItemsDisconnected's WHERE excludes both). Either way the Plaid side is
+		// already recorded done by the stamp above; any OTHER error must propagate.
+		return fmt.Errorf("failed to mark linked item %s disconnected: %w", linkedItemID, markErr)
+	}
+
+	// Transition the item's accounts to 'removed' with removed_at set — the change that actually
+	// retains history: no CASCADE, no DELETE, balance_snapshots/holdings/investment
+	// transactions/liability rows for these accounts are untouched.
+	if err := s.accountRepo.MarkRemovedByLinkedItemID(ctx, linkedItemID, domain.RemovalReasonUserDisconnect); err != nil {
+		if s.logger != nil {
+			s.logger.Error("failed to mark accounts removed after disconnecting linked item",
+				"item_id", linkedItemID,
+				"user_id", userID,
+				"error", err,
+			)
+		}
+		return fmt.Errorf("failed to mark accounts removed for item %s: %w", linkedItemID, err)
+	}
+
+	// Issue #1569, Task 5G: audit-log the disconnect. Non-fatal, same reasoning as
+	// DeleteAccount's audit call above — the disconnect has already committed by this point.
+	if s.auditLogger != nil {
+		if auditErr := s.auditLogger.Log(ctx, "institution.disconnected", "linked_item", linkedItemID); auditErr != nil {
+			logAuditFailure(ctx, auditErr, "institution.disconnected", userID)
+		}
+	}
+
+	return nil
+}
+
+// PurgeInstitution permanently and transactionally destroys the linked item and every account
+// under it. See repository.LinkedItemRepository.PurgeLinkedItem's doc comment for the full
+// contract. Issue #1569, Task 6.
+//
+// Deliberately a thin pass-through: unlike PurgeAccount, there is no post-purge zero-account-item
+// cleanup to run — the item itself, along with every account under it, is what was just destroyed.
+//
+// Returns repository.ErrLinkedItemNotFound if item doesn't exist or user doesn't own it,
+// repository.ErrLinkedItemNotDisconnected unless the item was already disconnected first, or
+// repository.ErrPurgeBlockedBySavingsGoal if a savings goal still references one of its accounts.
+func (s *accountService) PurgeInstitution(ctx context.Context, linkedItemID, userID string) error {
+	// See PurgeAccount's identical refusal.
+	if s.auditLogRepo == nil {
+		return repository.ErrAuditLogRepositoryNotWired
+	}
+	return s.linkedItemRepo.PurgeLinkedItem(ctx, linkedItemID, userID, s.auditLogRepo)
 }
 
 // AccountFilterOptions holds filter options for GetAccountsFiltered (Issue #1109).
@@ -944,6 +1281,13 @@ type AccountFilterOptions struct {
 	// repository's AllStatuses (the genuine no-status-predicate read) today. Issue #1537.
 	StatusFilter  string
 	UserAccountID string // if set, filter to accounts with this user_account_id
+
+	// AsOf resolves the account universe as it really was at this instant, from
+	// account_status_history, instead of the current accounts.status snapshot. Mutually
+	// exclusive with a "replaced"-only StatusFilter and with the repository's AllStatuses (see
+	// repository.ErrAccountFilterAsOfConflict / resolveAccountStatusScope) — the API layer must
+	// not offer a combination that errors. Issue #1569.
+	AsOf *time.Time
 }
 
 // GetAccountsFiltered retrieves accounts with optional filters (Issue #307, #1109).
@@ -961,12 +1305,32 @@ func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string,
 		return []domain.Account{}, nil
 	}
 
-	// Map service options to repository filter options
+	// Map service options to repository filter options.
+	//
+	// StatusFilter=="all_statuses" is distinct from the pre-existing StatusFilter=="all" misnomer:
+	// "all" maps to IncludeReplaced (`status IN ('active','replaced')`), while "all_statuses" maps
+	// to the repository's genuine no-status-predicate AllStatuses read (active, replaced, expired
+	// AND removed). Issue #1569, Task 5D: the accounts page's "Closed accounts" surface needs the
+	// full universe so it can locally split active vs. closed via isInactive.
 	repoOpts := repository.AccountFilterOptions{
 		IncludeHidden:   opts.IncludeHidden,
 		IncludeReplaced: opts.IncludeReplaced || opts.StatusFilter == "all",
 		ReplacedOnly:    opts.StatusFilter == "replaced",
+		AllStatuses:     opts.StatusFilter == "all_statuses",
 		UserAccountID:   opts.UserAccountID,
+		AsOf:            opts.AsOf,
+
+		// Issue #1591: the accounts list is also the accounts DETAIL surface — AccountDetailPage
+		// has no single-account endpoint and reads this same response — so this is the one read
+		// whose rows reach a place that can print "Last known balance: $X as of <date>" beside a
+		// Closed badge. Terminal accounts only; active ones come back with both fields nil.
+		//
+		// Gated on AsOf being absent because the repository REFUSES the combination
+		// (ErrAccountFilterLastKnownAsOfConflict): an as-of read is anchored to a past instant and
+		// "the newest snapshot on record" is not an answer to it. Asking for it here would turn
+		// every as-of listing into an error rather than a blend — correct, but the caller should
+		// not be asking. See lastKnownBalanceLateral in repository/account_liveness_sql.go.
+		IncludeLastKnownBalance: opts.AsOf == nil,
 	}
 
 	// Query accounts with filters using internal UUID
@@ -1095,6 +1459,20 @@ func (s *accountService) SetJobQueue(jq queue.JobQueue) {
 func (s *accountService) SetCacheInvalidation(gens *cache.Generations, hh SyncCacheHouseholdLookup) {
 	s.cacheGens = gens
 	s.cacheHousehold = hh
+}
+
+// SetAuditLogger wires the GDPR/security audit trail for account.removed and
+// institution.disconnected entries. Nil-safe optional dependency (Issue #1569, Task 5G) — see
+// the auditLogger field's doc comment for why this uses Log rather than LogInTx.
+func (s *accountService) SetAuditLogger(al AuditLogger) {
+	s.auditLogger = al
+}
+
+// SetAuditLogRepository implements AccountService.SetAuditLogRepository — see that method's doc
+// comment for why purge needs the LogInTx-capable repository interface rather than the plain
+// AuditLogger used by SetAuditLogger above.
+func (s *accountService) SetAuditLogRepository(ar repository.AuditLogRepository) {
+	s.auditLogRepo = ar
 }
 
 // bumpCacheForDispossessedOwner invalidates userID's cached analytics (and, when resolvable,

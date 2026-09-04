@@ -35,11 +35,11 @@ import (
 // instant. callOrder records every external call so a test can assert both WHAT happened and in
 // WHAT ORDER — ordering is load-bearing here (see the ordering test below).
 type revocationHarness struct {
-	svc          DeletionService
-	repo         *MockProfileRepositoryForDeletion
-	paddle       *MockPaddleDeletionCleaner
-	plaid        *MockPlaidItemCleanupService
-	clerk        *MockClerkService
+	svc        DeletionService
+	repo       *MockProfileRepositoryForDeletion
+	paddle     *MockPaddleDeletionCleaner
+	plaid      *MockPlaidItemCleanupService
+	clerk      *MockClerkService
 	callOrder  *[]string
 	subID      string
 	custID     string

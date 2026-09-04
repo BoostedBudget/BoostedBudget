@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { PlugZap } from 'lucide-react'
+import { SavingsGoalProgressItemFreshness } from '@boostedbudget/api-client/models'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { computeSavingsProgress, computeSavingsRemaining } from '../types'
@@ -16,6 +18,18 @@ export interface SavingsGoalCardProps {
   onAddFunds?: (goal: SavingsGoal) => void;
   /** Callback when contributions change (refetch the goal list) */
   onContributionChanged?: () => void;
+  /**
+   * Freshness of a balance-derived amount, from GET /savings-goals/progress-summary
+   * (Issue #1569 Task 13 / E14). Only 'basis_account_disconnected' renders anything: it is the
+   * one value the user can act on, and the only one that means the number will NEVER move
+   * again. 'stale' means the balance IS still being updated, just not in the last 24 h — a
+   * badge for that would be noise on every card overnight.
+   *
+   * Typed as the generated union, not `string`: the backend field carries an OpenAPI enum, so
+   * a rename on the Go side now breaks `tsc` here instead of silently switching the
+   * explanation off.
+   */
+  freshness?: SavingsGoalProgressItemFreshness;
 }
 
 function formatCurrency(amount: number, currencyCode: string): string {
@@ -36,11 +50,12 @@ function formatDate(dateString: string): string {
   return new Date(year, month - 1, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds, onContributionChanged }: SavingsGoalCardProps) {
+export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds, onContributionChanged, freshness }: SavingsGoalCardProps) {
   const progress = Math.round(computeSavingsProgress(goal))
   const remaining = computeSavingsRemaining(goal)
   const visualWidth = Math.min(progress, 100)
   const [contributionsOpen, setContributionsOpen] = useState(false)
+  const isDisconnected = freshness === SavingsGoalProgressItemFreshness.basis_account_disconnected
 
   return (
     <Card className="flex flex-col gap-4 transition-shadow hover:shadow-md">
@@ -51,6 +66,16 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds, onContribu
           </h3>
           {goal.is_completed && (
             <Badge variant="success">Completed</Badge>
+          )}
+          {isDisconnected && (
+            <Badge
+              variant="warning"
+              data-testid="savings-goal-disconnected-badge"
+              aria-describedby={`savings-goal-disconnected-${goal.id}`}
+            >
+              <PlugZap className="mr-1 h-3 w-3" aria-hidden="true" />
+              Account disconnected
+            </Badge>
           )}
         </div>
         {goal.description && <p className="m-0 text-sm text-muted-foreground"><span data-ph-mask>{goal.description}</span></p>}
@@ -82,6 +107,19 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds, onContribu
         </div>
         <span className="text-sm font-semibold text-muted-foreground min-w-[3rem] text-right">{progress}%</span>
       </div>
+
+      {isDisconnected && (
+        // NOT a live region. An earlier version used role="status", but a live region that
+        // enters the DOM already containing its text is not reliably announced by assistive
+        // technology — the comment claimed a behaviour the markup did not deliver. This is
+        // static page content, so it is reached by ordinary reading order, and the badge is
+        // tied to it via aria-describedby so the two are encountered together. Nothing here is
+        // conveyed by colour alone: both the badge and this sentence state it in words.
+        <p id={`savings-goal-disconnected-${goal.id}`} className="m-0 text-sm text-muted-foreground">
+          This goal&rsquo;s linked account is no longer connected, so the amount above is frozen at its
+          last known value. Reconnect the account to resume updates.
+        </p>
+      )}
 
       <div className="flex justify-between items-center text-sm text-muted-foreground">
         <span className="font-medium" data-ph-mask>

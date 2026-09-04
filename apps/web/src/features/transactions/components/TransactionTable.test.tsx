@@ -825,4 +825,134 @@ describe('TransactionTable', () => {
       expect(onCategorize).not.toHaveBeenCalled()
     })
   })
+  // ── #1569 T12 gap 1: reversed transactions ────────────────────────────────────────────
+  //
+  // The API can express "the bank withdrew this after it posted" and, until now, nothing in
+  // apps/web consumed it. An unlabelled reversal sitting in the list is WORSE than a hidden one
+  // — it reads as a live transaction. WCAG 2.1 AA: the state carries a text label, not a tint.
+  describe('reversed transactions (#1569 T12)', () => {
+    const reversedRow: BankingTransaction = {
+      ...mockBankingRow,
+      id: 'bank-reversed',
+      name: 'DUPLICATE CHARGE',
+      merchant_name: 'Contoso',
+      reversed: true,
+      reversed_at: '2025-03-14T09:00:00Z',
+    }
+
+    const renderRows = (rows: FeedRow[]) =>
+      render(<TransactionTable transactions={rows} accountsMap={mockAccounts} />)
+
+    it('labels a reversed row in words, not by colour alone', () => {
+      renderRows([reversedRow])
+      expect(screen.getByText('Reversed')).toBeInTheDocument()
+    })
+
+    it('does not label an ordinary posted row', () => {
+      renderRows([mockBankingRow])
+      expect(screen.queryByText('Reversed')).not.toBeInTheDocument()
+    })
+
+    it('does not label a row whose reversed flag is explicitly false', () => {
+      renderRows([{ ...mockBankingRow, reversed: false }])
+      expect(screen.queryByText('Reversed')).not.toBeInTheDocument()
+    })
+
+    it('gives the row an accessible reversed state for screen readers', () => {
+      const { container } = renderRows([reversedRow])
+      expect(container.querySelector('[data-reversed="true"]')).not.toBeNull()
+    })
+
+    // The amount is struck through so the row reads as undone at a glance. The strike is
+    // ADDITIONAL to the label, never instead of it.
+    it('strikes through the amount of a reversed row', () => {
+      const { container } = renderRows([reversedRow])
+      expect(container.querySelector('.line-through')).not.toBeNull()
+    })
+
+    it('does not strike through an ordinary row', () => {
+      const { container } = renderRows([mockBankingRow])
+      expect(container.querySelector('.line-through')).toBeNull()
+    })
+
+    // ⚠ DataTable masks only the columns named in maskedColumnIds, and NOTHING masks an
+    // attribute — session replay records those verbatim. The reversed marker must therefore be
+    // structural (a boolean) and must never carry the amount or the merchant.
+    it('leaks no financial detail into the attributes session replay records verbatim', () => {
+      const { container } = renderRows([reversedRow])
+      const marked = container.querySelector('[data-reversed="true"]')
+      expect(marked).not.toBeNull()
+      if (!marked) return
+      for (const attr of Array.from(marked.attributes)) {
+        expect(attr.value).not.toContain('45.99')
+        expect(attr.value).not.toContain('Contoso')
+        expect(attr.value).not.toContain('DUPLICATE CHARGE')
+      }
+    })
+
+    // ── C1: contrast ────────────────────────────────────────────────────────────────────
+    //
+    // The first version of this dimmed the row with `opacity-70` and the amount with
+    // `text-muted-foreground`. Rows have no background of their own (DataTable is bg-card), so
+    // the opacity composited straight onto the ground and took a 14px BOLD amount — not WCAG
+    // "large text", so the 4.5:1 floor applies — to 2.71:1 in light and 4.02:1 on dark card.
+    // Computed from src/index.css tokens; see the report for the full table.
+    //
+    // The fix is to remove the opacity entirely rather than tune it: a reversed row now
+    // composites on exactly the same ground as every other row, so no ratio anywhere can regress.
+    // The strike-through and the badge carry "undone"; the number stays fully legible, because
+    // the most important thing on a reversed row should not be the least readable thing on it.
+    it('does not dim the row, which would composite every cell below the AA floor', () => {
+      const { container } = renderRows([reversedRow])
+      expect(container.querySelector('tr.opacity-70')).toBeNull()
+      expect(container.querySelector('[class*="opacity-"]')).toBeNull()
+    })
+
+    it('renders the struck amount at full foreground contrast, not muted', () => {
+      const { container } = renderRows([reversedRow])
+      const struck = container.querySelector('.line-through')
+      expect(struck).not.toBeNull()
+      expect(struck?.className).toContain('text-foreground')
+      expect(struck?.className).not.toContain('text-muted-foreground')
+    })
+
+    // ── I2: a settled pending must render NOWHERE ───────────────────────────────────────
+    //
+    // The backend gates this twice (the query excludes TxnDeletedProviderRemovedPending, and
+    // Transaction.Reversed() returns false for it), and TestTombstone_SettledPendingIsNeverSurfaced
+    // pins it. This is the third gate, and it exists because of what was measured when one was
+    // fed in anyway: REVERSED BADGE true, PENDING BADGE false, AMOUNT RENDERED true — a settled
+    // pending rendered as an ordinary posted reversal, next to the posted twin it duplicates.
+    //
+    // Double-counting real money is the one failure mode worth a redundant client-side check,
+    // so `pending && reversed` is treated as unrenderable rather than as a reversal.
+    it('renders a pending+reversed row nowhere — it is a settled pending, not a reversal', () => {
+      const { container } = renderRows([{ ...reversedRow, pending: true }])
+      expect(screen.queryByText('Reversed')).not.toBeInTheDocument()
+      expect(screen.queryByText('Pending')).not.toBeInTheDocument()
+      expect(container.textContent).not.toContain('45.99')
+      expect(container.textContent).not.toContain('DUPLICATE CHARGE')
+    })
+
+    it('does not swallow the other rows when a settled pending is filtered out', () => {
+      renderRows([{ ...reversedRow, pending: true }, mockBankingRow])
+      expect(screen.getByText('Amazon')).toBeInTheDocument()
+    })
+
+    it('still renders an ordinary pending row, which is not a settled pending', () => {
+      renderRows([{ ...mockBankingRow, pending: true }])
+      expect(screen.getByText('Pending')).toBeInTheDocument()
+    })
+
+    // Tightened: td[data-ph-mask] alone matches ANY masked cell (merchant, account), so it
+    // passed even when the amount column was not in maskedColumnIds. Key on the cell that
+    // actually contains the amount.
+    it('keeps the amount cell inside the masked column set', () => {
+      const { container } = renderRows([reversedRow])
+      const maskedCells = Array.from(container.querySelectorAll('td[data-ph-mask]'))
+      const amountCell = maskedCells.find((td) => td.querySelector('[data-reversed="true"]'))
+      expect(amountCell).toBeDefined()
+      expect(amountCell?.textContent).toContain('45.99')
+    })
+  })
 })

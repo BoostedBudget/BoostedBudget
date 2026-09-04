@@ -162,7 +162,19 @@ func newAllowingPlaidCleanupClaimsRepo() *MockWorkClaimsRepository {
 func newTestPlaidCleanupService(repo linkedItemRepoForCleanup, plaidSvc plaidServiceForCleanup) PlaidItemCleanupService {
 	svc := NewPlaidItemCleanupService(repo, plaidSvc)
 	svc.SetWorkClaimsRepo(newAllowingPlaidCleanupClaimsRepo())
+	svc.SetAccountRepo(permissiveAccountRepoForCleanup{})
 	return svc
+}
+
+// permissiveAccountRepoForCleanup satisfies the account-repository requirement (Issue #1569 Task
+// 20) for the tests in this file, whose subject is the Plaid/claim/status machinery rather than the
+// account transition. It records nothing on purpose: the tests that ARE about the transition assert
+// on a recording mock, in plaid_item_cleanup_accounts_removed_test.go, and a second recorder here
+// would invite an assertion that passes because this stand-in was silently substituted for it.
+type permissiveAccountRepoForCleanup struct{}
+
+func (permissiveAccountRepoForCleanup) MarkRemovedByLinkedItemID(context.Context, string, domain.RemovalReason) error {
+	return nil
 }
 
 // plaidItemNotFoundErr builds a plaid.GenericOpenAPIError whose body decodes to Plaid's
@@ -679,6 +691,7 @@ func TestPlaidCleanup_SideEffectClaimLost_PlaidNeverCalled(t *testing.T) {
 
 	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
 	service.SetWorkClaimsRepo(mockClaims)
+	service.SetAccountRepo(permissiveAccountRepoForCleanup{})
 
 	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
@@ -711,6 +724,7 @@ func TestPlaidCleanup_SideEffectClaimWon_PlaidCalledExactlyOnceThenReleased(t *t
 
 	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
 	service.SetWorkClaimsRepo(mockClaims)
+	service.SetAccountRepo(permissiveAccountRepoForCleanup{})
 
 	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
@@ -918,6 +932,7 @@ func TestPlaidCleanup_C2_ItemListReadAfterClaimNotBefore(t *testing.T) {
 
 	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
 	service.SetWorkClaimsRepo(mockClaims)
+	service.SetAccountRepo(permissiveAccountRepoForCleanup{})
 
 	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 

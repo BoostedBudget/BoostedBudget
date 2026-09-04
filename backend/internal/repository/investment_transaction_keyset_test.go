@@ -34,23 +34,23 @@ func makeInvKeysetRowWithSecurity(userID, accountID string, txnDate time.Time, t
 	price := 200.00
 	subtype := "buy"
 	return []interface{}{
-		uuid.New().String(), // id
-		userID,              // user_id
-		accountID,           // account_id
-		(*string)(nil),      // user_account_id (nullable)
-		&secID,              // security_id (nullable)
+		uuid.New().String(),               // id
+		userID,                            // user_id
+		accountID,                         // account_id
+		(*string)(nil),                    // user_account_id (nullable)
+		&secID,                            // security_id (nullable)
 		"plaid-ks-" + uuid.New().String(), // plaid_investment_transaction_id
-		"buy",               // type
-		&subtype,            // subtype (nullable)
-		"ACME Corp",         // name
-		&qty,                // quantity (nullable)
-		1000.00,             // amount
-		&price,              // price (nullable)
-		(*float64)(nil),     // fees (nullable)
-		txnDate,             // date
-		txnDate,             // created_at
-		ticker,              // ticker_symbol (nullable, from LEFT JOIN securities)
-		securityName,        // security_name (nullable, from LEFT JOIN securities)
+		"buy",                             // type
+		&subtype,                          // subtype (nullable)
+		"ACME Corp",                       // name
+		&qty,                              // quantity (nullable)
+		1000.00,                           // amount
+		&price,                            // price (nullable)
+		(*float64)(nil),                   // fees (nullable)
+		txnDate,                           // date
+		txnDate,                           // created_at
+		ticker,                            // ticker_symbol (nullable, from LEFT JOIN securities)
+		securityName,                      // security_name (nullable, from LEFT JOIN securities)
 	}
 }
 

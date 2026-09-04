@@ -94,6 +94,9 @@ func TestPlaidCleanupService_Integration_TerminalFailure_UnblocksErasureAndPrese
 	fakePlaid := &switchablePlaidCollaborator{failWith: plaidInvalidAccessTokenErr()}
 	svc := NewPlaidItemCleanupService(linkedItemRepo, fakePlaid)
 	svc.SetWorkClaimsRepo(claimsRepo)
+	// Issue #1569 Task 20: a no-op account-repository stand-in — see the note in
+	// plaid_item_cleanup_service_null_status_integration_test.go.
+	svc.SetAccountRepo(permissiveAccountRepoForCleanup{})
 
 	// 1. The deletion flow's own call. It must report the sentinel — not a generic failure, which is
 	//    what used to make this user's erasure impossible forever.
@@ -215,6 +218,9 @@ func TestPlaidCleanupService_Integration_TerminalFailure_ConfigFixInsideTheWindo
 	fakePlaid := &switchablePlaidCollaborator{failWith: plaidInvalidAccessTokenErr()}
 	svc := NewPlaidItemCleanupService(linkedItemRepo, fakePlaid)
 	svc.SetWorkClaimsRepo(claimsRepo)
+	// Issue #1569 Task 20: a no-op account-repository stand-in — see the note in
+	// plaid_item_cleanup_service_null_status_integration_test.go.
+	svc.SetAccountRepo(permissiveAccountRepoForCleanup{})
 
 	// Day 1: misconfigured. The verdict is recorded and the erasure is refused — nothing irreversible
 	// has happened.

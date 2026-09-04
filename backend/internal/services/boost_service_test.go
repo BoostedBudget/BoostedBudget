@@ -22,10 +22,10 @@ import (
 // savingsGoalBoostActions returns a marshalled savings_goal action JSON for the given IDs.
 func savingsGoalBoostActions(savingsGoalID, fromAccountID string) json.RawMessage {
 	b, _ := json.Marshal(map[string]interface{}{
-		"savings_goal_id":  savingsGoalID,
-		"from_account_id":  fromAccountID,
-		"amount_type":      "fixed",
-		"amount":           50.0,
+		"savings_goal_id": savingsGoalID,
+		"from_account_id": fromAccountID,
+		"amount_type":     "fixed",
+		"amount":          50.0,
 	})
 	return b
 }
@@ -58,7 +58,7 @@ func transferBoostActionsWithUserAccountIDs(fromAccountID, toAccountID, fromUser
 // newSavingsGoalBoostRequest builds a CreateBoostRequest for a savings_goal rule.
 func newSavingsGoalBoostRequest(savingsGoalID, fromAccountID string) *domain.CreateBoostRequest {
 	return &domain.CreateBoostRequest{
-		Name:     "my savings rule",
+		Name:      "my savings rule",
 		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -71,7 +71,7 @@ func newSavingsGoalBoostRequest(savingsGoalID, fromAccountID string) *domain.Cre
 // newTransferBoostRequest builds a CreateBoostRequest for a transfer_suggestion rule.
 func newTransferBoostRequest(fromAccountID, toAccountID string) *domain.CreateBoostRequest {
 	return &domain.CreateBoostRequest{
-		Name:     "my transfer rule",
+		Name:      "my transfer rule",
 		BoostType: domain.BoostTypeTransferSuggestion,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -246,10 +246,10 @@ func TestUpdateBoost_OwnershipEnforced(t *testing.T) {
 	fromAccountID := "from-a"
 
 	existingBoost := &domain.Boost{
-		ID:       boostID,
-		UserID:   userID,
-		Name:     "existing",
-		Enabled:  true,
+		ID:        boostID,
+		UserID:    userID,
+		Name:      "existing",
+		Enabled:   true,
 		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -328,7 +328,7 @@ func TestCreateBoost_Transfer_FromUserAccountIDOwnership(t *testing.T) {
 
 	actions := transferBoostActionsWithUserAccountIDs(fromAccountID, toAccountID, fromUserAccountID, "")
 	req := &domain.CreateBoostRequest{
-		Name:     "chain resolver idor test",
+		Name:      "chain resolver idor test",
 		BoostType: domain.BoostTypeTransferSuggestion,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -364,7 +364,7 @@ func TestCreateBoost_Transfer_ToUserAccountIDOwnership(t *testing.T) {
 
 	actions := transferBoostActionsWithUserAccountIDs(fromAccountID, toAccountID, "", toUserAccountID)
 	req := &domain.CreateBoostRequest{
-		Name:     "chain resolver idor test to",
+		Name:      "chain resolver idor test to",
 		BoostType: domain.BoostTypeTransferSuggestion,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -393,7 +393,7 @@ func budgetCategoryConditionBoost(categoryID string) *domain.CreateBoostRequest 
 		"amount":          10.0,
 	})
 	return &domain.CreateBoostRequest{
-		Name:     "category condition rule",
+		Name:      "category condition rule",
 		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -523,10 +523,10 @@ func TestUpdateBoost_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	victimCategoryID := "cat-victim-update"
 
 	existingBoost := &domain.Boost{
-		ID:       boostID,
-		UserID:   userID,
-		Name:     "existing rule",
-		Enabled:  true,
+		ID:        boostID,
+		UserID:    userID,
+		Name:      "existing rule",
+		Enabled:   true,
 		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -589,7 +589,7 @@ func TestCreateBoost_InvalidConditions_WrapsErrInvalidBoost(t *testing.T) {
 		"amount":          10.0,
 	})
 	req := &domain.CreateBoostRequest{
-		Name:     "bad field rule",
+		Name:      "bad field rule",
 		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -620,10 +620,10 @@ func TestUpdateBoost_InvalidConditions_WrapsErrInvalidBoost(t *testing.T) {
 	boostID := "rule-bad-cond"
 
 	existingBoost := &domain.Boost{
-		ID:       boostID,
-		UserID:   userID,
-		Name:     "existing valid rule",
-		Enabled:  true,
+		ID:        boostID,
+		UserID:    userID,
+		Name:      "existing valid rule",
+		Enabled:   true,
 		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -717,7 +717,7 @@ func TestCreateBoost_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 		"amount":          10.0,
 	})
 	req := &domain.CreateBoostRequest{
-		Name:     "category-not-in-budget rule",
+		Name:      "category-not-in-budget rule",
 		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -749,10 +749,10 @@ func TestUpdateBoost_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 	categoryID := "cat-1"
 
 	existingBoost := &domain.Boost{
-		ID:       boostID,
-		UserID:   userID,
-		Name:     "existing rule",
-		Enabled:  true,
+		ID:        boostID,
+		UserID:    userID,
+		Name:      "existing rule",
+		Enabled:   true,
 		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,

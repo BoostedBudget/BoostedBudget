@@ -4,6 +4,7 @@ package cache_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -96,7 +97,19 @@ func TestGenerationKeys_HaveNoTTL_DataKeysDo(t *testing.T) {
 
 	gen, err := cache.NewGenerations(client).Get(ctx, scopeKind, scopeID)
 	require.NoError(t, err)
-	dataKey := k.DataKey(1, gen)
+	// Discover the data key GetOrLoad actually wrote instead of reconstructing one with a
+	// hand-picked schema version (k.DataKey(1, gen) went stale the moment round 12 bumped
+	// NamespaceAnalytics to SchemaVersion 2 — namespace.go has no exported accessor for a
+	// namespace's version from this external test package, and hardcoding "2" here would only
+	// buy one more bump before going stale again). The pattern wildcards the "vN" segment and
+	// otherwise pins every other segment of key.go's DataKey format (scope tag, namespace,
+	// generation, method, arg hash) via genKey's own rendered prefix, so it can only match the
+	// one data key this test itself wrote — it cannot match genKey (no ":gen" suffix, no
+	// namespace segment) and cannot match another test's key (scopeTag is unique per test, see
+	// cachetest.NewIsolatedCache).
+	prefix := genKey[:len(genKey)-len(":gen")]
+	pattern := fmt.Sprintf("%s:%s:v*:g%s:%s:%s", prefix, k.Namespace, gen, k.Method, k.ArgHash)
+	dataKey := findExactlyOneKey(ctx, t, pattern)
 	dataPTTL, err := pttl(ctx, t, dataKey)
 	require.NoError(t, err)
 	assert.Greater(t, dataPTTL, time.Duration(0), "data key must carry a real TTL")

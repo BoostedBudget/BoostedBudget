@@ -311,8 +311,8 @@ func TestBudgetIncomeService_GetMatchingIncomeTransactions_PFCPrimaryMatch(t *te
 	}
 
 	transactions := []domain.Transaction{
-		{ID: "tx-1", UserID: "user-123", Amount: -5000.00, PFCPrimary: incomeTestStrPtr("INCOME")},        // Match - inflow under PFCv2
-		{ID: "tx-2", UserID: "user-123", Amount: 50.00, PFCPrimary: incomeTestStrPtr("INCOME")},           // Outflow (positive), excluded by IsInflow check
+		{ID: "tx-1", UserID: "user-123", Amount: -5000.00, PFCPrimary: incomeTestStrPtr("INCOME")},       // Match - inflow under PFCv2
+		{ID: "tx-2", UserID: "user-123", Amount: 50.00, PFCPrimary: incomeTestStrPtr("INCOME")},          // Outflow (positive), excluded by IsInflow check
 		{ID: "tx-3", UserID: "user-123", Amount: 100.00, PFCPrimary: incomeTestStrPtr("FOOD_AND_DRINK")}, // Outflow, wrong category
 		// Match via PFC override
 		{

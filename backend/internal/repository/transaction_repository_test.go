@@ -32,11 +32,29 @@ func TestTransactionSelectColumns(t *testing.T) {
 		"custom_category_override_id", "category_source", "category_override_date",
 		"effective_pfc_primary", "effective_pfc_detailed", "effective_category_name",
 		"reviewed", "reviewed_at",
+		// #1569 tombstone provenance, appended last so no existing scan offset moves.
+		"deleted_at", "deleted_reason", "deleted_by",
 	}
 
 	t.Run("exact order and count match scanTransactions destinations", func(t *testing.T) {
 		assert.Equal(t, expectedColumns, transactionSelectColumns,
 			"transactionSelectColumns order must match the positional Scan() in scanTransactions")
+	})
+
+	// #1569 round 1. transactionSelectColumns and scanTransactionDestSliceWithState are coupled
+	// POSITIONALLY, and the test above only compares the column list to a hardcoded copy of itself —
+	// it never touches the destination slice. Four hand-maintained copies of that slice existed
+	// before #1569; consolidating them removed the drift-between-copies risk and left the survivor
+	// with no guard at all. This is the cheap half of the fix (a length check catches an
+	// added-to-one-not-the-other mistake); the half that catches a same-typed SWAP is
+	// TestScanDestinations_MapColumnsToTheRightFields_Integration, because only a real row can
+	// reveal that pfc_primary landed in PFCDetailed.
+	t.Run("scan destination count matches the column list", func(t *testing.T) {
+		repo := &transactionRepository{}
+		dest, _ := repo.scanTransactionDestSliceWithState(&domain.Transaction{})
+		assert.Len(t, dest, len(transactionSelectColumns),
+			"scanTransactionDestSliceWithState must have exactly one destination per column in "+
+				"transactionSelectColumns; a mismatch is a runtime Scan error on every read")
 	})
 
 	t.Run("no duplicate column names", func(t *testing.T) {
@@ -82,17 +100,18 @@ func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 		},
 	}
 
-	// Expect batch INSERT with multiple value sets (32 fields per transaction * 2 transactions = 64 args)
+	// Expect batch INSERT with multiple value sets (33 fields per transaction * 2 transactions = 66 args)
 	// Issue #171: user_account_id; Issue #1123: effective_category_name; Issue #1163: merchant_id
 	// Issue #1203: category override columns (4) + category_source + reviewed + reviewed_at
 	// Issue #1213: RETURNING id, (xmax::text::bigint = 0) AS inserted
-	args := make([]interface{}, 64)
+	// Issue #1578: pending_transaction_id_blind_idx
+	args := make([]interface{}, 66)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
-	rows := pgxmock.NewRows([]string{"id", "inserted"}).
-		AddRow("test-id-1", true).
-		AddRow("test-id-2", true)
+	rows := pgxmock.NewRows([]string{"id", "inserted", "external_transaction_id_blind_idx"}).
+		AddRow("test-id-1", true, nil).
+		AddRow("test-id-2", true, nil)
 	mock.ExpectQuery("INSERT INTO transactions").
 		WithArgs(args...).
 		WillReturnRows(rows)
@@ -127,7 +146,8 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 		Pending:               false,
 	}
 
-	// Expect UPDATE query (17 args: merchant_id added at $6, shifts all subsequent params)
+	// Expect UPDATE query (18 args: merchant_id added at $6, shifts all subsequent params;
+	// #1578 appended pending_transaction_id_blind_idx at $18)
 	mock.ExpectExec("UPDATE transactions SET").
 		WithArgs(
 			transaction.Amount,
@@ -147,34 +167,11 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 			pgxmock.AnyArg(), // updated_at
 			transaction.ID,
 			transaction.UserID, // $17: user_id scope
+			pgxmock.AnyArg(),   // $18: pending_transaction_id_blind_idx (#1578)
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err = repo.Update(ctx, transaction)
-	assert.NoError(t, err)
-
-	err = mock.ExpectationsWereMet()
-	assert.NoError(t, err)
-}
-
-// TestTransactionRepository_DeleteByExternalID_Success tests transaction deletion
-func TestTransactionRepository_DeleteByExternalID_Success(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	require.NoError(t, err)
-	defer mock.Close()
-
-	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
-	ctx := context.Background()
-
-	externalID := "plaid_tx_123"
-	userID := "user-123"
-
-	// Expect DELETE query using blind index (not raw externalID)
-	mock.ExpectExec("DELETE FROM transactions").
-		WithArgs(string(domain.SourcePlaid), pgxmock.AnyArg(), userID).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
-
-	err = repo.DeleteByExternalID(ctx, domain.SourcePlaid, externalID, userID)
 	assert.NoError(t, err)
 
 	err = mock.ExpectationsWereMet()
@@ -211,6 +208,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		).
 		AddRow(
 			"tx-2", userID, "account-2", "item-1",
@@ -222,6 +220,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// Expect SELECT query
@@ -266,6 +265,7 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// Expect chain-aware SELECT query (subquery expands via user_account_id)
@@ -309,6 +309,7 @@ func TestTransactionRepository_GetByAccountID_ChainAware(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// Chain subquery includes replaced account in result
@@ -353,6 +354,7 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// Expect SELECT query (source is passed as string, not domain type)
@@ -399,6 +401,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// Expect SELECT query with only user_id filter (FROM transactions t with t. prefix)
@@ -450,6 +453,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// Expect SELECT query with date range filter (FROM transactions t, t.-qualified columns)
@@ -499,6 +503,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// Chain-expanded WHERE clause (account_id appears twice for subquery; t. prefix on cols)
@@ -549,6 +554,7 @@ func TestTransactionRepository_ChainExpand_AccountID(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// Chain-expanded WHERE clause with activeAccountID twice (subquery + fallback; t. prefix)
@@ -598,6 +604,7 @@ func TestTransactionRepository_ChainExpand_AccountIDs(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// Chain-expanded WHERE with IN subquery (args appear twice; t. prefix)
@@ -647,6 +654,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// Expect SELECT query with ILIKE search (3 ILIKE conditions, single pattern arg via JOINs)
@@ -695,6 +703,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_PFCPrimaries(t *testing.T)
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t.user_id(.+)AND \(t.effective_pfc_primary IN`).
@@ -742,6 +751,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// Expect SELECT query with pending filter (t. prefix)
@@ -796,6 +806,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// Issue #1109: chain-expanded account_id filter uses subquery; accountID appears twice. (t. prefix)
@@ -904,6 +915,7 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// Expect SELECT query with WHERE source = $1 AND external_transaction_id_blind_idx = $2 AND user_id = $3
@@ -981,6 +993,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t\.user_id`).
@@ -1033,6 +1046,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 			nil, "manual", &overrideDate,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t\.user_id`).
@@ -1082,6 +1096,7 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 			nil, "manual", &overrideDate,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE id").
@@ -1119,7 +1134,19 @@ func TestTransactionRepository_UpdateCategory_PFCOverride(t *testing.T) {
 	kind := "pfc"
 	primary := "FOOD_AND_DRINK"
 
-	mock.ExpectExec("UPDATE transactions").
+	// Lock-first (#1569 Task 6, review fix R79): the capture now runs inside a transaction that has
+	// already taken the row lock, so the mock has to see Begin -> the FOR UPDATE -> the capturing
+	// query -> Commit. A mock cannot prove the lock WORKS — that is
+	// TestAnnotationHistory_ConcurrentWriteDoesNotFabricateATransition_Integration's job — but it can
+	// prove the sequence is still issued.
+	mock.ExpectBegin()
+	mock.ExpectExec("FOR UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	// #1569 Task 6 (#1579): the statement is now a CTE that also records the prior annotation, so
+	// it is a QUERY returning the `updated` CTE's count rather than an Exec whose statement tag is
+	// read. The tag would now count the recording INSERT, which is 0 for a write that changed
+	// nothing — reading it would report ErrTransactionNotFound for a successful no-op re-save.
+	mock.ExpectQuery("UPDATE transactions").
 		WithArgs(
 			&kind,
 			&primary,
@@ -1131,7 +1158,8 @@ func TestTransactionRepository_UpdateCategory_PFCOverride(t *testing.T) {
 			txID,
 			userID,
 		).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectCommit()
 
 	err = repo.UpdateCategory(ctx, txID, userID, &kind, &primary, nil, nil, domain.CategorySourceManual)
 	assert.NoError(t, err)
@@ -1151,9 +1179,13 @@ func TestTransactionRepository_SetReviewed(t *testing.T) {
 	userID := "user-123"
 	ids := []string{"tx-1", "tx-2"}
 
-	mock.ExpectExec("UPDATE transactions").
+	mock.ExpectBegin()
+	mock.ExpectExec("FOR UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	mock.ExpectQuery("UPDATE transactions").
 		WithArgs(true, pgxmock.AnyArg(), userID, ids).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(2)))
+	mock.ExpectCommit()
 
 	n, err := repo.SetReviewed(ctx, userID, ids, true)
 	require.NoError(t, err)
@@ -1172,9 +1204,13 @@ func TestTransactionRepository_SetReviewed_Unreview(t *testing.T) {
 	userID := "user-123"
 	ids := []string{"tx-1"}
 
-	mock.ExpectExec("UPDATE transactions").
+	mock.ExpectBegin()
+	mock.ExpectExec("FOR UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	mock.ExpectQuery("UPDATE transactions").
 		WithArgs(false, (*time.Time)(nil), userID, ids).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectCommit()
 
 	n, err := repo.SetReviewed(ctx, userID, ids, false)
 	require.NoError(t, err)
@@ -1207,7 +1243,10 @@ func TestTransactionRepository_UpdateCategory_ClearOverride(t *testing.T) {
 	txID := "tx-clear"
 	userID := "user-123"
 
-	mock.ExpectExec("UPDATE transactions").
+	mock.ExpectBegin()
+	mock.ExpectExec("FOR UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	mock.ExpectQuery("UPDATE transactions").
 		WithArgs(
 			(*string)(nil), // category_override_kind
 			(*string)(nil), // pfc_primary_override
@@ -1219,7 +1258,8 @@ func TestTransactionRepository_UpdateCategory_ClearOverride(t *testing.T) {
 			txID,
 			userID,
 		).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectCommit()
 
 	err = repo.UpdateCategory(ctx, txID, userID, nil, nil, nil, nil, domain.CategorySourceManual)
 	assert.NoError(t, err)
@@ -2229,12 +2269,12 @@ func TestTransactionRepository_CreateBatch_WithUserAccountID(t *testing.T) {
 
 	// Expect batch INSERT (32 fields per transaction; Issue #1203 added override columns + review state)
 	// Issue #1213: RETURNING id, (xmax::text::bigint = 0) AS inserted
-	args := make([]interface{}, 32)
+	args := make([]interface{}, 33) // #1578: pending_transaction_id_blind_idx is the 33rd
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
-	rows := pgxmock.NewRows([]string{"id", "inserted"}).
-		AddRow("test-id-relink-1", true)
+	rows := pgxmock.NewRows([]string{"id", "inserted", "external_transaction_id_blind_idx"}).
+		AddRow("test-id-relink-1", true, nil)
 	mock.ExpectQuery("INSERT INTO transactions").
 		WithArgs(args...).
 		WillReturnRows(rows)
@@ -2275,15 +2315,15 @@ func TestTransactionRepository_CreateBatch_DOUpdateBehavior(t *testing.T) {
 	}
 
 	// Build arguments for 32 fields per transaction (Issue #1203 added override columns + review state)
-	args := make([]interface{}, 32)
+	args := make([]interface{}, 33) // #1578: pending_transaction_id_blind_idx is the 33rd
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
 
 	// The query should use ON CONFLICT DO UPDATE (not DO NOTHING) and RETURNING xmax
 	// Issue #1213: RETURNING id, (xmax::text::bigint = 0) AS inserted
-	rows := pgxmock.NewRows([]string{"id", "inserted"}).
-		AddRow("test-do-update-id", false) // conflict-updated row: inserted=false
+	rows := pgxmock.NewRows([]string{"id", "inserted", "external_transaction_id_blind_idx"}).
+		AddRow("test-do-update-id", false, nil) // conflict-updated row: inserted=false
 	mock.ExpectQuery("ON CONFLICT.*DO UPDATE").
 		WithArgs(args...).
 		WillReturnRows(rows)
@@ -2330,12 +2370,12 @@ func TestTransactionRepository_CreateBatch_PersistsOverrideAndReview(t *testing.
 
 	// The INSERT must include the new override + review columns.
 	// Issue #1213: RETURNING id, (xmax::text::bigint = 0) AS inserted
-	args := make([]interface{}, 32)
+	args := make([]interface{}, 33) // #1578: pending_transaction_id_blind_idx is the 33rd
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
-	rows := pgxmock.NewRows([]string{"id", "inserted"}).
-		AddRow("test-override-id", true)
+	rows := pgxmock.NewRows([]string{"id", "inserted", "external_transaction_id_blind_idx"}).
+		AddRow("test-override-id", true, nil)
 	mock.ExpectQuery("category_override_kind, pfc_primary_override, pfc_detailed_override, custom_category_override_id,[\\s]+category_source, reviewed, reviewed_at").
 		WithArgs(args...).
 		WillReturnRows(rows)
@@ -2358,8 +2398,13 @@ func TestTransactionRepository_CreateBatch_ReturnsInsertedIDs(t *testing.T) {
 	repo := NewTransactionRepository(mockDB, newTestFieldEncryptor(t))
 	ctx := context.Background()
 
+	enc := newTestFieldEncryptor(t)
 	freshID := uuid.New().String()
 	conflictExistingID := uuid.New().String() // the id returned for the conflict row is the EXISTING row's id
+	// #1586 gap G7: the conflict row is MINTED with a different id from the one already stored,
+	// which is what a re-delivery looks like. Pre-assigning the stored id here (as this test used
+	// to) made the write-back a no-op and hid the defect.
+	conflictMintedID := uuid.New().String()
 	externalID1 := "plaid_tx_fresh"
 	externalID2 := "plaid_tx_conflict"
 
@@ -2376,7 +2421,7 @@ func TestTransactionRepository_CreateBatch_ReturnsInsertedIDs(t *testing.T) {
 			Name:                  "Fresh Transaction",
 		},
 		{
-			ID:                    conflictExistingID, // pre-assigned; on conflict RETURNING returns the existing row id
+			ID:                    conflictMintedID, // on conflict RETURNING returns the EXISTING row's id instead
 			UserID:                "user-123",
 			AccountID:             "account-123",
 			LinkedItemID:          "item-123",
@@ -2391,11 +2436,13 @@ func TestTransactionRepository_CreateBatch_ReturnsInsertedIDs(t *testing.T) {
 	// RETURNING id, (xmax::text::bigint = 0) AS inserted
 	// Fresh insert: our pre-assigned id, xmax=0 (inserted=true)
 	// Conflict update: existing row id, xmax!=0 (inserted=false)
-	rows := pgxmock.NewRows([]string{"id", "inserted"}).
-		AddRow(freshID, true).
-		AddRow(conflictExistingID, false)
+	blindFresh := enc.BlindIndex(externalID1)
+	blindConflict := enc.BlindIndex(externalID2)
+	rows := pgxmock.NewRows([]string{"id", "inserted", "external_transaction_id_blind_idx"}).
+		AddRow(freshID, true, &blindFresh).
+		AddRow(conflictExistingID, false, &blindConflict)
 
-	args := make([]interface{}, 64) // 32 fields * 2 rows
+	args := make([]interface{}, 66) // 33 fields * 2 rows (#1578 added pending_transaction_id_blind_idx)
 	for i := range args {
 		args[i] = pgxmock.AnyArg()
 	}
@@ -2408,6 +2455,16 @@ func TestTransactionRepository_CreateBatch_ReturnsInsertedIDs(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, insertedIDs[freshID], "fresh insert should be in insertedIDs")
 	assert.False(t, insertedIDs[conflictExistingID], "conflict-preserved row should NOT be in insertedIDs")
+	assert.False(t, insertedIDs[conflictMintedID], "nor under the id the caller minted for it")
+
+	// #1586 gap G7: the two returned facts are DIFFERENT questions and must stay so. insertedIDs
+	// answers "is this row new?" and deliberately excludes the conflict row, because
+	// EmitBatchSideEffects fires rule analytics off it and a re-delivery must not re-fire them. The
+	// slice answers "which row did I write?", and for the conflict row that is the STORED id — the
+	// only thing the caller can safely hand to a follow-up statement.
+	assert.Equal(t, freshID, transactions[0].ID, "a fresh insert keeps the id it was written with")
+	assert.Equal(t, conflictExistingID, transactions[1].ID,
+		"a conflict row must come back carrying the PERSISTED id, not the minted one")
 	require.NoError(t, mockDB.ExpectationsWereMet())
 }
 
@@ -2440,6 +2497,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 		"custom_category_override_id", "category_source", "category_override_date",
 		"effective_pfc_primary", "effective_pfc_detailed", "effective_category_name",
 		"reviewed", "reviewed_at",
+		"deleted_at", "deleted_reason", "deleted_by",
 	}).
 		AddRow(
 			"tx-uuid-1", userID, "account-old", "item-old", &userAccountID,
@@ -2450,6 +2508,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 			nil, nil, nil, nil, "plaid", nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		).
 		AddRow(
 			"tx-uuid-2", userID, "account-new", "item-new", &userAccountID,
@@ -2460,6 +2519,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 			nil, nil, nil, nil, "plaid", nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	mock.ExpectQuery("SELECT.*FROM transactions.*WHERE user_id.*AND user_account_id").
@@ -2526,6 +2586,7 @@ func testTxRow(id, userID, accountID, itemID, name string, amount float64, now t
 		nil, nil, nil, nil, nil, nil,
 		nil, nil, nil,
 		false, nil, // reviewed, reviewed_at
+		nil, nil, nil, // #1569 deleted_at, deleted_reason, deleted_by
 	}
 }
 
@@ -2888,6 +2949,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		).
 		AddRow(
 			"tx-2", userID, "account-new-2", "item-1",
@@ -2899,6 +2961,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// The WHERE clause must contain user_account_id filter.
@@ -3066,6 +3129,7 @@ func makeKeysetRow(id, userID string, amount float64, txDate time.Time, merchant
 		nil, nil, nil, nil, nil, nil,
 		nil, nil, nil,
 		false, nil, // reviewed, reviewed_at
+		nil, nil, nil, // #1569 deleted_at, deleted_reason, deleted_by
 	}
 }
 
@@ -3424,6 +3488,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_MerchantID(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			nil, nil, nil,
 			false, nil,
+			nil, nil, nil,
 		)
 
 	// WHERE clause must include merchant_id filter.
@@ -3612,9 +3677,13 @@ func TestBulkUpdateCategory_Success(t *testing.T) {
 	pfcPrimary := "FOOD_AND_DRINK"
 	ids := []string{uuid.New().String(), uuid.New().String()}
 
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE transactions")).
+	mock.ExpectBegin()
+	mock.ExpectExec("FOR UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	mock.ExpectQuery(regexp.QuoteMeta("UPDATE transactions")).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(2)))
+	mock.ExpectCommit()
 
 	n, err := repo.BulkUpdateCategory(ctx, userID, ids, ptrStr("pfc"), &pfcPrimary, nil, nil, domain.CategorySourceManual)
 	require.NoError(t, err)
@@ -3652,9 +3721,13 @@ func TestBulkUpdateCategory_PartialOwnership(t *testing.T) {
 	userID := "user-222"
 	ids := []string{uuid.New().String(), uuid.New().String(), uuid.New().String()} // 3 requested
 
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE transactions")).
+	mock.ExpectBegin()
+	mock.ExpectExec("FOR UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	mock.ExpectQuery(regexp.QuoteMeta("UPDATE transactions")).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1)) // only 1 owned
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1))) // only 1 owned
+	mock.ExpectCommit()
 
 	n, err := repo.BulkUpdateCategory(ctx, userID, ids, nil, nil, nil, nil, domain.CategorySourceManual)
 	require.NoError(t, err)

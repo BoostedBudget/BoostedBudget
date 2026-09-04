@@ -121,7 +121,15 @@ func armElapsedRetentionClock(t *testing.T, ctx context.Context, pool *pgxpool.P
 	_, err := pool.Exec(ctx, `
 		UPDATE users
 		SET retention_started_at = retention_started_at - make_interval(months => $1::int),
-		    retention_expires_at = retention_expires_at - make_interval(months => $1::int)
+		    retention_expires_at = retention_expires_at - make_interval(months => $1::int),
+		    -- Issue #1569 T1: the sweep and the retention claim both now require BOTH promised
+		    -- pre-deletion notices to have actually been recorded
+		    -- (retentionNoticesDeliveredPredicate). A fixture with NULL markers is a WITHHELD
+		    -- account, not a deletion candidate, so every test below would be asserting against a
+		    -- user the gate refuses. Backdated relative to the (already backdated) expiry so the
+		    -- row describes a user genuinely warned before their clock ran out.
+		    retention_notice_30d_sent_at = retention_expires_at - make_interval(months => $1::int) - INTERVAL '30 days',
+		    retention_notice_7d_sent_at = retention_expires_at - make_interval(months => $1::int) - INTERVAL '7 days'
 		WHERE id = $2`,
 		retentionFixtureMonths+1, userID,
 	)

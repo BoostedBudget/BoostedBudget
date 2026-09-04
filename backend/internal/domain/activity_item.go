@@ -80,6 +80,19 @@ type ActivityItem struct {
 	Tags                  []string       `json:"tags,omitempty"`
 	Account               *Account       `json:"account,omitempty"`
 
+	// Reversed marks a banking row the PROVIDER withdrew after it had already posted — a bank
+	// reversal or correction. Issue #1569.
+	//
+	// It is only ever true when the caller asked for reversals (include_reversed); every read
+	// excludes tombstoned rows by default. A settled pending (a row removed while still pending)
+	// is never returned at all and therefore never appears here: its posted twin is already in
+	// the feed, and showing both would double-count the same money.
+	//
+	// A client that requests reversals MUST render this distinctly. An unlabelled reversal sitting
+	// in a list is worse than a hidden one — it reads as a live transaction.
+	Reversed   *bool      `json:"reversed,omitempty"`
+	ReversedAt *time.Time `json:"reversed_at,omitempty"`
+
 	// --- Investment-only fields (null for banking rows) ---
 	// SecurityID is set for equity/fund transactions; null for cash transactions.
 	SecurityID         *string  `json:"security_id,omitempty"`
@@ -103,7 +116,8 @@ func NewBankingActivityItem(t *Transaction) *ActivityItem {
 	src := string(t.Source)
 	pending := t.Pending
 	reviewed := t.Reviewed
-	return &ActivityItem{
+	reversed := t.Reversed()
+	item := &ActivityItem{
 		Source:                        FeedSourceBanking,
 		SortDate:                      sortDate,
 		ID:                            t.ID,
@@ -143,5 +157,10 @@ func NewBankingActivityItem(t *Transaction) *ActivityItem {
 		ReviewedAt:                    t.ReviewedAt,
 		Tags:                          t.Tags,
 		Account:                       t.Account,
+		Reversed:                      &reversed,
 	}
+	if reversed {
+		item.ReversedAt = t.DeletedAt
+	}
+	return item
 }

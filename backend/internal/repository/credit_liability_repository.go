@@ -80,6 +80,12 @@ func (r *creditLiabilityRepository) ReplaceForAccount(ctx context.Context, accou
 
 	// nil means delete-only (clear stale data when Plaid no longer reports this liability)
 	if liability == nil {
+		// #1569 T6 fix round 1: record the absence rather than leaving today's earlier statement
+		// standing as the day's answer. Flips `present` only — the row keeps its details (the APR schedule this very DELETE just wiped) so
+		// the clear is preserved as history rather than erasing it. Earlier days are untouched.
+		if err := markLiabilityStatementAbsent(ctx, tx, accountID, userID, domain.LiabilityTypeCredit); err != nil {
+			return err
+		}
 		return tx.Commit(ctx)
 	}
 
@@ -123,6 +129,14 @@ func (r *creditLiabilityRepository) ReplaceForAccount(ctx context.Context, accou
 		}
 	}
 
+	// #1569 T6: capture the committed state — parent row AND the APR schedule just written — into
+	// liability_statements, in this same transaction and IN ADDITION to the replace above. The
+	// delete-only path returns earlier and deliberately captures nothing: there is nothing to
+	// record, and the days already recorded must not be disturbed by a clear.
+	if err := captureCreditLiabilityStatement(ctx, tx, accountID, userID); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 
@@ -140,7 +154,8 @@ func (r *creditLiabilityRepository) GetByUserID(ctx context.Context, userID stri
 		FROM credit_liabilities
 		JOIN accounts a ON a.id = credit_liabilities.account_id
 		WHERE credit_liabilities.user_id = $1
-		  AND a.status = 'active'
+		  -- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		  AND ` + currentStateAccountLeg("a") + `
 		ORDER BY credit_liabilities.account_id
 	`
 

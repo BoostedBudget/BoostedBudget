@@ -17,6 +17,67 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make dev                    # Docker-compose up
 make test-fast              # Backend+frontend tests, NO e2e (~2min)
 make test-all               # ALL tests including e2e (~4min)
+make test-scripts           # The 24 shell guard suites: 22 in scripts/__tests__/, one in
+                             # apps/web/scripts/__tests__/, and — ⚠ do not drop this one when
+                             # re-deriving the count from the two __tests__ globs, which is how
+                             # this line came to say 19 — scripts/check-frontend-coverage.test.sh,
+                             # which sits beside its subject rather than in a __tests__ dir.
+                             # Verified #1569 r19: every on-disk suite is invoked by the target
+                             # (no orphans), and the target's own "N/24:" labels agree.
+                             # Separate CI steps, NOT covered by
+                             # test-fast/test-all/bun run test. Fails on the first red. Docker/
+                             # Postgres-dependent suites skip with a visible warning if unavailable
+                             # locally (CI always has them and runs unconditionally). #1569 task 7.1:
+                             # this target existed but every local gate stayed green while CI's
+                             # shell-guard steps were red — run this before trusting a green local run.
+                             # ⚠ #1569 round 15: `make test-scripts` itself runs in NO CI job, and CI
+                             # never has. Each suite is wired as its OWN step instead. Round 15
+                             # wired the last unwired ones (no-ungated-migrate-down-invocation,
+                             # check-ci-env-drift, summarize-go-test; plus
+                             # replay-concurrently-transaction, added with its step in round 15
+                             # task 9 fix 1, in Migration Tests) — the suite count was 18 then.
+                             # ⚠ Re-verified #1569 r19 (Codex): 21 suites, 21 individual CI steps,
+                             # and set comparison found NO suite in the target missing from CI and
+                             # none in CI absent from the target.
+                             # ⚠ Re-verified #1598: now 23 suites, 23 individual CI steps, both set
+                             # comparisons still empty in both directions. The two added are
+                             # check-portable-sed and check-runner-portability, both hosted in
+                             # e2e-test and both also in check-ungated-guard-steps.py's
+                             # REQUIRED_UNGATED_STEPS (which now pins 12 step names, not 8), so
+                             # they cannot be silently unwired.
+                             # ⚠ #1601 adds the 24th, check-route-weight, and it breaks TWO
+                             # patterns the entries above would lead you to assume. It is hosted in
+                             # **bundle-size, not e2e-test**, because its guard needs a BUILT
+                             # apps/web/dist and only that job produces one (its sibling bundle
+                             # guard check-orphan-chunks is hosted there for the same reason). And
+                             # it is deliberately **NOT** in REQUIRED_UNGATED_STEPS: that list is
+                             # for guards whose subject no paths filter covers, whereas this one's
+                             # subject IS the frontend, so being gated on the frontend/workflow
+                             # filters is correct rather than a hole. The pin therefore stays at 12
+                             # step names, not 13. Re-derive with:
+                             #   git ls-files -- '*__tests__/*.test.sh' 'scripts/*.test.sh' | wc -l
+                             # and NOT by grepping the Makefile, which returns 46 because every
+                             # suite appears twice there — once in its "N/24:" label and once as
+                             # the invoked path.
+                             # Adding a suite to this target therefore does NOT put it in CI; add a
+                             # step too. **CI is the ONLY authoritative gate** —
+                             # there is no pre-push hook in this repo (`core.hooksPath` is
+                             # `.git/hooks`, `.sample` files only; no husky, no lefthook), and none
+                             # should be the sole home of a guard: a hook is bypassable with
+                             # `--no-verify` and does not exist in a fresh clone.
+                             # ⚠ **CI is not a single platform any more** (#1598). `e2e-test` and
+                             # `lighthouse-audit` run on ephemeral Ubuntu (`ubicloud-standard-2`);
+                             # the other 38 jobs stay on the macOS pool. A shell guard that runs
+                             # in e2e-test must therefore work under BOTH bash 3.2/BSD (the Mac,
+                             # and `make test-scripts` locally) and bash 5/GNU (the runner). This
+                             # is one-directional and easy to ship broken: a bash-4 or GNU-only
+                             # construct passes CI and fails only on a developer's machine, while
+                             # a BSD-only one does the reverse. `scripts/check-portable-sed.sh`
+                             # mechanises the sed case specifically; for everything else, verify
+                             # with `/bin/bash <script>` (3.2.57 here), not `bash`.
+                             # Runner placement is enforced by
+                             # `scripts/check-runner-portability.py` and documented in
+                             # `.github/workflows/README.md` § Runner placement.
 
 # Backend (from /backend)
 go test ./... -v            # All tests
@@ -29,6 +90,25 @@ make -C backend lint        # golangci-lint
 # entity — a convincing false failure. CI does this too: see the "Run integration tests"
 # step in .github/workflows/test.yml (referenced by step name, not line number — this
 # cross-reference has gone stale three times as the workflow grew).
+#
+# ⚠ #1569 round 14: DATABASE_URL alone is NOT the complete local command. CI's "Run
+# integration tests" step also requires CACHE_REDIS_TEST_URL and REDIS_TEST_URL — leaving
+# either unset makes 30 tests t.Skip() silently (they do NOT fail), which hid a real
+# regression for two rounds. The complete local command, against this repo's standing
+# Docker containers (boostedbudget-db on 5434, boostedbudget-redis-cache on 6380,
+# boostedbudget-redis-ratelimit on 6379):
+#   DATABASE_URL="postgres://devuser:devpass@localhost:5434/freshcheck?sslmode=disable" \
+#   CACHE_REDIS_TEST_URL="redis://localhost:6380" \
+#   REDIS_TEST_URL="redis://localhost:6379" \
+#   ./scripts/summarize-go-test.sh go test -tags integration -p 1 -count=1 ./internal/...
+# `freshcheck` is this repo's disposable scratch database (see scripts/test-migrations.sh) —
+# never point this at `boostedbudget`, the real local dev database.
+# `scripts/summarize-go-test.sh` prints a `PASS=.. FAIL=.. SKIP=..` line so a silent-skip
+# regression (the exact failure mode above) is visible instead of reading as a clean `ok`.
+# It also runs `scripts/check-ci-env-drift.sh` and prints a warning (non-fatal locally) if
+# any env var CI's integration-test guard step checks for is unset in the current shell —
+# see that script's own header comment for what it does and does not check, and
+# scripts/__tests__/check-ci-env-drift.test.sh for its guarantees.
 
 # Frontend (from /apps/web)
 bun run test                # Unit tests (bun:test)
@@ -116,6 +196,125 @@ config/
 - **Commits**: `#N: message` (e.g., `#42: Add user endpoint`)
 - **PR titles**: `#N: title`
 - **PR body**: **MUST include `Closes #N`** (auto-closes issue on merge)
+
+### Financial History Is Retained by Default (#1569)
+**Financial history is retained unless the user explicitly asks for it to be destroyed.** Retention
+is the default on every path; destruction is a named verb the user invokes, or it is a defect.
+Full reasoning, the classification test and the surprising cases:
+`docs/decisions/2026-08-24-financial-history-retained-by-default.md`.
+
+Before writing anything that removes a row, classify it:
+- **Explicit destruction** — the user asked for *this data*, in words, in the confirm dialog. Allowed.
+  Anything NEW here needs its own endpoint/method distinct from the retaining one, an audit row in
+  the SAME transaction, a precondition refusing live data, and an entry in `allowedHistoryDeletes`.
+  ⚠ `allowedHistoryDeletes` holds **7 entries across 4 functions** today (`PurgeAccount`,
+  `PurgeLinkedItem`, `PurgeGoal`, `DeleteContribution`) — re-derive before quoting either number.
+  ⚠ **All four now meet all four controls** (#1569 r17 T6 — this said `DeleteContribution` met 2/4
+  until then). Its audit row is `savings_goal_contribution.history_purged` via `LogInTx`, and its
+  precondition is the MIRRORED form the ADR now spells out: a per-row delete cannot demand a
+  tombstoned parent (that is the row it exists to destroy), so it instead refuses every row the
+  product has already retired from the live ledger — `g.deleted_at IS NULL`, `c.deleted_at IS NULL`
+  and `c.status <> $3` (bound to `'rejected'`, R3-7's sticky tombstone). It protects nothing about
+  the row the user DID name: that is destroyed irrecoverably. See ADR § Classification Test.
+  ⚠ `DeleteManagedForTransaction` is **NO LONGER a delete at all**, and this paragraph claimed it
+  was until #1569 round 14. Round 12 converted it to a TOMBSTONE — `UPDATE … SET deleted_at,
+  deleted_reason = 'provider_removed_txn'` (migration `000180`) — and its `allowedHistoryDeletes`
+  entry was **REMOVED, not reworded**. The four controls no longer apply to it: it was side-effect
+  destruction, fixed the way the next bullet prescribes. It still has no endpoint — its sole
+  production caller is `transactionSyncService.processRemovedTransactions`, inside Plaid
+  `removed`-array handling. **Copy the purges.**
+- **Side-effect destruction** — the delete is a consequence of something else they asked for
+  (disconnect, cancel, downgrade, sync). **Forbidden.** Tombstone instead (`deleted_at`, or
+  `removed_at` for accounts) and teach every read to filter it.
+- **Automatic destruction** — a timer, threshold or sweep. **Forbidden** unless it is a published
+  retention policy the user was told about. GC of tombstoned rows is permanently out of scope.
+
+Corollaries: the provider is not the user (Plaid removing an item is not a deletion request), and
+"I want to stop" is not "I want it gone".
+
+⚠ **No user-initiated restore exists.** No endpoint restores anything
+(`grep -icE "restore|undelete|recover" api/openapi.yaml` → 0), and **nothing anywhere sets
+`deleted_at = NULL`** — the seven `deleted_at` tombstones (`transactions`, `savings_goals`,
+`boosts`, `budgets`, `budget_categories`, `custom_categories`, and `savings_goal_contributions`,
+added by migration `000180`) mean **retained and permanently invisible**.
+Never write confirm copy promising the user they can restore it.
+
+⚠ **The one exception is cause-scoped, and it is deliberate.** `accounts` records WHY it was removed:
+`RestoreProviderRemovedAccount` un-removes a row only when
+`status='removed' AND removed_reason='provider_absent'` (the bank stopped reporting it), called from
+`restoreReappearedAccount` on sync. A `user_disconnect` tombstone — and a legacy NULL cause — is
+refused with `ErrAccountNotRestorable` and is **never** undone by a sync. ⚠ That check is a **Go
+`if` under `SELECT … FOR UPDATE`**, not the UPDATE's WHERE clause (which is only
+`id = $2 AND user_id = $3`) — race-safe as written, but a new write path to `status='active'` must
+carry the check with it. There are **three** removal causes, not two: `MarkRemovedByLinkedItemID`
+takes the reason as a parameter, and the orphaned-Plaid-item sweep passes
+`RemovalReasonLinkRemoved` — a background sweep is not a user disconnect. If you add a removal path,
+stamp the cause; if you add a restore, scope it to a cause you can prove.
+
+⚠ **A closed account carries no current balance; its history stays fully queryable.** A terminal
+account (`removed`/`replaced`/`expired`) presents NULL — not zero — for `current_balance` /
+`available_balance` from all ten account reads (one renderer, `accountBalanceProjection`); as-of
+balances from `balance_snapshots`/`holding_snapshots` are untouched. Current universe empty,
+historical universe intact. ⚠ "All ten" is exact for `account_repository.go` and is NOT the whole
+story: `investment_analytics_repository.go` (four `SUM(a.current_balance)` aggregates) reads the
+column RAW and is correct by a different mechanism — `currentStateAccountLeg("a")` keeps a terminal
+account out of the aggregate entirely, which is stronger than nulling it. An aggregate has no row to
+keep, so it takes the second mechanism. Both are now enforced:
+`TestNoAccountProjectionCarriesATerminalBalance` for the projection form and
+`TestNoRawAccountBalanceReadWithoutTheCurrentStateLeg` for the raw form.
+
+⚠ **Household spending and household net-worth now AGREE about a departed member** (#1569 T23 —
+this entry said the opposite until #1569 T8.5, and the stale version was a deferral that had
+already been paid off). `householdAccountsCTE` is now `householdGrantsCTE`, which emits every grant
+as a half-open interval on the same membership relaxation the balance CTEs use
+(`analytics_repository.go`), and all nine spending / income / savings-rate call sites decide
+inclusion through `householdSharedTransactionPredicate` — an `EXISTS` **semi-join, not a `JOIN`**,
+so an account covered by two grants cannot double-count. Pinned by
+`TestAnalyticsRepository_Household_BalanceAndSpendingUniversesAgreeOverSharedPeriod`.
+⚠ What REMAINS is different and correct: spending clips at **DATE** resolution, balances at the
+**instant**. Read ADR Decision 7 before touching either.
+
+⚠ Enforced mechanically, and each guard's meta-tests construct the violation and prove it fails:
+- `TestNoUnallowlistedCascadeIntoHistoryTable` (G1) — new `ON DELETE CASCADE` into a history-bearing
+  table. Allowlist + reason in `backend/internal/repository/history_cascade_guard_test.go`.
+  ⚠ Some cascades are the ONLY GDPR-erasure route for their table (`budget_categories`,
+  `budget_period_events`, `savings_goal_contributions` have no `user_id` FK) — read the reason
+  before "fixing" one to RESTRICT, or you strand the rows forever.
+  ⚠ **No guard checks that an allowlist reason is TRUE.** A reason is prose; nothing compares it to
+  the SQL. Two reasons shipped false in #1569 and two more were retracted in T7.5. Re-derive before
+  relying on one. (G1's cascade key still carries no predicate; G2's now does — see below.)
+- `TestNoUnallowlistedHistoryDelete` (G2) — a hard `DELETE FROM` a history table in Go.
+  `TestEveryAllowlistedHistoryDeleteStillCarriesItsPredicate` is its second half: each entry names
+  the SQL fragments it blesses, so dropping `AND deleted_at IS NOT NULL` from a purge no longer
+  keeps the blessing. Fragments are matched on comment-stripped, whitespace-collapsed SQL, and must
+  spell out polarity (`IS NULL` vs `IS NOT NULL`).
+- `TestNoUnallowlistedMigrationHistoryDelete` / `TestNoUnallowlistedShellHistoryDelete` /
+  `TestNoUnallowlistedFrontendFixtureHistoryDelete` (G4) — the paths G2's Go-only AST scan cannot
+  see. An UP migration, a `backend/scripts` shell script, or a `apps/web/scripts` fixture (`.sql`
+  and `.sh`) that hard-deletes history needs an allowlist entry; a DOWN migration only has to carry
+  a `WHERE`, because deleting what its own up migration inserted is a legitimate reversal. It does
+  NOT check that the predicate is correct.
+  ⚠ `apps/web/scripts/seed-e2e-data.sql` is now IN the universe (#1569 task 7.9) with its three
+  deletes allowlisted per predicate. The reason is the scoping — every statement is bounded by the
+  fixture user `e2e+clerk_test@boostedbudget.com` or by ids the same DO block just created — NOT
+  "it is E2E, so it only runs locally": the file is `psql $DATABASE_URL -f` and nothing in the tree
+  pins which database that names.
+- `TestNoConfigReadForgetsTheTombstoneFilter` / `TestNoTransactionReadForgetsTheTombstoneFilter` —
+  a read that forgets `deleted_at IS NULL` (per reference, alias-qualified).
+- `TestHistoryRetentionRoundTrip_*` (G3) — disconnect / re-link / purge, against real Postgres.
+- `TestNoNewNoMatcherAssertNotCalled` — `AssertNotCalled(t, "Method")` with no argument matchers is
+  a NO-OP for any method taking arguments. Use `mockassert.NoCallTo` instead.
+- `TestEveryCitedTestNameResolves` — a comment citing a test name that does not exist. Names only;
+  it deliberately says nothing about line numbers.
+- `TestNoAccountProjectionOmitsStatus` — an account-shaped `SELECT` (one naming `plaid_account_id`)
+  that omits `status`. Without it `Account.Status` is `""`, which `isAccountDisconnected` reads as
+  ACTIVE.
+- `TestEveryHistoryShapedTableIsClassified` — a live table named like history that is in neither
+  `historyBearingTables` nor `deliberatelyNotHistoryBearing`. Both G1 and G2 are blind to those.
+
+The exception, and the only one: GDPR erasure is a real hard delete
+(`docs/decisions/2026-08-01-gdpr-erasure-hard-delete.md`). No retention decision may leave a row
+unreachable from `users`.
 
 ### Analytics Instrumentation (PostHog)
 When implementing new features or modifying user-facing flows:

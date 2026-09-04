@@ -349,6 +349,66 @@ func TestGetTransactions_InvalidReviewed(t *testing.T) {
 	assert.Contains(t, err.Error(), "Invalid reviewed parameter")
 }
 
+// TestGetTransactions_IncludeReversedDefaultsOff pins #1569's default. A retained reversal that
+// appears unbidden in a total the user has already reconciled is the same silent change the issue
+// exists to stop, arriving from the other direction — so the flag has to be opt-in, and the default
+// has to be pinned rather than assumed from a zero value that a later refactor could flip.
+func TestGetTransactions_IncludeReversedDefaultsOff(t *testing.T) {
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.ActivityItem{},
+			Limit:        50,
+		},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	_, err := handler.GetTransactions(context.Background(), &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: "user-123"},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, mockService.capturedFilters.IncludeReversed,
+		"omitting include_reversed must not surface reversals")
+}
+
+// TestGetTransactions_IncludeReversedParsing verifies the opt-in actually reaches the filters.
+func TestGetTransactions_IncludeReversedParsing(t *testing.T) {
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.ActivityItem{},
+			Limit:        50,
+		},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	_, err := handler.GetTransactions(context.Background(), &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: "user-123"},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		IncludeReversed:       "true",
+	})
+
+	require.NoError(t, err)
+	assert.True(t, mockService.capturedFilters.IncludeReversed)
+}
+
+// TestGetTransactions_InvalidIncludeReversed: a malformed value is REJECTED, not coerced to false.
+// Coercing would hand the client a list it did not ask for while it believes it did — precisely the
+// silent-divergence failure mode #1569 is about.
+func TestGetTransactions_InvalidIncludeReversed(t *testing.T) {
+	handler := NewTransactionHandler(&mockTransactionService{})
+
+	output, err := handler.GetTransactions(context.Background(), &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: "user-123"},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		IncludeReversed:       "sometimes",
+	})
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Invalid include_reversed parameter")
+}
+
 // TestSetTransactionReviewed_Success verifies the single-transaction review handler
 // forwards a one-element id slice and returns the updated count (Issue #1203).
 func TestSetTransactionReviewed_Success(t *testing.T) {

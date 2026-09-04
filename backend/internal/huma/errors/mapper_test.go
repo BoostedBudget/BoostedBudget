@@ -40,6 +40,18 @@ func TestLoggingMapError_500(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, statusErr.GetStatus())
 }
 
+// TestLoggingMapError_409_AccountAlreadyDisconnected: Issue #1569, Task 2 — a repeat disconnect
+// must map to 409 Conflict, the same shape as PurgeAccount's ErrAccountNotDisconnected, not a 500
+// or a silently-swallowed success.
+func TestLoggingMapError_409_AccountAlreadyDisconnected(t *testing.T) {
+	result := humaerrors.LoggingMapError(context.Background(), repository.ErrAccountAlreadyDisconnected)
+	require.NotNil(t, result)
+
+	statusErr, ok := result.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError")
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
+}
+
 // Issue #1270: GAP-L — rule validation errors must return 400, not 500.
 func TestLoggingMapError_400_InvalidRule(t *testing.T) {
 	wrapped := fmt.Errorf("%w: condition field 'budget_category.bad_field' is not allowed for event 'budget_period_end'", domain.ErrInvalidBoost)

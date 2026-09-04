@@ -34,4 +34,3 @@ func newTestFieldEncryptor(t *testing.T) *appcrypto.FieldEncryptor {
 	require.NoError(t, err)
 	return enc
 }
-
