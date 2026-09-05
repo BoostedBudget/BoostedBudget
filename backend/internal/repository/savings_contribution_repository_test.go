@@ -8,8 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/pashagolub/pgxmock/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -173,7 +173,7 @@ func TestSavingsContributionRepository_UpsertFromTransaction_Success(t *testing.
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	// Step 1: lock query returns transaction magnitude (with user_id check).
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
 		WithArgs(txnID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"abs"}).AddRow(txnAmount))
 
@@ -191,6 +191,50 @@ func TestSavingsContributionRepository_UpsertFromTransaction_Success(t *testing.
 
 	err := repo.UpsertFromTransaction(ctx, userID, goalID, txnID, contribAmount, "confirmed_transfer")
 	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSavingsContributionRepository_UpsertFromTransaction_ConfirmedRowSlotIsNoOp pins the #1569
+// round 12 task 3 fix at the SQL level: the ON CONFLICT DO UPDATE now carries a predicate
+// (confirmed_by_user = false AND status != 'rejected'), and when that predicate is false — the
+// conflict slot is held by a row a human already decided about — the upsert commits as a no-op
+// (0 rows affected) rather than erroring or overwriting. Commit still happens; this is an expected,
+// non-fatal race, not a failure.
+func TestSavingsContributionRepository_UpsertFromTransaction_ConfirmedRowSlotIsNoOp(t *testing.T) {
+	mock, repo := setupContributionMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	goalID := uuid.New().String()
+	txnID := uuid.New().String()
+	txnAmount := 1000.00
+	contribAmount := 400.00
+
+	mock.ExpectBegin()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
+		WithArgs(txnID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"abs"}).AddRow(txnAmount))
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(SUM(amount), 0)`)).
+		WithArgs(txnID, goalID).
+		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(0.0))
+
+	// The conflict slot is held by a user-confirmed row: neither the INSERT nor the DO UPDATE leg
+	// fires, so the driver reports zero rows affected.
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO savings_goal_contributions`)).
+		WithArgs(goalID, txnID, contribAmount, "boost_match", pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 0))
+
+	mock.ExpectCommit()
+
+	err := repo.UpsertFromTransaction(ctx, userID, goalID, txnID, contribAmount, "boost_match")
+	require.NoError(t, err, "a no-op upsert is an expected race, not an error")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -213,7 +257,7 @@ func TestSavingsContributionRepository_UpsertFromTransaction_TransactionNotFound
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	// Step 1: lock fails — transaction not found for this user.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
 		WithArgs(txnID, userID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -244,7 +288,7 @@ func TestSavingsContributionRepository_UpsertFromTransaction_OverAllocated(t *te
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	// Step 1: transaction magnitude is 500.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
 		WithArgs(txnID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"abs"}).AddRow(500.0))
 
@@ -280,7 +324,7 @@ func TestSavingsContributionRepository_UpsertFromTransaction_ExactCapacity(t *te
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	// Step 1: transaction lock with user_id check.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
 		WithArgs(txnID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"abs"}).AddRow(500.0))
 
@@ -425,7 +469,13 @@ func TestSavingsContributionRepository_ListByGoal_Empty(t *testing.T) {
 }
 
 // TestSavingsContributionRepository_DeleteManagedForTransaction tests that only
-// managed_by_reconciliation rows are deleted (Codex C4 — user rows survive).
+// managed_by_reconciliation rows on a LIVE goal are TOMBSTONED (Codex C4 — user rows survive;
+// #1569 C1 — a tombstoned goal's retained ledger survives too; #1569 round 12 task 2 — the
+// destructive method is now an UPDATE, not a DELETE, so the provider cannot hard-delete history).
+//
+// pgxmock matches the SQL as text, so this pins the SHAPE of the statement and nothing about its
+// semantics. The behaviour lives in
+// TestDeleteManagedForTransaction_DeletedGoalLedgerSurvives_Integration.
 func TestSavingsContributionRepository_DeleteManagedForTransaction(t *testing.T) {
 	mock, repo := setupContributionMockDB(t)
 	defer mock.Close()
@@ -433,9 +483,9 @@ func TestSavingsContributionRepository_DeleteManagedForTransaction(t *testing.T)
 	ctx := context.Background()
 	txnID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM savings_goal_contributions`)).
-		WithArgs(txnID).
-		WillReturnResult(pgxmock.NewResult("DELETE", 2))
+	mock.ExpectExec(`UPDATE savings_goal_contributions c\s+SET deleted_at = NOW\(\), deleted_reason = \$2[\s\S]*FROM savings_goals g[\s\S]*g\.deleted_at IS NULL[\s\S]*c\.deleted_at IS NULL`).
+		WithArgs(txnID, "provider_removed_txn").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
 
 	err := repo.DeleteManagedForTransaction(ctx, txnID)
 
@@ -444,7 +494,7 @@ func TestSavingsContributionRepository_DeleteManagedForTransaction(t *testing.T)
 }
 
 // TestSavingsContributionRepository_DeleteManagedForTransaction_NoRows tests that
-// deleting for a transaction with no managed rows is not an error.
+// tombstoning for a transaction with no managed rows is not an error.
 func TestSavingsContributionRepository_DeleteManagedForTransaction_NoRows(t *testing.T) {
 	mock, repo := setupContributionMockDB(t)
 	defer mock.Close()
@@ -452,9 +502,9 @@ func TestSavingsContributionRepository_DeleteManagedForTransaction_NoRows(t *tes
 	ctx := context.Background()
 	txnID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM savings_goal_contributions`)).
-		WithArgs(txnID).
-		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectExec(`UPDATE savings_goal_contributions c\s+SET deleted_at = NOW\(\), deleted_reason = \$2[\s\S]*FROM savings_goals g[\s\S]*g\.deleted_at IS NULL[\s\S]*c\.deleted_at IS NULL`).
+		WithArgs(txnID, "provider_removed_txn").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.DeleteManagedForTransaction(ctx, txnID)
 
@@ -463,7 +513,10 @@ func TestSavingsContributionRepository_DeleteManagedForTransaction_NoRows(t *tes
 }
 
 // TestSavingsContributionRepository_ArchiveByGoal tests basis-switch archiving (Codex C10).
-// Only managed_by_reconciliation rows are flipped; user-entered rows are unchanged.
+// This is a wiring test only: it proves the Exec is issued with the goal ID. The claim that a
+// user-entered row survives the basis switch unflagged is a claim about ROWS, which no pgxmock can
+// make — it is proved against real Postgres by
+// TestArchiveByGoal_Integration_LeavesUserEnteredRowsAlone.
 func TestSavingsContributionRepository_ArchiveByGoal(t *testing.T) {
 	mock, repo := setupContributionMockDB(t)
 	defer mock.Close()
@@ -471,7 +524,7 @@ func TestSavingsContributionRepository_ArchiveByGoal(t *testing.T) {
 	ctx := context.Background()
 	goalID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goal_contributions`)).
+	mock.ExpectExec(`UPDATE savings_goal_contributions\s+SET managed_by_reconciliation = false`).
 		WithArgs(goalID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 3))
 
@@ -551,7 +604,7 @@ func TestSavingsContributionRepository_UpsertFromTransaction_CrossUserTransactio
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	// Transaction lock fails: transaction.user_id != userID → ErrNoRows.
-	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
 		WithArgs(txnID, userID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -583,7 +636,7 @@ func TestSavingsContributionRepository_UpsertFromTransaction_OwnershipCheckSucce
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	// Transaction lock — now requires user_id check.
-	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
 		WithArgs(txnID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"abs"}).AddRow(txnAmount))
 
@@ -694,7 +747,8 @@ func TestSavingsContributionRepository_RejectContribution_NotProposed(t *testing
 //
 // Implementation: the ON CONFLICT DO UPDATE WHERE clause must include
 // `AND savings_goal_contributions.managed_by_reconciliation = true` so that the update
-// only fires for rows the reconciler owns, even if status='proposed'.
+// only fires for rows the reconciler owns, even if status='proposed'. This test can only see the
+// SQL text; no fixture here creates the non-managed proposed row the guard is about.
 func TestSavingsContributionRepository_UpsertProposedFromTransaction_C3Guard(t *testing.T) {
 	mock, repo := setupContributionMockDB(t)
 	defer mock.Close()
@@ -709,13 +763,15 @@ func TestSavingsContributionRepository_UpsertProposedFromTransaction_C3Guard(t *
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
 		WithArgs(goalID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`)).
 		WithArgs(txnID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	// The INSERT ... ON CONFLICT ... DO UPDATE WHERE must include managed_by_reconciliation = true
-	// (C3 defense-in-depth). We match on the presence of this condition in the SQL.
-	mock.ExpectExec("managed_by_reconciliation = true").
+	// (C3 defense-in-depth). Matching the alias-qualified form keeps this from being satisfied by
+	// the INSERT's own column value; the behavioural proof on real rows is
+	// TestUpsertProposedFromTransaction_Integration_LeavesNonManagedProposedRowAlone.
+	mock.ExpectExec(regexp.QuoteMeta(`AND savings_goal_contributions.managed_by_reconciliation = true`)).
 		WithArgs(goalID, txnID, magnitude, pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 

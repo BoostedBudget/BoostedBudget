@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { SavingsGoalProgressItemFreshness } from './savingsGoalProgressItemFreshness';
 
 export interface SavingsGoalProgressItem {
   account_id?: string;
@@ -40,7 +41,7 @@ export interface SavingsGoalProgressItem {
   confirmed_contributions_total: number;
   current_amount: number;
   deadline?: string;
-  freshness: string;
+  freshness: SavingsGoalProgressItemFreshness;
   goal_id: string;
   goal_name: string;
   linked_balance?: number;

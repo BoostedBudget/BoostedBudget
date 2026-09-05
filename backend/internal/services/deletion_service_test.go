@@ -312,6 +312,13 @@ func (m *MockProfileRepositoryForDeletion) ExpireTrialIfNoOverride(ctx context.C
 	return false, nil
 }
 
+// CountRetentionDeletionsWithheld is Issue #1569 T1's withholding-count read. Never exercised by
+// this suite: it exists so MockProfileRepositoryForDeletion keeps satisfying
+// repository.ProfileRepository.
+func (m *MockProfileRepositoryForDeletion) CountRetentionDeletionsWithheld(ctx context.Context) (repository.RetentionWithholdingCounts, error) {
+	return repository.RetentionWithholdingCounts{}, nil
+}
+
 // ClaimForDeletion (Issue #1413 Critical finding C2, Codex review round 2) is stubbed via
 // m.Called so individual tests can assert the claimed/not-claimed branch explicitly — unlike
 // the other narrow-interface CAS stubs above, ExecuteDeletion's own tests need to control this
@@ -399,6 +406,23 @@ type MockAuditLogger struct {
 
 func (m *MockAuditLogger) Log(ctx context.Context, action, resourceType, resourceID string) error {
 	args := m.Called(ctx, action, resourceType, resourceID)
+	return args.Error(0)
+}
+
+// MockAuditLogRepository implements repository.AuditLogRepository (Log + LogInTx) for testing
+// callers that need the transactional write, e.g. PurgeAccount/PurgeInstitution (Issue #1569,
+// Task 6).
+type MockAuditLogRepository struct {
+	mock.Mock
+}
+
+func (m *MockAuditLogRepository) Log(ctx context.Context, action, resourceType, resourceID string) error {
+	args := m.Called(ctx, action, resourceType, resourceID)
+	return args.Error(0)
+}
+
+func (m *MockAuditLogRepository) LogInTx(ctx context.Context, tx pgx.Tx, action, resourceType, resourceID string) error {
+	args := m.Called(ctx, tx, action, resourceType, resourceID)
 	return args.Error(0)
 }
 
@@ -914,6 +938,7 @@ func (m *MockPlaidItemCleanupService) DisconnectAllUserItemsIfEligible(ctx conte
 // Bare no-op (no m.Called) to avoid an unregistered-expectation panic; stubbed only to satisfy
 // the widened PlaidItemCleanupService interface.
 func (m *MockPlaidItemCleanupService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {}
+func (m *MockPlaidItemCleanupService) SetAccountRepo(repo AccountRepoForCleanup)              {}
 
 // TestExecuteDeletion_CallsPlaidCleanupBeforeDBDelete verifies that
 // ExecuteDeletion calls PlaidCleanupService.RemoveAllUserItems before DeleteUserCascade

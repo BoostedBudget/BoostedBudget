@@ -19,17 +19,20 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
 
 	pgx "github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/database"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
 // rowQuerier is satisfied by *pgxpool.Pool and *pgxpool.Conn.
@@ -96,6 +99,12 @@ func TestChainExistsIndex_EXPLAIN(t *testing.T) {
 	// The correlated banking-branch shape from GetByUserIDKeysetUnified.
 	// When account_id is NULL or replaced, the planner must use the user_account_id
 	// index in the chain leg (second EXISTS) rather than a sequential scan.
+	//
+	// ⚠ This is a HAND-WRITTEN RESTATEMENT of two of the branch's three disjuncts, and it does
+	// not carry retainedAccountVisibilityLeg at all (#1569 residual E5). It is kept because it
+	// isolates the chain leg's index choice from everything else in a very large query — but it
+	// cannot notice the emitted query changing. TestUnifiedFeed_EmittedQuery_EXPLAIN, at the end
+	// of this file, plans the real thing.
 	bankingChainSQL := `
 SELECT t.id FROM transactions t
 WHERE t.user_id = $1
@@ -146,10 +155,10 @@ func TestTransactionKeyset_EXPLAIN(t *testing.T) {
 	defer conn.Exec(ctx, "SET enable_sort = ON") //nolint:errcheck
 
 	type tc struct {
-		sortExpr   string // ORDER BY expression
+		sortExpr    string // ORDER BY expression
 		indexSuffix string // e.g. "date"
-		orderDir   string // ASC or DESC
-		skipAssert bool   // for merchant: EFF JOIN has no matching index
+		orderDir    string // ASC or DESC
+		skipAssert  bool   // for merchant: EFF JOIN has no matching index
 	}
 
 	cases := []tc{
@@ -234,4 +243,76 @@ func TestTransactionKeyset_EXPLAIN(t *testing.T) {
 				"Plan should reference %s; plan:\n%s", expectedIdx, plan)
 		})
 	}
+}
+
+// recordingDB is a DB that answers nothing and remembers everything. It exists so a test can get
+// at the EXACT SQL and args a repository method emits — pgxmock's matcher hands over the SQL but
+// not the arguments, and the arguments are what an EXPLAIN of the real statement needs.
+type recordingDB struct {
+	sql  string
+	args []any
+}
+
+func (d *recordingDB) Begin(context.Context) (pgx.Tx, error) { return nil, errRecordingDB }
+func (d *recordingDB) Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, errRecordingDB
+}
+func (d *recordingDB) Query(_ context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
+	d.sql, d.args = sql, args
+	return nil, errRecordingDB
+}
+func (d *recordingDB) QueryRow(context.Context, string, ...interface{}) pgx.Row { return nil }
+func (d *recordingDB) SendBatch(context.Context, *pgx.Batch) pgx.BatchResults   { return nil }
+
+var errRecordingDB = errors.New("recordingDB: no results, by design")
+
+// TestUnifiedFeed_EmittedQuery_EXPLAIN is #1569 residual E5.
+//
+// TestChainExistsIndex_EXPLAIN above plans a HAND-WRITTEN restatement of the banking branch. That
+// was already a weak link — the restatement can drift from the query without anything noticing —
+// and #1569 broke it outright: task 2 added retainedAccountVisibilityLeg, a third disjunct that
+// joins account_status_history, and the restatement does not contain it. So the one new access
+// path this issue introduced into the feed query was the one path no EXPLAIN test covered.
+//
+// This test takes the text and the arguments straight out of GetByUserIDKeysetUnified via a
+// recording DB, so there is nothing to keep in sync: whatever the method emits is what gets
+// planned. Two things are then asserted, and the first matters as much as the second — EXPLAIN
+// of a real statement also proves the emitted SQL parses and type-checks end to end, which no
+// pgxmock shape test can do (pgxmock matches the string and never executes it).
+func TestUnifiedFeed_EmittedQuery_EXPLAIN(t *testing.T) {
+	db := connectTestDB(t)
+	ctx := context.Background()
+
+	rec := &recordingDB{}
+	repo := NewTransactionRepository(rec, newTestFieldEncryptor(t))
+	_, _, err := repo.GetByUserIDKeysetUnified(ctx, "00000000-0000-0000-0000-000000000000",
+		domain.TransactionFilters{IncludeInvestmentActivity: true}, nil, 10)
+	require.ErrorIs(t, err, errRecordingDB, "the recording DB must be the only thing that failed")
+	require.NotEmpty(t, rec.sql, "no SQL captured — GetByUserIDKeysetUnified stopped calling Query")
+
+	// Guard against the failure mode this test exists to end: planning a statement that no longer
+	// contains the leg under test, and passing.
+	require.Contains(t, rec.sql, "account_status_history h",
+		"the emitted feed query no longer carries retainedAccountVisibilityLeg — either the leg "+
+			"moved or this test is now planning something else entirely")
+	require.Contains(t, rec.sql, retainedAccountVisibilityLegs("t", "t.date"),
+		"the banking branch must carry the leg VERBATIM as the helper renders it")
+	require.Contains(t, rec.sql, retainedAccountVisibilityLegs("it", "it.date"),
+		"so must the investment branch")
+
+	conn, err := db.Acquire(ctx)
+	require.NoError(t, err)
+	defer conn.Release()
+
+	_, err = conn.Exec(ctx, "SET enable_seqscan = OFF")
+	require.NoError(t, err)
+	defer conn.Exec(ctx, "SET enable_seqscan = ON") //nolint:errcheck
+
+	plan := runExplain(ctx, t, conn, rec.sql, rec.args...)
+
+	assert.NotContains(t, plan, "Seq Scan on account_status_history",
+		"the retained-visibility leg must reach account_status_history by index (idx_ash_account_from, "+
+			"migration 000151); a Seq Scan here is a full-table scan per candidate transaction.\nPlan:\n%s", plan)
+	assert.Contains(t, plan, "account_status_history",
+		"the plan must actually include the retained-visibility leg.\nPlan:\n%s", plan)
 }

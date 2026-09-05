@@ -1,5 +1,5 @@
 import { useId } from 'react'
-import { Pencil, EyeOff, GripVertical, Unplug } from 'lucide-react'
+import { Pencil, EyeOff, GripVertical, Unplug, Archive, Trash2 } from 'lucide-react'
 import { Link } from 'react-router'
 import { cn } from '@/lib/utils'
 import { Card } from '@/components/ui/card'
@@ -7,18 +7,25 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AccountSummaryHeader } from './components/AccountSummaryHeader'
 import type { Account } from './types'
-import { getAccountTypeLabel } from './utils'
+import { getAccountTypeLabel, getAccountClosedDate, getAccountLastKnownBalance } from './utils'
+import { isInactive } from './hooks/useActiveAccounts'
 
 interface AccountCardProps {
   account: Account
-  onDelete?: (account: Account) => void
+  // Issue #1569, Task 6: disconnect (stop syncing, retain history) is the primary action for a
+  // LIVE account; purge (permanently destroy) is the destructive action, reachable only for a
+  // CLOSED account — see the render logic below for why a closed account gets neither onEdit nor
+  // onDisconnect (a Task 5 reviewer finding: closed rows previously kept working Edit/Delete
+  // actions that harmlessly re-ran UpdateStatus(removed)).
+  onDisconnect?: (account: Account) => void
+  onPurge?: (account: Account) => void
   onEdit?: (account: Account) => void
   isDragging?: boolean
   dragHandleProps?: React.HTMLAttributes<HTMLDivElement>
 }
 
 
-export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleProps }: AccountCardProps) {
+export function AccountCard({ account, onDisconnect, onPurge, onEdit, isDragging, dragHandleProps }: AccountCardProps) {
   const {
     name,
     official_name,
@@ -42,6 +49,22 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
   // Check if the linked item is disconnected — this can mean the subscription lapsed (#679/#680)
   // OR that orphan cleanup removed the Plaid item successfully; status alone can't tell which.
   const isDisconnected = linked_item_status === 'disconnected'
+
+  // Issue #1569: a retained (non-active) account — `replaced`, `expired`, or `removed`. Distinct
+  // from isDisconnected above: that's about the linked ITEM's subscription state; this is about the
+  // ACCOUNT's own status.
+  //
+  // ⚠ #1569 T8.5: do NOT say "the user disconnected it". `removed` has THREE causes
+  // (backend/internal/domain/account.go): user_disconnect, provider_absent (the bank stopped
+  // reporting it) and link_removed (one of our own sweeps). accounts.removed_reason is NOT on the
+  // wire — it appears nowhere in api/openapi.yaml — so this component CANNOT tell them apart, and
+  // the badge copy is deliberately worded to be true of all three rather than inventing a
+  // distinction the data cannot support. If removed_reason is ever exposed, revisit the copy here
+  // and in AccountTable.tsx together.
+  const isClosed = isInactive(account)
+  // Issue #1591: resolved through the helper that owns the "both or neither" rule, so the card
+  // never decides for itself whether a half-pair is renderable.
+  const lastKnown = getAccountLastKnownBalance(account)
 
   // Display name: nickname > official_name > name
   const displayName = nickname || official_name || name
@@ -93,9 +116,19 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
             customEmoji={custom_emoji}
             customIcon={custom_icon}
             customColor={custom_color}
+            isClosed={isClosed}
+            closedOn={getAccountClosedDate(account)}
+            lastKnownBalance={lastKnown?.amount}
+            lastKnownBalanceAt={lastKnown?.at}
             institutionRowTrailingSlot={
-              (isDisconnected || is_hidden) ? (
+              (isDisconnected || is_hidden || isClosed) ? (
                 <>
+                  {isClosed && (
+                    <Badge variant="secondary" title="This account is no longer active — it may have been disconnected, replaced by a re-link, or stopped being reported by your bank. Its history is retained.">
+                      <Archive className="h-3 w-3" />
+                      <span>Closed</span>
+                    </Badge>
+                  )}
                   {isDisconnected && (
                     <Badge variant="warning" title="This connection is no longer active">
                       <Unplug className="h-3 w-3" />
@@ -116,25 +149,44 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
       </div>
 
       <div className="flex gap-3 mt-4 pt-4 border-t border-border">
-        {onEdit && (
-          <Button
-            variant="secondary"
-            onClick={() => onEdit(account)}
-            title="Customize this account"
-            aria-label="Edit account"
-          >
-            <Pencil className="h-4 w-4" />
-            <span>Edit</span>
-          </Button>
-        )}
-        {onDelete && (
-          <Button
-            variant="destructive"
-            onClick={() => onDelete(account)}
-            title="Delete this account"
-          >
-            Delete Account
-          </Button>
+        {/* Issue #1569, Task 6: a closed account's actions are the ones that make sense for a
+            closed account — purge only. Edit and Disconnect both act on a LIVE account, and this
+            one no longer is one; re-running them would be a silent no-op at best. */}
+        {isClosed ? (
+          onPurge && (
+            <Button
+              variant="destructive"
+              onClick={() => onPurge(account)}
+              title="Permanently delete this account and its history"
+            >
+              <Trash2 className="h-4 w-4" />
+              <span>Delete from history</span>
+            </Button>
+          )
+        ) : (
+          <>
+            {onEdit && (
+              <Button
+                variant="secondary"
+                onClick={() => onEdit(account)}
+                title="Customize this account"
+                aria-label="Edit account"
+              >
+                <Pencil className="h-4 w-4" />
+                <span>Edit</span>
+              </Button>
+            )}
+            {onDisconnect && (
+              <Button
+                variant="secondary"
+                onClick={() => onDisconnect(account)}
+                title="Stop syncing this account, retaining its history"
+              >
+                <Unplug className="h-4 w-4" />
+                <span>Disconnect</span>
+              </Button>
+            )}
+          </>
         )}
       </div>
     </Card>

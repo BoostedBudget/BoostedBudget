@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { AccountStatus } from './accountStatus';
 
 export interface Account {
   available_balance?: number;
@@ -40,9 +41,12 @@ export interface Account {
   custom_emoji?: string;
   custom_icon?: string;
   display_order?: number;
+  expired_at?: string;
   id: string;
   institution_name?: string;
   is_hidden: boolean;
+  last_known_balance?: number;
+  last_known_balance_at?: string;
   linked_item_id: string;
   linked_item_status?: string;
   mask?: string;
@@ -50,9 +54,10 @@ export interface Account {
   nickname?: string;
   official_name?: string;
   plaid_account_id: string;
+  removed_at?: string;
   replaced_at?: string;
   replaced_by_id?: string;
-  status: string;
+  status: AccountStatus;
   subtype?: string;
   type: string;
   updated_at: string;

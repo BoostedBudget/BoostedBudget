@@ -1000,6 +1000,15 @@ func (s *householdService) PurgeRemovedMembership(ctx context.Context, household
 		return cerr
 	}
 
+	// #1569 T7 left this hard delete, and the AcceptInvite restore path that clears
+	// removed_at (householdRepository.RestoreMember), deliberately in place — see the ruling
+	// below for what DID change. Both destroy the fact and timing of a past removal, and they
+	// have to move together: retaining a removal interval that this statement deletes 30 days
+	// later buys nothing. Nothing reads household_members.removed_at outside this
+	// removal/restore/purge machinery today, so there is no consumer to break or serve either
+	// way; whoever changes it should decide whether an as-of membership read is actually
+	// wanted first, and watch uq_household_members_active_user (global on user_id,
+	// active-only) when making a re-invite insert a new row instead of resurrecting this one.
 	_, userID, cerr := hhRepo.DeleteRemovedMember(ctx, membershipID)
 	if cerr != nil {
 		return cerr
@@ -1020,7 +1029,63 @@ func (s *householdService) PurgeRemovedMembership(ctx context.Context, household
 		return cerr
 	}
 
-	if cerr = shareRepo.DeleteSharesForUser(ctx, householdID, userID); cerr != nil {
+	// #1569 T7 — THE RULING ON THE 30-DAY PURGE, written here because an undocumented
+	// status quo is the defect, not the behaviour.
+	//
+	// This used to be shareRepo.DeleteSharesForUser: a hard DELETE of every
+	// household_account_shares row for the departed member. The defensible intent was
+	// privacy — a removed member's grants should not linger in someone else's household
+	// forever. That intent is real, and it is in genuine tension with #1569's thesis that
+	// history is retained unless the user explicitly deletes it. It loses anyway, on an
+	// asymmetry:
+	//
+	//   - The departing member's FINANCIAL DATA is untouched either way. It lives in their
+	//     own user_accounts / accounts / transactions / balance_snapshots, owned by them,
+	//     and deleting the grant row moves none of it.
+	//   - What the grant row records is the OTHER direction: what the remaining members
+	//     were legitimately shown, and between which two instants. That is the household's
+	//     audit of its own past, not a copy of the leaver's data.
+	//
+	// So the delete did not protect the leaver; it destroyed the record of a disclosure
+	// that had already happened, held by the party that received it. And it did so
+	// silently: with the row gone, a point-in-time household read for a date INSIDE the
+	// shared window has nothing to resolve against and reports that nothing was ever
+	// shared — the one answer that is certainly false.
+	//
+	// The revocation, not the deletion, is what enforces the privacy interest, and it
+	// already happened at removal time (removeMemberTx -> RevokeSharesForUser, same
+	// transaction). revoked_at closes the interval, and every read is bounded by it:
+	// nothing after the departure is visible, at any asOf, ever. Re-closing here is an
+	// idempotent belt-and-braces for a grant that somehow survived the removal still open
+	// — it cannot re-open one, and the rejoin guard above has already established that
+	// this user has no live membership whose grants we could damage.
+	//
+	// If the leaver wants the row itself gone, that is GDPR erasure, and erasure still
+	// destroys it: household_account_shares.user_account_id is ON DELETE CASCADE from
+	// user_accounts, which DeleteUserCascade removes. Pinned by
+	// TestHouseholdServiceIntegration_PurgeRemovedMembership_GDPRErasureStillDestroysGrants.
+	//
+	// TWO LIMITS OF THIS RULING, both real and both accepted:
+	//
+	//   1. A retained grant is created by exactly two paths — the accept fan-out's InsertShare
+	//      and SetShareVisibility's interval INSERT — and BOTH require an active membership in
+	//      this household (the fan-out runs inside AcceptInvite; SetAccountShareVisibility
+	//      holds LockActiveMembershipForUser). So a closed grant always attests to a real past
+	//      membership, which is what licenses the as-of reads admitting it without a current
+	//      membership check. It is not licensed by "InsertShare is the only writer" — it no
+	//      longer is.
+	//   2. GetForHouseholdScopeActiveNow joins the as-of grant to LIVE `accounts` columns (name, mask,
+	//      official_name, current_balance). Balances are safe — every consumer takes the number
+	//      from an asOf-bounded balance_snapshots row, never from accounts.current_balance —
+	//      but a departed member's CURRENT account name and mask are now reachable at past
+	//      instants where the row previously did not appear at all. That is a widening of what
+	//      is legible, not of which periods are visible, and it is the same identifying detail
+	//      the household saw while the account was shared. It is also bounded by that read's
+	//      own `a.status = 'active'` filter: a departed member's account has to still be LIVE
+	//      today to be legible at all, so a disconnected or replaced one is already invisible.
+	//      Closing the rest properly needs an as-of read of account metadata, which
+	//      account_status_history does not carry.
+	if cerr = shareRepo.RevokeSharesForUser(ctx, householdID, userID); cerr != nil {
 		return cerr
 	}
 	// Scoped (not the broad ExpireActiveEntitlement) — a removed member may have since

@@ -91,10 +91,10 @@ func TestUuidCastRegression_Analytics_SpendingByMerchantWithCustomCategory(t *te
 
 	repo := NewAnalyticsRepository(tx)
 	filters := domain.SpendingFilters{
-		StartDate:        baseDate.AddDate(0, -1, 0),
-		EndDate:          baseDate.AddDate(0, 1, 0),
+		StartDate:         baseDate.AddDate(0, -1, 0),
+		EndDate:           baseDate.AddDate(0, 1, 0),
 		CustomCategoryIDs: []string{catID},
-		RollUpChildren:   true,
+		RollUpChildren:    true,
 	}
 	_, err = repo.GetSpendingByMerchant(ctx, userStr, filters, 10)
 	require.NoError(t, err)
@@ -118,10 +118,10 @@ func TestUuidCastRegression_Analytics_CategoryBreakdownWithCustomCategory(t *tes
 
 	repo := NewAnalyticsRepository(tx)
 	filters := domain.SpendingFilters{
-		StartDate:        baseDate.AddDate(0, -1, 0),
-		EndDate:          baseDate.AddDate(0, 1, 0),
+		StartDate:         baseDate.AddDate(0, -1, 0),
+		EndDate:           baseDate.AddDate(0, 1, 0),
 		CustomCategoryIDs: []string{catID},
-		RollUpChildren:   true,
+		RollUpChildren:    true,
 	}
 	_, err = repo.GetCategoryBreakdownForMerchant(ctx, userStr, merchantID, filters)
 	require.NoError(t, err)
@@ -130,7 +130,7 @@ func TestUuidCastRegression_Analytics_CategoryBreakdownWithCustomCategory(t *tes
 // TestUuidCastRegression_Transactions_SearchWithCustomCategory verifies
 // GetByUserIDWithFilters and CountByUserID with Search+CustomCategoryIDs succeed
 // despite merchantSortJoins and custom_categories.user_id=$1 type conflicts
-// (transaction_repository.go:957).
+// (transaction_repository.go:1186).
 func TestUuidCastRegression_Transactions_SearchWithCustomCategory(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -146,7 +146,7 @@ func TestUuidCastRegression_Transactions_SearchWithCustomCategory(t *testing.T) 
 
 	repo := NewTransactionRepository(tx, enc)
 	filters := domain.TransactionFilters{
-		Search:           ptrStr("test"),
+		Search:            ptrStr("test"),
 		CustomCategoryIDs: []string{catID},
 	}
 
@@ -162,7 +162,7 @@ func TestUuidCastRegression_Transactions_SearchWithCustomCategory(t *testing.T) 
 // TestUuidCastRegression_UnifiedFeed_SearchWithInvestmentRow verifies
 // GetByUserIDKeysetUnified with Search+investment rows succeeds despite
 // banking branch having mno.user_id=$1::text and investment branch having
-// investment_transactions.user_id=$1::uuid (transaction_repository.go:2885).
+// investment_transactions.user_id=$1::uuid (transaction_repository.go:3114).
 func TestUuidCastRegression_UnifiedFeed_SearchWithInvestmentRow(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -223,7 +223,7 @@ func TestUuidCastRegression_UnifiedFeed_SearchWithInvestmentRow(t *testing.T) {
 // TestUuidCastRegression_UnifiedFeed_SearchWithCustomCategory verifies
 // GetByUserIDKeysetUnified with Search+CustomCategoryIDs succeeds despite
 // banking branch having both merchantSortJoins ($1::text) and custom_categories
-// subquery ($1::uuid) (transaction_repository.go:2681).
+// subquery ($1::uuid) (transaction_repository.go:2910).
 func TestUuidCastRegression_UnifiedFeed_SearchWithCustomCategory(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -240,8 +240,8 @@ func TestUuidCastRegression_UnifiedFeed_SearchWithCustomCategory(t *testing.T) {
 	repo := NewTransactionRepository(tx, enc)
 	filters := domain.TransactionFilters{
 		IncludeInvestmentActivity: true,
-		Search:                    ptrStr("test"),    // activates merchantSortJoins
-		CustomCategoryIDs:         []string{catID},   // custom_categories.user_id=$1 subquery
+		Search:                    ptrStr("test"),  // activates merchantSortJoins
+		CustomCategoryIDs:         []string{catID}, // custom_categories.user_id=$1 subquery
 		SortBy:                    "date",
 	}
 	_, _, err = repo.GetByUserIDKeysetUnified(ctx, userStr, filters, nil, 10)

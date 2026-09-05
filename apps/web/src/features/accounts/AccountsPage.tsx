@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { useQueryClient } from '@tanstack/react-query'
-import { Eye, EyeOff, Landmark } from 'lucide-react'
-import { getAccountTypeLabel } from './utils'
+import { Eye, EyeOff, Landmark, Archive } from 'lucide-react'
+import { getAccountTypeLabel, accountMatchesBalanceRange, compareAccountsByBalance } from './utils'
 import { toast } from 'sonner'
+import { mutationFailureMessage } from '@/features/admin/lib/mutationFailureMessage'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { PlaidLinkButton } from './PlaidLinkButton'
@@ -19,14 +20,15 @@ import type { ListView } from '@/shared/components/ListViewToggle'
 import { STORAGE_KEY_LIST_VIEW } from './constants'
 import {
   useGetAccounts,
-  useDeleteAccount,
+  useDisconnectAccount,
+  usePurgeAccount,
   getGetAccountsQueryKey,
 } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import { useProfile } from '../profile/hooks/useProfile'
 import { useAccountCustomization } from './hooks/useAccountCustomization'
 import { useAccountFilters } from './hooks/useAccountFilters'
 import type { Account, ExchangePublicTokenResponse, UpdateAccountRequest } from './types'
-import { isReplaced } from './hooks/useActiveAccounts'
+import { isInactive } from './hooks/useActiveAccounts'
 import { useHousehold, ShareNewAccountsDialog } from '@/features/household'
 
 // Get initial view from localStorage
@@ -48,10 +50,20 @@ export function AccountsPage() {
   const navigate = useNavigate()
 
   const [showHidden, setShowHidden] = useState(false)
+  // Issue #1569, Task 5D: retained (non-active) accounts have nowhere to be viewed. Mirrors the
+  // "Show Hidden" toggle's idiom rather than a new filter-dropdown dimension — both are
+  // "excluded from the default view, viewable on demand" concepts, and this page has no existing
+  // pattern for a status-based filter dimension (useAccountFilters covers institution/type/
+  // balance only).
+  const [showClosed, setShowClosed] = useState(false)
   const [view, setView] = useState<ListView>(getInitialView)
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
-  const [accountToDelete, setAccountToDelete] = useState<Account | null>(null)
+  // Issue #1569, Task 6: the single "delete" dialog is split into two verbs — disconnect (stop
+  // syncing, retain history) and purge (permanently destroy). Two separate pieces of state so
+  // each dialog's open/closed state and copy are independent.
+  const [accountToDisconnect, setAccountToDisconnect] = useState<Account | null>(null)
+  const [accountToPurge, setAccountToPurge] = useState<Account | null>(null)
   // Issue #1370 Task 9: post-Plaid-link household share dialog. Dialog
   // visibility and its account list are tracked separately from
   // `isInHousehold` below — the dialog only OPENS when both "in a
@@ -76,20 +88,40 @@ export function AccountsPage() {
 
   const trackEvent = useTrackEvent()
 
+  // status: 'all_statuses' fetches the full universe (active, replaced, expired, removed) in one
+  // request so the "Closed accounts" toggle below can split it locally via isInactive() — see
+  // useActiveAccounts.ts. This is distinct from the pre-existing status=all (active+replaced
+  // only, silently drops expired/removed).
   const {
     data: accountsData,
     isLoading: accountsLoading,
     error: accountsError,
     refetch: refetchAccounts,
-  } = useGetAccounts({ include_hidden: 'true' })
+  } = useGetAccounts({ include_hidden: 'true', status: 'all_statuses' })
 
-  const deleteAccountMutation = useDeleteAccount()
+  const disconnectAccountMutation = useDisconnectAccount()
+  const purgeAccountMutation = usePurgeAccount()
 
   const accounts = accountsData?.accounts ?? []
-  const accountsQueryKey = getGetAccountsQueryKey({ include_hidden: 'true' })
+  const accountsQueryKey = getGetAccountsQueryKey({ include_hidden: 'true', status: 'all_statuses' })
 
   const { loading: userLoading, refetch: refetchProfile } = useProfile()
-  const { isInHousehold } = useHousehold()
+  const {
+    isInHousehold,
+    isLoading: householdLoading,
+    error: householdError,
+  } = useHousehold()
+
+  // Issue #1569 whole-branch review, minor 1 residual. The purge dialog's household caveat was
+  // unconditional, so a solo user — who has no shared totals for anything to drop out of — read a
+  // paragraph about a scope they are not in. Gate it, but gate it in the SAFE direction: show it
+  // unless we positively know the user is solo.
+  //
+  // ⚠ The asymmetry is deliberate. `isInHousehold` is false while `useGetMyHousehold` is still in
+  // flight and false when it errors, so a plain `isInHousehold &&` would HIDE a true warning about
+  // an irreversible action from a household member on a slow or failing request. Suppressing a
+  // relevant caveat is the expensive mistake; showing an irrelevant one costs a sentence.
+  const knownSolo = !householdLoading && !householdError && !isInHousehold
 
   const loading = accountsLoading || userLoading
   const error = accountsError ? 'Failed to load accounts. Please try again.' : null
@@ -141,40 +173,122 @@ export function AccountsPage() {
     }
   }
 
-  async function handleDeleteAccount(account: Account) {
+  async function handleDisconnectAccount(account: Account) {
     try {
-      await deleteAccountMutation.mutateAsync({ id: account.id })
+      await disconnectAccountMutation.mutateAsync({ id: account.id })
       trackEvent(ANALYTICS_EVENTS.ACCOUNT_REMOVED)
-      setAccountToDelete(null)
+      setAccountToDisconnect(null)
       await refetchAccounts()
     } catch (err) {
-      console.error('Failed to delete account:', err)
-      toast.error('Failed to delete account. Please try again.')
+      console.error('Failed to disconnect account:', err)
+      toast.error('Failed to disconnect account. Please try again.')
     }
   }
 
+  async function handlePurgeAccount(account: Account) {
+    try {
+      await purgeAccountMutation.mutateAsync({ id: account.id })
+      trackEvent(ANALYTICS_EVENTS.ACCOUNT_PURGED)
+      setAccountToPurge(null)
+      await refetchAccounts()
+    } catch (err) {
+      console.error('Failed to purge account:', err)
+      // Issue #1569, Task 6: a savings goal referencing this account surfaces as a 409 whose
+      // actionable text (repository.ErrPurgeBlockedBySavingsGoal's mapped message) lives at
+      // `err.response.data.detail`, NOT `err.message` (axios's `err.message` for an HTTP error is
+      // the useless "Request failed with status code 409"). mutationFailureMessage is the existing
+      // shared extractor for this exact RFC 9457 shape (already used by the DLQ and Plaid-orphan
+      // admin surfaces) — reused rather than reimplemented so this bug class can't recur here.
+      toast.error(mutationFailureMessage(err))
+    }
+  }
+
+  // DISCONNECT ONLY (Issue #1569 F5). This counts ACTIVE accounts under the item and asks whether
+  // the one being acted on is the last of them — which is only meaningful when that account is
+  // itself still active, i.e. on the disconnect path. It mirrors the backend's own trigger for
+  // stopping the Plaid item: accountService.cleanupAfterAccountRemoval schedules item cleanup when
+  // CountActiveByLinkedItemID drops to zero. Do NOT reuse it for the purge dialog: a purge target
+  // is by definition inactive, so it is never in this count, and purging it cannot change the
+  // active count at all.
   function isLastAccountForItem(account: Account): boolean {
     const allAccounts = accountsData?.accounts ?? []
     const activeAccountsForItem = allAccounts.filter(
-      a => a.linked_item_id === account.linked_item_id && !isReplaced(a)
+      a => a.linked_item_id === account.linked_item_id && !isInactive(a)
     )
     return activeAccountsForItem.length === 1
   }
 
-  function buildDeleteDescription(account: Account): React.ReactNode {
+  function buildDisconnectDescription(account: Account): React.ReactNode {
     const displayName = account.nickname || account.official_name || account.name
     const maskPart = account.mask ? ` (...${account.mask})` : ''
     const isLast = isLastAccountForItem(account)
     return (
       <span>
-        You are about to permanently delete <strong data-ph-mask>{displayName}{maskPart}</strong>.
-        <br />Your transactions will be preserved.
-        <br />Balance history will be removed.
+        <strong data-ph-mask>{displayName}{maskPart}</strong> will stop syncing new transactions and balances.
+        <br />Your transactions, balance history, and account details are all retained — you can still view this account under Closed accounts.
         {isLast && (
           <>
-            <br />The bank connection to <strong data-ph-mask>{account.institution_name}</strong> will also be removed.
+            <br />The bank connection to <strong data-ph-mask>{account.institution_name}</strong> will also be disconnected.
           </>
         )}
+      </span>
+    )
+  }
+
+  // Issue #1569, Task 6: purge is the ONE place a hard delete is correct, so the dialog must say
+  // exactly what is destroyed and what survives — including the multi-member-chain case. DECISION:
+  // a purge is allowed on a multi-member chain (a re-linked/replaced account) rather than refused,
+  // because MatchOrCreate already keys transactions by the chain's user_account_id independently of
+  // any single account row — a surviving chain member keeps that key, so the purged account's
+  // transactions continue to appear under it automatically. The dialog states this rather than
+  // leaving it implied.
+  //
+  // The savings-goal sentences are BOTH load-bearing after #1569 task 21 (C1), and they say
+  // different things. A LIVE goal still blocks the purge, so that sentence is advice. A goal the
+  // user has ALREADY deleted no longer blocks it — the purge destroys the tombstone and its
+  // hand-logged contributions and says nothing, because a tombstoned goal is invisible in every
+  // view. That is the only destruction here the user gets no second prompt for, which is exactly
+  // why it belongs in the enumeration and not only in the advice.
+  //
+  // ⚠ THE HOUSEHOLD QUALIFICATION IS NOT HEDGING (#1569 whole-branch review, minor 1). "They
+  // remain visible" was unqualified and false in household scope: every solo analytics read is
+  // `LEFT JOIN accounts`, every household read is `JOIN accounts`. After a purge
+  // `transactions.account_id` is NULL, so the rows stay in personal analytics and drop out of
+  // household-scoped spending, income, cash-flow and savings-rate. That is semantically forced —
+  // the share cannot be resolved without the account row — but it is a real consequence of
+  // pressing this button, so it is stated rather than discovered.
+  //
+  // It is now scoped to `!knownSolo` (see that binding for why it is "not known solo" rather than
+  // "in a household") — the sentence shipped unconditional, which put a household paragraph in
+  // front of solo users. Everything else in this dialog stays unconditional, because everything
+  // else in it is true of every user.
+  //
+  // ⚠ THE INVESTMENT SENTENCE IS UNCONDITIONAL, and that is a #1569 T8 correction, not sloppiness.
+  // It used to be gated on `account.type === 'investment'`, while the thing it describes —
+  // fk_inv_txn_account_id, ON DELETE CASCADE — does not consult type at all. `brokerage` is NOT
+  // a value of `accounts.type` (that enum, domain/account.go:~237-243, has no `brokerage` — only
+  // depository, credit, loan, investment, other). `brokerage` lives only on `user_accounts.
+  // primary_type` (domain/user_account.go:~100-111; :84-88 there is the unrelated hex-colour
+  // validator). The cascade this sentence describes is keyed off `accounts.type`, so the
+  // "brokerage account" example below is really about a `type: 'investment'` account carrying a
+  // `primary_type: 'brokerage'` subtype — still true, but not because `brokerage` is a value of
+  // the enum this sentence used to gate on. A brokerage-subtyped account holding investment
+  // transactions got no warning that the purge would destroy them. Rather than enumerate which
+  // types can hold them — a list that goes stale the next time Plaid adds one — the sentence now
+  // says "any investment transactions recorded against it", which is true of every account and
+  // matches exactly what the cascade does.
+  function buildPurgeDescription(account: Account): React.ReactNode {
+    const displayName = account.nickname || account.official_name || account.name
+    const maskPart = account.mask ? ` (...${account.mask})` : ''
+    return (
+      <span>
+        You are about to permanently delete <strong data-ph-mask>{displayName}{maskPart}</strong> and all of its balance history, holdings, liabilities, and any savings goal you have already deleted that was tracking it (including the contributions you logged by hand against it).
+        <br /><strong>This cannot be undone.</strong>
+        <br /><strong>Any investment transactions recorded against it (buys, sells, dividends) will also be permanently deleted</strong> — unlike bank transactions, they have no independent existence apart from the account.
+        <br />Your bank transactions will NOT be deleted — if another connection to this same account exists, they will continue to appear there; otherwise they stay in your own spending and reports with no linked account.{!knownSolo && (
+          <> <strong>In a household, they stop counting towards shared totals</strong> — household views resolve every transaction through its account, and this one no longer has one.</>
+        )}
+        <br />If a savings goal still tracks this account, the purge will be refused until you delete or re-link that goal. <strong>Deleting the goal first means it is destroyed here too</strong> — along with every contribution you logged by hand against it.
       </span>
     )
   }
@@ -185,8 +299,10 @@ export function AccountsPage() {
   }, []) // No deps — setters are stable
 
 
+  // Issue #1569: institution/type picker options are built from ACTIVE accounts only — a closed
+  // account must not pad any picker, even while "Show closed accounts" is on.
   const institutionOptions = useMemo<FilterOption[]>(() => {
-    const accs = accountsData?.accounts ?? []
+    const accs = (accountsData?.accounts ?? []).filter(acc => !isInactive(acc))
     const institutions = Array.from(
       new Set(accs.map((a) => a.institution_name).filter((x): x is string => x != null && x !== ''))
     )
@@ -200,7 +316,7 @@ export function AccountsPage() {
   }, [accountsData?.accounts])
 
   const typeOptions = useMemo<FilterOption[]>(() => {
-    const accs = accountsData?.accounts ?? []
+    const accs = (accountsData?.accounts ?? []).filter(acc => !isInactive(acc))
     // Map from typeValue (subtype || type) → { type, subtype } for label generation
     const seen = new Map<string, { type: string; subtype?: string }>()
     accs.forEach((acc) => {
@@ -238,7 +354,11 @@ export function AccountsPage() {
     const accs = accountsData?.accounts ?? []
     let filtered = accs
 
-    filtered = filtered.filter(acc => !isReplaced(acc))
+    // Closed (non-active) accounts are excluded unless the "Show closed accounts" toggle is on
+    // (Issue #1569, Task 5D) — never padding the default active list.
+    if (!showClosed) {
+      filtered = filtered.filter(acc => !isInactive(acc))
+    }
 
     // Filter hidden accounts unless showHidden is true
     if (!showHidden) {
@@ -258,13 +378,10 @@ export function AccountsPage() {
       })
     }
 
+    // Issue #1580: a closed account carries no current balance, so it matches no bounded range.
+    // See accountMatchesBalanceRange — the previous `?? 0` here got BOTH directions wrong.
     if (balanceRange) {
-      filtered = filtered.filter(acc => {
-        const balance = acc.current_balance ?? 0
-        if (balanceRange.min !== undefined && balance < balanceRange.min) return false
-        if (balanceRange.max !== undefined && balance > balanceRange.max) return false
-        return true
-      })
+      filtered = filtered.filter(acc => accountMatchesBalanceRange(acc, balanceRange))
     }
 
     if (sortColumn) {
@@ -290,12 +407,11 @@ export function AccountsPage() {
             comparison = typeA.localeCompare(typeB)
             break
           }
-          case 'balance': {
-            const balA = a.current_balance ?? 0
-            const balB = b.current_balance ?? 0
-            comparison = balA - balB
-            break
-          }
+          // Issue #1580: balance-less (closed) accounts form their own group, always last, in
+          // BOTH directions — so this case returns outright rather than falling through to the
+          // `sortDirection` negation below, which would flip the grouping too.
+          case 'balance':
+            return compareAccountsByBalance(a, b, sortDirection)
         }
 
         return sortDirection === 'asc' ? comparison : -comparison
@@ -314,14 +430,17 @@ export function AccountsPage() {
       // Fallback to created_at
       return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     })
-  }, [accountsData?.accounts, showHidden, sortColumn, sortDirection, institutionFilter, typeFilter, balanceRange])
+  }, [accountsData?.accounts, showHidden, showClosed, sortColumn, sortDirection, institutionFilter, typeFilter, balanceRange])
 
-  const { hiddenCount, activeAccountsCount } = useMemo(() => {
+  const { hiddenCount, activeAccountsCount, closedCount } = useMemo(() => {
     const accs = accountsData?.accounts ?? []
-    const activeAccounts = accs.filter(acc => !isReplaced(acc))
+    const activeAccounts = accs.filter(acc => !isInactive(acc))
     return {
       hiddenCount: activeAccounts.filter(acc => acc.is_hidden).length,
       activeAccountsCount: activeAccounts.length,
+      // Issue #1569, Task 5D: never counted toward activeAccountsCount — the "N accounts"
+      // header must keep meaning "N active accounts", not include retained history.
+      closedCount: accs.filter(isInactive).length,
     }
   }, [accountsData?.accounts])
 
@@ -365,6 +484,16 @@ export function AccountsPage() {
               )}
             </button>
           )}
+          {closedCount > 0 && (
+            <button
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded border cursor-pointer transition-colors focus:outline-none focus:ring-2 focus:ring-primary/50 ${showClosed ? 'bg-info/10 border-primary text-primary' : 'bg-muted text-foreground border-border hover:bg-accent'}`}
+              onClick={() => setShowClosed(!showClosed)}
+              aria-pressed={showClosed}
+            >
+              <Archive className="h-4 w-4" />
+              <span>{showClosed ? 'Hide' : 'Show'} closed accounts ({closedCount})</span>
+            </button>
+          )}
           <ListViewToggle
             view={view}
             onChange={setView}
@@ -406,7 +535,8 @@ export function AccountsPage() {
               accounts={displayedAccounts}
               loading={loading}
               onEdit={handleEditAccount}
-              onDelete={(account) => setAccountToDelete(account)}
+              onDisconnect={(account) => setAccountToDisconnect(account)}
+              onPurge={(account) => setAccountToPurge(account)}
               onRowClick={(account) => navigate(`/accounts/${account.id}`)}
               sort={sort}
               onSortChange={setSort}
@@ -434,7 +564,8 @@ export function AccountsPage() {
                 <AccountCard
                   key={account.id}
                   account={account}
-                  onDelete={(acc) => setAccountToDelete(acc)}
+                  onDisconnect={(acc) => setAccountToDisconnect(acc)}
+                  onPurge={(acc) => setAccountToPurge(acc)}
                   onEdit={handleEditAccount}
                 />
               ))}
@@ -451,14 +582,29 @@ export function AccountsPage() {
         isSaving={isUpdating}
       />
 
+      {/* Issue #1569, Task 6: disconnect is the primary, non-destructive action — no type-to-confirm,
+          since nothing is destroyed and the account remains fully visible under Closed accounts. */}
       <ConfirmationDialog
-        open={accountToDelete !== null}
-        onOpenChange={(open) => { if (!open) setAccountToDelete(null) }}
-        onConfirm={() => accountToDelete && handleDeleteAccount(accountToDelete)}
-        title="Delete Account"
-        description={accountToDelete ? buildDeleteDescription(accountToDelete) : ''}
-        confirmText={accountToDelete ? (accountToDelete.nickname || accountToDelete.official_name || accountToDelete.name) : ''}
-        loading={deleteAccountMutation.isPending}
+        open={accountToDisconnect !== null}
+        onOpenChange={(open) => { if (!open) setAccountToDisconnect(null) }}
+        onConfirm={() => accountToDisconnect && handleDisconnectAccount(accountToDisconnect)}
+        title="Disconnect account"
+        description={accountToDisconnect ? buildDisconnectDescription(accountToDisconnect) : ''}
+        variant="warning"
+        confirmButtonText="Disconnect"
+        loading={disconnectAccountMutation.isPending}
+      />
+
+      {/* Purge is the destructive secondary action — type-to-confirm, reusing the pattern above,
+          with copy stating exactly what is destroyed and that it cannot be undone. */}
+      <ConfirmationDialog
+        open={accountToPurge !== null}
+        onOpenChange={(open) => { if (!open) setAccountToPurge(null) }}
+        onConfirm={() => accountToPurge && handlePurgeAccount(accountToPurge)}
+        title="Permanently delete account"
+        description={accountToPurge ? buildPurgeDescription(accountToPurge) : ''}
+        confirmText={accountToPurge ? (accountToPurge.nickname || accountToPurge.official_name || accountToPurge.name) : ''}
+        loading={purgeAccountMutation.isPending}
       />
 
       <ShareNewAccountsDialog

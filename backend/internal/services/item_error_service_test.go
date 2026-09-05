@@ -36,15 +36,13 @@ func TestHandleLoginRequired_Success(t *testing.T) {
 
 	// Existing LinkedItem that needs re-authentication
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
-		AccessToken: "decrypted-access-token", // Decrypted by repo layer
-		InstitutionID:        "ins_1",
-		Status:               "active", // Currently active, will become "login_required"
+		ID:            "linked-item-123",
+		UserID:        "user-456",
+		ItemID:        "plaid-item-789",
+		AccessToken:   "decrypted-access-token", // Decrypted by repo layer
+		InstitutionID: "ins_1",
+		Status:        "active", // Currently active, will become "login_required"
 	}
-
-
 
 	// Mock: Create update mode link token for re-authentication
 	linkTokenResponse := &domain.LinkTokenResponse{
@@ -114,14 +112,12 @@ func TestHandleLoginRequired_LinkTokenCreationFailure(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
 		AccessToken: "decrypted-access-token",
-		Status:               "active",
+		Status:      "active",
 	}
-
-
 
 	// Mock: Link token creation fails (e.g., Plaid API error)
 	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").
@@ -160,14 +156,12 @@ func TestHandleLoginRequired_DatabaseUpdateFailure(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
 		AccessToken: "decrypted-access-token",
-		Status:               "active",
+		Status:      "active",
 	}
-
-
 
 	// Mock: Link token creation succeeds
 	linkTokenResponse := &domain.LinkTokenResponse{
@@ -215,14 +209,12 @@ func TestHandleLoginRequired_NotificationFailureNonBlocking(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
 		AccessToken: "decrypted-access-token",
-		Status:               "active",
+		Status:      "active",
 	}
-
-
 
 	// Mock: Link token creation succeeds
 	linkTokenResponse := &domain.LinkTokenResponse{
@@ -275,14 +267,12 @@ func TestHandleLoginRequired_EmailFailureNonBlocking(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
 		AccessToken: "decrypted-access-token",
-		Status:               "active",
+		Status:      "active",
 	}
-
-
 
 	// Mock: Link token creation succeeds
 	linkTokenResponse := &domain.LinkTokenResponse{
@@ -399,13 +389,13 @@ func TestHandleError_Success(t *testing.T) {
 
 	// Existing LinkedItem with a general error
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
-		AccessToken: "decrypted-access-token",
-		InstitutionID:        "ins_1",
-		InstitutionName:      "Test Bank",
-		Status:               "active", // Currently active, will become "error"
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		AccessToken:     "decrypted-access-token",
+		InstitutionID:   "ins_1",
+		InstitutionName: "Test Bank",
+		Status:          "active", // Currently active, will become "error"
 	}
 
 	// Mock: Update LinkedItem status to "error"
@@ -662,16 +652,14 @@ func TestHandlePendingExpiration_Success(t *testing.T) {
 
 	// Existing LinkedItem that is expiring soon
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
-		AccessToken: "decrypted-access-token",
-		InstitutionID:        "ins_1",
-		InstitutionName:      "Test Bank",
-		Status:               "active", // Currently active, will become "pending_expiration"
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		AccessToken:     "decrypted-access-token",
+		InstitutionID:   "ins_1",
+		InstitutionName: "Test Bank",
+		Status:          "active", // Currently active, will become "pending_expiration"
 	}
-
-
 
 	// Mock: Create update mode link token for re-authentication
 	linkTokenResponse := &domain.LinkTokenResponse{
@@ -741,14 +729,12 @@ func TestHandlePendingExpiration_LinkTokenCreationFailure(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
 		AccessToken: "decrypted-access-token",
-		Status:               "active",
+		Status:      "active",
 	}
-
-
 
 	// Mock: Link token creation fails
 	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").
@@ -787,14 +773,12 @@ func TestHandlePendingExpiration_DatabaseUpdateFailure(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
 		AccessToken: "decrypted-access-token",
-		Status:               "active",
+		Status:      "active",
 	}
-
-
 
 	// Mock: Link token creation succeeds
 	linkTokenResponse := &domain.LinkTokenResponse{
@@ -842,14 +826,12 @@ func TestHandlePendingExpiration_NotificationFailureNonBlocking(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
 		AccessToken: "decrypted-access-token",
-		Status:               "active",
+		Status:      "active",
 	}
-
-
 
 	// Mock: Link token creation succeeds
 	linkTokenResponse := &domain.LinkTokenResponse{
@@ -898,14 +880,12 @@ func TestHandlePendingExpiration_EmailFailureNonBlocking(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
 		AccessToken: "decrypted-access-token",
-		Status:               "active",
+		Status:      "active",
 	}
-
-
 
 	// Mock: Link token creation succeeds
 	linkTokenResponse := &domain.LinkTokenResponse{
@@ -968,16 +948,14 @@ func TestHandlePermissionRevoked_Success(t *testing.T) {
 
 	// Existing LinkedItem that has been revoked by the user
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
-		AccessToken: "decrypted-access-token",
-		InstitutionID:        "ins_1",
-		InstitutionName:      "Test Bank",
-		Status:               "active", // Currently active, will become "revoked"
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		AccessToken:     "decrypted-access-token",
+		InstitutionID:   "ins_1",
+		InstitutionName: "Test Bank",
+		Status:          "active", // Currently active, will become "revoked"
 	}
-
-
 
 	// Mock: Create update mode link token for re-linking
 	linkTokenResponse := &domain.LinkTokenResponse{
@@ -1047,14 +1025,12 @@ func TestHandlePermissionRevoked_LinkTokenCreationFailure(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
 		AccessToken: "decrypted-access-token",
-		Status:               "active",
+		Status:      "active",
 	}
-
-
 
 	// Mock: Link token creation fails
 	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").
@@ -1093,14 +1069,12 @@ func TestHandlePermissionRevoked_DatabaseUpdateFailure(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
 		AccessToken: "decrypted-access-token",
-		Status:               "active",
+		Status:      "active",
 	}
-
-
 
 	// Mock: Link token creation succeeds
 	linkTokenResponse := &domain.LinkTokenResponse{
@@ -1148,14 +1122,12 @@ func TestHandlePermissionRevoked_NotificationFailureNonBlocking(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
 		AccessToken: "decrypted-access-token",
-		Status:               "active",
+		Status:      "active",
 	}
-
-
 
 	// Mock: Link token creation succeeds
 	linkTokenResponse := &domain.LinkTokenResponse{
@@ -1204,14 +1176,12 @@ func TestHandlePermissionRevoked_EmailFailureNonBlocking(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
 		AccessToken: "decrypted-access-token",
-		Status:               "active",
+		Status:      "active",
 	}
-
-
 
 	// Mock: Link token creation succeeds
 	linkTokenResponse := &domain.LinkTokenResponse{
@@ -1273,13 +1243,13 @@ func TestProcessWebhook_LoginRequired(t *testing.T) {
 
 	// Mock: Lookup LinkedItem by itemID
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
-		AccessToken: "decrypted-access-token",
-		InstitutionID:        "ins_1",
-		InstitutionName:      "Test Bank",
-		Status:               "active",
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		AccessToken:     "decrypted-access-token",
+		InstitutionID:   "ins_1",
+		InstitutionName: "Test Bank",
+		Status:          "active",
 	}
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 
@@ -1379,13 +1349,13 @@ func TestProcessWebhook_PendingExpiration(t *testing.T) {
 
 	// Mock: Lookup LinkedItem by itemID
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
-		AccessToken: "decrypted-access-token",
-		InstitutionID:        "ins_1",
-		InstitutionName:      "Test Bank",
-		Status:               "active",
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		AccessToken:     "decrypted-access-token",
+		InstitutionID:   "ins_1",
+		InstitutionName: "Test Bank",
+		Status:          "active",
 	}
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 
@@ -1436,13 +1406,13 @@ func TestProcessWebhook_PermissionRevoked(t *testing.T) {
 
 	// Mock: Lookup LinkedItem by itemID
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
-		AccessToken: "decrypted-access-token",
-		InstitutionID:        "ins_1",
-		InstitutionName:      "Test Bank",
-		Status:               "active",
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		AccessToken:     "decrypted-access-token",
+		InstitutionID:   "ins_1",
+		InstitutionName: "Test Bank",
+		Status:          "active",
 	}
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 
@@ -1575,14 +1545,13 @@ func TestHandleLoginRequired_UserLookupFailureNonBlocking(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
-		AccessToken: "decrypted-access-token",
-		InstitutionName:      "Test Bank",
-		Status:               "active",
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		AccessToken:     "decrypted-access-token",
+		InstitutionName: "Test Bank",
+		Status:          "active",
 	}
-
 
 	linkTokenResponse := &domain.LinkTokenResponse{LinkToken: "link-token-123", Expiration: time.Now().Add(30 * time.Minute), RequestID: "req-123"}
 	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").Return(linkTokenResponse, nil)
@@ -1664,14 +1633,13 @@ func TestHandlePendingExpiration_UserLookupFailureNonBlocking(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
-		AccessToken: "decrypted-access-token",
-		InstitutionName:      "Test Bank",
-		Status:               "active",
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		AccessToken:     "decrypted-access-token",
+		InstitutionName: "Test Bank",
+		Status:          "active",
 	}
-
 
 	linkTokenResponse := &domain.LinkTokenResponse{LinkToken: "link-token-456", Expiration: time.Now().Add(30 * time.Minute), RequestID: "req-456"}
 	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").Return(linkTokenResponse, nil)
@@ -1710,14 +1678,13 @@ func TestHandlePermissionRevoked_UserLookupFailureNonBlocking(t *testing.T) {
 	)
 
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-456",
-		ItemID:               "plaid-item-789",
-		AccessToken: "decrypted-access-token",
-		InstitutionName:      "Test Bank",
-		Status:               "active",
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		AccessToken:     "decrypted-access-token",
+		InstitutionName: "Test Bank",
+		Status:          "active",
 	}
-
 
 	linkTokenResponse := &domain.LinkTokenResponse{LinkToken: "link-token-789", Expiration: time.Now().Add(30 * time.Minute), RequestID: "req-789"}
 	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").Return(linkTokenResponse, nil)

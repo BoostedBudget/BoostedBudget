@@ -63,14 +63,23 @@ func (s *recordingDeletionService) attemptedSet() map[string]bool {
 }
 
 // seedRetentionCandidate inserts one user whose retention clock has already expired.
+//
+// ⚠ BOTH PRE-DELETION NOTICE MARKERS ARE STAMPED, and they have to be. Since Issue #1569 T1 the
+// sweep refuses any expired user who was not actually warned at 30 and 7 days
+// (retentionNoticesDeliveredPredicate) — apps/web/src/legal/PrivacyPolicy.tsx promises those
+// notices and until T1 nothing enforced the promise. A candidate seeded with NULL markers is a
+// WITHHELD account, not a deletion candidate, so these cursor/paging tests would be asserting
+// against an empty population. The markers are backdated relative to expiry so the fixture
+// describes a user who really was warned before their clock ran out.
 func seedRetentionCandidate(t *testing.T, pool *pgxpool.Pool, expiresAt time.Time) string {
 	t.Helper()
 	id := uuid.New()
 	_, err := pool.Exec(context.Background(), `
 		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region,
-		                   retention_expires_at)
-		VALUES ($1, $2, $3, 'premium', 'cancelled', 'iad', $4)
-	`, id, "sweepret|"+id.String(), "sweepret-"+id.String()+"@example.com", expiresAt)
+		                   retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at)
+		VALUES ($1, $2, $3, 'premium', 'cancelled', 'iad', $4, $5, $6)
+	`, id, "sweepret|"+id.String(), "sweepret-"+id.String()+"@example.com", expiresAt,
+		expiresAt.Add(-30*24*time.Hour), expiresAt.Add(-7*24*time.Hour))
 	require.NoError(t, err, "seed retention candidate")
 
 	// context.Background(), never t.Context() — see seedDeletionCandidate.

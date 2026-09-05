@@ -70,6 +70,10 @@ func seedExpiredRetentionFixtureUsers(t *testing.T, ctx context.Context, pool *p
 		suffix := fmt.Sprintf("page_%d_%d", time.Now().UnixNano(), i)
 		expiresAt := expiredRetentionSweepEpoch.Add(time.Duration(i) * time.Minute)
 		user := createRetentionFixtureUser(t, ctx, pool, repo, suffix, expiresAt, nil, nil)
+		// Issue #1569 T1: the sweep refuses any expired user who was not actually warned at 30 and
+		// 7 days, so a seed with NULL markers is a WITHHELD account and every paging/cap assertion
+		// below would run against an empty candidate set.
+		markRetentionNoticesDelivered(t, ctx, pool, user.ID, expiresAt)
 		ids[i] = user.ID
 	}
 	return ids
@@ -95,6 +99,7 @@ func seedTiedExpiryFixtureUsers(t *testing.T, ctx context.Context, pool *pgxpool
 	for i := 0; i < n; i++ {
 		suffix := fmt.Sprintf("tied_%d_%d", time.Now().UnixNano(), i)
 		user := createRetentionFixtureUser(t, ctx, pool, repo, suffix, expiresAt, nil, nil)
+		markRetentionNoticesDelivered(t, ctx, pool, user.ID, expiresAt) // Issue #1569 T1, as above
 		ids[i] = user.ID
 	}
 	sort.Strings(ids)
@@ -116,6 +121,11 @@ func assertSeededRowsAreOldestCandidates(t *testing.T, ctx context.Context, pool
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
 		  AND (manual_tier_override IS NULL OR manual_tier_override = '')
+		  -- Issue #1569 T1's notice gate, copied here for the same reason as every other clause in
+		  -- this hand-written twin: it must stay an independent restatement of the real predicate,
+		  -- so that if the two disagree this precondition check is what says so.
+		  AND retention_notice_30d_sent_at IS NOT NULL
+		  AND retention_notice_7d_sent_at IS NOT NULL
 		ORDER BY retention_expires_at ASC, id ASC
 		LIMIT $1`, len(want))
 	require.NoError(t, err)
@@ -316,6 +326,11 @@ func TestGetUsersWithExpiredRetentionPage_Integration_KeepsManualOverrideExclusi
 
 	expiresAt := expiredRetentionSweepEpoch.Add(time.Minute)
 	fixtures := setupRetentionFixtures(t, ctx, pool, repo, "expired_page", expiresAt)
+	// Issue #1569 T1: fully warn all three, so the only thing that can exclude the ordinary user is
+	// the manual-override rule this test exists to check.
+	for _, u := range []*domain.User{fixtures.activeComp, fixtures.expiredComp, fixtures.ordinaryUser} {
+		markRetentionNoticesDelivered(t, ctx, pool, u.ID, expiresAt)
+	}
 
 	assertRetentionSelection(t, walkAllExpiredRetentionUsers(t, ctx, repo), fixtures)
 }

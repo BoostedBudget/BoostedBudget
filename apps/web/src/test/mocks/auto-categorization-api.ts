@@ -58,10 +58,24 @@ export const mockUseToggleRule = mock(() => ({
   error: null,
 }))
 
+// === useGetUserRuleExecutions ===
+// Issue #1569 T9.4: the account-wide automation audit trail. Default is an EMPTY page rather than
+// this file's usual `isLoading: true`, mirroring mockUseGetUserBoostExecutions: the panel that
+// consumes it renders nothing at all when total is 0, so every unrelated test that mounts the
+// rules page keeps the DOM it had before this hook existed.
+export const mockRefetchUserRuleExecutions = mock(() => Promise.resolve())
+export const mockUseGetUserRuleExecutions = mock(() => ({
+  data: { executions: [], total: 0, limit: 20, offset: 0 },
+  isLoading: false,
+  error: null,
+  refetch: mockRefetchUserRuleExecutions,
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/auto-categorization/auto-categorization', () => ({
   ...RealAutoCategorizationModule,
   useGetUserRules: mockUseGetUserRules,
+  useGetUserRuleExecutions: mockUseGetUserRuleExecutions,
   useCreateRule: mockUseCreateRule,
   useDeleteRule: mockUseDeleteRule,
   useGetRuleByID: mockUseGetRuleByID,

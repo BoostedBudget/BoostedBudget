@@ -11,6 +11,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/mockassert"
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -173,7 +174,7 @@ func TestProcessWebhook_Success(t *testing.T) {
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "new-cursor-from-plaid").Return(nil)
 
 	// Issue #261: Mock account repository for transaction storage
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// Mock transaction batch creation (empty because transaction has unmapped account, so will be skipped)
 	// No accounts exist, so all transactions will be skipped in processAddedTransactions
 
@@ -382,7 +383,7 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-after").Return(nil)
 
 	// Issue #261: Mock account repository for transaction storage
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// All transactions will be skipped since no accounts exist
 
 	// Execute
@@ -438,7 +439,7 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 		HasMore:    true,
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page0", 0).Return(plaidResp1, nil)
-	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-page1").Return(nil).Once()
+	// #1570: page 1's cursor is NOT persisted. The cursor advances once, after storage.
 
 	// Page 2: has_more=false
 	plaidResp2 := &plaid.TransactionsSyncResponse{
@@ -452,9 +453,14 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-page2").Return(nil).Once()
 
 	// Issue #261: Mock account repository for transaction storage
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// Mock deletion of removed transaction
-	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "txn-rem-1", linkedItem.UserID).Return(nil)
+	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "txn-rem-1", linkedItem.UserID, domain.TxnDeletedByPlaidSync).Return(domain.TxnDeletedProviderRemovedPosted, nil)
+	// #1569 round 1: processModifiedTransactions now looks the row up BEFORE mapping, so this
+	// lookup happens even for a transaction whose account cannot be mapped. Not found + not
+	// mappable is the one remaining skip, which is the same outcome this test always asserted.
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "txn-mod-1", linkedItem.UserID).
+		Return(nil, repository.ErrTransactionNotFound)
 
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
@@ -465,6 +471,11 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 	assert.Len(t, result.Modified, 1) // txn-mod-1
 	assert.Len(t, result.Removed, 1)  // txn-rem-1
 	assert.Equal(t, "cursor-page2", result.NewCursor)
+
+	// #1570: exactly ONE cursor write, carrying the final page's cursor. Persisting page 1's cursor
+	// mid-loop is what used to strand page 1's rows behind an advanced cursor when storage failed.
+	assert.Equal(t, []string{"cursor-page2"}, persistedCursors(mockLinkedItemRepo))
+	mockLinkedItemRepo.AssertNotCalled(t, "UpdateCursor", ctx, linkedItem.ID, "cursor-page1")
 
 	mockPlaidService.AssertExpectations(t)
 	mockLinkedItemRepo.AssertExpectations(t)
@@ -548,7 +559,7 @@ func TestSyncTransactions_PlaidErrorSubsequentPage(t *testing.T) {
 		HasMore:    true,
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-start", 0).Return(plaidResp1, nil)
-	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-page1").Return(nil).Once()
+	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Page 2 fails
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page1", 0).
@@ -563,19 +574,28 @@ func TestSyncTransactions_PlaidErrorSubsequentPage(t *testing.T) {
 	assert.Len(t, result.Added, 1) // Got page 1 data
 	assert.Contains(t, err.Error(), "sync failed on page 2")
 
-	// Cursor was updated after page 1, so retry can resume from page 2
+	// #1570: the cursor must NOT have moved. Page 1's rows were never stored (the worker discards
+	// `result` on error), so persisting page 1's cursor would lose them permanently — Plaid does not
+	// re-deliver past a stored cursor. Leaving it put means the retry re-fetches page 1 and page 2.
+	assert.Empty(t, persistedCursors(mockLinkedItemRepo))
 	mockLinkedItemRepo.AssertExpectations(t)
 }
 
-// TestSyncTransactions_CursorUpdateError tests cursor update failure
+// TestSyncTransactions_CursorUpdateError tests cursor update failure.
+//
+// #1570: the cursor write now happens AFTER storage, so this exercises the one remaining failure
+// mode of the boundary — rows are already durable and the cursor could not be advanced. The sync
+// must report the error; the next run re-delivers those rows and CreateBatch upserts them.
 func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockPlaidService := new(MockPlaidService)
+	mockAccountRepo := new(MockAccountRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
 	service := NewTransactionSyncService(
 		nil,
 		mockLinkedItemRepo,
-		nil,
-		nil,
+		mockTransactionRepo,
+		mockAccountRepo,
 		nil, // profileRepo - not needed for these tests
 		nil, // balanceSnapshotRepo - not needed for these tests
 		mockPlaidService,
@@ -597,11 +617,18 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 
 	// Mock Plaid API success
 	plaidResp := &plaid.TransactionsSyncResponse{
-		Added:      []plaid.Transaction{{TransactionId: "txn-1"}},
+		Added:      []plaid.Transaction{{TransactionId: "txn-1", AccountId: "plaid-acc-1", Amount: 5.00, Date: "2024-03-01", Name: "Stored"}},
 		NextCursor: "cursor-new",
 		HasMore:    false,
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "existing-cursor", 0).Return(plaidResp, nil)
+
+	// Storage runs first and genuinely COMMITS the row — that is the situation this test is about:
+	// durable rows plus a cursor that could not be advanced. An empty account list would skip the
+	// row and make the test vacuous.
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).
+		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: linkedItem.UserID}}, nil)
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(map[string]bool{"txn-1": true}, nil)
 
 	// Cursor update fails
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-new").
@@ -614,7 +641,11 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 	assert.Error(t, err)
 	assert.NotNil(t, result)
 	assert.Len(t, result.Added, 1) // Got transaction data
-	assert.Contains(t, err.Error(), "failed to update cursor on page 1")
+	assert.Contains(t, err.Error(), "failed to update cursor after storage")
+
+	// The row really was written before the cursor write failed — otherwise this test would be
+	// exercising nothing. The next run re-delivers it and CreateBatch upserts it.
+	assert.Equal(t, 1, storedExternalIDs(mockTransactionRepo)["txn-1"])
 
 	mockLinkedItemRepo.AssertExpectations(t)
 }
@@ -658,7 +689,7 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-initial").Return(nil)
 
 	// Issue #261: Mock account repository for transaction storage
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
@@ -719,7 +750,7 @@ func TestBuildAccountMap_Success(t *testing.T) {
 			Name:           "Credit Card",
 		},
 	}
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return(accounts, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).Return(accounts, nil)
 
 	// Execute
 	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID)
@@ -760,7 +791,7 @@ func TestBuildAccountMap_EmptyAccounts(t *testing.T) {
 	linkedItemID := "linked-item-123"
 
 	// Mock: GetByLinkedItemID returns empty slice
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).Return([]domain.Account{}, nil)
 
 	// Execute
 	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID)
@@ -798,7 +829,7 @@ func TestBuildAccountMap_RepositoryError(t *testing.T) {
 	linkedItemID := "linked-item-123"
 
 	// Mock: GetByLinkedItemID returns error
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return(nil, errors.New("database error"))
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).Return(nil, errors.New("database error"))
 
 	// Execute
 	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID)
@@ -1252,7 +1283,14 @@ func TestProcessModifiedTransactions_NewTransactionNoUserNotes(t *testing.T) {
 	mockTransactionRepo.AssertExpectations(t)
 }
 
-// TestProcessModifiedTransactions_TransactionNotFound tests handling when transaction doesn't exist yet
+// TestProcessModifiedTransactions_TransactionNotFound pins #1569 residual (3): a modification whose
+// row is not in the database is UPSERTED, not dropped.
+//
+// It used to be Warn'd and skipped, and the cursor then advanced past it, so the edit was lost for
+// good — Plaid does not re-deliver a modification the stored cursor is past. A missing row is
+// evidence an earlier sync failed to store it (before #1570 moved the cursor write after storage, a
+// partial page failure advanced the cursor over rows that were never written), not evidence the
+// transaction is not ours.
 func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
 	// Setup
 	mockTransactionRepo := new(MockTransactionRepository)
@@ -1296,17 +1334,158 @@ func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
 		},
 	}
 
-	// GetByExternalID returns error (not found)
 	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-new", userID).
-		Return(nil, errors.New("transaction not found"))
+		Return(nil, repository.ErrTransactionNotFound)
 
-	// Execute
+	var upserted []domain.Transaction
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).
+		Run(func(args mock.Arguments) {
+			upserted = args.Get(1).([]domain.Transaction)
+		}).
+		Return(map[string]bool{}, nil).Once()
+
 	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
 
-	// Assert - should continue despite not finding transaction (log warning)
-	assert.NoError(t, err) // Gracefully skip
-	// Update should NOT be called for not-found transaction
-	mockTransactionRepo.AssertNotCalled(t, "Update")
+	assert.NoError(t, err)
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "Update")
+	require.Len(t, upserted, 1, "the modification must reach the database as an upsert, not be dropped")
+	assert.Equal(t, "plaid-txn-new", *upserted[0].ExternalTransactionID)
+	assert.NotEmpty(t, upserted[0].ID,
+		"CreateBatch keys BatchRuleApplication records off pre-assigned IDs, so the upsert must carry one")
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessModifiedTransactions_UnmappableAccountButStored_StillApplies pins the round-1 fix to
+// the OTHER log-and-continue path in this function.
+//
+// Before it, mapPlaidTransaction ran first, and an account_id missing from accountMap discarded the
+// modification before anything checked whether the transaction was already stored — Warn, skip,
+// return nil, cursor advances, edit gone. That is residual (3)'s exact failure mode reached one
+// branch earlier, and it was missed because the contract comment's enumeration named only
+// processAddedTransactions.
+//
+// The stored row already records account_id / linked_item_id / user_account_id, so the payload is
+// remapped and that identity re-attached. The user's notes still survive, as on every other path.
+func TestProcessModifiedTransactions_UnmappableAccountButStored_StillApplies(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil, mockTransactionRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-123", UserID: "user-456"}
+
+	// accountMap deliberately does NOT contain the transaction's plaid account.
+	accountMap := map[string]string{"plaid-acc-other": "account-uuid-other"}
+
+	modified := []plaid.Transaction{{
+		TransactionId: "plaid-txn-unmappable",
+		AccountId:     "plaid-acc-vanished",
+		Amount:        321.00,
+		Date:          "2024-02-01",
+		Name:          "Corrected Name",
+	}}
+
+	notes := "do not lose this"
+	storedUserAccountID := "user-account-uuid-1"
+	stored := &domain.Transaction{
+		ID:            "stored-uuid",
+		UserID:        "user-456",
+		AccountID:     "account-uuid-stored",
+		LinkedItemID:  "linked-item-stored",
+		UserAccountID: &storedUserAccountID,
+		UserNotes:     &notes,
+	}
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-unmappable", "user-456").
+		Return(stored, nil)
+
+	var updated *domain.Transaction
+	mockTransactionRepo.On("Update", ctx, mock.Anything).
+		Run(func(args mock.Arguments) { updated = args.Get(1).(*domain.Transaction) }).
+		Return(nil).Once()
+
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
+
+	require.NoError(t, err)
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "CreateBatch")
+	require.NotNil(t, updated, "the edit must be applied, not dropped, when we already hold the row")
+	assert.Equal(t, "stored-uuid", updated.ID)
+	assert.Equal(t, "Corrected Name", updated.Name, "the provider's new data must actually land")
+	assert.Equal(t, "account-uuid-stored", updated.AccountID,
+		"identity comes from the stored row when accountMap cannot supply it")
+	assert.Equal(t, "linked-item-stored", updated.LinkedItemID)
+	require.NotNil(t, updated.UserAccountID)
+	assert.Equal(t, storedUserAccountID, *updated.UserAccountID)
+	require.NotNil(t, updated.UserNotes)
+	assert.Equal(t, notes, *updated.UserNotes, "user work survives this path like every other")
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessModifiedTransactions_UnmappableAndNotStored_IsTheOnlySkip is the boundary of the fix
+// above. With nothing stored there is no account_id to insert under and no row to update, so this
+// stays a log-and-continue — narrowed exactly as processAddedTransactions' equivalent is by task
+// 1b's GetByLinkedItemIDIncludingRetained, and recorded as residual (3) in the
+// #1570 STORAGE-BEFORE-CURSOR CONTRACT comment.
+func TestProcessModifiedTransactions_UnmappableAndNotStored_IsTheOnlySkip(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil, mockTransactionRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-123", UserID: "user-456"}
+
+	modified := []plaid.Transaction{{
+		TransactionId: "plaid-txn-ghost",
+		AccountId:     "plaid-acc-vanished",
+		Amount:        1.00,
+		Date:          "2024-02-01",
+		Name:          "Ghost",
+	}}
+
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-ghost", "user-456").
+		Return(nil, repository.ErrTransactionNotFound)
+
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, map[string]string{}, nil)
+
+	require.NoError(t, err, "this must not wedge the sync: re-delivery cannot conjure an account row")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "Update")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "CreateBatch")
+}
+
+// TestProcessModifiedTransactions_LookupFailureIsNotSwallowed separates residual (3)'s idempotent
+// case from a real one. "Row not found" is a decision to upsert; a connection failure is not, and
+// treating the two alike would let the cursor advance past a modification nobody applied — the same
+// silent loss residual (3) exists to end, arriving through the error branch instead.
+func TestProcessModifiedTransactions_LookupFailureIsNotSwallowed(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil, mockTransactionRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-123", UserID: "user-456"}
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+	modified := []plaid.Transaction{{
+		TransactionId: "plaid-txn-boom",
+		AccountId:     "plaid-acc-1",
+		Amount:        1.00,
+		Date:          "2024-01-15",
+		Name:          "Boom",
+	}}
+
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-boom", "user-456").
+		Return(nil, errors.New("connection reset by peer"))
+
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
+
+	require.Error(t, err, "a lookup failure is not the missing-row case and must abort the sync")
+	assert.Contains(t, err.Error(), "connection reset by peer")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "CreateBatch")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "Update")
 }
 
 // TestProcessModifiedTransactions_EmptySlice tests handling of empty input
@@ -1392,9 +1571,9 @@ func TestProcessRemovedTransactions_Success(t *testing.T) {
 	}
 
 	// Mock: DeleteByExternalID called for each transaction
-	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-1", userID).Return(nil)
-	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-2", userID).Return(nil)
-	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-3", userID).Return(nil)
+	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-1", userID, domain.TxnDeletedByPlaidSync).Return(domain.TxnDeletedProviderRemovedPosted, nil)
+	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-2", userID, domain.TxnDeletedByPlaidSync).Return(domain.TxnDeletedProviderRemovedPosted, nil)
+	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-3", userID, domain.TxnDeletedByPlaidSync).Return(domain.TxnDeletedProviderRemovedPosted, nil)
 
 	// Execute
 	err := service.processRemovedTransactions(ctx, removed, linkedItem)
@@ -1440,8 +1619,8 @@ func TestProcessRemovedTransactions_IdempotentNotFound(t *testing.T) {
 
 	// Mock: DeleteByExternalID returns "not found" error
 	// This is OK - transaction already deleted (idempotent)
-	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-not-found", userID).
-		Return(errors.New("transaction not found"))
+	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "plaid-txn-not-found", userID, domain.TxnDeletedByPlaidSync).
+		Return(domain.TransactionDeletedReason(""), repository.ErrTransactionNotFound)
 
 	// Execute
 	err := service.processRemovedTransactions(ctx, removed, linkedItem)
@@ -1487,7 +1666,7 @@ func TestProcessRemovedTransactions_EmptySlice(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	// DeleteByExternalID should NOT be called
-	mockTransactionRepo.AssertNotCalled(t, "DeleteByExternalID")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "TombstoneByExternalID")
 }
 
 // TestProcessRemovedTransactions_NilTransactionID tests handling of nil transaction_id (should skip)
@@ -1526,7 +1705,7 @@ func TestProcessRemovedTransactions_NilTransactionID(t *testing.T) {
 	// Assert - should succeed but skip nil transaction
 	assert.NoError(t, err)
 	// DeleteByExternalID should NOT be called for nil ID
-	mockTransactionRepo.AssertNotCalled(t, "DeleteByExternalID")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "TombstoneByExternalID")
 }
 
 // ============================================================================
@@ -1774,6 +1953,13 @@ type mockProfileRepoForCursorTests struct {
 	mock.Mock
 }
 
+// CountRetentionDeletionsWithheld is Issue #1569 T1's withholding-count read. Never exercised by
+// this suite: it exists so mockProfileRepoForCursorTests keeps satisfying
+// repository.ProfileRepository.
+func (m *mockProfileRepoForCursorTests) CountRetentionDeletionsWithheld(ctx context.Context) (repository.RetentionWithholdingCounts, error) {
+	return repository.RetentionWithholdingCounts{}, nil
+}
+
 func (m *mockProfileRepoForCursorTests) GetUserByClerkID(ctx context.Context, clerkUserID string) (*domain.User, error) {
 	args := m.Called(ctx, clerkUserID)
 	if args.Get(0) == nil {
@@ -1976,9 +2162,14 @@ func (m *mockProfileRepoForCursorTests) UpdateUserEmailTx(ctx context.Context, t
 // Plaid Staging Validation - Cursor handling edge cases
 // ============================================================================
 
-// TestSyncTransactions_CursorPersistsAfterTxnStorageFailure verifies that the cursor
-// is persisted even when transaction storage fails. This ensures resumability.
-func TestSyncTransactions_CursorPersistsAfterTxnStorageFailure(t *testing.T) {
+// TestSyncTransactions_CursorHeldBackWhenTxnStorageFails verifies that the cursor is NOT persisted
+// when transaction storage fails.
+//
+// #1570 INVERTED THIS TEST. It used to assert the opposite ("cursor persists even when storage
+// fails ... ensures resumability"), which was precisely the data-loss bug: resuming from an
+// advanced cursor means Plaid never re-delivers the rows that failed to store, so they are gone
+// permanently. Real resumability is holding the cursor back until storage has committed.
+func TestSyncTransactions_CursorHeldBackWhenTxnStorageFails(t *testing.T) {
 	ctx := context.Background()
 
 	// Setup mocks
@@ -2016,7 +2207,7 @@ func TestSyncTransactions_CursorPersistsAfterTxnStorageFailure(t *testing.T) {
 	accounts := []domain.Account{
 		{ID: "acc-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: "user-123"},
 	}
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-123").Return(accounts, nil)
 
 	// Mock: Plaid TransactionsSync returns transactions
 	newCursor := "cursor-page-2"
@@ -2031,8 +2222,8 @@ func TestSyncTransactions_CursorPersistsAfterTxnStorageFailure(t *testing.T) {
 	plaidResponse.SetHasMore(false)
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", existingCursor, 0).Return(plaidResponse, nil)
 
-	// Mock: Cursor update SUCCEEDS (this is the critical part)
-	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", newCursor).Return(nil)
+	// Mock: cursor update would succeed if called — the point is that it must NOT be called.
+	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Mock: Transaction storage FAILS
 	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, errors.New("database connection lost"))
@@ -2044,10 +2235,13 @@ func TestSyncTransactions_CursorPersistsAfterTxnStorageFailure(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "database connection lost")
 
-	// Assert: But cursor was still updated (critical for resumability)
-	mockLinkedItemRepo.AssertCalled(t, "UpdateCursor", ctx, "linked-item-123", newCursor)
+	// Assert: the cursor was NOT advanced — the rows never reached the database, so advancing past
+	// them would destroy them (Plaid does not re-deliver behind a stored cursor).
+	assert.Empty(t, persistedCursors(mockLinkedItemRepo))
+	mockLinkedItemRepo.AssertNotCalled(t, "UpdateCursor", ctx, "linked-item-123", newCursor)
 
-	// Assert: Partial results were returned (transactions that failed to store)
+	// Assert: Partial results were returned (transactions that failed to store). NewCursor is the
+	// in-memory cursor the run reached; it is deliberately NOT what was persisted.
 	assert.NotNil(t, result)
 	assert.Equal(t, newCursor, result.NewCursor)
 }
@@ -2092,7 +2286,7 @@ func TestSyncTransactions_CursorResumeFromLastSuccessfulPage(t *testing.T) {
 	accounts := []domain.Account{
 		{ID: "acc-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: "user-123"},
 	}
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-123").Return(accounts, nil)
 
 	// Mock: Plaid API is called with the RESUME cursor (not empty cursor)
 	finalCursor := "cursor-final"
@@ -2178,7 +2372,7 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 			accounts := []domain.Account{
 				{ID: "acc-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: "user-123"},
 			}
-			mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-first-sync").Return(accounts, nil)
+			mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-first-sync").Return(accounts, nil)
 
 			// Mock: Plaid API - expect empty string cursor for first sync; premium tier = 730 days
 			firstCursor := "cursor-first"
@@ -2250,7 +2444,7 @@ func TestSyncTransactions_FinalPageCursorUpdate(t *testing.T) {
 	accounts := []domain.Account{
 		{ID: "acc-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: "user-123"},
 	}
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-123").Return(accounts, nil)
 
 	// Mock: Plaid API returns final page (has_more=false)
 	finalCursor := "cursor-final-page"
@@ -2482,7 +2676,7 @@ func TestTransactionSyncService_SyncTransactions_SetsUserAccountID(t *testing.T)
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", "existing-cursor", 0).Return(plaidResp, nil)
 
 	// Mock GetByLinkedItemID returns accounts with UserAccountID set
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-123").Return(accounts, nil)
 
 	// Mock CreateBatch - verify transactions have UserAccountID set
 	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
@@ -2579,7 +2773,7 @@ func TestTransactionSyncService_SyncTransactions_LooksUpUserAccountFromAccount(t
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", "existing-cursor", 0).Return(plaidResp, nil)
 
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-123").Return(accounts, nil)
 
 	// Verify each transaction gets correct UserAccountID from its account
 	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
@@ -3441,7 +3635,7 @@ func TestSyncTransactions_CallsCorrelateForUser(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "token", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// CorrelateForUser must be called with the correct userID
 	mockCorrelation.On("CorrelateForUser", ctx, "user-corr-1").Return(nil)
 
@@ -3495,7 +3689,7 @@ func TestSyncTransactions_CorrelationErrorDoesNotFailSync(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "token2", "c3", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c4").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// CorrelateForUser returns an error — sync must NOT fail
 	mockCorrelation.On("CorrelateForUser", ctx, "user-corr-2").Return(errors.New("correlation db error"))
 
@@ -3622,7 +3816,7 @@ func TestSyncTransactions_SavingsRecomputeUserCalledAfterSync(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	mockProgressUpdater.On("RecomputeUser", ctx, "user-recompute-1").Return(nil)
 
 	result, err := svc.SyncTransactions(ctx, linkedItem)
@@ -3666,7 +3860,7 @@ func TestSyncTransactions_SavingsBackfillCalledAfterRecompute(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	mockBackfill.On("BackfillManagedCategories", ctx, "user-backfill-1").Return(nil)
 
 	result, err := svc.SyncTransactions(ctx, linkedItem)
@@ -3706,7 +3900,7 @@ func TestSyncTransactions_SavingsRecomputeErrorDoesNotFailSync(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// RecomputeUser errors — sync must still succeed
 	mockProgressUpdater.On("RecomputeUser", ctx, "user-nonfatal").Return(errors.New("db connection lost"))
 
@@ -3746,7 +3940,7 @@ func TestSyncTransactions_SavingsNilSafeWhenNotWired(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	result, err := svc.SyncTransactions(ctx, linkedItem)
 
@@ -3791,7 +3985,7 @@ func TestSyncTransactions_DeleteManagedContribsBeforeTransactionRemoval(t *testi
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	// GetByExternalID returns the internal transaction (for contribution cleanup)
 	internalTxn := &domain.Transaction{ID: internalTxnID}
@@ -3802,8 +3996,8 @@ func TestSyncTransactions_DeleteManagedContribsBeforeTransactionRemoval(t *testi
 	mockCleaner.On("DeleteManagedForTransaction", ctx, internalTxnID).Return(nil)
 
 	// DeleteByExternalID is called after the contribution cleanup
-	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, plaidExtID, "user-remove-1").
-		Return(nil)
+	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, plaidExtID, "user-remove-1", domain.TxnDeletedByPlaidSync).
+		Return(domain.TxnDeletedProviderRemovedPosted, nil)
 
 	result, err := svc.SyncTransactions(ctx, linkedItem)
 
@@ -3847,7 +4041,7 @@ func TestSyncTransactions_DeleteManagedContribNonFatalOnError(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	internalTxn := &domain.Transaction{ID: internalTxnID}
 	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, plaidExtID, "user-remove-nf").
@@ -3855,8 +4049,8 @@ func TestSyncTransactions_DeleteManagedContribNonFatalOnError(t *testing.T) {
 	// DeleteManagedForTransaction errors — removal must still proceed
 	mockCleaner.On("DeleteManagedForTransaction", ctx, internalTxnID).Return(errors.New("db error"))
 	// Transaction delete still happens despite contribution cleanup error
-	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, plaidExtID, "user-remove-nf").
-		Return(nil)
+	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, plaidExtID, "user-remove-nf", domain.TxnDeletedByPlaidSync).
+		Return(domain.TransactionDeletedReason(""), repository.ErrTransactionNotFound)
 
 	result, err := svc.SyncTransactions(ctx, linkedItem)
 
@@ -3943,7 +4137,7 @@ func TestSyncTransactions_ProposedContributionsCreatedForTransferIn(t *testing.T
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	// Goal reader returns one contributions-basis goal linked to accountID
 	contributionsGoal := &domain.SavingsGoal{
@@ -4015,7 +4209,7 @@ func TestSyncTransactions_ProposedContributionsSkipsNonContributionsBasisGoals(t
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	// Return a manual-basis and a balance-basis goal — neither should trigger inflow detection
 	goals := []*domain.SavingsGoal{
@@ -4074,7 +4268,7 @@ func TestSyncTransactions_ProposedContributionsSkipsGoalWithNoAccountID(t *testi
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	// Contributions-basis goal but no AccountID — detection must be skipped
 	goals := []*domain.SavingsGoal{
@@ -4132,7 +4326,7 @@ func TestSyncTransactions_ProposedContributionUpsertErrorIsNonFatal(t *testing.T
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	goals := []*domain.SavingsGoal{
 		{ID: goalID, UserID: userID, AccountID: accountID, ProgressBasis: domain.ProgressBasisContributions},
@@ -4197,10 +4391,127 @@ func TestSyncTransactions_ProposedContributionsNilSafeWhenNotWired(t *testing.T)
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	result, err := svc.SyncTransactions(ctx, linkedItem)
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 }
+
+// ============================================================================
+// Issue #1586: the stranded-settlement pull-forward is WIRED into the storage path
+// ============================================================================
+
+// TestProcessAddedTransactions_PullsForwardStrandedSettlementAnnotations pins the wiring the
+// repository change is useless without. The SQL is proved by the integration suite
+// (repository/transaction_late_settlement_integration_test.go); what a mock can prove, and what
+// nothing else does, is that the storage path calls it at all and hands it the right ids.
+//
+// It also pins the FILTER, which is the part that is easy to get subtly wrong: only rows carrying
+// Plaid's pending_transaction_id are candidates. Sending the whole batch would work but would ask
+// the database to scan ids that cannot possibly match, on every sync.
+func TestProcessAddedTransactions_PullsForwardStrandedSettlementAnnotations(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil, mockTransactionRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-1586", UserID: "user-1586"}
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	settled := plaid.NewNullableString(strPtrSvc("plaid-pending-999"))
+	added := []plaid.Transaction{
+		{TransactionId: "plaid-posted-1", AccountId: "plaid-acc-1", Amount: 10, Date: "2024-01-15",
+			Name: "Posted twin", PendingTransactionId: *settled},
+		{TransactionId: "plaid-ordinary-2", AccountId: "plaid-acc-1", Amount: 20, Date: "2024-01-16",
+			Name: "Ordinary"},
+	}
+
+	var storedIDs []string
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		storedIDs = nil
+		for i := range txns {
+			storedIDs = append(storedIDs, txns[i].ID)
+		}
+		return len(txns) == 2
+	})).Return(nil, nil)
+
+	var pulledFor []string
+	mockTransactionRepo.On("PullForwardSettledPendingAnnotations", ctx, "user-1586",
+		mock.MatchedBy(func(ids []string) bool { pulledFor = ids; return true })).
+		Return(int64(1), nil)
+
+	require.NoError(t, service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil))
+
+	mockTransactionRepo.AssertExpectations(t)
+	require.Len(t, pulledFor, 1,
+		"only the row carrying Plaid's pending_transaction_id is a settlement candidate")
+	assert.Equal(t, storedIDs[0], pulledFor[0],
+		"the id handed to the repository is the id the batch was stored under, not the provider's")
+}
+
+// TestProcessAddedTransactions_NoPointerMeansNoPullForward: the overwhelming majority of every sync
+// batch is not a settlement, and a database round-trip per batch that can match nothing is a cost
+// paid on every sync of every user.
+func TestProcessAddedTransactions_NoPointerMeansNoPullForward(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil, mockTransactionRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-1586b", UserID: "user-1586b"}
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	added := []plaid.Transaction{
+		{TransactionId: "plaid-ordinary-1", AccountId: "plaid-acc-1", Amount: 10, Date: "2024-01-15", Name: "Ordinary"},
+	}
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, nil)
+
+	require.NoError(t, service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil))
+
+	// mockassert.NoCallTo, not AssertNotCalled with a bare method name: the latter is a NO-OP for
+	// any method taking arguments, and this repository has a guard test that says so.
+	mockassert.NoCallTo(t, &mockTransactionRepo.Mock, "PullForwardSettledPendingAnnotations")
+}
+
+// TestProcessAddedTransactions_PullForwardFailureReturns.
+//
+// ⚠ THIS TEST USED TO ASSERT THE OPPOSITE, and its reason was the false comment that made the
+// defect look acceptable: "failing the sync for it would stall the cursor and re-deliver the whole
+// page, and the repository call is idempotent so the next sync retries for free". The re-delivery
+// it dismissed as a cost is the only thing that CAN retry the repair — swallowing the error let the
+// caller advance Plaid's cursor, and /transactions/sync does not re-deliver a transaction the
+// stored cursor is past, so the promised free retry could never happen and the user's annotations
+// stranded permanently. Returning is what makes the retry real; see
+// transaction_sync_settlement_repair_cursor_test.go for the cursor half of the contract.
+func TestProcessAddedTransactions_PullForwardFailureReturns(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil, mockTransactionRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-1586c", UserID: "user-1586c"}
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	settled := plaid.NewNullableString(strPtrSvc("plaid-pending-777"))
+	added := []plaid.Transaction{
+		{TransactionId: "plaid-posted-1", AccountId: "plaid-acc-1", Amount: 10, Date: "2024-01-15",
+			Name: "Posted twin", PendingTransactionId: *settled},
+	}
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, nil)
+	mockTransactionRepo.On("PullForwardSettledPendingAnnotations", ctx, "user-1586c", mock.Anything).
+		Return(int64(0), errors.New("deadlock detected"))
+
+	assert.Error(t, service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil),
+		"a failed repair must return, so the caller holds the cursor and Plaid re-delivers the page")
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+func strPtrSvc(s string) *string { return &s }

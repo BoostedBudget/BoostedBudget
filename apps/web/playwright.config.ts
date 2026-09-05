@@ -53,6 +53,19 @@ export default defineConfig({
     timeout: 10 * 1000,
   },
 
+  // ⚠ HARD CEILING ON THE WHOLE RUN. Must stay BELOW the e2e-test job's `timeout-minutes: 45`.
+  //
+  // Run 33678171305 shows why this is not the same thing as the job timeout. One test hung, the
+  // job hit 45 minutes, and GitHub CANCELLED it — which SKIPPED steps 35-43: the HTML report
+  // upload, the video upload, and the skipped-count guard. So the one run that most needed
+  // diagnostics produced none, and cost 45 runner-minutes against a normal 22 for zero signal.
+  //
+  // A Playwright-level ceiling fails the run itself instead: it stops, writes the report, and the
+  // upload steps still execute. 35 minutes leaves ~10 for setup, artifact upload and cache saves
+  // inside the job's 45. Enforced against drift by scripts/check-runner-portability.py (R8) —
+  // lowering the job's timeout-minutes below this silently inverts the guarantee.
+  globalTimeout: process.env.CI ? 35 * 60 * 1000 : undefined,
+
   // Run tests in files in parallel
   fullyParallel: true,
 
@@ -79,6 +92,36 @@ export default defineConfig({
 
   // Shared settings for all the projects below
   use: {
+    // #1569 T8-FIX, finding F. The browser context inherits the RUNNER's timezone and locale unless
+    // they are pinned, and specs assert rendered dates and currency: `formatDeletedOn` (and
+    // `formatHistoryLabel`) render with `toLocaleDateString(undefined, ...)`, so a fixture at
+    // 2026-03-20T12:00:00Z reads "March 20, 2026" in America/New_York and "March 21, 2026" in
+    // Pacific/Kiritimati — reproduced with Node's Intl, not reasoned about. That is a green suite
+    // that fails on a valid runner. Pinned rather than loosened: an assertion weakened to match any
+    // timezone stops testing the thing it was written for, and the fixture is already midday-UTC
+    // precisely so ONE pinned zone is enough.
+    timezoneId: 'UTC',
+    locale: 'en-US',
+
+    // ⚠ THE ROOT CAUSE OF THE 18-MINUTE BLOCK, and the least visible default in Playwright.
+    //
+    // actionTimeout defaults to 0, which does NOT mean "fast" — it means NO LIMIT. A single
+    // `.click()` on a locator that never resolves blocks until the whole-TEST timeout expires,
+    // with no error naming what it was waiting for. On run 33678171305 that produced six minutes
+    // of a live page doing nothing but a 30s notification poll, x3 retries = 18.6 minutes on one
+    // test, which blew the job's 45-minute cap and lost every artifact with it.
+    //
+    // A per-test budget cannot prevent this; it only sets the price. Bounding the ACTION is what
+    // makes it impossible, and it also turns an anonymous whole-test timeout into "waiting for
+    // getByRole('button', { name: 'Edit' })" — the difference between a diagnosable failure and a
+    // guess.
+    //
+    // 30s/15s is far above anything healthy: expect() already assumes 10s (above), and the
+    // heaviest real action in this suite completes in low single-digit seconds. Navigations get
+    // more room because they boot a real app against a real backend.
+    actionTimeout: process.env.CI ? 30 * 1000 : 15 * 1000,
+    navigationTimeout: process.env.CI ? 45 * 1000 : 30 * 1000,
+
     // Base URL to use in actions like `await page.goto('/')`
     baseURL: process.env.PLAYWRIGHT_BASE_URL || `http://localhost:${frontendPort}`,
 

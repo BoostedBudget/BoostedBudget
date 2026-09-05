@@ -16,7 +16,11 @@ type HoldingRepository interface {
 	// ReplaceForAccount atomically replaces all holdings for an account.
 	// Deletes all existing holdings for the account, then inserts the new ones.
 	// The operation is wrapped in a database transaction.
-	ReplaceForAccount(ctx context.Context, accountID, userID string, holdings []domain.Holding) error
+	//
+	// Returns the UTC calendar day the history capture filed under, read from the SERVER. A
+	// caller that pairs an aggregate with this replace MUST use it rather than its own clock —
+	// see #1569 T9.1 item C.
+	ReplaceForAccount(ctx context.Context, accountID, userID string, holdings []domain.Holding) (time.Time, error)
 
 	// GetByUserID retrieves all holdings for a user.
 	GetByUserID(ctx context.Context, userID string) ([]domain.Holding, error)
@@ -116,7 +120,7 @@ func assertRowsTargetAccount(caller, accountID string, rowAccounts []string) err
 
 // ReplaceForAccount atomically replaces all holdings for an account.
 // Wraps DELETE + INSERT in a single transaction.
-func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, userID string, holdings []domain.Holding) error {
+func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, userID string, holdings []domain.Holding) (time.Time, error) {
 	// #1566: the DELETE below is scoped to userID but each INSERT writes holdings[i].UserID, so a
 	// foreign element would delete the actor's rows and write someone else's. Refuse loudly before
 	// any statement runs. Checked even for an empty slice: the delete-all path is itself
@@ -127,7 +131,7 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 		owners[i] = holdings[i].UserID
 	}
 	if err := assertActorOwnsRows("holdingRepository.ReplaceForAccount", userID, owners); err != nil {
-		return err
+		return time.Time{}, err
 	}
 
 	// #1568: the same split exists on the account axis — the DELETE uses the scalar accountID while
@@ -138,19 +142,19 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 		rowAccounts[i] = holdings[i].AccountID
 	}
 	if err := assertRowsTargetAccount("holdingRepository.ReplaceForAccount", accountID, rowAccounts); err != nil {
-		return err
+		return time.Time{}, err
 	}
 
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	// Delete all existing holdings for this account
 	deleteQuery := `DELETE FROM holdings WHERE account_id = $1 AND user_id = $2`
 	if _, err := tx.Exec(ctx, deleteQuery, accountID, userID); err != nil {
-		return err
+		return time.Time{}, err
 	}
 
 	// Insert new holdings
@@ -184,11 +188,29 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 			h.CreatedAt,
 			h.UpdatedAt,
 		); err != nil {
-			return err
+			return time.Time{}, err
 		}
 	}
 
-	return tx.Commit(ctx)
+	// #1569 T6: record what this account now holds into the append-only history table, in this
+	// SAME transaction and IN ADDITION to the replace above — the replace's semantics are
+	// deliberately unchanged (see holding_snapshot_repository.go for why soft-deleting holdings
+	// was rejected). Derived from the rows just written, so the history can never disagree with
+	// the state it describes, and a rollback discards both together.
+	//
+	// A confirmed-complete liquidation (holdings empty) captures nothing new and, crucially,
+	// deletes nothing: earlier days keep their rows. Guarding an EMPTY response from wiping
+	// current state is a separate concern and lives upstream, in SyncHoldings' PlaidAccountRoster
+	// gate — this repository is reached only once that gate has been passed.
+	day, err := captureHoldingSnapshots(ctx, tx, accountID, userID)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return time.Time{}, err
+	}
+	return day, nil
 }
 
 // GetByUserID retrieves all holdings for a user.
@@ -203,7 +225,8 @@ func (r *holdingRepository) GetByUserID(ctx context.Context, userID string) ([]d
 		FROM holdings
 		JOIN accounts a ON a.id = holdings.account_id
 		WHERE holdings.user_id = $1
-		  AND a.status = 'active'
+		  -- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		  AND ` + currentStateAccountLeg("a") + `
 		ORDER BY holdings.account_id, holdings.security_id
 	`
 
@@ -360,7 +383,8 @@ func (r *holdingRepository) GetByUserIDWithSecurities(ctx context.Context, userI
 			sec.institution_price, sec.institution_price_as_of,
 			sec.close_price, sec.close_price_as_of
 		FROM holdings h
-		JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
+		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		JOIN accounts a ON a.id = h.account_id AND `+currentStateAccountLeg("a")+`
 		LEFT JOIN securities sec ON sec.id = h.security_id
 		WHERE h.user_id = $1
 		%s
@@ -412,7 +436,8 @@ func (r *holdingRepository) GetDistinctUserIDsWithHoldings(ctx context.Context) 
 	query := `
 		SELECT DISTINCT h.user_id::text
 		FROM holdings h
-		JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
+		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		JOIN accounts a ON a.id = h.account_id AND ` + currentStateAccountLeg("a") + `
 		ORDER BY h.user_id::text
 	`
 

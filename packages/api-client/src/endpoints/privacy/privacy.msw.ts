@@ -44,14 +44,35 @@ import type {
 } from 'msw';
 
 import type {
+  DataExport,
   PrivacySettings
 } from '../../models';
 
+
+export const getGetDataExportResponseMock = (overrideResponse: Partial<Extract<DataExport, object>> = {}): DataExport => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), excluded_tables: {
+        [faker.string.alphanumeric(5)]: faker.string.alpha({length: {min: 10, max: 20}})
+      }, export_version: faker.number.int(), generated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', row_count: faker.number.int(), sections: {
+        [faker.string.alphanumeric(5)]: Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({
+        [faker.string.alphanumeric(5)]: {}
+      }))
+      }, user_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getGetPrivacySettingsResponseMock = (overrideResponse: Partial<Extract<PrivacySettings, object>> = {}): PrivacySettings => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', data_sharing_enabled: faker.datatype.boolean(), gdpr_advertising_consent: faker.datatype.boolean(), gdpr_analytics_consent: faker.datatype.boolean(), gdpr_consent_timestamp: faker.date.past().toISOString().slice(0, 19) + 'Z', gdpr_necessary_consent: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), include_in_aggregate_stats: faker.datatype.boolean(), marketing_emails_enabled: faker.datatype.boolean(), product_updates_enabled: faker.datatype.boolean(), security_alerts_enabled: faker.datatype.boolean(), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getUpdatePrivacySettingsResponseMock = (overrideResponse: Partial<Extract<PrivacySettings, object>> = {}): PrivacySettings => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', data_sharing_enabled: faker.datatype.boolean(), gdpr_advertising_consent: faker.datatype.boolean(), gdpr_analytics_consent: faker.datatype.boolean(), gdpr_consent_timestamp: faker.date.past().toISOString().slice(0, 19) + 'Z', gdpr_necessary_consent: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), include_in_aggregate_stats: faker.datatype.boolean(), marketing_emails_enabled: faker.datatype.boolean(), product_updates_enabled: faker.datatype.boolean(), security_alerts_enabled: faker.datatype.boolean(), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
+
+export const getGetDataExportMockHandler = (overrideResponse?: DataExport | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<DataExport> | DataExport), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/user/data-export', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetDataExportResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
 
 export const getGetPrivacySettingsMockHandler = (overrideResponse?: PrivacySettings | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<PrivacySettings> | PrivacySettings), options?: RequestHandlerOptions) => {
   return http.get('*/api/v1/user/privacy', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
@@ -77,6 +98,7 @@ export const getUpdatePrivacySettingsMockHandler = (overrideResponse?: PrivacySe
   }, options)
 }
 export const getPrivacyMock = () => [
+  getGetDataExportMockHandler(),
   getGetPrivacySettingsMockHandler(),
   getUpdatePrivacySettingsMockHandler()
 ]

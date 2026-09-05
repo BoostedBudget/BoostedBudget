@@ -203,6 +203,12 @@ func (r *studentLoanLiabilityRepository) ReplaceForAccount(ctx context.Context, 
 
 	// nil means delete-only (clear stale data when Plaid no longer reports this liability)
 	if liability == nil {
+		// #1569 T6 fix round 1: record the absence rather than leaving today's earlier statement
+		// standing as the day's answer. Flips `present` only — the row keeps its details (rate, PSLF counts, repayment plan) so
+		// the clear is preserved as history rather than erasing it. Earlier days are untouched.
+		if err := markLiabilityStatementAbsent(ctx, tx, accountID, userID, domain.LiabilityTypeStudentLoan); err != nil {
+			return err
+		}
 		return tx.Commit(ctx)
 	}
 
@@ -240,6 +246,14 @@ func (r *studentLoanLiabilityRepository) ReplaceForAccount(ctx context.Context, 
 		return err
 	}
 
+	// #1569 T6: capture the committed row into liability_statements, in this same transaction and
+	// IN ADDITION to the replace above. `details` is to_jsonb() of the row as stored, so the
+	// encrypted columns are copied AS CIPHERTEXT (see the mortgage repository's identical note).
+	// The delete-only path returns earlier and captures nothing, leaving recorded days intact.
+	if err := captureStudentLoanLiabilityStatement(ctx, tx, accountID, userID); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 
@@ -268,7 +282,8 @@ func (r *studentLoanLiabilityRepository) GetByUserID(ctx context.Context, userID
 		FROM student_loan_liabilities
 		JOIN accounts a ON a.id = student_loan_liabilities.account_id
 		WHERE student_loan_liabilities.user_id = $1
-		  AND a.status = 'active'
+		  -- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		  AND ` + currentStateAccountLeg("a") + `
 		ORDER BY student_loan_liabilities.account_id
 	`
 

@@ -39,6 +39,45 @@ export const mockUseGetActiveSavingsGoals = mock(() => ({
   refetch: mockActiveSavingsGoalsRefetch,
 }))
 
+// #1569 Task 12: deleted-goals listing + purge.
+export const mockDeletedSavingsGoalsRefetch = mock(() => Promise.resolve(null as any))
+// `isError` present-and-false for the same reason as mockUseGetAccounts above: DeletedGoalsPanel
+// reads it (it is what disarms purge on a degraded listing), and a factory that omits the key
+// makes that arm unreachable AND untypable in every test.
+export const mockUseGetDeletedSavingsGoals = mock(() => ({
+  data: undefined,
+  isLoading: false,
+  isError: false,
+  error: null,
+  refetch: mockDeletedSavingsGoalsRefetch,
+}))
+export const mockPurgeSavingsGoalMutateAsync = mock(() => Promise.resolve(undefined))
+export const mockUsePurgeSavingsGoal = mock(() => ({
+  mutateAsync: mockPurgeSavingsGoalMutateAsync,
+  isPending: false,
+  isError: false,
+  error: null,
+}))
+export const mockGetGetDeletedSavingsGoalsQueryKey = mock(() => ['getDeletedSavingsGoals'])
+
+// #1569 T7 / C2: the retained ledger under a DELETED goal. The live contributions read returns
+// nothing once the goal is tombstoned, so this is the only way a user can see money they logged
+// by hand.
+export const mockUseListDeletedSavingsGoalContributions = mock(() => ({
+  data: undefined as any,
+  isLoading: false,
+  error: null,
+  refetch: mock(() => Promise.resolve(null as any)),
+}))
+
+// #1569 Task 13 (E14): basis-aware progress summary — the only source of the `freshness`
+// flag that explains a frozen balance-basis amount.
+export const mockUseGetSavingsProgressSummary = mock(() => ({
+  data: undefined as any,
+  isLoading: false,
+  error: null,
+}))
+
 export const mockUseGetSavingsGoal = mock(() => ({
   data: undefined,
   isLoading: false,
@@ -116,6 +155,11 @@ mock.module('@boostedbudget/api-client/endpoints/savings-goals/savings-goals', (
   useGetSavingsGoals: mockUseGetSavingsGoals,
   useGetActiveSavingsGoals: mockUseGetActiveSavingsGoals,
   useGetSavingsGoal: mockUseGetSavingsGoal,
+  useGetSavingsProgressSummary: mockUseGetSavingsProgressSummary,
+  useGetDeletedSavingsGoals: mockUseGetDeletedSavingsGoals,
+  usePurgeSavingsGoal: mockUsePurgeSavingsGoal,
+  getGetDeletedSavingsGoalsQueryKey: mockGetGetDeletedSavingsGoalsQueryKey,
+  useListDeletedSavingsGoalContributions: mockUseListDeletedSavingsGoalContributions,
   useCreateSavingsGoal: mockUseCreateSavingsGoal,
   useUpdateSavingsGoal: mockUseUpdateSavingsGoal,
   useDeleteSavingsGoal: mockUseDeleteSavingsGoal,

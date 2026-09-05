@@ -13,6 +13,28 @@ import { TermsOfService } from './TermsOfService'
 const renderWithRouter = (component: React.ReactElement) =>
   render(<MemoryRouter>{component}</MemoryRouter>)
 
+/**
+ * The text of one top-level section: the content between the <h2> matching `heading` and the next
+ * <h2>, whitespace-collapsed.
+ *
+ * Anchoring matters here rather than querying the whole ~600-line document: words like "delete",
+ * "6 months" and "retention period" appear in a dozen other sections, so a document-wide matcher
+ * would prove nothing about the clause under test.
+ */
+function sectionText(heading: RegExp): string {
+  const h2 = Array.from(document.querySelectorAll('h2')).find((h) =>
+    heading.test(h.textContent ?? '')
+  )
+  expect(h2).toBeDefined()
+  let text = ''
+  let node: Element | null = h2!.nextElementSibling
+  while (node && node.tagName !== 'H2') {
+    text += ' ' + (node.textContent ?? '')
+    node = node.nextElementSibling
+  }
+  return text.replace(/\s+/g, ' ').trim()
+}
+
 describe('TermsOfService', () => {
   it('renders "Terms of Service" heading', () => {
     renderWithRouter(<TermsOfService />)
@@ -21,7 +43,7 @@ describe('TermsOfService', () => {
 
   it('renders "Last Updated" date', () => {
     renderWithRouter(<TermsOfService />)
-    expect(screen.getByText(/last updated: july 26, 2026/i)).toBeInTheDocument()
+    expect(screen.getByText(/last updated: august 25, 2026/i)).toBeInTheDocument()
   })
 
   it('renders all major sections', () => {
@@ -145,6 +167,58 @@ describe('TermsOfService', () => {
     renderWithRouter(<TermsOfService />)
     expect(screen.getAllByText(/6 months/i).length).toBeGreaterThan(0)
     expect(screen.queryByText(/preserved indefinitely/i)).not.toBeInTheDocument()
+  })
+
+  // Issue #1592 finding I2. § 7 was the second of three surfaces promising a post-retention
+  // deletion that does not happen in any environment: #1569 gated the retention sweep on both
+  // pre-deletion notices having been recorded (retentionNoticesDeliveredPredicate,
+  // profile_repository.go) and no EmailService implements jobs.RetentionEmailService
+  // (cmd/server/main.go), so the notices are never sent and expired accounts are retained
+  // indefinitely instead of deleted.
+  //
+  // Anchored to the § 7 heading and walked to the next <h2>, not queried against the whole
+  // ~600-line document — the words "delete" and "retention period" appear in a dozen other
+  // sections, so a document-wide matcher would prove nothing about this clause.
+  it('does not promise a post-retention deletion the retention sweep cannot perform (Section 7)', () => {
+    renderWithRouter(<TermsOfService />)
+    const text = sectionText(/trial expiration and read-only access/i)
+
+    // The superseded sentence, pinned in full.
+    expect(text).not.toMatch(
+      /After the retention period, we will delete or anonymize it unless a longer retention period is legally required/i
+    )
+    expect(text).toMatch(
+      /we do not automatically delete a cancelled account unless both .{0,40}notices have been sent/i
+    )
+    expect(text).toMatch(/not sending those notices yet/i)
+    // …and the user-requested path, which the sweep's own `deletion_requested_at IS NULL`
+    // predicate excludes, must stay available and unqualified.
+    expect(text).toMatch(/request deletion at any time/i)
+  })
+
+  // Issue #1592 round 5 (G13) — the same contradiction as Privacy Policy § 8.4, in § 7 and again
+  // in the Key Points Summary. Round 4 added "cancelled accounts are kept past the 6-month
+  // window" without reconciling the sentence above it, which still said "for up to 6 months".
+  it('states six months as a floor, not a cap, in the cancellation clause (Section 7)', () => {
+    renderWithRouter(<TermsOfService />)
+    const text = sectionText(/trial expiration and read-only access/i)
+
+    expect(text).not.toMatch(/account data for up to ?6 months after cancellation/i)
+    expect(text).toMatch(/account data for at least ?6 months after cancellation/i)
+    expect(text).toMatch(/longer than that today/i)
+    expect(text).toMatch(/kept past the 6-month window/i)
+  })
+
+  // The Key Points Summary is the only part of this document most readers finish. An unqualified
+  // "retained for up to 6 months" there re-states the capped claim the body no longer makes.
+  it('carries the same floor qualification in the Key Points Summary', () => {
+    renderWithRouter(<TermsOfService />)
+    const summary = document.querySelector('.privacy-summary')
+    expect(summary).not.toBeNull()
+    const text = (summary!.textContent ?? '').replace(/\s+/g, ' ').trim()
+    expect(text).not.toMatch(/data retained for up to 6 months/i)
+    expect(text).toMatch(/data retained for at least 6 months/i)
+    expect(text).toMatch(/longer while automatic deletion is not yet running/i)
   })
 
   it('renders 30-day data preservation for removed household members (Section 9.2)', () => {

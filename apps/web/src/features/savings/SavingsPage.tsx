@@ -13,12 +13,14 @@ import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { useSavingsGoals } from './hooks/useSavingsGoals'
+import { useSavingsGoalFreshness } from './hooks/useSavingsGoalFreshness'
 import { useSavingsGoalsView } from './hooks/useSavingsGoalsView'
 import type { SortKey, TabKey } from './hooks/useSavingsGoalsView'
 import type { SavingsGoal } from './types'
 import { SavingsAggregateHeader } from './components/SavingsAggregateHeader'
 import { SavingsFiltersBar } from './components/SavingsFiltersBar'
 import { SavingsGoalsGrid } from './components/SavingsGoalsGrid'
+import { DeletedGoalsPanel } from './components/DeletedGoalsPanel'
 import { CreateSavingsGoalDialog } from './components/CreateSavingsGoalDialog'
 import { UpdateSavingsGoalDialog } from './components/UpdateSavingsGoalDialog'
 
@@ -35,6 +37,8 @@ export function SavingsPage() {
 
   const { goals, goalsWithProgress, loading, error, refetch, deleteGoal } = useSavingsGoals()
   const { view, tab, setTab, sortKey, setSortKey } = useSavingsGoalsView(goalsWithProgress)
+  // Issue #1569 (Task 13 / E14): explains a frozen balance-basis amount on the affected card.
+  const freshnessByGoalId = useSavingsGoalFreshness()
 
   // Fire page-viewed analytics once on mount
   useEffect(() => {
@@ -132,6 +136,19 @@ export function SavingsPage() {
         >
           Retry
         </button>
+        {/*
+          #1569 R8. Mounted in the ERROR branch for the same reason it is mounted in the empty
+          branch: a failure of the LIVE-goals query says nothing about the deleted-goals query,
+          which is separate, has its own error arm, and — when it succeeds — is the only place the
+          user can see the contributions we promised to keep, or reach
+          POST /savings-goals/{id}/purge to reclaim them. Hiding it here made a transient network
+          blip read as "you have deleted nothing".
+
+          The live-list failure above is deliberately NOT swallowed: it keeps its message and its
+          Retry, and this panel is additive beneath it. The panel self-hides on an empty listing,
+          so an ordinary failed page is visually unchanged.
+        */}
+        <DeletedGoalsPanel onPurged={() => void refetch()} />
       </main>
     )
   }
@@ -150,6 +167,26 @@ export function SavingsPage() {
             </ReadOnlyGuard>
           }
         />
+        {/*
+          #1569 whole-branch review, C2. This branch is exactly where the disclosure matters most:
+          the user who just deleted their LAST goal was told, in the confirm dialog, that every
+          contribution still logged against it is kept and that they can erase the goal for good
+          later from "Deleted
+          goals". Returning the empty state before <DeletedGoalsPanel> made both halves of that
+          promise false for them, and left POST /savings-goals/{id}/purge with no reachable
+          caller. The panel self-hides on an empty listing, so a genuine first-run page is
+          unchanged.
+
+          ⚠ Mounting the panel here is only half of it, and the missing half was invisible for a
+          round: this branch MOUNTS <DeletedGoalsPanel> for the first time, so what it shows is
+          whatever the deleted-goals query already holds. main.tsx sets a global five-minute
+          staleTime, and deleteGoal() used to refetch only the LIVE goals — so the panel's first
+          mount read a cached, empty listing, self-hid, and the disclosure above was false again
+          by a different route. useSavingsGoals.deleteGoal now invalidates
+          getGetDeletedSavingsGoalsQueryKey() as well; useSavingsGoalsDeletedCache.test.tsx pins
+          that against a real QueryClient with a primed stale cache.
+        */}
+        <DeletedGoalsPanel onPurged={() => void refetch()} />
         <CreateSavingsGoalDialog
           isOpen={activeDialog === 'create'}
           onCancel={() => setActiveDialog('none')}
@@ -194,7 +231,11 @@ export function SavingsPage() {
         onDelete={handleDeleteClick}
         emptyMessage={emptyMessage}
         onContributionChanged={() => void refetch()}
+        freshnessByGoalId={freshnessByGoalId}
       />
+
+      {/* #1569 T12 gap 2: what deletion kept, and the only way to actually reclaim it. */}
+      <DeletedGoalsPanel onPurged={() => void refetch()} />
 
       <CreateSavingsGoalDialog
         isOpen={activeDialog === 'create'}
@@ -217,10 +258,20 @@ export function SavingsPage() {
         }}
         onConfirm={() => void handleConfirmDelete()}
         title="Delete savings goal"
+        /*
+          #1569 T8.5: this used to read "Nothing is thrown away — every contribution you logged is
+          kept", which is FALSE for any user who has already deleted an individual contribution.
+          DELETE /savings-goals/{goalID}/contributions/{id} HARD-deletes the row
+          (savings_contribution_repository.DeleteContribution) and is the sanctioned
+          explicit-destruction exception, reachable from GoalContributionsSheet. The claim is now
+          scoped to what THIS action does, matching DeletedGoalsPanel's already-correct "on its own"
+          wording. Pinned by a NEGATIVE assertion in SavingsPage.test.tsx — the unscoped sentence
+          must not come back.
+        */
         description={
           deletingGoal
-            ? <>Are you sure you want to delete &ldquo;<span data-ph-mask>{deletingGoal.name}</span>&rdquo;? This cannot be undone.</>
-            : 'Are you sure you want to delete this goal?'
+            ? <>Remove &ldquo;<span data-ph-mask>{deletingGoal.name}</span>&rdquo; from your goals? Deleting the goal doesn&apos;t throw anything away on its own — every contribution still logged against it is kept, and you can erase the goal for good later from &ldquo;Deleted goals&rdquo;.</>
+            : 'Remove this goal from your list? Deleting the goal doesn\'t throw anything away on its own.'
         }
         variant="destructive"
         confirmButtonText="Delete"

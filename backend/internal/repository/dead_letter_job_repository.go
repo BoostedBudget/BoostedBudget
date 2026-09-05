@@ -428,7 +428,6 @@ func (r *DeadLetterJobRepository) AddNotes(ctx context.Context, id int64, notes 
 	return err
 }
 
-
 // replayResolvedPredicate is the single definition of "this DLQ row's replay actually happened",
 // shared by GetStats and GetOldestJobAge so the success count and the age alarm can never disagree
 // about it — round 15, Tier E item 6.

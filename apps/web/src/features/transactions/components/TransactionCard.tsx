@@ -88,7 +88,12 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
     <article
       className={cn(
         'relative bg-card border border-border rounded-lg p-4 mb-3 transition-shadow',
-        pending && 'bg-warning/10 border-warning/40',
+        // #1569 task 20 (A3): the `bg-warning/10` half is removed. The card DOES paint its own
+        // bg-card, so the tint composited onto it and dropped text-muted-foreground to 4.38:1 —
+        // the same failure the table row had, on the mobile surface. A left rule marks the card
+        // instead; it changes no text's ground. See TransactionTable's rowClassName for the full
+        // argument, including why tuning the alpha was rejected.
+        pending && 'border-warning/40 border-l-4 border-l-warning',
         onEdit && 'cursor-pointer hover:shadow-md focus:outline-2 focus:outline-ring focus:outline-offset-2 active:scale-[0.99]'
       )}
       data-transaction-id={id}

@@ -67,6 +67,9 @@ func (m *MockTransactionSyncService) SetSavingsDetectionServices(_ services.Sync
 func (m *MockTransactionSyncService) SetCacheInvalidation(_ *cache.Generations, _ services.SyncCacheHouseholdLookup) {
 }
 
+// SetAuditLogger satisfies the TransactionSyncService interface (Issue #1569 Task 5).
+func (m *MockTransactionSyncService) SetAuditLogger(_ services.AuditLogger) {}
+
 // MockLinkedItemRepository mocks the LinkedItemRepository interface
 type MockLinkedItemRepository struct {
 	mock.Mock
@@ -124,8 +127,8 @@ func (m *MockLinkedItemRepository) Delete(ctx context.Context, id string) error 
 	return args.Error(0)
 }
 
-func (m *MockLinkedItemRepository) DeleteByUser(ctx context.Context, id, userID string) error {
-	args := m.Called(ctx, id, userID)
+func (m *MockLinkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID, userID string, auditLog repository.AuditLogRepository) error {
+	args := m.Called(ctx, linkedItemID, userID, auditLog)
 	return args.Error(0)
 }
 

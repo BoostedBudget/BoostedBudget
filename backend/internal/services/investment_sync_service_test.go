@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/plaid/plaid-go/v23/plaid"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -35,9 +37,17 @@ type MockHoldingRepository struct {
 	mock.Mock
 }
 
-func (m *MockHoldingRepository) ReplaceForAccount(ctx context.Context, accountID, userID string, holdings []domain.Holding) error {
+// ReplaceForAccount returns the UTC day the history capture filed under. Existing tests set only
+// an error expectation, so a missing first return value falls back to the zero Time — which is
+// exactly what TestInvestmentSyncService_SyncHoldings_FilesTheAggregateUnderTheCapturedDay relies
+// on being visible rather than papered over.
+func (m *MockHoldingRepository) ReplaceForAccount(ctx context.Context, accountID, userID string, holdings []domain.Holding) (time.Time, error) {
 	args := m.Called(ctx, accountID, userID, holdings)
-	return args.Error(0)
+	day, _ := args.Get(0).(time.Time)
+	if len(args) > 1 {
+		return day, args.Error(1)
+	}
+	return day, nil
 }
 
 func (m *MockHoldingRepository) GetByUserID(ctx context.Context, userID string) ([]domain.Holding, error) {
@@ -107,6 +117,20 @@ func (m *MockPortfolioSnapshotRepository) GetLatestBefore(ctx context.Context, u
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.PortfolioSnapshot), args.Error(1)
+}
+
+// #1569 Task 11: the coverage-limited repair of past portfolio_snapshots days. Not exercised by
+// the sync service, which only ever writes TODAY.
+func (m *MockPortfolioSnapshotRepository) RepairUserFromHistory(ctx context.Context, userID string) (domain.PortfolioRepairSummary, error) {
+	args := m.Called(ctx, userID)
+	sum, _ := args.Get(0).(domain.PortfolioRepairSummary)
+	return sum, args.Error(1)
+}
+
+func (m *MockPortfolioSnapshotRepository) UserIDsWithUnexaminedSnapshots(ctx context.Context, limit int) ([]string, error) {
+	args := m.Called(ctx, limit)
+	ids, _ := args.Get(0).([]string)
+	return ids, args.Error(1)
 }
 
 type MockInvestmentTransactionRepository struct {
@@ -367,7 +391,6 @@ func TestInvestmentSyncService_SyncHoldings_SecurityMappingCorrect(t *testing.T)
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
 	sec := makePlaidSecurity(plaidSecurityID, "Apple Inc.", "AAPL")
 	holding := makePlaidHolding(plaidAccountID, plaidSecurityID, 5.0, 165.0, 825.0, 750.0)
 
@@ -414,10 +437,11 @@ func TestInvestmentSyncService_SyncHoldings_EmptyHoldings(t *testing.T) {
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-	// No securities, no holdings in response (account was fully liquidated)
+	// No securities, no holdings in response (account was fully liquidated) — but the account
+	// IS present in the response's `accounts` array, confirming Plaid enumerated it this call
+	// and genuinely reports zero holdings, not a partial/incomplete response for it.
 	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(
-		[]plaid.AccountBase{},
+		[]plaid.AccountBase{{AccountId: plaidAccountID}},
 		[]plaid.Holding{},
 		[]plaid.Security{},
 		makeMinimalPlaidItem(),
@@ -442,6 +466,59 @@ func TestInvestmentSyncService_SyncHoldings_EmptyHoldings(t *testing.T) {
 	deps.holdingRepo.AssertExpectations(t)
 }
 
+// TestInvestmentSyncService_SyncHoldings_PartialResponse_PreservesHoldings verifies the Issue
+// #1569 Task 4 fix: an account with no holdings in the response AND absent from the response's
+// `accounts` array (the only per-account completeness signal Plaid exposes, see
+// plaid_completeness.go) must NOT be treated as "fully liquidated." Existing holdings rows must
+// be preserved, and the sync must surface the skip on SkippedIncomplete (NOT Errors — fix round
+// 1 caught that Errors also gates the portfolio snapshot upsert, and a permanently-absent account
+// would otherwise suppress the user's snapshot forever) so the caller (ProcessWebhook) retries
+// instead of silently accepting a partial response as final.
+func TestInvestmentSyncService_SyncHoldings_PartialResponse_PreservesHoldings(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	before := testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("holdings"))
+
+	internalAccountID := uuid.New().String()
+	plaidAccountID := "plaid-acct-partial-holdings"
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-001", userID)
+
+	// No holdings for this account AND the account itself is absent from `accounts` — Plaid's
+	// response says nothing about this account at all this call (a partial/degraded response),
+	// which is NOT the same as "confirmed fully liquidated."
+	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(
+		[]plaid.AccountBase{},
+		[]plaid.Holding{},
+		[]plaid.Security{},
+		makeMinimalPlaidItem(),
+		"req-partial-holdings",
+	)
+	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, "tok").Return(holdingsResp, nil)
+
+	deps.securityRepo.On("UpsertBatch", ctx, []domain.Security{}).Return(map[string]string{}, nil)
+
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+	}, nil)
+
+	result, err := svc.SyncHoldings(ctx, linkedItem)
+
+	require.NoError(t, err)
+	// ReplaceForAccount must NEVER be called for this account — existing holdings are preserved.
+	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount", ctx, internalAccountID, userID, []domain.Holding{})
+	assert.Equal(t, 0, result.AccountsProcessed)
+	// A partial response must surface on SkippedIncomplete (so ProcessWebhook still retries) —
+	// but NOT on Errors, which gates the portfolio snapshot upsert.
+	assert.Empty(t, result.Errors, "a partial/incomplete response is not a correctness failure — "+
+		"putting it on Errors would suppress the portfolio snapshot")
+	require.Len(t, result.SkippedIncomplete, 1)
+	assert.Contains(t, result.SkippedIncomplete[0], plaidAccountID)
+	assert.Equal(t, before+1, testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("holdings")),
+		"a refactor that silently drops the .Inc() call must be visible here, not just in the log line")
+}
+
 // TestInvestmentSyncService_SyncHoldings_UnmappedAccount verifies that holdings for
 // a Plaid account that has no matching internal account are gracefully skipped.
 func TestInvestmentSyncService_SyncHoldings_UnmappedAccount(t *testing.T) {
@@ -450,7 +527,6 @@ func TestInvestmentSyncService_SyncHoldings_UnmappedAccount(t *testing.T) {
 
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
-
 
 	// Plaid returns a holding for an account we don't have internally
 	plaidSecurityID := "plaid-sec-001"
@@ -477,7 +553,7 @@ func TestInvestmentSyncService_SyncHoldings_UnmappedAccount(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.AccountsProcessed)
-	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount")
+	assertNoCallTo(t, &deps.holdingRepo.Mock, "ReplaceForAccount")
 }
 
 // TestInvestmentSyncService_SyncHoldings_PlaidAPIError verifies that Plaid API
@@ -623,7 +699,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_FirstSync_NoLastSynced
 	// No InvestmentsLastSyncedDate → first sync
 	// AccessToken is already decrypted by the repository layer
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -659,6 +735,71 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_FirstSync_NoLastSynced
 	deps.linkedItemRepo.AssertExpectations(t)
 }
 
+// TestInvestmentSyncService_SyncInvestmentTransactions_RetainedAccount_StillStored is THE
+// regression test for Issue #1569 round 11 task 1: the exact defect task 1b already fixed for
+// banking (transaction_sync_service.go:915, GetByLinkedItemIDIncludingRetained), left in place
+// one file over for investment transactions.
+//
+// A user disconnects (or Plaid retires) one brokerage account inside a linked item that keeps
+// syncing. The account row survives as 'removed' — investment_transactions carries no cascade
+// or wipe on that path, and investmentTransactionRepository.UpsertBatch is a pure
+// INSERT ... ON CONFLICT DO UPDATE (semantically identical to the banking path), so there is no
+// wipe-and-reinsert reason to scope the account map to 'active' only here. Before this fix,
+// SyncInvestmentTransactions built its account map from active-only GetByLinkedItemID, so the
+// retained account never appears in accountMap and mapPlaidInvestmentTransactions silently
+// Warn+skips every transaction Plaid delivers for it, forever.
+//
+// Mutation-check: reverting investment_sync_service.go:498 to GetByLinkedItemID must turn this
+// RED, since the mock below only ever stubs GetByLinkedItemIDIncludingRetained.
+func TestInvestmentSyncService_SyncInvestmentTransactions_RetainedAccount_StillStored(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	userID := uuid.New().String()
+	plaidAccountID := "plaid-acct-retained"
+	internalAccountID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-001", userID)
+
+	// The account was disconnected but the linked item keeps syncing (sibling accounts
+	// remain active); GetByLinkedItemIDIncludingRetained must be the source, not
+	// GetByLinkedItemID, or this retained account never lands in the map.
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID, Status: domain.AccountStatusRemoved},
+	}, nil)
+
+	txn := makePlaidCashTxn("txn-retained-001", plaidAccountID, 250.0, "2024-01-15")
+	txnResp := plaid.NewInvestmentsTransactionsGetResponse(
+		makeMinimalPlaidItem(),
+		[]plaid.AccountBase{},
+		[]plaid.Security{},
+		[]plaid.InvestmentTransaction{txn},
+		1,
+		"req-001",
+	)
+
+	deps.plaidSvc.On("InvestmentsTransactionsGet", ctx, linkedItem.AccessToken, mock.Anything, mock.Anything, int32(0), int32(500)).
+		Return(txnResp, nil)
+
+	// The transaction for the retained account must actually be stored (mapped to its
+	// internal account ID), not silently dropped.
+	deps.invTxnRepo.On("UpsertBatch", ctx, mock.MatchedBy(func(txns []domain.InvestmentTransaction) bool {
+		if len(txns) != 1 {
+			return false
+		}
+		return txns[0].AccountID == internalAccountID
+	})).Return(1, nil)
+
+	deps.linkedItemRepo.On("UpdateInvestmentsLastSyncedDate", ctx, linkedItem.ID, mock.Anything).Return(nil)
+
+	result, err := svc.SyncInvestmentTransactions(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.TransactionsInserted,
+		"a retained account's investment transaction must be stored, not permanently skipped")
+	deps.accountRepo.AssertExpectations(t)
+	deps.invTxnRepo.AssertExpectations(t)
+}
+
 // TestInvestmentSyncService_SyncInvestmentTransactions_IncrementalSync_UsesLastSyncedDate
 // verifies that on incremental sync, startDate = lastSyncedDate - 1 day (overlap for safety).
 func TestInvestmentSyncService_SyncInvestmentTransactions_IncrementalSync_UsesLastSyncedDate(t *testing.T) {
@@ -674,7 +815,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_IncrementalSync_UsesLa
 	linkedItem.InvestmentsLastSyncedDate = &lastSyncedDate
 	// AccessToken is already decrypted by the repository layer
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -718,8 +859,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_Pagination_SinglePage(
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -760,8 +900,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_Pagination_MultiplePag
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -835,8 +974,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_Pagination_ExactBounda
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -879,8 +1017,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_DuplicatesSkipped(t *t
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -916,8 +1053,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_UpdatesLastSyncedDate(
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -956,8 +1092,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_PartialPageError_NoDat
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -1006,8 +1141,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_NullSecurityID(t *test
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -1050,8 +1184,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_SecurityResolution(t *
 	internalSecurityID := "internal-" + uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -1156,7 +1289,7 @@ func TestInvestmentSyncService_ProcessWebhook_RoutesInvestmentTransactions(t *te
 
 	// SyncInvestmentTransactions dependencies (empty response)
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	deps.plaidSvc.On("InvestmentsTransactionsGet", ctx, "tok", mock.Anything, mock.Anything, int32(0), int32(500)).
 		Return(plaid.NewInvestmentsTransactionsGetResponse(
 			makeMinimalPlaidItem(), nil, nil, []plaid.InvestmentTransaction{}, 0, "req-001",
@@ -1218,7 +1351,6 @@ func TestInvestmentSyncService_SyncHoldings_UnmappedSecurity_SkipsAccountReplace
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
 	// Two holdings: one with a known security, one with an unknown security
 	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(
 		[]plaid.AccountBase{},
@@ -1251,7 +1383,7 @@ func TestInvestmentSyncService_SyncHoldings_UnmappedSecurity_SkipsAccountReplace
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	// ReplaceForAccount must NOT be called — existing holdings are preserved
-	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount")
+	assertNoCallTo(t, &deps.holdingRepo.Mock, "ReplaceForAccount")
 	// Error is recorded in result
 	assert.Len(t, result.Errors, 1)
 }
@@ -1312,7 +1444,57 @@ func TestInvestmentSyncService_ProcessWebhook_HoldingsPartialFailure(t *testing.
 	assert.Contains(t, err.Error(), "partial failure")
 	// Webhook must NOT be marked as processed
 	assert.False(t, webhook.Processed)
-	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount")
+	assertNoCallTo(t, &deps.holdingRepo.Mock, "ReplaceForAccount")
+}
+
+// TestInvestmentSyncService_ProcessWebhook_HoldingsSkippedIncomplete verifies that when
+// SyncHoldings skips an account's clear because it's absent from Plaid's response (Issue #1569
+// Task 4 — result.SkippedIncomplete, NOT result.Errors), ProcessWebhook still returns an error so
+// the job retries. This is a DIFFERENT code path from the unmapped-security test above — that one
+// hits result.Errors, this one hits the newer result.SkippedIncomplete branch added in fix round 1.
+func TestInvestmentSyncService_ProcessWebhook_HoldingsSkippedIncomplete(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	itemID := "item-skipped-001"
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem(itemID, userID)
+
+	internalAccountID := uuid.New().String()
+	plaidAccountID := "plaid-acct-absent"
+	holdingsCode := "DEFAULT_UPDATE"
+
+	webhook := &domain.WebhookEvent{
+		ID:          "wh-skipped",
+		WebhookType: "HOLDINGS",
+		WebhookCode: &holdingsCode,
+		ItemID:      &itemID,
+	}
+
+	deps.webhookRepo.On("Update", ctx, mock.Anything).Return(nil)
+	deps.linkedItemRepo.On("GetByItemID", ctx, itemID).Return(linkedItem, nil)
+	// The account is absent from `accounts` entirely and has no holdings in the response.
+	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(
+		[]plaid.AccountBase{},
+		[]plaid.Holding{},
+		[]plaid.Security{},
+		makeMinimalPlaidItem(),
+		"req-skipped",
+	)
+	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, linkedItem.AccessToken).Return(holdingsResp, nil)
+	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).Return(map[string]string{}, nil)
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+	}, nil)
+
+	err := svc.ProcessWebhook(ctx, webhook)
+
+	// ProcessWebhook must return an error so the job retries — the SkippedIncomplete branch,
+	// not the Errors branch.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "incomplete")
+	assert.False(t, webhook.Processed)
+	assertNoCallTo(t, &deps.holdingRepo.Mock, "ReplaceForAccount")
 }
 
 // TestInvestmentSyncService_ProcessWebhook_NilWebhook verifies that nil input returns an error.
@@ -1339,7 +1521,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_CashTxnQuantityPriceAl
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-r23", userID)
 
-	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+	deps.accountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
 
@@ -1430,4 +1612,99 @@ func TestInvestmentSyncService_SetAnalytics_DoesNotPanic(t *testing.T) {
 		svc.SetAnalytics(nil)
 	}, "SetAnalytics with nil must not panic")
 	assert.Nil(t, iss.analytics, "analytics field should be nil after SetAnalytics(nil)")
+}
+
+// TestInvestmentSyncService_SyncHoldings_FilesTheAggregateUnderTheCapturedDay is #1569 T9.1 item C.
+//
+// The row-level holding_snapshots capture takes its as_of_date from POSTGRES (serverUTCDate, inside
+// ReplaceForAccount's own transaction). This path used to take the portfolio_snapshots aggregate's
+// day from the GO process's clock instead. The two clocks are independent, so a sync that crosses
+// UTC midnight while Postgres has not — or the reverse — files the rows under day D and the
+// aggregate under D+1: an aggregate with nothing behind it, and a day whose rows no aggregate
+// names. portfolio_snapshot_repair.go excludes the current server day, so the orphan survives the
+// next repair pass and is later refused for lack of coverage.
+//
+// The daily worker already solved this by using the day CaptureForUser returns; this path was the
+// outlier. The fix is NOT to compare clocks — it is to stop consulting the second one.
+func TestInvestmentSyncService_SyncHoldings_FilesTheAggregateUnderTheCapturedDay(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	plaidAccountID := "plaid-acct-clock"
+	internalAccountID := uuid.New().String()
+	plaidSecurityID := "plaid-sec-clock"
+	internalSecurityID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-clock", userID)
+
+	// A day the Go clock cannot possibly produce, so "it used time.Now()" is unmistakable.
+	capturedDay := time.Date(2031, 3, 7, 0, 0, 0, 0, time.UTC)
+
+	sec := makePlaidSecurity(plaidSecurityID, "Apple Inc.", "AAPL")
+	holding := makePlaidHolding(plaidAccountID, plaidSecurityID, 10.0, 165.0, 1650.0, 1500.0)
+	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, linkedItem.AccessToken).Return(
+		plaid.NewInvestmentsHoldingsGetResponse(
+			[]plaid.AccountBase{}, []plaid.Holding{holding}, []plaid.Security{sec},
+			makeMinimalPlaidItem(), "req-clock"), nil)
+	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).
+		Return(map[string]string{plaidSecurityID: internalSecurityID}, nil)
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+	}, nil)
+	deps.holdingRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, mock.Anything).
+		Return(capturedDay, nil)
+
+	_, err := svc.SyncHoldings(ctx, linkedItem)
+	require.NoError(t, err)
+
+	deps.snapshotRepo.AssertCalled(t, "Upsert", ctx, userID, capturedDay)
+}
+
+// TestInvestmentSyncService_SyncHoldings_StraddlingUTCMidnight_FilesUnderTheLatestCapturedDay pins
+// WHICH captured day wins when one item's accounts do not all land on the same one.
+//
+// Each account's capture reads the server date inside its own transaction, so a sync that crosses
+// UTC midnight mid-loop genuinely produces two different days. Neither day then has full coverage —
+// which the repair reports honestly rather than silently rebuilding — and the aggregate names the
+// LATER one: the more recent state, and the day the next sync and the daily whole-user capture will
+// complete. Reversing this to the earliest day left the whole services package green.
+func TestInvestmentSyncService_SyncHoldings_StraddlingUTCMidnight_FilesUnderTheLatestCapturedDay(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-straddle", userID)
+	plaidSecurityID := "plaid-sec-straddle"
+	internalSecurityID := uuid.New().String()
+	acctA, acctB := "plaid-acct-A", "plaid-acct-B"
+	internalA, internalB := uuid.New().String(), uuid.New().String()
+
+	dayBefore := time.Date(2031, 3, 7, 0, 0, 0, 0, time.UTC)
+	dayAfter := time.Date(2031, 3, 8, 0, 0, 0, 0, time.UTC)
+
+	sec := makePlaidSecurity(plaidSecurityID, "Apple Inc.", "AAPL")
+	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, linkedItem.AccessToken).Return(
+		plaid.NewInvestmentsHoldingsGetResponse(
+			[]plaid.AccountBase{},
+			[]plaid.Holding{
+				makePlaidHolding(acctA, plaidSecurityID, 10.0, 165.0, 1650.0, 1500.0),
+				makePlaidHolding(acctB, plaidSecurityID, 5.0, 165.0, 825.0, 750.0),
+			},
+			[]plaid.Security{sec}, makeMinimalPlaidItem(), "req-straddle"), nil)
+	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).
+		Return(map[string]string{plaidSecurityID: internalSecurityID}, nil)
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalA, PlaidAccountID: acctA, UserID: userID},
+		{ID: internalB, PlaidAccountID: acctB, UserID: userID},
+	}, nil)
+	// The map iteration order over accountMap is not defined, so the days are attached per
+	// account rather than per call order: whichever runs first, the LATER day must win.
+	deps.holdingRepo.On("ReplaceForAccount", ctx, internalA, userID, mock.Anything).Return(dayBefore, nil)
+	deps.holdingRepo.On("ReplaceForAccount", ctx, internalB, userID, mock.Anything).Return(dayAfter, nil)
+
+	_, err := svc.SyncHoldings(ctx, linkedItem)
+	require.NoError(t, err)
+
+	deps.snapshotRepo.AssertCalled(t, "Upsert", ctx, userID, dayAfter)
+	deps.snapshotRepo.AssertNotCalled(t, "Upsert", ctx, userID, dayBefore)
 }

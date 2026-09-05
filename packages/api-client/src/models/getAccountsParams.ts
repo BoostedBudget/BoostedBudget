@@ -37,7 +37,7 @@ export type GetAccountsParams = {
  */
 include_hidden?: string;
 /**
- * Filter by account status: 'active' (default), 'replaced', or 'all'
+ * Filter by account status: 'active' (default), 'replaced', 'all' (active+replaced — a misnomer inherited from history, see AccountFilterOptions.StatusFilter), or 'all_statuses' (every status: active, replaced, expired, removed — for surfaces like the closed-accounts view that need the full universe)
  */
 status?: string;
 /**
@@ -48,4 +48,8 @@ include_replaced?: string;
  * When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set.
  */
 user_account_id?: string;
+/**
+ * Get accounts as of a specific date (YYYY-MM-DD) — which accounts were live that day. Cannot be combined with status=all, status=replaced, or include_replaced=true.
+ */
+as_of_date?: string;
 };

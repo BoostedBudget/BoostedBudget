@@ -155,7 +155,7 @@ func setupMerchantTestFixture(t *testing.T, db *pgxpool.Pool) merchantTestFixtur
 	insertTx(&txAID, &nameA, &f.merchantA, nil, baseDate.Add(4*24*time.Hour))
 	insertTx(&txBID, &nameB, &f.merchantB, nil, baseDate.Add(3*24*time.Hour))
 	insertTx(&txCID, &nameC, &f.merchantC, nil, baseDate.Add(2*24*time.Hour))
-	insertTx(&txNullID, &nameNull, nil, nil, baseDate.Add(1*24*time.Hour))        // null merchant_id
+	insertTx(&txNullID, &nameNull, nil, nil, baseDate.Add(1*24*time.Hour))     // null merchant_id
 	insertTx(&txNoLinkID, &nameNoLink, nil, &mN, baseDate.Add(0*24*time.Hour)) // merchant_name set, merchant_id NULL
 
 	t.Cleanup(func() {
@@ -164,7 +164,7 @@ func setupMerchantTestFixture(t *testing.T, db *pgxpool.Pool) merchantTestFixtur
 		db.Exec(ctx2, `DELETE FROM merchant_name_overrides WHERE user_id = $1`, f.userID) //nolint:errcheck
 		db.Exec(ctx2, `DELETE FROM accounts WHERE user_id = $1`, f.userID)                //nolint:errcheck
 		db.Exec(ctx2, `DELETE FROM linked_items WHERE user_id = $1`, f.userID)            //nolint:errcheck
-		db.Exec(ctx2, `DELETE FROM merchants WHERE id IN ($1, $2, $3)`, //nolint:errcheck
+		db.Exec(ctx2, `DELETE FROM merchants WHERE id IN ($1, $2, $3)`,                   //nolint:errcheck
 			f.merchantA, f.merchantB, f.merchantC)
 		db.Exec(ctx2, `DELETE FROM users WHERE id = $1`, f.userID) //nolint:errcheck
 	})

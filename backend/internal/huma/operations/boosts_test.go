@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/workers"
@@ -126,6 +127,16 @@ func (m *MockBoostExecutionService) GetExecutionHistoryWithFilter(ctx context.Co
 	return args.Get(0).([]*domain.BoostExecution), args.Int(1), args.Error(2)
 }
 
+// GetUserExecutionHistory is the Issue #1569 Task 14 reader that can surface an execution whose
+// boost has been purged.
+func (m *MockBoostExecutionService) GetUserExecutionHistory(ctx context.Context, userID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
+	args := m.Called(ctx, userID, status, limit, offset)
+	if args.Get(0) == nil {
+		return nil, args.Int(1), args.Error(2)
+	}
+	return args.Get(0).([]*domain.BoostExecution), args.Int(1), args.Error(2)
+}
+
 func (m *MockBoostExecutionService) TestBoost(ctx context.Context, boost *domain.Boost, triggerData map[string]interface{}) (*domain.BoostTestResult, error) {
 	args := m.Called(ctx, boost, triggerData)
 	if args.Get(0) == nil {
@@ -136,10 +147,10 @@ func (m *MockBoostExecutionService) TestBoost(ctx context.Context, boost *domain
 
 func createMockBoost(id, userID string) *domain.Boost {
 	return &domain.Boost{
-		ID:       id,
-		UserID:   userID,
-		Name:     "Test Rule " + id,
-		Enabled:  true,
+		ID:        id,
+		UserID:    userID,
+		Name:      "Test Rule " + id,
+		Enabled:   true,
 		BoostType: domain.BoostTypeBudgetAlert,
 		TriggerConfig: domain.TriggerConfig{
 			Type: domain.TriggerTypeSchedule,
@@ -283,9 +294,9 @@ func TestBoostHandler_TriggerBoost_Success(t *testing.T) {
 	manager := workers.NewBoostSchedulerManager(nil)
 	mockProvider := &mockManualProvider{
 		execution: &domain.BoostExecution{
-			ID:     "exec-1",
-			BoostID: "rule-1",
-			Status: domain.ExecutionStatusCompleted,
+			ID:      "exec-1",
+			BoostID: strPtr("rule-1"),
+			Status:  domain.ExecutionStatusCompleted,
 		},
 	}
 	manager.RegisterProvider(mockProvider)
@@ -315,9 +326,9 @@ func TestBoostHandler_TriggerBoost_WithTriggerData(t *testing.T) {
 	manager := workers.NewBoostSchedulerManager(nil)
 	mockProvider := &mockManualProvider{
 		execution: &domain.BoostExecution{
-			ID:     "exec-1",
-			BoostID: "rule-1",
-			Status: domain.ExecutionStatusCompleted,
+			ID:      "exec-1",
+			BoostID: strPtr("rule-1"),
+			Status:  domain.ExecutionStatusCompleted,
 		},
 	}
 	manager.RegisterProvider(mockProvider)
@@ -475,9 +486,9 @@ func TestBoostHandler_TestBoostExecution_Success(t *testing.T) {
 	mockBoostService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	testResult := &domain.BoostTestResult{
-		BoostID:        "rule-1",
-		BoostName:      boost.Name,
-		BoostType:      boost.BoostType,
+		BoostID:       "rule-1",
+		BoostName:     boost.Name,
+		BoostType:     boost.BoostType,
 		ConditionsMet: true,
 		ConditionResults: []domain.ConditionEvalResult{
 			{Field: "amount", Operator: "gt", Value: "50", Actual: float64(100), Met: true},
@@ -552,9 +563,9 @@ func TestBoostHandler_TestBoostExecution_PFCDisplayFieldsPassThrough(t *testing.
 	mockBoostService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	testResult := &domain.BoostTestResult{
-		BoostID:        "rule-1",
-		BoostName:      boost.Name,
-		BoostType:      boost.BoostType,
+		BoostID:       "rule-1",
+		BoostName:     boost.Name,
+		BoostType:     boost.BoostType,
 		ConditionsMet: true,
 		ConditionResults: []domain.ConditionEvalResult{
 			{
@@ -644,8 +655,8 @@ func TestBoostHandler_GetBoostExecutions_Success(t *testing.T) {
 	mockBoostService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	executions := []*domain.BoostExecution{
-		{ID: "exec-1", BoostID: "rule-1", Status: domain.ExecutionStatusCompleted},
-		{ID: "exec-2", BoostID: "rule-1", Status: domain.ExecutionStatusCompleted},
+		{ID: "exec-1", BoostID: strPtr("rule-1"), Status: domain.ExecutionStatusCompleted},
+		{ID: "exec-2", BoostID: strPtr("rule-1"), Status: domain.ExecutionStatusCompleted},
 	}
 	mockExecService.On("GetExecutionHistoryWithFilter", mock.Anything, "rule-1", (*domain.ExecutionStatus)(nil), 20, 0).Return(executions, 2, nil)
 
@@ -679,7 +690,7 @@ func TestBoostHandler_GetBoostExecutions_WithStatusFilter(t *testing.T) {
 
 	completedStatus := domain.ExecutionStatusCompleted
 	executions := []*domain.BoostExecution{
-		{ID: "exec-1", BoostID: "rule-1", Status: domain.ExecutionStatusCompleted},
+		{ID: "exec-1", BoostID: strPtr("rule-1"), Status: domain.ExecutionStatusCompleted},
 	}
 	mockExecService.On("GetExecutionHistoryWithFilter", mock.Anything, "rule-1", &completedStatus, 20, 0).Return(executions, 1, nil)
 
@@ -808,3 +819,170 @@ func TestBoostHandler_UpdateBoost_ServiceError(t *testing.T) {
 }
 
 func stringPtr(s string) *string { return &s }
+
+// ---------------------------------------------------------------------------------------------
+// Issue #1569 Task 14 (review round 2) — GET /api/v1/boosts/executions
+// ---------------------------------------------------------------------------------------------
+
+// TestBoostHandler_GetUserBoostExecutions_ReturnsOrphans is the endpoint that makes retained
+// automation history reachable from a client at all. Before it, GetByUserID had zero production
+// callers and every other read was keyed on boost_id, so an execution whose boost had been purged
+// was present in the database and invisible to the entire application.
+func TestBoostHandler_GetUserBoostExecutions_ReturnsOrphans(t *testing.T) {
+	mockExecService := new(MockBoostExecutionService)
+
+	orphanName := "Purged Boost"
+	liveBoostID := "boost-live"
+	executions := []*domain.BoostExecution{
+		{ID: "e-orphan", BoostID: nil, UserID: "user-1", BoostName: &orphanName,
+			Status:             domain.ExecutionStatusCompleted,
+			DefinitionSnapshot: []byte(`{"name":"Purged Boost","boost_type":"savings_goal"}`)},
+		{ID: "e-live", BoostID: &liveBoostID, UserID: "user-1", Status: domain.ExecutionStatusCompleted},
+	}
+	// The user id passed through MUST be the authenticated one, never a client-supplied value.
+	mockExecService.On("GetUserExecutionHistory", mock.Anything, "user-1",
+		(*domain.ExecutionStatus)(nil), 20, 0).Return(executions, 2, nil)
+
+	handler := NewBoostHandler(new(MockBoostService), nil)
+	handler.SetExecutionService(mockExecService)
+
+	result, err := handler.GetUserBoostExecutions(context.Background(), &GetUserBoostExecutionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		Limit:              20,
+		Offset:             0,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Body.Executions, 2)
+	assert.Equal(t, 2, result.Body.Total)
+
+	var orphan *domain.BoostExecution
+	for _, e := range result.Body.Executions {
+		if e.ID == "e-orphan" {
+			orphan = e
+		}
+	}
+	require.NotNil(t, orphan, "the orphan must reach the client; filtering it out defeats the endpoint")
+	assert.Nil(t, orphan.BoostID)
+	require.NotNil(t, orphan.BoostName)
+	assert.Equal(t, "Purged Boost", *orphan.BoostName)
+	assert.NotEmpty(t, orphan.DefinitionSnapshot, "the snapshot is what a reader shows in place of the parent")
+
+	mockExecService.AssertExpectations(t)
+}
+
+// TestBoostHandler_GetUserBoostExecutions_IsScopedToTheAuthenticatedUser pins the tenancy boundary.
+// The handler has no boost to check ownership against — a purged boost leaves none — so the ONLY
+// thing standing between one user and another's automation history is that the authenticated id,
+// and nothing else, reaches the service.
+func TestBoostHandler_GetUserBoostExecutions_IsScopedToTheAuthenticatedUser(t *testing.T) {
+	mockExecService := new(MockBoostExecutionService)
+	// mock.Anything for the user id ON PURPOSE: a strict matcher here would make testify's own
+	// "unexpected call" failure the thing that fires, and this test's claim would then be enforced
+	// by the mock setup rather than by an assertion anyone can read. The explicit scan below is the
+	// assertion.
+	mockExecService.On("GetUserExecutionHistory", mock.Anything, mock.Anything,
+		(*domain.ExecutionStatus)(nil), 20, 0).Return([]*domain.BoostExecution{}, 0, nil)
+
+	handler := NewBoostHandler(new(MockBoostService), nil)
+	handler.SetExecutionService(mockExecService)
+
+	_, err := handler.GetUserBoostExecutions(context.Background(), &GetUserBoostExecutionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-authenticated"},
+		Limit:              20,
+		Offset:             0,
+	})
+	require.NoError(t, err)
+
+	// Scan the recorded calls by name rather than using AssertNotCalled with no argument matchers,
+	// which is a no-op for any method taking arguments (364 such calls exist in this repo and none
+	// of them assert anything).
+	var sawCall bool
+	for _, c := range mockExecService.Calls {
+		if c.Method != "GetUserExecutionHistory" {
+			continue
+		}
+		sawCall = true
+		assert.Equal(t, "user-authenticated", c.Arguments.String(1),
+			"the service must be handed the AUTHENTICATED user id and no other")
+	}
+	assert.True(t, sawCall, "the handler must actually call the service, or this proves nothing")
+}
+
+func TestBoostHandler_GetUserBoostExecutions_AppliesStatusFilter(t *testing.T) {
+	mockExecService := new(MockBoostExecutionService)
+	failed := domain.ExecutionStatusFailed
+	mockExecService.On("GetUserExecutionHistory", mock.Anything, "user-1", &failed, 20, 0).
+		Return([]*domain.BoostExecution{{ID: "e-failed", UserID: "user-1", Status: failed}}, 1, nil)
+
+	handler := NewBoostHandler(new(MockBoostService), nil)
+	handler.SetExecutionService(mockExecService)
+
+	result, err := handler.GetUserBoostExecutions(context.Background(), &GetUserBoostExecutionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		Status:             "failed",
+		Limit:              20,
+		Offset:             0,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Body.Total)
+	mockExecService.AssertExpectations(t)
+}
+
+func TestBoostHandler_GetUserBoostExecutions_NoExecutionService(t *testing.T) {
+	handler := NewBoostHandler(new(MockBoostService), nil)
+
+	_, err := handler.GetUserBoostExecutions(context.Background(), &GetUserBoostExecutionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		Limit:              20,
+	})
+	require.Error(t, err)
+}
+
+// TestBoostRoutes_ExecutionsPathIsNotSwallowedByTheIDWildcard proves at the ROUTER level, not by
+// reasoning about matching rules, that the account-wide history endpoint is actually reachable.
+//
+// It earned its place immediately: the route was first registered at /api/v1/boosts/executions, and
+// this test caught /api/v1/boosts/{id} matching it with id="executions" and dispatching to
+// GetBoostByID. Every handler-level test above still passed, because those call the handler function
+// directly and never touch the router.
+//
+// ⚠ ATTRIBUTION CORRECTED (#1569 task 19). What this test measures is humatest.New's router, which is
+// REGISTRATION-ORDER SENSITIVE. Production uses humaecho.NewV4 — Echo v4's radix tree — where a
+// static segment beats a {param} sibling in either order, so the endpoint would NOT have shipped
+// dead. Both routers are measured in cmd/server/router_precedence_test.go. This test is still worth
+// keeping: it pins that the account-wide path is reachable, and it is honest about which router it
+// is asking. Do not read a humatest verdict as production routing.
+func TestBoostRoutes_ExecutionsPathIsNotSwallowedByTheIDWildcard(t *testing.T) {
+	mockBoostService := new(MockBoostService)
+	mockExecService := new(MockBoostExecutionService)
+	mockExecService.On("GetUserExecutionHistory", mock.Anything, "user-routing",
+		(*domain.ExecutionStatus)(nil), 20, 0).
+		Return([]*domain.BoostExecution{{ID: "e-1", UserID: "user-routing"}}, 1, nil)
+	// A permissive stub for the WRONG handler, so that a misrouted request returns an ordinary
+	// error response and this test's own assertions are what report the failure. Without it,
+	// testify panics on an unexpected call and the diagnosis is a stack trace instead of a message.
+	mockBoostService.On("GetBoostByID", mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, domain.ErrBoostNotFound)
+
+	_, api := humatest.New(t)
+	// Stand in for the Clerk middleware, which is what normally puts the user id in context.
+	api.UseMiddleware(func(ctx huma.Context, next func(huma.Context)) {
+		next(huma.WithValue(ctx, inputs.UserIDKey, "user-routing"))
+	})
+
+	handler := NewBoostHandler(mockBoostService, nil)
+	handler.SetExecutionService(mockExecService)
+	RegisterBoostRoutes(api, handler)
+
+	resp := api.Get("/api/v1/boost-executions")
+	require.Equal(t, 200, resp.Code, "body: %s", resp.Body.String())
+	assert.Contains(t, resp.Body.String(), `"total":1`)
+
+	// The decisive part: the boost-by-id handler must never have run with id="executions".
+	for _, c := range mockBoostService.Calls {
+		assert.NotEqual(t, "GetBoostByID", c.Method,
+			"the literal /executions segment was swallowed by the {id} wildcard")
+	}
+	mockExecService.AssertExpectations(t)
+}

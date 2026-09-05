@@ -196,6 +196,18 @@ func (r *categorizationRuleRepository) GetByUserID(ctx context.Context, userID s
 }
 
 // GetEnabledByUserID retrieves all enabled rules for a user, ordered by priority (desc).
+//
+// This is the set the rule ENGINE fires (ruleApplicationService.ApplyRulesToTransaction /
+// ApplyRulesToBatch) as well as the set GET /rules?enabled returns, so Issue #1569 Task 9's
+// promise -- a rule may not act on a category the user can no longer see -- has to hold HERE, not
+// only at the two service methods that can flip `enabled`. Those gates
+// (categorization_rule_service.assertTargetCategoryOwnedAndLive) give the user a proper 404
+// instead of a silently inert rule; this predicate is what makes the guarantee unconditional,
+// covering any future writer of `enabled` and any direct-SQL repair that re-arms a rule by hand.
+//
+// A rule with no custom target is unaffected: the EXISTS is guarded by
+// `target_custom_category_id IS NULL`, so PFC-target and tag-only rules keep firing exactly as
+// before.
 func (r *categorizationRuleRepository) GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.CategorizationRule, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
@@ -205,6 +217,13 @@ func (r *categorizationRuleRepository) GetEnabledByUserID(ctx context.Context, u
 			last_matched_at, created_at, updated_at
 		FROM categorization_rules
 		WHERE user_id = $1 AND enabled = true
+		  AND (
+		    target_custom_category_id IS NULL
+		    OR EXISTS (
+		      SELECT 1 FROM custom_categories cc
+		      WHERE cc.id = target_custom_category_id AND cc.deleted_at IS NULL
+		    )
+		  )
 		ORDER BY priority DESC, created_at ASC
 	`
 

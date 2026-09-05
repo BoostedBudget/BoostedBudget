@@ -60,6 +60,7 @@ type GetTransactionsInput struct {
 	Search            string `query:"search" doc:"Search in merchant name or transaction name"`
 	Pending           string `query:"pending" doc:"Filter by pending status (true/false)"`
 	Reviewed          string `query:"reviewed" doc:"Filter by review state: true (reviewed), false (unreviewed inbox), omit for both"`
+	IncludeReversed   string `query:"include_reversed" doc:"Include transactions the bank REVERSED after they posted (default false). Reversed rows are returned with reversed=true and reversed_at set, and MUST be rendered distinctly — an unlabelled reversal reads as a live transaction. Transactions removed while still pending are never returned, by any value of this flag: their posted twin is already in the feed. Issue #1569."`
 	CategorySources   string `query:"category_source" doc:"Filter by category origin (comma-separated): plaid, rule, manual"`
 	MinAmount         string `query:"min_amount" doc:"Filter by minimum absolute amount"`
 	MaxAmount         string `query:"max_amount" doc:"Filter by maximum absolute amount"`
@@ -334,6 +335,19 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 			return nil, huma.Error400BadRequest("Invalid reviewed parameter (expected true or false)")
 		}
 		filters.Reviewed = &reviewed
+	}
+
+	// Reversal surface (Issue #1569). Off by default: a retained reversal appearing unbidden in a
+	// total the user has already reconciled is the same silent change this issue exists to stop,
+	// arriving from the other direction. An invalid value is rejected rather than coerced to
+	// false — silently ignoring it would show the client a list it did not ask for and believe it
+	// did.
+	if input.IncludeReversed != "" {
+		includeReversed, err := strconv.ParseBool(input.IncludeReversed)
+		if err != nil {
+			return nil, huma.Error400BadRequest("Invalid include_reversed parameter (expected true or false)")
+		}
+		filters.IncludeReversed = includeReversed
 	}
 
 	// Category source filter (Issue #1210) — comma-separated, validated enum tokens

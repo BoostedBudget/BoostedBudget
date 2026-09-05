@@ -24,7 +24,8 @@ export interface AuditEntry {
   actorUserId: string
   grantId: string
   scopes?: string[]
-  operationClass: 'read' | 'write'
+  /** Mirrors the manifest's OperationClass and mcp_audit_log.operation_class's CHECK (#1569 T16). */
+  operationClass: 'read' | 'write' | 'destructive'
   operationId: string
   confirmationPresented?: boolean
   confirmationConfirmed?: boolean
