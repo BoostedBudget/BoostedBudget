@@ -227,6 +227,34 @@ describe('BudgetCategoryManager', () => {
     })
   })
 
+  /**
+   * Issue #1569 Task 7.3, item 2 (milder half) — this dialog was merely SILENT about the history
+   * that survives. `budgetRepository.DeleteCategory` tombstones the row
+   * (`deleted_at = NOW(), deleted_reason = 'user'`); the spending already recorded against it and
+   * the `budget_period_events` / `rollover_history` rows are untouched.
+   *
+   * Negative assertions included on purpose: restoring the old silent copy, or over-correcting
+   * into a promise of recovery (there is no restore path anywhere), must both fail here.
+   */
+  it('delete confirmation says the recorded history is kept, without promising recovery', async () => {
+    const user = userEvent.setup({ delay: null })
+    const categories = [createMockCategory({ id: 'cat-1' })]
+
+    renderManager({ categories })
+    await user.click(screen.getByRole('button', { name: /^Delete category$/i }))
+
+    const dialog = await screen.findByRole('alertdialog')
+    const text = dialog.textContent ?? ''
+
+    expect(text).toMatch(/nothing is thrown away/i)
+    expect(text).toMatch(/kept/i)
+    expect(text).toMatch(/cannot be undone/i)
+
+    expect(text).not.toMatch(/permanently deleted/i)
+    expect(text).not.toMatch(/erased|destroyed|wiped/i)
+    expect(text).not.toMatch(/restore|recover|undelete/i)
+  })
+
   it('should call onDeleteCategory after confirmation', async () => {
     const user = userEvent.setup({ delay: null })
     const categories = [createMockCategory({ id: 'cat-1' })]

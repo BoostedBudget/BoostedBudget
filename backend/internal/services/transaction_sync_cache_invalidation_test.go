@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/assert"
@@ -29,6 +30,38 @@ import (
 // meaning transactionRepo is never actually invoked, matching that test's own mock setup), plus a
 // real (fake-Redis-backed) cache.Cache so the bump can be asserted against real generation state.
 func newSyncCacheInvalidationHarness(t *testing.T) (
+	service TransactionSyncService, linkedItem *domain.LinkedItem, c cache.Cache,
+	hhReader *mockHouseholdReaderForDeletion, mockPlaidService *MockPlaidService,
+) {
+	t.Helper()
+	return newSyncCacheInvalidationHarnessWithClient(t, redisclient.NewFake("cache"))
+}
+
+// flakySetClient wraps redisclient.Fake, failing the first failCount Set calls and succeeding on
+// every subsequent one — used exclusively by the item 3 (#1569 round 11) tests below to model a
+// transient Redis blip. setCalls records every SET's key, in order, so a test can assert on WHICH
+// scope was written first (the reorder) as well as whether a retry recovered (the fail-open fix).
+// Mirrors internal/huma/middleware/cache_invalidation_test.go's identical type, kept separate
+// since Go test helpers are not exported across packages.
+type flakySetClient struct {
+	*redisclient.Fake
+	failCount int
+	setCalls  []string
+}
+
+func (c *flakySetClient) Set(ctx context.Context, key, value string, ttl time.Duration) error {
+	c.setCalls = append(c.setCalls, key)
+	if c.failCount > 0 {
+		c.failCount--
+		return errors.New("redis: timeout")
+	}
+	return c.Fake.Set(ctx, key, value, ttl)
+}
+
+// newSyncCacheInvalidationHarnessWithClient is newSyncCacheInvalidationHarness with the
+// underlying Redis client swappable — used by the #1569 round 11 item 3 tests below, which need a
+// flakySetClient rather than the always-succeeding bare Fake.
+func newSyncCacheInvalidationHarnessWithClient(t *testing.T, client redisclient.Client) (
 	service TransactionSyncService, linkedItem *domain.LinkedItem, c cache.Cache,
 	hhReader *mockHouseholdReaderForDeletion, mockPlaidService *MockPlaidService,
 ) {
@@ -72,12 +105,11 @@ func newSyncCacheInvalidationHarness(t *testing.T) (
 	ctx := context.Background()
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-before", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-after").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// transactionRepo: no .On() setup — Added is skipped (no matching account), Modified/Removed
 	// are empty, so no method on it should ever be invoked. Matches TestSyncTransactions_SuccessSinglePage.
 
-	fake := redisclient.NewFake("cache")
-	c = cache.NewCache(cache.Options{Client: fake})
+	c = cache.NewCache(cache.Options{Client: client})
 	hhReader = &mockHouseholdReaderForDeletion{}
 
 	return service, linkedItem, c, hhReader, mockPlaidService
@@ -208,7 +240,7 @@ func TestSyncTransactions_BumpsOnPartialCommitEvenWhenSyncLaterFails(t *testing.
 	accounts := []domain.Account{
 		{ID: "account-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: linkedItem.UserID},
 	}
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return(accounts, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return(accounts, nil)
 
 	plaidResp := &plaid.TransactionsSyncResponse{
 		Added: []plaid.Transaction{
@@ -299,7 +331,7 @@ func newSingleStepSyncHarness(t *testing.T, itemSuffix string, resp *plaid.Trans
 	}
 
 	ctx := context.Background()
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).
 		Return([]domain.Account{{ID: "account-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: linkedItem.UserID}}, nil)
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-before", 0).Return(resp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-after").Return(nil)
@@ -361,13 +393,18 @@ func TestSyncTransactions_ModifiedOnlyPartialCommitStillBumpsCache(t *testing.T)
 			"This also proves the deferred bump runs on an error return.")
 }
 
-// TestSyncTransactions_RemovedOnlyPartialCommitStillBumpsCache is the Removed-only twin — and it
-// PASSED at HEAD, before the arm-before-write fix. Finding: the T92 brief's claim that the
-// Removed arm can be skipped by a mid-step failure is FALSE. processRemovedTransactions treats a
-// failed DeleteByExternalID as "already deleted", logs it, and continues; it returns nil on every
-// path, so `if err != nil { return }` at the Removed step is unreachable and the flag was always
-// armed. Kept as a characterization guard: if that function ever starts propagating a per-row
-// delete error, this test fails unless the flag is armed first.
+// TestSyncTransactions_RemovedOnlyPartialCommitStillBumpsCache is the Removed-only twin.
+//
+// HISTORY, because the reason it passes has changed. It PASSED at HEAD before the arm-before-write
+// fix, and the finding recorded here was that the T92 brief's claim — that the Removed arm can be
+// skipped by a mid-step failure — was FALSE, because processRemovedTransactions swallowed every
+// per-row error and returned nil unconditionally.
+//
+// #1569 task 7 made that swallow a real error return (residual path (4)), so the arm IS now
+// reachable-past, and this test is no longer a characterization of an unreachable branch: it is a
+// live guard. Row 1's tombstone commits, row 2 fails, SyncTransactions returns an error — and the
+// generation must still move, because a committed write that no cache bump follows serves stale
+// financial data for the namespace TTL.
 func TestSyncTransactions_RemovedOnlyPartialCommitStillBumpsCache(t *testing.T) {
 	resp := &plaid.TransactionsSyncResponse{
 		Added:    []plaid.Transaction{}, // CRITICAL: no prior successful step
@@ -382,20 +419,22 @@ func TestSyncTransactions_RemovedOnlyPartialCommitStillBumpsCache(t *testing.T) 
 	service, txnRepo, linkedItem, c := newSingleStepSyncHarness(t, "removed-only", resp)
 	ctx := context.Background()
 
-	txnRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "txn-rem-1", linkedItem.UserID).Return(nil).Once()
-	txnRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "txn-rem-2", linkedItem.UserID).
-		Return(errors.New("delete failed on row 2")).Once()
+	txnRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "txn-rem-1", linkedItem.UserID, domain.TxnDeletedByPlaidSync).Return(domain.TxnDeletedProviderRemovedPosted, nil).Once()
+	txnRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "txn-rem-2", linkedItem.UserID, domain.TxnDeletedByPlaidSync).
+		Return(domain.TransactionDeletedReason(""), errors.New("delete failed on row 2")).Once()
 
 	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
 	require.NoError(t, err)
 
 	_, syncErr := service.SyncTransactions(ctx, linkedItem)
-	_ = syncErr
+	require.Error(t, syncErr,
+		"since #1569 a genuine per-row tombstone failure propagates; if this stops being an error "+
+			"the residual-(4) fix has been undone")
 
 	postGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
 	require.NoError(t, err)
 	assert.NotEqual(t, preGen, postGen,
-		"row 1's delete COMMITTED; the generation must move regardless of row 2's outcome")
+		"row 1's tombstone COMMITTED; the generation must move regardless of row 2's outcome")
 }
 
 // TestSyncTransactions_AddedOnlyFailureStillBumpsCache is the Added-only twin. CreateBatch is a
@@ -430,4 +469,51 @@ func TestSyncTransactions_AddedOnlyFailureStillBumpsCache(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, preGen, postGen,
 		"a CreateBatch error cannot prove the rows did not land; the fail-safe is to bump")
+}
+
+// TestSyncTransactions_HouseholdBumpedBeforeUser (#1569 round 11 item 3) is the sync-worker twin
+// of the HTTP middleware's identical reorder test: bumpCacheForSync must write the HOUSEHOLD
+// generation key before the user's, so a shared-budget or lookup failure lands on the lower
+// blast-radius (self-scoped) bump rather than the one visible to a different household member.
+func TestSyncTransactions_HouseholdBumpedBeforeUser(t *testing.T) {
+	client := &flakySetClient{Fake: redisclient.NewFake("cache")}
+	service, linkedItem, c, hhReader, _ := newSyncCacheInvalidationHarnessWithClient(t, client)
+	ctx := context.Background()
+	household := &domain.Household{ID: "household-order"}
+	hhReader.On("GetHouseholdForUser", mock.Anything, linkedItem.UserID).Return(household, false, true, nil)
+
+	service.SetCacheInvalidation(c.Generations(), hhReader)
+
+	_, err := service.SyncTransactions(ctx, linkedItem)
+	require.NoError(t, err)
+
+	userKey := cache.GenerationKey(cache.ScopeTag(cache.ScopeUser, linkedItem.UserID))
+	hhKey := cache.GenerationKey(cache.ScopeTag(cache.ScopeHousehold, household.ID))
+	require.Len(t, client.setCalls, 2, "exactly one SET per scope")
+	assert.Equal(t, hhKey, client.setCalls[0], "the household generation must be written FIRST")
+	assert.Equal(t, userKey, client.setCalls[1], "the user generation must be written SECOND")
+}
+
+// TestSyncTransactions_HouseholdBumpRecoversFromTransientSetFailure (#1569 round 11 item 3) is
+// the fail-open half: bumpCacheForSync's household bump must survive a single transient Redis SET
+// failure via BumpWithRetry, where a bare Bump would have logged and silently given up.
+func TestSyncTransactions_HouseholdBumpRecoversFromTransientSetFailure(t *testing.T) {
+	client := &flakySetClient{Fake: redisclient.NewFake("cache"), failCount: 1}
+	service, linkedItem, c, hhReader, _ := newSyncCacheInvalidationHarnessWithClient(t, client)
+	ctx := context.Background()
+	household := &domain.Household{ID: "household-retry"}
+	hhReader.On("GetHouseholdForUser", mock.Anything, linkedItem.UserID).Return(household, false, true, nil)
+
+	preGen, err := c.Generations().Get(ctx, cache.ScopeHousehold, household.ID)
+	require.NoError(t, err)
+
+	service.SetCacheInvalidation(c.Generations(), hhReader)
+
+	_, err = service.SyncTransactions(ctx, linkedItem)
+	require.NoError(t, err)
+
+	postGen, err := c.Generations().Get(ctx, cache.ScopeHousehold, household.ID)
+	require.NoError(t, err)
+	assert.NotEqual(t, preGen, postGen,
+		"the household bump must recover from a single transient Redis SET failure via retry")
 }

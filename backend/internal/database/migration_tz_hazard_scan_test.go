@@ -387,17 +387,22 @@ var tzHazardAllowlist = []allowedTZHazard{
 		file:     "000017_migrate_to_timestamp_snapshots.down.sql",
 		category: "date_func_untz",
 		snippet:  "DATE(bs2.snapshot_at)",
-		count:    1,
+		count:    2,
 		reason: "Pre-existing rollback migration. Decides which duplicate snapshot rows get " +
 			"deleted using a session-zone DATE() cast with no AT TIME ZONE. Only runs on manual " +
-			"rollback, but the SQL is already applied/committed history and cannot be edited.",
+			"rollback, but the SQL is already applied/committed history and cannot be edited. " +
+			"#1569 round 12 task 4 added a REFUSE-if-any-row-would-be-deleted guard ahead of the " +
+			"DELETE that repeats this exact comparison verbatim (same operands, same session-zone " +
+			"semantics) so the guard and the DELETE agree on what would be lost — a second " +
+			"occurrence of the same pre-existing hazard, not a new one.",
 	},
 	{
 		file:     "000017_migrate_to_timestamp_snapshots.down.sql",
 		category: "date_func_untz",
 		snippet:  "DATE(bs1.snapshot_at)",
-		count:    1,
-		reason:   "Same statement as bs2.snapshot_at above — the other operand of the duplicate-detection comparison.",
+		count:    2,
+		reason: "Same statement as bs2.snapshot_at above — the other operand of the " +
+			"duplicate-detection comparison, duplicated by the same #1569 round 12 task 4 guard.",
 	},
 	{
 		file:     "000017_migrate_to_timestamp_snapshots.down.sql",

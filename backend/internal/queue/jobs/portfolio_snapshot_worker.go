@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -33,16 +34,20 @@ func (PortfolioSnapshotArgs) Kind() string { return "portfolio_snapshot" }
 type PortfolioSnapshotWorker struct {
 	river.WorkerDefaults[PortfolioSnapshotArgs]
 
-	holdingRepo  repository.HoldingRepository
-	snapshotRepo repository.PortfolioSnapshotRepository
-	logger       *slog.Logger
+	holdingRepo         repository.HoldingRepository
+	snapshotRepo        repository.PortfolioSnapshotRepository
+	holdingSnapshotRepo repository.HoldingSnapshotRepository
+	logger              *slog.Logger
 }
 
 // PortfolioSnapshotWorkerDeps contains the dependencies for PortfolioSnapshotWorker.
 type PortfolioSnapshotWorkerDeps struct {
 	HoldingRepo  repository.HoldingRepository
 	SnapshotRepo repository.PortfolioSnapshotRepository
-	Logger       *slog.Logger
+	// HoldingSnapshotRepo records the row-level history behind each aggregate (#1569 T6).
+	// Optional: nil skips the capture rather than failing the job.
+	HoldingSnapshotRepo repository.HoldingSnapshotRepository
+	Logger              *slog.Logger
 }
 
 // NewPortfolioSnapshotWorker creates a new PortfolioSnapshotWorker.
@@ -52,9 +57,10 @@ func NewPortfolioSnapshotWorker(deps PortfolioSnapshotWorkerDeps) *PortfolioSnap
 		logger = slog.Default()
 	}
 	return &PortfolioSnapshotWorker{
-		holdingRepo:  deps.HoldingRepo,
-		snapshotRepo: deps.SnapshotRepo,
-		logger:       logger,
+		holdingRepo:         deps.HoldingRepo,
+		snapshotRepo:        deps.SnapshotRepo,
+		holdingSnapshotRepo: deps.HoldingSnapshotRepo,
+		logger:              logger,
 	}
 }
 
@@ -89,6 +95,13 @@ func (w *PortfolioSnapshotWorker) Work(ctx context.Context, job *river.Job[Portf
 		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
 	}()
 
+	// Step 0 (#1569 Task 11, S6/E4): repair the PAST days that were recorded before the account
+	// liveness predicate was corrected. Bounded, ledger-gated and idempotent — see
+	// repository.RepairUserFromHistory. It runs here because this job already runs daily and
+	// already holds the snapshot repository, and because a day it does not reach today is still
+	// unexamined tomorrow, so the pass needs no retry logic of its own.
+	w.repairRecordedHistory(ctx, job.ID)
+
 	// Step 1: Get all users with holdings.
 	userIDs, err := w.holdingRepo.GetDistinctUserIDsWithHoldings(ctx)
 	if err != nil {
@@ -109,10 +122,41 @@ func (w *PortfolioSnapshotWorker) Work(ctx context.Context, job *river.Job[Portf
 		return nil
 	}
 
-	// Step 2: Upsert snapshot for each user (today UTC, idempotent).
-	today := time.Now().UTC().Truncate(24 * time.Hour)
+	// Step 2: Capture the row-level history and upsert the aggregate for each user (today UTC,
+	// idempotent).
+	//
+	// goClockToday is only the fallback for a build where the history repository is not wired.
+	// When it IS wired, the day comes back from CaptureForUser — i.e. from the SERVER — and the
+	// aggregate is filed under that same day. Taking the aggregate's day from the Go clock while
+	// the rows took theirs from Postgres meant that across UTC midnight, with the ~16 ms
+	// host/container skew this project already documents, the aggregate and the rows behind it
+	// landed on DIFFERENT days: precisely the "aggregate with no rows behind it" state this
+	// capture exists to prevent.
+	goClockToday := time.Now().UTC().Truncate(24 * time.Hour)
 	var failCount int
 	for _, userID := range userIDs {
+		today := goClockToday
+
+		// #1569 T6: record the row-level history FIRST and SKIP the aggregate if it fails. A
+		// failure here loses a day of history — the exact loss this task exists to stop — so it
+		// counts as a job failure and River retries (the capture is idempotent within the UTC
+		// day). Writing the aggregate anyway would manufacture the very state the capture is
+		// here to prevent: a portfolio_snapshots row with nothing behind it for task 11 to
+		// rebuild from. One user's failure never aborts the rest.
+		if w.holdingSnapshotRepo != nil {
+			capturedDay, capErr := w.holdingSnapshotRepo.CaptureForUser(ctx, userID)
+			if capErr != nil {
+				w.logger.Error("holding snapshot capture failed for user; skipping this user's aggregate",
+					"job_id", job.ID,
+					"user_id", userID,
+					"error", capErr,
+				)
+				failCount++
+				continue
+			}
+			today = capturedDay
+		}
+
 		if _, upsertErr := w.snapshotRepo.Upsert(ctx, userID, today); upsertErr != nil {
 			w.logger.Error("portfolio snapshot upsert failed for user",
 				"job_id", job.ID,
@@ -131,7 +175,7 @@ func (w *PortfolioSnapshotWorker) Work(ctx context.Context, job *river.Job[Portf
 	)
 
 	if failCount > 0 {
-		return fmt.Errorf("portfolio snapshot: %d/%d upserts failed", failCount, len(userIDs))
+		return fmt.Errorf("portfolio snapshot: %d/%d per-user writes failed", failCount, len(userIDs))
 	}
 	return nil
 }
@@ -163,4 +207,70 @@ func PortfolioSnapshotInsertOpts() *river.InsertOpts {
 // time (Issue #1448).
 func PortfolioSnapshotPeriodicOpts() *river.PeriodicJobOpts {
 	return &river.PeriodicJobOpts{RunOnStart: true, ID: PortfolioSnapshotArgs{}.Kind()}
+}
+
+// portfolioRepairUsersPerRun bounds one run's repair pass. The pass is resumable by construction —
+// a user it does not reach keeps their unexamined days and is picked up on the next daily run — so
+// the cap costs nothing but keeps a first run over a large backlog from stretching the daily job.
+const portfolioRepairUsersPerRun = 200
+
+// repairRecordedHistory runs the #1569 Task 11 repair over the users the ledger still owes a
+// verdict.
+//
+// It NEVER fails the job, deliberately. The aggregate write is this job's contract; the repair is
+// catch-up work over rows that are already wrong and will still be there tomorrow. Returning an
+// error here would make River retry the capture and the aggregate as well, and would eventually
+// dead-letter a job whose actual work succeeded — trading a stale historical row for a missing
+// current one.
+//
+// The user list comes from UserIDsWithUnexaminedSnapshots, NOT from the holdings enumeration this
+// job uses for its own work: that one joins a.status = 'active' and so skips a user who has
+// disconnected every institution, whose recorded curve is the one most likely to be wrong.
+func (w *PortfolioSnapshotWorker) repairRecordedHistory(ctx context.Context, jobID int64) {
+	// Nil-guarded for the same reason HoldingSnapshotRepo beside it is: this is now the FIRST
+	// statement in Work, so it moved the earliest possible nil dereference ahead of holdingRepo's.
+	// cmd/server/periodic_jobs_test.go builds this worker with empty deps. Unreachable in the wired
+	// server, which always supplies the repository — but the symmetry is free and the asymmetry was
+	// a trap laid for whoever calls Work on a zero-valued worker next.
+	if w.snapshotRepo == nil {
+		return
+	}
+
+	userIDs, err := w.snapshotRepo.UserIDsWithUnexaminedSnapshots(ctx, portfolioRepairUsersPerRun)
+	if err != nil {
+		w.logger.Error("#1569 portfolio history repair: could not enumerate users; skipping this run",
+			"job_id", jobID, "error", err)
+		return
+	}
+	if len(userIDs) == 0 {
+		return
+	}
+
+	var total domain.PortfolioRepairSummary
+	var failed int
+	for _, userID := range userIDs {
+		summary, repairErr := w.snapshotRepo.RepairUserFromHistory(ctx, userID)
+		if repairErr != nil {
+			w.logger.Error("#1569 portfolio history repair failed for user; their days stay unexamined",
+				"job_id", jobID, "user_id", userID, "error", repairErr)
+			failed++
+			continue
+		}
+		total.Merge(summary)
+	}
+
+	// cap_reached is the backlog signal. Without it this line reads identically whether the pass
+	// drained the queue or merely took the first 200 of thousands — which is how the starving
+	// version of the enumeration looked like a healthy one every single day.
+	w.logger.Info("#1569 portfolio history repair pass complete",
+		"job_id", jobID,
+		"users", len(userIDs),
+		"cap_reached", len(userIDs) >= portfolioRepairUsersPerRun,
+		"failed_users", failed,
+		"days_examined", total.Examined,
+		"days_repaired", total.Repaired,
+		"days_verified", total.Verified,
+		"days_refused_no_coverage", total.RefusedNoCoverage,
+		"days_refused_partial_coverage", total.RefusedPartialCoverage,
+	)
 }

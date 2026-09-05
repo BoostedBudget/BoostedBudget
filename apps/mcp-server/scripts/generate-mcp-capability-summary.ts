@@ -39,11 +39,24 @@ export interface CapabilitySummary {
   allowedOperations: number
   /** Allowed and non-mutating. */
   readOperations: number
-  /** Allowed and mutating (all confirmation-gated). */
+  /**
+   * Allowed and mutating (all confirmation-gated) — manifest class 'write' OR 'destructive'.
+   *
+   * ⚠ #1569 Task 16 added a third manifest class. This field deliberately keeps its
+   * "every allowed mutating operation" meaning rather than narrowing to class === 'write',
+   * so `allowedOperations === readOperations + writeOperations` still holds and the public
+   * /mcp page's sentence ("N capabilities: R for reading and W for changes") stays true.
+   * destructiveWriteOperations below is the subset that permanently destroys data.
+   */
   writeOperations: number
   /** Never reachable through MCP. */
   excludedOperations: number
-  /** Allowed writes that destroy or permanently remove data. */
+  /**
+   * Allowed mutating operations that permanently destroy data — manifest class 'destructive'.
+   * A subset of writeOperations. Soft-deleting ("tombstoning") verbs are NOT counted: after
+   * #1569 deleting a budget, budget category, custom category or savings goal retains the row
+   * and its dependent financial history.
+   */
   destructiveWriteOperations: number
   /** Curated account-action boundaries suitable for public page copy. */
   publicBoundaries: PublicBoundary[]
@@ -102,9 +115,13 @@ export function computeCapabilitySummary(specIndex: SpecIndex): CapabilitySummar
     allowedOperations++
     if (entry.manifestClass === 'read') {
       readOperations++
-    } else if (entry.manifestClass === 'write') {
+    } else if (entry.manifestClass === 'write' || entry.manifestClass === 'destructive') {
       writeOperations++
-      if (capability.destructive) destructiveWriteOperations++
+      // Counted off the CLASS, not off capability.destructive. Both are kept in lockstep by
+      // capability-manifest.test.ts, but reading the flag made this aggregate blind to a
+      // destructive→write reclassification (the flag stayed true, the op just moved buckets),
+      // and an aggregate that cannot move is an aggregate the drift test cannot police.
+      if (entry.manifestClass === 'destructive') destructiveWriteOperations++
     }
   }
 

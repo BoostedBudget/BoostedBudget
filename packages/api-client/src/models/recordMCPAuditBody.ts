@@ -46,7 +46,7 @@ export interface RecordMCPAuditBody {
   grant_id: string;
   /** Idempotency key if provided */
   idempotency_key?: string;
-  /** Operation class: read or write */
+  /** Operation class: read, write, or destructive (permanently destroys data — #1569) */
   operation_class: RecordMCPAuditBodyOperationClass;
   /** OpenAPI operationId */
   operation_id: string;

@@ -53,6 +53,19 @@ echo -e "${BLUE}MCP URL:${NC} ${MCP_URL:-"(not configured)"}"
 echo ""
 
 # Function to print test status
+# #1569 round 17 task 3: this script is a HARD GATE on real production and staging
+# deploys (deploy-production.yml / deploy-to-staging.yaml both run it and gate the
+# release on its exit status). It previously had NO warning counter and ended in an
+# unconditional "All Smoke Tests Passed!" banner, so a deploy that lost HTTPS
+# enforcement, lost CORS, or served a mismatched RFC 9728 OAuth `resource` still
+# printed success. WARNING_COUNT exists so the closing banner cannot lie about that.
+#
+# It deliberately does NOT fail the run on its own: several warnings are structural
+# (no MCP worker in qa, no frontend URL in staging) and firing on those would block
+# every deploy. Warnings that describe a genuinely broken production are converted to
+# hard failures individually instead - see the comments at each call site.
+WARNING_COUNT=0
+
 print_test() {
   local status=$1
   local message=$2
@@ -62,6 +75,7 @@ print_test() {
   elif [ "$status" == "fail" ]; then
     echo -e "${RED}✗${NC} $message"
   else
+    WARNING_COUNT=$((WARNING_COUNT + 1))
     echo -e "${YELLOW}⚠${NC} $message"
   fi
 }
@@ -89,20 +103,69 @@ check_endpoint() {
 }
 
 # Function to check JSON response
+# Retries before reporting a mismatch. A single-shot body fetch turns any transient
+# transport failure into "{}" -> "null", which is indistinguishable from a real
+# mismatch. Every caller of this function is now fatal, so that ambiguity would have
+# been a deploy-blocking flake.
 check_json_response() {
   local url=$1
   local jq_query=$2
   local expected_value=$3
+  local attempts=${4:-3}
+  local interval=${5:-2}
 
-  response=$(curl -s "$url" --max-time 10 || echo "{}")
-  actual_value=$(echo "$response" | jq -r "$jq_query" 2>/dev/null || echo "")
+  local i
+  actual_value=""
+  for i in $(seq 1 "$attempts"); do
+    response=$(curl -s "$url" --max-time 10 || echo "{}")
+    actual_value=$(echo "$response" | jq -r "$jq_query" 2>/dev/null || echo "")
 
-  if [ "$actual_value" == "$expected_value" ]; then
-    return 0
+    if [ "$actual_value" == "$expected_value" ]; then
+      return 0
+    fi
+
+    if [ "$i" -lt "$attempts" ]; then
+      sleep "$interval"
+    fi
+  done
+
+  echo "Expected: $expected_value, Got: $actual_value" >&2
+  return 1
+}
+
+# Returns 0 if the API echoes an Access-Control-Allow-Origin header for $WEB_URL,
+# 1 if it responded but sent no such header, and 2 if the probe itself failed
+# (no response at all). The 2 case is what keeps a network flake from blocking a
+# deploy: only a definite "responded, and CORS is off" is fatal.
+#
+# Two probe shapes are used because they fail for different reasons. Verified against
+# the real echo CORSWithConfig(GetCORSConfig(...)) middleware this API runs:
+#   OPTIONS + Access-Control-Request-Method -> 204 with Access-Control-Allow-Origin
+#     when the origin is allowed, and NO access-control headers when it is not.
+#   plain GET with Origin                   -> 200 with Access-Control-Allow-Origin.
+#   (HEAD, which this check used to send, gets 405 from echo because /health is
+#    registered GET-only. The headers happened to survive, but the probe was
+#    measuring an error response.)
+cors_allow_origin_probe() {
+  local mode=$1
+  local raw
+
+  if [ "$mode" == "preflight" ]; then
+    raw=$(curl -s -i -X OPTIONS -H "Origin: $WEB_URL" -H "Access-Control-Request-Method: GET" "$API_URL/health" --max-time 10) || return 2
   else
-    echo "Expected: $expected_value, Got: $actual_value" >&2
-    return 1
+    raw=$(curl -s -i -H "Origin: $WEB_URL" "$API_URL/health" --max-time 10) || return 2
   fi
+
+  if [ -z "$raw" ]; then
+    return 2
+  fi
+
+  # Only look at the header block, never the body.
+  if printf '%s\n' "$raw" | sed -n '1,/^\r\{0,1\}$/p' | grep -iq "^access-control-allow-origin:"; then
+    return 0
+  fi
+
+  return 1
 }
 
 # =============================================================================
@@ -157,7 +220,10 @@ fi
 if check_endpoint "$API_URL/version" "200" 3 2; then
   print_test "pass" "API version endpoint is responding"
 else
-  print_test "warn" "API version endpoint not found (may not exist yet)"
+  # Deliberately still a warning: re-derived in #1569 round 17 task 3 that no /version
+  # route is registered anywhere in the backend, so the endpoint is legitimately
+  # absent in every environment. Making it fatal would block every deploy today.
+  print_test "warn" "API version endpoint not found (no /version route exists in the backend)"
 fi
 
 # =============================================================================
@@ -187,7 +253,17 @@ if [ -n "$MCP_URL" ]; then
     if check_json_response "$MCP_URL/.well-known/oauth-protected-resource" ".resource" "$MCP_URL"; then
       print_test "pass" "MCP OAuth protected-resource metadata is serving correctly"
     else
-      print_test "warn" "MCP OAuth metadata resource field may not match expected URL"
+      # #1569 round 17 task 3: FATAL (was a warning). RFC 9728 § 2 makes `resource` the
+      # canonical resource identifier a client uses as the token audience. Serving a
+      # value that is not this deployment's own URL is an audience-confusion condition,
+      # and the three sibling checks in this same block already exit 1. The comparison
+      # is a deterministic string equality against MCP_RESOURCE_URL, which
+      # apps/mcp-server/wrangler.toml pins to exactly the MCP_URL this script uses for
+      # both production and staging - there is no environment in which a mismatch is
+      # expected. Transport flake is handled by check_json_response's retries, and the
+      # endpoint has already had to return 200 above.
+      print_test "fail" "MCP OAuth metadata 'resource' does not match $MCP_URL (RFC 9728 audience mismatch)"
+      exit 1
     fi
   else
     print_test "fail" "MCP OAuth protected-resource metadata endpoint not responding"
@@ -240,7 +316,12 @@ if [ -n "$WEB_URL" ]; then
   if check_endpoint "$WEB_URL/assets" "200" 3 2 || check_endpoint "$WEB_URL/static" "200" 3 2; then
     print_test "pass" "Frontend static assets are accessible"
   else
-    print_test "warn" "Frontend static assets check inconclusive (non-critical)"
+    # Deliberately still a warning: /assets and /static are directory paths with no
+    # guaranteed index document. A static host may 404 them or SPA-fallback them to 200
+    # whether or not real assets are being served, so the probe cannot distinguish
+    # healthy from broken. The homepage-200 and doctype checks above already prove the
+    # app is served. Making this fatal would block deploys on a meaningless signal.
+    print_test "warn" "Frontend static assets check inconclusive (non-critical; /assets and /static have no guaranteed index)"
   fi
 else
   echo ""
@@ -259,24 +340,58 @@ echo -e "${BLUE}  Integration Checks${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
 # Test 7: HTTPS Redirect (production only)
+# #1569 round 17 task 3: production only (staging and qa never reach this block - the
+# apex hostname is hardcoded and only production serves it). Serving plaintext HTTP
+# without a redirect in production is a genuine security regression, so a definite
+# non-redirect HTTP status is now FATAL. A curl transport failure ("000") is NOT: that
+# is the probe failing, not the redirect being gone, and it stays a warning after three
+# attempts so a network blip cannot block a release.
 if [ "$ENVIRONMENT" == "production" ]; then
-  http_response=$(curl -s -o /dev/null -w "%{http_code}" "http://boostedbudget.com" --max-time 10 || echo "000")
+  http_response="000"
+  for attempt in 1 2 3; do
+    http_response=$(curl -s -o /dev/null -w "%{http_code}" "http://boostedbudget.com" --max-time 10 || echo "000")
+    if [ "$http_response" != "000" ]; then
+      break
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      sleep 2
+    fi
+  done
 
-  if [ "$http_response" == "301" ] || [ "$http_response" == "302" ] || [ "$http_response" == "308" ]; then
-    print_test "pass" "HTTPS redirect is working"
-  else
-    print_test "warn" "HTTPS redirect may not be configured (got HTTP $http_response)"
-  fi
+  case "$http_response" in
+    301|302|307|308)
+      print_test "pass" "HTTPS redirect is working (HTTP $http_response)"
+      ;;
+    000)
+      print_test "warn" "HTTPS redirect check inconclusive - http://boostedbudget.com did not respond after 3 attempts (probe/network failure, not evidence the redirect is missing)"
+      ;;
+    *)
+      print_test "fail" "HTTPS redirect is NOT configured: http://boostedbudget.com returned HTTP $http_response (expected 301/302/307/308). Production is serving plaintext HTTP."
+      exit 1
+      ;;
+  esac
 fi
 
 # Test 8: CORS Headers (check if API allows frontend origin) - skip if no frontend
+# #1569 round 17 task 3: FATAL, but only on an unambiguous result. An API that does not
+# allow the frontend's own origin is a broken deployment, not a cosmetic warning. To
+# avoid blocking a deploy on a bad probe, this fails only when BOTH probe shapes
+# responded AND neither carried Access-Control-Allow-Origin; if either probe could not
+# reach the API at all, it stays a warning. Runs only when WEB_URL is set, which today
+# means production and qa - staging has no frontend URL configured and skips it.
 if [ -n "$WEB_URL" ]; then
-  cors_response=$(curl -s -I -H "Origin: $WEB_URL" "$API_URL/health" --max-time 10 | grep -i "access-control" || echo "")
+  cors_preflight_rc=0
+  cors_simple_rc=0
+  cors_allow_origin_probe "preflight" || cors_preflight_rc=$?
+  cors_allow_origin_probe "simple" || cors_simple_rc=$?
 
-  if [ -n "$cors_response" ]; then
-    print_test "pass" "API CORS headers are present"
+  if [ "$cors_preflight_rc" -eq 0 ] || [ "$cors_simple_rc" -eq 0 ]; then
+    print_test "pass" "API CORS headers are present for origin $WEB_URL"
+  elif [ "$cors_preflight_rc" -eq 2 ] || [ "$cors_simple_rc" -eq 2 ]; then
+    print_test "warn" "API CORS check inconclusive - the probe to $API_URL/health returned no response (probe/network failure, not evidence CORS is misconfigured)"
   else
-    print_test "warn" "API CORS headers not detected (may not be needed)"
+    print_test "fail" "API CORS is NOT configured for the frontend origin $WEB_URL - neither the RFC-compliant preflight (OPTIONS) nor a simple GET to $API_URL/health returned an Access-Control-Allow-Origin header. The frontend cannot call the API."
+    exit 1
   fi
 else
   print_test "warn" "CORS check skipped - no frontend URL configured"
@@ -325,9 +440,15 @@ fi
 # Summary
 # =============================================================================
 echo ""
-echo -e "${GREEN}╔═══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║           All Smoke Tests Passed!                             ║${NC}"
-echo -e "${GREEN}╚═══════════════════════════════════════════════════════════════╝${NC}"
+if [ "$WARNING_COUNT" -eq 0 ]; then
+  echo -e "${GREEN}╔═══════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${GREEN}║           All Smoke Tests Passed!                             ║${NC}"
+  echo -e "${GREEN}╚═══════════════════════════════════════════════════════════════╝${NC}"
+else
+  echo -e "${YELLOW}╔═══════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${YELLOW}║  Smoke tests passed with ${WARNING_COUNT} warning(s) - see the ⚠ lines above.${NC}"
+  echo -e "${YELLOW}╚═══════════════════════════════════════════════════════════════╝${NC}"
+fi
 echo ""
 echo -e "${BLUE}Environment:${NC} $ENVIRONMENT"
 echo -e "${BLUE}API:${NC} $API_URL (${api_time_ms}ms)"
@@ -336,6 +457,7 @@ if [ -n "$WEB_URL" ]; then
 else
   echo -e "${BLUE}Frontend:${NC} Not configured"
 fi
+echo -e "${BLUE}Warnings:${NC} $WARNING_COUNT"
 echo -e "${BLUE}Timestamp:${NC} $(date -u)"
 echo ""
 

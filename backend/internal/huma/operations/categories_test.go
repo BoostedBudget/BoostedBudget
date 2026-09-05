@@ -11,22 +11,23 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // mockCustomCategoryService is a mock implementation of services.CustomCategoryService
 type mockCustomCategoryService struct {
-	categories       []*domain.CustomCategory
-	category         *domain.CustomCategory
-	createErr        error
-	getErr           error
-	updateErr        error
-	deleteErr        error
-	getOrCreateCat   *domain.CustomCategory
-	getOrCreateErr   error
-	usage            *domain.CategoryUsage
-	usageErr         error
+	categories     []*domain.CustomCategory
+	category       *domain.CustomCategory
+	createErr      error
+	getErr         error
+	updateErr      error
+	deleteErr      error
+	getOrCreateCat *domain.CustomCategory
+	getOrCreateErr error
+	usage          *domain.CategoryUsage
+	usageErr       error
 }
 
 func (m *mockCustomCategoryService) GetUserCategories(ctx context.Context, userID string) ([]*domain.CustomCategory, error) {
@@ -80,6 +81,8 @@ func (m *mockCustomCategoryService) GetOrCreateCategory(ctx context.Context, use
 
 // SetJobQueue is a no-op for the mock (Issue #1123: satisfies updated interface).
 func (m *mockCustomCategoryService) SetJobQueue(_ queue.JobQueue) {}
+
+func (m *mockCustomCategoryService) SetAuditLogRepository(_ repository.AuditLogRepository) {}
 
 // Helper to create a test category
 func createTestCategory(userID, name string) *domain.CustomCategory {

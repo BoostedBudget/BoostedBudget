@@ -44,8 +44,12 @@ type AdminHandler struct {
 	// there is no admin re-attempt action, because the automated retry sweep already re-attempts every
 	// unresolved record on its own cadence and a button would only duplicate it.
 	plaidOrphanedItemRepo repository.PlaidOrphanedItemRepository
-	jobQueue              queue.JobQueue
-	config                *config.Config
+	// retentionWithheldReader backs the withheld-retention admin listing (Issue #1584). Read-only,
+	// deliberately: what to do about a stuck account is an open product decision, so there is no
+	// write beside this read — see ListAdminRetentionWithheld.
+	retentionWithheldReader RetentionWithheldReader
+	jobQueue                queue.JobQueue
+	config                  *config.Config
 }
 
 // NewAdminHandler creates a new AdminHandler with required dependencies.
@@ -600,4 +604,7 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 
 	// --- Orphaned Plaid Items surviving a GDPR erasure (Issue #1497) ---
 	RegisterAdminPlaidOrphanedItemOperations(api, handler)
+
+	// Issue #1584: the enumerating read over accounts the #1569 T1 notice gate is holding.
+	RegisterAdminRetentionWithheldOperations(api, handler)
 }

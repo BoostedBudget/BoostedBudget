@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -76,10 +77,13 @@ type mockAccountServiceForPlaid struct {
 	getErr        error
 	linkErr       error
 	updateErr     error
-	deleteErr     error
-	disconnectErr error
-	reorderErr    error
+	disconnectAccountErr error
+	purgeAccountErr      error
+	disconnectErr        error
+	purgeInstitutionErr  error
+	reorderErr           error
 	capturedOpts  services.AccountFilterOptions
+	called        bool
 }
 
 func (m *mockAccountServiceForPlaid) LinkAccounts(ctx context.Context, userID, publicToken, institutionID, institutionName string) (*services.LinkAccountsResult, error) {
@@ -97,6 +101,7 @@ func (m *mockAccountServiceForPlaid) GetAccounts(ctx context.Context, userID str
 }
 
 func (m *mockAccountServiceForPlaid) GetAccountsFiltered(ctx context.Context, userID string, opts services.AccountFilterOptions) ([]domain.Account, error) {
+	m.called = true
 	m.capturedOpts = opts
 	if m.getErr != nil {
 		return nil, m.getErr
@@ -115,12 +120,20 @@ func (m *mockAccountServiceForPlaid) ReorderAccounts(ctx context.Context, userID
 	return m.reorderErr
 }
 
-func (m *mockAccountServiceForPlaid) DeleteAccount(ctx context.Context, accountID, userID string) error {
-	return m.deleteErr
+func (m *mockAccountServiceForPlaid) DisconnectAccount(ctx context.Context, accountID, userID string) error {
+	return m.disconnectAccountErr
+}
+
+func (m *mockAccountServiceForPlaid) PurgeAccount(ctx context.Context, accountID, userID string) error {
+	return m.purgeAccountErr
 }
 
 func (m *mockAccountServiceForPlaid) DisconnectInstitution(ctx context.Context, linkedItemID, userID string) error {
 	return m.disconnectErr
+}
+
+func (m *mockAccountServiceForPlaid) PurgeInstitution(ctx context.Context, linkedItemID, userID string) error {
+	return m.purgeInstitutionErr
 }
 
 func (m *mockAccountServiceForPlaid) ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error) {
@@ -135,6 +148,14 @@ func (m *mockAccountServiceForPlaid) SetJobQueue(jq queue.JobQueue) {
 }
 
 func (m *mockAccountServiceForPlaid) SetCacheInvalidation(gens *cache.Generations, hh services.SyncCacheHouseholdLookup) {
+	// no-op for tests
+}
+
+func (m *mockAccountServiceForPlaid) SetAuditLogger(al services.AuditLogger) {
+	// no-op for tests
+}
+
+func (m *mockAccountServiceForPlaid) SetAuditLogRepository(ar repository.AuditLogRepository) {
 	// no-op for tests
 }
 
@@ -507,6 +528,168 @@ func TestGetAccounts_UserAccountIDExplicitStatusNotOverridden(t *testing.T) {
 		"Explicit status should not be overridden even when user_account_id is set")
 }
 
+// TestGetAccounts_StatusAllStatuses tests that status=all_statuses is forwarded via
+// StatusFilter, distinct from the pre-existing status=all misnomer (Issue #1569, Task 5D).
+func TestGetAccounts_StatusAllStatuses(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Status:             "all_statuses",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "all_statuses", mockAccount.capturedOpts.StatusFilter)
+}
+
+// TestGetAccounts_AsOfDate_ConflictWithStatusAllStatuses tests that as_of_date combined with
+// status=all_statuses is rejected the same way as status=all/replaced (both hit
+// repository.ErrAccountFilterAsOfConflict via AllStatuses).
+func TestGetAccounts_AsOfDate_ConflictWithStatusAllStatuses(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AsOfDate:           "2026-01-15",
+		Status:             "all_statuses",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.False(t, mockAccount.called, "service must not be called when as_of_date conflicts with status=all_statuses")
+}
+
+// TestGetAccounts_AsOfDate tests that a valid as_of_date query param (Issue #1569, Task 5B)
+// is parsed and forwarded as AccountFilterOptions.AsOf.
+func TestGetAccounts_AsOfDate(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AsOfDate:           "2026-01-15",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockAccount.capturedOpts.AsOf, "expected AsOf to be forwarded")
+	assert.Equal(t, "2026-01-15", mockAccount.capturedOpts.AsOf.Format("2006-01-02"))
+}
+
+// TestGetAccounts_AsOfDate_InvalidFormat tests that a malformed as_of_date returns a 400
+// instead of silently ignoring it.
+func TestGetAccounts_AsOfDate_InvalidFormat(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AsOfDate:           "not-a-date",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+}
+
+// TestGetAccounts_AsOfDate_ConflictWithStatusAll tests that combining as_of_date with
+// status=all is rejected at the API layer with a 400, rather than reaching the resolver's
+// ErrAccountFilterAsOfConflict (repository.AccountFilterOptions.AsOf is mutually exclusive
+// with AllStatuses/ReplacedOnly by design — see account_repository.go's
+// resolveAccountStatusScope). The API must not offer a combination that errors deeper down.
+func TestGetAccounts_AsOfDate_ConflictWithStatusAll(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AsOfDate:           "2026-01-15",
+		Status:             "all",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.False(t, mockAccount.called, "service must not be called when as_of_date conflicts with status")
+}
+
+// TestGetAccounts_AsOfDate_ConflictWithStatusReplaced mirrors the status=all case for
+// status=replaced.
+func TestGetAccounts_AsOfDate_ConflictWithStatusReplaced(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AsOfDate:           "2026-01-15",
+		Status:             "replaced",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.False(t, mockAccount.called, "service must not be called when as_of_date conflicts with status")
+}
+
+// TestGetAccounts_AsOfDate_ConflictWithIncludeReplaced tests the include_replaced=true alias,
+// which is equivalent to status=all.
+func TestGetAccounts_AsOfDate_ConflictWithIncludeReplaced(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AsOfDate:           "2026-01-15",
+		IncludeReplaced:    "true",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.False(t, mockAccount.called, "service must not be called when as_of_date conflicts with include_replaced")
+}
+
 // TestUpdateAccount_Success tests successful account update.
 
 func TestUpdatePlaidAccount_Success(t *testing.T) {
@@ -560,38 +743,141 @@ func TestUpdatePlaidAccount_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestDeletePlaidAccount_Success tests successful account deletion.
-func TestDeletePlaidAccount_Success(t *testing.T) {
+// TestDisconnectPlaidAccount_Success tests successful account disconnection (soft, retains
+// history). Issue #1569, Task 6.
+func TestDisconnectPlaidAccount_Success(t *testing.T) {
 	mockPlaid := &mockPlaidServiceForPlaid{}
 	mockAccount := &mockAccountServiceForPlaid{}
 
 	handler := NewPlaidHandler(mockPlaid, mockAccount)
 
-	input := &DeleteAccountInput{
+	input := &DisconnectAccountInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		ID:                 "acc-123",
 	}
 
-	_, err := handler.DeleteAccount(context.Background(), input)
+	_, err := handler.DisconnectAccount(context.Background(), input)
 
 	require.NoError(t, err)
 }
 
-// TestDeletePlaidAccount_NotFound tests error when account not found for deletion.
-func TestDeletePlaidAccount_NotFound(t *testing.T) {
+// TestDisconnectPlaidAccount_NotFound tests error when account not found for disconnection.
+func TestDisconnectPlaidAccount_NotFound(t *testing.T) {
 	mockPlaid := &mockPlaidServiceForPlaid{}
 	mockAccount := &mockAccountServiceForPlaid{
-		deleteErr: repository.ErrAccountNotFound,
+		disconnectAccountErr: repository.ErrAccountNotFound,
 	}
 
 	handler := NewPlaidHandler(mockPlaid, mockAccount)
 
-	input := &DeleteAccountInput{
+	input := &DisconnectAccountInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		ID:                 "nonexistent",
 	}
 
-	_, err := handler.DeleteAccount(context.Background(), input)
+	_, err := handler.DisconnectAccount(context.Background(), input)
+
+	require.Error(t, err)
+}
+
+// TestDisconnectPlaidAccount_AlreadyDisconnected asserts, at the handler level, the API behaviour
+// chosen for a repeat disconnect (Issue #1569, Task 2): the handler must propagate
+// repository.ErrAccountAlreadyDisconnected unchanged, which internal/huma/errors.mapper.go maps to
+// a 409 Conflict — the same precondition-check-then-409 shape as PurgeAccount's
+// ErrAccountNotDisconnected, rather than silently swallowing the repeat call as idempotent success.
+func TestDisconnectPlaidAccount_AlreadyDisconnected(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		disconnectAccountErr: repository.ErrAccountAlreadyDisconnected,
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &DisconnectAccountInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "acc-123",
+	}
+
+	_, err := handler.DisconnectAccount(context.Background(), input)
+
+	require.Error(t, err)
+	statusErr, ok := err.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError")
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
+}
+
+// TestPurgePlaidAccount_Success tests successful account purge (hard delete). Issue #1569, Task 6.
+func TestPurgePlaidAccount_Success(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &PurgeAccountInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "acc-123",
+	}
+
+	_, err := handler.PurgeAccount(context.Background(), input)
+
+	require.NoError(t, err)
+}
+
+// TestPurgePlaidAccount_NotFound tests error when account not found for purge.
+func TestPurgePlaidAccount_NotFound(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		purgeAccountErr: repository.ErrAccountNotFound,
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &PurgeAccountInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "nonexistent",
+	}
+
+	_, err := handler.PurgeAccount(context.Background(), input)
+
+	require.Error(t, err)
+}
+
+// TestPurgePlaidAccount_BlockedBySavingsGoal proves a savings goal referencing the account
+// surfaces as an error rather than silently succeeding.
+func TestPurgePlaidAccount_BlockedBySavingsGoal(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		purgeAccountErr: repository.ErrPurgeBlockedBySavingsGoal,
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &PurgeAccountInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "acc-123",
+	}
+
+	_, err := handler.PurgeAccount(context.Background(), input)
+
+	require.Error(t, err)
+}
+
+// TestPurgePlaidAccount_NotDisconnected proves purging a still-active account surfaces an error
+// rather than silently destroying a live account's history (fix round 1, IMPORTANT 4).
+func TestPurgePlaidAccount_NotDisconnected(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		purgeAccountErr: repository.ErrAccountNotDisconnected,
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &PurgeAccountInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "acc-123",
+	}
+
+	_, err := handler.PurgeAccount(context.Background(), input)
 
 	require.Error(t, err)
 }
@@ -628,6 +914,43 @@ func TestDisconnectInstitution_Error(t *testing.T) {
 	}
 
 	_, err := handler.DisconnectInstitution(context.Background(), input)
+
+	require.Error(t, err)
+}
+
+// TestPurgeInstitution_Success tests successful institution purge (hard delete). Issue #1569, Task 6.
+func TestPurgeInstitution_Success(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &PurgeInstitutionInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "item-123",
+	}
+
+	_, err := handler.PurgeInstitution(context.Background(), input)
+
+	require.NoError(t, err)
+}
+
+// TestPurgeInstitution_NotDisconnected proves purging an institution that was never disconnected
+// surfaces an error rather than silently destroying an item that might still be billing.
+func TestPurgeInstitution_NotDisconnected(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		purgeInstitutionErr: repository.ErrLinkedItemNotDisconnected,
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &PurgeInstitutionInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "item-123",
+	}
+
+	_, err := handler.PurgeInstitution(context.Background(), input)
 
 	require.Error(t, err)
 }

@@ -54,10 +54,38 @@ func (r *securityRepository) UpsertBatch(ctx context.Context, securities []domai
 				isin = EXCLUDED.isin,
 				cusip = EXCLUDED.cusip,
 				is_cash_equivalent = EXCLUDED.is_cash_equivalent,
-				institution_price = EXCLUDED.institution_price,
-				institution_price_as_of = EXCLUDED.institution_price_as_of,
-				close_price = EXCLUDED.close_price,
-				close_price_as_of = EXCLUDED.close_price_as_of,
+				-- Issue #1569 Task 20 (S12). The prices are RETAINED when the incoming payload has
+				-- none; every other column is overwritten. That asymmetry is the point.
+				--
+				-- securities is the one table here that is NOT user-scoped (see the interface doc:
+				-- "Securities are shared across users"). Before this, one user's sync arriving
+				-- without a close_price for a security erased the last known price of that security
+				-- for EVERY user holding it, and every holding valuation reading it went blank at
+				-- once. Nothing re-derives it — the figure is simply gone until some other user's
+				-- sync happens to carry one.
+				--
+				-- A last known price IS history: it is the only thing that can value a holding when
+				-- today's payload omits one. ticker_symbol, type, isin and cusip are NOT — they are
+				-- provider-authoritative identity metadata, refetchable, and blanking one destroys
+				-- no financial record. So those keep overwriting, deliberately, and the distinction
+				-- is pinned by
+				-- TestSecurityRepository_UpsertBatch_ANewPriceStillWins_Integration's ticker case
+				-- rather than left to this comment.
+				--
+				-- ⚠ Each price and its as_of are coalesced as a PAIR, on the price's nullness. Doing
+				-- it per column would let a payload with no price but a fresh timestamp stamp
+				-- today's date onto last week's figure — a number nothing can date, which is the
+				-- same defect this issue closed for account balances.
+				institution_price = COALESCE(EXCLUDED.institution_price, securities.institution_price),
+				institution_price_as_of = CASE
+					WHEN EXCLUDED.institution_price IS NULL THEN securities.institution_price_as_of
+					ELSE EXCLUDED.institution_price_as_of
+				END,
+				close_price = COALESCE(EXCLUDED.close_price, securities.close_price),
+				close_price_as_of = CASE
+					WHEN EXCLUDED.close_price IS NULL THEN securities.close_price_as_of
+					ELSE EXCLUDED.close_price_as_of
+				END,
 				updated_at = NOW()
 			RETURNING plaid_security_id, id
 		`

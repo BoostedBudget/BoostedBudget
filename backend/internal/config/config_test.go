@@ -788,7 +788,7 @@ func TestConfig_RedisTimeoutMsOverflow_FallsBackToDefault(t *testing.T) {
 // TestConfig_RedisTimeoutMsMax_IsLoweredForTheRequestPath is Issue #1531 slice H5. G3 set
 // RedisTimeoutMsMax to 10000 purely to stop the int64 overflow above; it never asked whether 10s
 // is a SANE ceiling for what this value actually feeds. It is not: cfg.RedisTimeoutMs is the rate
-// limiter's PRIMARY_TIMEOUT (main.go:2724, middleware.RateLimitConfig.PrimaryTimeout), which
+// limiter's PRIMARY_TIMEOUT (main.go:2741, middleware.RateLimitConfig.PrimaryTimeout), which
 // BLOCKS the request path at middleware position 4 (rate_limit_fallback.go's Allow) before falling
 // back. redisclient/client.go's own package doc says a 1s DialTimeout delay at that position is "a
 // latency cliff" with "a real risk of tripping Fly's 5s health check, cycling machines, and causing

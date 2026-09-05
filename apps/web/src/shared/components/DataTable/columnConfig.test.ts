@@ -58,8 +58,12 @@ const CONSUMERS: Array<{ file: string; columnIds: string[] }> = [
     columnIds: ['select', 'name', 'type', 'status', 'trigger', 'lastRun', 'priority'],
   },
   {
-    file: 'src/features/boosts/components/BoostExecutionHistory.tsx',
-    columnIds: ['time', 'status', 'duration', 'trigger', 'details'],
+    // #1569 T7.3: the boost-execution columns moved out of BoostExecutionHistory.tsx into the
+    // shared BoostExecutionTable so the per-boost view and the account-wide history render rows
+    // identically. This entry follows the corpus — left pointing at the old file it would have
+    // gone on passing against columns nobody renders. 'boost' is the account-wide-only column.
+    file: 'src/features/boosts/components/BoostExecutionTable.tsx',
+    columnIds: ['boost', 'time', 'status', 'duration', 'trigger', 'details'],
   },
 ]
 

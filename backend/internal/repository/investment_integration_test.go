@@ -200,7 +200,12 @@ func TestInvestment_Snapshot_PartialNullCostBasis_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := NewPortfolioSnapshotRepository(tx)
-	snap, err := repo.Upsert(ctx, userID.String(), time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC))
+	// Issue #1569, Task 6 (Fix A): snapshotDate must be a day the account's account_status_history
+	// records as live, not an arbitrary fixed calendar date — the account seeded above was created
+	// (and its history interval opened) just now, so a hardcoded past date would correctly resolve
+	// to "not live yet" and fail for a reason unrelated to what this test is proving.
+	snapshotDate := time.Now().UTC().Truncate(24 * time.Hour)
+	snap, err := repo.Upsert(ctx, userID.String(), snapshotDate)
 	require.NoError(t, err, "Upsert must succeed")
 
 	assert.InDelta(t, 1500.0, snap.TotalValue, 0.01, "total_value must include all holdings (1000+500)")
@@ -258,7 +263,10 @@ func TestInvestment_Snapshot_ExcludesInactiveAccounts_Integration(t *testing.T) 
 	require.NoError(t, err)
 
 	repo := NewPortfolioSnapshotRepository(tx)
-	snap, err := repo.Upsert(ctx, userID.String(), time.Date(2024, 6, 2, 0, 0, 0, 0, time.UTC))
+	// See the #1569 Task 6 comment above: snapshotDate must fall within the seeded account's
+	// recorded-live window rather than an arbitrary fixed calendar date.
+	snapshotDate := time.Now().UTC().Truncate(24 * time.Hour)
+	snap, err := repo.Upsert(ctx, userID.String(), snapshotDate)
 	require.NoError(t, err)
 
 	// Only active account's holdings should be counted (proves GAP C fix)
@@ -560,11 +568,11 @@ func TestInvestment_UnifiedFeed_ActivityTypesExcludesBanking_Integration(t *test
 // ── R2-1: user_account_id re-link propagation ───────────────────────────────
 
 // TestInvestment_UserAccountID_SurvivesRelink_Integration proves that:
-// 1. UpsertBatch populates user_account_id at INSERT time (GAP D fix).
-// 2. A second UpsertBatch with the same plaid_investment_transaction_id and a
-//    non-nil UserAccountID backfills user_account_id on pre-fix NULL rows (R2-5 bulk-backfill).
-// 3. GetByUserIDKeyset filtered by a NEW account_id (post-relink) still returns the
-//    pre-relink transactions via chain-expansion through user_account_id.
+//  1. UpsertBatch populates user_account_id at INSERT time (GAP D fix).
+//  2. A second UpsertBatch with the same plaid_investment_transaction_id and a
+//     non-nil UserAccountID backfills user_account_id on pre-fix NULL rows (R2-5 bulk-backfill).
+//  3. GetByUserIDKeyset filtered by a NEW account_id (post-relink) still returns the
+//     pre-relink transactions via chain-expansion through user_account_id.
 func TestInvestment_UserAccountID_SurvivesRelink_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -769,7 +777,7 @@ func TestInvestment_UnifiedFeed_BankingOnlyFilter_ExcludesInvestment_Integration
 	itemsMerchant, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filtersMerchant, nil, 10)
 	require.NoError(t, err, "MerchantID filter must not error")
 	// Merchant filter returns zero rows (no txn has that merchant), confirming investment branch zeroed
-	assert.Empty(t, itemsMerchant, "MerchantID filter must zero investment rows (proves transaction_repository.go:2323-2328 branch)")
+	assert.Empty(t, itemsMerchant, "MerchantID filter must zero investment rows (proves transaction_repository.go:2552-2557 branch)")
 
 	// ── Assertion 2: AccountIDs (both-branch filter) returns investment rows ──
 	investAcctIDStr := investAcctID.String()

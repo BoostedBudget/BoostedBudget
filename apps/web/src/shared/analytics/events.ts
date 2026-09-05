@@ -21,8 +21,31 @@ export const ANALYTICS_EVENTS = {
   PLAID_LINK_SUCCEEDED: 'plaid_link_succeeded',
   PLAID_LINK_FAILED: 'plaid_link_failed',
   ACCOUNT_REMOVED: 'account_removed',
+  // Issue #1569, Task 6: ACCOUNT_REMOVED is fired by the disconnect (non-destructive) verb — kept
+  // as-is for continuity with existing dashboards. ACCOUNT_PURGED is the new, genuinely
+  // destructive verb and must be tracked separately.
+  ACCOUNT_PURGED: 'account_purged',
   ACCOUNT_DETAIL_VIEWED: 'account_detail_viewed',
   ACCOUNT_INVESTMENT_ACTIVITY_CLICKED: 'account_investment_activity_clicked',
+  // #1569: the retained holdings history of a CLOSED account. Fired when the user switches which
+  // recorded day they are looking at — the only interaction the surface has.
+  ACCOUNT_HOLDINGS_HISTORY_DATE_CHANGED: 'account_holdings_history_date_changed',
+  // Issue #1569 T7.8: a user opened the day-by-day POSITIONS retained under a CLOSED account.
+  // DATE_CHANGED above cannot answer "did anyone actually go and look at the money we kept?" —
+  // the day picker only renders above ONE available day, so a recently-closed account with a
+  // single retained day fired no event at all, and ACCOUNT_DETAIL_VIEWED cannot tell this tab
+  // apart from any other. Same shape and same reasoning as ACCOUNT_BALANCE_HISTORY_VIEWED below.
+  // ⚠ COUNTS AND A FIXED TYPE DISCRIMINATOR ONLY — no amount, no security name, no date. Event
+  // properties are NOT covered by session-replay masking, and a security name is portfolio
+  // composition. It is a rate, not a record.
+  ACCOUNT_HOLDINGS_HISTORY_VIEWED: 'account_holdings_history_viewed',
+  // Issue #1569: a user opened the day-by-day balances retained under a CLOSED account. A VIEW
+  // event, not a change-only one, and that distinction is the whole point: the thesis of #1569 is
+  // what the user can SEE, so the measurement that has to exist is the one answering "did anyone
+  // actually go and look at the money we kept?". A date/range-changed event only ever counts the
+  // people who already got there. Carries account_type — a fixed discriminator, never free text
+  // and never an amount — so the rate can be read per kind of closed account.
+  ACCOUNT_BALANCE_HISTORY_VIEWED: 'account_balance_history_viewed',
 
   // Transactions
   TRANSACTIONS_VIEWED: 'transactions_viewed',
@@ -42,9 +65,23 @@ export const ANALYTICS_EVENTS = {
   BOOST_CREATED: 'boost_created',
   BOOST_EDITED: 'boost_edited',
   BOOST_DELETED: 'boost_deleted',
+  // Issue #1569 T7.3: a user opened the account-wide automation history — the only surface that
+  // can reach an execution whose boost has been deleted or purged. A VIEW event, because the
+  // thesis of #1569 is what the user can SEE: this is the measurement that answers "did anyone
+  // actually go and look at the history we kept?". Carries `has_deleted_boost_rows`, a boolean
+  // computed over the page on screen — a fixed discriminator, never a name, id or amount.
+  BOOST_EXECUTION_HISTORY_VIEWED: 'boost_execution_history_viewed',
 
   // Auto-categorization
   AUTO_CATEGORIZATION_VIEWED: 'auto_categorization_viewed',
+  // Issue #1569 T9.4: a user opened the account-wide RULE run history — the only surface that can
+  // reach an execution whose categorization rule has since been hard-deleted (rule_id goes NULL,
+  // rule_name and definition_snapshot are kept). The twin of BOOST_EXECUTION_HISTORY_VIEWED, and a
+  // VIEW event for the same reason: #1569's thesis is what the user can SEE, so this is the
+  // measurement that answers "did anyone actually go and look at the history we kept?". Carries
+  // `has_deleted_rule_rows` and `deleted_row_count`, both computed over the page on screen —
+  // counts and a boolean, never a rule name, a condition value, an amount or an id.
+  RULE_EXECUTION_HISTORY_VIEWED: 'rule_execution_history_viewed',
 
   // Dashboard
   DASHBOARD_VIEWED: 'dashboard_viewed',
@@ -91,6 +128,11 @@ export const ANALYTICS_EVENTS = {
 
   // Profile
   PRIVACY_SETTINGS_CHANGED: 'privacy_settings_changed',
+  // Issue #1587: the user exercising their GDPR Article 20 right to data portability. Fired on the
+  // DOWNLOAD, not on the click: an export the browser never handed the user is not a fulfilled
+  // request, and counting it as one would make the funnel say the opposite of the truth.
+  DATA_EXPORT_DOWNLOADED: 'data_export_downloaded',
+  DATA_EXPORT_FAILED: 'data_export_failed',
   PROFILE_UPDATED: 'profile_updated',
   THEME_CHANGED: 'theme_changed',
 
@@ -212,6 +254,17 @@ export const ANALYTICS_EVENTS = {
 
   // Unified investment feed (#1299)
   INVESTMENT_ACTIVITY_FILTER_TOGGLED: 'investment_activity_filter_toggled',
+  // Issue #1569 T12: the user opted in/out of bank-reversed transactions. Worth measuring —
+  // if nobody ever turns it on, the retention it exposes is invisible in practice.
+  REVERSED_TRANSACTIONS_FILTER_TOGGLED: 'reversed_transactions_filter_toggled',
+  // Issue #1569 T12: a deleted savings goal was erased for good, destroying hand-logged
+  // contributions. Deliberately carries no goal identity — it is a rate, not a record.
+  SAVINGS_GOAL_PURGED: 'savings_goal_purged',
+  // Issue #1569 T7: a user opened the contributions retained under a DELETED goal. The whole
+  // thesis of #1569 is what the user can SEE, and this is the one measurement that answers
+  // "did anyone actually go and look at the money we kept?". Like SAVINGS_GOAL_PURGED it carries
+  // no goal identity — it is a rate, not a record.
+  SAVINGS_GOAL_DELETED_LEDGER_VIEWED: 'savings_goal_deleted_ledger_viewed',
   INVESTMENT_ACTIVITY_TYPE_FILTER_APPLIED: 'investment_activity_type_filter_applied',
   INVESTMENT_DETAIL_DRAWER_OPENED: 'investment_detail_drawer_opened',
 

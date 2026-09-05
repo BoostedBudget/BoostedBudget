@@ -74,7 +74,7 @@ func TestGetRecurringSubscriptions_Integration(t *testing.T) {
 
 	// Irregular vendor: charges at 15d, 45d, 60d intervals — avg ~40 days but stddev ~19 → should NOT be detected.
 	irregularDates := []time.Time{
-		now.AddDate(0, -5, 0),            // 5 months ago
+		now.AddDate(0, -5, 0),                           // 5 months ago
 		now.AddDate(0, -5, 0).Add(15 * 24 * time.Hour),  // +15 days
 		now.AddDate(0, -5, 0).Add(60 * 24 * time.Hour),  // +60 days (gap 45d)
 		now.AddDate(0, -5, 0).Add(120 * 24 * time.Hour), // +120 days (gap 60d)

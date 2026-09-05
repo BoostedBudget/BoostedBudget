@@ -354,8 +354,13 @@ func (s *transferCorrelationService) referenceDate(suggestion *domain.TransferSu
 // createBoostMatchContribution creates or promotes a confirmed "boost_match" contribution for the
 // savings goal linked to the suggestion's destination account (D6 source-c / Issue #1300 M19 RG1).
 // Non-fatal: errors are logged and ignored — a missing contribution row is recoverable at next sync.
-// The UpsertFromTransaction ON CONFLICT promotes a pre-existing proposed row to confirmed so that
-// the M18-created proposed row is not left dangling after the boost match completes.
+// The UpsertFromTransaction ON CONFLICT promotes a pre-existing proposed row to confirmed (or
+// updates a row a PRIOR automatic pass confirmed) so the M18-created proposed row is not left
+// dangling after the boost match completes. #1569 round 12 task 3: it does NOT overwrite a row a
+// human has already decided about — a row with confirmed_by_user=true (manually confirmed) or
+// status='rejected' (explicitly rejected) makes the DO UPDATE a no-op instead, logged by the
+// repository. Before that fix this comment overstated the guard: the SQL had no predicate at all
+// and would silently clobber a user-confirmed amount.
 func (s *transferCorrelationService) createBoostMatchContribution(
 	ctx context.Context,
 	userID string,
@@ -390,7 +395,9 @@ func (s *transferCorrelationService) createBoostMatchContribution(
 		}
 
 		// Found the matching contributions-basis goal. Upsert a confirmed contribution.
-		// UpsertFromTransaction uses ON CONFLICT to promote any pre-existing proposed row.
+		// UpsertFromTransaction uses ON CONFLICT to promote any pre-existing proposed row (or
+		// update a prior automatic write) — but leaves a user-confirmed or user-rejected row
+		// alone (see the doc comment above).
 		if err := s.correlationContribUpserter.UpsertFromTransaction(
 			ctx, userID, goal.ID, txnID, amount, "boost_match",
 		); err != nil {

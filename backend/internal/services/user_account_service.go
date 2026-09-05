@@ -18,7 +18,9 @@ import (
 // Issue #171 - Plaid Re-Link Handling
 type UserAccountService interface {
 	// MatchOrCreate finds an existing UserAccount or creates a new one.
-	// This is the core re-link matching logic: match on (user_id, institution_id, mask).
+	// This is the core re-link matching logic: match on (user_id, institution_id, mask,
+	// identity_type, identity_subtype) — #1569 round 11 task 4 narrowed this from
+	// (user_id, institution_id, mask) alone.
 	// If found, updates type/subtype if different and returns existing (preserving customizations).
 	// If not found, creates new UserAccount with provided details.
 	//
@@ -65,8 +67,13 @@ func (s *userAccountService) MatchOrCreate(
 	mask *string,
 	accountName, accountType, accountSubtype string,
 ) (*domain.UserAccount, error) {
-	// Step 1: Try to find existing user account by (user_id, institution_id, mask)
-	existing, err := s.repo.FindByInstitutionAndMask(ctx, userID, institutionID, mask)
+	// Step 1: Try to find existing user account by (user_id, institution_id, mask, identity_type,
+	// identity_subtype). #1569 round 11 task 4: identity is now PART of the match key, so a
+	// brokerage and an IRA at one institution (same institution, both maskless) are no longer
+	// matched onto the same chain.
+	identityType := strPtrIfNotEmpty(accountType)
+	identitySubtype := strPtrIfNotEmpty(accountSubtype)
+	existing, err := s.repo.FindByInstitutionAndMask(ctx, userID, institutionID, mask, identityType, identitySubtype)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find existing user account: %w", err)
 	}
@@ -77,6 +84,14 @@ func (s *userAccountService) MatchOrCreate(
 	}
 
 	// Step 2: No match found - create new UserAccount
+	// #1569 round 11 task 3: IdentityType/IdentitySubtype are the FROZEN identity of this chain,
+	// set here from the founding account's own type/subtype and never touched again — no
+	// repository method updates them. PrimaryType/PrimarySubtype above are a SEPARATE,
+	// last-writer-wins pair that DOES get overwritten on every re-link
+	// (normalizeExistingUserAccount -> UpdatePrimaryTypeAndSubtype); do not conflate them.
+	// #1569 round 11 task 4: IdentityType/IdentitySubtype ARE now read for matching — they are
+	// PART of FindByInstitutionAndMask's key (passed as identityType/identitySubtype above), so
+	// the "future task" this comment used to defer to has already landed.
 	newUA := &domain.UserAccount{
 		UserID:          userID,
 		InstitutionID:   institutionID,
@@ -84,6 +99,8 @@ func (s *userAccountService) MatchOrCreate(
 		AccountNameHint: strPtrIfNotEmpty(accountName),
 		PrimaryType:     strPtrIfNotEmpty(accountType),
 		PrimarySubtype:  strPtrIfNotEmpty(accountSubtype),
+		IdentityType:    strPtrIfNotEmpty(accountType),
+		IdentitySubtype: strPtrIfNotEmpty(accountSubtype),
 		IsHidden:        false, // Default to visible
 	}
 
@@ -91,7 +108,7 @@ func (s *userAccountService) MatchOrCreate(
 	if err != nil {
 		if errors.Is(err, repository.ErrDuplicateUserAccount) {
 			// Lost a concurrent create race — re-find the winner's row and normalize it.
-			winner, findErr := s.repo.FindByInstitutionAndMask(ctx, userID, institutionID, mask)
+			winner, findErr := s.repo.FindByInstitutionAndMask(ctx, userID, institutionID, mask, identityType, identitySubtype)
 			if findErr != nil {
 				return nil, fmt.Errorf("failed to re-find user account after duplicate: %w", findErr)
 			}

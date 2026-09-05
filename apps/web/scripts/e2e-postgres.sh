@@ -373,7 +373,15 @@ _get_clerk_user_id() {
 # Seed E2E test data into the database
 # Arguments:
 #   $1 - DATABASE_URL (required)
-# Returns 0 on success, 1 on failure (non-fatal)
+# Returns:
+#   0 - seeded
+#   1 - the seed FAILED (SQL error). Fatal: the suite would run against an empty database.
+#   2 - seeding was SKIPPED because a precondition is absent (no seed file, no Clerk user id).
+#       Not fatal — a developer without CLERK_SECRET_KEY can still run unauthenticated specs.
+#
+# #1569 task 20 (A1): the 1-vs-2 split is load-bearing. This function used to return 1 for both,
+# and the caller downgraded 1 to a warning so that the legitimate skip stayed quiet -- which meant
+# a real SQL failure was quiet too. Pinned by scripts/__tests__/check-e2e-seed-fails-loudly.test.sh.
 seed_e2e_data() {
   local database_url="${1:?Error: DATABASE_URL required for seed_e2e_data}"
   local seed_file="${E2E_SCRIPT_DIR}/seed-e2e-data.sql"
@@ -381,19 +389,26 @@ seed_e2e_data() {
   # Check if seed file exists
   if [ ! -f "$seed_file" ]; then
     echo "   ⚠️  Seed file not found: $seed_file"
-    return 1
+    return 2
   fi
 
   echo "🌱 Seeding E2E test data..."
 
-  # Get Clerk user ID
+  # Get Clerk user ID.
+  #
+  # `|| true` is required, not defensive. #1569 task 20, review round 1: this function is sourced
+  # into run-e2e-with-ports.sh, which runs under `set -Eeuo pipefail`, and a plain assignment from
+  # a FAILING command substitution aborts the shell — verified with a standalone probe, in which
+  # the line after the assignment never executed. _get_clerk_user_id returns 1 whenever no id can
+  # be determined, so without this the `return 2` skip below was unreachable in production and a
+  # developer with no CLERK_SECRET_KEY got a bare abort instead of the SKIPPED warning.
   local clerk_user_id
-  clerk_user_id=$(_get_clerk_user_id)
+  clerk_user_id=$(_get_clerk_user_id) || true
 
   if [ -z "$clerk_user_id" ]; then
     echo "   ⚠️  Could not determine Clerk user ID"
     echo "   Set E2E_CLERK_USER_ID or ensure TEST_CLERK_EMAIL and CLERK_SECRET_KEY are set"
-    return 1
+    return 2
   fi
 
   echo "   Using Clerk user ID: $clerk_user_id"
@@ -405,23 +420,68 @@ seed_e2e_data() {
 
   # Run SQL via psql inside the Docker container
   # Copy the temp file to the container and execute it
-  docker cp "$temp_file" "${E2E_POSTGRES_CONTAINER}:/tmp/seed.sql"
+  if ! docker cp "$temp_file" "${E2E_POSTGRES_CONTAINER}:/tmp/seed.sql"; then
+    rm -f "$temp_file"
+    echo "   ❌ Could not copy the seed script into ${E2E_POSTGRES_CONTAINER}"
+    return 1
+  fi
 
-  # Show seed output for debugging (Issue #698)
+  # #1569 task 20 (A1). Three deliberate details, each of which was individually enough to hide a
+  # totally failed seed:
+  #
+  #   -v ON_ERROR_STOP=1  -- WITHOUT it, psql -f reports ERROR and then exits 0. Every check below
+  #                          would be reading a zero from a run that seeded nothing.
+  #   no `|| true`        -- the old code ended `grep -E ... || true`, which pinned the pipeline's
+  #                          status at 0. `local exit_code=$?` was then read AFTER it, so it
+  #                          captured `|| true`'s zero and never psql's status at all.
+  #   NO PIPELINE AT ALL  -- and this is the correction to the first version of this fix, which
+  #                          piped through `tee` and read PIPESTATUS[0]. See below.
+  #
+  # ⚠ WHY THE PIPE IS GONE, AND WHY PIPESTATUS IS NOT USED. #1569 task 20, review round 1.
+  #
+  # This function is SOURCED INTO run-e2e-with-ports.sh, whose line 17 is `set -Eeuo pipefail` and
+  # has been since long before this change. Under errexit + pipefail, `docker exec … | tee` KILLS
+  # THE SHELL the instant psql exits non-zero. The PIPESTATUS read, the diagnostic block, the
+  # 1-vs-2 return contract and the caller's re-run hint below are all AFTER that pipeline, so for
+  # the actual defect class they never executed. Observed, not reasoned: with the original
+  # ON CONFLICT defect reintroduced, the real harness exited 3, Playwright never started, and none
+  # of the messages below appeared anywhere in the log.
+  #
+  # A redirect plus `|| exit_code=$?` is immune to both options and needs neither:
+  #   * errexit does not fire for a command on the left of `||`, so control reaches the diagnostic;
+  #   * there is no pipeline, so the status is psql's own and pipefail is irrelevant. The earlier
+  #     PIPESTATUS spelling silently depended on the CALLER having pipefail set — without it the
+  #     pipeline reports tee's 0 and the failure is invisible again.
+  # The Issue #698 debugging view is preserved by cat-ing the log instead of tee-ing to it.
+  local seed_log="${temp_file}.log"
+  local exit_code=0
   docker exec "$E2E_POSTGRES_CONTAINER" \
-    psql -U "$E2E_POSTGRES_USER" -d "$E2E_POSTGRES_DB" -f /tmp/seed.sql \
-    2>&1 | grep -E "NOTICE|ERROR|count|table_name" || true
-
-  local exit_code=$?
+    psql -v ON_ERROR_STOP=1 -U "$E2E_POSTGRES_USER" -d "$E2E_POSTGRES_DB" -f /tmp/seed.sql \
+    > "$seed_log" 2>&1 || exit_code=$?
+  cat "$seed_log"
 
   # Clean up temp file
   rm -f "$temp_file"
 
-  if [ $exit_code -ne 0 ]; then
-    echo "   ⚠️  Seed script failed (exit code: $exit_code)"
+  if [ "$exit_code" -ne 0 ]; then
+    # The output is NOT re-printed here: the `cat` above already showed it, immediately preceding
+    # this line. An earlier version dumped it twice, which on a real failure meant ~20 duplicated
+    # lines between the developer and the message that matters.
+    echo "   ❌ Seed script FAILED (psql exit code: $exit_code) — see the psql output immediately above"
+    rm -f "$seed_log"
     return 1
   fi
 
+  # Belt and braces: ON_ERROR_STOP makes psql exit non-zero on an ERROR, but a seed that starts
+  # RAISE-ing warnings without failing is still worth refusing to call a success.
+  if grep -q "^ERROR:\|: ERROR:" "$seed_log" 2>/dev/null; then
+    echo "   ❌ Seed script printed an ERROR despite exiting 0:"
+    grep "^ERROR:\|: ERROR:" "$seed_log"
+    rm -f "$seed_log"
+    return 1
+  fi
+
+  rm -f "$seed_log"
   echo "   ✅ Test data seeded successfully!"
   return 0
 }

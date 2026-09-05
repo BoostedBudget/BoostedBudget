@@ -62,16 +62,50 @@ else
   fail "expected exit 0 but got non-zero"
 fi
 
-# ── Test 3: empty dist directory → exit 0 (guard skips gracefully) ──
-echo "Test 3: empty dist directory (no .js files)"
+# ── Test 3: empty dist directory → non-zero exit (the chunk floor) ──
+# ⚠ #1569 r17: this case used to assert exit 0, which pinned the guard's one unconditional pass.
+# A present-but-empty assets directory is the worst build outcome this script can observe — the
+# build emitted nothing — and it was the single input for which the script could not fail. The
+# floor turns it into a failure; Tests 3b/3c pin the floor itself in both directions.
+echo "Test 3: empty dist directory (no .js files) fails the chunk floor"
 setup_sandbox
 write_size_limit
 # Leave dist/assets empty (no .js files)
 
+captured=$(cd "$SANDBOX" && bash "$SCRIPT" 2>&1 || true)
 if cd "$SANDBOX" && bash "$SCRIPT" >/dev/null 2>&1; then
-  pass "exits 0 for empty dist (no files to check)"
+  fail "expected non-zero exit for an empty dist — a build that emitted nothing must not pass"
+elif echo "$captured" | grep -q "below the floor"; then
+  pass "exits non-zero and names the chunk floor for an empty dist"
 else
-  fail "expected exit 0 for empty dist"
+  fail "exits non-zero but did not mention the floor (got: $captured)"
+fi
+
+# ── Test 3b: an explicit floor above the real chunk count → non-zero exit ──
+echo "Test 3b: MIN_JS_CHUNKS floor above the actual chunk count fails"
+setup_sandbox
+write_size_limit
+touch "$SANDBOX/apps/web/dist/assets/vendor-abc12345.js"
+
+captured=$(cd "$SANDBOX" && MIN_JS_CHUNKS=3 bash "$SCRIPT" 2>&1 || true)
+if cd "$SANDBOX" && MIN_JS_CHUNKS=3 bash "$SCRIPT" >/dev/null 2>&1; then
+  fail "expected non-zero exit when 1 chunk is below MIN_JS_CHUNKS=3"
+elif echo "$captured" | grep -q "Only 1 JS chunk"; then
+  pass "honours an explicit MIN_JS_CHUNKS floor and reports the real count"
+else
+  fail "exits non-zero but did not report the count (got: $captured)"
+fi
+
+# ── Test 3c: a floor that IS met still passes — the floor must not fail everything ──
+echo "Test 3c: MIN_JS_CHUNKS floor that is met still passes"
+setup_sandbox
+write_size_limit
+touch "$SANDBOX/apps/web/dist/assets/vendor-abc12345.js"
+
+if cd "$SANDBOX" && MIN_JS_CHUNKS=1 bash "$SCRIPT" >/dev/null 2>&1; then
+  pass "exits 0 when the chunk count meets the floor"
+else
+  fail "expected exit 0 when the chunk count meets the floor"
 fi
 
 # ── Test 4: missing dist directory → non-zero exit ──

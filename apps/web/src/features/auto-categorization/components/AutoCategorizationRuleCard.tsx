@@ -2,46 +2,17 @@ import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
-import type { CategorizationRule, ConditionType } from '../types'
+import type { CategorizationRule } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
-import { formatPFCPrimary, formatPFCDetailed, formatPFCEnum } from '@/shared/categories/formatPfc'
+import { formatPFCEnum } from '@/shared/categories/formatPfc'
+import { formatConditionValue } from '../utils/formatConditionValue'
 
 export interface AutoCategorizationRuleCardProps {
   rule: CategorizationRule
   onToggle: (enabled: boolean) => Promise<void>
   onEdit: () => void
   onDelete: () => Promise<void>
-}
-
-function formatConditionValue(condition: { type: ConditionType; value: unknown; value_display?: string }): string {
-  if (condition.value_display && (condition.type === 'existing_pfc_primary' || condition.type === 'existing_pfc_detailed')) {
-    return condition.value_display
-  }
-
-  const { type, value } = condition
-  if (typeof value === 'string') {
-    if (type === 'existing_pfc_primary') return formatPFCPrimary(value)
-    if (type === 'existing_pfc_detailed') return formatPFCDetailed(value)
-    return value
-  }
-
-  if (Array.isArray(value)) return value.join(', ')
-
-  if (typeof value === 'object' && value !== null) {
-    const obj = value as Record<string, unknown>
-    if ('min' in obj && 'max' in obj) {
-      return `${obj.min} - ${obj.max}`
-    }
-    if ('start' in obj || 'end' in obj) {
-      const parts: string[] = []
-      if (obj.start) parts.push(`from ${obj.start}`)
-      if (obj.end) parts.push(`to ${obj.end}`)
-      return parts.join(' ')
-    }
-  }
-
-  return String(value)
 }
 
 export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }: AutoCategorizationRuleCardProps) {

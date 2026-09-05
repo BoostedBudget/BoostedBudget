@@ -728,4 +728,46 @@ describe('useTransactionFilters', () => {
       expect(result.current.activeFilterCount).toBe(1)
     })
   })
+  // ── #1569 T12 gap 1: reversals are opt-in URL state ─────────────────────────────────────
+  describe('include_reversed filter', () => {
+    it('defaults to off and stays out of the URL', () => {
+      window.history.replaceState({}, '', '/')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+
+      expect(result.current.filters.include_reversed).toBeUndefined()
+      expect(result.current.includeReversed).toBe(false)
+      expect(result.current.activeFilterCount).toBe(0)
+    })
+
+    it('opting in serializes to the URL and counts as an active filter', () => {
+      window.history.replaceState({}, '', '/')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+
+      act(() => result.current.setIncludeReversed(true))
+
+      expect(new URLSearchParams(window.location.search).get('include_reversed')).toBe('true')
+      expect(result.current.filters.include_reversed).toBe(true)
+      expect(result.current.includeReversed).toBe(true)
+      expect(result.current.activeFilterCount).toBe(1)
+    })
+
+    it('opting back out removes the param rather than writing false', () => {
+      window.history.replaceState({}, '', '/?include_reversed=true')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      expect(result.current.includeReversed).toBe(true)
+
+      act(() => result.current.setIncludeReversed(false))
+
+      expect(new URLSearchParams(window.location.search).get('include_reversed')).toBeNull()
+      expect(result.current.filters.include_reversed).toBeUndefined()
+      expect(result.current.activeFilterCount).toBe(0)
+    })
+
+    it('is deep-linkable', () => {
+      window.history.replaceState({}, '', '/?include_reversed=true')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+
+      expect(result.current.filters.include_reversed).toBe(true)
+    })
+  })
 })

@@ -375,9 +375,9 @@ func TestCategorizationRuleService_GetRuleByID_PopulatesTargetCustomCategoryDisp
 	catID := "cat-uuid-rule"
 
 	rule := &domain.CategorizationRule{
-		ID:     ruleID,
-		UserID: userID,
-		Name:   "Custom Rule",
+		ID:                     ruleID,
+		UserID:                 userID,
+		Name:                   "Custom Rule",
 		TargetKind:             ptrStr("custom"),
 		TargetCustomCategoryID: &catID,
 		Conditions:             []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "test"}},
@@ -442,6 +442,10 @@ func TestCategorizationRuleService_CreateRule_PopulatesTargetCustomCategoryDispl
 	catID := "cat-uuid-create"
 
 	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.CategorizationRule")).Return(nil)
+	// CreateRule validates through the LIVE variant (#1569 Task 9) and enriches the response
+	// through the tombstone-blind one.
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{catID}).
+		Return(map[string]string{catID: "Travel"}, nil)
 	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{catID}).
 		Return(map[string]string{catID: "Travel"}, nil)
 
@@ -589,8 +593,9 @@ func TestCategorizationRuleService_CreateRule_RejectsCrossUserCustomCategory(t *
 	req.TargetPFCPrimary = nil
 	req.TargetCustomCategoryID = &otherUsersCategoryID
 
-	// GetNamesByIDs is user-scoped; a category owned by someone else is absent from the map.
-	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
+	// GetLiveNamesByIDs is user-scoped AND tombstone-filtered (#1569 Task 9); a category owned
+	// by someone else is absent from the map.
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
 		Return(map[string]string{}, nil)
 
 	rule, err := service.CreateRule(ctx, userID, req)
@@ -627,7 +632,7 @@ func TestCategorizationRuleService_UpdateRule_RejectsCrossUserCustomCategory(t *
 	}
 
 	mockRepo.On("GetByID", ctx, ruleID).Return(existingRule, nil)
-	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
 		Return(map[string]string{}, nil)
 
 	req := &domain.UpdateCategorizationRuleRequest{
@@ -635,6 +640,111 @@ func TestCategorizationRuleService_UpdateRule_RejectsCrossUserCustomCategory(t *
 	}
 
 	rule, err := service.UpdateRule(ctx, userID, ruleID, req)
+
+	assert.ErrorIs(t, err, domain.ErrCategoryNotFound)
+	assert.Nil(t, rule)
+	mockRepo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Issue #1569 Task 9, review finding I1: a rule DeleteWithReassignment disabled must not be
+// ARMED AGAIN onto the tombstoned category it still names.
+//
+// The liveness gate used to live inside `if req.TargetCustomCategoryID != nil`, so
+// `PATCH /api/v1/rules/{id}` with `{"enabled": true}` and no target field skipped it entirely and
+// put the rule straight back into GetEnabledByUserID with target_custom_category_id pointing at a
+// tombstoned row — defeating step 2's entire justification in one API call. ToggleRule, the other
+// re-enable path, had no gate at all.
+//
+// Both tests assert the repository is never asked to persist the change: refusing after the write
+// would be no protection.
+// ---------------------------------------------------------------------------------------------
+
+// ruleWithTombstonedTarget builds an already-DISABLED rule that still names a custom category —
+// exactly the state DeleteWithReassignment leaves behind.
+func ruleWithTombstonedTarget(userID, ruleID, categoryID string) *domain.CategorizationRule {
+	return &domain.CategorizationRule{
+		ID:                     ruleID,
+		UserID:                 userID,
+		Name:                   "File Blue Bottle as Coffee",
+		Enabled:                false,
+		Priority:               5,
+		Conditions:             []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "Blue Bottle"}},
+		ConditionLogic:         "AND",
+		TargetKind:             ptrStr("custom"),
+		TargetCustomCategoryID: &categoryID,
+		TagBehavior:            "add",
+		Source:                 "manual",
+	}
+}
+
+func TestCategorizationRuleService_UpdateRule_RefusesToArmOntoATombstonedCategory(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCategorizationRuleService(mockRepo, mockCategoryRepo)
+	ctx := context.Background()
+	userID, ruleID, categoryID := "user-123", "rule-123", "category-123"
+
+	mockRepo.On("GetByID", ctx, ruleID).
+		Return(ruleWithTombstonedTarget(userID, ruleID, categoryID), nil)
+	// The category is gone, so the LIVE lookup returns nothing for it.
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{categoryID}).
+		Return(map[string]string{}, nil)
+
+	enabled := true
+	// No TargetCustomCategoryID: this is the request shape that used to skip the gate.
+	rule, err := service.UpdateRule(ctx, userID, ruleID, &domain.UpdateCategorizationRuleRequest{
+		Enabled: &enabled,
+	})
+
+	assert.ErrorIs(t, err, domain.ErrCategoryNotFound)
+	assert.Nil(t, rule)
+	mockRepo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// Disabling is always allowed — the gate is about ARMING, not about touching the rule at all. A
+// user must still be able to edit or switch off a rule whose category has gone.
+func TestCategorizationRuleService_UpdateRule_DisablingNeverConsultsTheCategory(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCategorizationRuleService(mockRepo, mockCategoryRepo)
+	ctx := context.Background()
+	userID, ruleID, categoryID := "user-123", "rule-123", "category-123"
+
+	existing := ruleWithTombstonedTarget(userID, ruleID, categoryID)
+	existing.Enabled = true
+	mockRepo.On("GetByID", ctx, ruleID).Return(existing, nil)
+	mockRepo.On("Update", ctx, mock.AnythingOfType("*domain.CategorizationRule")).Return(nil)
+	// Enrichment still resolves the historical name through the tombstone-BLIND variant.
+	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{categoryID}).
+		Return(map[string]string{categoryID: "Coffee"}, nil)
+
+	disabled := false
+	rule, err := service.UpdateRule(ctx, userID, ruleID, &domain.UpdateCategorizationRuleRequest{
+		Enabled: &disabled,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, rule)
+	assert.False(t, rule.Enabled)
+	mockCategoryRepo.AssertNotCalled(t, "GetLiveNamesByIDs", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestCategorizationRuleService_ToggleRule_RefusesToArmOntoATombstonedCategory(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCategorizationRuleService(mockRepo, mockCategoryRepo)
+	ctx := context.Background()
+	userID, ruleID, categoryID := "user-123", "rule-123", "category-123"
+
+	mockRepo.On("GetByID", ctx, ruleID).
+		Return(ruleWithTombstonedTarget(userID, ruleID, categoryID), nil)
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{categoryID}).
+		Return(map[string]string{}, nil)
+
+	rule, err := service.ToggleRule(ctx, userID, ruleID, true)
 
 	assert.ErrorIs(t, err, domain.ErrCategoryNotFound)
 	assert.Nil(t, rule)

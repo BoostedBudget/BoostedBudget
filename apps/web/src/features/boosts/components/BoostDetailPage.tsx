@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router'
 import { ArrowLeft, AlertCircle } from 'lucide-react'
 import { useGetBoostByID } from '@boostedbudget/api-client/endpoints/boosts/boosts'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ErrorState } from '@/components/ui/error-state'
 import { BOOST_TYPE_LABELS } from '../boostConstants'
 import { BoostExecutionHistory } from './BoostExecutionHistory'
 import type { BoostType } from '../types'
@@ -10,7 +11,7 @@ import type { BoostType } from '../types'
 export function BoostDetailPage() {
   const { id } = useParams<{ id: string }>()
 
-  const { data: boost, isLoading } = useGetBoostByID(id ?? '')
+  const { data: boost, isLoading, error, refetch } = useGetBoostByID(id ?? '')
 
   if (isLoading) {
     return (
@@ -18,6 +19,20 @@ export function BoostDetailPage() {
         <div className="h-8 w-48 rounded bg-muted" />
         <div className="h-4 w-full rounded bg-muted" />
         <div className="h-4 w-3/4 rounded bg-muted" />
+      </div>
+    )
+  }
+
+  // Issue #1569 T9.5 — a failed read is not a missing boost. Falling through to "Boost not
+  // found" told the user their boost does not exist when all we know is that the request failed.
+  // A 404 is the one error that DOES mean it is not there, so it keeps the not-found branch;
+  // everything else (offline, 500, timeout) is reported as a failed read.
+  const notFound = (error as { response?: { status?: number } } | null)?.response?.status === 404
+
+  if (error && !notFound) {
+    return (
+      <div className="p-6">
+        <ErrorState title="We couldn't load this boost" onRetry={() => void refetch()} />
       </div>
     )
   }

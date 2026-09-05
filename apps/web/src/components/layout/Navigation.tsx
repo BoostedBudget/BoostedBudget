@@ -1,6 +1,11 @@
 import { NavLink } from 'react-router'
 import { cn } from '@/lib/utils'
-import { useIsAdmin, useAdminMode, ADMIN_NAV_ITEMS } from '@/features/admin'
+// #1601: concrete modules, NOT the '@/features/admin' barrel — see App.tsx's note. Navigation
+// is rendered by Header, which the landing route imports eagerly, so a barrel import here
+// reaches the landing critical path too.
+import { useIsAdmin } from '@/features/admin/hooks/useIsAdmin'
+import { useAdminMode } from '@/features/admin/hooks/useAdminMode'
+import { ADMIN_NAV_ITEMS } from '@/features/admin/constants'
 
 interface NavigationProps {
   className?: string

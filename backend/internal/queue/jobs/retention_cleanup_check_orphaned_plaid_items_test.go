@@ -56,6 +56,7 @@ func setupOrphanMonitorMocks(ctx context.Context, mockRepo *MockRetentionProfile
 	mockRepo.On("ClearMarkersOnEligibleStatus", ctx).Return(0, nil)
 	mockRepo.On("GetUsersWithMalformedTierOverride", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetOrphanedFKlessUserScopedRowCounts", ctx).Return(repository.OrphanedFKlessUserScopedRowCounts{}, nil)
+	mockRepo.On("CountRetentionDeletionsWithheld", ctx).Return(repository.RetentionWithholdingCounts{}, nil)
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)

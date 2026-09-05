@@ -3,14 +3,17 @@ package operations
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,6 +28,14 @@ type mockSavingsGoalService struct {
 	getGoalsErr error
 	updateErr   error
 	deleteErr   error
+	purgeErr    error
+	// purgeCalls records (userID, goalID) for each PurgeGoal call, so the handler test can prove
+	// the route reaches the service rather than merely returning 204. Issue #1569, Task 8.
+	purgeCalls [][2]string
+	// #1569 Task 12: the deleted-goals listing that makes purge reachable.
+	deletedGoals      []*domain.SavingsGoal
+	deletedGoalsErr   error
+	deletedGoalsCalls []string
 }
 
 func (m *mockSavingsGoalService) CreateGoal(ctx context.Context, userID string, req *domain.CreateSavingsGoalRequest) (*domain.SavingsGoal, error) {
@@ -39,6 +50,15 @@ func (m *mockSavingsGoalService) GetGoal(ctx context.Context, userID, goalID str
 		return nil, m.getErr
 	}
 	return m.goal, nil
+}
+
+// deletedGoals is what GetDeletedGoals returns; deletedGoalsErr short-circuits it.
+func (m *mockSavingsGoalService) GetDeletedGoals(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
+	if m.deletedGoalsErr != nil {
+		return nil, m.deletedGoalsErr
+	}
+	m.deletedGoalsCalls = append(m.deletedGoalsCalls, userID)
+	return m.deletedGoals, nil
 }
 
 func (m *mockSavingsGoalService) GetGoals(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
@@ -65,6 +85,13 @@ func (m *mockSavingsGoalService) UpdateGoal(ctx context.Context, userID, goalID 
 func (m *mockSavingsGoalService) DeleteGoal(ctx context.Context, userID, goalID string) error {
 	return m.deleteErr
 }
+
+func (m *mockSavingsGoalService) PurgeGoal(ctx context.Context, userID, goalID string) error {
+	m.purgeCalls = append(m.purgeCalls, [2]string{userID, goalID})
+	return m.purgeErr
+}
+
+func (m *mockSavingsGoalService) SetAuditLogRepository(_ repository.AuditLogRepository) {}
 
 func (m *mockSavingsGoalService) SetBudgetRepo(_ services.GoalAutoCreateBudgetRepo) {}
 
@@ -320,6 +347,43 @@ func TestDeleteSavingsGoal_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestPurgeSavingsGoal_ReachesTheServiceAndMapsThePrecondition covers the second, explicit half of
+// the #1569 Task 8 two-step. DELETE is now non-destructive, so this is the only route that can
+// actually erase a user's hand-logged contributions.
+func TestPurgeSavingsGoal_ReachesTheServiceAndMapsThePrecondition(t *testing.T) {
+	t.Run("success forwards the authenticated user and the path id", func(t *testing.T) {
+		mockService := &mockSavingsGoalService{}
+		handler := NewSavingsGoalHandler(mockService)
+
+		_, err := handler.PurgeGoal(context.Background(), &PurgeSavingsGoalInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ID:                 "goal-123",
+		})
+
+		require.NoError(t, err)
+		require.Equal(t, [][2]string{{"user-123", "goal-123"}}, mockService.purgeCalls,
+			"a 204 that never reached the service would be indistinguishable from a purge that "+
+				"silently did nothing")
+	})
+
+	t.Run("a live goal is refused with 409, not 500", func(t *testing.T) {
+		mockService := &mockSavingsGoalService{purgeErr: domain.ErrSavingsGoalNotDeleted}
+		handler := NewSavingsGoalHandler(mockService)
+
+		_, err := handler.PurgeGoal(context.Background(), &PurgeSavingsGoalInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ID:                 "goal-123",
+		})
+
+		require.Error(t, err)
+		var statusErr huma.StatusError
+		require.ErrorAs(t, err, &statusErr)
+		require.Equal(t, http.StatusConflict, statusErr.GetStatus(),
+			"the precondition is a client-correctable conflict — the same shape PurgeAccount's "+
+				"ErrAccountNotDisconnected already maps to")
+	})
+}
+
 // TestCreateSavingsGoalRequest_DeadlineDecoding tests JSON unmarshaling of deadline
 // field (RFC3339 format required, bare YYYY-MM-DD rejected).
 func TestCreateSavingsGoalRequest_DeadlineDecoding(t *testing.T) {
@@ -550,4 +614,130 @@ func TestProgressSummaryRouteRegistration(t *testing.T) {
 
 	resp := api.Get("/api/v1/savings-goals/progress-summary")
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+}
+
+// ── #1569 Task 12 gap 2: the deleted-goals listing ────────────────────────────────────────────
+//
+// purgeSavingsGoal shipped in task 8 with a precondition (the goal must already be deleted) and
+// no way for any client to discover which goals satisfy it, because every other read filters
+// `deleted_at IS NULL`. These tests pin the endpoint that closes that loop.
+
+func TestGetDeletedSavingsGoals_ReturnsTheUsersTombstonedGoals(t *testing.T) {
+	deletedAt := time.Now().Add(-48 * time.Hour)
+	goal := createTestSavingsGoal()
+	goal.DeletedAt = &deletedAt
+
+	mockService := &mockSavingsGoalService{deletedGoals: []*domain.SavingsGoal{goal}}
+	handler := NewSavingsGoalHandler(mockService)
+
+	output, err := handler.GetDeletedGoals(context.Background(), &GetDeletedSavingsGoalsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, output.Body, 1)
+	assert.Equal(t, "goal-123", output.Body[0].ID)
+	require.NotNil(t, output.Body[0].DeletedAt,
+		"deleted_at must reach the client — it is the only thing distinguishing this listing")
+	// The handler must scope to the AUTHENTICATED user, not to anything in the request.
+	assert.Equal(t, []string{"user-123"}, mockService.deletedGoalsCalls)
+}
+
+func TestGetDeletedSavingsGoals_EmptyIsAnArrayNotNull(t *testing.T) {
+	mockService := &mockSavingsGoalService{deletedGoals: nil}
+	handler := NewSavingsGoalHandler(mockService)
+
+	output, err := handler.GetDeletedGoals(context.Background(), &GetDeletedSavingsGoalsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output.Body, "a client mapping over the response must not receive null")
+	assert.Empty(t, output.Body)
+}
+
+func TestGetDeletedSavingsGoals_Error(t *testing.T) {
+	mockService := &mockSavingsGoalService{deletedGoalsErr: errors.New("database error")}
+	handler := NewSavingsGoalHandler(mockService)
+
+	_, err := handler.GetDeletedGoals(context.Background(), &GetDeletedSavingsGoalsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	})
+
+	require.Error(t, err)
+}
+
+// TestSavingsGoalDeletedRouteIsRegistered — #1569 Task 12 fix round 1 (I5).
+//
+// Deleting the whole huma.Register block for GET /savings-goals/deleted previously left this
+// package green: the handler was unit-tested by direct call, so nothing noticed that the route it
+// serves had stopped existing.
+//
+// ⚠ THE OBVIOUS VERSION OF THIS TEST DOES NOT WORK, and the first draft of it shipped broken.
+// Asserting `api.Get("/api/v1/savings-goals/deleted")` returns 401-not-404 SURVIVES deleting the
+// registration: with /deleted gone the request is matched by /savings-goals/{id} with
+// id="deleted", auth runs first, and the response is an identical 401. Measured — the mutant was
+// green. The status code cannot discriminate here, so the assertion is made against the registry
+// itself.
+func TestSavingsGoalDeletedRouteIsRegistered(t *testing.T) {
+	_, api := humatest.New(t)
+	RegisterSavingsGoalRoutes(api, NewSavingsGoalHandler(&mockSavingsGoalService{}))
+
+	item, ok := api.OpenAPI().Paths["/api/v1/savings-goals/deleted"]
+	require.True(t, ok, "GET /api/v1/savings-goals/deleted is not registered")
+	require.NotNil(t, item.Get, "the path exists but has no GET operation")
+	assert.Equal(t, "getDeletedSavingsGoals", item.Get.OperationID)
+}
+
+// TestSavingsGoalDeletedRoute_IsItsOwnOperation guards the failure the status-code test could not
+// see: the listing being served by getSavingsGoal with id="deleted".
+//
+// The registration used to carry a "(must be before :id route)" comment copied from its
+// neighbours. That claim is false for this router — a static segment wins over a parameter
+// regardless of registration order — so it has been corrected rather than propagated. What this
+// test holds is narrower and true: /deleted is a distinct path with a distinct operation from
+// /{id}, and the handler behind it is the listing handler, not the single-goal one.
+func TestSavingsGoalDeletedRoute_IsItsOwnOperation(t *testing.T) {
+	deletedAt := time.Now()
+	goal := createTestSavingsGoal()
+	goal.DeletedAt = &deletedAt
+
+	mockService := &mockSavingsGoalService{
+		goal:         createTestSavingsGoal(), // what the {id} route would return
+		deletedGoals: []*domain.SavingsGoal{goal},
+	}
+	handler := NewSavingsGoalHandler(mockService)
+
+	_, api := humatest.New(t)
+	RegisterSavingsGoalRoutes(api, handler)
+
+	paths := api.OpenAPI().Paths
+	deleted, ok := paths["/api/v1/savings-goals/deleted"]
+	require.True(t, ok)
+	byID, ok := paths["/api/v1/savings-goals/{id}"]
+	require.True(t, ok, "the {id} route must still exist — otherwise this proves nothing")
+	assert.NotEqual(t, byID.Get.OperationID, deleted.Get.OperationID,
+		"the deleted listing is being served by the single-goal operation")
+
+	// And the route must actually be WIRED to the listing handler. Distinct paths in the spec do
+	// not prove that: pointing `}, handler.GetDeletedGoals)` at handler.GetGoals instead left this
+	// package green until this half was added (measured). So drive the route end-to-end with an
+	// authenticated context and check WHICH handler answered — the two mocks return disjoint sets.
+	authed := func(ctx huma.Context, next func(huma.Context)) {
+		next(huma.WithValue(ctx, inputs.UserIDKey, "user-123"))
+	}
+	_, authedAPI := humatest.New(t)
+	authedAPI.UseMiddleware(authed)
+	RegisterSavingsGoalRoutes(authedAPI, handler)
+
+	resp := authedAPI.Get("/api/v1/savings-goals/deleted")
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var body []*domain.SavingsGoal
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	require.Len(t, body, 1)
+	require.NotNil(t, body[0].DeletedAt,
+		"the live listing answered — its goals carry no deleted_at")
+	assert.Equal(t, []string{"user-123"}, mockService.deletedGoalsCalls,
+		"GetDeletedGoals was never reached, so some other handler served /deleted")
 }

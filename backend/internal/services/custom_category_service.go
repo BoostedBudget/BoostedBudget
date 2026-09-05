@@ -38,11 +38,20 @@ type CustomCategoryService interface {
 	// Called after the River client is created (see main.go). Safe to skip in tests
 	// that don't exercise the rename path.
 	SetJobQueue(jq queue.JobQueue)
+
+	// SetAuditLogRepository wires the custom_category.deleted audit entry, which
+	// CustomCategoryRepository.DeleteWithReassignment writes INSIDE its own transaction so the
+	// entry and the tombstone commit or roll back together (Issue #1569 Task 9, following #1507).
+	// Optional: unset, the delete still works and writes no entry.
+	SetAuditLogRepository(ar repository.AuditLogRepository)
 }
 
 type customCategoryService struct {
 	categoryRepo repository.CustomCategoryRepository
 	jobQueue     queue.JobQueue // nil until SetJobQueue is called
+	// auditLogRepo records the custom_category.deleted entry inside DeleteWithReassignment's own
+	// transaction. nil until SetAuditLogRepository; when unset the delete writes no entry.
+	auditLogRepo repository.AuditLogRepository
 	logger       *slog.Logger
 }
 
@@ -58,6 +67,11 @@ func NewCustomCategoryService(
 // SetJobQueue injects the job queue after construction (Issue #1123).
 func (s *customCategoryService) SetJobQueue(jq queue.JobQueue) {
 	s.jobQueue = jq
+}
+
+// SetAuditLogRepository injects the audit-log repository. See the interface method.
+func (s *customCategoryService) SetAuditLogRepository(ar repository.AuditLogRepository) {
+	s.auditLogRepo = ar
 }
 
 func (s *customCategoryService) CreateCategory(ctx context.Context, userID string, req *domain.CreateCustomCategoryRequest) (*domain.CustomCategory, error) {
@@ -238,9 +252,10 @@ func (s *customCategoryService) DeleteCategory(ctx context.Context, userID, cate
 		return domain.ErrCategoryNotFound
 	}
 
-	// Reverts referencing transactions to Plaid PFC + unreviewed, cleans up rules,
-	// reparents children, and deletes — all in one transaction (Issue #1203).
-	return s.categoryRepo.DeleteWithReassignment(ctx, userID, categoryID)
+	// Tombstones the category, disables the rules that targeted it, reparents its children and
+	// tombstones its budget lines — all in one transaction, leaving every historical transaction
+	// exactly as the user left it (Issue #1569 Task 9; was a five-step destructive delete).
+	return s.categoryRepo.DeleteWithReassignment(ctx, userID, categoryID, s.auditLogRepo)
 }
 
 // GetCategoryUsage returns live reference counts for a category (Issue #1203).

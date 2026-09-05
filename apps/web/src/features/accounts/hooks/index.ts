@@ -7,5 +7,5 @@
 export { useAccountCustomization } from './useAccountCustomization'
 export type { UseAccountCustomizationResult } from './useAccountCustomization'
 
-export { useActiveAccounts, filterActiveAccounts, isReplaced } from './useActiveAccounts'
-export type { UseActiveAccountsResult } from './useActiveAccounts'
+export { useActiveAccounts, useAllAccounts, filterActiveAccounts, isReplaced, isInactive } from './useActiveAccounts'
+export type { UseActiveAccountsResult, UseAllAccountsResult } from './useActiveAccounts'

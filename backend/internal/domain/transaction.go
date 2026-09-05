@@ -42,6 +42,42 @@ const (
 	CategorySourceManual CategorySource = "manual"
 )
 
+// TransactionDeletedReason explains why a transaction row carries a tombstone
+// (transactions.deleted_at). Issue #1569.
+//
+// The provider removing a row is NOT the user deleting it, and before #1569 the two were the same
+// operation: Plaid's `removed` array ran `DELETE FROM transactions`, destroying category overrides,
+// tags, notes and `reviewed` state that only the user could have produced, plus the
+// rule_execution_history trail behind them. The row is now retained and marked instead.
+//
+// The reason decides visibility, and the split is derivable from transactions.pending alone. That
+// remains true and is what this enum rests on. ⚠ The sentence that used to follow it — "because
+// this codebase does not store Plaid's pending_transaction_id" — is NO LONGER TRUE as of #1578:
+// the posted twin now carries transactions.pending_transaction_id_blind_idx, and the settlement
+// annotation move matches on it. The pointer is a LINK between the two rows; it is not, and must
+// not become, the input to this classification — a settled pending is recognised by its own
+// `pending` column under the tombstoning UPDATE's row lock, with no second read to race.
+type TransactionDeletedReason string
+
+const (
+	// TxnDeletedProviderRemovedPending marks a row the provider removed while it was still
+	// pending. That is the ordinary pending -> posted lifecycle: a posted twin has already
+	// replaced it. Retained for forensics, and shown NOWHERE — surfacing it would double-count
+	// the same spend against its twin.
+	TxnDeletedProviderRemovedPending TransactionDeletedReason = "provider_removed_pending"
+
+	// TxnDeletedProviderRemovedPosted marks a row the provider removed after it had posted: a
+	// bank reversal or correction. Retained AND surfacable as reversed
+	// (TransactionFilters.IncludeReversed), because a closed month whose totals change without
+	// the user being told is the failure #1569 exists to end.
+	TxnDeletedProviderRemovedPosted TransactionDeletedReason = "provider_removed_posted"
+)
+
+// TxnDeletedByPlaidSync is the actor recorded in transactions.deleted_by when the Plaid sync path
+// tombstones a row. It names the ACTOR, not a user — no user is involved in a provider removal,
+// which is the whole reason the row is kept.
+const TxnDeletedByPlaidSync = "plaid_sync"
+
 // TagSource tracks the origin of a tag on a transaction
 type TagSource struct {
 	Tag    string  `json:"tag"`
@@ -114,6 +150,21 @@ type Transaction struct {
 	PaymentChannel *string `json:"payment_channel,omitempty" db:"payment_channel"`
 	Pending        bool    `json:"pending" db:"pending"`
 
+	// PendingTransactionID is the provider's id of the PENDING transaction this one replaced.
+	// Plaid sets it on the POSTED transaction when a pending charge settles
+	// (plaid-go v23.0.0, plaid/model_transaction.go:47). Issue #1578.
+	//
+	// It is the ONLY safe way to link a settled pending to its posted twin. Matching on
+	// (account, amount, date window, merchant) instead can attach one transaction's category to a
+	// different transaction, which is worse than the bug it would fix.
+	//
+	// NOT SERIALISED and NOT a `db` column, deliberately. The plaintext is never stored and never
+	// read back: the repository derives transactions.pending_transaction_id_blind_idx from it on
+	// write and only ever MATCHES against that. So this field is write-only plumbing between the
+	// Plaid mapper and the repository, and putting it in the JSON contract would publish an
+	// external identifier the client has no use for.
+	PendingTransactionID *string `json:"-" db:"-"`
+
 	// User customization
 	UserNotes *string `json:"user_notes,omitempty" db:"user_notes"`
 
@@ -130,6 +181,22 @@ type Transaction struct {
 	// or the user explicitly toggles review.
 	Reviewed   bool       `json:"reviewed" db:"reviewed"`
 	ReviewedAt *time.Time `json:"reviewed_at,omitempty" db:"reviewed_at"`
+
+	// Tombstone (Issue #1569). DeletedAt is NULL on every live row, and every read in the
+	// codebase excludes non-NULL rows by default — see repository's
+	// TestNoTransactionReadForgetsTheTombstoneFilter, which enforces that mechanically.
+	//
+	// A caller that opts into reversals (TransactionFilters.IncludeReversed) receives rows with
+	// DeletedReason == TxnDeletedProviderRemovedPosted; Reversed() is the predicate to render on.
+	DeletedAt     *time.Time                `json:"deleted_at,omitempty" db:"deleted_at"`
+	DeletedReason *TransactionDeletedReason `json:"deleted_reason,omitempty" db:"deleted_reason" enum:"provider_removed_pending,provider_removed_posted"`
+
+	// DeletedBy is `json:"-"` ON PURPOSE. It is an internal ACTOR label ("plaid_sync"), not a user
+	// or anything a client can act on, and the reason a client actually needs is already in
+	// DeletedReason. Serialising it would put an operational implementation detail into
+	// api/openapi.yaml, where it becomes a contract we have to keep. It stays on the struct because
+	// the scan path populates it and the integration tests assert provenance was recorded.
+	DeletedBy *string `json:"-" db:"deleted_by"`
 
 	// Effective category columns (denormalized, generated or app-maintained)
 	EffectivePFCPrimary   *string `json:"effective_pfc_primary,omitempty" db:"effective_pfc_primary"`
@@ -343,6 +410,19 @@ type TransactionFilters struct {
 	// CustomCategoryIDs filters by effective custom category override ID(s) (OR logic within).
 	CustomCategoryIDs []string
 
+	// IncludeReversed admits retained provider REVERSALS into the result set: rows tombstoned
+	// with TxnDeletedProviderRemovedPosted, i.e. transactions the bank withdrew after they had
+	// already posted. Issue #1569.
+	//
+	// Default false, and that default is load-bearing rather than conservative: a tombstoned row
+	// that leaks into a total the user has already reconciled is the same silent change this
+	// issue exists to stop, arriving from the other direction. Settled pendings
+	// (TxnDeletedProviderRemovedPending) are NEVER admitted by this flag — nothing admits them.
+	//
+	// Callers that set it must render Transaction.Reversed() distinctly; an unlabelled reversal
+	// in a list is worse than a hidden one.
+	IncludeReversed bool
+
 	// Search filters transactions by merchant name or transaction name
 	// Uses ILIKE for case-insensitive partial matching
 	Search *string
@@ -398,4 +478,18 @@ type TransactionFilters struct {
 	// IncludeInvestmentActivity=true. Empty = no filter. Values: buy/sell/dividend/
 	// reinvest/fee/cash/other (see domain.TradeType* constants).
 	ActivityTypes []string
+}
+
+// Reversed reports whether this row is a retained, surfacable provider reversal — a transaction
+// that had already POSTED when the provider withdrew it. It is the only tombstone class any read
+// is allowed to return, and only when the caller asked for it
+// (TransactionFilters.IncludeReversed).
+//
+// A settled pending (TxnDeletedProviderRemovedPending) deliberately returns false here as well as
+// being excluded at the query: two independent gates, because showing one double-counts real money
+// against its posted twin.
+func (t *Transaction) Reversed() bool {
+	return t.DeletedAt != nil &&
+		t.DeletedReason != nil &&
+		*t.DeletedReason == TxnDeletedProviderRemovedPosted
 }

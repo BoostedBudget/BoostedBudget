@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/pashagolub/pgxmock/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -70,14 +70,14 @@ func TestAccountRepository_CreateBatch(t *testing.T) {
 			acc.ID,
 			acc.LinkedItemID,
 			acc.UserID,
-			acc.UserAccountID,              // nil
-			pgxmock.AnyArg(),               // plaid_account_id (encrypted by repo)
-			pgxmock.AnyArg(),               // plaid_account_id_blind_idx
-			pgxmock.AnyArg(),               // name (encrypted by repo)
-			pgxmock.AnyArg(),               // official_name (encrypted by repo)
+			acc.UserAccountID, // nil
+			pgxmock.AnyArg(),  // plaid_account_id (encrypted by repo)
+			pgxmock.AnyArg(),  // plaid_account_id_blind_idx
+			pgxmock.AnyArg(),  // name (encrypted by repo)
+			pgxmock.AnyArg(),  // official_name (encrypted by repo)
 			acc.Type,
 			acc.Subtype,
-			pgxmock.AnyArg(),               // mask (encrypted by repo)
+			pgxmock.AnyArg(), // mask (encrypted by repo)
 			acc.CurrentBalance,
 			acc.AvailableBalance,
 			acc.CurrencyCode,
@@ -136,10 +136,14 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 			now, now,
 		)
 
+	// The balance columns come from accountBalanceProjection rather than being written out here:
+	// a hand-copied projection is a restatement that can drift from the query, and #1569 task 21
+	// (item D) changed exactly these two columns in ten places at once. Calling the renderer means
+	// this expectation cannot disagree with what the method emits.
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
@@ -188,7 +192,7 @@ func TestAccountRepository_GetByUserID(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
@@ -222,13 +226,44 @@ func TestAccountRepository_CountByUserID(t *testing.T) {
 		SELECT COUNT(*)
 		FROM accounts
 		WHERE user_id = $1
-		AND status != 'expired'
+		AND status = 'active'
 	`)).WithArgs(userID).WillReturnRows(rows)
 
 	// Execute
 	count, err := repo.CountByUserID(ctx, userID)
 
 	// Assert
+	assert.NoError(t, err)
+	assert.Equal(t, expectedCount, count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_CountByUserID_ExcludesRemoved pins the SQL TEXT that keeps a retained
+// 'removed' account (Issue #1569: accounts are retained rather than deleted) out of the count.
+//
+// ⚠ It cannot pin the BEHAVIOUR: pgxmock never executes the query, and the row count below is one
+// this test made up. The behavioural proof — including the 'replaced' case this text used to let
+// through, residual E10 — is
+// TestAccountRepository_CountByUserID_Integration_CountsOneRowPerRealAccount, against Postgres.
+func TestAccountRepository_CountByUserID_ExcludesRemoved(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	expectedCount := 2 // 2 active, 1 removed — removed must not count
+
+	rows := pgxmock.NewRows([]string{"count"}).AddRow(expectedCount)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		FROM accounts
+		WHERE user_id = $1
+		AND status = 'active'
+	`)).WithArgs(userID).WillReturnRows(rows)
+
+	count, err := repo.CountByUserID(ctx, userID)
+
 	assert.NoError(t, err)
 	assert.Equal(t, expectedCount, count)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -310,36 +345,36 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
-		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
 		"created_at", "updated_at", "institution_name",
 	}).
 		AddRow(
 			uuid.New().String(), linkedItemID1, userID, "plaid-acc-1",
 			"Chase Checking", strPtr("Chase Total Checking®"), "depository", strPtr("checking"), strPtr("1234"),
 			&bal1, &avail1, "USD",
-			"active", nil, nil, nil,
+			"active", nil, nil, nil, nil,
 			time.Now(), time.Now(), "Chase",
 		).
 		AddRow(
 			uuid.New().String(), linkedItemID1, userID, "plaid-acc-2",
 			"Chase Savings", strPtr("Chase Savings℠"), "depository", strPtr("savings"), strPtr("5678"),
 			&bal2, &avail2, "USD",
-			"active", nil, nil, nil,
+			"active", nil, nil, nil, nil,
 			time.Now(), time.Now(), "Chase",
 		).
 		AddRow(
 			uuid.New().String(), linkedItemID2, userID, "plaid-acc-3",
 			"Wells Fargo Checking", nil, "depository", strPtr("checking"), strPtr("9012"),
 			&bal3, &avail3, "USD",
-			"active", nil, nil, nil,
+			"active", nil, nil, nil, nil,
 			time.Now(), time.Now(), "Wells Fargo",
 		)
 
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -389,15 +424,15 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
-		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
 		"created_at", "updated_at", "institution_name",
 	})
 
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -434,13 +469,13 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
-		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
 		"created_at", "updated_at", "institution_name",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "plaid-acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&bal, &bal, "USD",
-		"active", nil, nil, nil,
+		"active", nil, nil, nil, nil,
 		time.Now(), time.Now(), "Chase",
 	)
 	// Note: expired account not in rows — DB filters it via WHERE a.status != 'expired'
@@ -448,8 +483,8 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -466,106 +501,6 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing
 	require.NoError(t, err)
 	assert.Len(t, accounts, 1)
 	assert.Equal(t, "Active Checking", accounts[0].Name)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TestAccountRepository_Delete_Success tests successful account deletion with ownership validation
-func TestAccountRepository_Delete_Success(t *testing.T) {
-	// Given: Mock DB and account repository
-	mock, repo := setupAccountMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	accountID := uuid.New().String()
-	userID := uuid.New().String()
-
-	// Expect: DELETE query with ownership validation (WHERE id = $1 AND user_id = $2)
-	expectedQuery := `DELETE FROM accounts WHERE id = $1 AND user_id = $2`
-	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
-		WithArgs(accountID, userID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1)) // 1 row affected
-
-	// When: Deleting account
-	err := repo.Delete(ctx, accountID, userID)
-
-	// Then: No error, deletion successful
-	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TestAccountRepository_Delete_NotFound tests deletion when account doesn't exist
-func TestAccountRepository_Delete_NotFound(t *testing.T) {
-	// Given: Mock DB and account repository
-	mock, repo := setupAccountMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	accountID := uuid.New().String()
-	userID := uuid.New().String()
-
-	// Expect: DELETE query returns 0 rows affected (account not found)
-	expectedQuery := `DELETE FROM accounts WHERE id = $1 AND user_id = $2`
-	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
-		WithArgs(accountID, userID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0)) // 0 rows affected
-
-	// When: Attempting to delete non-existent account
-	err := repo.Delete(ctx, accountID, userID)
-
-	// Then: Returns ErrAccountNotFound
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, ErrAccountNotFound)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TestAccountRepository_Delete_NotOwner tests deletion when user doesn't own the account
-// This validates ownership via the WHERE clause (id AND user_id must match)
-func TestAccountRepository_Delete_NotOwner(t *testing.T) {
-	// Given: Mock DB and account repository
-	mock, repo := setupAccountMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	accountID := uuid.New().String()
-	wrongUserID := uuid.New().String() // Different user
-
-	// Expect: DELETE query with wrong user_id returns 0 rows affected
-	expectedQuery := `DELETE FROM accounts WHERE id = $1 AND user_id = $2`
-	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
-		WithArgs(accountID, wrongUserID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0)) // 0 rows affected (ownership check fails)
-
-	// When: Attempting to delete account owned by different user
-	err := repo.Delete(ctx, accountID, wrongUserID)
-
-	// Then: Returns ErrAccountNotFound (account not found for this user)
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, ErrAccountNotFound)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TestAccountRepository_Delete_DatabaseError tests handling of database errors during deletion
-func TestAccountRepository_Delete_DatabaseError(t *testing.T) {
-	// Given: Mock DB and account repository
-	mock, repo := setupAccountMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	accountID := uuid.New().String()
-	userID := uuid.New().String()
-
-	// Expect: DELETE query returns database error
-	expectedQuery := `DELETE FROM accounts WHERE id = $1 AND user_id = $2`
-	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
-		WithArgs(accountID, userID).
-		WillReturnError(errors.New("connection done")) // Database connection error
-
-	// When: Attempting to delete account with DB error
-	err := repo.Delete(ctx, accountID, userID)
-
-	// Then: Returns database error
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "connection done")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -600,7 +535,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id",
+		"user_account_id", "status", "removed_at", "replaced_at", "expired_at", "replaced_by_id",
 		"created_at", "updated_at",
 	}).AddRow(
 		accountID, uuid.New().String(), userID, "plaid-acc-1",
@@ -608,17 +543,17 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		&balance, &available, "USD",
 		strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), strPtr("💰"),
 		&displayOrder, false,
-		&userAccountID,
+		&userAccountID, domain.AccountStatusActive, nil, nil, nil, nil,
 		now, now,
 	)
 
 	expectedQuery := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id,
+		       user_account_id, status, removed_at, replaced_at, expired_at, replaced_by_id,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -642,6 +577,11 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 	assert.Equal(t, 1, *account.DisplayOrder)
 	assert.False(t, account.IsHidden)
 	assert.Equal(t, userAccountID, *account.UserAccountID)
+	// Issue #1569: GetByIDAndUser previously did not select `status` at all, so any caller
+	// (e.g. savings_progress_service.go) always saw the zero value regardless of the account's
+	// real status — a retained (replaced/expired/removed) account was indistinguishable from
+	// active.
+	assert.Equal(t, domain.AccountStatusActive, account.Status)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -657,10 +597,10 @@ func TestAccountRepository_GetByIDAndUser_NotFound(t *testing.T) {
 	expectedQuery := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id,
+		       user_account_id, status, removed_at, replaced_at, expired_at, replaced_by_id,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -874,7 +814,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
 		AddRow(
@@ -883,7 +823,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 			&bal1, &avail1, "USD",
 			strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), nil,
 			&order0, false,
-			nil, "active", nil, nil,
+			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
 		AddRow(
@@ -892,7 +832,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 			&bal2, &avail2, "USD",
 			nil, nil, nil, nil,
 			&order1, false,
-			nil, "active", nil, nil,
+			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		)
 
@@ -901,10 +841,10 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -947,7 +887,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
 		AddRow(
@@ -956,7 +896,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 			&bal1, &avail1, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
-			nil, "active", nil, nil,
+			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
 		AddRow(
@@ -965,7 +905,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 			&bal2, &avail2, "USD",
 			strPtr("Closed Account"), nil, nil, nil,
 			nil, true, // This one is hidden
-			nil, "active", nil, nil,
+			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Bank of America"), strPtr("active"),
 		)
 
@@ -974,10 +914,10 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -1034,12 +974,14 @@ func TestAccountRepository_GetByUserAccountAndStatus_Active(t *testing.T) {
 			now, now,
 		)
 
-	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status").
-		WithArgs(userAccountID, "active").
+	userID := uuid.New().String()
+
+	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status.*AND user_id").
+		WithArgs(userAccountID, "active", userID).
 		WillReturnRows(rows)
 
 	// Execute - this method should exist for stable queries across re-links
-	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "active")
+	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "active", userID)
 
 	// Assert
 	assert.NoError(t, err)
@@ -1080,12 +1022,14 @@ func TestAccountRepository_GetByUserAccountAndStatus_Replaced(t *testing.T) {
 			now, now,
 		)
 
-	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status").
-		WithArgs(userAccountID, "replaced").
+	userID := uuid.New().String()
+
+	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status.*AND user_id").
+		WithArgs(userAccountID, "replaced", userID).
 		WillReturnRows(rows)
 
 	// Execute
-	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "replaced")
+	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "replaced", userID)
 
 	// Assert
 	assert.NoError(t, err)
@@ -1114,16 +1058,53 @@ func TestAccountRepository_GetByUserAccountAndStatus_NotFound(t *testing.T) {
 		"created_at", "updated_at",
 	})
 
-	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status").
-		WithArgs(userAccountID, "active").
+	userID := uuid.New().String()
+
+	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status.*AND user_id").
+		WithArgs(userAccountID, "active", userID).
 		WillReturnRows(rows)
 
 	// Execute
-	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "active")
+	accounts, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "active", userID)
 
 	// Assert - should return empty slice (not an error) when no match found
 	assert.NoError(t, err)
 	assert.Empty(t, accounts)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_GetByUserAccountAndStatus_ScopesToUserID pins Issue #1569 R11 T2: this
+// query previously had NO user_id predicate at all, so any caller supplying a raw user_account_id
+// (a client-facing stable identifier) could read another user's accounts. Asserting the SQL text
+// contains "AND user_id" AND that the third bind parameter is the userID proves the predicate was
+// added, not merely that the query still runs.
+func TestAccountRepository_GetByUserAccountAndStatus_ScopesToUserID(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userAccountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"created_at", "updated_at",
+	})
+
+	// pgxmock.WithArgs matches positionally: if the implementation dropped the user_id bind
+	// parameter (or put it in the wrong position), this expectation would not match and the
+	// query would error — that failure IS the assertion.
+	mock.ExpectQuery(`SELECT.*FROM accounts.*WHERE user_account_id = \$1 AND status = \$2 AND user_id = \$3`).
+		WithArgs(userAccountID, "active", userID).
+		WillReturnRows(rows)
+
+	_, err := repo.GetByUserAccountAndStatus(ctx, userAccountID, "active", userID)
+
+	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1187,7 +1168,9 @@ func TestAccountRepository_GetByUserAccountAndStatus_MultipleAccounts(t *testing
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestAccountRepository_UpdateStatus tests updating account status for soft-delete
+// TestAccountRepository_UpdateStatus tests updating account status for soft-delete. Issue #1569,
+// Task 2: UpdateStatus now locks and checks the row's CURRENT status before writing, so the mock
+// must satisfy the SELECT ... FOR UPDATE precondition check (returning 'active') before the UPDATE.
 func TestAccountRepository_UpdateStatus(t *testing.T) {
 	mock, repo := setupAccountMockDB(t)
 	defer mock.Close()
@@ -1197,17 +1180,27 @@ func TestAccountRepository_UpdateStatus(t *testing.T) {
 	userID := uuid.New().String()
 	replacedByID := uuid.New().String()
 
-	// Expect update to set status, replaced_at, and replaced_by_id
-	mock.ExpectExec("UPDATE accounts.*SET.*status.*replaced_at.*replaced_by_id").
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT status FROM accounts WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+		WithArgs(accountID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"status"}).AddRow("active"))
+
+	// Expect update to set status, replaced_at, replaced_by_id, removed_at and removed_reason
+	// (Issue #1569 Task 5: the cause is stamped in the same statement as removed_at, so the two
+	// can never disagree — migration 000154's accounts_removed_reason_valid CHECK requires it).
+	mock.ExpectExec("UPDATE accounts.*SET.*status.*replaced_at.*replaced_by_id.*removed_at.*removed_reason").
 		WithArgs(
 			pgxmock.AnyArg(), // status
 			pgxmock.AnyArg(), // replaced_at
 			pgxmock.AnyArg(), // replaced_by_id
+			pgxmock.AnyArg(), // removed_at
+			pgxmock.AnyArg(), // removed_reason
 			pgxmock.AnyArg(), // updated_at
 			pgxmock.AnyArg(), // id
 			pgxmock.AnyArg(), // user_id
 		).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
 	// Execute
 	err := repo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusReplaced, &replacedByID)
@@ -1217,7 +1210,8 @@ func TestAccountRepository_UpdateStatus(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestAccountRepository_UpdateStatus_NotFound tests updating status for non-existent account
+// TestAccountRepository_UpdateStatus_NotFound tests updating status for non-existent account: the
+// row-lock SELECT itself finds no matching row.
 func TestAccountRepository_UpdateStatus_NotFound(t *testing.T) {
 	mock, repo := setupAccountMockDB(t)
 	defer mock.Close()
@@ -1226,16 +1220,11 @@ func TestAccountRepository_UpdateStatus_NotFound(t *testing.T) {
 	accountID := uuid.New().String()
 	userID := uuid.New().String()
 
-	mock.ExpectExec("UPDATE accounts.*SET.*status.*replaced_at.*replaced_by_id").
-		WithArgs(
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-		).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT status FROM accounts WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+		WithArgs(accountID, userID).
+		WillReturnError(pgx.ErrNoRows)
+	mock.ExpectRollback()
 
 	// Execute
 	err := repo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusReplaced, nil)
@@ -1243,6 +1232,70 @@ func TestAccountRepository_UpdateStatus_NotFound(t *testing.T) {
 	// Assert
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrAccountNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_UpdateStatus_AlreadyNonActive is the RED test for Issue #1569, Task 2: a
+// row that is no longer 'active' (already replaced or expired — a GENUINELY different transition
+// than the one being requested) must refuse the write entirely — no UPDATE statement should even
+// be issued — rather than clobbering an already-terminal status or its chain metadata.
+// 'removed' is deliberately NOT covered here: fix round 1 split it into the idempotency case
+// (ErrAccountAlreadyRemoved), covered separately below.
+func TestAccountRepository_UpdateStatus_AlreadyNonActive(t *testing.T) {
+	for _, currentStatus := range []string{"replaced", "expired"} {
+		t.Run(currentStatus, func(t *testing.T) {
+			mock, repo := setupAccountMockDB(t)
+			defer mock.Close()
+
+			ctx := context.Background()
+			accountID := uuid.New().String()
+			userID := uuid.New().String()
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(regexp.QuoteMeta(`SELECT status FROM accounts WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+				WithArgs(accountID, userID).
+				WillReturnRows(pgxmock.NewRows([]string{"status"}).AddRow(currentStatus))
+			mock.ExpectRollback()
+			// Deliberately NO mock.ExpectExec for the UPDATE — issuing it at all would be the bug.
+
+			// Execute
+			err := repo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusRemoved, nil)
+
+			// Assert
+			assert.Error(t, err)
+			assert.ErrorIs(t, err, ErrAccountAlreadyDisconnected)
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+// TestAccountRepository_UpdateStatus_AlreadyRemoved is the RED test for fix round 1 of Task 2: an
+// already-'removed' row is the IDEMPOTENCY case, not a hard refusal — UpdateStatus must return the
+// distinct ErrAccountAlreadyRemoved sentinel (so DisconnectAccount can treat it as success) while
+// still never issuing the UPDATE.
+func TestAccountRepository_UpdateStatus_AlreadyRemoved(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT status FROM accounts WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+		WithArgs(accountID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"status"}).AddRow("removed"))
+	mock.ExpectRollback()
+	// Deliberately NO mock.ExpectExec for the UPDATE — idempotent success must still mean no write.
+
+	// Execute
+	err := repo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusRemoved, nil)
+
+	// Assert
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrAccountAlreadyRemoved)
+	assert.NotErrorIs(t, err, ErrAccountAlreadyDisconnected,
+		"the idempotency case must NOT also satisfy the hard-refusal sentinel")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1457,25 +1510,59 @@ func TestAccountRepository_CheckFingerprintOwnership_NullItemStatus_NoError(t *t
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestAccountRepository_ExpireAccountsByFingerprint verifies that accounts matching
-// a fingerprint are marked as 'expired' to release the DB uniqueness constraint.
+// TestAccountRepository_ExpireAccountsByFingerprint verifies that accounts matching a fingerprint
+// are marked as 'expired' (stamping expired_at, Issue #1569 Task 6) to release the DB uniqueness
+// constraint, and that the caller gets back the IDs of every account actually flipped — the
+// repository's own RETURNING, not a second SELECT — so the service layer can audit-log each one.
 func TestAccountRepository_ExpireAccountsByFingerprint(t *testing.T) {
 	mock, repo := setupAccountMockDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
 	fingerprint := "test-fingerprint-blind-idx"
+	expiredID1 := uuid.New().String()
+	expiredID2 := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`
+	mock.ExpectQuery(regexp.QuoteMeta(`
 		UPDATE accounts
-		SET status = 'expired', updated_at = NOW()
+		SET status = 'expired', expired_at = NOW(), updated_at = NOW()
 		WHERE (persistent_account_id_blind_idx = $1 OR fallback_fingerprint_blind_idx = $1)
 		  AND status = 'active'
-	`)).WithArgs(fingerprint).WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+		RETURNING id
+	`)).WithArgs(fingerprint).WillReturnRows(
+		pgxmock.NewRows([]string{"id"}).AddRow(expiredID1).AddRow(expiredID2),
+	)
 
-	err := repo.ExpireAccountsByFingerprint(ctx, fingerprint)
+	expiredIDs, err := repo.ExpireAccountsByFingerprint(ctx, fingerprint)
 
 	assert.NoError(t, err)
+	assert.ElementsMatch(t, []string{expiredID1, expiredID2}, expiredIDs,
+		"must return every account the UPDATE actually flipped, via RETURNING, so the service can audit-log each one")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_ExpireAccountsByFingerprint_NoMatch verifies a no-op (nothing active
+// matches the fingerprint) returns an empty slice and no error, not a sentinel or a panic — a bulk
+// statement has no single "current status" to compare against, so silent success is correct here.
+func TestAccountRepository_ExpireAccountsByFingerprint_NoMatch(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	fingerprint := "unclaimed-fingerprint-blind-idx"
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		UPDATE accounts
+		SET status = 'expired', expired_at = NOW(), updated_at = NOW()
+		WHERE (persistent_account_id_blind_idx = $1 OR fallback_fingerprint_blind_idx = $1)
+		  AND status = 'active'
+		RETURNING id
+	`)).WithArgs(fingerprint).WillReturnRows(pgxmock.NewRows([]string{"id"}))
+
+	expiredIDs, err := repo.ExpireAccountsByFingerprint(ctx, fingerprint)
+
+	assert.NoError(t, err)
+	assert.Empty(t, expiredIDs)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1509,7 +1596,7 @@ func TestAccountRepository_GetByUserID_ExcludesReplaced(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
@@ -1541,21 +1628,21 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesReplaced(t *testin
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
-		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
 		"created_at", "updated_at", "institution_name",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "plaid-acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&bal, &bal, "USD",
-		"active", nil, nil, nil,
+		"active", nil, nil, nil, nil,
 		time.Now(), time.Now(), "Chase",
 	)
 
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -1605,7 +1692,7 @@ func TestAccountRepository_GetByLinkedItemID_ExcludesReplaced(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
@@ -1618,6 +1705,71 @@ func TestAccountRepository_GetByLinkedItemID_ExcludesReplaced(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, accounts, 1)
 	assert.Equal(t, "Active Checking", accounts[0].Name)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuses verifies the
+// separate, sync-only read (Issue #1569 Task 1b) has NO status predicate — unlike
+// GetByLinkedItemID above, which callers must keep using for holdings/liability syncs.
+func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuses(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	now := time.Now()
+	balance := 1500.50
+	available := 1450.25
+
+	// removed_reason is selected by THIS read alone (Issue #1569 Task 5): it is the only caller
+	// that needs the cause, because it feeds the provider-restore decision.
+	rows := pgxmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"removed_reason",
+		"created_at", "updated_at",
+	}).AddRow(
+		uuid.New().String(), linkedItemID, uuid.New().String(), "acc-active",
+		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
+		&balance, &available, "USD",
+		"active", nil, nil, nil,
+		nil,
+		now, now,
+	).AddRow(
+		uuid.New().String(), linkedItemID, uuid.New().String(), "acc-removed",
+		"Removed Card", nil, "credit", strPtr("credit card"), strPtr("5678"),
+		nil, nil, "USD",
+		"removed", nil, nil, nil,
+		strPtr("provider_absent"),
+		now, now,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, linked_item_id, user_id, plaid_account_id,
+		       name, official_name, type, subtype, mask,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
+		       status, user_account_id, replaced_by_id, replaced_at,
+		       removed_reason,
+		       created_at, updated_at
+		FROM accounts
+		WHERE linked_item_id = $1
+		ORDER BY created_at ASC
+	`)).WithArgs(linkedItemID).WillReturnRows(rows)
+
+	accounts, err := repo.GetByLinkedItemIDIncludingRetained(ctx, linkedItemID)
+
+	require.NoError(t, err)
+	require.Len(t, accounts, 2, "removed accounts must be included, unlike GetByLinkedItemID")
+	assert.Equal(t, "Active Checking", accounts[0].Name)
+	assert.Equal(t, "Removed Card", accounts[1].Name)
+	assert.Equal(t, domain.AccountStatusRemoved, accounts[1].Status)
+	// The scan target must line up: the removal cause reaches the domain object, and an active
+	// account's NULL stays nil rather than shifting a neighbouring column into it.
+	assert.Nil(t, accounts[0].RemovedReason)
+	require.NotNil(t, accounts[1].RemovedReason)
+	assert.Equal(t, "provider_absent", *accounts[1].RemovedReason)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1637,7 +1789,7 @@ func TestAccountRepository_CountByUserID_ExcludesExpired(t *testing.T) {
 		SELECT COUNT(*)
 		FROM accounts
 		WHERE user_id = $1
-		AND status != 'expired'
+		AND status = 'active'
 	`)).WithArgs(userID).WillReturnRows(rows)
 
 	count, err := repo.CountByUserID(ctx, userID)
@@ -1668,7 +1820,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
 		AddRow(
@@ -1677,7 +1829,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 			&bal1, &avail1, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
-			nil, "active", nil, nil,
+			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
 		AddRow(
@@ -1686,7 +1838,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 			&bal2, &avail2, "USD",
 			nil, nil, nil, nil,
 			nil, false,
-			nil, "replaced", &replacedAt, nil,
+			nil, "replaced", &replacedAt, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		)
 	// Note: expired account is NOT included in the mock result rows.
@@ -1695,10 +1847,10 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -1746,7 +1898,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
 		AddRow(
@@ -1755,17 +1907,17 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 			nil, nil, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
-			nil, "active", nil, nil,
+			nil, "active", nil, nil, nil, nil,
 			now, now, nil, nil, // l.institution_name = NULL, l.status = NULL
 		)
 
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id

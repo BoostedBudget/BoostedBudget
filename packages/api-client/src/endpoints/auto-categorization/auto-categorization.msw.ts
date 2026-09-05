@@ -44,7 +44,8 @@ import type {
 } from 'msw';
 
 import type {
-  CategorizationRule
+  CategorizationRule,
+  RuleExecutionsResponse
 } from '../../models';
 
 
@@ -57,6 +58,8 @@ export const getGetRuleByIDResponseMock = (overrideResponse: Partial<Extract<Cat
 export const getUpdateRuleResponseMock = (overrideResponse: Partial<Extract<CategorizationRule, object>> = {}): CategorizationRule => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), condition_logic: faker.string.alpha({length: {min: 10, max: 20}}), conditions: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({operator: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), type: faker.string.alpha({length: {min: 10, max: 20}}), value: {}, value_display: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined])})), null]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', description: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), enabled: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), last_matched_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), match_count: faker.number.int(), name: faker.string.alpha({length: {min: 10, max: 20}}), override_count: faker.number.int(), priority: faker.number.int(), source: faker.string.alpha({length: {min: 10, max: 20}}), tag_behavior: faker.string.alpha({length: {min: 10, max: 20}}), target_custom_category_display: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), target_custom_category_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), target_kind: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), target_pfc_detailed: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), target_pfc_detailed_display: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), target_pfc_primary: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), target_pfc_primary_display: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), target_tags: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), undefined]), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getToggleRuleResponseMock = (overrideResponse: Partial<Extract<CategorizationRule, object>> = {}): CategorizationRule => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), condition_logic: faker.string.alpha({length: {min: 10, max: 20}}), conditions: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({operator: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), type: faker.string.alpha({length: {min: 10, max: 20}}), value: {}, value_display: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined])})), null]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', description: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), enabled: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), last_matched_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), match_count: faker.number.int(), name: faker.string.alpha({length: {min: 10, max: 20}}), override_count: faker.number.int(), priority: faker.number.int(), source: faker.string.alpha({length: {min: 10, max: 20}}), tag_behavior: faker.string.alpha({length: {min: 10, max: 20}}), target_custom_category_display: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), target_custom_category_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), target_kind: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), target_pfc_detailed: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), target_pfc_detailed_display: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), target_pfc_primary: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), target_pfc_primary_display: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), target_tags: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), undefined]), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getGetUserRuleExecutionsResponseMock = (overrideResponse: Partial<Extract<RuleExecutionsResponse, object>> = {}): RuleExecutionsResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), executions: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({action_type: faker.string.alpha({length: {min: 10, max: 20}}), definition_snapshot: faker.helpers.arrayElement([{}, undefined]), executed_at: faker.date.past().toISOString().slice(0, 19) + 'Z', id: faker.string.alpha({length: {min: 10, max: 20}}), result: faker.string.alpha({length: {min: 10, max: 20}}), rule_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), rule_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), transaction_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), limit: faker.number.int(), offset: faker.number.int(), total: faker.number.int(), ...overrideResponse})
 
 
 export const getGetUserRulesMockHandler = (overrideResponse?: CategorizationRule[] | null | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<CategorizationRule[] | null> | CategorizationRule[] | null), options?: RequestHandlerOptions) => {
@@ -128,11 +131,24 @@ export const getToggleRuleMockHandler = (overrideResponse?: CategorizationRule |
       })
   }, options)
 }
+
+export const getGetUserRuleExecutionsMockHandler = (overrideResponse?: RuleExecutionsResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<RuleExecutionsResponse> | RuleExecutionsResponse), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/rule-executions', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetUserRuleExecutionsResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
 export const getAutoCategorizationMock = () => [
   getGetUserRulesMockHandler(),
   getCreateRuleMockHandler(),
   getDeleteRuleMockHandler(),
   getGetRuleByIDMockHandler(),
   getUpdateRuleMockHandler(),
-  getToggleRuleMockHandler()
+  getToggleRuleMockHandler(),
+  getGetUserRuleExecutionsMockHandler()
 ]

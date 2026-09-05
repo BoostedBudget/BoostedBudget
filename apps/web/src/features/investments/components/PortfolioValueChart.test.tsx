@@ -4,7 +4,7 @@
  * TDD: tests written before implementation.
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import '@/test/mocks/shared-charts'
 import { mockUseDarkMode, MockEChartsChart } from '@/test/mocks/shared-charts'
@@ -189,5 +189,32 @@ describe('PortfolioValueChart', () => {
     const formatted = formatter!([{ name: '<script>alert(1)</script>', value: 1000 }])
     expect(formatted).not.toMatch(/<script/i)
     expect(formatted).toContain('&lt;script')
+  })
+})
+
+// Issue #1569 T9.5 — a failed read is not "not enough data". The latter tells the user their
+// portfolio has no history in this range, which is a claim about their money the client cannot
+// make when the request never returned.
+describe('PortfolioValueChart failed read', () => {
+  beforeEach(() => {
+    mockUseDarkMode.mockReturnValue(false)
+  })
+
+  // The API mock is process-global; leave it as other files expect to find it.
+  afterEach(() => {
+    mockUseGetPortfolioHistory.mockReturnValue({ data: undefined, isLoading: false, isError: false })
+  })
+
+  it('reports the failed read and does not claim there is not enough data', () => {
+    mockUseGetPortfolioHistory.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    })
+    render(<PortfolioValueChart dateRange={DATE_RANGE} />)
+    expect(screen.getByRole('alert')).toBeDefined()
+    expect(screen.getByText(/couldn't load/i)).toBeDefined()
+    expect(screen.queryByText(/not enough data/i)).toBeNull()
+    expect(screen.queryByTestId('echarts-chart')).toBeNull()
   })
 })

@@ -64,6 +64,11 @@ type BudgetService interface {
 	// Issue #1300, Codex C1 (IDOR protection).
 	SetGoalOwnershipChecker(r GoalOwnershipChecker)
 
+	// SetAuditLogRepository wires the budget.deleted / budget_category.deleted audit entries,
+	// written INSIDE the repository's own tombstone transaction via LogInTx. Nil-safe optional
+	// dependency. Issue #1569, Task 8.
+	SetAuditLogRepository(ar repository.AuditLogRepository)
+
 	// BackfillManagedCategories creates missing managed savings categories for all
 	// active goals across all active budgets, skipping tombstoned (budget, goal) pairs.
 	// Idempotent — the unique index no-ops on duplicates. Called on sync and as an
@@ -84,6 +89,9 @@ type budgetService struct {
 	// savings_goal_id in a savings-kind request belongs to the authenticated user
 	// before persisting (IDOR protection — Issue #1300, Codex C1).
 	goalOwnershipChecker GoalOwnershipChecker
+	// auditLogRepo records budget.deleted / budget_category.deleted entries inside the
+	// repository's tombstone transaction (Issue #1569 Task 8). Nil-safe optional dependency.
+	auditLogRepo repository.AuditLogRepository
 }
 
 // NewBudgetService creates a new BudgetService instance.
@@ -186,8 +194,11 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 
 	// Issue #1540: reject a "custom" category referencing another user's custom_categories
 	// row before persisting anything — the same IDOR protection the loop above gives
-	// SavingsGoalID. GetNamesByIDs is already user-scoped (custom_category_repository.go);
-	// any requested ID absent from the returned map is not owned by the caller.
+	// SavingsGoalID. GetLiveNamesByIDs is user-scoped AND tombstone-filtered
+	// (custom_category_repository.go); any requested ID absent from the returned map is either
+	// not owned by the caller or has been deleted. Issue #1569 Task 9 moved this off
+	// GetNamesByIDs, which deliberately still resolves tombstoned names for DISPLAY — attaching
+	// a new budget line to a deleted category would put it back in front of the user.
 	var customCategoryIDs []string
 	for _, catReq := range req.Categories {
 		if catReq.CustomCategoryID != nil {
@@ -203,7 +214,7 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 			// behaviour) or silently skip the ownership check (would reopen the #1540 IDOR).
 			return nil, fmt.Errorf("custom category repository not configured: cannot validate custom_category_id")
 		}
-		names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, customCategoryIDs)
+		names, err := s.customCategoryRepo.GetLiveNamesByIDs(ctx, userID, customCategoryIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -517,8 +528,9 @@ func (s *budgetService) DeleteBudget(ctx context.Context, userID, budgetID strin
 		return domain.ErrBudgetNotFound
 	}
 
-	// Delete the budget (cascade deletes categories)
-	if err := s.budgetRepo.Delete(ctx, budgetID, userID); err != nil {
+	// Tombstone the budget and its categories. rollover_history and budget_period_events are
+	// retained; see BudgetRepository.Delete.
+	if err := s.budgetRepo.Delete(ctx, budgetID, userID, s.auditLogRepo); err != nil {
 		s.logger.Error("failed to delete budget",
 			slog.String("budget_id", budgetID),
 			slog.String("error", err.Error()),
@@ -566,10 +578,11 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 		}
 	}
 
-	// IDOR check for custom categories: verify the category belongs to the user (Issue #1540).
-	// Mirrors the savings-goal check above and CreateBudget's batched version.
+	// IDOR check for custom categories: verify the category belongs to the user (Issue #1540)
+	// and is still live (Issue #1569 Task 9). Mirrors the savings-goal check above and
+	// CreateBudget's batched version.
 	if req.CustomCategoryID != nil {
-		names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, []string{*req.CustomCategoryID})
+		names, err := s.customCategoryRepo.GetLiveNamesByIDs(ctx, userID, []string{*req.CustomCategoryID})
 		if err != nil {
 			return nil, err
 		}
@@ -716,7 +729,7 @@ func (s *budgetService) DeleteCategory(ctx context.Context, userID, budgetID, ca
 	}
 
 	// Delete first, only tombstone after confirmed deletion to avoid orphan tombstones (Codex C6)
-	if err := s.budgetRepo.DeleteCategory(ctx, categoryID, budgetID); err != nil {
+	if err := s.budgetRepo.DeleteCategory(ctx, categoryID, budgetID, s.auditLogRepo); err != nil {
 		s.logger.Error("failed to delete budget category",
 			slog.String("category_id", categoryID),
 			slog.String("error", err.Error()),
@@ -788,6 +801,11 @@ func (s *budgetService) GetAvailableCategories(ctx context.Context, userID strin
 // SetGoalRepo wires the optional active-goal repository for carry-forward and backfill.
 func (s *budgetService) SetGoalRepo(r ActiveGoalRepo) {
 	s.goalRepo = r
+}
+
+// SetAuditLogRepository wires the optional audit-log repository. See the interface method.
+func (s *budgetService) SetAuditLogRepository(ar repository.AuditLogRepository) {
+	s.auditLogRepo = ar
 }
 
 // SetGoalOwnershipChecker wires the optional ownership checker used by AddCategory to

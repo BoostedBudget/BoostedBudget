@@ -26,10 +26,13 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/database"
 )
 
-// setupHouseholdSchemaDB creates an isolated DB pool for schema tests and
-// returns a teardown function that removes all rows inserted by the test.
-// Each test function is responsible for cleaning up its own rows (or using
-// subtests with per-subtest cleanup) to keep tests independent.
+// setupHouseholdSchemaDB opens a SEPARATE POOL AGAINST THE SAME DATABASE every other integration
+// test in this package uses. It is not isolation, and nothing here is transactional: the pool is
+// a distinct set of connections to one shared `DATABASE_URL`, so every row these tests insert is
+// visible to every other test running against it. It also returns no teardown — each helper
+// registers its own t.Cleanup, and a cleanup that silently fails strands a fixture row that a
+// global-scan test in another package will later pick up and fail on. That is why the deletes
+// below report their errors instead of dropping them.
 func setupHouseholdSchemaDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
@@ -62,7 +65,10 @@ func insertTestUser(t *testing.T, pool *pgxpool.Pool) string {
 		t.Fatalf("insertTestUser: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, id) //nolint:errcheck
+		if _, cleanupErr := pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, id); cleanupErr != nil {
+			t.Errorf("cleanup users %s: %v — a stranded fixture row is visible to every other "+
+				"test on this shared database", id, cleanupErr)
+		}
 	})
 	return id
 }
@@ -82,7 +88,10 @@ func insertTestHousehold(t *testing.T, pool *pgxpool.Pool, ownerID string) strin
 		t.Fatalf("insertTestHousehold: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, id) //nolint:errcheck
+		if _, cleanupErr := pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, id); cleanupErr != nil {
+			t.Errorf("cleanup households %s: %v — a stranded fixture row is visible to every other "+
+				"test on this shared database", id, cleanupErr)
+		}
 	})
 	return id
 }
@@ -101,7 +110,10 @@ func insertTestUserAccount(t *testing.T, pool *pgxpool.Pool, userID string) stri
 		t.Fatalf("insertTestUserAccount: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, id) //nolint:errcheck
+		if _, cleanupErr := pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, id); cleanupErr != nil {
+			t.Errorf("cleanup user_accounts %s: %v — a stranded fixture row is visible to every other "+
+				"test on this shared database", id, cleanupErr)
+		}
 	})
 	return id
 }
@@ -161,8 +173,13 @@ func TestHouseholdSchema_Households(t *testing.T) {
 			t.Fatalf("delete household: %v", err)
 		}
 
+		// The Scan error used to be dropped here, which left count at its zero value — the exact
+		// value this assertion wants — so a failed read read as a successful cascade.
 		var count int
-		pool.QueryRow(ctx, `SELECT COUNT(*) FROM household_members WHERE household_id = $1`, hhID).Scan(&count) //nolint:errcheck
+		if scanErr := pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM household_members WHERE household_id = $1`, hhID).Scan(&count); scanErr != nil {
+			t.Fatalf("count members after cascade: %v", scanErr)
+		}
 		if count != 0 {
 			t.Fatalf("expected 0 members after cascade, got %d", count)
 		}

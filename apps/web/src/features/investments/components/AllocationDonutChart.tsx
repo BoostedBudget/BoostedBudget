@@ -10,6 +10,7 @@ import {
 } from '@/shared/charts'
 import { useGetPortfolioAllocationBreakdown } from '@boostedbudget/api-client/endpoints/analytics/analytics'
 import type { AllocationConfig, GetPortfolioAllocationBreakdownGroupBy } from '../hooks/usePortfolioAllocationConfig'
+import { ErrorState } from '@/components/ui/error-state'
 
 interface AllocationDonutChartProps {
   config: AllocationConfig
@@ -113,7 +114,7 @@ function reconcilePercentages<T extends { pct: number }>(slices: T[]): T[] {
 export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
   const isDark = useDarkMode()
 
-  const { data: allocationData, isLoading } = useGetPortfolioAllocationBreakdown({
+  const { data: allocationData, isLoading, isError, refetch } = useGetPortfolioAllocationBreakdown({
     include: config.include.join(',') || undefined,
     group_by: config.group_by,
     basis: config.basis,
@@ -188,6 +189,12 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
         <div className="animate-spin rounded-full size-6 border-b-2 border-primary" />
       </div>
     )
+  }
+
+  // Issue #1569 T9.5 — see PortfolioValueChart: "No allocation data" on a failed read tells the
+  // user they hold nothing.
+  if (isError) {
+    return <ErrorState title="We couldn't load this chart" onRetry={refetch} />
   }
 
   if (!buckets || buckets.length === 0 || Object.keys(option).length === 0) {

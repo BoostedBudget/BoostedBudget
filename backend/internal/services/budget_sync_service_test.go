@@ -98,26 +98,26 @@ func TestCalculateBudgetPeriodDates_Weekly(t *testing.T) {
 	}{
 		{
 			name:          "mid-week Wednesday",
-			now:           time.Date(2024, 1, 17, 15, 30, 0, 0, time.UTC), // Wednesday Jan 17, 2024
-			expectedStart: time.Date(2024, 1, 14, 0, 0, 0, 0, time.UTC),  // Sunday Jan 14
+			now:           time.Date(2024, 1, 17, 15, 30, 0, 0, time.UTC),          // Wednesday Jan 17, 2024
+			expectedStart: time.Date(2024, 1, 14, 0, 0, 0, 0, time.UTC),            // Sunday Jan 14
 			expectedEnd:   time.Date(2024, 1, 20, 23, 59, 59, 999999999, time.UTC), // Saturday Jan 20
 		},
 		{
 			name:          "on Sunday (first day)",
-			now:           time.Date(2024, 1, 14, 10, 0, 0, 0, time.UTC), // Sunday Jan 14, 2024
-			expectedStart: time.Date(2024, 1, 14, 0, 0, 0, 0, time.UTC),  // Same Sunday
+			now:           time.Date(2024, 1, 14, 10, 0, 0, 0, time.UTC),           // Sunday Jan 14, 2024
+			expectedStart: time.Date(2024, 1, 14, 0, 0, 0, 0, time.UTC),            // Same Sunday
 			expectedEnd:   time.Date(2024, 1, 20, 23, 59, 59, 999999999, time.UTC), // Saturday Jan 20
 		},
 		{
 			name:          "on Saturday (last day)",
-			now:           time.Date(2024, 1, 20, 23, 0, 0, 0, time.UTC), // Saturday Jan 20, 2024
-			expectedStart: time.Date(2024, 1, 14, 0, 0, 0, 0, time.UTC),  // Sunday Jan 14
+			now:           time.Date(2024, 1, 20, 23, 0, 0, 0, time.UTC),           // Saturday Jan 20, 2024
+			expectedStart: time.Date(2024, 1, 14, 0, 0, 0, 0, time.UTC),            // Sunday Jan 14
 			expectedEnd:   time.Date(2024, 1, 20, 23, 59, 59, 999999999, time.UTC), // Same Saturday
 		},
 		{
 			name:          "week spanning month boundary",
-			now:           time.Date(2024, 2, 1, 12, 0, 0, 0, time.UTC), // Thursday Feb 1, 2024
-			expectedStart: time.Date(2024, 1, 28, 0, 0, 0, 0, time.UTC),  // Sunday Jan 28
+			now:           time.Date(2024, 2, 1, 12, 0, 0, 0, time.UTC),           // Thursday Feb 1, 2024
+			expectedStart: time.Date(2024, 1, 28, 0, 0, 0, 0, time.UTC),           // Sunday Jan 28
 			expectedEnd:   time.Date(2024, 2, 3, 23, 59, 59, 999999999, time.UTC), // Saturday Feb 3
 		},
 	}

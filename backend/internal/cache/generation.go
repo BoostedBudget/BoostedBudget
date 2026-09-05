@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/redisclient"
 )
@@ -94,6 +95,59 @@ func (g *Generations) Bump(ctx context.Context, kind ScopeKind, scopeID string, 
 		return
 	}
 	cacheGenerationBumpsTotal.WithLabelValues(string(kind), source).Inc()
+}
+
+// BumpWithRetry is Bump with a bounded retry: it attempts the mint+SET up to attempts times
+// (waiting backoff between tries, or returning early if ctx is done), and reports whether any
+// attempt succeeded.
+//
+// #1569 round 11 item 3: Bump is deliberately VOID — see its own doc comment — and that is the
+// right contract for every EXISTING caller, because every existing caller's bump is either
+// self-scoped (the acting user's own generation) or already covered by a broader retraction. This
+// method exists for the one shape of bump that is not self-scoped: a HOUSEHOLD bump whose failure
+// is served to a DIFFERENT, otherwise-uninvolved household member as stale financial data for up
+// to the namespace TTL. A caller for whom that distinction matters can use this instead of Bump and
+// react to the returned bool (log/alert differently); Bump's contract for everyone else is
+// unchanged.
+//
+// This does NOT eliminate the failure mode — a household whose Redis SET fails on every attempt is
+// still not invalidated, and that is inherent to "void by design": Bump has no way to fail the
+// request that already committed, by construction, and this method inherits that. What it does is
+// narrow the window: a single transient failure (the dominant real-world case for a blip, not an
+// outage) is very unlikely to repeat across `attempts` tries `backoff` apart.
+func (g *Generations) BumpWithRetry(ctx context.Context, kind ScopeKind, scopeID string, source string, attempts int, backoff time.Duration) bool {
+	if attempts < 1 {
+		attempts = 1
+	}
+	key := GenerationKey(ScopeTag(kind, scopeID))
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		token := mintGenerationToken()
+		err := g.client.Set(ctx, key, token, 0)
+		if err == nil {
+			cacheGenerationBumpsTotal.WithLabelValues(string(kind), source).Inc()
+			return true
+		}
+		if attempt == attempts {
+			cacheBumpFailuresTotal.WithLabelValues(string(kind)).Inc()
+			slog.Default().Error("cache: generation bump failed after retries; stale reads may be "+
+				"served until the generation key is next lost or bumped",
+				"scope_kind", kind, "source", source, "attempts", attempts, "error", err)
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			cacheBumpFailuresTotal.WithLabelValues(string(kind)).Inc()
+			slog.Default().Error("cache: generation bump retry loop abandoned; context done before "+
+				"exhausting attempts; stale reads may be served until the generation key is next "+
+				"lost or bumped",
+				"scope_kind", kind, "source", source, "attempt", attempt, "attempts", attempts,
+				"error", ctx.Err())
+			return false
+		case <-time.After(backoff):
+		}
+	}
+	return false
 }
 
 // mintGenerationToken returns a fresh random 128-bit token, hex-encoded. crypto/rand.Read only

@@ -7,7 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 func TestPFCPrimaryDisplayName_CuratedValues(t *testing.T) {
 	cases := map[string]string{
 		"FOOD_AND_DRINK":            "Food And Drink",
