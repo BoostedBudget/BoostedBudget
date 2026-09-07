@@ -93,12 +93,21 @@ func StructuredLogging(logger *slog.Logger) echo.MiddlewareFunc {
 			// status 200 alongside a 404. The level was already escalated correctly for this
 			// case (below), but the STATUS FIELD kept the stale value, so any dashboard or
 			// alert counting by status silently undercounted 4xx/5xx. Every propagated error
-			// is affected — router 404s, IPRateLimiter's 429, Huma handler errors.
+			// that reaches THIS middleware is affected — router 404s and Huma handler errors,
+			// both of which return without writing a response.
+			//
+			// This fix cannot, and does not, cover IPRateLimiter's 429 or CloudflareOnly's
+			// 403-via-gate-rejection: IPRateLimiter short-circuits earlier in the middleware
+			// chain and never calls next(c), so a rate-limited request produces no HTTP log
+			// line here at all — that absence is itself a real observability gap, tracked
+			// separately rather than papered over by this comment.
 			//
 			// Prefer the error's own code whenever the response has not been committed.
 			// c.Response().Committed is the authoritative "did anything get written" signal;
-			// a handler that wrote its own status (CloudflareOnly's c.String(403, ...)) keeps
-			// that status verbatim.
+			// a handler that writes its own status before returning keeps that status
+			// verbatim (CloudflareOnly's c.String(403, ...) is used below purely as a
+			// synthetic example of that write-then-return shape — in production a 403
+			// from CloudflareOnly never reaches this middleware at all, per the note above).
 			// Pinned by TestStructuredLogging_PropagatedHTTPErrorLogsRealStatus.
 			if err != nil && !c.Response().Committed {
 				var httpErr *echo.HTTPError

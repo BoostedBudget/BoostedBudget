@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"strconv"
 	"time"
 
@@ -66,16 +67,28 @@ func MetricsMiddleware() echo.MiddlewareFunc {
 
 			// Get status code
 			status := c.Response().Status
-			if status == 0 {
-				// If status not set, determine from error
-				if err != nil {
-					if he, ok := err.(*echo.HTTPError); ok {
-						status = he.Code
-					} else {
-						status = 500
-					}
-				} else {
-					status = 200
+
+			// Issue #1609 Item 4 (companion fix to logging.go): when the handler
+			// RETURNS an *echo.HTTPError instead of writing a response, Echo's
+			// HTTPErrorHandler writes the real status only after this middleware
+			// chain unwinds — so c.Response().Status still holds the unwritten
+			// default. Every propagated error was affected — router 404s, Huma
+			// handler errors — and recorded here as status="200", so a Prometheus
+			// alert built on http_requests_total's 4xx/5xx rate would never fire.
+			//
+			// Prefer the error's own code whenever the response has not been
+			// committed. c.Response().Committed is the authoritative "did anything
+			// get written" signal; a handler that wrote its own status (e.g.
+			// CloudflareOnly's c.String(403, ...)) keeps that status verbatim.
+			//
+			// (The old `if status == 0` fallback that used to live here never ran:
+			// Echo's Response.reset sets Status to http.StatusOK before any handler
+			// runs, so it is never 0 by the time this executes. Removed rather than
+			// kept as dead code.)
+			if err != nil && !c.Response().Committed {
+				var httpErr *echo.HTTPError
+				if errors.As(err, &httpErr) && httpErr.Code != 0 {
+					status = httpErr.Code
 				}
 			}
 
