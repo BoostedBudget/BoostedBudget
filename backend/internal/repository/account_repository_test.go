@@ -714,13 +714,19 @@ func TestAccountRepository_UpdateDisplayOrders_Success(t *testing.T) {
 	}
 
 	mock.ExpectBegin()
+	// #1609: every order first resolves whether the account is chained, because the target column
+	// follows the chain. Both accounts here are UNCHAINED (NULL user_account_id), so both take the
+	// legacy accounts leg — the no-regression half of the routing.
+	//
+	// ⚠ TWO PASSES, and the expectation order pins that. Fix round 1 (F2) moved the writes behind
+	// a full resolve pass, because a discarded duplicate must still be validated and because the
+	// collapse cannot know a target's lowest order until every entry has been resolved.
 	for _, order := range orders {
-		// #1609: every order first resolves whether the account is chained, because the target
-		// column follows the chain. Both accounts here are UNCHAINED (NULL user_account_id), so
-		// both take the legacy accounts leg — the no-regression half of the routing.
 		mock.ExpectQuery(regexp.QuoteMeta(displayOrderResolveChainQuery)).
 			WithArgs(order.AccountID, userID).
 			WillReturnRows(pgxmock.NewRows([]string{"user_account_id"}).AddRow(nil))
+	}
+	for _, order := range orders {
 		mock.ExpectExec(regexp.QuoteMeta(displayOrderAccountsSideQuery)).
 			WithArgs(order.DisplayOrder, pgxmock.AnyArg(), order.AccountID, userID).
 			WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -767,16 +773,18 @@ func TestAccountRepository_UpdateDisplayOrders_AccountNotFound(t *testing.T) {
 	}
 
 	mock.ExpectBegin()
-	// First update succeeds (unchained: the resolve returns a NULL chain id).
+	// The first account resolves (unchained: a NULL chain id).
 	mock.ExpectQuery(regexp.QuoteMeta(displayOrderResolveChainQuery)).
 		WithArgs(orders[0].AccountID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"user_account_id"}).AddRow(nil))
-	mock.ExpectExec(regexp.QuoteMeta(displayOrderAccountsSideQuery)).
-		WithArgs(orders[0].DisplayOrder, pgxmock.AnyArg(), orders[0].AccountID, userID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	// The second account does not exist, so the RESOLVE finds no row — #1609 moved the
 	// not-found detection ahead of the UPDATE so that "no such account" stays distinguishable
 	// from "this account is simply not chained".
+	//
+	// ⚠ NO Exec is expected at all. Fix round 1 (F2) put every resolve ahead of every write, so a
+	// rejected batch never reaches the write pass — the rollback has nothing to undo rather than
+	// one statement's worth. That is a strictly narrower window, and pgxmock's ordered
+	// expectations are what pin it: an interleaved implementation fails here.
 	mock.ExpectQuery(regexp.QuoteMeta(displayOrderResolveChainQuery)).
 		WithArgs(orders[1].AccountID, userID).
 		WillReturnError(pgx.ErrNoRows)
