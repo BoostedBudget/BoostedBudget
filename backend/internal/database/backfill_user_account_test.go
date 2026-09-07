@@ -98,8 +98,8 @@ func TestBackfillUserAccountIDs_MultipleMatch_Warns(t *testing.T) {
 	// #1569 round 14 task 9: the scan's sort key — and therefore its cursor — is (created_at, id),
 	// so created_at is selected too.
 	createdAt := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
-	accountRows := pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id", "type", "subtype", "created_at"}).
-		AddRow(accountID, userID, encMaskPtr, encInstIDPtr, &acctType, &acctSubtype, createdAt)
+	accountRows := pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id", "type", "subtype", "is_hidden", "status", "created_at"}).
+		AddRow(accountID, userID, encMaskPtr, encInstIDPtr, &acctType, &acctSubtype, false, "active", createdAt)
 	// #1569 round 14: the run first LOADS its persisted resume position (absent here), then the scan
 	// is paged, so it carries (cursor timestamp, cursor id, offset, limit). A nil timestamp AND a nil
 	// id are "from the beginning" and carry no position predicate at all. One row comes back, which

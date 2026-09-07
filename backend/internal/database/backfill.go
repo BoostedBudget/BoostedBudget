@@ -496,6 +496,15 @@ type backfillAccountRow struct {
 	instID      *string // nullable on linked_items
 	acctType    *string // #1569: carried so a synthesised identity is not typeless
 	acctSubtype *string
+	// isHidden and status carry the account's LEGACY hide and liveness up to the chain row
+	// (#1609). Migrations run before the server boots (backend/scripts/docker-entrypoint.sh), so
+	// an account whose user_account_id was still NULL when 000185 ran MISSED that migration's
+	// is_hidden lift entirely; the chain row this repair gives it would otherwise be born visible
+	// (user_accounts.is_hidden is NOT NULL DEFAULT FALSE) and the chain-authoritative read overlay
+	// would silently un-hide an account the user hid. Fixing it HERE rather than by re-ordering
+	// the migration is what makes it durable: the repair runs on every boot, the migration once.
+	isHidden bool
+	status   string
 	// createdAt is the scan's leading sort key (#1569 task 9) and the only part of the position
 	// that is ever persisted — see backfill_accounts_cursor.go on why the stored position may not
 	// be a row identity.
@@ -542,7 +551,8 @@ func fetchBackfillAccountPage(ctx context.Context, db backfillQuerier, cursor *b
 		}
 	}
 	rows, err := db.Query(ctx, `
-		SELECT a.id, a.user_id, a.mask, li.institution_id, a.type, a.subtype, a.created_at
+		SELECT a.id, a.user_id, a.mask, li.institution_id, a.type, a.subtype,
+		       a.is_hidden, a.status, a.created_at
 		FROM accounts a
 		JOIN linked_items li ON a.linked_item_id = li.id
 		WHERE a.user_account_id IS NULL
@@ -560,7 +570,8 @@ func fetchBackfillAccountPage(ctx context.Context, db backfillQuerier, cursor *b
 	var page []backfillAccountRow
 	for rows.Next() {
 		var r backfillAccountRow
-		if err := rows.Scan(&r.id, &r.userID, &r.mask, &r.instID, &r.acctType, &r.acctSubtype, &r.createdAt); err != nil {
+		if err := rows.Scan(&r.id, &r.userID, &r.mask, &r.instID, &r.acctType, &r.acctSubtype,
+			&r.isHidden, &r.status, &r.createdAt); err != nil {
 			return nil, fmt.Errorf("scan account row: %w", err)
 		}
 		page = append(page, r)
@@ -758,8 +769,65 @@ func repairBackfillAccountPage(
 		); err != nil {
 			return fmt.Errorf("update account %s: %w", r.id, err)
 		}
+
+		if err := carryLegacyHideForward(ctx, db, r, uaID); err != nil {
+			return err
+		}
 		*repaired++
 	}
+	return nil
+}
+
+// carryLegacyHideForward lifts an account's LEGACY accounts.is_hidden onto the chain row the
+// repair just attached it to — the SAME chain-OR rule migration 000185 applies, applied on the
+// path that migration structurally cannot reach.
+//
+// WHY IT HAS TO LIVE HERE (#1609, the ordering hazard):
+//
+//	container migrations run BEFORE the server boots (backend/scripts/docker-entrypoint.sh), and
+//	the server THEN calls BackfillUserAccountIDs (cmd/server/main.go). An account whose
+//	user_account_id was still NULL when 000185 ran was invisible to that migration's
+//	`EXISTS (SELECT 1 FROM accounts WHERE user_account_id = ua.id ...)` lift — it belonged to no
+//	chain yet. Moments later this repair gives it one, and user_accounts.is_hidden is
+//	NOT NULL DEFAULT FALSE (000031), so the chain is born VISIBLE. Under the chain-authoritative
+//	read overlay that FALSE wins, and an account the user deliberately hid quietly reappears.
+//
+// Re-ordering the migration would not fix it: the NULL user_account_id can be created at any time
+// (a fresh link between two boots), whereas this repair runs on EVERY boot.
+//
+// Both outcomes of the repair need it, not just synthesis. A hidden account that MATCHES an
+// existing visible chain reopens exactly the same hole, which is why this runs after uaID is
+// resolved rather than inside synthesiseUserAccountID.
+//
+// The hidden_source it stamps is 000185's classification applied to the account joining the chain:
+// only a human could have hidden a LIVE account ('user'); anything else is genuinely ambiguous
+// ('unknown'), and 'unknown' is never auto-un-hidden. It is deliberately NOT 'system' — labelling
+// an ambiguous hide 'system' is what would let the next re-link destroy a real user hide.
+//
+// COALESCE on hidden_source (and the `hidden_source IS NULL` leg of the WHERE) means a cause the
+// application already owns is never overwritten by a re-derivation from state.
+func carryLegacyHideForward(ctx context.Context, db backfillQuerier, r backfillAccountRow, uaID string) error {
+	if !r.isHidden {
+		// Nothing to carry. Notably this does NOT un-hide anything: a visible account joining a
+		// hidden chain says nothing about why the chain was hidden.
+		return nil
+	}
+	source := "unknown"
+	if r.status == "active" {
+		source = "user"
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE user_accounts
+		SET is_hidden     = TRUE,
+		    hidden_source = COALESCE(hidden_source, $1),
+		    updated_at    = now()
+		WHERE id = $2
+		  AND (is_hidden = FALSE OR hidden_source IS NULL)
+	`, source, uaID); err != nil {
+		return fmt.Errorf("carry legacy hide forward for account %s: %w", r.id, err)
+	}
+	slog.WarnContext(ctx, "#1609: carried a legacy account hide onto its chain row",
+		"account_id", r.id, "user_account_id", uaID, "hidden_source", source)
 	return nil
 }
 
