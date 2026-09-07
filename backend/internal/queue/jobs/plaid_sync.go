@@ -124,7 +124,7 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 
 	// Acquire row-level lock via transaction
 	// This prevents concurrent sync operations on the same linked item
-	linkedItem, tx, lockErr := w.acquireLockAndGetItem(ctx, args.ItemID, args.UserID)
+	linkedItem, tx, lockErr := acquireLinkedItemLock(ctx, w.db, w.linkedItemRepo, args.ItemID, args.UserID)
 	if lockErr != nil {
 		if errors.Is(lockErr, repository.ErrLinkedItemNotFound) {
 			w.logger.Warn("linked item not found, skipping job",
@@ -150,6 +150,12 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 			_ = tx.Rollback(ctx) // No-op if already committed
 		}
 	}()
+	if tx != nil {
+		w.logger.Debug("acquired lock on linked item",
+			"item_id", args.ItemID,
+			"user_id", args.UserID,
+		)
+	}
 
 	// Issue #1609 Item 7: release the lock BEFORE the sync, not after.
 	//
@@ -299,51 +305,4 @@ func plaidErrorTypeLabel(t domain.PlaidErrorType) string {
 	default:
 		return "temporary"
 	}
-}
-
-// acquireLockAndGetItem starts a transaction, acquires an exclusive row-level lock
-// on the linked item, and validates ownership.
-//
-// The returned transaction MUST be committed or rolled back by the caller.
-// The lock is held until the transaction ends.
-//
-// Returns:
-//   - The linked item if successful
-//   - The transaction (caller must commit/rollback)
-//   - repository.ErrLinkedItemNotFound if the item doesn't exist
-//   - errOwnershipMismatch if the item belongs to a different user
-//   - Other errors for database failures
-func (w *PlaidSyncWorker) acquireLockAndGetItem(ctx context.Context, itemID, userID string) (*domain.LinkedItem, pgx.Tx, error) {
-	// If DB is not configured, fall back to non-locking behavior
-	// This allows graceful degradation in tests or when locking is not needed
-	if w.db == nil {
-		item, err := w.linkedItemRepo.GetByIDAndUser(ctx, itemID, userID)
-		return item, nil, err
-	}
-
-	// Start transaction for row-level locking
-	tx, err := w.db.Begin(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to begin transaction: %w", err)
-	}
-
-	// Acquire exclusive lock and get the item
-	item, err := w.linkedItemRepo.GetByIDForUpdate(ctx, tx, itemID)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return nil, nil, err
-	}
-
-	// Validate ownership - the item must belong to the specified user
-	if item.UserID != userID {
-		_ = tx.Rollback(ctx)
-		return nil, nil, errOwnershipMismatch
-	}
-
-	w.logger.Debug("acquired lock on linked item",
-		"item_id", itemID,
-		"user_id", userID,
-	)
-
-	return item, tx, nil
 }
