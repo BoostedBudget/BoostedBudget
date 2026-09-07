@@ -63,6 +63,9 @@ func TestGetCORSConfig(t *testing.T) {
 			assert.Equal(t, tt.expectedOrigins, config.AllowOrigins)
 			assert.Equal(t, expectedMethods, config.AllowMethods)
 			assert.Equal(t, expectedHeaders, config.AllowHeaders)
+			// #1609: without ExposeHeaders, Retry-After (set by IPRateLimiter on a 429) is not
+			// readable cross-origin by a browser client.
+			assert.Equal(t, []string{"Retry-After"}, config.ExposeHeaders)
 			assert.True(t, config.AllowCredentials)
 			assert.Equal(t, 86400, config.MaxAge)
 		})
