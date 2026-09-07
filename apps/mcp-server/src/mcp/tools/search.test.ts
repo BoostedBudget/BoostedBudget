@@ -203,6 +203,30 @@ describe('buildSearchResult', () => {
     expect(text).toContain('merchant|amount|category')
   })
 
+  // #1609 fix round 1: a field with no `type` (e.g. RuleCondition.value, declared as a
+  // literal `{}` schema in api/openapi.yaml because the Go field is genuinely untyped `any`)
+  // must render distinguishably from a tooling failure. The old `?? 'unknown'` fallback read
+  // identically whether the extractor failed or the API truly accepts any JSON value — exactly
+  // the ambiguity this task exists to eliminate, since `value` is a REQUIRED field on the very
+  // operation (createRule) the incident was about.
+  it('renders a typeless field (schema {}) as "any", never the literal "unknown" (#1609 fix round 1)', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'createRule',
+        method: 'POST',
+        path: '/api/v1/auto-categorization',
+        summary: 'Create a new categorization rule',
+        tags: ['Auto-Categorization'],
+        manifestClass: 'write',
+        excluded: false,
+        requestBody: [{ name: 'conditions[].value', required: true }],
+      },
+    ])
+    const text = result.content[0]?.text ?? ''
+    expect(text).toContain('conditions[].value (any, required)')
+    expect(text).not.toContain('unknown')
+  })
+
   it('omits the body: block entirely when there is no requestBody (byte-identical to today for GETs)', () => {
     const result = buildSearchResult([
       {
