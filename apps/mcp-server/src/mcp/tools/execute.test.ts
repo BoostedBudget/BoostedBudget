@@ -231,4 +231,100 @@ describe('buildExecuteHandler', () => {
     expect(toolResult.content[0]?.text).toContain('No operations')
     expect(auditEvents).toHaveLength(0)
   })
+
+  // ── Result truncation must be explicit, not silent (issue #1609, item 8) ──────
+  //
+  // Production impact (2026-09-07): a user asked for recent transactions; the
+  // client received a silently-truncated result, couldn't see merchant names or
+  // the reversal field (both sat in the discarded portion), and fell back to
+  // reconstructing the data from analytics endpoints — reporting a confident
+  // answer built on a fragment. A visible truncation marker turns that into an
+  // explicit "I received partial data" instead of a silent falsehood.
+  describe('result truncation', () => {
+    it('truncates an oversized result and marks it explicitly with shown/full sizes', async () => {
+      // Build an object whose JSON is comfortably larger than the cap.
+      const bigArray = Array.from({ length: 5000 }, (_, i) => ({
+        id: `txn-${i}`,
+        merchant: 'Some Merchant Name',
+        amount: -12.34,
+        reversal: false,
+      }))
+      const proxy = makeProxy({ transactions: bigArray })
+      const handler = buildExecuteHandler(proxy)
+
+      const { toolResult } = await handler({
+        calls: [{ operationId: 'getTransactions' }],
+      })
+
+      const text = toolResult.content[0]?.text ?? ''
+      const fullLength = JSON.stringify({ transactions: bigArray }).length
+
+      expect(text).toContain('truncated')
+      expect(text).toContain(String(fullLength))
+    })
+
+    it('reports the ACTUAL full size, not a hardcoded or cap-derived number', async () => {
+      const bigArray = Array.from({ length: 3000 }, (_, i) => ({ id: `txn-${i}`, note: 'x'.repeat(50) }))
+      const proxy = makeProxy({ items: bigArray })
+      const handler = buildExecuteHandler(proxy)
+
+      const { toolResult } = await handler({
+        calls: [{ operationId: 'getTransactions' }],
+      })
+
+      const text = toolResult.content[0]?.text ?? ''
+      const fullLength = JSON.stringify({ items: bigArray }).length
+
+      // The marker must cite the real length of THIS payload, not a fixed number
+      // a lazy implementation might hardcode into the message.
+      expect(text).toContain(String(fullLength))
+      expect(fullLength).toBeGreaterThan(100_000)
+    })
+
+    it('leaves a small result byte-identical to today\'s output — no marker', async () => {
+      const small = { transactions: [{ id: 'txn-1', merchant: 'Coffee Shop', amount: -4.5 }] }
+      const proxy = makeProxy(small)
+      const handler = buildExecuteHandler(proxy)
+
+      const { toolResult } = await handler({
+        calls: [{ operationId: 'getTransactions' }],
+      })
+
+      const text = toolResult.content[0]?.text ?? ''
+      expect(text).toBe(`✅ getTransactions: ${JSON.stringify(small)}`)
+      expect(text).not.toContain('truncated')
+    })
+
+    it('does not mark a result exactly at the cap as truncated', async () => {
+      // Construct a value whose JSON.stringify length is EXACTLY MAX_RESULT_CHARS,
+      // by measuring and then adjusting one character at a time.
+      const target = 100_000
+      let payload = { s: '' }
+      let str = JSON.stringify(payload)
+      const padLength = target - str.length
+      payload = { s: 'a'.repeat(Math.max(0, padLength)) }
+      str = JSON.stringify(payload)
+      // Adjust by +/-1 in case of off-by-one from the padding math above.
+      while (str.length < target) {
+        payload.s += 'a'
+        str = JSON.stringify(payload)
+      }
+      while (str.length > target) {
+        payload.s = payload.s.slice(0, -1)
+        str = JSON.stringify(payload)
+      }
+      expect(str.length).toBe(target)
+
+      const proxy = makeProxy(payload)
+      const handler = buildExecuteHandler(proxy)
+
+      const { toolResult } = await handler({
+        calls: [{ operationId: 'getTransactions' }],
+      })
+
+      const text = toolResult.content[0]?.text ?? ''
+      expect(text).toBe(`✅ getTransactions: ${str}`)
+      expect(text).not.toContain('truncated')
+    })
+  })
 })

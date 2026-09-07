@@ -88,6 +88,45 @@ function buildRequestArgs(
 const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 /**
+ * Max characters of a single call's JSON result surfaced in the tool output.
+ *
+ * MCP results are consumed by a model, not a human — an unbounded result risks
+ * blowing the client's context window on a single tool call. But the cap must
+ * be large enough to hold realistic list responses (transactions, accounts,
+ * budgets) or the tool becomes useless for exactly the operations that matter
+ * most. 100_000 chars (~25k tokens at a rough 4 chars/token) comfortably fits
+ * a page of most list endpoints while still bounding worst case. No documented
+ * MCP or Cloudflare Workers response-size limit is lower than this for a
+ * single tool-call text block, so this constant IS the limit.
+ *
+ * Issue #1609 item 8: the previous cap (500 chars, unnamed, silent) truncated
+ * production traffic without any marker — on 2026-09-07 a user's MCP client
+ * silently lost merchant names and the reversal field out of a transactions
+ * response and fell back to reconstructing the answer from analytics
+ * endpoints, reporting a confident answer built on a fragment. Truncation
+ * must now be large enough to rarely fire, and self-describing when it does.
+ */
+const MAX_RESULT_CHARS = 100_000
+
+/**
+ * Render a call's JSON result, truncating to MAX_RESULT_CHARS and appending an
+ * explicit marker when truncation occurs. The marker states the fact of
+ * truncation, the shown size, the full size, and an actionable hint — it MUST
+ * NOT include any sample of the omitted content (sizes only; no financial
+ * data in the marker itself).
+ */
+function renderResult(result: unknown): string {
+  const full = JSON.stringify(result)
+  if (full.length <= MAX_RESULT_CHARS) return full
+
+  const shown = full.slice(0, MAX_RESULT_CHARS)
+  return (
+    `${shown}\n… [truncated: showing ${MAX_RESULT_CHARS} of ${full.length} characters. ` +
+    `Narrow the query — add filters, a date range, or a smaller limit — to receive the complete result.]`
+  )
+}
+
+/**
  * The class to record for a call the manifest gate REFUSED — an excluded operation, or an
  * operationId that is in no manifest at all.
  *
@@ -173,7 +212,7 @@ export function buildExecuteHandler(
         const result = await proxy.invoke(call.operationId, args, {
           confirmationToken: capability.confirmationRequired ? confirmationToken : undefined,
         })
-        results.push(`✅ ${call.operationId}: ${JSON.stringify(result).slice(0, 500)}`)
+        results.push(`✅ ${call.operationId}: ${renderResult(result)}`)
         auditEvents.push({ operationId: call.operationId, operationClass, result: 'success' })
       } catch (err) {
         if (err instanceof HostProxyError) {
