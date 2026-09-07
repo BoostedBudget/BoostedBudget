@@ -2,7 +2,11 @@ package domain
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"time"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/pfc"
 )
 
 // CustomCategory represents a user-defined category for transaction classification.
@@ -11,7 +15,7 @@ type CustomCategory struct {
 	ID                      string  `json:"id" db:"id"`
 	UserID                  string  `json:"user_id" db:"user_id"`
 	Name                    string  `json:"name" db:"name"`
-	ParentPFCPrimary        *string `json:"parent_pfc_primary,omitempty" db:"parent_pfc_primary"`
+	ParentPFCPrimary        *string `json:"parent_pfc_primary,omitempty" db:"parent_pfc_primary" enum:"BANK_FEES,ENTERTAINMENT,FOOD_AND_DRINK,GENERAL_MERCHANDISE,GENERAL_SERVICES,GOVERNMENT_AND_NON_PROFIT,HOME_IMPROVEMENT,INCOME,LOAN_DISBURSEMENTS,LOAN_PAYMENTS,MEDICAL,OTHER,PERSONAL_CARE,RENT_AND_UTILITIES,TRANSFER_IN,TRANSFER_OUT,TRANSPORTATION,TRAVEL" doc:"The PFCv2 primary this custom category nests under. This is NOT a cosmetic label: budget roll-up counts the category's transactions under this primary, and analytics classifies them through it -- a category nested under TRANSFER_IN or TRANSFER_OUT makes its transactions TRANSFERS, so they are excluded from cash flow when include_transfers is false (Issue #1609). Leave unset for a category with no PFC parent."`
 	ParentPFCPrimaryDisplay *string `json:"parent_pfc_primary_display,omitempty" db:"-"` // populated by PopulatePFCDisplay
 	// ParentID nests this custom category under another CUSTOM primary (Issue #1203).
 	// Mutually exclusive with ParentPFCPrimary; 2 levels max (no grandchildren).
@@ -45,6 +49,18 @@ func (c *CustomCategory) Validate() error {
 		}
 	}
 
+	// parent_pfc_primary is not decoration. Budget roll-up already resolves through it
+	// (transaction_repository.categoryMatchClause) and, since Issue #1609 Item 11, so does the
+	// analytics transfer filter (analytics_repository.effectiveTransferExpr): a custom category
+	// nested under TRANSFER_IN now makes its transactions transfers. Reject anything the DB CHECK
+	// valid_custom_category_parent_pfc (migration 000065) would reject, so the caller gets a
+	// message naming the field instead of an opaque constraint violation. "" means "unset" and is
+	// normalised to nil by the service before it reaches the repository.
+	if c.ParentPFCPrimary != nil && *c.ParentPFCPrimary != "" &&
+		!pfc.IsValidPrimary(*c.ParentPFCPrimary) {
+		return fmt.Errorf("parent_pfc_primary must be one of %s", strings.Join(pfc.PrimaryEnums(), ", "))
+	}
+
 	// Hierarchy: a custom category is at most one of top-level, nested under a
 	// PFC primary, or nested under a custom primary (Issue #1203).
 	if c.ParentID != nil && *c.ParentID != "" {
@@ -62,7 +78,7 @@ func (c *CustomCategory) Validate() error {
 // CreateCustomCategoryRequest represents the request to create a new custom category.
 type CreateCustomCategoryRequest struct {
 	Name             string  `json:"name" validate:"required,max=100"`
-	ParentPFCPrimary *string `json:"parent_pfc_primary,omitempty"`
+	ParentPFCPrimary *string `json:"parent_pfc_primary,omitempty" enum:"BANK_FEES,ENTERTAINMENT,FOOD_AND_DRINK,GENERAL_MERCHANDISE,GENERAL_SERVICES,GOVERNMENT_AND_NON_PROFIT,HOME_IMPROVEMENT,INCOME,LOAN_DISBURSEMENTS,LOAN_PAYMENTS,MEDICAL,OTHER,PERSONAL_CARE,RENT_AND_UTILITIES,TRANSFER_IN,TRANSFER_OUT,TRANSPORTATION,TRAVEL," doc:"The PFCv2 primary this custom category nests under. This is NOT a cosmetic label: budget roll-up counts the category's transactions under this primary, and analytics classifies them through it -- a category nested under TRANSFER_IN or TRANSFER_OUT makes its transactions TRANSFERS, so they are excluded from cash flow when include_transfers is false (Issue #1609). Leave unset for a category with no PFC parent. Send an empty string to clear it."`
 	ParentID         *string `json:"parent_id,omitempty" validate:"omitempty,uuid"`
 	Icon             *string `json:"icon,omitempty" validate:"omitempty,max=50"`
 	Color            *string `json:"color,omitempty" validate:"omitempty,hexcolor"`
@@ -74,7 +90,7 @@ type CreateCustomCategoryRequest struct {
 // explicit empty string.
 type UpdateCustomCategoryRequest struct {
 	Name             *string `json:"name,omitempty" validate:"omitempty,max=100"`
-	ParentPFCPrimary *string `json:"parent_pfc_primary,omitempty"`
+	ParentPFCPrimary *string `json:"parent_pfc_primary,omitempty" enum:"BANK_FEES,ENTERTAINMENT,FOOD_AND_DRINK,GENERAL_MERCHANDISE,GENERAL_SERVICES,GOVERNMENT_AND_NON_PROFIT,HOME_IMPROVEMENT,INCOME,LOAN_DISBURSEMENTS,LOAN_PAYMENTS,MEDICAL,OTHER,PERSONAL_CARE,RENT_AND_UTILITIES,TRANSFER_IN,TRANSFER_OUT,TRANSPORTATION,TRAVEL," doc:"The PFCv2 primary this custom category nests under. This is NOT a cosmetic label: budget roll-up counts the category's transactions under this primary, and analytics classifies them through it -- a category nested under TRANSFER_IN or TRANSFER_OUT makes its transactions TRANSFERS, so they are excluded from cash flow when include_transfers is false (Issue #1609). Leave unset for a category with no PFC parent. Send an empty string to clear it."`
 	ParentID         *string `json:"parent_id,omitempty"`
 	Icon             *string `json:"icon,omitempty" validate:"omitempty,max=50"`
 	Color            *string `json:"color,omitempty" validate:"omitempty,hexcolor"`
