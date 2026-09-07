@@ -1,6 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router'
-import { usePlaidLink, PlaidLinkOnSuccessMetadata } from 'react-plaid-link'
+import {
+  usePlaidLink,
+  PlaidLinkOnSuccessMetadata,
+  PlaidLinkError,
+  PlaidLinkOnExitMetadata,
+} from 'react-plaid-link'
 import {
   useCreateLinkToken,
   useExchangePublicToken,
@@ -58,6 +63,30 @@ function mapErrorToMessage(error: unknown): string {
   }
 
   return 'Failed to load bank connection. Please try again.'
+}
+
+/**
+ * Maps a Plaid Link error (from `onExit`) to a user-readable message.
+ *
+ * Issue #1609 (Item 6): a 2026-09-07 production incident (Citibank Online /
+ * ins_5, error_code INSTITUTION_REGISTRATION_REQUIRED) showed only a generic
+ * "Something went wrong" message in the UI — the real cause was only visible
+ * by cross-referencing the Plaid Dashboard's Link Sessions view. The
+ * error_code is always included below so the message stays diagnosable even
+ * for codes without a specific mapping.
+ */
+function mapPlaidErrorToMessage(err: PlaidLinkError): string {
+  switch (err.error_code) {
+    case 'INSTITUTION_REGISTRATION_REQUIRED':
+      return 'This bank is not yet fully set up for secure connections (INSTITUTION_REGISTRATION_REQUIRED). Please try again later or contact support.'
+    case 'INSTITUTION_NOT_RESPONDING':
+    case 'INSTITUTION_DOWN':
+      return `Your bank is temporarily unavailable (${err.error_code}). Please try again in a few minutes.`
+    case 'INSTITUTION_NOT_AVAILABLE':
+      return `This bank isn't available right now (${err.error_code}). Please try again later.`
+    default:
+      return `Unable to connect your bank account (${err.error_code}). Please try again or contact support.`
+  }
 }
 
 export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false }: PlaidLinkButtonProps) {
@@ -133,11 +162,34 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
     }
   }
 
-  // Handle user exiting Plaid Link
-  const handleOnExit = () => {
-    // Call optional exit callback
+  // Handle user exiting Plaid Link.
+  // Issue #1609 (Item 6): Plaid calls onExit(err, metadata) on BOTH an
+  // intentional user exit AND an error exit (e.g. an unsupported
+  // institution) — err is only null/undefined in the former case. The
+  // previous implementation declared no parameters at all, silently
+  // discarding error_code/error_message/error_type and the link session
+  // and request ids, which made real failures indistinguishable from the
+  // user simply closing Link.
+  const handleOnExit = (err: PlaidLinkError | null, metadata: PlaidLinkOnExitMetadata) => {
+    if (err) {
+      // Diagnostic identifiers only (error code/type, session/request ids) —
+      // never account numbers, balances, or tokens.
+      console.error('Plaid Link exited with an error:', {
+        error_code: err.error_code,
+        error_type: err.error_type,
+        error_message: err.error_message,
+        link_session_id: metadata.link_session_id,
+        request_id: metadata.request_id,
+      })
+      trackEvent(ANALYTICS_EVENTS.PLAID_LINK_FAILED, {
+        error_code: err.error_code,
+        error_type: err.error_type,
+      })
+      setError(mapPlaidErrorToMessage(err))
+    }
+    // Call optional exit callback in both cases - it is the component's public prop
     onExit?.()
-    // No error state needed - user intentionally exited
+    // No error state needed when err is null - user intentionally exited
   }
 
   // Initialize Plaid Link with token and callbacks
