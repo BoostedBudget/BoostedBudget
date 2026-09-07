@@ -98,8 +98,13 @@ func TestBackfillUserAccountIDs_MultipleMatch_Warns(t *testing.T) {
 	// #1569 round 14 task 9: the scan's sort key — and therefore its cursor — is (created_at, id),
 	// so created_at is selected too.
 	createdAt := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
-	accountRows := pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id", "type", "subtype", "is_hidden", "status", "created_at"}).
-		AddRow(accountID, userID, encMaskPtr, encInstIDPtr, &acctType, &acctSubtype, false, "active", createdAt)
+	// #1609 task 3c widened it again with the five nullable customization columns, carried up to
+	// the chain row for the same reason is_hidden already was. They are NULL here, which is the
+	// shape that exercises carryLegacyCustomizationForward's early return; the carrying itself is
+	// pinned against real Postgres in backfill_user_account_customization_integration_test.go.
+	accountRows := pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id", "type", "subtype", "is_hidden", "status", "nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "created_at"}).
+		AddRow(accountID, userID, encMaskPtr, encInstIDPtr, &acctType, &acctSubtype, false, "active",
+			(*string)(nil), (*string)(nil), (*string)(nil), (*string)(nil), (*int)(nil), createdAt)
 	// #1569 round 14: the run first LOADS its persisted resume position (absent here), then the scan
 	// is paged, so it carries (cursor timestamp, cursor id, offset, limit). A nil timestamp AND a nil
 	// id are "from the beginning" and carry no position predicate at all. One row comes back, which

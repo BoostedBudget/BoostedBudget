@@ -116,7 +116,7 @@ func expectCursorClear(mock pgxmock.PgxPoolIface) {
 func expectRepairablePage(t *testing.T, mock pgxmock.PgxPoolIface, enc *appcrypto.FieldEncryptor, cursor *backfillAccountsCursor, page []backfillPageRow) {
 	t.Helper()
 	acctType, acctSubtype := "depository", "checking"
-	rows := pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id", "type", "subtype", "is_hidden", "status", "created_at"})
+	rows := pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id", "type", "subtype", "is_hidden", "status", "nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "created_at"})
 	type pending struct{ id, userID, instBlind, uaID string }
 	var queued []pending
 	for _, r := range page {
@@ -127,7 +127,12 @@ func expectRepairablePage(t *testing.T, mock pgxmock.PgxPoolIface, enc *appcrypt
 		encInstIDPtr := &encInstID
 		// mask is NULL, so the backfill takes lookupUserAccountID's mask_blind_idx IS NULL branch,
 		// whose args are (user_id, institution_id_blind_idx, identity_type, identity_subtype).
-		rows.AddRow(r.id, userID, (*string)(nil), encInstIDPtr, &acctType, &acctSubtype, false, "active", r.createdAt)
+		// The five customization columns are NULL here: this fixture is about PAGING, and an
+		// uncustomized account is the shape that exercises carryLegacyCustomizationForward's
+		// early return (#1609). Its carrying behaviour is pinned in
+		// backfill_user_account_customization_integration_test.go against real Postgres.
+		rows.AddRow(r.id, userID, (*string)(nil), encInstIDPtr, &acctType, &acctSubtype, false, "active",
+			(*string)(nil), (*string)(nil), (*string)(nil), (*string)(nil), (*int)(nil), r.createdAt)
 		queued = append(queued, pending{
 			id:        r.id,
 			userID:    userID,
@@ -412,7 +417,7 @@ func TestBackfillAccounts_StaleWatermarkWrapsWithinTheRun(t *testing.T) {
 	// Resumed page: empty.
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT a.id, a.user_id, a.mask, li.institution_id`)).
 		WithArgs(&stored, (*string)(nil), 0, backfillAccountsPageSize).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id", "type", "subtype", "is_hidden", "status", "created_at"}))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id", "type", "subtype", "is_hidden", "status", "nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "created_at"}))
 	// The wrap: clear, then re-ask with NO position at all.
 	expectCursorClear(mock)
 	expectRepairablePage(t, mock, enc, nil, backfillPageRows(stored.Add(-24*time.Hour), 1))
