@@ -34,6 +34,14 @@ mock.module('@boostedbudget/api-client/endpoints/plaid/plaid', () => ({
 }))
 
 // Mock react-plaid-link (browser API - not available in happy-dom)
+// #1609: capture the options usePlaidLink is called with (a plain mock(), not
+// a bare arrow function) so tests can retrieve the real onExit/onSuccess
+// callbacks a component wired up and invoke them directly.
+export const mockUsePlaidLink = mock((_options: Record<string, unknown>) => ({
+  open: mock(() => {}),
+  ready: true,
+}))
+
 mock.module('react-plaid-link', () => ({
-  usePlaidLink: () => ({ open: mock(() => {}), ready: true }),
+  usePlaidLink: mockUsePlaidLink,
 }))
