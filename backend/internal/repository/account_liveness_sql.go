@@ -880,12 +880,39 @@ func accountCustomizationProjection(alias string) string {
 
 // accountHiddenExpr is the is_hidden overlay alone, for a WHERE clause.
 //
-// A predicate over a LEFT-JOINed column is safe HERE specifically because the ELSE leg
-// (`<a>.is_hidden`) is `NOT NULL DEFAULT FALSE` (migration 000024) and so is the chain's
-// (migration 000031): the expression can never be NULL, so there is no three-valued-logic trap in
-// which an unmatched join silently drops rows. That argument is about these two columns and does
-// not generalise to the other five, which are all nullable — which is why only this one has a
-// WHERE-shaped renderer.
+// A predicate over a LEFT-JOINed column risks the three-valued-logic trap where an unmatched join
+// yields NULL, `NULL = FALSE` is UNKNOWN, and the row silently disappears from every list read.
+// It is safe here, but ⚠ #1609 fix round 2 (F3) corrected WHY, because the reason this comment
+// used to give was not the real one.
+//
+// The OLD reason — both `is_hidden` columns are `NOT NULL DEFAULT FALSE` (migrations 000024 and
+// 000031), therefore the expression can never be NULL — does not follow. NOT NULL constrains the
+// value of a column IN A ROW; it says nothing about whether the LEFT JOIN finds a row at all, and
+// an unmatched LEFT JOIN synthesises NULL for every column regardless of its constraints. The
+// join (accountCustomizationJoin) matches on TWO conditions:
+//
+//	a_ua.id = a.user_account_id AND a_ua.user_id = a.user_id
+//
+// and the FK on accounts.user_account_id (migration 000033) guarantees only the FIRST — that the
+// id exists. Nothing in the schema forces the chain row's OWNER to be the account's owner. For a
+// row where they disagree the CASE takes the chain leg, finds no joined row, and evaluates to
+// SQL NULL.
+//
+// The REAL invariant is a write-path one: every writer of accounts.user_account_id is user-scoped,
+// so a row whose user_account_id points at another tenant's chain cannot be produced by this
+// application. It is an invariant maintained by code, not enforced by a constraint — so state it
+// as such rather than claiming the columns make it impossible.
+//
+// ⚠ The case it does NOT cover, named explicitly: a mismatched-tenant row reaching this predicate
+// would vanish from every list read, and with IncludeHidden=true it reaches the scanner as NULL
+// into a non-pointer bool and errors. That direction is FAIL-CLOSED (the account becomes
+// invisible) and is deliberately left alone: a defensive COALESCE here would fail OPEN, masking
+// real data corruption by rendering a row whose ownership we cannot establish. If this ever fires,
+// the row is the bug.
+//
+// The NOT NULL argument does hold for the ELSE leg (an unchained account reads its own row, which
+// is always present), and none of this generalises to the other five overlaid columns, which are
+// all nullable — which is why only this one has a WHERE-shaped renderer.
 func accountHiddenExpr(alias string) string {
 	return accountCustomizationExpr(alias, "is_hidden")
 }
