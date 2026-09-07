@@ -63,10 +63,22 @@ type UserAccountRepository interface {
 	// Scoped by (id, userID); returns ErrUserAccountNotFound if the pair matches no row.
 	UpdatePrimaryTypeAndSubtype(ctx context.Context, id, userID, primaryType, primarySubtype string) error
 
-	// UpdateHidden sets the is_hidden flag on a user account by ID.
+	// SetHiddenBySystem hides a chain because it lost its last active account, recording
+	// hidden_source = 'system' — and NEVER downgrading a cause that is already recorded, so a
+	// deliberate user hide cannot be relabelled into one a later re-link would silently lift.
 	// Scoped by (id, userID); returns ErrUserAccountNotFound if the pair matches no row,
 	// which includes the case of an id owned by a different user (issue #1566).
-	UpdateHidden(ctx context.Context, id, userID string, hidden bool) error
+	SetHiddenBySystem(ctx context.Context, id, userID string) error
+
+	// ClearHidden un-hides a chain and clears the recorded cause, which only makes sense
+	// together: a visible chain has no hide, so it can have no reason for one, and leaving a
+	// stale cause behind would let a later hide inherit somebody else's reason.
+	// Scoped by (id, userID); returns ErrUserAccountNotFound if the pair matches no row.
+	//
+	// ⚠ This is NOT the inverse of SetHiddenBySystem and must not be called to "toggle": the
+	// DECISION of whether a hide may be lifted lives in UserAccountService (only a 'system' cause
+	// is lifted automatically). This method carries it out once that decision is made.
+	ClearHidden(ctx context.Context, id, userID string) error
 }
 
 // userAccountRepository implements UserAccountRepository using PostgreSQL
@@ -207,7 +219,8 @@ func (r *userAccountRepository) GetByID(ctx context.Context, id string) (*domain
 	query := `
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE id = $1
@@ -226,6 +239,7 @@ func (r *userAccountRepository) GetByID(ctx context.Context, id string) (*domain
 		&ua.CustomEmoji,
 		&ua.DisplayOrder,
 		&ua.IsHidden,
+		&ua.HiddenSource,
 		&ua.PrimaryType,
 		&ua.PrimarySubtype,
 		&ua.IdentityType,
@@ -253,7 +267,8 @@ func (r *userAccountRepository) GetByIDAndUser(ctx context.Context, id, userID s
 	query := `
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE id = $1 AND user_id = $2
@@ -272,6 +287,7 @@ func (r *userAccountRepository) GetByIDAndUser(ctx context.Context, id, userID s
 		&ua.CustomEmoji,
 		&ua.DisplayOrder,
 		&ua.IsHidden,
+		&ua.HiddenSource,
 		&ua.PrimaryType,
 		&ua.PrimarySubtype,
 		&ua.IdentityType,
@@ -299,7 +315,8 @@ func (r *userAccountRepository) GetByUserID(ctx context.Context, userID string) 
 	query := `
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE user_id = $1
@@ -327,6 +344,7 @@ func (r *userAccountRepository) GetByUserID(ctx context.Context, userID string) 
 			&ua.CustomEmoji,
 			&ua.DisplayOrder,
 			&ua.IsHidden,
+			&ua.HiddenSource,
 			&ua.PrimaryType,
 			&ua.PrimarySubtype,
 			&ua.IdentityType,
@@ -399,7 +417,8 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 		query = `
 			SELECT id, user_id, institution_id, mask, account_name_hint,
 			       nickname, custom_color, custom_icon, custom_emoji,
-			       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+			       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+			       identity_type, identity_subtype,
 			       created_at, updated_at
 			FROM user_accounts
 			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
@@ -414,7 +433,8 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 		query = `
 			SELECT id, user_id, institution_id, mask, account_name_hint,
 			       nickname, custom_color, custom_icon, custom_emoji,
-			       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+			       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+			       identity_type, identity_subtype,
 			       created_at, updated_at
 			FROM user_accounts
 			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
@@ -439,6 +459,7 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 		&ua.CustomEmoji,
 		&ua.DisplayOrder,
 		&ua.IsHidden,
+		&ua.HiddenSource,
 		&ua.PrimaryType,
 		&ua.PrimarySubtype,
 		&ua.IdentityType,
@@ -462,13 +483,18 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 	return &ua, nil
 }
 
-// Update updates a user account's customization fields
+// Update updates a user account's customization fields.
+//
+// hidden_source travels WITH is_hidden (#1609): the pair is one fact, and the caller
+// (UserAccountService.UpdateCustomization) is responsible for keeping them consistent — a hide the
+// user sets is 'user', and clearing the hide clears the cause.
 func (r *userAccountRepository) Update(ctx context.Context, userAccount *domain.UserAccount) error {
 	query := `
 		UPDATE user_accounts
 		SET nickname = $1, custom_color = $2, custom_icon = $3,
-		    custom_emoji = $4, display_order = $5, is_hidden = $6, updated_at = $7
-		WHERE id = $8 AND user_id = $9
+		    custom_emoji = $4, display_order = $5, is_hidden = $6, hidden_source = $7,
+		    updated_at = $8
+		WHERE id = $9 AND user_id = $10
 	`
 
 	result, err := r.db.Exec(ctx, query,
@@ -478,6 +504,7 @@ func (r *userAccountRepository) Update(ctx context.Context, userAccount *domain.
 		userAccount.CustomEmoji,
 		userAccount.DisplayOrder,
 		userAccount.IsHidden,
+		userAccount.HiddenSource,
 		time.Now(),
 		userAccount.ID,
 		userAccount.UserID,
@@ -516,18 +543,58 @@ func (r *userAccountRepository) UpdatePrimaryTypeAndSubtype(ctx context.Context,
 	return nil
 }
 
-// UpdateHidden sets the is_hidden flag on a user account by ID, scoped to its owner.
+// SetHiddenBySystem hides a chain that lost its last active account, and records that the SYSTEM
+// is why it is hidden (#1609).
+//
+// ⚠ THE CAUSE IS WRITTEN MONOTONICALLY, IN SQL, NOT READ-THEN-WRITTEN. A cause that is already
+// recorded stands: a 'user' hide is never relabelled 'system' (which would let the next re-link
+// lift it — the exact defect this batch closes), and an 'unknown' one is not either, because
+// 'unknown' means the cause could not be established and a system hide arriving on an
+// already-hidden chain establishes nothing about why it was hidden BEFORE. Only a hidden row with
+// no recorded cause, or a visible row being hidden now, takes 'system'.
+//
+// Doing it in the CASE rather than in Go is what makes it race-free: two concurrent hides cannot
+// interleave a read and a write and downgrade the cause between them.
 //
 // #1566: ownership is enforced HERE, in the statement, not delegated to caller discipline. The
 // previous `WHERE id = $3` meant any caller with an unvalidated id could flip a stranger's row
 // while the cache-invalidation middleware bumped only the actor.
-func (r *userAccountRepository) UpdateHidden(ctx context.Context, id, userID string, hidden bool) error {
+func (r *userAccountRepository) SetHiddenBySystem(ctx context.Context, id, userID string) error {
 	query := `
 		UPDATE user_accounts
-		SET is_hidden = $1, updated_at = $2
+		SET is_hidden     = TRUE,
+		    hidden_source = CASE
+		        WHEN is_hidden THEN COALESCE(hidden_source, $1)
+		        ELSE $1
+		    END,
+		    updated_at    = $2
 		WHERE id = $3 AND user_id = $4
 	`
-	result, err := r.db.Exec(ctx, query, hidden, time.Now(), id, userID)
+	result, err := r.db.Exec(ctx, query, domain.HiddenSourceSystem, time.Now(), id, userID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return ErrUserAccountNotFound
+	}
+	return nil
+}
+
+// ClearHidden un-hides a chain and clears the recorded cause in the SAME statement (#1609).
+//
+// The two columns are one fact — "this chain is hidden, and here is why" — so they are never
+// written apart. A visible row carrying a stale cause would hand its reason to whatever hid the
+// row next, and the un-hide decision reads exactly that column.
+//
+// The DECISION of whether a hide may be lifted is NOT here: UserAccountService lifts only a
+// 'system' cause. See normalizeExistingUserAccount.
+func (r *userAccountRepository) ClearHidden(ctx context.Context, id, userID string) error {
+	query := `
+		UPDATE user_accounts
+		SET is_hidden = FALSE, hidden_source = NULL, updated_at = $1
+		WHERE id = $2 AND user_id = $3
+	`
+	result, err := r.db.Exec(ctx, query, time.Now(), id, userID)
 	if err != nil {
 		return err
 	}

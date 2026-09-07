@@ -8,6 +8,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/mockassert"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -65,8 +66,13 @@ func (m *MockUserAccountRepository) UpdatePrimaryTypeAndSubtype(ctx context.Cont
 	return args.Error(0)
 }
 
-func (m *MockUserAccountRepository) UpdateHidden(ctx context.Context, id, userID string, hidden bool) error {
-	args := m.Called(ctx, id, userID, hidden)
+func (m *MockUserAccountRepository) SetHiddenBySystem(ctx context.Context, id, userID string) error {
+	args := m.Called(ctx, id, userID)
+	return args.Error(0)
+}
+
+func (m *MockUserAccountRepository) ClearHidden(ctx context.Context, id, userID string) error {
+	args := m.Called(ctx, id, userID)
 	return args.Error(0)
 }
 
@@ -284,11 +290,11 @@ func TestUserAccountService_MatchOrCreate_PreservesCustomizations(t *testing.T) 
 	assert.Equal(t, 5, *result.DisplayOrder)
 	assert.False(t, result.IsHidden)
 	mockRepo.AssertExpectations(t)
-	mockRepo.AssertNotCalled(t, "UpdateHidden")
+	mockassert.NoCallTo(t, &mockRepo.Mock, "ClearHidden")
 }
 
 // TestUserAccountService_MatchOrCreate_UnhidesHiddenUserAccount tests that when a matching
-// UserAccount has IsHidden=true (set by a prior deletion), MatchOrCreate calls UpdateHidden
+// UserAccount has IsHidden=true (set by a prior deletion), MatchOrCreate calls ClearHidden
 // to un-hide it and returns the account with IsHidden=false.
 func TestUserAccountService_MatchOrCreate_UnhidesHiddenUserAccount(t *testing.T) {
 	mockRepo := new(MockUserAccountRepository)
@@ -309,12 +315,16 @@ func TestUserAccountService_MatchOrCreate_UnhidesHiddenUserAccount(t *testing.T)
 		Mask:           &mask,
 		PrimaryType:    userAccountStrPtr("depository"),
 		PrimarySubtype: userAccountStrPtr("checking"),
-		IsHidden:       true, // Previously deleted (hidden)
+		// Previously deleted, so the SYSTEM hid the chain — #1609 recorded that cause, and it is
+		// the ONLY cause a re-link lifts. A user-set hide must survive one; see
+		// user_account_hidden_source_test.go.
+		IsHidden:     true,
+		HiddenSource: userAccountStrPtr(domain.HiddenSourceSystem),
 	}
 
 	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).Return(existingUA, nil)
-	// UpdateHidden must be called to un-hide the account
-	mockRepo.On("UpdateHidden", ctx, existingUA.ID, existingUA.UserID, false).Return(nil)
+	// ClearHidden must be called to un-hide the account
+	mockRepo.On("ClearHidden", ctx, existingUA.ID, existingUA.UserID).Return(nil)
 
 	// Execute
 	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, accountName, accountType, accountSubtype)
@@ -328,9 +338,9 @@ func TestUserAccountService_MatchOrCreate_UnhidesHiddenUserAccount(t *testing.T)
 	mockRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 }
 
-// TestUserAccountService_MatchOrCreate_DoesNotCallUpdateHiddenWhenNotHidden tests that when
-// a matching UserAccount already has IsHidden=false, UpdateHidden is NOT called.
-func TestUserAccountService_MatchOrCreate_DoesNotCallUpdateHiddenWhenNotHidden(t *testing.T) {
+// TestUserAccountService_MatchOrCreate_DoesNotCallClearHiddenWhenNotHidden tests that when
+// a matching UserAccount already has IsHidden=false, ClearHidden is NOT called.
+func TestUserAccountService_MatchOrCreate_DoesNotCallClearHiddenWhenNotHidden(t *testing.T) {
 	mockRepo := new(MockUserAccountRepository)
 	service := NewUserAccountService(mockRepo)
 
@@ -350,7 +360,7 @@ func TestUserAccountService_MatchOrCreate_DoesNotCallUpdateHiddenWhenNotHidden(t
 	}
 
 	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).Return(existingUA, nil)
-	// UpdateHidden must NOT be called
+	// ClearHidden must NOT be called
 
 	// Execute
 	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, "BoA Checking", "depository", "checking")
@@ -360,13 +370,13 @@ func TestUserAccountService_MatchOrCreate_DoesNotCallUpdateHiddenWhenNotHidden(t
 	assert.NotNil(t, result)
 	assert.False(t, result.IsHidden)
 	mockRepo.AssertExpectations(t)
-	mockRepo.AssertNotCalled(t, "UpdateHidden", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockassert.NoCallTo(t, &mockRepo.Mock, "ClearHidden")
 }
 
-// TestUserAccountService_MatchOrCreate_UpdateHiddenError_StillReturnsAccountHidden tests
-// that when UpdateHidden fails during re-link, MatchOrCreate still returns the account
+// TestUserAccountService_MatchOrCreate_ClearHiddenError_StillReturnsAccountHidden tests
+// that when ClearHidden fails during re-link, MatchOrCreate still returns the account
 // without error, but IsHidden remains true (in-memory consistent with DB state).
-func TestUserAccountService_MatchOrCreate_UpdateHiddenError_StillReturnsAccountHidden(t *testing.T) {
+func TestUserAccountService_MatchOrCreate_ClearHiddenError_StillReturnsAccountHidden(t *testing.T) {
 	mockRepo := new(MockUserAccountRepository)
 	service := NewUserAccountService(mockRepo)
 
@@ -383,18 +393,19 @@ func TestUserAccountService_MatchOrCreate_UpdateHiddenError_StillReturnsAccountH
 		PrimaryType:    userAccountStrPtr("depository"),
 		PrimarySubtype: userAccountStrPtr("checking"),
 		IsHidden:       true,
+		HiddenSource:   userAccountStrPtr(domain.HiddenSourceSystem),
 	}
 
 	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).Return(existingUA, nil)
-	mockRepo.On("UpdateHidden", ctx, existingUA.ID, existingUA.UserID, false).Return(assert.AnError)
+	mockRepo.On("ClearHidden", ctx, existingUA.ID, existingUA.UserID).Return(assert.AnError)
 
 	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, "BoA Checking", "depository", "checking")
 
-	// No error propagated — UpdateHidden failure is non-fatal
+	// No error propagated — ClearHidden failure is non-fatal
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	// IsHidden remains true (DB and memory stay in sync — update failed)
-	assert.True(t, result.IsHidden, "IsHidden should stay true when UpdateHidden fails")
+	assert.True(t, result.IsHidden, "IsHidden should stay true when ClearHidden fails")
 	mockRepo.AssertExpectations(t)
 }
 
@@ -630,6 +641,7 @@ func TestMatchOrCreate_DuplicateError_RunsNormalization(t *testing.T) {
 		PrimaryType:    userAccountStrPtr("depository"), // differs from newType
 		PrimarySubtype: userAccountStrPtr("checking"),   // differs from newSubtype
 		IsHidden:       true,                            // hidden — should be un-hidden
+		HiddenSource:   userAccountStrPtr(domain.HiddenSourceSystem),
 	}
 
 	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).
@@ -639,7 +651,7 @@ func TestMatchOrCreate_DuplicateError_RunsNormalization(t *testing.T) {
 	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask, mock.Anything, mock.Anything).
 		Return(existingUA, nil).Once()
 	mockRepo.On("UpdatePrimaryTypeAndSubtype", ctx, existingUA.ID, existingUA.UserID, newType, newSubtype).Return(nil)
-	mockRepo.On("UpdateHidden", ctx, existingUA.ID, existingUA.UserID, false).Return(nil)
+	mockRepo.On("ClearHidden", ctx, existingUA.ID, existingUA.UserID).Return(nil)
 
 	// Execute
 	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, "BoA", newType, newSubtype)
@@ -650,7 +662,7 @@ func TestMatchOrCreate_DuplicateError_RunsNormalization(t *testing.T) {
 	assert.False(t, result.IsHidden, "re-found row should be un-hidden")
 	mockRepo.AssertExpectations(t)
 	mockRepo.AssertCalled(t, "UpdatePrimaryTypeAndSubtype", ctx, existingUA.ID, existingUA.UserID, newType, newSubtype)
-	mockRepo.AssertCalled(t, "UpdateHidden", ctx, existingUA.ID, existingUA.UserID, false)
+	mockRepo.AssertCalled(t, "ClearHidden", ctx, existingUA.ID, existingUA.UserID)
 }
 
 // =============================================================================
@@ -1115,17 +1127,18 @@ func TestUserAccountService_MatchOrCreate_ForeignHiddenRow_RejectsAndPropagates(
 		PrimaryType:    userAccountStrPtr("depository"),
 		PrimarySubtype: userAccountStrPtr("checking"),
 		IsHidden:       true,
+		HiddenSource:   userAccountStrPtr(domain.HiddenSourceSystem),
 	}
 
 	mockRepo.On("FindByInstitutionAndMask", ctx, actorID, institutionID, &mask, mock.Anything, mock.Anything).Return(foreignUA, nil)
 	// Scoped to the actor: the repository rejects, because the actor does not own the row.
-	mockRepo.On("UpdateHidden", ctx, foreignUA.ID, actorID, false).Return(repository.ErrUserAccountNotFound)
+	mockRepo.On("ClearHidden", ctx, foreignUA.ID, actorID).Return(repository.ErrUserAccountNotFound)
 	// Scoped to the row owner (the tautological call): the repository happily succeeds.
-	mockRepo.On("UpdateHidden", ctx, foreignUA.ID, victimID, false).Return(nil)
+	mockRepo.On("ClearHidden", ctx, foreignUA.ID, victimID).Return(nil)
 
 	result, err := service.MatchOrCreate(ctx, actorID, institutionID, &mask, "BoA Checking", "depository", "checking")
 
-	mockRepo.AssertNotCalled(t, "UpdateHidden", ctx, foreignUA.ID, victimID, false)
+	mockRepo.AssertNotCalled(t, "ClearHidden", ctx, foreignUA.ID, victimID)
 	assert.Error(t, err, "un-hiding a row the actor does not own must not succeed silently")
 	assert.ErrorIs(t, err, repository.ErrUserAccountNotFound)
 	assert.Nil(t, result, "no account should be returned for a cross-tenant match")

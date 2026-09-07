@@ -57,9 +57,40 @@ type UserAccount struct {
 	IdentityType    *string `json:"-" db:"identity_type"`
 	IdentitySubtype *string `json:"-" db:"identity_subtype"`
 
+	// HiddenSource records WHY this chain is hidden, for rows with IsHidden = true; NULL when
+	// IsHidden = false. Added by migration 000185 (#1609) because two different things hide a
+	// chain and current state cannot tell them apart: the SYSTEM hides a chain that lost its last
+	// active account, and the USER hides it via PATCH /api/v1/user-accounts/{id}. Both have zero
+	// active accounts by the time a re-link asks, so before this column normalizeExistingUserAccount
+	// un-hid BOTH — silently destroying a deliberate user hide on the next re-link.
+	//
+	// Only HiddenSourceSystem is eligible for that automatic un-hide. HiddenSourceUser is the
+	// user's own decision; HiddenSourceUnknown is 000185's conservative classification for rows it
+	// genuinely could not tell apart; and a NULL cause on a hidden row is treated the same way as
+	// unknown, for the same reason. Un-hiding an account the user hid is a privacy regression they
+	// cannot even detect, whereas leaving a system hide in place is an annoyance they can undo.
+	//
+	// json:"-" for the same reason as IdentityType above: it is not part of the API surface, and
+	// adding it to the response body would drift the checked-in openapi.yaml.
+	HiddenSource *string `json:"-" db:"hidden_source"`
+
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
+
+// The user_accounts.hidden_source vocabulary, constrained in SQL by
+// user_accounts_valid_hidden_source (migration 000185). See UserAccount.HiddenSource.
+const (
+	// HiddenSourceUser — a human hid this chain via PATCH /api/v1/user-accounts/{id}. Never
+	// un-hidden automatically.
+	HiddenSourceUser = "user"
+	// HiddenSourceSystem — hidden automatically because the chain lost its last active account,
+	// so it would otherwise linger as a ghost. The ONLY cause a re-link may un-hide.
+	HiddenSourceSystem = "system"
+	// HiddenSourceUnknown — migration 000185 could not tell the two apart. Deliberately never
+	// un-hidden automatically; do not "simplify" it into HiddenSourceSystem.
+	HiddenSourceUnknown = "unknown"
+)
 
 // Validate checks that the UserAccount has all required fields and valid values
 func (ua *UserAccount) Validate() error {
