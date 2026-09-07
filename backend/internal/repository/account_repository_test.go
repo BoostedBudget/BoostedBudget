@@ -972,7 +972,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_Active(t *testing.T) {
 
 	userID := uuid.New().String()
 
-	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status.*AND user_id").
+	mock.ExpectQuery("SELECT.*FROM accounts a.*WHERE a\\.user_account_id.*AND a\\.status.*AND a\\.user_id").
 		WithArgs(userAccountID, "active", userID).
 		WillReturnRows(rows)
 
@@ -1020,7 +1020,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_Replaced(t *testing.T) {
 
 	userID := uuid.New().String()
 
-	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status.*AND user_id").
+	mock.ExpectQuery("SELECT.*FROM accounts a.*WHERE a\\.user_account_id.*AND a\\.status.*AND a\\.user_id").
 		WithArgs(userAccountID, "replaced", userID).
 		WillReturnRows(rows)
 
@@ -1056,7 +1056,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_NotFound(t *testing.T) {
 
 	userID := uuid.New().String()
 
-	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status.*AND user_id").
+	mock.ExpectQuery("SELECT.*FROM accounts a.*WHERE a\\.user_account_id.*AND a\\.status.*AND a\\.user_id").
 		WithArgs(userAccountID, "active", userID).
 		WillReturnRows(rows)
 
@@ -1094,7 +1094,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_ScopesToUserID(t *testing.T
 	// pgxmock.WithArgs matches positionally: if the implementation dropped the user_id bind
 	// parameter (or put it in the wrong position), this expectation would not match and the
 	// query would error — that failure IS the assertion.
-	mock.ExpectQuery(`SELECT.*FROM accounts.*WHERE user_account_id = \$1 AND status = \$2 AND user_id = \$3`).
+	mock.ExpectQuery(`SELECT.*FROM accounts a.*WHERE a\.user_account_id = \$1 AND a\.status = \$2 AND a\.user_id = \$3`).
 		WithArgs(userAccountID, "active", userID).
 		WillReturnRows(rows)
 
@@ -1147,7 +1147,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_MultipleAccounts(t *testing
 		)
 
 	// When querying without status filter (nil), return all
-	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id").
+	mock.ExpectQuery("SELECT.*FROM accounts a.*WHERE a\\.user_account_id").
 		WithArgs(userAccountID).
 		WillReturnRows(rows)
 

@@ -1389,16 +1389,15 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 // comparing against AccountStatusActive would silently read every account as not-live.
 func (r *accountRepository) GetByUserAccountIDAndUser(ctx context.Context, userAccountID, userID string) (*domain.Account, error) {
 	query := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden,
-		       user_account_id, status, removed_at,
-		       created_at, updated_at
-		FROM accounts
-		WHERE user_account_id = $1 AND user_id = $2
-		ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountCustomizationProjection("a") + `,
+		       a.user_account_id, a.status, a.removed_at,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.user_account_id = $1 AND a.user_id = $2
+		ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END
 		LIMIT 1
 	`
 
@@ -1734,15 +1733,15 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 // Issue #1569 R11 T2: added the user_id predicate — see the interface doc comment.
 func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userAccountID, status, userID string) ([]domain.Account, error) {
 	query := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       user_account_id, status, replaced_at, replaced_by_id,
-		       nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden,
-		       created_at, updated_at
-		FROM accounts
-		WHERE user_account_id = $1 AND status = $2 AND user_id = $3
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       ` + accountCustomizationProjection("a") + `,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.user_account_id = $1 AND a.status = $2 AND a.user_id = $3
+		ORDER BY a.created_at ASC
 	`
 
 	rows, err := r.db.Query(ctx, query, userAccountID, status, userID)
@@ -1783,15 +1782,15 @@ func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userA
 // Issue #171: Plaid Re-Link Handling
 func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountID string) ([]domain.Account, error) {
 	query := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       user_account_id, status, replaced_at, replaced_by_id,
-		       nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden,
-		       created_at, updated_at
-		FROM accounts
-		WHERE user_account_id = $1
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       ` + accountCustomizationProjection("a") + `,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.user_account_id = $1
+		ORDER BY a.created_at ASC
 	`
 
 	rows, err := r.db.Query(ctx, query, userAccountID)
