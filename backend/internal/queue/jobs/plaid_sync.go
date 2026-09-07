@@ -151,6 +151,33 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 		}
 	}()
 
+	// Issue #1609 Item 7: release the lock BEFORE the sync, not after.
+	//
+	// This transaction exists only to take a `SELECT ... FOR UPDATE` row lock on
+	// linked_items and validate ownership; it performs no writes, and every write the
+	// sync makes goes on a DIFFERENT pool connection. Previously the commit happened
+	// after SyncTransactions returned, so this connection sat idle-in-transaction for
+	// the whole multi-page Plaid sync. Postgres eventually terminated it and the job
+	// failed at Commit with SQLSTATE 25P03 — a production DLQ entry burned all 5
+	// attempts that way, and no timeout tuning fixes it (holding a pooled connection
+	// across unbounded external HTTP exhausts the pool regardless).
+	//
+	// Committing here is safe because the lock protected less than it appeared:
+	//   - The webhook path takes NO lock at all — transactionSyncService.ProcessWebhook
+	//     does a plain GetByItemID then calls SyncTransactions directly. A webhook sync
+	//     could always run concurrently with a job sync; this lock never prevented it.
+	//   - Worker-vs-worker serialization already comes from River's job uniqueness
+	//     (ByArgs + ByState including Running — plaidSyncUniqueOpts).
+	//
+	// Pinned by TestPlaidSyncWorker_LockTxCommitsBeforeSync, which asserts ORDERING —
+	// a test that merely asserted "Commit was called" passes against the old code too.
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit transaction: %w", err)
+		}
+		tx = nil // the deferred Rollback above must not fire for a committed tx
+	}
+
 	// Perform the sync - this is fully self-contained and handles:
 	// - Cursor-based pagination until has_more=false
 	// - Creating/updating/deleting transactions
@@ -212,13 +239,8 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 		"duration_ms", time.Since(startTime).Milliseconds(),
 	)
 
-	// Commit the transaction to release the lock (if we're using locking)
-	// This must happen before enqueueing follow-up jobs to avoid holding the lock
-	if tx != nil {
-		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("failed to commit transaction: %w", err)
-		}
-	}
+	// Issue #1609 Item 7: the lock transaction was already committed above, before the
+	// sync ran. Nothing to commit here.
 
 	// Enqueue follow-up job if there were transaction changes
 	// This allows us to decouple sync from budget notifications

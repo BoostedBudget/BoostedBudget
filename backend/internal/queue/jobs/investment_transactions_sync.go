@@ -115,6 +115,20 @@ func (w *InvestmentTransactionsSyncWorker) Work(ctx context.Context, job *river.
 		}
 	}()
 
+	// Issue #1609 Item 7: release the lock BEFORE the sync, not after. This tx takes
+	// only a `SELECT ... FOR UPDATE` row lock and does no writes, so committing it after
+	// the multi-page Plaid sync left the connection idle-in-transaction until Postgres
+	// terminated it (SQLSTATE 25P03 — a production DLQ entry burned all 5 attempts).
+	// Safe because the webhook path takes no lock at all and worker-vs-worker
+	// serialization already comes from River job uniqueness. See plaid_sync.go for the
+	// full rationale; pinned by the ordering tests in issue1609_lock_tx_lifetime_test.go.
+	if tx != nil {
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			return fmt.Errorf("failed to commit transaction: %w", commitErr)
+		}
+		tx = nil // the deferred Rollback above must not fire for a committed tx
+	}
+
 	result, err := w.investmentSyncSvc.SyncInvestmentTransactions(ctx, linkedItem)
 	if err != nil {
 		var plaidErr *domain.PlaidSyncError
@@ -147,11 +161,7 @@ func (w *InvestmentTransactionsSyncWorker) Work(ctx context.Context, job *river.
 		return fmt.Errorf("investment transactions sync failed: %w", err)
 	}
 
-	if tx != nil {
-		if commitErr := tx.Commit(ctx); commitErr != nil {
-			return fmt.Errorf("failed to commit transaction: %w", commitErr)
-		}
-	}
+	// Issue #1609 Item 7: lock tx already committed above, before the sync ran.
 
 	observability.InvestmentTransactionsSyncDuration.Observe(time.Since(startTime).Seconds())
 	observability.InvestmentTransactionsSynced.WithLabelValues("inserted").Add(float64(result.TransactionsInserted))
