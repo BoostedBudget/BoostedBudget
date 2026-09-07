@@ -1181,3 +1181,117 @@ func TestUserAccountService_MatchOrCreate_ForeignRowTypeChange_RejectsAndPropaga
 	assert.ErrorIs(t, err, repository.ErrUserAccountNotFound)
 	assert.Nil(t, result, "no account should be returned for a cross-tenant match")
 }
+
+// =============================================================================
+// exclude_investment_sync (#1609 Item 5)
+// =============================================================================
+
+// TestUserAccountService_UpdateCustomization_SetsExcludeInvestmentSync pins that the per-chain
+// investment opt-out is plumbed through the same PATCH /api/v1/user-accounts/{id} path as every
+// other customization: a non-nil *bool is applied, and nothing else on the row moves.
+func TestUserAccountService_UpdateCustomization_SetsExcludeInvestmentSync(t *testing.T) {
+	mockRepo := new(MockUserAccountRepository)
+	service := NewUserAccountService(mockRepo)
+
+	ctx := context.Background()
+	userID := "user-1609"
+	uaID := "ua-1609"
+
+	existingUA := &domain.UserAccount{
+		ID:                    uaID,
+		UserID:                userID,
+		InstitutionID:         "ins_morgan_stanley",
+		IsHidden:              false,
+		ExcludeInvestmentSync: false,
+	}
+
+	exclude := true
+	req := &domain.UpdateUserAccountRequest{ExcludeInvestmentSync: &exclude}
+
+	mockRepo.On("GetByIDAndUser", ctx, uaID, userID).Return(existingUA, nil)
+	mockRepo.On("Update", ctx, mock.AnythingOfType("*domain.UserAccount")).
+		Run(func(args mock.Arguments) {
+			ua := args.Get(1).(*domain.UserAccount)
+			assert.True(t, ua.ExcludeInvestmentSync,
+				"the flag the user just set must reach the repository")
+			assert.False(t, ua.IsHidden,
+				"excluding the duplicate investment feed must not hide the account itself — "+
+					"they are different user intents")
+		}).Return(nil)
+
+	result, err := service.UpdateCustomization(ctx, uaID, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.True(t, result.ExcludeInvestmentSync)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestUserAccountService_UpdateCustomization_ClearsExcludeInvestmentSync is the reversibility half
+// at the API level: the flag is a read filter, so turning it off is a first-class operation and
+// must not be one-way.
+func TestUserAccountService_UpdateCustomization_ClearsExcludeInvestmentSync(t *testing.T) {
+	mockRepo := new(MockUserAccountRepository)
+	service := NewUserAccountService(mockRepo)
+
+	ctx := context.Background()
+	userID := "user-1609"
+	uaID := "ua-1609"
+
+	existingUA := &domain.UserAccount{
+		ID:                    uaID,
+		UserID:                userID,
+		InstitutionID:         "ins_morgan_stanley",
+		ExcludeInvestmentSync: true,
+	}
+
+	exclude := false
+	req := &domain.UpdateUserAccountRequest{ExcludeInvestmentSync: &exclude}
+
+	mockRepo.On("GetByIDAndUser", ctx, uaID, userID).Return(existingUA, nil)
+	mockRepo.On("Update", ctx, mock.AnythingOfType("*domain.UserAccount")).
+		Run(func(args mock.Arguments) {
+			assert.False(t, args.Get(1).(*domain.UserAccount).ExcludeInvestmentSync)
+		}).Return(nil)
+
+	result, err := service.UpdateCustomization(ctx, uaID, userID, req)
+
+	assert.NoError(t, err)
+	assert.False(t, result.ExcludeInvestmentSync)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestUserAccountService_UpdateCustomization_OmittedExcludeInvestmentSyncIsNoChange pins the nil
+// contract shared by every field on this request: an unrelated PATCH (renaming the account, say)
+// must not silently un-exclude a chain the user deliberately excluded.
+func TestUserAccountService_UpdateCustomization_OmittedExcludeInvestmentSyncIsNoChange(t *testing.T) {
+	mockRepo := new(MockUserAccountRepository)
+	service := NewUserAccountService(mockRepo)
+
+	ctx := context.Background()
+	userID := "user-1609"
+	uaID := "ua-1609"
+
+	existingUA := &domain.UserAccount{
+		ID:                    uaID,
+		UserID:                userID,
+		InstitutionID:         "ins_morgan_stanley",
+		ExcludeInvestmentSync: true,
+	}
+
+	newNickname := "Platinum CashPlus"
+	req := &domain.UpdateUserAccountRequest{Nickname: &newNickname}
+
+	mockRepo.On("GetByIDAndUser", ctx, uaID, userID).Return(existingUA, nil)
+	mockRepo.On("Update", ctx, mock.AnythingOfType("*domain.UserAccount")).
+		Run(func(args mock.Arguments) {
+			assert.True(t, args.Get(1).(*domain.UserAccount).ExcludeInvestmentSync,
+				"a PATCH that says nothing about exclude_investment_sync must leave it alone")
+		}).Return(nil)
+
+	result, err := service.UpdateCustomization(ctx, uaID, userID, req)
+
+	assert.NoError(t, err)
+	assert.True(t, result.ExcludeInvestmentSync)
+	mockRepo.AssertExpectations(t)
+}

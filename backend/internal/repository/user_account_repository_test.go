@@ -146,12 +146,12 @@ func TestUserAccountRepository_GetByID_Success(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "exclude_investment_sync", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	}).AddRow(
 		userAccountID, userID, "ins_chase", strPtr("1234"), strPtr("Chase Checking"),
 		strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), strPtr("💰"),
-		&order, false, nil, strPtr("depository"), strPtr("checking"),
+		&order, false, nil, false, strPtr("depository"), strPtr("checking"),
 		strPtr("depository"), strPtr("checking"),
 		now, now,
 	)
@@ -159,7 +159,8 @@ func TestUserAccountRepository_GetByID_Success(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
@@ -196,7 +197,8 @@ func TestUserAccountRepository_GetByID_NotFound(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
@@ -225,20 +227,20 @@ func TestUserAccountRepository_GetByUserID_Success(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "exclude_investment_sync", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	}).
 		AddRow(
 			uuid.New().String(), userID, "ins_chase", strPtr("1234"), strPtr("Chase Checking"),
 			strPtr("Checking"), nil, nil, nil,
-			&order1, false, nil, strPtr("depository"), strPtr("checking"),
+			&order1, false, nil, false, strPtr("depository"), strPtr("checking"),
 			nil, nil,
 			now, now,
 		).
 		AddRow(
 			uuid.New().String(), userID, "ins_chase", strPtr("5678"), strPtr("Chase Savings"),
 			strPtr("Savings"), nil, nil, nil,
-			&order2, false, nil, strPtr("depository"), strPtr("savings"),
+			&order2, false, nil, false, strPtr("depository"), strPtr("savings"),
 			nil, nil,
 			now, now,
 		)
@@ -246,7 +248,8 @@ func TestUserAccountRepository_GetByUserID_Success(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
@@ -276,14 +279,15 @@ func TestUserAccountRepository_GetByUserID_Empty(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "exclude_investment_sync", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
@@ -325,8 +329,9 @@ func TestUserAccountRepository_Update_Success(t *testing.T) {
 		UPDATE user_accounts
 		SET nickname = $1, custom_color = $2, custom_icon = $3,
 		    custom_emoji = $4, display_order = $5, is_hidden = $6, hidden_source = $7,
-		    updated_at = $8
-		WHERE id = $9 AND user_id = $10
+		    exclude_investment_sync = $8,
+		    updated_at = $9
+		WHERE id = $10 AND user_id = $11
 	`)).WithArgs(
 		userAccount.Nickname,
 		userAccount.CustomColor,
@@ -335,6 +340,7 @@ func TestUserAccountRepository_Update_Success(t *testing.T) {
 		userAccount.DisplayOrder,
 		userAccount.IsHidden,
 		userAccount.HiddenSource,
+		userAccount.ExcludeInvestmentSync,
 		pgxmock.AnyArg(), // updated_at
 		userAccountID,
 		userID,
@@ -367,8 +373,9 @@ func TestUserAccountRepository_Update_NotFound(t *testing.T) {
 		UPDATE user_accounts
 		SET nickname = $1, custom_color = $2, custom_icon = $3,
 		    custom_emoji = $4, display_order = $5, is_hidden = $6, hidden_source = $7,
-		    updated_at = $8
-		WHERE id = $9 AND user_id = $10
+		    exclude_investment_sync = $8,
+		    updated_at = $9
+		WHERE id = $10 AND user_id = $11
 	`)).WithArgs(
 		userAccount.Nickname,
 		userAccount.CustomColor,
@@ -377,6 +384,7 @@ func TestUserAccountRepository_Update_NotFound(t *testing.T) {
 		userAccount.DisplayOrder,
 		userAccount.IsHidden,
 		userAccount.HiddenSource,
+		userAccount.ExcludeInvestmentSync,
 		pgxmock.AnyArg(),
 		userAccountID,
 		userID,
@@ -409,12 +417,12 @@ func TestUserAccountRepository_FindByInstitutionAndMask_ExactMatch(t *testing.T)
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "exclude_investment_sync", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, institutionID, strPtr(mask), strPtr("Chase Checking"),
 		strPtr("My Checking"), nil, nil, nil,
-		&order, false, nil, strPtr("depository"), strPtr("checking"),
+		&order, false, nil, false, strPtr("depository"), strPtr("checking"),
 		nil, nil,
 		now, now,
 	)
@@ -422,7 +430,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_ExactMatch(t *testing.T)
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
@@ -455,7 +464,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NoMatch_DifferentInstitu
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
@@ -486,7 +496,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NoMatch_DifferentMask(t 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
@@ -517,7 +528,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NullMask(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
@@ -548,12 +560,12 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NullMask_Match(t *testin
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "exclude_investment_sync", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, institutionID, nil, strPtr("Manual Account"),
 		strPtr("My Manual"), nil, nil, nil,
-		nil, false, nil, nil, nil,
+		nil, false, nil, false, nil, nil,
 		nil, nil,
 		now, now,
 	)
@@ -561,7 +573,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NullMask_Match(t *testin
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
@@ -598,12 +611,12 @@ func TestUserAccountRepository_FindByInstitutionAndMask_Deterministic_NonNullMas
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "exclude_investment_sync", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, institutionID, strPtr(mask), strPtr("Chase Checking"),
 		strPtr("My Checking"), nil, nil, nil,
-		&order, false, nil, strPtr("depository"), strPtr("checking"),
+		&order, false, nil, false, strPtr("depository"), strPtr("checking"),
 		nil, nil,
 		now, now,
 	)
@@ -612,7 +625,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_Deterministic_NonNullMas
 	mock.ExpectQuery(regexp.QuoteMeta(`
 			SELECT id, user_id, institution_id, mask, account_name_hint,
 			       nickname, custom_color, custom_icon, custom_emoji,
-			       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+			       display_order, is_hidden, hidden_source, exclude_investment_sync,
+			       primary_type, primary_subtype,
 			       identity_type, identity_subtype,
 			       created_at, updated_at
 			FROM user_accounts
@@ -645,12 +659,12 @@ func TestUserAccountRepository_FindByInstitutionAndMask_Deterministic_NullMask(t
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "exclude_investment_sync", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, institutionID, nil, strPtr("Manual Account"),
 		strPtr("My Manual"), nil, nil, nil,
-		nil, false, nil, nil, nil,
+		nil, false, nil, false, nil, nil,
 		nil, nil,
 		now, now,
 	)
@@ -659,7 +673,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_Deterministic_NullMask(t
 	mock.ExpectQuery(regexp.QuoteMeta(`
 			SELECT id, user_id, institution_id, mask, account_name_hint,
 			       nickname, custom_color, custom_icon, custom_emoji,
-			       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+			       display_order, is_hidden, hidden_source, exclude_investment_sync,
+			       primary_type, primary_subtype,
 			       identity_type, identity_subtype,
 			       created_at, updated_at
 			FROM user_accounts
@@ -769,7 +784,8 @@ func TestUserAccountRepository_GetByID_DatabaseError(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
@@ -803,12 +819,12 @@ func TestUserAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "exclude_investment_sync", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	}).AddRow(
 		userAccountID, userID, "ins_chase", strPtr("1234"), strPtr("Chase Checking"),
 		nil, nil, nil, nil,
-		nil, false, nil, strPtr("depository"), strPtr("checking"),
+		nil, false, nil, false, strPtr("depository"), strPtr("checking"),
 		nil, nil,
 		now, now,
 	)
@@ -816,7 +832,8 @@ func TestUserAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
@@ -845,7 +862,8 @@ func TestUserAccountRepository_GetByIDAndUser_NotOwner(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts

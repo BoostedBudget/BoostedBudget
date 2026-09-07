@@ -299,6 +299,14 @@ func (s *userAccountService) UpdateCustomization(
 		}
 	}
 
+	if req.ExcludeInvestmentSync != nil {
+		// A plain assignment, with no companion state to keep in step — unlike IsHidden above,
+		// which carries a cause. The flag is a read filter over investment_transactions (#1609
+		// Item 5): nothing is deleted or suppressed at ingestion, so there is nothing to
+		// reconcile and clearing it restores exactly the rows it hid.
+		existing.ExcludeInvestmentSync = *req.ExcludeInvestmentSync
+	}
+
 	// Step 3: Validate the updated account
 	if err := existing.Validate(); err != nil {
 		return nil, fmt.Errorf("validation error: %w", err)

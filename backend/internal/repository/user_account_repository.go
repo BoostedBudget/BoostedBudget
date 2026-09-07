@@ -219,7 +219,8 @@ func (r *userAccountRepository) GetByID(ctx context.Context, id string) (*domain
 	query := `
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
@@ -240,6 +241,7 @@ func (r *userAccountRepository) GetByID(ctx context.Context, id string) (*domain
 		&ua.DisplayOrder,
 		&ua.IsHidden,
 		&ua.HiddenSource,
+		&ua.ExcludeInvestmentSync,
 		&ua.PrimaryType,
 		&ua.PrimarySubtype,
 		&ua.IdentityType,
@@ -267,7 +269,8 @@ func (r *userAccountRepository) GetByIDAndUser(ctx context.Context, id, userID s
 	query := `
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
@@ -288,6 +291,7 @@ func (r *userAccountRepository) GetByIDAndUser(ctx context.Context, id, userID s
 		&ua.DisplayOrder,
 		&ua.IsHidden,
 		&ua.HiddenSource,
+		&ua.ExcludeInvestmentSync,
 		&ua.PrimaryType,
 		&ua.PrimarySubtype,
 		&ua.IdentityType,
@@ -315,7 +319,8 @@ func (r *userAccountRepository) GetByUserID(ctx context.Context, userID string) 
 	query := `
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
@@ -345,6 +350,7 @@ func (r *userAccountRepository) GetByUserID(ctx context.Context, userID string) 
 			&ua.DisplayOrder,
 			&ua.IsHidden,
 			&ua.HiddenSource,
+			&ua.ExcludeInvestmentSync,
 			&ua.PrimaryType,
 			&ua.PrimarySubtype,
 			&ua.IdentityType,
@@ -417,7 +423,8 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 		query = `
 			SELECT id, user_id, institution_id, mask, account_name_hint,
 			       nickname, custom_color, custom_icon, custom_emoji,
-			       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+			       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 			       identity_type, identity_subtype,
 			       created_at, updated_at
 			FROM user_accounts
@@ -433,7 +440,8 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 		query = `
 			SELECT id, user_id, institution_id, mask, account_name_hint,
 			       nickname, custom_color, custom_icon, custom_emoji,
-			       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+			       display_order, is_hidden, hidden_source, exclude_investment_sync,
+		       primary_type, primary_subtype,
 			       identity_type, identity_subtype,
 			       created_at, updated_at
 			FROM user_accounts
@@ -460,6 +468,7 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 		&ua.DisplayOrder,
 		&ua.IsHidden,
 		&ua.HiddenSource,
+		&ua.ExcludeInvestmentSync,
 		&ua.PrimaryType,
 		&ua.PrimarySubtype,
 		&ua.IdentityType,
@@ -493,8 +502,9 @@ func (r *userAccountRepository) Update(ctx context.Context, userAccount *domain.
 		UPDATE user_accounts
 		SET nickname = $1, custom_color = $2, custom_icon = $3,
 		    custom_emoji = $4, display_order = $5, is_hidden = $6, hidden_source = $7,
-		    updated_at = $8
-		WHERE id = $9 AND user_id = $10
+		    exclude_investment_sync = $8,
+		    updated_at = $9
+		WHERE id = $10 AND user_id = $11
 	`
 
 	result, err := r.db.Exec(ctx, query,
@@ -505,6 +515,7 @@ func (r *userAccountRepository) Update(ctx context.Context, userAccount *domain.
 		userAccount.DisplayOrder,
 		userAccount.IsHidden,
 		userAccount.HiddenSource,
+		userAccount.ExcludeInvestmentSync,
 		time.Now(),
 		userAccount.ID,
 		userAccount.UserID,

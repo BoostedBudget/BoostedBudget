@@ -18,8 +18,8 @@ import (
 type UserAccount struct {
 	ID              string  `json:"id" db:"id"`
 	UserID          string  `json:"user_id" db:"user_id"`
-	InstitutionID   string  `json:"institution_id" db:"institution_id"`         // Plaid institution ID (stable)
-	Mask            *string `json:"mask,omitempty" db:"mask"`                   // Last 4 digits (stable)
+	InstitutionID   string  `json:"institution_id" db:"institution_id"`                 // Plaid institution ID (stable)
+	Mask            *string `json:"mask,omitempty" db:"mask"`                           // Last 4 digits (stable)
 	AccountNameHint *string `json:"account_name_hint,omitempty" db:"account_name_hint"` // Original name
 
 	// User customization (stable across re-links)
@@ -29,6 +29,23 @@ type UserAccount struct {
 	CustomEmoji  *string `json:"custom_emoji,omitempty" db:"custom_emoji"`   // UTF-8 emoji
 	DisplayOrder *int    `json:"display_order,omitempty" db:"display_order"` // Sort order
 	IsHidden     bool    `json:"is_hidden" db:"is_hidden"`                   // Hide from default views
+
+	// ExcludeInvestmentSync hides this chain's investment_transactions from BOTH read surfaces —
+	// the unified activity feed and GET /api/v1/investments/investment-transactions (#1609 Item 5,
+	// migration 000187). It exists for a brokerage cash-management account that Plaid reports
+	// through BOTH /transactions/sync and /investments/transactions/get, which otherwise shows
+	// every real movement twice.
+	//
+	// ⚠ It is a READ FILTER AND NOTHING ELSE. No investment_transactions row is deleted,
+	// tombstoned, or suppressed at ingestion, so clearing the flag makes exactly the same rows
+	// reappear. Destroying them because a user reclassified an account would be side-effect
+	// destruction (docs/decisions/2026-08-24-financial-history-retained-by-default.md), and the
+	// reversibility is the reason no backfill or cleanup script exists: turning the flag on IS the
+	// cleanup.
+	//
+	// It lives on the chain rather than on accounts so it survives a Plaid re-link, for the same
+	// reason every other customization above does.
+	ExcludeInvestmentSync bool `json:"exclude_investment_sync" db:"exclude_investment_sync"`
 
 	// Account type info (from most recent Plaid account)
 	PrimaryType    *string `json:"primary_type,omitempty" db:"primary_type"`       // depository, credit, etc.
@@ -154,6 +171,11 @@ type UpdateUserAccountRequest struct {
 	CustomEmoji  *string `json:"custom_emoji"`  // nil = no change, empty string = clear
 	DisplayOrder *int    `json:"display_order"` // nil = no change
 	IsHidden     *bool   `json:"is_hidden"`     // nil = no change
+
+	// ExcludeInvestmentSync — nil = no change. See UserAccount.ExcludeInvestmentSync: a read
+	// filter for a brokerage account Plaid reports on both product endpoints (#1609 Item 5).
+	// Fully reversible; setting it back to false restores every hidden row.
+	ExcludeInvestmentSync *bool `json:"exclude_investment_sync"`
 }
 
 // Validate validates the UpdateUserAccountRequest
