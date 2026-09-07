@@ -379,7 +379,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
 		WHERE a.user_id = $1 AND a.status = 'active'
-		ORDER BY a.created_at ASC
+		ORDER BY a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -437,7 +437,7 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
 		WHERE a.user_id = $1 AND a.status = 'active'
-		ORDER BY a.created_at ASC
+		ORDER BY a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -489,7 +489,7 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
 		WHERE a.user_id = $1 AND a.status = 'active'
-		ORDER BY a.created_at ASC
+		ORDER BY a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -886,7 +886,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
-		WHERE a.user_id = $1 AND a.status = 'active' AND ` + accountHiddenExpr("a") + ` = FALSE ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC
+		WHERE a.user_id = $1 AND a.status = 'active' AND ` + accountHiddenExpr("a") + ` = FALSE ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -958,7 +958,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
-		WHERE a.user_id = $1 AND a.status = 'active' ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC
+		WHERE a.user_id = $1 AND a.status = 'active' ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -1684,7 +1684,7 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesReplaced(t *testin
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
 		WHERE a.user_id = $1 AND a.status = 'active'
-		ORDER BY a.created_at ASC
+		ORDER BY a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -1890,7 +1890,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
-		WHERE a.user_id = $1 AND a.status IN ('active', 'replaced') AND ` + accountHiddenExpr("a") + ` = FALSE ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC
+		WHERE a.user_id = $1 AND a.status IN ('active', 'replaced') AND ` + accountHiddenExpr("a") + ` = FALSE ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -1956,7 +1956,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
-		WHERE a.user_id = $1 AND a.status = 'active' AND ` + accountHiddenExpr("a") + ` = FALSE ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC
+		WHERE a.user_id = $1 AND a.status = 'active' AND ` + accountHiddenExpr("a") + ` = FALSE ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
