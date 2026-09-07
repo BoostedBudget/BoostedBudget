@@ -55,7 +55,24 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Bulk updates display_order for multiple accounts."
+      "description": "Bulk updates display_order for multiple accounts.",
+      "requestBody": [
+        {
+          "name": "account_orders",
+          "type": "array of object",
+          "required": true
+        },
+        {
+          "name": "account_orders[].account_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "account_orders[].display_order",
+          "type": "integer",
+          "required": true
+        }
+      ]
     },
     {
       "operationId": "updateAccount",
@@ -75,6 +92,38 @@
           "required": true,
           "description": "Account ID",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "custom_color",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "custom_emoji",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "custom_icon",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "display_order",
+          "type": "integer",
+          "required": true
+        },
+        {
+          "name": "is_hidden",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "name": "nickname",
+          "type": "string",
+          "required": true
         }
       ]
     },
@@ -238,7 +287,36 @@
         "Admin"
       ],
       "manifestClass": "destructive",
-      "excluded": true
+      "excluded": true,
+      "requestBody": [
+        {
+          "name": "end_date",
+          "type": "string",
+          "description": "Inclusive upper bound on failed_at (YYYY-MM-DD)"
+        },
+        {
+          "name": "expected_count",
+          "type": "integer",
+          "description": "Exact number of rows the caller expects to delete; required when the match exceeds the unconfirmed ceiling"
+        },
+        {
+          "name": "kind",
+          "type": "string"
+        },
+        {
+          "name": "retried",
+          "type": "boolean"
+        },
+        {
+          "name": "start_date",
+          "type": "string",
+          "description": "Inclusive lower bound on failed_at (YYYY-MM-DD)"
+        },
+        {
+          "name": "user_id",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getAdminDeadLetterJobStats",
@@ -293,7 +371,15 @@
         "Admin"
       ],
       "manifestClass": "write",
-      "excluded": true
+      "excluded": true,
+      "requestBody": [
+        {
+          "name": "notes",
+          "type": "string",
+          "required": true,
+          "description": "Admin notes for this dead letter job"
+        }
+      ]
     },
     {
       "operationId": "retryAdminDeadLetterJob",
@@ -342,7 +428,21 @@
       ],
       "manifestClass": "write",
       "excluded": true,
-      "description": "Fires a Plaid webhook for testing. Requires Clerk authentication and admin authorization. Reachable in every environment, but only functions when PLAID_ENV=sandbox; it returns an error otherwise."
+      "description": "Fires a Plaid webhook for testing. Requires Clerk authentication and admin authorization. Reachable in every environment, but only functions when PLAID_ENV=sandbox; it returns an error otherwise.",
+      "requestBody": [
+        {
+          "name": "item_id",
+          "type": "string",
+          "required": true,
+          "description": "The Plaid item ID (UUID)"
+        },
+        {
+          "name": "webhook_code",
+          "type": "string",
+          "required": true,
+          "description": "The webhook code to fire"
+        }
+      ]
     },
     {
       "operationId": "listAdminPlaidOrphanedItems",
@@ -388,6 +488,14 @@
           "required": true,
           "description": "plaid_orphaned_items.id of the record being attested",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "note",
+          "type": "string",
+          "required": true,
+          "description": "What you did at Plaid, in your own words. Recorded verbatim against your admin identity and shown on the orphaned-Items surface; it is the only way anyone can check this claim later."
         }
       ]
     },
@@ -568,6 +676,29 @@
           "description": "ID of the user to override",
           "type": "string"
         }
+      ],
+      "requestBody": [
+        {
+          "name": "limit_value",
+          "type": "integer",
+          "required": true,
+          "description": "The new limit value (-1 for unlimited)"
+        },
+        {
+          "name": "reason",
+          "type": "string",
+          "required": true,
+          "description": "Reason for the override"
+        },
+        {
+          "name": "resource_type",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "transaction_history_days"
+          ],
+          "description": "The resource type to override"
+        }
       ]
     },
     {
@@ -589,6 +720,33 @@
           "description": "ID of the user to update",
           "type": "string"
         }
+      ],
+      "requestBody": [
+        {
+          "name": "expires_at",
+          "type": "string",
+          "required": true,
+          "description": "Optional expiration date for the manual override"
+        },
+        {
+          "name": "reason",
+          "type": "string",
+          "required": true,
+          "description": "Reason for the manual tier override"
+        },
+        {
+          "name": "tier",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "premium",
+            "household_2",
+            "household_3",
+            "household_4",
+            "household_5"
+          ],
+          "description": "The subscription tier to set"
+        }
       ]
     },
     {
@@ -609,6 +767,14 @@
           "required": true,
           "description": "ID of the user whose manual tier override should be cleared",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "reason",
+          "type": "string",
+          "required": true,
+          "description": "Reason for removing the manual tier override"
         }
       ]
     },
@@ -1491,7 +1657,72 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Creates a new categorization rule for the authenticated user."
+      "description": "Creates a new categorization rule for the authenticated user.",
+      "requestBody": [
+        {
+          "name": "condition_logic",
+          "type": "string"
+        },
+        {
+          "name": "conditions",
+          "type": "array of object",
+          "required": true
+        },
+        {
+          "name": "conditions[].operator",
+          "type": "string"
+        },
+        {
+          "name": "conditions[].type",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "conditions[].value",
+          "required": true
+        },
+        {
+          "name": "conditions[].value_display",
+          "type": "string"
+        },
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "priority",
+          "type": "integer"
+        },
+        {
+          "name": "tag_behavior",
+          "type": "string"
+        },
+        {
+          "name": "target_custom_category_id",
+          "type": "string"
+        },
+        {
+          "name": "target_kind",
+          "type": "string"
+        },
+        {
+          "name": "target_pfc_detailed",
+          "type": "string"
+        },
+        {
+          "name": "target_pfc_primary",
+          "type": "string"
+        },
+        {
+          "name": "target_tags",
+          "type": "array of string"
+        }
+      ]
     },
     {
       "operationId": "getRuleByID",
@@ -1532,6 +1763,73 @@
           "required": true,
           "description": "Rule UUID",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "condition_logic",
+          "type": "string"
+        },
+        {
+          "name": "conditions",
+          "type": "array of object"
+        },
+        {
+          "name": "conditions[].operator",
+          "type": "string"
+        },
+        {
+          "name": "conditions[].type",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "conditions[].value",
+          "required": true
+        },
+        {
+          "name": "conditions[].value_display",
+          "type": "string"
+        },
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "enabled",
+          "type": "boolean"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "priority",
+          "type": "integer"
+        },
+        {
+          "name": "tag_behavior",
+          "type": "string"
+        },
+        {
+          "name": "target_custom_category_id",
+          "type": "string"
+        },
+        {
+          "name": "target_kind",
+          "type": "string"
+        },
+        {
+          "name": "target_pfc_detailed",
+          "type": "string"
+        },
+        {
+          "name": "target_pfc_primary",
+          "type": "string"
+        },
+        {
+          "name": "target_tags",
+          "type": "array of string"
         }
       ]
     },
@@ -1574,6 +1872,13 @@
           "required": true,
           "description": "Rule UUID",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "enabled",
+          "type": "boolean",
+          "required": true
         }
       ]
     },
@@ -1639,7 +1944,87 @@
       ],
       "manifestClass": "write",
       "excluded": true,
-      "description": "Creates a new boost for the authenticated user."
+      "description": "Creates a new boost for the authenticated user.",
+      "requestBody": [
+        {
+          "name": "actions",
+          "required": true
+        },
+        {
+          "name": "boost_type",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "condition_logic",
+          "type": "string"
+        },
+        {
+          "name": "conditions",
+          "type": "array of object"
+        },
+        {
+          "name": "conditions[].budget_id",
+          "type": "string"
+        },
+        {
+          "name": "conditions[].category_id",
+          "type": "string"
+        },
+        {
+          "name": "conditions[].field",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "conditions[].operator",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "conditions[].value",
+          "required": true
+        },
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "priority",
+          "type": "integer"
+        },
+        {
+          "name": "trigger_config",
+          "type": "object",
+          "required": true
+        },
+        {
+          "name": "trigger_config.cron",
+          "type": "string"
+        },
+        {
+          "name": "trigger_config.event",
+          "type": "string"
+        },
+        {
+          "name": "trigger_config.filters",
+          "type": "object"
+        },
+        {
+          "name": "trigger_config.timezone",
+          "type": "string"
+        },
+        {
+          "name": "trigger_config.type",
+          "type": "string",
+          "required": true
+        }
+      ]
     },
     {
       "operationId": "getBoostByID",
@@ -1680,6 +2065,82 @@
           "required": true,
           "description": "Automation Boost UUID",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "actions"
+        },
+        {
+          "name": "condition_logic",
+          "type": "string"
+        },
+        {
+          "name": "conditions",
+          "type": "array of object"
+        },
+        {
+          "name": "conditions[].budget_id",
+          "type": "string"
+        },
+        {
+          "name": "conditions[].category_id",
+          "type": "string"
+        },
+        {
+          "name": "conditions[].field",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "conditions[].operator",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "conditions[].value",
+          "required": true
+        },
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "enabled",
+          "type": "boolean"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "priority",
+          "type": "integer"
+        },
+        {
+          "name": "trigger_config",
+          "type": "object"
+        },
+        {
+          "name": "trigger_config.cron",
+          "type": "string"
+        },
+        {
+          "name": "trigger_config.event",
+          "type": "string"
+        },
+        {
+          "name": "trigger_config.filters",
+          "type": "object"
+        },
+        {
+          "name": "trigger_config.timezone",
+          "type": "string"
+        },
+        {
+          "name": "trigger_config.type",
+          "type": "string",
+          "required": true
         }
       ]
     },
@@ -1804,6 +2265,13 @@
           "description": "Automation Boost UUID",
           "type": "string"
         }
+      ],
+      "requestBody": [
+        {
+          "name": "trigger_data",
+          "type": "object",
+          "description": "Optional test data to evaluate conditions against"
+        }
       ]
     },
     {
@@ -1825,6 +2293,14 @@
           "description": "Automation Boost UUID",
           "type": "string"
         }
+      ],
+      "requestBody": [
+        {
+          "name": "enabled",
+          "type": "boolean",
+          "required": true,
+          "description": "Whether the boost should be enabled"
+        }
       ]
     },
     {
@@ -1845,6 +2321,13 @@
           "required": true,
           "description": "Automation Boost UUID",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "trigger_data",
+          "type": "object",
+          "description": "Optional data to pass to the boost execution"
         }
       ]
     },
@@ -1870,7 +2353,113 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Creates a new budget for the authenticated user."
+      "description": "Creates a new budget for the authenticated user.",
+      "requestBody": [
+        {
+          "name": "amount",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "categories",
+          "type": "array of object"
+        },
+        {
+          "name": "categories[].allocated_amount",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "categories[].category_kind",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "categories[].custom_category_id",
+          "type": "string"
+        },
+        {
+          "name": "categories[].match_logic",
+          "type": "string"
+        },
+        {
+          "name": "categories[].pfc_detailed",
+          "type": "string"
+        },
+        {
+          "name": "categories[].pfc_primary",
+          "type": "string"
+        },
+        {
+          "name": "categories[].savings_goal_id",
+          "type": "string"
+        },
+        {
+          "name": "categories[].tags",
+          "type": "array of string"
+        },
+        {
+          "name": "currency_code",
+          "type": "string"
+        },
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "type": "string"
+        },
+        {
+          "name": "expected_income",
+          "type": "number"
+        },
+        {
+          "name": "from_budget_id",
+          "type": "string"
+        },
+        {
+          "name": "income_amount",
+          "type": "number"
+        },
+        {
+          "name": "income_sources",
+          "type": "array of object"
+        },
+        {
+          "name": "income_sources[].description",
+          "type": "string"
+        },
+        {
+          "name": "income_sources[].type",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "income_sources[].value",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "income_sources[].value_display",
+          "type": "string"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "period",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "start_date",
+          "type": "string",
+          "required": true
+        }
+      ]
     },
     {
       "operationId": "getAvailableCategories",
@@ -1894,7 +2483,45 @@
       ],
       "manifestClass": "read",
       "excluded": false,
-      "description": "Returns the count and total amount of transactions matching the given category configuration within the date range."
+      "description": "Returns the count and total amount of transactions matching the given category configuration within the date range.",
+      "requestBody": [
+        {
+          "name": "category_kind",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "custom_category_id",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "match_logic",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "pfc_detailed",
+          "type": "string"
+        },
+        {
+          "name": "pfc_primary",
+          "type": "string"
+        },
+        {
+          "name": "start_date",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "tags",
+          "type": "array of string"
+        }
+      ]
     },
     {
       "operationId": "getCurrentBudget",
@@ -1948,6 +2575,66 @@
           "description": "Budget ID",
           "type": "string"
         }
+      ],
+      "requestBody": [
+        {
+          "name": "amount",
+          "type": "number"
+        },
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "type": "string"
+        },
+        {
+          "name": "expected_income",
+          "type": "number"
+        },
+        {
+          "name": "income_amount",
+          "type": "number"
+        },
+        {
+          "name": "income_sources",
+          "type": "array of object"
+        },
+        {
+          "name": "income_sources[].description",
+          "type": "string"
+        },
+        {
+          "name": "income_sources[].type",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "income_sources[].value",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "income_sources[].value_display",
+          "type": "string"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "period",
+          "type": "string"
+        },
+        {
+          "name": "start_date",
+          "type": "string"
+        }
       ]
     },
     {
@@ -1990,6 +2677,42 @@
           "description": "Budget ID",
           "type": "string"
         }
+      ],
+      "requestBody": [
+        {
+          "name": "allocated_amount",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "category_kind",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "custom_category_id",
+          "type": "string"
+        },
+        {
+          "name": "match_logic",
+          "type": "string"
+        },
+        {
+          "name": "pfc_detailed",
+          "type": "string"
+        },
+        {
+          "name": "pfc_primary",
+          "type": "string"
+        },
+        {
+          "name": "savings_goal_id",
+          "type": "string"
+        },
+        {
+          "name": "tags",
+          "type": "array of string"
+        }
       ]
     },
     {
@@ -2017,6 +2740,20 @@
           "required": true,
           "description": "Category ID",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "allocated_amount",
+          "type": "number"
+        },
+        {
+          "name": "match_logic",
+          "type": "string"
+        },
+        {
+          "name": "tags",
+          "type": "array of string"
         }
       ]
     },
@@ -2131,7 +2868,30 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Creates a new custom category for the authenticated user."
+      "description": "Creates a new custom category for the authenticated user.",
+      "requestBody": [
+        {
+          "name": "color",
+          "type": "string"
+        },
+        {
+          "name": "icon",
+          "type": "string"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "parent_id",
+          "type": "string"
+        },
+        {
+          "name": "parent_pfc_primary",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getPlaidCategories",
@@ -2207,6 +2967,28 @@
           "in": "path",
           "required": true,
           "description": "Category UUID",
+          "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "color",
+          "type": "string"
+        },
+        {
+          "name": "icon",
+          "type": "string"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "parent_id",
+          "type": "string"
+        },
+        {
+          "name": "parent_pfc_primary",
           "type": "string"
         }
       ]
@@ -2467,7 +3249,25 @@
       ],
       "manifestClass": "write",
       "excluded": true,
-      "description": "Saves the user's dashboard layout preferences."
+      "description": "Saves the user's dashboard layout preferences.",
+      "requestBody": [
+        {
+          "name": "layout",
+          "type": "object",
+          "required": true,
+          "description": "Dashboard layout configuration"
+        },
+        {
+          "name": "layout.version",
+          "type": "integer",
+          "required": true
+        },
+        {
+          "name": "layout.widgets",
+          "type": "array of object",
+          "required": true
+        }
+      ]
     },
     {
       "operationId": "resetDashboardPreferences",
@@ -2503,7 +3303,15 @@
       ],
       "manifestClass": "write",
       "excluded": true,
-      "description": "Creates a new household with the caller as owner."
+      "description": "Creates a new household with the caller as owner.",
+      "requestBody": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "description": "Household display name"
+        }
+      ]
     },
     {
       "operationId": "getHouseholdInvitePreview",
@@ -2543,6 +3351,19 @@
           "required": true,
           "description": "Raw invite token from the invite link",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "consent",
+          "type": "boolean",
+          "required": true,
+          "description": "Explicit consent to share accounts with the household"
+        },
+        {
+          "name": "hidden_account_ids",
+          "type": "array of string",
+          "description": "user_account IDs (must be the caller's own) to keep private instead of sharing"
         }
       ]
     },
@@ -2586,7 +3407,15 @@
         "Household"
       ],
       "manifestClass": "write",
-      "excluded": true
+      "excluded": true,
+      "requestBody": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "description": "New household display name"
+        }
+      ]
     },
     {
       "operationId": "deleteHousehold",
@@ -2652,7 +3481,15 @@
         "Household"
       ],
       "manifestClass": "write",
-      "excluded": true
+      "excluded": true,
+      "requestBody": [
+        {
+          "name": "email",
+          "type": "string",
+          "required": true,
+          "description": "Email address to invite"
+        }
+      ]
     },
     {
       "operationId": "revokeHouseholdInvite",
@@ -3001,7 +3838,82 @@
       ],
       "manifestClass": "write",
       "excluded": true,
-      "description": "Records a security audit entry for an MCP operation. Called by the trusted MCP Worker; authenticated by CloudflareOnly middleware (X-Origin-Secret), not end-user Clerk JWT."
+      "description": "Records a security audit entry for an MCP operation. Called by the trusted MCP Worker; authenticated by CloudflareOnly middleware (X-Origin-Secret), not end-user Clerk JWT.",
+      "requestBody": [
+        {
+          "name": "actor_user_id",
+          "type": "string",
+          "required": true,
+          "description": "Clerk user ID of the actor; resolved to the internal user UUID server-side"
+        },
+        {
+          "name": "confirmation_confirmed",
+          "type": "boolean",
+          "required": true,
+          "description": "Whether confirmation was provided and valid"
+        },
+        {
+          "name": "confirmation_presented",
+          "type": "boolean",
+          "required": true,
+          "description": "Whether confirmation was required"
+        },
+        {
+          "name": "grant_id",
+          "type": "string",
+          "required": true,
+          "description": "OAuth grant ID from the Clerk token"
+        },
+        {
+          "name": "idempotency_key",
+          "type": "string",
+          "description": "Idempotency key if provided"
+        },
+        {
+          "name": "operation_class",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "read",
+            "write",
+            "destructive"
+          ],
+          "description": "Operation class: read, write, or destructive (permanently destroys data — #1569)"
+        },
+        {
+          "name": "operation_id",
+          "type": "string",
+          "required": true,
+          "description": "OpenAPI operationId"
+        },
+        {
+          "name": "request_id",
+          "type": "string",
+          "description": "Trace request ID"
+        },
+        {
+          "name": "result",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "success",
+            "denied",
+            "error",
+            "confirmation_required"
+          ],
+          "description": "Outcome"
+        },
+        {
+          "name": "revocation_state",
+          "type": "string",
+          "description": "Revocation check outcome"
+        },
+        {
+          "name": "scopes",
+          "type": "array of string",
+          "description": "OAuth scopes granted"
+        }
+      ]
     },
     {
       "operationId": "listMCPRecipes",
@@ -3025,7 +3937,44 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Create a saved MCP workflow recipe (read-only compositions only in v1)."
+      "description": "Create a saved MCP workflow recipe (read-only compositions only in v1).",
+      "requestBody": [
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "schedule",
+          "type": "string"
+        },
+        {
+          "name": "spec",
+          "type": "array of object",
+          "required": true
+        },
+        {
+          "name": "spec[].body",
+          "type": "object"
+        },
+        {
+          "name": "spec[].operation_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "spec[].params",
+          "type": "object"
+        },
+        {
+          "name": "spec[].path_params",
+          "type": "object"
+        }
+      ]
     },
     {
       "operationId": "getMCPRecipe",
@@ -3064,6 +4013,45 @@
           "required": true,
           "description": "Recipe ID",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "enabled",
+          "type": "boolean"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "schedule",
+          "type": "string"
+        },
+        {
+          "name": "spec",
+          "type": "array of object"
+        },
+        {
+          "name": "spec[].body",
+          "type": "object"
+        },
+        {
+          "name": "spec[].operation_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "spec[].params",
+          "type": "object"
+        },
+        {
+          "name": "spec[].path_params",
+          "type": "object"
         }
       ]
     },
@@ -3142,7 +4130,21 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Creates per-user merge overrides so source merchants display under the target merchant name."
+      "description": "Creates per-user merge overrides so source merchants display under the target merchant name.",
+      "requestBody": [
+        {
+          "name": "merchant_ids",
+          "type": "array of string",
+          "required": true,
+          "description": "Source merchant UUIDs to merge (the duplicates)"
+        },
+        {
+          "name": "target_merchant_id",
+          "type": "string",
+          "required": true,
+          "description": "Target merchant UUID to merge into (the canonical)"
+        }
+      ]
     },
     {
       "operationId": "getMerchantOverrides",
@@ -3166,7 +4168,28 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Upserts multiple merchant name overrides in a single request. MCP-friendly."
+      "description": "Upserts multiple merchant name overrides in a single request. MCP-friendly.",
+      "requestBody": [
+        {
+          "name": "overrides",
+          "type": "array of object",
+          "required": true,
+          "description": "List of merchant overrides to upsert"
+        },
+        {
+          "name": "overrides[].display_name",
+          "type": "string"
+        },
+        {
+          "name": "overrides[].merchant_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "overrides[].merged_into_merchant_id",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "setMerchantOverride",
@@ -3186,6 +4209,18 @@
           "required": true,
           "description": "Merchant UUID",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "display_name",
+          "type": "string",
+          "description": "Custom display name for the merchant"
+        },
+        {
+          "name": "merged_into_merchant_id",
+          "type": "string",
+          "description": "Target merchant UUID to merge this merchant into"
         }
       ]
     },
@@ -3285,7 +4320,27 @@
       ],
       "manifestClass": "write",
       "excluded": true,
-      "description": "Exchanges a Plaid public token for an access token and links bank accounts."
+      "description": "Exchanges a Plaid public token for an access token and links bank accounts.",
+      "requestBody": [
+        {
+          "name": "institution_id",
+          "type": "string",
+          "required": true,
+          "description": "The institution ID"
+        },
+        {
+          "name": "institution_name",
+          "type": "string",
+          "required": true,
+          "description": "The institution name"
+        },
+        {
+          "name": "public_token",
+          "type": "string",
+          "required": true,
+          "description": "The public token from Plaid Link"
+        }
+      ]
     },
     {
       "operationId": "createLinkToken",
@@ -3309,7 +4364,21 @@
       ],
       "manifestClass": "write",
       "excluded": true,
-      "description": "Creates a Clerk sign-in token URL for QA test users. Only available in QA/Staging environments."
+      "description": "Creates a Clerk sign-in token URL for QA test users. Only available in QA/Staging environments.",
+      "requestBody": [
+        {
+          "name": "role",
+          "type": "string",
+          "required": true,
+          "description": "QA test user role: admin or premium"
+        },
+        {
+          "name": "secret",
+          "type": "string",
+          "required": true,
+          "description": "QA bypass secret (must match QA_BYPASS_SECRET env var)"
+        }
+      ]
     },
     {
       "operationId": "getRegions",
@@ -3371,7 +4440,48 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Creates a new savings goal for the authenticated user."
+      "description": "Creates a new savings goal for the authenticated user.",
+      "requestBody": [
+        {
+          "name": "account_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "account_percentage",
+          "type": "number"
+        },
+        {
+          "name": "currency_code",
+          "type": "string"
+        },
+        {
+          "name": "current_amount",
+          "type": "number"
+        },
+        {
+          "name": "deadline",
+          "type": "string"
+        },
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "progress_basis",
+          "type": "string"
+        },
+        {
+          "name": "target_amount",
+          "type": "number",
+          "required": true
+        }
+      ]
     },
     {
       "operationId": "getActiveSavingsGoals",
@@ -3472,6 +4582,26 @@
           "in": "path",
           "required": true,
           "description": "Savings goal ID",
+          "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "amount",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "notes",
+          "type": "string"
+        },
+        {
+          "name": "occurred_on",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "transaction_id",
           "type": "string"
         }
       ]
@@ -3603,6 +4733,40 @@
           "description": "Savings goal ID",
           "type": "string"
         }
+      ],
+      "requestBody": [
+        {
+          "name": "account_id",
+          "type": "string"
+        },
+        {
+          "name": "account_percentage",
+          "type": "number"
+        },
+        {
+          "name": "current_amount",
+          "type": "number"
+        },
+        {
+          "name": "deadline",
+          "type": "string"
+        },
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "progress_basis",
+          "type": "string"
+        },
+        {
+          "name": "target_amount",
+          "type": "number"
+        }
       ]
     },
     {
@@ -3708,7 +4872,25 @@
       ],
       "manifestClass": "write",
       "excluded": true,
-      "description": "Creates a Paddle checkout session for purchasing a subscription. Returns checkout URL to open in Paddle.js Overlay or as redirect."
+      "description": "Creates a Paddle checkout session for purchasing a subscription. Returns checkout URL to open in Paddle.js Overlay or as redirect.",
+      "requestBody": [
+        {
+          "name": "billing_interval",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "month",
+            "year"
+          ],
+          "description": "Billing interval (month or year)"
+        },
+        {
+          "name": "tier",
+          "type": "string",
+          "required": true,
+          "description": "Subscription tier (premium, household_2, etc.)"
+        }
+      ]
     },
     {
       "operationId": "get-current-subscription",
@@ -3734,7 +4916,25 @@
       ],
       "manifestClass": "write",
       "excluded": true,
-      "description": "Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details."
+      "description": "Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details.",
+      "requestBody": [
+        {
+          "name": "billing_interval",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "month",
+            "year"
+          ],
+          "description": "Billing interval for new tier (month or year)"
+        },
+        {
+          "name": "new_tier",
+          "type": "string",
+          "required": true,
+          "description": "New subscription tier to preview"
+        }
+      ]
     },
     {
       "operationId": "getSubscriptionTiers",
@@ -3759,7 +4959,44 @@
       ],
       "manifestClass": "write",
       "excluded": true,
-      "description": "Updates subscription to a different tier or billing interval. Handles proration automatically."
+      "description": "Updates subscription to a different tier or billing interval. Handles proration automatically.",
+      "requestBody": [
+        {
+          "name": "billing_interval",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "month",
+            "year"
+          ],
+          "description": "Billing interval (month or year)"
+        },
+        {
+          "name": "current_billing_interval",
+          "type": "string",
+          "enum": [
+            "month",
+            "year"
+          ],
+          "description": "Current billing interval, used server-side to detect and reject no-op updates"
+        },
+        {
+          "name": "new_tier",
+          "type": "string",
+          "required": true,
+          "description": "New subscription tier"
+        },
+        {
+          "name": "proration_billing_mode",
+          "type": "string",
+          "enum": [
+            "prorated_immediately",
+            "full_immediately",
+            "full_next_billing_period"
+          ],
+          "description": "Proration mode (prorated_immediately, full_immediately, full_next_billing_period)"
+        }
+      ]
     },
     {
       "operationId": "getUserTags",
@@ -3783,7 +5020,18 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Creates a new tag for the authenticated user."
+      "description": "Creates a new tag for the authenticated user.",
+      "requestBody": [
+        {
+          "name": "color",
+          "type": "string"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        }
+      ]
     },
     {
       "operationId": "getTagByID",
@@ -3823,6 +5071,16 @@
           "in": "path",
           "required": true,
           "description": "Tag UUID",
+          "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "color",
+          "type": "string"
+        },
+        {
+          "name": "name",
           "type": "string"
         }
       ]
@@ -4061,7 +5319,41 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Recategorizes multiple transactions for the authenticated user. Best-effort: unowned/unknown IDs are silently ignored. Returns requested (de-duplicated input count) and updated (rows changed)."
+      "description": "Recategorizes multiple transactions for the authenticated user. Best-effort: unowned/unknown IDs are silently ignored. Returns requested (de-duplicated input count) and updated (rows changed).",
+      "requestBody": [
+        {
+          "name": "custom_category_id",
+          "type": "string",
+          "description": "Custom category UUID (required when kind=custom)"
+        },
+        {
+          "name": "kind",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "clear"
+          ],
+          "description": "Category override kind"
+        },
+        {
+          "name": "pfc_detailed",
+          "type": "string",
+          "description": "PFC detailed enum (optional when kind=pfc)"
+        },
+        {
+          "name": "pfc_primary",
+          "type": "string",
+          "description": "PFC primary enum (required when kind=pfc)"
+        },
+        {
+          "name": "transaction_ids",
+          "type": "array of string",
+          "required": true,
+          "description": "Transaction UUIDs to recategorize (max 500, owned by the caller)"
+        }
+      ]
     },
     {
       "operationId": "bulkSetTransactionReviewed",
@@ -4073,7 +5365,21 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Marks multiple transactions reviewed or unreviewed for the authenticated user."
+      "description": "Marks multiple transactions reviewed or unreviewed for the authenticated user.",
+      "requestBody": [
+        {
+          "name": "reviewed",
+          "type": "boolean",
+          "required": true,
+          "description": "true to mark reviewed, false to move back to the unreviewed inbox"
+        },
+        {
+          "name": "transaction_ids",
+          "type": "array of string",
+          "required": true,
+          "description": "Transaction UUIDs to update (owned by the caller)"
+        }
+      ]
     },
     {
       "operationId": "getTransactionReviewSummary",
@@ -4151,6 +5457,34 @@
           "description": "Transaction UUID",
           "type": "string"
         }
+      ],
+      "requestBody": [
+        {
+          "name": "custom_category_id",
+          "type": "string",
+          "description": "Custom category UUID (required when kind=custom)"
+        },
+        {
+          "name": "kind",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "clear"
+          ],
+          "description": "Category override kind"
+        },
+        {
+          "name": "pfc_detailed",
+          "type": "string",
+          "description": "PFC detailed enum (optional when kind=pfc)"
+        },
+        {
+          "name": "pfc_primary",
+          "type": "string",
+          "description": "PFC primary enum (required when kind=pfc)"
+        }
       ]
     },
     {
@@ -4172,6 +5506,14 @@
           "description": "Transaction UUID",
           "type": "string"
         }
+      ],
+      "requestBody": [
+        {
+          "name": "reviewed",
+          "type": "boolean",
+          "required": true,
+          "description": "true to mark reviewed, false to move back to the unreviewed inbox"
+        }
       ]
     },
     {
@@ -4192,6 +5534,14 @@
           "required": true,
           "description": "Transaction UUID",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "tags",
+          "type": "array of string",
+          "required": true,
+          "description": "Array of tag names to set on the transaction"
         }
       ]
     },
@@ -4246,6 +5596,13 @@
           "description": "Transfer suggestion UUID",
           "type": "string"
         }
+      ],
+      "requestBody": [
+        {
+          "name": "notes",
+          "type": "string",
+          "description": "Optional notes for accepting the suggestion"
+        }
       ]
     },
     {
@@ -4267,6 +5624,13 @@
           "description": "Transfer suggestion UUID to cancel",
           "type": "string"
         }
+      ],
+      "requestBody": [
+        {
+          "name": "notes",
+          "type": "string",
+          "description": "Optional notes for the cancellation"
+        }
       ]
     },
     {
@@ -4287,6 +5651,14 @@
           "required": true,
           "description": "Transfer suggestion UUID to confirm",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "actual_amount",
+          "type": "number",
+          "required": true,
+          "description": "Actual amount transferred"
         }
       ]
     },
@@ -4329,6 +5701,13 @@
           "required": true,
           "description": "Transfer suggestion UUID",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "notes",
+          "type": "string",
+          "description": "Optional notes for rejecting the suggestion"
         }
       ]
     },
@@ -4392,6 +5771,38 @@
           "description": "User Account UUID",
           "type": "string"
         }
+      ],
+      "requestBody": [
+        {
+          "name": "custom_color",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "custom_emoji",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "custom_icon",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "display_order",
+          "type": "integer",
+          "required": true
+        },
+        {
+          "name": "is_hidden",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "name": "nickname",
+          "type": "string",
+          "required": true
+        }
       ]
     },
     {
@@ -4412,6 +5823,18 @@
           "required": true,
           "description": "User Account UUID",
           "type": "string"
+        }
+      ],
+      "requestBody": [
+        {
+          "name": "visibility",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "shared",
+            "hidden"
+          ],
+          "description": "shared: included in the household aggregate. hidden: excluded, but the member stays in the household."
         }
       ]
     },
@@ -4482,7 +5905,41 @@
       ],
       "manifestClass": "write",
       "excluded": true,
-      "description": "Updates the authenticated user's privacy settings with GDPR validation."
+      "description": "Updates the authenticated user's privacy settings with GDPR validation.",
+      "requestBody": [
+        {
+          "name": "data_sharing_enabled",
+          "type": "boolean"
+        },
+        {
+          "name": "gdpr_advertising_consent",
+          "type": "boolean"
+        },
+        {
+          "name": "gdpr_analytics_consent",
+          "type": "boolean"
+        },
+        {
+          "name": "gdpr_necessary_consent",
+          "type": "boolean"
+        },
+        {
+          "name": "include_in_aggregate_stats",
+          "type": "boolean"
+        },
+        {
+          "name": "marketing_emails_enabled",
+          "type": "boolean"
+        },
+        {
+          "name": "product_updates_enabled",
+          "type": "boolean"
+        },
+        {
+          "name": "security_alerts_enabled",
+          "type": "boolean"
+        }
+      ]
     },
     {
       "operationId": "getUserProfile",
@@ -4506,7 +5963,25 @@
       ],
       "manifestClass": "write",
       "excluded": true,
-      "description": "Updates the authenticated user's profile with validated data."
+      "description": "Updates the authenticated user's profile with validated data.",
+      "requestBody": [
+        {
+          "name": "email",
+          "type": "string"
+        },
+        {
+          "name": "primary_region",
+          "type": "string"
+        },
+        {
+          "name": "timezone",
+          "type": "string"
+        },
+        {
+          "name": "timezone_source",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getHealth",

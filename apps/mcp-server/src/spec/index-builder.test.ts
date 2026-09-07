@@ -139,3 +139,173 @@ describe('issue #1503: fail-closed on unclassified operations', () => {
     }
   })
 })
+
+// ── Issue #1609 Task 6: request body extraction ──────────────────────────────
+//
+// Real incident (2026-09-07): an MCP client guessed createRule's body shape three times
+// (three different field layouts) and got a bare 422 with no field detail each time, then
+// correctly stopped rather than keep firing speculative writes at a live financial account.
+// search() exposed query params but never request bodies, so the schema was unlearnable.
+// These tests pin the fix: requestBody schemas (including $ref-resolved, nested, array-of-
+// object shapes) must flatten into the spec index in a token-frugal way.
+
+describe('issue #1609 task 6: request body extraction', () => {
+  // Mirrors the REAL CreateCategorizationRuleRequest / RuleCondition schemas in
+  // api/openapi.yaml (createRule is already classified `write` in the manifest, so this
+  // reuses that operationId rather than requiring a manifest change).
+  const specWithRequestBody = {
+    paths: {
+      '/api/v1/auto-categorization': {
+        post: {
+          operationId: 'createRule',
+          summary: 'Create a new categorization rule',
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/CreateCategorizationRuleRequest' },
+              },
+            },
+            required: true,
+          },
+        },
+      },
+      '/api/v1/transactions': {
+        get: { operationId: 'getTransactions', summary: 'List transactions' },
+      },
+    },
+    components: {
+      schemas: {
+        CreateCategorizationRuleRequest: {
+          type: 'object',
+          required: ['name', 'conditions'],
+          properties: {
+            name: { type: 'string', description: 'Human-readable rule name' },
+            priority: { type: 'integer', description: 'Lower runs first' },
+            tag_behavior: { type: 'string', enum: ['replace', 'append'] },
+            conditions: {
+              type: ['array', 'null'],
+              items: { $ref: '#/components/schemas/RuleCondition' },
+            },
+          },
+        },
+        RuleCondition: {
+          type: 'object',
+          required: ['type', 'value'],
+          properties: {
+            type: { type: 'string', enum: ['merchant', 'amount', 'category'] },
+            operator: { type: 'string', enum: ['contains', 'equals', 'gt', 'lt'] },
+            value: {},
+          },
+        },
+      },
+    },
+  }
+
+  it('resolves a $ref requestBody into concrete fields, never a raw ref string', () => {
+    const index = indexFromSpec(specWithRequestBody)
+    const entry = index.entries.find((e) => e.operationId === 'createRule')
+    expect(entry?.requestBody).toBeDefined()
+    expect(entry?.requestBody?.some((f) => f.name === 'name')).toBe(true)
+    expect(JSON.stringify(entry?.requestBody)).not.toContain('$ref')
+  })
+
+  it('marks required body fields correctly (name required, priority not)', () => {
+    const index = indexFromSpec(specWithRequestBody)
+    const entry = index.entries.find((e) => e.operationId === 'createRule')
+    expect(entry?.requestBody?.find((f) => f.name === 'name')?.required).toBe(true)
+    expect(entry?.requestBody?.find((f) => f.name === 'priority')?.required).toBeUndefined()
+  })
+
+  it('captures enum values on body fields', () => {
+    const index = indexFromSpec(specWithRequestBody)
+    const entry = index.entries.find((e) => e.operationId === 'createRule')
+    expect(entry?.requestBody?.find((f) => f.name === 'tag_behavior')?.enum).toEqual(['replace', 'append'])
+  })
+
+  it('exposes array-of-object item fields with dotted names (the conditions[] case)', () => {
+    const index = indexFromSpec(specWithRequestBody)
+    const entry = index.entries.find((e) => e.operationId === 'createRule')
+
+    const conditions = entry?.requestBody?.find((f) => f.name === 'conditions')
+    expect(conditions?.type).toBe('array of object')
+    expect(conditions?.required).toBe(true)
+
+    const typeField = entry?.requestBody?.find((f) => f.name === 'conditions[].type')
+    expect(typeField?.enum).toEqual(['merchant', 'amount', 'category'])
+    expect(typeField?.required).toBe(true)
+
+    const valueField = entry?.requestBody?.find((f) => f.name === 'conditions[].value')
+    expect(valueField?.required).toBe(true)
+  })
+
+  it('an operation with no requestBody produces no requestBody key', () => {
+    const index = indexFromSpec(specWithRequestBody)
+    const entry = index.entries.find((e) => e.operationId === 'getTransactions')
+    expect(entry?.requestBody).toBeUndefined()
+  })
+
+  it('does not infinitely recurse on a self-referential schema, and caps flattening depth', () => {
+    const selfRefSpec = {
+      paths: {
+        '/api/v1/auto-categorization': {
+          post: {
+            operationId: 'createRule',
+            summary: 'self-ref test',
+            requestBody: {
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/SelfRef' } } },
+            },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          SelfRef: {
+            type: 'object',
+            properties: {
+              child: { $ref: '#/components/schemas/SelfRef' },
+              label: { type: 'string' },
+            },
+          },
+        },
+      },
+    }
+    expect(() => indexFromSpec(selfRefSpec)).not.toThrow()
+  })
+
+  it('the committed createRule operation carries a requestBody in the real generated index', () => {
+    const entry = entries.find((e) => e.operationId === 'createRule')
+    expect(entry?.requestBody?.some((f) => f.name === 'name' && f.required)).toBe(true)
+    expect(entry?.requestBody?.some((f) => f.name === 'conditions')).toBe(true)
+  })
+
+  it('skips readOnly properties (Huma stamps a readOnly $schema field onto every body schema)', () => {
+    const specWithReadOnly = {
+      paths: {
+        '/api/v1/auto-categorization': {
+          post: {
+            operationId: 'createRule',
+            summary: 'readOnly test',
+            requestBody: {
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/HasReadOnly' } } },
+            },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          HasReadOnly: {
+            type: 'object',
+            properties: {
+              $schema: { type: 'string', readOnly: true, description: 'A URL to the JSON Schema.' },
+              name: { type: 'string' },
+            },
+          },
+        },
+      },
+    }
+    const index = indexFromSpec(specWithReadOnly)
+    const entry = index.entries.find((e) => e.operationId === 'createRule')
+    expect(entry?.requestBody?.some((f) => f.name === '$schema')).toBe(false)
+    expect(entry?.requestBody?.some((f) => f.name === 'name')).toBe(true)
+  })
+})

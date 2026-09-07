@@ -78,6 +78,16 @@ export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
       )
       parts.push(`  params:\n${paramLines.join('\n')}`)
     }
+    // Issue #1609 Task 6: render the request body shape so an MCP client can construct a
+    // valid write body instead of guessing (the createRule incident — three guessed body
+    // shapes, three bare 422s, no field detail available anywhere the client could reach).
+    if (e.requestBody?.length) {
+      const bodyLines = e.requestBody.map(
+        (f) =>
+          `    ${f.name} (${f.type ?? 'unknown'}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
+      )
+      parts.push(`  body:\n${bodyLines.join('\n')}`)
+    }
     parts.push(`  tags: ${e.tags.join(', ')}`)
     return parts.join('\n')
   })
