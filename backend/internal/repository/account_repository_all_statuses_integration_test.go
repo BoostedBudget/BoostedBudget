@@ -104,7 +104,15 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_AllStatuses_Honour
 	user := insertTestUser(t, pool)
 	hiddenExpired := setupHouseholdMemberAccount(t, pool, user)
 	setAccountStatus(t, pool, hiddenExpired.AccountID, domain.AccountStatusExpired)
+	// #1609: the hide is written to BOTH tables. user_accounts is where the product writes it
+	// (PATCH /api/v1/user-accounts/{id}) and, for a CHAINED account like this fixture's, it is now
+	// the authoritative side of the customization overlay — an accounts-only hide would be
+	// overridden by the chain's FALSE and this fixture would silently stop being hidden at all.
+	// accounts keeps its TRUE so the assertion below still holds for the unchained fallback leg
+	// too. The assertion itself is unchanged: AllStatuses widens the STATUS predicate only.
 	_, err := pool.Exec(ctx, `UPDATE accounts SET is_hidden = TRUE WHERE id = $1`, hiddenExpired.AccountID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE user_accounts SET is_hidden = TRUE WHERE id = $1`, hiddenExpired.UserAccountID)
 	require.NoError(t, err)
 
 	withHidden, err := repo.GetAccountsWithInstitutionFiltered(ctx, user,
