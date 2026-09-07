@@ -168,6 +168,47 @@ describe('useAccountCustomization', () => {
       expect(result.current.updateError).toBeNull()
     })
 
+    // #1609 Item 5: exclude_investment_sync is the per-chain opt-out for a brokerage account
+    // Plaid reports on BOTH product endpoints, so the same movement appears twice in the feed.
+    // There is no toggle UI yet — this pins that the hook can carry the flag, and that an update
+    // which says nothing about it sends null (the server's "no change"), rather than silently
+    // un-excluding a chain the user excluded.
+    it('should forward exclude_investment_sync to the UserAccount endpoint', async () => {
+      const { result } = renderHook(() => useAccountCustomization(), {
+        wrapper: createWrapper(),
+      })
+
+      await act(async () => {
+        await result.current.updateAccount(mockAccountWithUserAccount, {
+          exclude_investment_sync: true,
+        })
+      })
+
+      expect(mockUpdateUserAccountMutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ exclude_investment_sync: true }),
+        })
+      )
+    })
+
+    it('should send a null exclude_investment_sync when the update does not mention it', async () => {
+      const { result } = renderHook(() => useAccountCustomization(), {
+        wrapper: createWrapper(),
+      })
+
+      await act(async () => {
+        await result.current.updateAccount(mockAccountWithUserAccount, {
+          nickname: 'Platinum CashPlus',
+        })
+      })
+
+      expect(mockUpdateUserAccountMutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ exclude_investment_sync: null }),
+        })
+      )
+    })
+
     it('should set isUpdating to true during update', () => {
       mockUseUpdateAccount.mockReturnValue({
         mutateAsync: mockUpdateAccountMutateAsync,

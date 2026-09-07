@@ -26,6 +26,12 @@ interface PartialUpdateAccountRequest {
   custom_emoji?: string | null
   display_order?: number | null
   is_hidden?: boolean | null
+  // #1609 Item 5 — the per-chain opt-out that hides an account's investment_transactions from
+  // both the activity feed and the investments page, for a brokerage account Plaid reports on
+  // BOTH /transactions/sync and /investments/transactions/get. Read-layer only and fully
+  // reversible; there is no toggle UI yet, so today this reaches the server only from callers
+  // that set it explicitly.
+  exclude_investment_sync?: boolean | null
 }
 
 interface AccountOrder {
@@ -113,6 +119,10 @@ export function useAccountCustomization(): UseAccountCustomizationResult {
       custom_emoji: changes.custom_emoji ?? null,
       display_order: changes.display_order ?? null,
       is_hidden: changes.is_hidden ?? null,
+      // null is the server's "no change" for every field on this request, so an update that says
+      // nothing about the flag must send null rather than false — false would UN-exclude a chain
+      // the user deliberately excluded, on every unrelated rename.
+      exclude_investment_sync: changes.exclude_investment_sync ?? null,
     }
 
     // If account has a stable UserAccount reference, use that endpoint
