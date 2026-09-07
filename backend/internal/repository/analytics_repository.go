@@ -511,12 +511,48 @@ const merchantGroupKeyExpr = `CASE
 		    ELSE 'unknown'
 		  END`
 
-// effectiveTransferExpr returns the SQL expression for the effective PFC primary used
-// in transfer filtering. Reads the denormalized effective_pfc_primary column directly.
-// effective_pfc_primary is NULL for custom-kind rows (never match TRANSFER%), so
-// COALESCE to '' ensures the NOT LIKE filter still works correctly.
+// effectiveTransferExpr returns the SQL expression for the effective PFC primary used in
+// transfer filtering (`<expr> NOT LIKE 'TRANSFER...'`).
+//
+// Issue #1609 Item 11 — WHY THERE IS A SECOND ARM. effective_pfc_primary is a GENERATED column
+// (migration 000073) that is NULL for every custom-categorised row, because a custom category
+// takes precedence over the PFC dimension. Reading it alone therefore made EVERY such row escape
+// the transfer filter: NULL -> COALESCE -> the empty string, which NOT LIKE 'TRANSFER...' accepts.
+// A category named "Paycheck" and one named "Internal Transfer To Savings" were therefore included
+// identically, by accident of NULL-ness rather than by declaration. A real user was advised to "assign a custom
+// category to reclassify these as income", which would have appeared to work for exactly that
+// wrong reason. custom_categories.parent_pfc_primary already declares which PFC primary the
+// category nests under (CHECK-constrained to the 18 valid primaries by migration 000065) and is
+// already honoured by budget roll-up; this resolves through it so analytics agrees.
+//
+// CORRELATED SUBQUERY, NOT A JOIN, and deliberately: this expression is spliced into a WHERE
+// clause that is already assembled (there is no FROM list left to extend at the splice point,
+// and buildSpendingFilter's output is reused by ~15 further queries including CTE-based household
+// variants). COALESCE evaluates left to right and short-circuits, so the lookup runs ONLY for the
+// rows whose effective_pfc_primary is NULL — the custom-categorised minority — and each one is a
+// primary-key point lookup on a small per-user table.
+//
+// A category with parent_pfc_primary IS NULL still resolves to the empty string and keeps today's
+// behaviour; only an explicit TRANSFER_IN / TRANSFER_OUT changes an answer. Rows with no override at all are
+// untouched, because custom_category_override_id is NULL for them (CHECK
+// valid_category_override_discriminator, migration 000065, sets it if and only if the override
+// dimension is the custom one — which is why this arm needs no discriminator test of its own).
+//
+// Pinned by TestCashFlow_CustomCategoryResolvesParentPFCPrimaryForTransferFilter_Integration.
 func effectiveTransferExpr() string {
-	return `COALESCE(t.effective_pfc_primary, '')`
+	return `COALESCE(
+		    t.effective_pfc_primary,
+		    (SELECT cc.parent_pfc_primary
+		       FROM custom_categories cc
+		      -- tombstone-exempt(custom_categories cc): HISTORY FILTER (#1609 Item 11). A transaction
+		      -- filed under a since-deleted custom category is still real history, and the category
+		      -- it was filed under still declares what it was. An 'AND cc.deleted_at IS NULL' here
+		      -- would silently re-admit those rows to the non-transfer universe the day the user
+		      -- tidied their category list, restating a closed month. Same rule, and same reason, as
+		      -- the budget roll-up subqueries in transaction_repository.go.
+		      WHERE cc.id = t.custom_category_override_id
+		        AND cc.user_id = t.user_id),
+		    '')`
 }
 
 // buildPlaceholders creates numbered placeholders ($1, $2, ...) for parameterized query building
