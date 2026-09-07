@@ -68,11 +68,11 @@ export interface UseAccountCustomizationResult {
  *   const { updateAccount, isUpdating, updateError } = useAccountCustomization()
  *
  *   const handleNicknameChange = async (nickname: string) => {
- *     // Pass the full account object - hook will use user_account_id if available
+ *     // Pass the full account object - hook will use user_account_id if available.
+ *     // #1609: this REJECTS on failure. Let the rejection reach whoever decides what a failed
+ *     // save means for the UI; do not swallow it here.
  *     const result = await updateAccount(account, { nickname })
- *     if (result) {
- *       console.log('Account updated:', result.nickname)
- *     }
+ *     console.log('Account updated:', result.nickname)
  *   }
  *
  *   return (
