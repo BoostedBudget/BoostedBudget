@@ -84,6 +84,20 @@ func foldSQLExpr(expr ast.Expr) (string, bool) {
 					return accountBalanceProjection(arg), true
 				case "currentStateAccountLeg":
 					return currentStateAccountLeg(arg), true
+				// #1609. Without these four the customization overlay folds to the
+				// placeholder, and TestNoAccountCustomizationReadWithoutTheOverlay — whose
+				// whole design is to strip the renderer's OWN OUTPUT — would have nothing to
+				// strip and nothing to find. Same reason accountBalanceProjection is here:
+				// this file is package `repository`, so these calls return the exact text the
+				// production query gets rather than a restatement that could drift.
+				case "accountCustomizationProjection":
+					return accountCustomizationProjection(arg), true
+				case "accountCustomizationJoin":
+					return accountCustomizationJoin(arg), true
+				case "accountHiddenExpr":
+					return accountHiddenExpr(arg), true
+				case "accountDisplayOrderExpr":
+					return accountDisplayOrderExpr(arg), true
 				}
 			}
 		}

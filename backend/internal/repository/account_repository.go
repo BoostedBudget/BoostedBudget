@@ -994,6 +994,15 @@ func (f householdStatusFilter) statusClause() string {
 
 // householdScopeQuery builds the household-scope account SELECT. Pure and separate from the
 // read itself so the exact SQL each filter produces can be asserted without a database.
+//
+// ⚠ DELIBERATELY WITHOUT the #1609 customization overlay, and do NOT "finish the job" by adding
+// it. is_hidden is the OWNER'S PERSONAL-VIEW control and must not travel into a household view —
+// householdGrantsCTE in analytics_repository.go records the ruling (Issue #1369 decision 3,
+// migration 000110's documented contract): household inclusion is governed SOLELY by the share.
+// A member hiding an account from their own sidebar is not withdrawing it from the household they
+// shared it with, and making it so would be a privacy regression dressed as a consistency fix.
+// The query projects none of the six today; there is an entry in customizationOverlayExceptions
+// (account_customization_overlay_guard_test.go) so that whoever adds one finds this ruling.
 func householdScopeQuery(statuses householdStatusFilter) string {
 	return "WITH " + householdAccountsCTEForBalancesAsOf() + `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,

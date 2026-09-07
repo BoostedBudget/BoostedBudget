@@ -828,9 +828,10 @@ func accountChainSupersessionCTESQL(observedExpr string) string {
 //
 // ── WHY RENDERERS AND NOT FIVE HAND-WRITTEN COPIES. ────────────────────────────────────────
 // The same reason accountBalanceProjection exists: five hand-edited copies drift, and the drift is
-// invisible (a stale nickname is a well-formed string). One renderer is mutation-checkable, and it
-// lets a guard strip this function's OWN OUTPUT before looking for a raw column — so the guard
-// cannot drift from the implementation, because there is no restatement to drift.
+// invisible (a stale nickname is a well-formed string). One renderer is mutation-checkable, and
+// TestNoAccountCustomizationReadWithoutTheOverlay strips this function's OWN OUTPUT before looking
+// for a raw column — so the guard cannot drift from the implementation, because there is no
+// restatement to drift.
 //
 // ⚠ NOT applied to householdScopeQuery, deliberately — see that query's own comment.
 
