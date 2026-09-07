@@ -419,15 +419,26 @@ async function captureCashFlowSummary(
   // "page.reload() at the end of the widget-add branch, but the response promise was set up
   // before the FIRST goto" produced: a "No resource with given identifier found" Protocol error
   // when the widget-add branch's own reload discarded the original response before it was read).
-  const responsePromise = page.waitForResponse(
-    (r) => r.url().includes('/api/v1/analytics/cash-flow-summary') && r.request().method() === 'GET',
-    { timeout: WAIT_RESPONSE_MS }
-  )
+  // ⚠ `.json()` is chained onto the wait, NOT awaited after the navigation settles.
+  // Reading the body later is what produced `Network.getResponseBody: No resource with
+  // given identifier found` on job 101762977828: `waitForResponse` resolves on response
+  // HEADERS, and Chromium may discard the body once the document finishes loading, so
+  // every `await` between the response arriving and `.json()` widens the eviction window.
+  // Chaining starts the body read in the microtask right after headers land, while the
+  // resource is still live. Do not "simplify" this back to `await responsePromise` followed
+  // by `response.json()`.
+  const bodyPromise = page
+    .waitForResponse(
+      (r) =>
+        r.url().includes('/api/v1/analytics/cash-flow-summary') && r.request().method() === 'GET',
+      { timeout: WAIT_RESPONSE_MS }
+    )
+    .then((r) => r.json() as Promise<CashFlowSummaryResponse>)
+
   await page.reload()
   await page.waitForLoadState('domcontentloaded')
 
-  const response = await responsePromise
-  return response.json()
+  return bodyPromise
 }
 
 // captureSpendingByCategory navigates to /reports and returns the REAL
@@ -437,16 +448,21 @@ async function captureCashFlowSummary(
 async function captureSpendingByCategory(
   page: import('@playwright/test').Page
 ): Promise<SpendingByCategoryResponse> {
-  const responsePromise = page.waitForResponse(
-    (r) =>
-      r.url().includes('/api/v1/analytics/spending-by-category') && r.request().method() === 'GET',
-    { timeout: WAIT_RESPONSE_MS }
-  )
+  // Same body-eviction hazard as captureCashFlowSummary, and WIDER here: three awaits
+  // separate the response from the read, one of which (acceptCookieConsent) interacts with
+  // the DOM and can take seconds. Chain the read for the same reason.
+  const bodyPromise = page
+    .waitForResponse(
+      (r) =>
+        r.url().includes('/api/v1/analytics/spending-by-category') &&
+        r.request().method() === 'GET',
+      { timeout: WAIT_RESPONSE_MS }
+    )
+    .then((r) => r.json() as Promise<SpendingByCategoryResponse>)
 
   await page.goto('/reports')
   await page.waitForLoadState('domcontentloaded')
   await acceptCookieConsent(page)
 
-  const response = await responsePromise
-  return response.json()
+  return bodyPromise
 }
