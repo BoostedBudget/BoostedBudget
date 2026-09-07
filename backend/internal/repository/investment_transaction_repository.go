@@ -364,10 +364,14 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 		      EXISTS (SELECT 1 FROM accounts WHERE id = it.account_id AND status = 'active')
 %s
 		  )
+		  -- The per-chain investment opt-out (#1609 Item 5). This surface MUST carry it too: it is
+		  -- the endpoint the investments page calls directly, so filtering only the unified feed
+		  -- would leave this page still showing the rows the accounts page just hid.
+%s
 		%s
 		ORDER BY it.date DESC, it.id ASC
 		LIMIT $%d
-	`, retainedAccountVisibilityLegs("it", "it.date"), extraConditions, limitPH)
+	`, retainedAccountVisibilityLegs("it", "it.date"), investmentSyncExclusionCondition("it"), extraConditions, limitPH)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
