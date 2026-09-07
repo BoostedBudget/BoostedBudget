@@ -776,3 +776,120 @@ func accountChainLiveCTESQL(dayCol, fromClause, whereClause, dateExpr, observedE
 func accountChainSupersessionCTESQL(observedExpr string) string {
 	return strings.NewReplacer("$OBSERVED", observedExpr).Replace(accountChainSupersessionCTE)
 }
+
+// ─── #1609 Item 3: the account-customization overlay ────────────────────────────────────────
+//
+// THE DEFECT. The six customization fields — nickname, custom_color, custom_icon, custom_emoji,
+// display_order, is_hidden — exist on BOTH `accounts` and `user_accounts`. PATCH
+// /api/v1/user-accounts/{id} writes ONLY user_accounts (userAccountRepository.Update), while every
+// account read projected them straight off `accounts` with no join at all. So hiding, renaming,
+// recolouring or reordering an account reverted the moment the page refreshed — the write landed
+// somewhere nothing read.
+//
+// `user_accounts` is the source of truth for these fields; domain/account.go says so, and it is the
+// only choice that survives a Plaid re-link (the chain row is stable, the accounts row is not).
+//
+// ── WHY A CASE AND NOT COALESCE, which is the whole design. ─────────────────────────────────
+// The update API writes NULL to mean "the user CLEARED this" (userAccountService.UpdateUserAccount
+// assigns the request's pointer straight through). COALESCE cannot tell that apart from "never
+// overridden": it would fall through to the legacy accounts value and hand the user back the
+// nickname they just deleted, an edit that silently does nothing — which is the very bug this
+// change exists to fix, reintroduced one field at a time.
+//
+// So the rule is CHAIN-AUTHORITATIVE rather than first-non-null: once a row is chained, the chain
+// answers, NULL included.
+//
+//	CASE WHEN <a>.user_account_id IS NOT NULL THEN <a>_ua.<field> ELSE <a>.<field> END
+//
+// Pinned behaviourally by
+// TestAccountRepository_CustomizationOverlay_ClearedOverrideDoesNotResurrectLegacyValue_Integration.
+//
+// ── WHY THE ELSE LEG IS NOT DEAD CODE. ──────────────────────────────────────────────────────
+// accounts.user_account_id is NULLABLE and a real population carries unchained rows: the startup
+// repair (database/backfill.go) skips no-match and decryption-failure rows, and nothing guarantees
+// a row is chained at the instant it is read. Those accounts must behave EXACTLY as they did
+// before — hence ELSE, not an inner join and not a COALESCE default.
+//
+// ── WHY A JOIN AND NOT A SCALAR SUBQUERY, which is not a style preference. ──────────────────
+// TestNoAccountProjectionOmitsStatus matches select lists with a NON-GREEDY
+// `\bSELECT\b(.*?)\bFROM\b`. A correlated subquery in the select list introduces an inner FROM that
+// truncates the matched span, cutting `<a>.status` out of what that guard can see — the guard would
+// go silently vacuous for every query that adopted the subquery form. The JOIN has no such
+// interaction.
+//
+// ── CARDINALITY. ───────────────────────────────────────────────────────────────────────────
+// accounts.user_account_id is a nullable FK to user_accounts(id), the PRIMARY KEY (migration
+// 000033), so AT MOST ONE row matches and the join cannot multiply the account's own result row.
+// The relationship runs many-accounts → one-user_account, which is the direction that is safe. The
+// `AND <a>_ua.user_id = <a>.user_id` leg is defence-in-depth — the FK constrains identity, not
+// ownership — and can only ever REDUCE the match count. Pinned by
+// TestAccountRepository_CustomizationOverlay_ChainWithReplacedSiblingsReturnsOneRowPerAccount_Integration,
+// which puts three accounts on one chain and demands three rows.
+//
+// ── WHY RENDERERS AND NOT FIVE HAND-WRITTEN COPIES. ────────────────────────────────────────
+// The same reason accountBalanceProjection exists: five hand-edited copies drift, and the drift is
+// invisible (a stale nickname is a well-formed string). One renderer is mutation-checkable, and it
+// lets a guard strip this function's OWN OUTPUT before looking for a raw column — so the guard
+// cannot drift from the implementation, because there is no restatement to drift.
+//
+// ⚠ NOT applied to householdScopeQuery, deliberately — see that query's own comment.
+
+// accountCustomizationColumns are the six fields that live on both tables, in the order every
+// account projection in this package selects them. One order, one renderer: the scan lists are
+// position-sensitive, and a per-call-site ordering choice is a transposition waiting to happen.
+var accountCustomizationColumns = []string{
+	"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+}
+
+// accountCustomizationAlias is the joined alias for a given accounts alias. Deliberately
+// `<alias>_ua` and never a bare `ua`: three of the five reads had an UNALIASED `FROM accounts` and
+// needed an alias introduced, and a bare `ua` would have collided the moment a query joined
+// user_accounts for its own reasons.
+func accountCustomizationAlias(alias string) string {
+	return alias + "_ua"
+}
+
+// accountCustomizationJoin renders the LEFT JOIN that the projection, the hidden filter and the
+// display-order ordering all depend on. Every SQL literal that uses any of the three must contain
+// it — the guard checks exactly that.
+func accountCustomizationJoin(alias string) string {
+	ua := accountCustomizationAlias(alias)
+	return "\n\t\tLEFT JOIN user_accounts " + ua +
+		" ON " + ua + ".id = " + alias + ".user_account_id" +
+		" AND " + ua + ".user_id = " + alias + ".user_id"
+}
+
+// accountCustomizationExpr renders the overlay for ONE field, without an output alias. Used for the
+// WHERE and ORDER BY forms, where an `AS` is a syntax error.
+func accountCustomizationExpr(alias, field string) string {
+	ua := accountCustomizationAlias(alias)
+	return "CASE WHEN " + alias + ".user_account_id IS NOT NULL THEN " + ua + "." + field +
+		" ELSE " + alias + "." + field + " END"
+}
+
+// accountCustomizationProjection renders all six overlaid columns, aliased back to their own names
+// so every existing scan list keeps working unchanged.
+func accountCustomizationProjection(alias string) string {
+	parts := make([]string, 0, len(accountCustomizationColumns))
+	for _, f := range accountCustomizationColumns {
+		parts = append(parts, accountCustomizationExpr(alias, f)+" AS "+f)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// accountHiddenExpr is the is_hidden overlay alone, for a WHERE clause.
+//
+// A predicate over a LEFT-JOINed column is safe HERE specifically because the ELSE leg
+// (`<a>.is_hidden`) is `NOT NULL DEFAULT FALSE` (migration 000024) and so is the chain's
+// (migration 000031): the expression can never be NULL, so there is no three-valued-logic trap in
+// which an unmatched join silently drops rows. That argument is about these two columns and does
+// not generalise to the other five, which are all nullable — which is why only this one has a
+// WHERE-shaped renderer.
+func accountHiddenExpr(alias string) string {
+	return accountCustomizationExpr(alias, "is_hidden")
+}
+
+// accountDisplayOrderExpr is the display_order overlay alone, for an ORDER BY.
+func accountDisplayOrderExpr(alias string) string {
+	return accountCustomizationExpr(alias, "display_order")
+}

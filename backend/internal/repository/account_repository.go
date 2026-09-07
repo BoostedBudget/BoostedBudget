@@ -1338,15 +1338,14 @@ func (r *accountRepository) PurgeAccount(ctx context.Context, accountID, userID 
 // Pinned by TestAccountRepository_ExpiredAtSurvivesACosmeticWrite_Integration.
 func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userID string) (*domain.Account, error) {
 	query := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden,
-		       user_account_id, status, removed_at, replaced_at, expired_at, replaced_by_id,
-		       created_at, updated_at
-		FROM accounts
-		WHERE id = $1 AND user_id = $2
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountCustomizationProjection("a") + `,
+		       a.user_account_id, a.status, a.removed_at, a.replaced_at, a.expired_at, a.replaced_by_id,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.id = $1 AND a.user_id = $2
 	`
 
 	var account domain.Account
@@ -1633,7 +1632,10 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 	}
 	hiddenClause := ""
 	if !opts.IncludeHidden {
-		hiddenClause = " AND a.is_hidden = FALSE"
+		// #1609: the FILTER reads the same overlay the projection does. Reading a.is_hidden here
+		// while projecting the chain's value is the worst of both — the list shows the row as
+		// hidden and keeps returning it.
+		hiddenClause = " AND " + accountHiddenExpr("a") + " = FALSE"
 	}
 
 	userAccountClause := ""
@@ -1666,14 +1668,13 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
-		       a.display_order, a.is_hidden,
+		       ` + accountCustomizationProjection("a") + `,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status` + lastKnownProjection + `
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + lastKnownJoin + `
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + lastKnownJoin + `
 		WHERE a.user_id = $1` + statusClause + hiddenClause + userAccountClause + `
-		ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC`
+		ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC`
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
