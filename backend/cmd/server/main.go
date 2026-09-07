@@ -312,14 +312,21 @@ func main() {
 		appLogger.Error("Failed to build rate-limit backend", "error", err)
 		os.Exit(1)
 	}
-	registerCloudflareAndRateLimitMiddlewareWithBackend(e, cfCIDRRef, cfg, rateLimitBackend, rateLimitDone, appLogger) // 3-4. Cloudflare gate, then per-IP rate limiting (order load-bearing, see helper doc)
-	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                                                        // 5. Panic recovery (formats RFC 9457 response)
-	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                                                           // 6. Sentry panic reporting
-	e.Use(otelecho.Middleware("boostedbudget-api"))                                                                    // 7. OTEL tracing
-	e.Use(middleware.StructuredLogging(appLogger))                                                                     // 8. slog-based HTTP logging
-	e.Use(middleware.MetricsMiddleware())                                                                              // 9. Prometheus metrics
-	e.Use(echomiddleware.BodyLimit(cfg.MaxBodySize))                                                                   // 10. Request body size limit
-	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins)))                             // 10. CORS handling with configured origins
+	// #1609: header-only CORS middleware, registered BEFORE the Cloudflare gate and rate
+	// limiter so a 403/429 rejection still carries Access-Control-Allow-Origin (and
+	// -Credentials, Vary, Expose-Headers) — those two paths short-circuit and never reach
+	// the real CORS middleware at the end of this chain. It never short-circuits itself
+	// (does not handle OPTIONS/preflight) — see CORSErrorHeaders' doc comment for why moving
+	// the REAL CORS middleware here instead was rejected as an unmetered perimeter bypass.
+	e.Use(middleware.CORSErrorHeaders(cfg.CORSAllowedOrigins)) // 3. Error-path CORS headers (must run before the gate)
+	registerCloudflareAndRateLimitMiddlewareWithBackend(e, cfCIDRRef, cfg, rateLimitBackend, rateLimitDone, appLogger) // 4-5. Cloudflare gate, then per-IP rate limiting (order load-bearing, see helper doc)
+	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                                                        // 6. Panic recovery (formats RFC 9457 response)
+	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                                                           // 7. Sentry panic reporting
+	e.Use(otelecho.Middleware("boostedbudget-api"))                                                                    // 8. OTEL tracing
+	e.Use(middleware.StructuredLogging(appLogger))                                                                     // 9. slog-based HTTP logging
+	e.Use(middleware.MetricsMiddleware())                                                                              // 10. Prometheus metrics
+	e.Use(echomiddleware.BodyLimit(cfg.MaxBodySize))                                                                   // 11. Request body size limit
+	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins)))                             // 12. CORS handling with configured origins
 
 	// Initialize Huma API wrapping Echo for OpenAPI generation
 	// Huma provides automatic OpenAPI 3.1 spec generation from Go code

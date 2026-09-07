@@ -59,26 +59,40 @@ func ValidateCORSConfig(allowedOrigins, environment string) error {
 	return nil
 }
 
+// parseCORSAllowedOrigins is the single place that turns the CORS_ALLOWED_ORIGINS config
+// string into an origin list. Both GetCORSConfig and CORSErrorHeaders (cors_error_headers.go)
+// must use this so the two allowlists cannot drift (issue #1609): the header-only middleware
+// registered before the Cloudflare/rate-limit gate needs the exact same allowlist semantics as
+// the real echomiddleware.CORSWithConfig instance registered after it.
+//
+// If allowedOrigins is empty or "*", it returns []string{"*"} (dev/test only, wildcard).
+// Otherwise it splits on commas and trims whitespace, dropping empty entries.
+func parseCORSAllowedOrigins(allowedOrigins string) []string {
+	if allowedOrigins == "" || allowedOrigins == "*" {
+		return []string{"*"}
+	}
+
+	var origins []string
+	for _, origin := range strings.Split(allowedOrigins, ",") {
+		if trimmed := strings.TrimSpace(origin); trimmed != "" {
+			origins = append(origins, trimmed)
+		}
+	}
+	return origins
+}
+
 // GetCORSConfig returns an Echo CORS middleware configuration based on allowed origins
 // If allowedOrigins is empty or "*", it allows all origins (dev/test only)
 // For production, should be a comma-separated list of allowed origins
 func GetCORSConfig(allowedOrigins string) echomiddleware.CORSConfig {
-	var origins []string
-	if allowedOrigins == "" || allowedOrigins == "*" {
-		origins = []string{"*"}
-	} else {
-		// Split comma-separated origins and trim whitespace
-		for _, origin := range strings.Split(allowedOrigins, ",") {
-			if trimmed := strings.TrimSpace(origin); trimmed != "" {
-				origins = append(origins, trimmed)
-			}
-		}
-	}
-
 	return echomiddleware.CORSConfig{
-		AllowOrigins:     origins,
+		AllowOrigins:     parseCORSAllowedOrigins(allowedOrigins),
 		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
 		AllowHeaders:     []string{"Authorization", "Content-Type", "X-Requested-With"},
+		// ExposeHeaders makes Retry-After readable cross-origin. Without it a browser client
+		// cannot read the Retry-After header IPRateLimiter sets on a 429 (rate_limit.go), even
+		// once CORSErrorHeaders lets it read the response at all (issue #1609).
+		ExposeHeaders:    []string{"Retry-After"},
 		AllowCredentials: true,
 		MaxAge:           86400,
 	}
