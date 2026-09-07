@@ -393,3 +393,62 @@ func TestAccountRepository_CustomizationOverlay_GetByIDAndUserOverlays_Integrati
 	assert.Equal(t, 2, *got.DisplayOrder)
 	assert.True(t, got.IsHidden)
 }
+
+// ── 8. A3/A4/A5, the remaining three reads. ──────────────────────────────────────────────────
+//
+// GetByUserAccountIDAndUser is the transfer IDOR probe; GetByUserAccountAndStatus and
+// GetByUserAccountID are latent today (no caller renders their customization) — which is exactly
+// why they are covered here rather than left: a latent stale field becomes a live one the moment
+// somebody renders it, with nothing to say it was ever wrong.
+func TestAccountRepository_CustomizationOverlay_RemainingChainReadsOverlay_Integration(t *testing.T) {
+	f, ctx := newOverlayFixture(t)
+
+	uaID := f.newUserAccount(t, ctx)
+	accountID := f.newAccount(t, ctx, "remaining", &uaID)
+
+	require.NoError(t, f.repo.Update(ctx, &domain.Account{
+		ID: accountID, Nickname: strptr("legacy nickname"), CustomColor: strptr("#777777"),
+		CustomIcon: strptr("wallet"), CustomEmoji: strptr("📁"), DisplayOrder: intptr(6),
+	}, f.userID.String()))
+	require.NoError(t, f.uaRepo.Update(ctx, &domain.UserAccount{
+		ID: uaID, UserID: f.userID.String(),
+		Nickname: strptr("chain nickname"), CustomColor: strptr("#888888"),
+		CustomIcon: strptr("piggy-bank"), CustomEmoji: strptr("🏧"), DisplayOrder: intptr(3),
+		IsHidden: true,
+	}))
+
+	assertOverlaid := func(t *testing.T, got domain.Account) {
+		t.Helper()
+		require.NotNil(t, got.Nickname)
+		assert.Equal(t, "chain nickname", *got.Nickname)
+		require.NotNil(t, got.CustomColor)
+		assert.Equal(t, "#888888", *got.CustomColor)
+		require.NotNil(t, got.CustomIcon)
+		assert.Equal(t, "piggy-bank", *got.CustomIcon)
+		require.NotNil(t, got.CustomEmoji)
+		assert.Equal(t, "🏧", *got.CustomEmoji)
+		require.NotNil(t, got.DisplayOrder)
+		assert.Equal(t, 3, *got.DisplayOrder)
+		assert.True(t, got.IsHidden)
+	}
+
+	t.Run("A3 GetByUserAccountIDAndUser", func(t *testing.T) {
+		got, err := f.repo.GetByUserAccountIDAndUser(ctx, uaID, f.userID.String())
+		require.NoError(t, err)
+		assertOverlaid(t, *got)
+	})
+
+	t.Run("A4 GetByUserAccountAndStatus", func(t *testing.T) {
+		rows, err := f.repo.GetByUserAccountAndStatus(ctx, uaID, string(domain.AccountStatusActive), f.userID.String())
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		assertOverlaid(t, rows[0])
+	})
+
+	t.Run("A5 GetByUserAccountID", func(t *testing.T) {
+		rows, err := f.repo.GetByUserAccountID(ctx, uaID)
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		assertOverlaid(t, rows[0])
+	})
+}
