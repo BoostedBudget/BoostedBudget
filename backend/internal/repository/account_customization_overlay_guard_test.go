@@ -53,10 +53,25 @@ import (
 //     account reads are aliased as of this change, precisely so the guard can see them.
 //  3. Whether the CASE's predicate is RIGHT — only that the fragment is verbatim. The behavioural
 //     half is account_customization_overlay_integration_test.go, against real Postgres.
+//  4. ⚠ WAS a hole, CLOSED in fix round 1 (F2), and recorded because the closing is the point.
+//     Everything above judges SELECT LISTS only, so reverting A1's filter to
+//     `AND a.is_hidden = FALSE` or its ordering to `COALESCE(a.display_order, 999999)` left the
+//     projection and the join intact and the guard green — producing the "worst of both" state
+//     accountHiddenExpr's own comment warns about, and doing it to the one read whose
+//     requirements single those two clauses out. customizationOverlayOffences now has a second
+//     half for exactly that, keyed on internal consistency: a literal that overlays an alias may
+//     not read that alias's raw columns anywhere else in the statement. Mutation-checked against
+//     real production code — reverting BOTH clauses in
+//     GetAccountsWithInstitutionFiltered turns this red naming both lines.
+//     What is STILL not seen: an alias in a file that overlays NOTHING (judged by the select-list
+//     rule alone), and a predicate assembled by fmt.Sprintf or a helper the folder cannot
+//     evaluate, which folds to the unknown-fragment placeholder.
 //
-// Mutation-checked: restoring `a.nickname, a.custom_color, ...` at
-// GetAccountsWithInstitutionFiltered turns this red naming the file, line and select list. See
-// task-3b-report.md for what it printed.
+// Mutation-checked, three times, each against real production code and each observed red on its
+// own assertion: (1) restoring `a.nickname, a.custom_color, ...` at
+// GetAccountsWithInstitutionFiltered; (2) dropping the join from GetByIDAndUser while keeping its
+// projection; (3) reverting A1's hidden filter AND its ORDER BY while leaving projection and join
+// intact. See task-3b-report.md for what each printed.
 
 // accountCustomizationColumnRe matches any of the six columns carrying the given qualifier.
 func accountCustomizationColumnRe(qualifier string) *regexp.Regexp {
@@ -94,11 +109,18 @@ var customizationOverlayExceptions = []customizationOverlayException{
 		File:   "database/backfill.go",
 		Marker: "WHERE a.user_account_id IS NULL",
 		Reason: "The startup user_account repair, and it reads a.is_hidden in the OPPOSITE " +
-			"direction to everything else here: this row has NO chain yet (that is the WHERE " +
-			"clause), so `accounts` is the only place its hide can be, and the value is being " +
-			"LIFTED onto the user_accounts row it is about to join (carryLegacyHideForward, " +
-			"#1609 task 3a). Overlaying a chain that does not exist would read NULL and destroy " +
-			"the hide — the exact defect this repair exists to prevent.",
+			"direction to everything else here: its WHERE clause is `a.user_account_id IS NULL`, " +
+			"so by construction this row has NO chain, and `accounts` is the only place its hide " +
+			"can be. The value is being LIFTED onto the user_accounts row the repair is about to " +
+			"attach (carryLegacyHideForward, #1609 task 3a). The overlay is therefore a SEMANTIC " +
+			"NO-OP on this query — every row it returns takes the CASE's ELSE leg and yields " +
+			"a.is_hidden unchanged — so requiring it would buy nothing and would add a pointless " +
+			"join dependency to a repair scan that runs on every boot. " +
+			"⚠ CORRECTED in fix round 1 (F1): this reason previously claimed the overlay 'would " +
+			"read NULL and destroy the hide'. That was FALSE — NULL is what COALESCE would have " +
+			"done, and the whole point of the CASE is that it does not. CLAUDE.md records that " +
+			"two false allowlist reasons have already shipped on this branch and that no guard " +
+			"checks a reason is true; this one is corrected rather than left as the third.",
 	},
 	{
 		File:   "repository/savings_impact_repository.go",
@@ -130,6 +152,135 @@ func (e customizationOverlayException) matches(rel, sql string) bool {
 	return e.File == rel && strings.Contains(sql, e.Marker)
 }
 
+// customizationOverlayOffences judges ONE SQL literal and is the SINGLE definition of the rule.
+//
+// ⚠ THE WALKER AND THE META-TESTS BOTH CALL THIS. The first draft had the meta-tests
+// re-implement the alias-scan / strip / match loop by hand, which meant nine subtests were
+// validating a COPY — structurally the same drift hole this file's header criticises the status
+// guard for, one level down. Two branches (the allowlist, and projection-without-join) were
+// exercised by NO meta-test at all as a direct result. Anything added here is therefore
+// automatically under meta-test, and a meta-test that passes is a statement about the code the
+// walker runs.
+//
+// rel is the path relative to backend/internal and is used ONLY for allowlist matching; pass ""
+// for a synthetic case, which no allowlist entry can match. Returned offences carry no file or
+// line — the walker prefixes those — and each begins with a space so the prefix reads naturally.
+//
+// The int is the number of overlaid projections seen, which feeds the fail-closed floor.
+// overlaidAliasesIn returns the accounts aliases whose projection this literal renders.
+func overlaidAliasesIn(sql string) map[string]bool {
+	out := map[string]bool{}
+	for _, alias := range accountsAliasesIn(sql) {
+		if strings.Contains(sql, accountCustomizationProjection(alias)) {
+			out[alias] = true
+		}
+	}
+	return out
+}
+
+func customizationOverlayOffences(rel, sql string, overlaidInFile map[string]bool) ([]string, int) {
+	aliases := accountsAliasesIn(sql)
+	// ⚠ NOT `len(aliases) == 0 -> return`. The optional-predicate literal this guard's second
+	// half exists to catch (`" AND a.is_hidden = FALSE"`, built as its own Go string) binds no
+	// alias of its own — an early return on that basis is precisely what let mutant 3's WHERE
+	// revert through while its ORDER BY revert was caught. Measured, not reasoned.
+	if len(aliases) == 0 && len(overlaidInFile) == 0 {
+		return nil, 0
+	}
+	excused := false
+	for _, e := range customizationOverlayExceptions {
+		if e.matches(rel, sql) {
+			excused = true
+			break
+		}
+	}
+
+	var offences []string
+	guarded := 0
+	overlaidAliases := map[string]bool{}
+
+	for _, m := range accountProjectionSelect.FindAllStringSubmatch(sql, -1) {
+		list := m[1]
+		// Strip the compliant form — the renderer's OWN output, for every alias in play — before
+		// looking for a raw column. What remains is by definition not rendered through it.
+		stripped := list
+		for _, alias := range aliases {
+			stripped = strings.ReplaceAll(stripped, accountCustomizationProjection(alias), " ")
+		}
+		for _, alias := range aliases {
+			if strings.Contains(list, accountCustomizationProjection(alias)) {
+				guarded++
+				overlaidAliases[alias] = true
+				// The projection is useless without its join: a_ua would be an unknown alias and
+				// the query would not even parse, but a HALF-edited literal (join added to one,
+				// projection to another) is exactly the shape a partial refactor leaves behind.
+				if !strings.Contains(sql, accountCustomizationJoin(alias)) {
+					offences = append(offences, " renders accountCustomizationProjection("+alias+
+						") without accountCustomizationJoin("+alias+")")
+				}
+			}
+			bare := accountCustomizationColumnRe(alias).FindAllString(stripped, -1)
+			if len(bare) == 0 || excused {
+				continue
+			}
+			offences = append(offences, " ("+strings.Join(bare, ", ")+")"+
+				"\n      SELECT "+strings.Join(strings.Fields(list), " ")+" FROM ...")
+		}
+	}
+
+	// ── The WHERE / ORDER BY half (fix round 1, F2). ────────────────────────────────────────
+	//
+	// Everything above judges SELECT LISTS, and that left a hole the requirements themselves
+	// single out: reverting A1's filter to `AND a.is_hidden = FALSE`, or its ordering to
+	// `COALESCE(a.display_order, 999999)`, leaves the projection and the join intact and every
+	// check above green — while producing the "worst of both" state accountHiddenExpr's own
+	// comment warns about, where the list renders the row as hidden and the query keeps
+	// returning it.
+	//
+	// SCOPED TO LITERALS THAT ALREADY RENDER THE OVERLAY, deliberately. A query that never
+	// overlays anything is judged by the select-list rule alone; this is about internal
+	// CONSISTENCY — once a literal has decided the chain is authoritative for its projection, it
+	// may not consult the raw column anywhere else in the same statement.
+	//
+	// The select lists are removed first (they are judged above, and re-reporting them here
+	// would double-count), then every renderer's own output is stripped for the alias in
+	// question — the projection first, because accountHiddenExpr's text is a SUBSTRING of it.
+	//
+	// ⚠ THE ALIAS SET IS FILE-SCOPED, and that is a deliberate exception to this file's own
+	// "judge each literal on its own" rule. Measured, not assumed: reverting A1's filter to
+	// `AND a.is_hidden = FALSE` was NOT caught by the literal-scoped form, because that clause
+	// is assembled in a SEPARATE Go string (`hiddenClause`) which folds on its own and carries
+	// no `FROM accounts`, so no alias is bound in it at all. An optional predicate built in a
+	// sibling literal is the ordinary shape in this package, so a literal-scoped rule is
+	// structurally blind to the exact regression this half exists to catch. Widening to the file
+	// is safe in the direction that matters: it can only ADD offences, the allowlist still
+	// applies per literal, and the select-list rule above stays strictly per-span.
+	for alias := range overlaidInFile {
+		overlaidAliases[alias] = true
+	}
+	if len(overlaidAliases) > 0 && !excused {
+		rest := sql
+		for _, span := range accountProjectionSelect.FindAllString(sql, -1) {
+			rest = strings.Replace(rest, span, " FROM ", 1)
+		}
+		for alias := range overlaidAliases {
+			r := rest
+			r = strings.ReplaceAll(r, accountCustomizationProjection(alias), " ")
+			for _, f := range accountCustomizationColumns {
+				r = strings.ReplaceAll(r, accountCustomizationExpr(alias, f), " ")
+			}
+			if bare := accountCustomizationColumnRe(alias).FindAllString(r, -1); len(bare) > 0 {
+				offences = append(offences, " overlays its projection but reads "+
+					strings.Join(bare, ", ")+" RAW outside the select list (a WHERE or ORDER BY "+
+					"regression: the row renders as the chain says and is filtered/sorted as "+
+					"`accounts` says)")
+			}
+		}
+	}
+
+	return offences, guarded
+}
+
 func TestNoAccountCustomizationReadWithoutTheOverlay(t *testing.T) {
 	root := repoInternalRoot(t)
 
@@ -151,52 +302,22 @@ func TestNoAccountCustomizationReadWithoutTheOverlay(t *testing.T) {
 		rel, _ := filepath.Rel(root, path)
 		rel = filepath.ToSlash(rel)
 
-		for _, expr := range sqlStringExprs(file) {
-			aliases := accountsAliasesIn(expr.SQL)
-			if len(aliases) == 0 {
-				continue
+		exprs := sqlStringExprs(file)
+		// Pass 1: which aliases does this FILE overlay anywhere? See the file-scope note in
+		// customizationOverlayOffences for why the second rule needs this and the first does not.
+		fileOverlaid := map[string]bool{}
+		for _, expr := range exprs {
+			for alias := range overlaidAliasesIn(expr.SQL) {
+				fileOverlaid[alias] = true
 			}
+		}
+		// Pass 2: judge.
+		for _, expr := range exprs {
+			offences, guarded := customizationOverlayOffences(rel, expr.SQL, fileOverlaid)
+			guardedProjections += guarded
 			line := strconv.Itoa(fset.Position(expr.Pos).Line)
-
-			for _, m := range accountProjectionSelect.FindAllStringSubmatch(expr.SQL, -1) {
-				list := m[1]
-				// Strip the compliant form — the renderer's OWN output, for every alias in play —
-				// before looking for a raw column. What remains is by definition not rendered
-				// through it.
-				stripped := list
-				for _, alias := range aliases {
-					stripped = strings.ReplaceAll(stripped, accountCustomizationProjection(alias), " ")
-				}
-				for _, alias := range aliases {
-					if strings.Contains(list, accountCustomizationProjection(alias)) {
-						guardedProjections++
-						// The projection is useless without its join: a_ua would be an unknown
-						// alias and the query would not even parse, but a HALF-edited query (join
-						// added to one literal, projection to another) is exactly the shape a
-						// partial refactor leaves behind.
-						if !strings.Contains(expr.SQL, accountCustomizationJoin(alias)) {
-							offenders = append(offenders, rel+":"+line+
-								" renders accountCustomizationProjection("+alias+
-								") without accountCustomizationJoin("+alias+")")
-						}
-					}
-					bare := accountCustomizationColumnRe(alias).FindAllString(stripped, -1)
-					if len(bare) == 0 {
-						continue
-					}
-					excused := false
-					for _, e := range customizationOverlayExceptions {
-						if e.matches(rel, expr.SQL) {
-							excused = true
-							break
-						}
-					}
-					if excused {
-						continue
-					}
-					offenders = append(offenders, rel+":"+line+" ("+strings.Join(bare, ", ")+")"+
-						"\n      SELECT "+strings.Join(strings.Fields(list), " ")+" FROM ...")
-				}
+			for _, o := range offences {
+				offenders = append(offenders, rel+":"+line+o)
 			}
 		}
 		return nil
@@ -294,6 +415,61 @@ func TestAccountCustomizationOverlayGuard_Recognises(t *testing.T) {
 			assertOverlayOffences(t, "SELECT a.id, a."+col+" FROM accounts a", 1)
 		}
 	})
+	t.Run("a projection WITHOUT its join is an offence", func(t *testing.T) {
+		// The half-edited shape: the select list was migrated, the FROM clause was not. It cannot
+		// run — a_ua is an unknown alias — but a partial refactor produces exactly this, and a
+		// guard that only checks the select list would call it compliant.
+		sql := "SELECT a.id, a.plaid_account_id, a.status, " +
+			accountCustomizationProjection("a") + " FROM accounts a"
+		assertOverlayOffences(t, sql, 1)
+	})
+	t.Run("the allowlist excuses a raw column, and ONLY for its own file", func(t *testing.T) {
+		sql := "SELECT ts.id, COALESCE(NULLIF(a.nickname, ''), a.name) AS plaid_account_name " +
+			"FROM transfer_suggestions ts LEFT JOIN accounts a ON a.id = ts.to_account_id"
+		assertOverlayOffencesIn(t, "repository/savings_impact_repository.go", sql, 0)
+		assertOverlayOffencesIn(t, "repository/some_other_file.go", sql, 1)
+	})
+	// ── The WHERE / ORDER BY half (fix round 1, F2). ────────────────────────────────────────
+	t.Run("a reverted WHERE filter is an offence even with a perfect projection", func(t *testing.T) {
+		sql := compliant + " WHERE a.user_id = $1 AND a.is_hidden = FALSE"
+		assertOverlayOffences(t, sql, 1)
+	})
+	t.Run("a reverted ORDER BY is an offence even with a perfect projection", func(t *testing.T) {
+		sql := compliant + " ORDER BY COALESCE(a.display_order, 999999) ASC"
+		assertOverlayOffences(t, sql, 1)
+	})
+	t.Run("the overlaid WHERE and ORDER BY forms are clean", func(t *testing.T) {
+		sql := compliant +
+			" WHERE a.user_id = $1 AND " + accountHiddenExpr("a") + " = FALSE" +
+			" ORDER BY COALESCE(" + accountDisplayOrderExpr("a") + ", 999999) ASC, a.created_at ASC"
+		assertOverlayOffences(t, sql, 0)
+	})
+	t.Run("a literal that overlays NOTHING is not subject to the WHERE rule", func(t *testing.T) {
+		// The consistency rule is about a literal contradicting ITSELF. A query that never
+		// overlays is judged by the select-list rule alone, which is what keeps this off the
+		// allowlisted repair scan's own `WHERE a.user_account_id IS NULL`.
+		assertOverlayOffences(t, "SELECT a.id, a.status FROM accounts a WHERE a.is_hidden = FALSE", 0)
+	})
+	t.Run("an optional predicate built in a SEPARATE literal is still judged", func(t *testing.T) {
+		// The shape that defeated the literal-scoped form: `hiddenClause` is its own Go string,
+		// binds no alias, and folds separately from the query it is concatenated into. The file
+		// overlays `a`, so the fragment is judged against that.
+		frag := " AND a.is_hidden = FALSE"
+		if got, _ := customizationOverlayOffences("", frag, nil); len(got) != 0 {
+			t.Fatalf("with no file context the fragment is not judgeable; got %q", got)
+		}
+		got, _ := customizationOverlayOffences("", frag, map[string]bool{"a": true})
+		if len(got) != 1 {
+			t.Fatalf("a file that overlays `a` must not also filter on a raw a.is_hidden; got %d %q",
+				len(got), got)
+		}
+		// And the overlaid form of the same fragment is clean.
+		ok, _ := customizationOverlayOffences("",
+			" AND "+accountHiddenExpr("a")+" = FALSE", map[string]bool{"a": true})
+		if len(ok) != 0 {
+			t.Fatalf("the overlaid predicate must be clean; got %q", ok)
+		}
+	})
 	t.Run("KNOWN HOLE: a star projection is invisible", func(t *testing.T) {
 		assertOverlayOffences(t, "SELECT a.* FROM accounts a", 0)
 	})
@@ -306,21 +482,14 @@ func TestAccountCustomizationOverlayGuard_Recognises(t *testing.T) {
 // allowlist, and asserts the offence count.
 func assertOverlayOffences(t *testing.T, sql string, want int) {
 	t.Helper()
-	aliases := accountsAliasesIn(sql)
-	got := 0
-	for _, m := range accountProjectionSelect.FindAllStringSubmatch(sql, -1) {
-		stripped := m[1]
-		for _, alias := range aliases {
-			stripped = strings.ReplaceAll(stripped, accountCustomizationProjection(alias), " ")
-		}
-		for _, alias := range aliases {
-			if len(accountCustomizationColumnRe(alias).FindAllString(stripped, -1)) > 0 {
-				got++
-			}
-		}
-	}
-	if got != want {
-		t.Fatalf("got %d offence(s), want %d, for:\n%s", got, want, sql)
+	assertOverlayOffencesIn(t, "", sql, want)
+}
+
+func assertOverlayOffencesIn(t *testing.T, rel, sql string, want int) {
+	t.Helper()
+	got, _ := customizationOverlayOffences(rel, sql, nil)
+	if len(got) != want {
+		t.Fatalf("got %d offence(s) %q, want %d, for:\n%s", len(got), got, want, sql)
 	}
 }
 
