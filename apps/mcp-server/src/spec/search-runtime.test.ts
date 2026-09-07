@@ -173,3 +173,33 @@ describe('searchSpec with description and parameters (R8-2b)', () => {
     expect(entry?.parameters?.[0]?.enum).toContain('pending')
   })
 })
+
+// Issue #1609 Task 6: body field names join the search haystack so "how do I create a rule
+// with conditions" matches createRule even though "conditions" never appears in its summary.
+describe('searchSpec with requestBody (#1609 task 6)', () => {
+  const INDEX_WITH_BODY: SpecIndex = {
+    version: '1',
+    entries: [
+      ...FIXTURE_INDEX.entries,
+      {
+        operationId: 'createRule',
+        method: 'POST',
+        path: '/api/v1/auto-categorization',
+        summary: 'Create a new categorization rule',
+        tags: ['Auto-Categorization'],
+        manifestClass: 'write',
+        excluded: false,
+        requestBody: [
+          { name: 'name', type: 'string', required: true, description: 'Human-readable rule name' },
+          { name: 'conditions', type: 'array of object', required: true },
+          { name: 'conditions[].type', type: 'string', required: true, enum: ['merchant', 'amount', 'category'] },
+        ],
+      },
+    ],
+  }
+
+  it('finds an operation by a body field name not present in its summary', () => {
+    const results = searchSpec(INDEX_WITH_BODY, 'conditions')
+    expect(results.some((e: SpecEntry) => e.operationId === 'createRule')).toBe(true)
+  })
+})

@@ -172,4 +172,49 @@ describe('buildSearchResult', () => {
     expect(result.content[0]?.text).not.toContain('description:')
     expect(result.content[0]?.text).not.toContain('params:')
   })
+
+  // Issue #1609 Task 6: search() must render request body shape so an MCP client can
+  // construct a valid write body instead of guessing (the createRule incident).
+  it('renders a body: block for an operation with a requestBody (#1609)', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'createRule',
+        method: 'POST',
+        path: '/api/v1/auto-categorization',
+        summary: 'Create a new categorization rule',
+        tags: ['Auto-Categorization'],
+        manifestClass: 'write',
+        excluded: false,
+        requestBody: [
+          { name: 'name', type: 'string', required: true, description: 'Human-readable rule name' },
+          { name: 'priority', type: 'integer', description: 'Lower runs first' },
+          { name: 'conditions', type: 'array of object', required: true },
+          { name: 'conditions[].type', type: 'string', required: true, enum: ['merchant', 'amount', 'category'] },
+          { name: 'conditions[].operator', type: 'string', required: true, enum: ['contains', 'equals', 'gt', 'lt'] },
+          { name: 'conditions[].value', required: true },
+        ],
+      },
+    ])
+    const text = result.content[0]?.text ?? ''
+    expect(text).toContain('body:')
+    expect(text).toContain('name (string, required)')
+    expect(text).toContain('conditions (array of object, required)')
+    expect(text).toContain('conditions[].type')
+    expect(text).toContain('merchant|amount|category')
+  })
+
+  it('omits the body: block entirely when there is no requestBody (byte-identical to today for GETs)', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'getTransactions',
+        method: 'GET',
+        path: '/api/v1/transactions',
+        summary: 'List transactions',
+        tags: ['Transactions'],
+        manifestClass: 'read',
+        excluded: false,
+      },
+    ])
+    expect(result.content[0]?.text).not.toContain('body:')
+  })
 })

@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import $RefParser from '@apidevtools/json-schema-ref-parser'
 import { parse as parseYaml } from 'yaml'
 import { getCapability } from '../manifest/capability-manifest'
-import type { SpecEntry, SpecIndex, SpecParameter } from './search-runtime'
+import type { SpecBodyField, SpecEntry, SpecIndex, SpecParameter } from './search-runtime'
 
 // Paths relative to repo root
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -39,6 +39,27 @@ interface OpenAPIParameter {
   [key: string]: unknown
 }
 
+/**
+ * OpenAPI JSON Schema fragment, as it appears either inline or as the target of a `$ref`.
+ * Deliberately loose — we only read the handful of keywords the flattener understands.
+ */
+interface OpenAPISchema {
+  $ref?: string
+  type?: string | string[]
+  properties?: Record<string, OpenAPISchema>
+  items?: OpenAPISchema
+  required?: string[]
+  enum?: unknown[]
+  description?: string
+  [key: string]: unknown
+}
+
+interface OpenAPIRequestBody {
+  content?: Record<string, { schema?: OpenAPISchema } | undefined>
+  required?: boolean
+  [key: string]: unknown
+}
+
 interface OpenAPIOperation {
   operationId?: string
   summary?: string
@@ -46,6 +67,7 @@ interface OpenAPIOperation {
   tags?: string[]
   security?: unknown[]
   parameters?: OpenAPIParameter[]
+  requestBody?: OpenAPIRequestBody
 }
 
 interface OpenAPIPathItem {
@@ -59,7 +81,135 @@ interface OpenAPIPathItem {
 
 interface OpenAPISpec {
   paths?: Record<string, OpenAPIPathItem>
+  components?: { schemas?: Record<string, OpenAPISchema> }
   [key: string]: unknown
+}
+
+/**
+ * Resolve a `$ref` (and any chain of `$ref`s) against `components.schemas`, breaking on a
+ * self-referential cycle (a schema whose `$ref` chain points back at a name already visited).
+ * `buildSpecIndex` runs `$RefParser.dereference` first, so in production this is mostly a
+ * no-op passthrough — but `indexFromSpec` is also exercised directly with synthetic,
+ * UNDEREFERENCED fixtures in tests, so resolution must not depend on that prior pass.
+ */
+function resolveSchema(
+  schema: OpenAPISchema | undefined,
+  spec: OpenAPISpec,
+  seen: Set<string> = new Set(),
+): OpenAPISchema | undefined {
+  if (!schema) return undefined
+  if (!schema.$ref) return schema
+
+  const refName = schema.$ref.replace(/^#\/components\/schemas\//, '')
+  if (seen.has(refName)) return undefined // self-referential cycle — stop, don't recurse forever
+
+  const resolved = spec.components?.schemas?.[refName]
+  if (!resolved) return undefined
+
+  const nextSeen = new Set(seen)
+  nextSeen.add(refName)
+  return resolveSchema(resolved, spec, nextSeen)
+}
+
+/** First non-`null` entry of a (possibly nullable-union) OpenAPI `type`. */
+function primaryType(type: string | string[] | undefined): string | undefined {
+  return Array.isArray(type) ? type.find((t) => t !== 'null') : type
+}
+
+// Nested objects / array-of-object items flatten to this many levels deep (dotted names).
+// Depth 1 = the request body's own top-level fields; depth 2 = one level of nesting
+// (`action.custom_category_id`, `conditions[].field`). Beyond that we mark the field as
+// `object` / `array of object` without expanding it further — see the brief: "flatten... to
+// a reasonable depth (2 is enough)... or clearly mark a nested object rather than recursing
+// without bound."
+const MAX_BODY_DEPTH = 2
+
+/**
+ * Flatten an object schema's properties into token-frugal SpecBodyField entries, recursing
+ * into nested objects and array-of-object items up to MAX_BODY_DEPTH using dotted names.
+ */
+function flattenBodySchema(
+  schema: OpenAPISchema | undefined,
+  spec: OpenAPISpec,
+  depth: number,
+  prefix: string,
+  out: SpecBodyField[],
+): void {
+  const resolved = resolveSchema(schema, spec)
+  if (!resolved?.properties) return
+
+  const required = resolved.required ?? []
+
+  for (const [key, rawProp] of Object.entries(resolved.properties)) {
+    const prop = resolveSchema(rawProp, spec)
+    if (!prop) continue
+    // Huma stamps a `$schema` (readOnly) property onto every generated request-body schema
+    // for tooling/editor use; it is never a field the client is meant to send. Surfacing it
+    // here would mislead an MCP client into thinking it's part of the write body.
+    if (prop.readOnly === true) continue
+
+    const fieldName = prefix ? `${prefix}.${key}` : key
+    const isRequired = required.includes(key)
+    const schemaType = primaryType(prop.type)
+
+    if (schemaType === 'array') {
+      const itemSchema = resolveSchema(prop.items, spec)
+      const itemType = itemSchema ? primaryType(itemSchema.type) : undefined
+      const isItemObject = itemType === 'object' || (!itemType && !!itemSchema?.properties)
+
+      out.push({
+        name: fieldName,
+        type: isItemObject ? 'array of object' : itemType ? `array of ${itemType}` : 'array',
+        ...(isRequired && { required: true }),
+        ...(prop.description && { description: prop.description }),
+        ...(itemSchema?.enum && { enum: itemSchema.enum.map(String) }),
+      })
+
+      if (isItemObject && depth < MAX_BODY_DEPTH) {
+        flattenBodySchema(itemSchema, spec, depth + 1, `${fieldName}[]`, out)
+      }
+      continue
+    }
+
+    if (schemaType === 'object' || prop.properties) {
+      out.push({
+        name: fieldName,
+        type: 'object',
+        ...(isRequired && { required: true }),
+        ...(prop.description && { description: prop.description }),
+      })
+
+      if (depth < MAX_BODY_DEPTH) {
+        flattenBodySchema(prop, spec, depth + 1, fieldName, out)
+      }
+      continue
+    }
+
+    out.push({
+      name: fieldName,
+      ...(schemaType && { type: schemaType }),
+      ...(isRequired && { required: true }),
+      ...(prop.enum && { enum: prop.enum.map(String) }),
+      ...(prop.description && { description: prop.description }),
+    })
+  }
+}
+
+/**
+ * Extract and flatten an operation's `application/json` request body schema. Prefer
+ * `content['application/json'].schema`; a body defined only under some other content type is
+ * skipped (acceptable per the brief — Huma-generated specs use JSON bodies throughout).
+ */
+function extractRequestBodyFields(
+  requestBody: OpenAPIRequestBody | undefined,
+  spec: OpenAPISpec,
+): SpecBodyField[] {
+  const schema = requestBody?.content?.['application/json']?.schema
+  if (!schema) return []
+
+  const out: SpecBodyField[] = []
+  flattenBodySchema(schema, spec, 1, '', out)
+  return out
 }
 
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const
@@ -120,6 +270,10 @@ export function indexFromSpec(spec: OpenAPISpec): SpecIndex {
           }
         })
 
+      // Extract the request body schema (issue #1609 Task 6). Prefer application/json;
+      // resolves $ref against components.schemas locally (spec is already in scope).
+      const requestBody = extractRequestBodyFields(operation.requestBody, spec)
+
       const entry: SpecEntry = {
         operationId,
         method: method.toUpperCase(),
@@ -131,6 +285,7 @@ export function indexFromSpec(spec: OpenAPISpec): SpecIndex {
       }
       if (description) entry.description = description
       if (parameters.length > 0) entry.parameters = parameters
+      if (requestBody.length > 0) entry.requestBody = requestBody
 
       entries.push(entry)
     }
