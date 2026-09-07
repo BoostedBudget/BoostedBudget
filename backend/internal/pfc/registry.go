@@ -42,11 +42,11 @@ var pfcPrimaryDisplayNames = map[string]string{
 var pfcDetailedByPrimary = map[string][]string{
 	"BANK_FEES": {
 		"BANK_FEES_ATM_FEES",
-		"BANK_FEES_CASH_ADVANCE",        // PFCv2 addition
+		"BANK_FEES_CASH_ADVANCE", // PFCv2 addition
 		"BANK_FEES_FOREIGN_TRANSACTION_FEES",
 		"BANK_FEES_INSUFFICIENT_FUNDS",
 		"BANK_FEES_INTEREST_CHARGE",
-		"BANK_FEES_LATE_FEES",           // PFCv2 addition
+		"BANK_FEES_LATE_FEES", // PFCv2 addition
 		"BANK_FEES_OVERDRAFT_FEES",
 		"BANK_FEES_OTHER_BANK_FEES",
 	},
@@ -108,15 +108,15 @@ var pfcDetailedByPrimary = map[string][]string{
 		"HOME_IMPROVEMENT_SECURITY",
 	},
 	"INCOME": {
-		"INCOME_CHILD_SUPPORT",       // PFCv2 addition
-		"INCOME_CONTRACTOR",          // PFCv2 addition
+		"INCOME_CHILD_SUPPORT", // PFCv2 addition
+		"INCOME_CONTRACTOR",    // PFCv2 addition
 		"INCOME_DIVIDENDS",
-		"INCOME_GIG_ECONOMY",         // PFCv2 addition
+		"INCOME_GIG_ECONOMY", // PFCv2 addition
 		"INCOME_INTEREST_EARNED",
 		"INCOME_LONG_TERM_DISABILITY", // PFCv2 addition
-		"INCOME_MILITARY",            // PFCv2 addition
+		"INCOME_MILITARY",             // PFCv2 addition
 		"INCOME_OTHER_INCOME",
-		"INCOME_RENTAL",              // PFCv2 addition
+		"INCOME_RENTAL", // PFCv2 addition
 		"INCOME_RETIREMENT_PENSION",
 		"INCOME_TAX_REFUND",
 		"INCOME_UNEMPLOYMENT",
@@ -172,20 +172,20 @@ var pfcDetailedByPrimary = map[string][]string{
 		"TRANSFER_IN_ACCOUNT_TRANSFER",
 		"TRANSFER_IN_CASH_ADVANCES_AND_LOANS",
 		"TRANSFER_IN_DEPOSIT",
-		"TRANSFER_IN_FROM_APPS",             // PFCv2 addition
+		"TRANSFER_IN_FROM_APPS", // PFCv2 addition
 		"TRANSFER_IN_INVESTMENT_AND_RETIREMENT_FUNDS",
 		"TRANSFER_IN_OTHER_TRANSFER_IN",
 		"TRANSFER_IN_SAVINGS",
-		"TRANSFER_IN_WIRE",                  // PFCv2 addition
+		"TRANSFER_IN_WIRE", // PFCv2 addition
 	},
 	"TRANSFER_OUT": {
 		"TRANSFER_OUT_ACCOUNT_TRANSFER",
-		"TRANSFER_OUT_CRYPTO",               // PFCv2 addition
-		"TRANSFER_OUT_FROM_APPS",            // PFCv2 addition
+		"TRANSFER_OUT_CRYPTO",    // PFCv2 addition
+		"TRANSFER_OUT_FROM_APPS", // PFCv2 addition
 		"TRANSFER_OUT_INVESTMENT_AND_RETIREMENT_FUNDS",
 		"TRANSFER_OUT_OTHER_TRANSFER_OUT",
 		"TRANSFER_OUT_SAVINGS",
-		"TRANSFER_OUT_WIRE",                 // PFCv2 addition
+		"TRANSFER_OUT_WIRE", // PFCv2 addition
 		"TRANSFER_OUT_WITHDRAWAL",
 	},
 	"TRANSPORTATION": {
@@ -198,7 +198,7 @@ var pfcDetailedByPrimary = map[string][]string{
 		"TRANSPORTATION_TOLLS",
 	},
 	"TRAVEL": {
-		"TRAVEL_FLIGHTS",     // PFCv2 addition
+		"TRAVEL_FLIGHTS", // PFCv2 addition
 		"TRAVEL_LODGING",
 		"TRAVEL_OTHER_TRAVEL",
 		"TRAVEL_RENTAL_CARS",
@@ -229,6 +229,27 @@ func AllPrimaries() []Primary {
 		return result[i].Display < result[j].Display
 	})
 	return result
+}
+
+// PrimaryEnums returns every valid PFCv2 primary enum, sorted alphabetically by ENUM (not by
+// display name, unlike AllPrimaries) so the result is stable and directly usable as an OpenAPI
+// `enum:` tag value. Issue #1609: this set is the same one migration 000065's
+// valid_custom_category_parent_pfc CHECK constrains custom_categories.parent_pfc_primary to;
+// TestPFCPrimaryEnumsMatchTheCustomCategoryParentCheck pins the two together.
+func PrimaryEnums() []string {
+	out := make([]string, 0, len(pfcPrimaryDisplayNames))
+	for enum := range pfcPrimaryDisplayNames {
+		out = append(out, enum)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// IsValidPrimary reports whether s is one of the PFCv2 primary enums. The empty string is NOT
+// valid here — callers that treat "" as "unset" must normalise it away before asking.
+func IsValidPrimary(s string) bool {
+	_, ok := pfcPrimaryDisplayNames[s]
+	return ok
 }
 
 // AllDetailed returns all PFCv2 detailed categories sorted by primary display name then
