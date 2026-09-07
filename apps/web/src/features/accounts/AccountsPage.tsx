@@ -335,10 +335,15 @@ export function AccountsPage() {
   }, [accountsData?.accounts])
 
   const handleSaveAccount = useCallback(async (account: Account, changes: Partial<UpdateAccountRequest>) => {
+    // #1609: updateAccount now REJECTS on failure instead of resolving with null, so the
+    // `if (!updatedAccount) return` guard that used to sit here is gone. It was not merely dead —
+    // it was the second half of a swallowed error: the modal decides whether to close from
+    // whether this promise rejected, so returning quietly told it the save had succeeded.
     const updatedAccount = await updateAccount(account, changes)
-    if (!updatedAccount) return
 
-    // Optimistically update the query cache
+    // Optimistically update the query cache. This keeps the UI instant, but it is a GUESS —
+    // useAccountCustomization reconstructs the account from the local `changes` because
+    // PATCH /user-accounts/{id} returns a UserAccount, a different shape.
     queryClient.setQueryData(accountsQueryKey, (oldData: { accounts: Account[] } | undefined) => {
       if (!oldData) return oldData
       return {
@@ -348,6 +353,13 @@ export function AccountsPage() {
         ),
       }
     })
+
+    // ...and then RECONCILE it (#1609). Without this the cache holds a guess that nothing ever
+    // corrects, which is exactly why a backend write that silently did nothing stayed invisible
+    // until a hard refresh. Invalidation, not hand-mapping the mutation response: the response
+    // is a UserAccount and mapping it into an Account is the mismatch that produced the guess in
+    // the first place.
+    await queryClient.invalidateQueries({ queryKey: accountsQueryKey })
   }, [updateAccount, queryClient, accountsQueryKey])
 
   const displayedAccounts = useMemo(() => {

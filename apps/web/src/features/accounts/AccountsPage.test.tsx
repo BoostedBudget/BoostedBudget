@@ -22,9 +22,28 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 // Local component stubs — safe because this file runs from /tmp (no bunfig.toml)
 // ============================================================================
 
-// Simplify AccountCustomizationModal to avoid complex dependencies
+// Simplify AccountCustomizationModal to avoid complex dependencies.
+//
+// #1609: the stub now exposes a button that fires `onSave`, so this file can drive
+// AccountsPage's own handleSaveAccount — the cache write and the reconciliation that follows it.
+// The modal is rendered unconditionally by the page (its `open` prop controls visibility), so the
+// button is always reachable without first opening the modal through a card.
 mock.module('./components/AccountCustomizationModal', () => ({
-  AccountCustomizationModal: () => null,
+  AccountCustomizationModal: ({
+    onSave,
+  }: {
+    onSave?: (account: { id: string }, changes: Record<string, unknown>) => Promise<unknown>
+  }) => (
+    <button
+      data-testid="stub-save-customization"
+      // Settled rather than fired-and-forgotten, mirroring the real modal, which awaits onSave
+      // inside Promise.allSettled and decides whether to close from the outcome. A bare call
+      // would leave a rejection unhandled and fail the run for the wrong reason.
+      onClick={() => void Promise.allSettled([onSave?.({ id: 'acc-1' }, { nickname: 'Renamed' })])}
+    >
+      Save customization
+    </button>
+  ),
 }))
 
 // Issue #1323: Use centralized ConfirmationDialog stub to avoid clobbering
@@ -120,9 +139,22 @@ mock.module('@/features/household', () => ({
     ) : null,
 }))
 
-// Mock useAccountCustomization
+// Mock useAccountCustomization.
+//
+// #1609: `updateAccount` is a STABLE mock on an exported stub object rather than a fresh one per
+// render, so a test can assert on it and swap in a rejecting implementation. It resolves with an
+// Account-shaped object because handleSaveAccount writes the resolved value into the query cache.
+export const accountCustomizationStub: {
+  updateAccount: ReturnType<typeof mock>
+} = {
+  updateAccount: mock(async () => ({ id: 'acc-1', name: 'Renamed' })),
+}
+
 mock.module('./hooks/useAccountCustomization', () => ({
-  useAccountCustomization: () => ({ updateAccount: mock(async () => {}), isUpdating: false }),
+  useAccountCustomization: () => ({
+    updateAccount: accountCustomizationStub.updateAccount,
+    isUpdating: false,
+  }),
 }))
 
 // Mock useAccountFilters.
@@ -173,24 +205,26 @@ import {
   mockExchangePublicTokenMutateAsync,
 } from '@/test/mocks/plaid-api'
 import { mockToastError } from '@/test/mocks/sonner'
+import { getGetAccountsQueryKey } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 // ============================================================================
 // Test helper
 // ============================================================================
 
 const { locationRef, LocationProbe, reset: resetLocationProbe } = createLocationHarness()
 
+// #1609: the client is held so a test can spy on the reconciliation AccountsPage performs after a
+// customization save. Previously it was constructed inline and unreachable.
+let lastQueryClient: QueryClient
+
 function renderAccountsPage() {
+  lastQueryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
+  })
   return render(
-    <QueryClientProvider
-      client={
-        new QueryClient({
-          defaultOptions: {
-            queries: { retry: false, gcTime: 0 },
-            mutations: { retry: false },
-          },
-        })
-      }
-    >
+    <QueryClientProvider client={lastQueryClient}>
       <MemoryRouter>
         <LocationProbe />
         <AccountsPage />
@@ -331,6 +365,53 @@ describe('AccountsPage', () => {
     it('does not show Monthly Sync Limits card', () => {
       renderAccountsPage()
       expect(screen.queryByText('Monthly Sync Limits')).not.toBeInTheDocument()
+    })
+
+    // ── #1609: the optimistic cache is written AND reconciled ────────────────────────────────
+    //
+    // AccountsPage writes an optimistic account into the query cache after a successful save.
+    // That object is a GUESS: useAccountCustomization reconstructs it from the local `changes`,
+    // because PATCH /user-accounts/{id} returns a UserAccount, a different shape. Nothing ever
+    // corrected the guess, so the cache held it until a hard refresh — which is exactly why a
+    // backend write that silently did nothing stayed invisible. Two coupled defects; this is the
+    // second half.
+    //
+    // Invalidation, not hand-mapping the mutation response: mapping a UserAccount into an Account
+    // is the mismatch that produced the guess in the first place.
+    it('invalidates the accounts query after a successful customization save', async () => {
+      accountCustomizationStub.updateAccount = mock(async () => ({ id: 'acc-1', name: 'Renamed' }))
+      renderAccountsPage()
+      const invalidateSpy = spyOn(lastQueryClient, 'invalidateQueries')
+
+      fireEvent.click(screen.getByTestId('stub-save-customization'))
+
+      await waitFor(() => {
+        expect(accountCustomizationStub.updateAccount).toHaveBeenCalled()
+      })
+      await waitFor(() => {
+        expect(invalidateSpy).toHaveBeenCalledWith({
+          queryKey: getGetAccountsQueryKey({ include_hidden: 'true', status: 'all_statuses' }),
+        })
+      })
+    })
+
+    it('writes nothing to the cache when the customization save fails', async () => {
+      accountCustomizationStub.updateAccount = mock(async () => {
+        throw new Error('Save failed')
+      })
+      renderAccountsPage()
+      const setSpy = spyOn(lastQueryClient, 'setQueryData')
+      const invalidateSpy = spyOn(lastQueryClient, 'invalidateQueries')
+
+      fireEvent.click(screen.getByTestId('stub-save-customization'))
+
+      await waitFor(() => {
+        expect(accountCustomizationStub.updateAccount).toHaveBeenCalled()
+      })
+      // The rejection must reach the modal — that is what keeps it open — so nothing downstream
+      // of the await runs: neither the optimistic write nor the reconciliation.
+      expect(setSpy).not.toHaveBeenCalled()
+      expect(invalidateSpy).not.toHaveBeenCalled()
     })
   })
 

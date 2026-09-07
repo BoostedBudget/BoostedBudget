@@ -184,7 +184,15 @@ describe('useAccountCustomization', () => {
       expect(result.current.isUpdating).toBe(true)
     })
 
-    it('should set updateError on failure', async () => {
+    // #1609: a failed save must REJECT, not resolve with null.
+    //
+    // The `catch { return null }` this replaces turned a rejection into a resolved value, which
+    // defeated the modal's own failure detection one layer down: AccountCustomizationModal
+    // decides whether to close from `Promise.allSettled(...).status === 'rejected'`, so a
+    // swallowed failure closed the modal exactly as a success would. The user saw their edit
+    // "save" and revert on the next refresh -- indistinguishable from the backend bug this batch
+    // exists to fix, which is precisely why that bug stayed invisible for so long.
+    it('should reject when the save fails', async () => {
       const error = new Error('Network error')
       mockUpdateAccountMutateAsync.mockRejectedValue(error)
       mockUseUpdateAccount.mockReturnValue({
@@ -199,14 +207,12 @@ describe('useAccountCustomization', () => {
         wrapper: createWrapper(),
       })
 
-      let returnedAccount: Account | null = null
       await act(async () => {
-        returnedAccount = await result.current.updateAccount(mockAccountLegacy, {
-          nickname: 'Test',
-        })
+        await expect(
+          result.current.updateAccount(mockAccountLegacy, { nickname: 'Test' })
+        ).rejects.toThrow('Network error')
       })
 
-      expect(returnedAccount).toBeNull()
       expect(result.current.updateError).toBeInstanceOf(Error)
     })
 

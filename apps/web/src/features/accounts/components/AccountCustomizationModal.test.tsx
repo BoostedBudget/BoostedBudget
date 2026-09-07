@@ -389,6 +389,42 @@ describe('AccountCustomizationModal', () => {
       expect(mockOnOpenChange).toHaveBeenCalledWith(false)
     })
 
+    // #1609: the user-visible symptom, encoded.
+    //
+    // The modal already decides correctly — it closes only when nothing failed — but
+    // useAccountCustomization's `catch { return null }` turned a rejection into a resolved value
+    // one layer down, so `Promise.allSettled(...).status` was never 'rejected' and the modal
+    // closed on a failed save exactly as it does on a successful one. The user was told their
+    // edit had saved, and found out on the next refresh that it had not. This case fails if that
+    // swallowing ever comes back at any layer between the button and the mutation.
+    it('stays open and does not close when the save rejects', async () => {
+      const user = userEvent.setup()
+      const rejectingSave = mock(() => Promise.reject(new Error('Save failed')))
+
+      renderModal(
+        <AccountCustomizationModal
+          account={mockAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={rejectingSave}
+        />
+      )
+
+      const nicknameInput = screen.getByLabelText('Nickname')
+      await user.type(nicknameInput, 'New Name')
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(rejectingSave).toHaveBeenCalled()
+      })
+      // The save is settled (the button is interactive again), and the modal did NOT close.
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled()
+      })
+      expect(mockOnOpenChange).not.toHaveBeenCalled()
+      expect(screen.getByText('Customize Account')).toBeInTheDocument()
+    })
+
     it('closes modal after successful save', async () => {
       const user = userEvent.setup()
 

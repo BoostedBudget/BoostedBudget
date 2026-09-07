@@ -34,8 +34,13 @@ interface AccountOrder {
 }
 
 export interface UseAccountCustomizationResult {
-  // Update account - uses UserAccount if available for stable storage
-  updateAccount: (account: Account, changes: PartialUpdateAccountRequest) => Promise<Account | null>
+  // Update account - uses UserAccount if available for stable storage.
+  //
+  // ⚠ REJECTS on failure (#1609). It used to swallow the error and resolve with `null`, which
+  // defeated AccountCustomizationModal's own failure detection: the modal decides whether to
+  // close from `Promise.allSettled(...).status === 'rejected'`, so a swallowed failure closed
+  // the modal exactly as a success would and the user was told their edit had saved.
+  updateAccount: (account: Account, changes: PartialUpdateAccountRequest) => Promise<Account>
   isUpdating: boolean
   updateError: Error | null
 
@@ -94,46 +99,52 @@ export function useAccountCustomization(): UseAccountCustomizationResult {
   async function updateAccount(
     account: Account,
     changes: PartialUpdateAccountRequest
-  ): Promise<Account | null> {
-    try {
-      // Normalize request data (convert undefined to null)
-      const requestData: GeneratedUpdateUserAccountRequest = {
-        nickname: changes.nickname ?? null,
-        custom_color: changes.custom_color ?? null,
-        custom_icon: changes.custom_icon ?? null,
-        custom_emoji: changes.custom_emoji ?? null,
-        display_order: changes.display_order ?? null,
-        is_hidden: changes.is_hidden ?? null,
-      }
+  ): Promise<Account> {
+    // ⚠ NO try/catch (#1609). A rejection must reach the caller: the modal closes only when
+    // nothing failed, and turning the rejection into a resolved `null` here made every failed
+    // save look like a successful one. The mutation hooks still surface the error through
+    // `updateError`, so nothing is lost by letting it propagate.
 
-      // If account has a stable UserAccount reference, use that endpoint
-      // This ensures customizations survive Plaid re-links (Issue #171)
-      if (account.user_account_id) {
-        await updateUserAccountMutation.mutateAsync({
-          id: account.user_account_id,
-          data: requestData,
-        })
-        // Return updated account with changed values (others preserved)
-        return {
-          ...account,
-          nickname: changes.nickname !== undefined ? (changes.nickname ?? undefined) : account.nickname,
-          custom_color: changes.custom_color !== undefined ? (changes.custom_color ?? undefined) : account.custom_color,
-          custom_icon: changes.custom_icon !== undefined ? (changes.custom_icon ?? undefined) : account.custom_icon,
-          custom_emoji: changes.custom_emoji !== undefined ? (changes.custom_emoji ?? undefined) : account.custom_emoji,
-          display_order: changes.display_order !== undefined ? (changes.display_order ?? undefined) : account.display_order,
-          is_hidden: changes.is_hidden !== undefined ? (changes.is_hidden ?? false) : account.is_hidden,
-        }
-      }
+    // Normalize request data (convert undefined to null)
+    const requestData: GeneratedUpdateUserAccountRequest = {
+      nickname: changes.nickname ?? null,
+      custom_color: changes.custom_color ?? null,
+      custom_icon: changes.custom_icon ?? null,
+      custom_emoji: changes.custom_emoji ?? null,
+      display_order: changes.display_order ?? null,
+      is_hidden: changes.is_hidden ?? null,
+    }
 
-      // Fallback: Use legacy Account endpoint (for accounts without user_account_id)
-      const response = await updateAccountMutation.mutateAsync({
-        id: account.id,
+    // If account has a stable UserAccount reference, use that endpoint
+    // This ensures customizations survive Plaid re-links (Issue #171)
+    if (account.user_account_id) {
+      await updateUserAccountMutation.mutateAsync({
+        id: account.user_account_id,
         data: requestData,
       })
-      return response.account
-    } catch {
-      return null
+      // Return updated account with changed values (others preserved).
+      //
+      // ⚠ This is an OPTIMISTIC guess, not the server's answer, and it cannot be anything else:
+      // PATCH /user-accounts/{id} returns a UserAccount, a different shape from Account. The
+      // caller is responsible for reconciling it — AccountsPage invalidates the accounts query
+      // after writing this into the cache (#1609). Do not treat it as authoritative.
+      return {
+        ...account,
+        nickname: changes.nickname !== undefined ? (changes.nickname ?? undefined) : account.nickname,
+        custom_color: changes.custom_color !== undefined ? (changes.custom_color ?? undefined) : account.custom_color,
+        custom_icon: changes.custom_icon !== undefined ? (changes.custom_icon ?? undefined) : account.custom_icon,
+        custom_emoji: changes.custom_emoji !== undefined ? (changes.custom_emoji ?? undefined) : account.custom_emoji,
+        display_order: changes.display_order !== undefined ? (changes.display_order ?? undefined) : account.display_order,
+        is_hidden: changes.is_hidden !== undefined ? (changes.is_hidden ?? false) : account.is_hidden,
+      }
     }
+
+    // Fallback: Use legacy Account endpoint (for accounts without user_account_id)
+    const response = await updateAccountMutation.mutateAsync({
+      id: account.id,
+      data: requestData,
+    })
+    return response.account
   }
 
   /**
