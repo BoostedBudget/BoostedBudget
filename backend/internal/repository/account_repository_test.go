@@ -548,15 +548,14 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 	)
 
 	expectedQuery := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden,
-		       user_account_id, status, removed_at, replaced_at, expired_at, replaced_by_id,
-		       created_at, updated_at
-		FROM accounts
-		WHERE id = $1 AND user_id = $2
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountCustomizationProjection("a") + `,
+		       a.user_account_id, a.status, a.removed_at, a.replaced_at, a.expired_at, a.replaced_by_id,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.id = $1 AND a.user_id = $2
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -595,15 +594,14 @@ func TestAccountRepository_GetByIDAndUser_NotFound(t *testing.T) {
 	userID := uuid.New().String()
 
 	expectedQuery := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden,
-		       user_account_id, status, removed_at, replaced_at, expired_at, replaced_by_id,
-		       created_at, updated_at
-		FROM accounts
-		WHERE id = $1 AND user_id = $2
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountCustomizationProjection("a") + `,
+		       a.user_account_id, a.status, a.removed_at, a.replaced_at, a.expired_at, a.replaced_by_id,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.id = $1 AND a.user_id = $2
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -842,13 +840,12 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
-		       a.display_order, a.is_hidden,
+		       ` + accountCustomizationProjection("a") + `,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status = 'active' AND a.is_hidden = FALSE ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
+		WHERE a.user_id = $1 AND a.status = 'active' AND ` + accountHiddenExpr("a") + ` = FALSE ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -915,13 +912,12 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
-		       a.display_order, a.is_hidden,
+		       ` + accountCustomizationProjection("a") + `,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status = 'active' ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
+		WHERE a.user_id = $1 AND a.status = 'active' ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -1848,13 +1844,12 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
-		       a.display_order, a.is_hidden,
+		       ` + accountCustomizationProjection("a") + `,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status IN ('active', 'replaced') AND a.is_hidden = FALSE ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
+		WHERE a.user_id = $1 AND a.status IN ('active', 'replaced') AND ` + accountHiddenExpr("a") + ` = FALSE ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -1915,13 +1910,12 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
-		       a.display_order, a.is_hidden,
+		       ` + accountCustomizationProjection("a") + `,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status = 'active' AND a.is_hidden = FALSE ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
+		WHERE a.user_id = $1 AND a.status = 'active' AND ` + accountHiddenExpr("a") + ` = FALSE ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
