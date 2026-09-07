@@ -763,15 +763,24 @@ func repairBackfillAccountPage(
 				"account_id", r.id, "user_account_id", uaID)
 		}
 
+		// ⚠ ORDER IS LOAD-BEARING, and it is the opposite of the intuitive one. This runs against
+		// a *pgxpool.Pool (BackfillUserAccountIDs), so every statement AUTOCOMMITS — there is no
+		// surrounding transaction covering these two writes. Attaching the account FIRST makes it
+		// invisible to every future run (the page query is `WHERE a.user_account_id IS NULL`), so a
+		// crash, a cancelled context or a pool error before the hide write would lose the hide
+		// PERMANENTLY, with no repair path. Hiding first is safe in the mirror case: the hide write
+		// is idempotent, hiding a chain the account has not joined yet converges to the same end
+		// state, and the failure leaves user_account_id NULL so the next boot retries the row.
+		// Pinned by TestBackfillUserAccountIDs_Hide_HideIsWrittenBeforeTheAccountIsAttached.
+		if err := carryLegacyHideForward(ctx, db, r, uaID); err != nil {
+			return err
+		}
+
 		if _, err := db.Exec(ctx,
 			"UPDATE accounts SET user_account_id = $1 WHERE id = $2 AND user_account_id IS NULL",
 			uaID, r.id,
 		); err != nil {
 			return fmt.Errorf("update account %s: %w", r.id, err)
-		}
-
-		if err := carryLegacyHideForward(ctx, db, r, uaID); err != nil {
-			return err
 		}
 		*repaired++
 	}
@@ -804,8 +813,15 @@ func repairBackfillAccountPage(
 // ('unknown'), and 'unknown' is never auto-un-hidden. It is deliberately NOT 'system' — labelling
 // an ambiguous hide 'system' is what would let the next re-link destroy a real user hide.
 //
-// COALESCE on hidden_source (and the `hidden_source IS NULL` leg of the WHERE) means a cause the
-// application already owns is never overwritten by a re-derivation from state.
+// The cause is written monotonically: a NULL is filled, and a 'system' cause is UPGRADED to 'user'
+// when the joining account is live. That upgrade is not hypothetical — task 3c starts writing
+// 'system' for the automatic "the chain lost its last active account" hide AND un-hides only
+// 'system' chains on re-link, so a real user hide left sitting at 'system' is destroyed by the
+// next re-link. Nothing is ever downgraded: a 'user' cause stands, and 'unknown' is left as it is
+// (it is already never auto-un-hidden, so rewriting it would buy nothing and would erase the
+// record that migration 000185 genuinely could not tell). The migration's own Step 4 keeps its
+// `AND hidden_source IS NULL` guard, which is correct THERE for the same reason: at migration time
+// there is no better information to be had.
 func carryLegacyHideForward(ctx context.Context, db backfillQuerier, r backfillAccountRow, uaID string) error {
 	if !r.isHidden {
 		// Nothing to carry. Notably this does NOT un-hide anything: a visible account joining a
@@ -819,10 +835,16 @@ func carryLegacyHideForward(ctx context.Context, db backfillQuerier, r backfillA
 	if _, err := db.Exec(ctx, `
 		UPDATE user_accounts
 		SET is_hidden     = TRUE,
-		    hidden_source = COALESCE(hidden_source, $1),
+		    hidden_source = CASE
+		        WHEN hidden_source IS NULL                          THEN $1
+		        WHEN hidden_source = 'system' AND $1 = 'user'       THEN 'user'
+		        ELSE hidden_source
+		    END,
 		    updated_at    = now()
 		WHERE id = $2
-		  AND (is_hidden = FALSE OR hidden_source IS NULL)
+		  AND (is_hidden = FALSE
+		       OR hidden_source IS NULL
+		       OR (hidden_source = 'system' AND $1 = 'user'))
 	`, source, uaID); err != nil {
 		return fmt.Errorf("carry legacy hide forward for account %s: %w", r.id, err)
 	}

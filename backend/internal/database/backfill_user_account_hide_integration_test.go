@@ -34,10 +34,13 @@ package database
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/stretchr/testify/assert"
@@ -214,3 +217,173 @@ func TestBackfillUserAccountIDs_Hide_MatchedExistingChainAdoptsTheHide(t *testin
 	require.NotNil(t, source)
 	assert.Equal(t, "user", *source)
 }
+
+// ─── Fix round 1, I1: the two writes are not atomic, so their ORDER is the safety property ───
+//
+// BackfillUserAccountIDs runs against a *pgxpool.Pool, so every statement AUTOCOMMITS — there is
+// no surrounding transaction, and there cannot cheaply be one (the scan is paged across a run cap).
+// That makes the ordering of the repair's two writes load-bearing:
+//
+//	UPDATE accounts SET user_account_id = ...   <- makes the row invisible to the next boot's
+//	                                              page query (WHERE a.user_account_id IS NULL)
+//	UPDATE user_accounts SET is_hidden = TRUE   <- carries the hide
+//
+// Written in that order, a crash, a cancelled context or a pool error in the window between them
+// leaves the account attached and the hide LOST PERMANENTLY: nothing will ever select that row
+// again, so there is no repair path. Written the other way round the same failure leaves
+// user_account_id NULL, so the next boot retries the whole account — and hiding a chain the
+// account has not joined yet converges to the same end state, because the hide write is
+// idempotent.
+//
+// A test that only asserts "the hide was carried" passes under BOTH orders. This one asserts the
+// order itself, by failing the hide write and observing what survives.
+
+// execFailOnFragment wraps a backfillQuerier and fails any Exec whose SQL contains `fragment`,
+// delegating everything else. It is the only way to observe the ordering: the property is about
+// what is DURABLE after a mid-repair failure, which needs a real failure at a chosen statement.
+type execFailOnFragment struct {
+	backfillQuerier
+	fragment string
+	fired    bool
+}
+
+func (e *execFailOnFragment) Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
+	if strings.Contains(sql, e.fragment) {
+		e.fired = true
+		return pgconn.CommandTag{}, errors.New("injected failure at the hide write")
+	}
+	return e.backfillQuerier.Exec(ctx, sql, args...)
+}
+
+func TestBackfillUserAccountIDs_Hide_HideIsWrittenBeforeTheAccountIsAttached(t *testing.T) {
+	pool := connectBackfillTestDB(t)
+	enc := newBackfillTestEnc(t)
+	ctx := context.Background()
+
+	userID, liID, plainInstID := seedHideFixture(t, pool, enc, "hideorder")
+	plainMask := "8484"
+
+	encInstID, err := enc.EncryptString(plainInstID)
+	require.NoError(t, err)
+	encMask, err := enc.EncryptString(plainMask)
+	require.NoError(t, err)
+
+	// An existing chain to match, so the repair takes the lookup branch and the only Execs in play
+	// are the two whose order is under test.
+	uaID := uuid.New().String()
+	_, err = pool.Exec(ctx, `
+		INSERT INTO user_accounts
+			(id, user_id, institution_id, mask, institution_id_blind_idx, mask_blind_idx, is_hidden)
+		VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+	`, uaID, userID, encInstID, encMask, enc.BlindIndex(plainInstID), enc.BlindIndex(plainMask))
+	require.NoError(t, err)
+
+	accID := seedHiddenAccount(t, pool, enc, userID, liID, plainMask, "active", true)
+
+	db := &execFailOnFragment{backfillQuerier: pool, fragment: "SET is_hidden"}
+	row := backfillAccountRow{
+		id: accID, userID: userID, mask: &encMask, instID: &encInstID,
+		acctType: strp("depository"), acctSubtype: strp("checking"),
+		isHidden: true, status: "active",
+	}
+	var repaired, synthesised, skippedNoMatch, skippedDecrypt int
+	err = repairBackfillAccountPage(ctx, db, enc, []backfillAccountRow{row},
+		&repaired, &synthesised, &skippedNoMatch, &skippedDecrypt)
+
+	require.Error(t, err, "the injected hide-write failure must propagate, not be swallowed")
+	require.True(t, db.fired, "the hide write must actually have been attempted")
+
+	var got *string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT user_account_id FROM accounts WHERE id = $1`, accID).Scan(&got))
+	assert.Nil(t, got,
+		"a failure at the hide write must leave user_account_id NULL. The repair autocommits "+
+			"each statement, so attaching the account FIRST and then failing would make the row "+
+			"invisible to every future run (the page query is WHERE user_account_id IS NULL) and "+
+			"lose the hide permanently, with no repair path. The hide must be written first: it "+
+			"is idempotent, and hiding a chain the account has not joined yet converges.")
+}
+
+// ─── Fix round 1, I2: a 'system' cause must be upgradable to 'user' ──────────────────────────
+//
+// Task 3c will start writing hidden_source = 'system' for the automatic "the chain lost its last
+// active account" hide, and will un-hide ONLY 'system' chains on re-link. So a chain sitting at
+// 'system' that a legacy-hidden LIVE account then joins is a real user hide wearing a cause that
+// says "safe to un-hide". The repair has to upgrade it.
+//
+// Only ever an UPGRADE: 'user' is never downgraded, and 'unknown' is left alone (it is already
+// never auto-un-hidden, so rewriting it would buy nothing and lose the record that the migration
+// genuinely could not tell).
+
+func TestBackfillUserAccountIDs_Hide_UpgradesSystemCauseToUserForALiveAccount(t *testing.T) {
+	pool := connectBackfillTestDB(t)
+	enc := newBackfillTestEnc(t)
+	ctx := context.Background()
+
+	userID, liID, plainInstID := seedHideFixture(t, pool, enc, "hideupg")
+	plainMask := "9595"
+
+	encInstID, err := enc.EncryptString(plainInstID)
+	require.NoError(t, err)
+	encMask, err := enc.EncryptString(plainMask)
+	require.NoError(t, err)
+
+	// The chain 3c would have written: already hidden, and marked as the SYSTEM's doing.
+	uaID := uuid.New().String()
+	_, err = pool.Exec(ctx, `
+		INSERT INTO user_accounts
+			(id, user_id, institution_id, mask, institution_id_blind_idx, mask_blind_idx,
+			 is_hidden, hidden_source)
+		VALUES ($1, $2, $3, $4, $5, $6, TRUE, 'system')
+	`, uaID, userID, encInstID, encMask, enc.BlindIndex(plainInstID), enc.BlindIndex(plainMask))
+	require.NoError(t, err)
+
+	accID := seedHiddenAccount(t, pool, enc, userID, liID, plainMask, "active", true)
+
+	require.NoError(t, BackfillUserAccountIDs(ctx, pool, enc))
+
+	gotUA, isHidden, source := chainStateForAccount(t, pool, accID)
+	assert.Equal(t, uaID, gotUA)
+	assert.True(t, isHidden)
+	require.NotNil(t, source)
+	assert.Equal(t, "user", *source,
+		"a legacy hide on a LIVE account joining a chain marked 'system' must UPGRADE the cause. "+
+			"Leaving it 'system' hands task 3c a real user hide labelled safe-to-un-hide, and the "+
+			"next re-link destroys it")
+}
+
+func TestBackfillUserAccountIDs_Hide_NeverDowngradesAUserCause(t *testing.T) {
+	pool := connectBackfillTestDB(t)
+	enc := newBackfillTestEnc(t)
+	ctx := context.Background()
+
+	userID, liID, plainInstID := seedHideFixture(t, pool, enc, "hidenodg")
+	plainMask := "9696"
+
+	encInstID, err := enc.EncryptString(plainInstID)
+	require.NoError(t, err)
+	encMask, err := enc.EncryptString(plainMask)
+	require.NoError(t, err)
+
+	uaID := uuid.New().String()
+	_, err = pool.Exec(ctx, `
+		INSERT INTO user_accounts
+			(id, user_id, institution_id, mask, institution_id_blind_idx, mask_blind_idx,
+			 is_hidden, hidden_source)
+		VALUES ($1, $2, $3, $4, $5, $6, TRUE, 'user')
+	`, uaID, userID, encInstID, encMask, enc.BlindIndex(plainInstID), enc.BlindIndex(plainMask))
+	require.NoError(t, err)
+
+	// A DEAD hidden account joining the chain would classify as 'unknown' on its own.
+	accID := seedHiddenAccount(t, pool, enc, userID, liID, plainMask, "removed", true)
+
+	require.NoError(t, BackfillUserAccountIDs(ctx, pool, enc))
+
+	_, isHidden, source := chainStateForAccount(t, pool, accID)
+	assert.True(t, isHidden)
+	require.NotNil(t, source)
+	assert.Equal(t, "user", *source,
+		"a weaker cause arriving later must never overwrite a stronger one already recorded")
+}
+
+func strp(s string) *string { return &s }
