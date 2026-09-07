@@ -146,12 +146,12 @@ func TestUserAccountRepository_GetByID_Success(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	}).AddRow(
 		userAccountID, userID, "ins_chase", strPtr("1234"), strPtr("Chase Checking"),
 		strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), strPtr("💰"),
-		&order, false, strPtr("depository"), strPtr("checking"),
+		&order, false, nil, strPtr("depository"), strPtr("checking"),
 		strPtr("depository"), strPtr("checking"),
 		now, now,
 	)
@@ -159,7 +159,8 @@ func TestUserAccountRepository_GetByID_Success(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE id = $1
@@ -195,7 +196,8 @@ func TestUserAccountRepository_GetByID_NotFound(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE id = $1
@@ -223,20 +225,20 @@ func TestUserAccountRepository_GetByUserID_Success(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	}).
 		AddRow(
 			uuid.New().String(), userID, "ins_chase", strPtr("1234"), strPtr("Chase Checking"),
 			strPtr("Checking"), nil, nil, nil,
-			&order1, false, strPtr("depository"), strPtr("checking"),
+			&order1, false, nil, strPtr("depository"), strPtr("checking"),
 			nil, nil,
 			now, now,
 		).
 		AddRow(
 			uuid.New().String(), userID, "ins_chase", strPtr("5678"), strPtr("Chase Savings"),
 			strPtr("Savings"), nil, nil, nil,
-			&order2, false, strPtr("depository"), strPtr("savings"),
+			&order2, false, nil, strPtr("depository"), strPtr("savings"),
 			nil, nil,
 			now, now,
 		)
@@ -244,7 +246,8 @@ func TestUserAccountRepository_GetByUserID_Success(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE user_id = $1
@@ -273,14 +276,15 @@ func TestUserAccountRepository_GetByUserID_Empty(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE user_id = $1
@@ -320,8 +324,9 @@ func TestUserAccountRepository_Update_Success(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE user_accounts
 		SET nickname = $1, custom_color = $2, custom_icon = $3,
-		    custom_emoji = $4, display_order = $5, is_hidden = $6, updated_at = $7
-		WHERE id = $8 AND user_id = $9
+		    custom_emoji = $4, display_order = $5, is_hidden = $6, hidden_source = $7,
+		    updated_at = $8
+		WHERE id = $9 AND user_id = $10
 	`)).WithArgs(
 		userAccount.Nickname,
 		userAccount.CustomColor,
@@ -329,6 +334,7 @@ func TestUserAccountRepository_Update_Success(t *testing.T) {
 		userAccount.CustomEmoji,
 		userAccount.DisplayOrder,
 		userAccount.IsHidden,
+		userAccount.HiddenSource,
 		pgxmock.AnyArg(), // updated_at
 		userAccountID,
 		userID,
@@ -360,8 +366,9 @@ func TestUserAccountRepository_Update_NotFound(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE user_accounts
 		SET nickname = $1, custom_color = $2, custom_icon = $3,
-		    custom_emoji = $4, display_order = $5, is_hidden = $6, updated_at = $7
-		WHERE id = $8 AND user_id = $9
+		    custom_emoji = $4, display_order = $5, is_hidden = $6, hidden_source = $7,
+		    updated_at = $8
+		WHERE id = $9 AND user_id = $10
 	`)).WithArgs(
 		userAccount.Nickname,
 		userAccount.CustomColor,
@@ -369,6 +376,7 @@ func TestUserAccountRepository_Update_NotFound(t *testing.T) {
 		userAccount.CustomEmoji,
 		userAccount.DisplayOrder,
 		userAccount.IsHidden,
+		userAccount.HiddenSource,
 		pgxmock.AnyArg(),
 		userAccountID,
 		userID,
@@ -401,12 +409,12 @@ func TestUserAccountRepository_FindByInstitutionAndMask_ExactMatch(t *testing.T)
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, institutionID, strPtr(mask), strPtr("Chase Checking"),
 		strPtr("My Checking"), nil, nil, nil,
-		&order, false, strPtr("depository"), strPtr("checking"),
+		&order, false, nil, strPtr("depository"), strPtr("checking"),
 		nil, nil,
 		now, now,
 	)
@@ -414,7 +422,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_ExactMatch(t *testing.T)
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
@@ -446,7 +455,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NoMatch_DifferentInstitu
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
@@ -476,7 +486,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NoMatch_DifferentMask(t 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
@@ -506,7 +517,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NullMask(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
@@ -536,12 +548,12 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NullMask_Match(t *testin
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, institutionID, nil, strPtr("Manual Account"),
 		strPtr("My Manual"), nil, nil, nil,
-		nil, false, nil, nil,
+		nil, false, nil, nil, nil,
 		nil, nil,
 		now, now,
 	)
@@ -549,7 +561,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NullMask_Match(t *testin
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
@@ -585,12 +598,12 @@ func TestUserAccountRepository_FindByInstitutionAndMask_Deterministic_NonNullMas
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, institutionID, strPtr(mask), strPtr("Chase Checking"),
 		strPtr("My Checking"), nil, nil, nil,
-		&order, false, strPtr("depository"), strPtr("checking"),
+		&order, false, nil, strPtr("depository"), strPtr("checking"),
 		nil, nil,
 		now, now,
 	)
@@ -599,7 +612,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_Deterministic_NonNullMas
 	mock.ExpectQuery(regexp.QuoteMeta(`
 			SELECT id, user_id, institution_id, mask, account_name_hint,
 			       nickname, custom_color, custom_icon, custom_emoji,
-			       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+			       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+			       identity_type, identity_subtype,
 			       created_at, updated_at
 			FROM user_accounts
 			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
@@ -631,12 +645,12 @@ func TestUserAccountRepository_FindByInstitutionAndMask_Deterministic_NullMask(t
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, institutionID, nil, strPtr("Manual Account"),
 		strPtr("My Manual"), nil, nil, nil,
-		nil, false, nil, nil,
+		nil, false, nil, nil, nil,
 		nil, nil,
 		now, now,
 	)
@@ -645,7 +659,8 @@ func TestUserAccountRepository_FindByInstitutionAndMask_Deterministic_NullMask(t
 	mock.ExpectQuery(regexp.QuoteMeta(`
 			SELECT id, user_id, institution_id, mask, account_name_hint,
 			       nickname, custom_color, custom_icon, custom_emoji,
-			       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+			       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+			       identity_type, identity_subtype,
 			       created_at, updated_at
 			FROM user_accounts
 			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
@@ -754,7 +769,8 @@ func TestUserAccountRepository_GetByID_DatabaseError(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE id = $1
@@ -787,12 +803,12 @@ func TestUserAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "institution_id", "mask", "account_name_hint",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
-		"display_order", "is_hidden", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
+		"display_order", "is_hidden", "hidden_source", "primary_type", "primary_subtype", "identity_type", "identity_subtype",
 		"created_at", "updated_at",
 	}).AddRow(
 		userAccountID, userID, "ins_chase", strPtr("1234"), strPtr("Chase Checking"),
 		nil, nil, nil, nil,
-		nil, false, strPtr("depository"), strPtr("checking"),
+		nil, false, nil, strPtr("depository"), strPtr("checking"),
 		nil, nil,
 		now, now,
 	)
@@ -800,7 +816,8 @@ func TestUserAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE id = $1 AND user_id = $2
@@ -828,7 +845,8 @@ func TestUserAccountRepository_GetByIDAndUser_NotOwner(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, institution_id, mask, account_name_hint,
 		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden, primary_type, primary_subtype, identity_type, identity_subtype,
+		       display_order, is_hidden, hidden_source, primary_type, primary_subtype,
+		       identity_type, identity_subtype,
 		       created_at, updated_at
 		FROM user_accounts
 		WHERE id = $1 AND user_id = $2
@@ -908,11 +926,18 @@ func TestUserAccountRepository_UpdatePrimaryTypeAndSubtype_NotFound(t *testing.T
 }
 
 // =============================================================================
-// UpdateHidden Tests
+// SetHiddenBySystem / ClearHidden Tests
+//
+// #1609 split the old single UpdateHidden(bool) into two named statements, because the two
+// directions are not each other's inverse: hiding records WHY ('system', never downgrading a
+// cause already recorded) and un-hiding clears the cause with the flag.
 // =============================================================================
 
-// TestUserAccountRepository_UpdateHidden_SetTrue tests setting hidden=true on an existing account
-func TestUserAccountRepository_UpdateHidden_SetTrue(t *testing.T) {
+// TestUserAccountRepository_SetHiddenBySystem_RecordsTheCause pins the statement shape: the flag
+// and the cause are written together, and COALESCE is what stops an already-recorded cause being
+// downgraded. That the downgrade really cannot happen is a claim about what Postgres computes and
+// is pinned in user_account_hidden_source_integration_test.go, not here.
+func TestUserAccountRepository_SetHiddenBySystem_RecordsTheCause(t *testing.T) {
 	mock, repo := setupUserAccountMockDB(t)
 	defer mock.Close()
 
@@ -922,25 +947,32 @@ func TestUserAccountRepository_UpdateHidden_SetTrue(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE user_accounts
-		SET is_hidden = $1, updated_at = $2
+		SET is_hidden     = TRUE,
+		    hidden_source = CASE
+		        WHEN is_hidden THEN COALESCE(hidden_source, $1)
+		        ELSE $1
+		    END,
+		    updated_at    = $2
 		WHERE id = $3 AND user_id = $4
 	`)).WithArgs(
-		true,
+		"system",
 		pgxmock.AnyArg(), // updated_at
 		userAccountID,
 		userID,
 	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
-	err := repo.UpdateHidden(ctx, userAccountID, userID, true)
+	err := repo.SetHiddenBySystem(ctx, userAccountID, userID)
 
 	// Assert
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestUserAccountRepository_UpdateHidden_SetFalse tests setting hidden=false on an existing account
-func TestUserAccountRepository_UpdateHidden_SetFalse(t *testing.T) {
+// TestUserAccountRepository_ClearHidden_ClearsTheCauseWithTheFlag — the two columns are one fact,
+// so they are written in one statement. A visible row left carrying a cause would hand its reason
+// to whatever hid the row next.
+func TestUserAccountRepository_ClearHidden_ClearsTheCauseWithTheFlag(t *testing.T) {
 	mock, repo := setupUserAccountMockDB(t)
 	defer mock.Close()
 
@@ -950,25 +982,24 @@ func TestUserAccountRepository_UpdateHidden_SetFalse(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE user_accounts
-		SET is_hidden = $1, updated_at = $2
-		WHERE id = $3 AND user_id = $4
+		SET is_hidden = FALSE, hidden_source = NULL, updated_at = $1
+		WHERE id = $2 AND user_id = $3
 	`)).WithArgs(
-		false,
 		pgxmock.AnyArg(), // updated_at
 		userAccountID,
 		userID,
 	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
-	err := repo.UpdateHidden(ctx, userAccountID, userID, false)
+	err := repo.ClearHidden(ctx, userAccountID, userID)
 
 	// Assert
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestUserAccountRepository_UpdateHidden_NotFound tests that ErrUserAccountNotFound is returned when RowsAffected=0
-func TestUserAccountRepository_UpdateHidden_NotFound(t *testing.T) {
+// TestUserAccountRepository_SetHiddenBySystem_NotFound tests that ErrUserAccountNotFound is returned when RowsAffected=0
+func TestUserAccountRepository_SetHiddenBySystem_NotFound(t *testing.T) {
 	mock, repo := setupUserAccountMockDB(t)
 	defer mock.Close()
 
@@ -978,7 +1009,12 @@ func TestUserAccountRepository_UpdateHidden_NotFound(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE user_accounts
-		SET is_hidden = $1, updated_at = $2
+		SET is_hidden     = TRUE,
+		    hidden_source = CASE
+		        WHEN is_hidden THEN COALESCE(hidden_source, $1)
+		        ELSE $1
+		    END,
+		    updated_at    = $2
 		WHERE id = $3 AND user_id = $4
 	`)).WithArgs(
 		pgxmock.AnyArg(),
@@ -988,17 +1024,17 @@ func TestUserAccountRepository_UpdateHidden_NotFound(t *testing.T) {
 	).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	// Execute
-	err := repo.UpdateHidden(ctx, userAccountID, userID, true)
+	err := repo.SetHiddenBySystem(ctx, userAccountID, userID)
 
 	// Assert
 	assert.ErrorIs(t, err, ErrUserAccountNotFound)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestUserAccountRepository_UpdateHidden_ScopesByUserID pins the ownership predicate into the SQL
+// TestUserAccountRepository_SetHiddenBySystem_ScopesByUserID pins the ownership predicate into the SQL
 // itself (#1566). The old statement was `WHERE id = $3` with no user predicate — a caller passing
 // an unvalidated id flipped a stranger's row while the cache middleware bumped only the actor.
-func TestUserAccountRepository_UpdateHidden_ScopesByUserID(t *testing.T) {
+func TestUserAccountRepository_SetHiddenBySystem_ScopesByUserID(t *testing.T) {
 	mock, repo := setupUserAccountMockDB(t)
 	defer mock.Close()
 
@@ -1008,24 +1044,29 @@ func TestUserAccountRepository_UpdateHidden_ScopesByUserID(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE user_accounts
-		SET is_hidden = $1, updated_at = $2
+		SET is_hidden     = TRUE,
+		    hidden_source = CASE
+		        WHEN is_hidden THEN COALESCE(hidden_source, $1)
+		        ELSE $1
+		    END,
+		    updated_at    = $2
 		WHERE id = $3 AND user_id = $4
 	`)).WithArgs(
-		true,
+		"system",
 		pgxmock.AnyArg(), // updated_at
 		userAccountID,
 		userID,
 	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	err := repo.UpdateHidden(ctx, userAccountID, userID, true)
+	err := repo.SetHiddenBySystem(ctx, userAccountID, userID)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestUserAccountRepository_UpdateHidden_NonOwner_NoRowsAffected verifies that when the id/user_id
+// TestUserAccountRepository_SetHiddenBySystem_NonOwner_NoRowsAffected verifies that when the id/user_id
 // pair matches nothing (the cross-tenant case) the method reports not-found instead of succeeding.
-func TestUserAccountRepository_UpdateHidden_NonOwner_NoRowsAffected(t *testing.T) {
+func TestUserAccountRepository_SetHiddenBySystem_NonOwner_NoRowsAffected(t *testing.T) {
 	mock, repo := setupUserAccountMockDB(t)
 	defer mock.Close()
 
@@ -1035,16 +1076,21 @@ func TestUserAccountRepository_UpdateHidden_NonOwner_NoRowsAffected(t *testing.T
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE user_accounts
-		SET is_hidden = $1, updated_at = $2
+		SET is_hidden     = TRUE,
+		    hidden_source = CASE
+		        WHEN is_hidden THEN COALESCE(hidden_source, $1)
+		        ELSE $1
+		    END,
+		    updated_at    = $2
 		WHERE id = $3 AND user_id = $4
 	`)).WithArgs(
-		true,
+		"system",
 		pgxmock.AnyArg(),
 		victimUAID,
 		actorID,
 	).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
-	err := repo.UpdateHidden(ctx, victimUAID, actorID, true)
+	err := repo.SetHiddenBySystem(ctx, victimUAID, actorID)
 
 	assert.ErrorIs(t, err, ErrUserAccountNotFound)
 	assert.NoError(t, mock.ExpectationsWereMet())

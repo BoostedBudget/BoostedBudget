@@ -43,6 +43,9 @@ type UserAccountService interface {
 
 	// SetHidden updates the is_hidden flag on a UserAccount, scoped to the authenticated actor.
 	// Used by DeleteAccount to hide the UserAccount when its last active account is deleted.
+	//
+	// ⚠ hidden = true means a SYSTEM hide (hidden_source = 'system'), never a user-initiated one
+	// — see the implementation. A user hide arrives through UpdateCustomization instead.
 	// Returns repository.ErrUserAccountNotFound (unwrapped) if userID does not own userAccountID (#1566).
 	SetHidden(ctx context.Context, userAccountID, userID string, hidden bool) error
 }
@@ -172,10 +175,21 @@ func (s *userAccountService) normalizeExistingUserAccount(
 		// Other errors are non-fatal: the type labels stay stale, customizations are preserved.
 	}
 
-	// Un-hide if previously hidden (re-link after account deletion).
-	// Only update in-memory state on success to keep DB and caller in sync.
-	if existing.IsHidden {
-		err := s.repo.UpdateHidden(ctx, existing.ID, actorUserID, false)
+	// Un-hide if the SYSTEM is what hid it (re-link after the chain lost its last active
+	// account). Only update in-memory state on success to keep DB and caller in sync.
+	//
+	// ⚠ THE CAUSE IS THE WHOLE POINT (#1609). This used to un-hide on every re-link, full stop,
+	// which destroyed a hide the user had set deliberately: by the time a re-link asks, a
+	// user-hidden chain and a system-hidden one both have zero active accounts, so current state
+	// cannot tell them apart. hidden_source (migration 000185) records which it was.
+	//
+	// Only 'system' is lifted. 'user' is the user's own decision. 'unknown' is 000185's
+	// conservative classification for rows it could not tell apart, and a NULL cause on a hidden
+	// row is the same claim — nobody recorded why — so it is treated the same way. The asymmetry
+	// is deliberate: un-hiding an account the user hid is a privacy regression they cannot even
+	// detect, while leaving a system hide in place is an annoyance they can undo.
+	if existing.IsHidden && derefPtr(existing.HiddenSource) == domain.HiddenSourceSystem {
+		err := s.repo.ClearHidden(ctx, existing.ID, actorUserID)
 		switch {
 		case errors.Is(err, repository.ErrUserAccountNotFound):
 			return nil, fmt.Errorf("user %s does not own user account %s: %w", actorUserID, existing.ID, err)
@@ -183,6 +197,7 @@ func (s *userAccountService) normalizeExistingUserAccount(
 			// Non-fatal: the row stays hidden, and so does the in-memory copy.
 		default:
 			existing.IsHidden = false
+			existing.HiddenSource = nil
 		}
 	}
 
@@ -268,6 +283,20 @@ func (s *userAccountService) UpdateCustomization(
 
 	if req.IsHidden != nil {
 		existing.IsHidden = *req.IsHidden
+		// The cause travels WITH the flag (#1609). This endpoint is the user speaking, so a hide
+		// set here is 'user' — the one cause a later re-link must never lift — and clearing the
+		// hide clears the cause, because a visible chain has no hide to explain and a stale cause
+		// would be inherited by whatever hid the row next.
+		//
+		// This deliberately UPGRADES a 'system' or 'unknown' cause to 'user' when the user hides
+		// an already-hidden chain: they have now said it themselves, which is strictly better
+		// information than either. It is never a downgrade.
+		if *req.IsHidden {
+			source := domain.HiddenSourceUser
+			existing.HiddenSource = &source
+		} else {
+			existing.HiddenSource = nil
+		}
 	}
 
 	// Step 3: Validate the updated account
@@ -285,8 +314,18 @@ func (s *userAccountService) UpdateCustomization(
 }
 
 // SetHidden updates the is_hidden flag on a UserAccount, scoped to its owner (#1566).
+//
+// ⚠ hidden = true is a SYSTEM hide and nothing else (#1609). The sole caller is DeleteAccount,
+// hiding a chain that lost its last active account; the cause is recorded as 'system' so a later
+// re-link may lift it, and an already-recorded cause is never downgraded. A hide the USER asks
+// for does NOT come through here — it arrives via UpdateCustomization (PATCH
+// /api/v1/user-accounts/{id}) and is recorded as 'user'. Do not repurpose this method for one:
+// a user hide labelled 'system' is silently destroyed by the next re-link.
 func (s *userAccountService) SetHidden(ctx context.Context, userAccountID, userID string, hidden bool) error {
-	return s.repo.UpdateHidden(ctx, userAccountID, userID, hidden)
+	if hidden {
+		return s.repo.SetHiddenBySystem(ctx, userAccountID, userID)
+	}
+	return s.repo.ClearHidden(ctx, userAccountID, userID)
 }
 
 // strPtrIfNotEmpty returns a pointer to s if s is not empty, otherwise nil
