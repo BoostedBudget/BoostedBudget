@@ -280,7 +280,25 @@ type AccountRepository interface {
 	UpdateDisplayOrders(ctx context.Context, userID string, orders []domain.AccountOrder) error
 
 	// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and flexible filtering.
-	// Results are sorted by display_order ASC (nulls last), then created_at ASC.
+	// Results are sorted by effective display_order ASC, then created_at ASC, then id ASC.
+	//
+	// ⚠ #1609 fix round 2 (F2): this comment used to say "(nulls last)", and that is not what the
+	// query does. A NULL display_order is mapped to the SENTINEL 999999 by COALESCE, so it sorts
+	// last only for as long as every real display_order is BELOW 999999 — `display_order` carries
+	// no upper-bound constraint (migration 000024_add_account_customization.up.sql), so a value of
+	// 1000000 sorts AFTER the unordered rows and a value of exactly 999999 TIES with them. The
+	// sentinel is kept rather than swapped for NULLS LAST because changing it would change the
+	// order existing data comes back in, which a comment correction has no business doing; the
+	// assumption it rests on is written down here instead of being implied.
+	//
+	// ⚠ The final `id ASC` is what makes the ordering TOTAL (#1609 F1). CreateBatch stamps one
+	// `now` on every row of a batch, so the accounts of a single Plaid connection share a
+	// created_at exactly; with no display_order override they also share the sentinel, and the
+	// pair is completely tied. Postgres may return a complete tie in any order — measurably so:
+	// see account_list_total_order_integration_test.go, where the same two rows come back in
+	// OPPOSITE orders depending only on which INSERT was issued first. accounts.id is the primary
+	// key, so appending it separates any two distinct rows and the list stops reshuffling between
+	// refreshes.
 	GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error)
 
 	// GetByUserAccountAndStatus retrieves accounts by user_account_id and status, SCOPED to
@@ -1080,6 +1098,12 @@ func (r *accountRepository) getForHouseholdScope(ctx context.Context, requesting
 // currency_code (matching the column's own default intent), '' for institution_name (the natural
 // zero for this omitempty field, matching GetAccountsWithInstitutionFiltered's established rule
 // for the same column).
+// ⚠ #1609 fix round 2 (F1): the trailing `a.id ASC` is what makes this ORDER BY a TOTAL order,
+// and it is load-bearing rather than cosmetic. Every account of one Plaid connection is written by
+// a single CreateBatch, which stamps ONE `now` on the whole batch, so their created_at values are
+// byte-identical and the sort was completely tied with nothing left to decide it — the planner
+// picked. This is the GET /api/v1/accounts list, so the symptom was a user-visible reshuffle
+// between refreshes. Pinned by account_list_total_order_integration_test.go.
 func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
@@ -1090,7 +1114,7 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
 		WHERE a.user_id = $1 AND a.status = 'active'
-		ORDER BY a.created_at ASC
+		ORDER BY a.created_at ASC, a.id ASC
 	`
 
 	rows, err := r.db.Query(ctx, query, userID)
@@ -1793,7 +1817,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + lastKnownJoin + `
 		WHERE a.user_id = $1` + statusClause + hiddenClause + userAccountClause + `
-		ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC`
+		ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC, a.id ASC`
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
