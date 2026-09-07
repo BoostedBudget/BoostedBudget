@@ -82,9 +82,14 @@ export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
     // valid write body instead of guessing (the createRule incident — three guessed body
     // shapes, three bare 422s, no field detail available anywhere the client could reach).
     if (e.requestBody?.length) {
+      // #1609 fix round 1: a field with no `type` in the index means the OpenAPI schema
+      // genuinely declared none (e.g. RuleCondition.value: `{}` — a Go `any` field). Render
+      // "any" (accepts any JSON value), not "unknown" — "unknown" reads identically whether
+      // the extractor failed or the API truly accepts anything, which is exactly the
+      // ambiguity this task exists to eliminate.
       const bodyLines = e.requestBody.map(
         (f) =>
-          `    ${f.name} (${f.type ?? 'unknown'}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
+          `    ${f.name} (${f.type ?? 'any'}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
       )
       parts.push(`  body:\n${bodyLines.join('\n')}`)
     }
