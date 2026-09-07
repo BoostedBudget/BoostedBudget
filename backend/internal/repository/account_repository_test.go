@@ -713,15 +713,15 @@ func TestAccountRepository_UpdateDisplayOrders_Success(t *testing.T) {
 		{AccountID: acc2ID, DisplayOrder: 1},
 	}
 
-	expectedQuery := `
-		UPDATE accounts
-		SET display_order = $1, updated_at = $2
-		WHERE id = $3 AND user_id = $4
-	`
-
 	mock.ExpectBegin()
 	for _, order := range orders {
-		mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
+		// #1609: every order first resolves whether the account is chained, because the target
+		// column follows the chain. Both accounts here are UNCHAINED (NULL user_account_id), so
+		// both take the legacy accounts leg — the no-regression half of the routing.
+		mock.ExpectQuery(regexp.QuoteMeta(displayOrderResolveChainQuery)).
+			WithArgs(order.AccountID, userID).
+			WillReturnRows(pgxmock.NewRows([]string{"user_account_id"}).AddRow(nil))
+		mock.ExpectExec(regexp.QuoteMeta(displayOrderAccountsSideQuery)).
 			WithArgs(order.DisplayOrder, pgxmock.AnyArg(), order.AccountID, userID).
 			WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	}
@@ -766,21 +766,20 @@ func TestAccountRepository_UpdateDisplayOrders_AccountNotFound(t *testing.T) {
 		{AccountID: acc2ID, DisplayOrder: 1},
 	}
 
-	expectedQuery := `
-		UPDATE accounts
-		SET display_order = $1, updated_at = $2
-		WHERE id = $3 AND user_id = $4
-	`
-
 	mock.ExpectBegin()
-	// First update succeeds
-	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
+	// First update succeeds (unchained: the resolve returns a NULL chain id).
+	mock.ExpectQuery(regexp.QuoteMeta(displayOrderResolveChainQuery)).
+		WithArgs(orders[0].AccountID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"user_account_id"}).AddRow(nil))
+	mock.ExpectExec(regexp.QuoteMeta(displayOrderAccountsSideQuery)).
 		WithArgs(orders[0].DisplayOrder, pgxmock.AnyArg(), orders[0].AccountID, userID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	// Second update returns 0 rows (not found)
-	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
-		WithArgs(orders[1].DisplayOrder, pgxmock.AnyArg(), orders[1].AccountID, userID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	// The second account does not exist, so the RESOLVE finds no row — #1609 moved the
+	// not-found detection ahead of the UPDATE so that "no such account" stays distinguishable
+	// from "this account is simply not chained".
+	mock.ExpectQuery(regexp.QuoteMeta(displayOrderResolveChainQuery)).
+		WithArgs(orders[1].AccountID, userID).
+		WillReturnError(pgx.ErrNoRows)
 	mock.ExpectRollback()
 
 	// Execute
@@ -788,6 +787,40 @@ func TestAccountRepository_UpdateDisplayOrders_AccountNotFound(t *testing.T) {
 
 	// Assert
 	assert.ErrorIs(t, err, ErrAccountNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_UpdateDisplayOrders_ChainedAccountTargetsUserAccounts pins the STATEMENT
+// SHAPE of the chained leg: the UPDATE goes to user_accounts, keyed by the chain id the resolve
+// returned, and still carries the actor's user_id.
+//
+// This is a shape assertion only. What the write actually does — that the value comes back out of
+// the chain-authoritative read, and that the legacy accounts column is left alone — is not
+// something pgxmock can see (it returns rows the test author invented), so it is pinned by
+// account_display_order_routing_integration_test.go against real Postgres.
+func TestAccountRepository_UpdateDisplayOrders_ChainedAccountTargetsUserAccounts(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+	userAccountID := uuid.New().String()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(displayOrderResolveChainQuery)).
+		WithArgs(accountID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"user_account_id"}).AddRow(&userAccountID))
+	mock.ExpectExec(regexp.QuoteMeta(displayOrderChainSideQuery)).
+		WithArgs(3, pgxmock.AnyArg(), userAccountID, userID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
+
+	err := repo.UpdateDisplayOrders(ctx, userID, []domain.AccountOrder{
+		{AccountID: accountID, DisplayOrder: 3},
+	})
+
+	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

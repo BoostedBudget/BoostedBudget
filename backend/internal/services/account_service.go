@@ -1342,6 +1342,17 @@ func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string,
 	return accounts, nil
 }
 
+// upperCaseHexColor normalizes a hex colour the way the legacy accounts-side write does, so the
+// two UpdateAccount legs cannot disagree about the stored casing. nil (no change) and "" (clear)
+// pass through untouched — both are meaningful to the update request and neither is a colour.
+func upperCaseHexColor(color *string) *string {
+	if color == nil || *color == "" {
+		return color
+	}
+	upper := strings.ToUpper(*color)
+	return &upper
+}
+
 // UpdateAccount updates account customization fields (Issue #307)
 //
 // Flow:
@@ -1364,6 +1375,42 @@ func (s *accountService) UpdateAccount(
 	account, err := s.accountRepo.GetByIDAndUser(ctx, accountID, userID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Step 2b: THE WRITE FOLLOWS THE CHAIN (#1609, task 3c).
+	//
+	// Task 3b made every account read chain-authoritative — for a chained account the six
+	// customization fields come from user_accounts, and accounts.<field> stops being read at all.
+	// Writing `accounts` here would therefore save into a column nothing reads and revert on the
+	// next refresh: the exact defect this batch exists to fix, relocated to this endpoint.
+	//
+	// So a chained account is delegated to the user-account service — the SAME method
+	// PATCH /api/v1/user-accounts/{id} calls — and the response is RE-READ through the
+	// chain-authoritative query rather than reconstructed from the request, so the body this
+	// endpoint returns is what the next GET will return.
+	//
+	// ⚠ Not redundant with the frontend, which already routes chained accounts to the
+	// user-accounts endpoint (useAccountCustomization.ts). The API must not depend on client
+	// discipline: MCP tools, integrations and anyone holding the OpenAPI contract reach this
+	// endpoint directly.
+	//
+	// userAccountSvc is an OPTIONAL dependency (nil in several construction paths), so a nil one
+	// falls back to the legacy write rather than panicking. That fallback is a strictly better
+	// outcome than a crash and is exactly what the code did before this change; it is not an
+	// endorsement of the accounts-side write.
+	if account.UserAccountID != nil && s.userAccountSvc != nil {
+		if _, err := s.userAccountSvc.UpdateCustomization(ctx, *account.UserAccountID, userID,
+			&domain.UpdateUserAccountRequest{
+				Nickname:     req.Nickname,
+				CustomColor:  upperCaseHexColor(req.CustomColor),
+				CustomIcon:   req.CustomIcon,
+				CustomEmoji:  req.CustomEmoji,
+				DisplayOrder: req.DisplayOrder,
+				IsHidden:     req.IsHidden,
+			}); err != nil {
+			return nil, fmt.Errorf("failed to update account customization on its chain: %w", err)
+		}
+		return s.accountRepo.GetByIDAndUser(ctx, accountID, userID)
 	}
 
 	// Step 3: Apply updates (nil = no change, empty string = clear)

@@ -1460,7 +1460,53 @@ func (r *accountRepository) Update(ctx context.Context, account *domain.Account,
 	return nil
 }
 
+// The three statements UpdateDisplayOrders runs. Package-level rather than function-local so the
+// shape tests reference the SAME strings the method executes — a pgxmock expectation written out
+// by hand drifts silently the moment the statement is edited.
+const (
+	// displayOrderResolveChainQuery answers "is this account chained, and is it the actor's?" in
+	// one step. ErrNoRows here is the not-found/not-yours case; a NULL user_account_id is the
+	// unchained case, and the two must not be conflated.
+	displayOrderResolveChainQuery = `
+		SELECT user_account_id
+		FROM accounts
+		WHERE id = $1 AND user_id = $2
+	`
+	displayOrderAccountsSideQuery = `
+		UPDATE accounts
+		SET display_order = $1, updated_at = $2
+		WHERE id = $3 AND user_id = $4
+	`
+	displayOrderChainSideQuery = `
+		UPDATE user_accounts
+		SET display_order = $1, updated_at = $2
+		WHERE id = $3 AND user_id = $4
+	`
+)
+
 // UpdateDisplayOrders updates the display_order for multiple accounts atomically.
+//
+// ⚠ THE TARGET COLUMN FOLLOWS THE CHAIN (#1609, task 3c). This used to be one
+// `UPDATE accounts SET display_order` for every account. Task 3b then made the read
+// chain-authoritative — `ORDER BY COALESCE(CASE WHEN a.user_account_id IS NOT NULL THEN
+// a_ua.display_order ELSE a.display_order END, 999999)` — at which point a chained account's
+// reorder was written to a column nothing reads any more, and every drag of a Plaid-linked
+// account silently reverted on the next refresh.
+//
+// So the write is routed the same way the read resolves: `user_accounts.display_order` for a
+// chained account, `accounts.display_order` for an unchained one. SINGLE-SOURCE, not a dual
+// write — writing both would re-create exactly the split-brain this batch is removing, with
+// nothing to say which copy was right once they diverged.
+//
+// The chain id is resolved INSIDE the transaction rather than joined into the UPDATE so that
+// "this account does not exist / is not yours" stays distinguishable from "this account is not
+// chained": both would otherwise present as RowsAffected == 0 and the ownership error would be
+// reported for a perfectly valid unchained account. The ownership predicate rides on both legs
+// (`user_id = $4`, the actor) — the chained leg re-asserts it against user_accounts, so a chain
+// id reached through somebody else's account row still matches nothing.
+//
+// Still one transaction: a partial reorder is a scrambled list, so the batch commits or it does
+// not.
 func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID string, orders []domain.AccountOrder) error {
 	if len(orders) == 0 {
 		return nil
@@ -1472,16 +1518,23 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
-	query := `
-		UPDATE accounts
-		SET display_order = $1, updated_at = $2
-		WHERE id = $3 AND user_id = $4
-	`
-
 	now := time.Now()
 
 	for _, order := range orders {
-		ct, err := tx.Exec(ctx, query, order.DisplayOrder, now, order.AccountID, userID)
+		var userAccountID *string
+		if err := tx.QueryRow(ctx, displayOrderResolveChainQuery, order.AccountID, userID).Scan(&userAccountID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrAccountNotFound
+			}
+			return err
+		}
+
+		query, targetID := displayOrderAccountsSideQuery, order.AccountID
+		if userAccountID != nil {
+			query, targetID = displayOrderChainSideQuery, *userAccountID
+		}
+
+		ct, err := tx.Exec(ctx, query, order.DisplayOrder, now, targetID, userID)
 		if err != nil {
 			return err
 		}
