@@ -107,6 +107,26 @@ REQUIRED_UNGATED_STEPS = [
         "Markdown citation guards plus TestCitedLineNumbersAreInRange scan docs/** and root *.md "
         "— corpora that match the frontend filter and no filter at all respectively",
     ),
+    (
+        "Test portable-sed guard (#1598 regression suite)",
+        "regression suite for the tree-wide non-portable-sed scan below",
+    ),
+    (
+        "Guard — no non-portable in-place sed in the tree (#1598)",
+        "scans every tracked *.sh, Makefile, workflow, Dockerfile and extensionless shell-shebang "
+        "script, so a BSD-only `sed -i ''` can be introduced in a file matching no paths filter — "
+        "and the defect that motivated it lived in scripts/__tests__/, which the backend filter "
+        "matches but which no filter would have caught on a workflow-only change",
+    ),
+    (
+        "Test runner-portability guard (#1598 regression suite)",
+        "regression suite for the runner-placement scan below",
+    ),
+    (
+        "Guard — runner placement and Linux portability (#1598)",
+        "scans every workflow under .github/workflows/**, so a job moved to the wrong runner in "
+        "deploy-*.yml is invisible to any filter this job could be gated on",
+    ),
 ]
 
 # `needs.<job>.outputs.<name>` in an `if:` expression. Presence of ANY such reference means the

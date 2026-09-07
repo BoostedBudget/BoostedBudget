@@ -419,11 +419,19 @@ fi
 
 # 7b. Clean Grype vulnerability databases — the scanner this repo's CI actually runs.
 #
-# The "Docker Image Security Scan (Grype)" job in .github/workflows/test.yml (~line 1568)
-# brew-installs Grype and scans each component image; there is no active Trivy invocation
-# anywhere in the workflow, so step 7 above reclaims nothing here. (The comment at
-# test.yml:1483 says Trivy was replaced by "official/native tools" generally — Grype is a
-# separate job, not literally named as its replacement.) Grype caches under
+# The `docker-image-scan` job in .github/workflows/test.yml brew-installs Grype and scans each
+# component image; there is no active Trivy invocation anywhere in the workflow, so step 7 above
+# reclaims nothing here. (That job's header comment says Trivy was replaced by "official/native
+# tools" generally — Grype is a separate job, not literally named as its replacement.)
+#
+# ⚠ Both citations in this paragraph were LINE NUMBERS until #1598, and both were already wrong
+# before it: the job was cited as "~line 1568" when it was at 2674, and the Trivy comment as
+# "test.yml:1483" when 1483 was an unrelated `runs-on:` line. Nothing caught either, because
+# TestCitedLineNumbersAreInRange only checks that a cited line is IN RANGE, and test.yml is ~3000
+# lines long. Cite this file by job name — it survives every edit above it, which line numbers in
+# a workflow this size demonstrably do not.
+#
+# Grype caches under
 # ~/Library/Caches/grype/db, outside ~/github-runners, which was the entire sweep area —
 # so the real consumer went untouched. It was measured at 6.7GB on 2026-08-04 and cleared
 # during incident response; since that removal happened before this step existed, treat

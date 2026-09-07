@@ -10,6 +10,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+
 env:
   GO_VERSION: '1.26.6'
   NODE_VERSION: '20'
@@ -52,6 +53,8 @@ jobs:
               - 'package.json'
               - 'bun.lock'
               - 'scripts/**'
+              - '.lighthouserc.js'
+              - '.size-limit.json'
             api:
               - 'api/**'
               - 'api/openapi.yaml'
@@ -110,7 +113,39 @@ jobs:
   e2e-test:
     name: E2E Tests
     if: always() && !cancelled()
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubicloud-standard-2
+    # Least-privilege token, scoped to this job rather than the whole workflow (#1598). This is
+    # one of only two jobs that now run on an ephemeral cloud VM, which is the entire reason the
+    # restriction is worth stating -- and neither writes with GITHUB_TOKEN.
+    #
+    # ⚠ Declared PER JOB on purpose. A workflow-level block was tried first and broke
+    # `detect-changes`: setting any `permissions:` drops every scope not listed, and
+    # dorny/paths-filter calls the PR Files API, which needs `pull-requests: read`. It failed with
+    # the generic "Resource not accessible by integration" -- naming neither the scope nor the
+    # action -- and because 11 jobs are gated on detect-changes' outputs, that one failure cascaded
+    # into skipping most of the matrix. Job-level scoping keeps a hardening change to the jobs it
+    # was justified for, and matches this repo's existing convention (deploy-production.yml,
+    # deploy-to-staging.yaml, cleanup-artifacts.yml all declare permissions per job).
+    permissions:
+      contents: read
+    # ⚠⚠ READ THIS FIRST (#1598). Everything below was written about the self-hosted Mac Mini pool,
+    # which this job NO LONGER RUNS ON. It is retained verbatim as history, not deleted, for two
+    # reasons: the 45 was set by an explicit user authorisation that should not be quietly undone,
+    # and there is not yet a single completed Ubicloud run to derive a replacement from. Deleting
+    # the reasoning before its replacement exists would leave a bare number with no provenance at
+    # all, which is worse than a number with stale provenance.
+    #
+    # What survives the move: nothing here is a MEASUREMENT of this job on Ubicloud. The 4.6-17.7
+    # minute range, the 35 -> 45 override, the "quarter of the capacity" argument and the
+    # #1489 host-load framing all describe a machine with four concurrent runners and 15GB of 16GB
+    # used at idle. This job now gets a dedicated 2-vCPU VM to itself.
+    #
+    # What to do about it: after ~10 completed Ubicloud runs, re-derive this from the observed
+    # maximum and REPLACE the block below, citing those runs. Until then 45 stands as an upper
+    # bound that is certainly generous rather than a bound that is right. Tracked in #1598's
+    # follow-up.
+    #
+    # ── History (Mac Mini pool, pre-#1598) ──────────────────────────────────────────────────────
     # Bound a wedged run. Without this the job inherits GitHub's 360-minute default, and this is a
     # SELF-HOSTED pool of four runners on one Mac Mini -- so one stuck E2E job can hold a quarter of
     # the capacity for six hours, slowing every sibling job and making the load-induced timeouts of
@@ -136,23 +171,107 @@ jobs:
     # host cannot carry the matrix, which is #1489's actual subject.
     timeout-minutes: 45
     environment: e2e  # Access Clerk secrets from e2e environment
-    env:
-      UNIQUE_WORKSPACE: workspace-e2e-test-${{ github.run_id }}
-      # #1531 Task 11e (fix round 1): container names unique per run AND per rerun attempt, same
-      # convention as backend-integration-test's PG_CONTAINER, so a killed prior attempt can never
-      # collide with this one.
-      E2E_CACHE_REDIS_CONTAINER: test-e2e-cache-redis-${{ github.run_id }}-${{ github.run_attempt }}
-      E2E_RATELIMIT_REDIS_CONTAINER: test-e2e-ratelimit-redis-${{ github.run_id }}-${{ github.run_attempt }}
+
+    # #1598. Postgres and both Redis instances are provisioned by Actions rather than by hand.
+    # This replaced ~250 lines across this job and apps/web/scripts/e2e-postgres.sh: `docker run`
+    # calls, 30-attempt health-poll loops, orphan reaping by run_id prefix, a `docker port`
+    # read-back, a container watchdog, and retrying cleanup steps. GitHub health-gates these
+    # before the first step runs and destroys them with the VM, so none of that machinery has
+    # anything left to do.
+    #
+    # It also deletes three latent defects rather than fixing them, which is the better kind of
+    # fix:
+    #   - `docker port … | cut -d: -f2` assumed the IPv4 line comes first. On Linux `docker port`
+    #     emits both `0.0.0.0:PORT` and `[::]:PORT` and the order is not contractual; if IPv6 led,
+    #     the value became multi-line and $GITHUB_ENV rejects that with `Invalid format`.
+    #   - a bare `-p 6379` let Docker choose the host port from its OWN allocator (default begin
+    #     32768), which overlaps the top of the E2E port block at 32768-44999 — so a Redis
+    #     container could squat a port find-available-ports.js was about to assign.
+    #   - the same bare `-p` bound on every interface. Untidy on a LAN Mac Mini, wrong on a
+    #     cloud VM.
+    #
+    # Images are digest-pinned. Ubicloud pools share a host IP, so Docker Hub's per-IP pull limit
+    # is a live failure mode (Ubicloud disabled IPv6 on runner VMs over it), and a digest also
+    # makes the pull reproducible. Credentials match e2e-postgres.sh's defaults (test/test/test)
+    # so the CI and local paths describe the same database.
+    services:
+      postgres:
+        image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432/tcp
+        # 20 retries, not the 10 the Redis services use. `pg_isready` succeeding is NOT the same
+        # as this Postgres being ready to serve: the official image's entrypoint restarts the
+        # server after first-time initdb, so a probe can succeed against the instance that is
+        # about to go away (diagnosed at apps/web/scripts/e2e-postgres.sh:183-196). This widens
+        # the window; run-e2e-ci.sh closes it by opening a real connection before migrating.
+        options: >-
+          --health-cmd "pg_isready -U test -d test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+      cache_redis:
+        image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+      # A SEPARATE instance, not a second database on the first. The two roles have different
+      # eviction semantics (the cache may evict, the rate limiter must not), and sharing one
+      # server would let cache pressure silently drop rate-limit state.
+      ratelimit_redis:
+        image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
 
     steps:
-      - name: Clean workspace (fix permission issues)
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-
+      # No `sudo rm -rf` pre-clean and no `path:`/`clean: false` any more: those existed so four
+      # runners sharing one Mac Mini could not stamp on each other's checkout. This VM is created
+      # for this job and destroyed after it.
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          path: ${{ env.UNIQUE_WORKSPACE }}
-          clean: false
+          fetch-depth: 1
+
+      # #1598. This job moved from a hand-configured Mac Mini to an ephemeral Ubicloud VM, so
+      # every tool it used to inherit from the host is now an assumption about a machine image --
+      # and Ubicloud documents nothing about its image contents (it forks GitHub's packer
+      # templates in ubicloud/runner-images). "Should match by inheritance, undocumented" is
+      # exactly when you assert rather than hope.
+      #
+      # This checks CAPABILITY, not presence. `command -v sudo` says nothing about whether
+      # `sudo -n` actually works, and a `docker` binary with an unusable daemon socket fails
+      # twenty minutes later in a step that looks unrelated. PyYAML matters most: two of the
+      # guard suites below import it, and without it they fail with a traceback that reads like a
+      # defect in the guard rather than a missing package.
+      - name: Preflight — required tooling
+        run: |
+          set -euo pipefail
+          missing=""
+          for tool in node python3 jq curl tar sha256sum git; do
+            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+          done
+          python3 -c 'import yaml' 2>/dev/null || missing="$missing python3-yaml"
+          sudo -n true 2>/dev/null || missing="$missing passwordless-sudo"
+          if [ -n "$missing" ]; then
+            echo "::error::this runner image cannot support the e2e-test job, missing:$missing"
+            exit 1
+          fi
+          echo "arch=$(uname -m) nproc=$(nproc) mem=$(free -m | awk '/^Mem:/{print $2}')MB"
+          echo "bash=$(bash --version | head -1)"
 
       # Regression suite for scripts/check-e2e-storage-state.py — the guard the "Guard — E2E
       # auth session must have been obtained" step below delegates to. Placed here, right
@@ -165,7 +284,6 @@ jobs:
       # any of the setup below. Was previously unwired from every runner — see the suite's own
       # header comment.
       - name: Test E2E storage-state guard
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-e2e-storage-state.test.sh
 
       # Truth table for the two MCP jobs' `if:` conditions (#1464 U1a). Hosted in this job for the
@@ -182,7 +300,6 @@ jobs:
       # checks (they are workflow_dispatch deploys), so this is the ONLY place their MCP trigger
       # surface is validated — which is exactly why #1484 was originally deferred as unverifiable.
       - name: Test MCP job trigger truth table
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-mcp-job-triggers.test.sh
 
       # #1569 round 15 task 1. scripts/assert-no-ungated-migrate-down-invocation.sh was built on an
@@ -207,11 +324,9 @@ jobs:
       # in backend-test. The suite mutates tracked files in THIS WORKSPACE only and restores every
       # one through an explicit backup copy in its own EXIT trap (never `git stash`/`git checkout`).
       - name: Test ungated-migrate-down guard (#1569 regression suite)
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/no-ungated-migrate-down-invocation-guard.test.sh
 
       - name: Guard — no ungated 'migrate ... down' anywhere in the tree (#1569)
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/assert-no-ungated-migrate-down-invocation.sh
 
       # #1569 round 17 task 1. Every step above, and the "whole-tree corpus guards" step further
@@ -224,11 +339,9 @@ jobs:
       # scan — the same two-step shape as the three guards above. Pure Python against the
       # checked-out workflow file: no Go, no Bun, no browser, ~1s.
       - name: Test ungated-guard-step wiring guard (#1569 regression suite)
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-ungated-guard-steps.test.sh
 
       - name: Guard — whole-tree guard steps must live in an ungated job (#1569)
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: python3 scripts/check-ungated-guard-steps.py
 
       # #1569 round 17 task 2. Unit suite for the history-foreign-key assertions that replaced
@@ -239,7 +352,6 @@ jobs:
       # so a change confined to scripts/** would not run it there. Pure shell against synthetic
       # fixtures and the real Go guard: no Postgres, no migrate binary, no browser, ~1s.
       - name: Test schema-constraint history-FK assertions (#1569)
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/schema-constraint-history-fks.test.sh
 
       # #1569 round 17 task 3. scripts/smoke-test.sh is the hard gate on real production and
@@ -251,49 +363,197 @@ jobs:
       # workflows that invoke it) and apps/mcp-server/wrangler.toml, which no single paths filter
       # covers. No network, no Postgres, no Bun: ~1s.
       - name: Test smoke-test deploy-gate failure paths (#1569)
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/smoke-test-failure-paths.test.sh
 
+      # #1598. Hosted here for the same reason as every guard above: this job has no
+      # `needs:`/paths-filter gate (`if: always() && !cancelled()` reacts only to prior job
+      # outcomes), so these run on EVERY pull request. Both are pure shell/Python against the
+      # checked-out tree and cost ~1s each.
+      #
+      # Regression suite first (proves the guard can still reject a fixture), then the real scan
+      # -- the same two-step shape as the guards above.
+      #
+      # check-portable-sed.sh in particular is load-bearing for THIS migration: the
+      # ungated-migrate-down suite two steps up used BSD-only in-place sed at four sites, which
+      # GNU sed rejects outright. It would have broken the moment this job moved to Linux while
+      # still passing on every developer's Mac.
+      - name: Test portable-sed guard (#1598 regression suite)
+        run: bash scripts/__tests__/check-portable-sed.test.sh
+
+      - name: Guard — no non-portable in-place sed in the tree (#1598)
+        run: bash scripts/check-portable-sed.sh
+
+      - name: Test runner-portability guard (#1598 regression suite)
+        run: bash scripts/__tests__/check-runner-portability.test.sh
+
+      - name: Guard — runner placement and Linux portability (#1598)
+        run: python3 scripts/check-runner-portability.py
+
       - name: Setup Bun
+        id: setup-bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: latest
+          # Read from package.json's `packageManager` field (bun@1.3.14) rather than hardcoding a
+          # version here or using `latest`, which is what this said before. `latest` made every
+          # run's toolchain a moving target -- tolerable on a hand-maintained Mac, worse on an
+          # ephemeral VM where nothing else is stable, and it silently contradicted the repo's own
+          # pin.
+          bun-version-file: package.json
+
+      # run-e2e-with-ports.sh / run-e2e-ci.sh call `node` directly (find-available-ports.js), and
+      # this job previously had no setup-node at all -- it inherited whatever node the Mac Mini
+      # happened to have. On an ephemeral runner that is an unpinned dependency on the image.
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          # `cache:` intentionally LEFT UNSET, unlike setup-go's explicit `cache: false` below --
+          # the two are not parallel. setup-go's `cache` input defaults to true and silently
+          # caches GOMODCACHE under its own key if you don't turn it off; setup-node's `cache`
+          # input only recognizes 'npm' | 'yarn' | 'pnpm' and does nothing (no caching, no error)
+          # when omitted -- but passing the LITERAL boolean `false` serializes to the string
+          # "false" over the Actions input protocol, which setup-node treats as an unrecognized
+          # package manager and fails the step with "Caching for 'false' is not supported". This
+          # repo uses bun, not any of the three, so its dependency cache is the explicit
+          # `bun-store-*` actions/cache step above/below -- setup-node's own cache has nothing to
+          # do here regardless of this input's value.
+
+      # ── Caches ──────────────────────────────────────────────────────────────────────────────
+      # Ephemeral runners start cold, so these are new with #1598. Every key carries
+      # `runner.arch` as well as `runner.os`: `runner.os` is `Linux` on both amd64 and arm64, so
+      # an os-only key would serve amd64 binaries to an arm64 runner the day someone tries one
+      # (and Ubicloud does offer `-arm` labels).
+      #
+      # Keys must stay byte-identical to .github/workflows/warm-ci-cache.yml, which is the only
+      # thing that writes them in the DEFAULT-BRANCH scope. This workflow is `on: pull_request`
+      # only, and a cache written by a pull_request run is scoped to that PR -- so without that
+      # companion workflow every new PR's first run is fully cold. If you change a key here,
+      # change it there, and re-run the key-diff check in that file's header.
+      - name: Restore Bun package store
+        id: cache-bun
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          # setup-bun caches the bun EXECUTABLE, not the package store, so this is not a
+          # duplicate of the action's own cache (verified in its action.yml at the pinned SHA).
+          path: ~/.bun/install/cache
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-bun.outputs.bun-version }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-bun.outputs.bun-version }}-
 
       - name: Install workspace dependencies
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        id: install-deps
         run: bun install --frozen-lockfile
 
-      - name: Install Playwright browsers
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
-        run: bunx playwright install --with-deps chromium
+      - name: Resolve Playwright version
+        id: playwright
+        # Keyed on the RESOLVED Playwright version, not hashFiles('bun.lock'). The lockfile
+        # changes on every Dependabot bump of any dependency, which would evict a still-valid
+        # ~200MB browser set weekly for no reason. Read after `bun install`, since it comes from
+        # the installed package.
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./apps/web/node_modules/@playwright/test/package.json').version")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Playwright ${version}"
 
-      - name: Install webkit browser
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
-        run: bunx playwright install webkit
+      - name: Restore Playwright browsers
+        id: cache-playwright
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/ms-playwright
+          # Exact match only, deliberately: no restore-keys. A fallback would hand this run a
+          # DIFFERENT Playwright version's browsers, which is worse than downloading the right
+          # ones -- the failure would surface as an inscrutable browser-launch error.
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}
+
+      # WebKit was previously installed by a SECOND step without `--with-deps`. That is a no-op on
+      # macOS (no system deps to fetch), which is why the omission was invisible for so long; on
+      # Linux it installs a browser that is present but cannot launch, and the `webkit-sticky`
+      # project (apps/web/playwright.config.ts) would fail to start one at all.
+      #
+      # ⚠ UNCONDITIONAL, and it must stay that way. The tempting `if: cache-hit != 'true'` guard
+      # is a bug: `--with-deps` installs apt packages that do NOT live in ~/.cache/ms-playwright,
+      # so a browser-cache hit would skip them -- shipping a job that is green on its first run
+      # and broken on every cached run afterwards.
+      - name: Install Playwright browsers and OS dependencies
+        id: install-playwright-browsers
+        working-directory: apps/web
+        run: bunx playwright install --with-deps chromium webkit
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
-        # Note: go clean -cache is intentionally omitted — it is destructive on
-        # a shared self-hosted runner when other jobs build concurrently.
+          # ⚠ EXPLICIT false, and it is NOT a no-op: this input DEFAULTS TO TRUE (verified in
+          # action.yml at this pinned SHA). Left at the default, setup-go caches GOMODCACHE *and*
+          # `go env GOCACHE` under its own key `setup-go-<os>-<arch>-go<ver>-<hash(go.sum)>`, in
+          # addition to the two explicit caches below -- the same bytes moved twice, against
+          # Ubicloud's 30 GB cache quota. And because that key hashes ONLY go.sum, every
+          # run after the first save for a given go.sum is an exact hit, so its build-cache half
+          # never absorbs newly-compiled packages. That is precisely the freeze this repo already
+          # diagnosed for its own hand-rolled key at the "Save Go build cache" step in
+          # backend-test ("the cache silently froze at whatever was compiled on that first run").
+          cache: false
+        # `go clean -cache` remains intentionally absent, but the reason has changed: it used to
+        # be "destructive on a shared self-hosted runner when other jobs build concurrently".
+        # Nothing is shared now -- it is simply pointless work on a VM that starts empty and is
+        # destroyed after the job.
 
-      - name: Configure job-local Go build cache
-        # runner context is unavailable in job-level env blocks (GitHub Actions limitation),
-        # so we export GOCACHE here where $RUNNER_TEMP is a real shell variable.
-        # This isolates this job's build cache from openapi-validate's concurrent
-        # go clean -cache (root cause of intermittent "no such file or directory"
-        # import failures on the default shared ~/Library/Caches/go-build).
-        run: echo "GOCACHE=$RUNNER_TEMP/gocache-e2e" >> "$GITHUB_ENV"
+      # The job-local GOCACHE step that used to sit here is gone. Its entire rationale was
+      # isolation from openapi-validate's CONCURRENT `go clean -cache` on the shared Mac Mini;
+      # there are no concurrent jobs on this VM, so the Linux default (~/.cache/go-build) is
+      # correct and is what the cache below stores.
+      - name: Restore Go modules cache
+        id: cache-go-modules
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/go/pkg/mod
+          key: go-modules-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-modules-${{ runner.os }}-${{ runner.arch }}-
 
+      - name: Restore Go build cache
+        id: cache-go-build
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/go-build
+          # A COMPILATION-INPUT hash, never github.sha. backend-test's "Save Go build cache" step
+          # records why the github.sha version was itself a bug: it minted a new entry on every
+          # commit, including ones that cannot change compiled output, evicting warm entries under
+          # a capped quota. That argument survives the move to Ubicloud with different numbers --
+          # Ubicloud's quota is 30 GB free PER REPOSITORY PER WEEK (a rolling write budget, not a
+          # standing cap on total stored bytes, which is how an earlier version of these comments
+          # described it), AND it evicts any entry unaccessed for 7 days. Measured from the
+          # Ubicloud console on #1598: the four keys this branch writes occupy 848.8 MB (playwright
+          # 363.7, bun-store 203.9, go-modules 156.1, gocache-e2e 125.0) -- well under the weekly
+          # write budget, so THAT axis is not currently a concern. The 7-day eviction is the one
+          # that matters here: it is why warm-ci-cache.yml's keys must stay byte-identical to
+          # these (R9 in scripts/check-runner-portability.py) -- a quiet week ages an entry out,
+          # and a mismatched key means the "warm" save never lands on the key a PR run restores,
+          # so every run pays the cold-start cost regardless of how recently the warm job ran. A
+          # per-commit key would also churn entries for no benefit, which is the actual argument
+          # against `github.sha`.
+          key: gocache-e2e-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
+          restore-keys: |
+            gocache-e2e-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-
+            gocache-e2e-${{ runner.os }}-${{ runner.arch }}-
+
+      # ⚠ This build is REQUIRED, and that is a change from before #1598. The old path ran
+      # run-e2e-with-ports.sh, which rebuilds bin/server unconditionally at its line 224 -- so
+      # this step was pure duplicated work. run-e2e-ci.sh deliberately does NOT build (it assumes
+      # services and a built binary), and Playwright's `webServer` command runs ./bin/server, so
+      # this is now the only thing that produces it. Keeping the build here also means a compile
+      # error reports as a build failure rather than as an inscrutable Playwright webServer
+      # timeout.
+      #
+      # The `chmod +x` step that used to follow is gone: it was always dead, because `go build`
+      # writes mode 0755.
       - name: Build backend binary
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        id: build-backend
+        working-directory: backend
         run: |
           mkdir -p bin
           go build -o bin/server ./cmd/server
-
-      - name: Make backend binary executable
-        run: chmod +x $GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
 
       # #1569 round 17 task 1. FIVE Go guards scan corpora that live OUTSIDE the paths-filters of
       # the only job that ran them (backend-test, gated `backend || api || workflow || config`,
@@ -338,7 +598,7 @@ jobs:
       # `needs: detect-changes` + an `if:` to this job would otherwise silently unwire all five
       # guards again, which is exactly how they came to be unwired in the first place.
       - name: Guard — whole-tree corpus guards (#1569 R17 T1)
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        working-directory: backend
         run: go test -count=1 ./internal/repository/ ./internal/testsupport/citations/
 
       - name: Install golang-migrate
@@ -346,119 +606,100 @@ jobs:
           # #1514: pin to a specific release and verify the published checksum before
           # executing the binary — the previous `releases/latest` URL was mutable and
           # unverified.
+          # #1598: the artefact and its checksum were darwin-arm64-only, verified with BSD
+          # `shasum`. This job now runs on Linux amd64, so all three had to change. The checksum
+          # was re-derived by DOWNLOADING THE FILE and hashing it, never by piping curl into a
+          # hasher: `curl … | shasum -a 256` truncates (measured: 13,878 of 17,394,526 bytes) and
+          # returns a stable but wrong digest, so a "correction" from that value would ship a pin
+          # that fails here every time.
           MIGRATE_VERSION: v4.19.1
-          MIGRATE_SHA256: a8cc8657afd1c2c93c78e8b77fd2275d150c29ebc1fff0e8fe0be68751503468
+          MIGRATE_SHA256: 2ac648fbd1b127b69ab5a7b33cf96212178f71e22379fc50573630c6f4c7ce18
         run: |
-          # Install golang-migrate to user bin (no sudo needed on self-hosted runners)
-          mkdir -p $HOME/bin
-          curl -sSfL -o migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.darwin-arm64.tar.gz"
-          echo "${MIGRATE_SHA256}  migrate.tar.gz" | shasum -a 256 -c -
+          set -euo pipefail
+          # $HOME/bin rather than /usr/local/bin: no sudo needed, and it is already on PATH via
+          # $GITHUB_PATH below.
+          mkdir -p "$HOME/bin"
+          curl -sSfL -o migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz"
+          echo "${MIGRATE_SHA256}  migrate.tar.gz" | sha256sum -c -
           tar -xz -f migrate.tar.gz migrate
           rm -f migrate.tar.gz
-          mv migrate $HOME/bin/
-          echo "$HOME/bin" >> $GITHUB_PATH
-          $HOME/bin/migrate --version
-
-      # #1531 Task 11e (fix round 1): apps/web/e2e/cache-freshness.auth.spec.ts and
-      # cache-household-visibility.auth.spec.ts both hard-fail (no skip path, by design — a
-      # guard that skips is a guard nobody has watched fail) unless the backend this job starts
-      # reports cache_enabled=true on /api/v1/admin/system/health. Without a real cache Redis
-      # here, this job's `bun run test:e2e` step launches the backend via
-      # playwright.config.ts's webServer with CACHE_REDIS_URL/RATE_LIMIT_REDIS_URL both empty,
-      # cacheInstance falls back to cache.NewNoopCache(), and both new specs would redden this
-      # job's very first run. Two disposable containers, same reap/dynamic-port/health-wait
-      # shape as backend-integration-test's Postgres and Redis containers.
-      - name: Start Redis containers for E2E cache verification (dynamic ports)
+          mv migrate "$HOME/bin/"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          "$HOME/bin/migrate" --version
+      # #1598. Was ~88 lines of `docker pull` with retries, two `docker run`s with bare `-p 6379`,
+      # a `docker port` read-back parsed with `cut -d: -f2`, and 30-attempt `redis-cli ping`
+      # loops. All three containers are now Actions services (see the `services:` block above),
+      # already health-gated before this step runs, so the only thing left to do is tell the app
+      # where they are.
+      #
+      # `job.services.<id>.ports['<container-port>']` is the mapped host port. Reading it here
+      # rather than parsing `docker port` is what removes the IPv4/IPv6 ordering bug described in
+      # the services block.
+      #
+      # Two specs (cache-freshness.auth.spec.ts, cache-household-visibility.auth.spec.ts) hard-fail
+      # unless the backend reports cache_enabled=true, which needs BOTH CACHE_ENABLED=true and a
+      # CACHE_REDIS_URL that resolves to a working client -- hence both are set, here and on the
+      # test step.
+      - name: Export service URLs
         run: |
-          cache_orphans=$(docker ps -aq --filter "name=test-e2e-cache-redis-${{ github.run_id }}-" 2>/dev/null || true)
-          if [ -n "$cache_orphans" ]; then
-            while IFS= read -r container; do [ -z "$container" ] || docker rm -f "$container" 2>/dev/null || true; done <<< "$cache_orphans"
+          set -euo pipefail
+          # One grouped redirect rather than three appends (shellcheck SC2129).
+          {
+            echo "DATABASE_URL=postgres://test:test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/test?sslmode=disable"
+            echo "CACHE_REDIS_URL=redis://127.0.0.1:${{ job.services.cache_redis.ports['6379'] }}/0"
+            echo "RATE_LIMIT_REDIS_URL=redis://127.0.0.1:${{ job.services.ratelimit_redis.ports['6379'] }}/0"
+          } >> "$GITHUB_ENV"
+
+      # psql is used by run-e2e-ci.sh to seed, and to open a real connection before migrating.
+      # The old path reached the database with `docker cp` + `docker exec psql` against a
+      # container it had named itself, which cannot address an Actions-managed service -- which is
+      # precisely why the service container's name never has to be known here.
+      - name: Install postgresql-client
+        run: |
+          set -euo pipefail
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
           fi
-          ratelimit_orphans=$(docker ps -aq --filter "name=test-e2e-ratelimit-redis-${{ github.run_id }}-" 2>/dev/null || true)
-          if [ -n "$ratelimit_orphans" ]; then
-            while IFS= read -r container; do [ -z "$container" ] || docker rm -f "$container" 2>/dev/null || true; done <<< "$ratelimit_orphans"
-          fi
-          docker rm -f ${{ env.E2E_CACHE_REDIS_CONTAINER }} 2>/dev/null || true
-          docker rm -f ${{ env.E2E_RATELIMIT_REDIS_CONTAINER }} 2>/dev/null || true
+          psql --version
 
-          echo "Pulling Redis image..."
-          for i in 1 2 3; do
-            docker pull redis:7-alpine && break || {
-              echo "Pull attempt $i/3 failed"
-              [ $i -lt 3 ] && sleep 10
-            }
-          done
-
-          docker run -d \
-            --name ${{ env.E2E_CACHE_REDIS_CONTAINER }} \
-            -p 6379 \
-            --health-cmd "redis-cli ping" \
-            --health-interval 5s \
-            --health-timeout 3s \
-            --health-retries 10 \
-            redis:7-alpine
-
-          docker run -d \
-            --name ${{ env.E2E_RATELIMIT_REDIS_CONTAINER }} \
-            -p 6379 \
-            --health-cmd "redis-cli ping" \
-            --health-interval 5s \
-            --health-timeout 3s \
-            --health-retries 10 \
-            redis:7-alpine
-
-          sleep 2
-          E2E_CACHE_REDIS_PORT=$(docker port ${{ env.E2E_CACHE_REDIS_CONTAINER }} 6379 | cut -d: -f2)
-          E2E_RATELIMIT_REDIS_PORT=$(docker port ${{ env.E2E_RATELIMIT_REDIS_CONTAINER }} 6379 | cut -d: -f2)
-          echo "E2E cache Redis running on dynamically assigned port: $E2E_CACHE_REDIS_PORT"
-          echo "E2E rate-limit Redis running on dynamically assigned port: $E2E_RATELIMIT_REDIS_PORT"
-
-          # DELIBERATELY the app's OWN config variable names here (CACHE_REDIS_URL /
-          # RATE_LIMIT_REDIS_URL) — the opposite choice from backend-integration-test's
-          # CACHE_REDIS_TEST_URL / REDIS_TEST_URL. The two jobs are not the same shape:
-          # backend-integration-test runs `go test` directly in a process that ALSO loads
-          # config.Load() for plain (non-integration) unit tests on the SAME runner, so the
-          # app's real var names must never appear there — see cachetest/redis.go's own doc
-          # comment. This job instead builds and RUNS the actual backend binary via
-          # playwright.config.ts's webServer, exactly like a real deployment would — there is
-          # no config.Load() unit test sharing this process to leak into, and the backend only
-          # ever picks up CACHE_REDIS_URL/RATE_LIMIT_REDIS_URL from its own environment. Using
-          # the TEST_URL names here would do nothing: cmd/server/main.go reads cfg.CacheRedisURL
-          # (env CACHE_REDIS_URL) and cfg.RateLimitRedisURL (env RATE_LIMIT_REDIS_URL), full
-          # stop. If a future change ever makes this job share a process with unit tests, revisit
-          # this choice — until then, unifying the two jobs' env var names would silently break
-          # this one.
-          echo "CACHE_REDIS_URL=redis://localhost:$E2E_CACHE_REDIS_PORT/0" >> $GITHUB_ENV
-          echo "RATE_LIMIT_REDIS_URL=redis://localhost:$E2E_RATELIMIT_REDIS_PORT/0" >> $GITHUB_ENV
-
-          echo "Waiting for E2E cache Redis to be ready..."
-          for i in {1..30}; do
-            if docker exec ${{ env.E2E_CACHE_REDIS_CONTAINER }} redis-cli ping 2>/dev/null | grep -q PONG; then
-              echo "E2E cache Redis is ready!"
-              break
-            fi
-            if [ $i -eq 30 ]; then
-              echo "::error::Timeout waiting for E2E cache Redis to start"
-              exit 1
-            fi
-            sleep 1
-          done
-
-          echo "Waiting for E2E rate-limit Redis to be ready..."
-          for i in {1..30}; do
-            if docker exec ${{ env.E2E_RATELIMIT_REDIS_CONTAINER }} redis-cli ping 2>/dev/null | grep -q PONG; then
-              echo "E2E rate-limit Redis is ready!"
-              break
-            fi
-            if [ $i -eq 30 ]; then
-              echo "::error::Timeout waiting for E2E rate-limit Redis to start"
-              exit 1
-            fi
-            sleep 1
-          done
+      # #1598, added after a Codex review of the migration commit flagged it. The E2E port block
+      # runs to 44999 (apps/web/scripts/find-available-ports.js), and Linux's default
+      # net.ipv4.ip_local_port_range starts at 32768 -- so the kernel can hand an OUTBOUND socket
+      # a port in 32768-44999 in the window between find-available-ports.js probing it and
+      # Playwright's webServer binding the backend to 0.0.0.0:<that port>
+      # (backend/cmd/server/main.go:2606). The result is an intermittent, load-dependent
+      # EADDRINUSE or webServer startup failure that reads as test flake rather than as a
+      # port-allocation bug. This job makes plenty of outbound connections (Clerk, the staging MCP
+      # worker, the Docker registry), so the window is not theoretical. macOS never had the
+      # problem: its ephemeral floor is 49152, which is why the allocator's ceiling was chosen.
+      #
+      # ⚠ SCOPE, precisely. This controls KERNEL selection for outbound sockets, and nothing else.
+      # It does NOT move Docker's own host-port allocator, which reads its range when `dockerd`
+      # starts -- an earlier draft of this migration claimed it did, and that claim was wrong.
+      # That no longer matters here: this job starts no containers of its own, and the Postgres and
+      # Redis service containers are already started and bound before the first step runs, so
+      # raising the floor afterwards cannot disturb them.
+      #
+      # Prevention rather than detection, deliberately. The local path guards this with an `lsof`
+      # preflight (run-e2e-with-ports.sh:200-219), which run-e2e-ci.sh does not carry: moving the
+      # range so the collision cannot occur is strictly better than racing to notice it, and
+      # non-root `lsof` on Linux cannot see a root-owned listener anyway.
+      - name: Raise kernel ephemeral port floor above the E2E port block
+        run: |
+          set -euo pipefail
+          sudo sysctl -w net.ipv4.ip_local_port_range="49152 60999"
+          floor="$(sysctl -n net.ipv4.ip_local_port_range | awk '{print $1}')"
+          # Assert the property, not the command: a sysctl that silently no-ops (a restricted
+          # container, a changed key) must fail here rather than leave the hazard in place.
+          [ "$floor" -gt 44999 ] || {
+            echo "::error::kernel ephemeral floor is $floor, which still overlaps the E2E port block (max 44999)"
+            exit 1
+          }
+          echo "ephemeral floor now $floor (E2E block ceiling 44999)"
 
       - name: Run E2E tests
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        working-directory: apps/web
         env:
           CI: true
           CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
@@ -478,7 +719,7 @@ jobs:
           CACHE_ENABLED: "true"
           CACHE_REDIS_URL: ${{ env.CACHE_REDIS_URL }}
           RATE_LIMIT_REDIS_URL: ${{ env.RATE_LIMIT_REDIS_URL }}
-        run: bun run test:e2e
+        run: bash scripts/run-e2e-ci.sh
 
       # Issue #1437 (second half): a lost Clerk session must fail CI loudly, not pass
       # silently. e2e/auth.setup.ts calls setup.skip() whenever TEST_CLERK_EMAIL/
@@ -493,7 +734,7 @@ jobs:
       # Local dev is unaffected: this check lives in CI only. auth.setup.ts's skip() path
       # (and the no-auth spec subset it leaves runnable) is untouched.
       - name: Guard — E2E auth session must have been obtained
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        working-directory: apps/web
         run: |
           AUTH_FILE="e2e/.auth/user.json"
 
@@ -520,7 +761,7 @@ jobs:
           # deploy-to-staging.yaml use `jq -r`. python3 is used instead simply for consistency
           # with the skip-ceiling guard below, which already parses Playwright's JSON report
           # the same way — not because jq is unproven on this runner.
-          python3 "${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/scripts/check-e2e-storage-state.py" "$AUTH_FILE"
+          python3 "$GITHUB_WORKSPACE/scripts/check-e2e-storage-state.py" "$AUTH_FILE"
 
       # Issue #1437 (defect b): the auth guard above only proves *a* session was obtained — it
       # says nothing about how many tests actually ran. #1437's real failure mode was a total
@@ -557,7 +798,7 @@ jobs:
       # report "verified"; that is the same false-confidence shape as the cookie-count defect
       # fixed in the step above, and it would sit inside the very guard meant to catch it.
       - name: Guard — E2E skipped-test count must not exceed ceiling
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        working-directory: apps/web
         run: |
           RESULTS="playwright-report/results.json"
           if [ ! -s "$RESULTS" ]; then
@@ -619,8 +860,8 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         continue-on-error: true
         with:
-          name: playwright-report-${{ github.run_id }}
-          path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/playwright-report/
+          name: playwright-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: apps/web/playwright-report/
           retention-days: 1
           if-no-files-found: warn
 
@@ -634,8 +875,8 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         continue-on-error: true
         with:
-          name: playwright-videos-${{ github.run_id }}
-          path: ${{ env.UNIQUE_WORKSPACE }}/apps/web/test-results/
+          name: playwright-videos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: apps/web/test-results/
           retention-days: 1
           if-no-files-found: warn
 
@@ -643,42 +884,77 @@ jobs:
         if: steps.upload-playwright-videos.outcome == 'failure'
         run: echo "::warning::E2E videos upload failed (storage quota/network). Test results valid."
 
-      - name: Cleanup E2E Redis containers
-        if: always()
-        run: |
-          cleanup_status=0
-          cleanup_container() {
-            local name="$1"
-            local existing
-            existing=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null || true)
-            [ -n "$existing" ] || return 0
-            for attempt in 1 2; do
-              if docker rm -f "$name" >/dev/null 2>&1; then
-                break
-              fi
-              if [ "$attempt" -eq 2 ]; then
-                echo "::error::Failed to remove E2E Redis container $name"
-                return 1
-              fi
-              sleep 1
-            done
-            remaining=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null || true)
-            if [ -n "$remaining" ]; then
-              echo "::error::E2E Redis container still exists after cleanup: $name"
-              return 1
-            fi
-          }
-          cleanup_container "${{ env.E2E_CACHE_REDIS_CONTAINER }}" || cleanup_status=1
-          cleanup_container "${{ env.E2E_RATELIMIT_REDIS_CONTAINER }}" || cleanup_status=1
-          if [ "$cleanup_status" -ne 0 ]; then exit 1; fi
+      # ── Cache saves (#1598) ─────────────────────────────────────────────────────────────────
+      # Three guards on every one of these, each for a different reason:
+      #
+      #   `if: ${{ !cancelled() }}` -- NOT `always()`. `always()` also fires on CANCELLATION, and
+      #     cancellation is this job's normal recent outcome: all eleven of its most recent runs
+      #     on the Mac pool ended `cancelled`. On a billed ephemeral runner that means paying to
+      #     upload a cache built by a job that was killed mid-compile, then paying again to
+      #     download it into the next run.
+      #
+      #   `&& steps.<producer>.outcome == 'success'` (#1598 G10) -- `!cancelled()` ALONE still lets
+      #     a FAILED producer's save run: a step that errors out (a broken lockfile, a Playwright
+      #     install that dies partway through OS deps, a Go compile failure) is neither cancelled
+      #     nor skipped, so without this the save step still executes and uploads whatever partial
+      #     or empty directory the failed step left behind. Cache entries are IMMUTABLE -- once a
+      #     key exists, no later successful run can overwrite it, only wait ~7 days for it to age
+      #     out on its own -- and this repo has Ubicloud shared-branch caching enabled, so a
+      #     poisoned entry written on one branch is served to EVERY branch that restores the same
+      #     key, not just the one that produced it. Each save below is therefore gated on the
+      #     specific step that actually populates its cached path having `outcome == 'success'`,
+      #     not merely on the job not having been cancelled.
+      #
+      #   `continue-on-error: true` -- actions/cache/save fails outright if its exact key already
+      #     exists, which is EXPECTED on a rerun of the same commit, or on a second commit that
+      #     changes no cached input. That must not redden the job; a persistent failure (a real
+      #     quota or network problem) still surfaces as a workflow warning rather than silence.
+      #     Kept even after adding the producer-outcome check above: colliding with an existing key
+      #     is a normal rerun, not evidence the producer is unhealthy, and the two failure modes
+      #     must stay distinguishable.
+      #
+      # Deliberately NOT guarded on `steps.<id>.outputs.cache-hit != 'true'`: `cache-hit` is true
+      # only on an EXACT primary-key match, so guarding a save on it freezes the entry at
+      # whatever the first save contained. backend-test's "Save Go build cache" step documents
+      # that bug at length; do not reintroduce it here.
+      - name: Save Bun package store
+        if: ${{ !cancelled() && steps.install-deps.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-bun.outputs.bun-version }}-${{ hashFiles('bun.lock') }}
 
-      - name: Final workspace cleanup
-        if: always()
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+      - name: Save Playwright browsers
+        if: ${{ !cancelled() && steps.install-playwright-browsers.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}
 
-  # =============================================================================
-  # OpenAPI Spec Validation (ensures spec is committed when backend changes)
-  # =============================================================================
+      # Go modules AND Go build cache are both gated on "Build backend binary", not on a
+      # dedicated `go mod download` step -- this job has none. `go build` resolves and downloads
+      # any missing modules into ~/go/pkg/mod before it compiles, and it is also the first Go
+      # invocation in the job (it runs before the "Guard -- whole-tree corpus guards" `go test`
+      # step further down), so it is the step that actually populates both cached paths for a run
+      # starting cold. If it fails -- a broken go.sum, a network failure resolving a module, a
+      # real compile error -- neither cache should be trusted as complete.
+      - name: Save Go modules cache
+        if: ${{ !cancelled() && steps.build-backend.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/go/pkg/mod
+          key: go-modules-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+
+      - name: Save Go build cache
+        if: ${{ !cancelled() && steps.build-backend.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/go-build
+          key: gocache-e2e-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
   openapi-validate:
     name: OpenAPI Spec Validation
     needs: detect-changes
@@ -2697,7 +2973,7 @@ jobs:
           clean: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       - name: Set Dockerfile path
         id: dockerfile
@@ -2749,65 +3025,240 @@ jobs:
   # =============================================================================
   # Lighthouse CI Audit (Performance, Accessibility, Best Practices, SEO)
   # =============================================================================
-  # DISABLED: Lighthouse CI has macOS-specific Chrome isolation issues on self-hosted
-  # Mac Mini runners (LHCI uses --headless=new which interferes with running Chrome
-  # sessions). Re-enable when migrating CI to Ubicloud Linux runners (#996).
-  # Audits the landing page with 3 runs (median scoring) against hard thresholds:
+  # Audits the landing page and /mcp with 3 runs (median scoring) against hard thresholds:
   #   Performance >= 80, Accessibility >= 95, Best Practices >= 90, SEO >= 95
-  # Uses dynamic port allocation (45000-49900) to prevent concurrent run collisions.
-  # No artifacts stored — assertions only, workspace cleaned up after.
+  #
+  # RE-ENABLED on Linux runners by #1598, closing #996. This job was dark from 2026-04-07
+  # (commit 2ce659b6) until then, because Chrome headless under LHCI shared a process group with
+  # the Mac Mini's own browser session and LHCI SIGKILLs that group after an audit -- taking the
+  # developer's browser with it.
+  #
+  # ⚠ The exact FLAG mechanism is recorded inconsistently across the repo and was NOT re-verified
+  # here, so do not quote either version as established. #996 says LHCI "always appends
+  # `--headless=new`". But .lighthouserc.js's chromeFlags comment says plain `--headless` was
+  # chosen precisely BECAUSE `--headless=new` caused EPERM/WebSocket failures on the macOS
+  # runners -- which would be pointless if LHCI overrode it unconditionally. Both cannot be true.
+  # What IS certain is that the conflict was macOS process-group behaviour, which Linux does not
+  # share, and that is the reason this job had to wait for the Ubicloud migration.
   lighthouse-audit:
     name: Lighthouse CI Audit
     needs: detect-changes
-    if: false  # Disabled — re-enable on Ubicloud Linux runners (#996)
-    runs-on: [self-hosted, macOS, mac-mini]
-    env:
-      UNIQUE_WORKSPACE: workspace-lighthouse-${{ github.run_id }}
+    if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    runs-on: ubicloud-standard-2
+    # Least-privilege token, scoped to this job rather than the whole workflow (#1598). This is
+    # one of only two jobs that now run on an ephemeral cloud VM, which is the entire reason the
+    # restriction is worth stating -- and neither writes with GITHUB_TOKEN.
+    #
+    # ⚠ Declared PER JOB on purpose. A workflow-level block was tried first and broke
+    # `detect-changes`: setting any `permissions:` drops every scope not listed, and
+    # dorny/paths-filter calls the PR Files API, which needs `pull-requests: read`. It failed with
+    # the generic "Resource not accessible by integration" -- naming neither the scope nor the
+    # action -- and because 11 jobs are gated on detect-changes' outputs, that one failure cascaded
+    # into skipping most of the matrix. Job-level scoping keeps a hardening change to the jobs it
+    # was justified for, and matches this repo's existing convention (deploy-production.yml,
+    # deploy-to-staging.yaml, cleanup-artifacts.yml all declare permissions per job).
+    permissions:
+      contents: read
+    # NEW in #1598. This job had no timeout at all, so it inherited GitHub's 360-minute default:
+    # a wedged LHCI run would have billed six hours of runner time. 20 minutes is a wedge bound,
+    # not a performance target -- a frontend build plus 3 audit runs over 2 URLs is minutes.
+    timeout-minutes: 20
+    # Needed for secrets.CLERK_PUBLISHABLE_KEY, which is an `e2e` ENVIRONMENT secret rather than
+    # a repo-level one (verified: the repo has no CLERK_* secrets at all; the e2e environment has
+    # six). That environment has no protection rules and no branch policy, so declaring it neither
+    # gates this job nor requires an approval -- e2e-test already declares it for the same reason.
+    environment: e2e
 
     steps:
-      - name: Clean workspace
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-
+      # No `sudo rm -rf` and no `path:`/`clean: false`: those existed so concurrent jobs on one
+      # Mac Mini could not collide. This VM is created for this job and destroyed after it.
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          path: ${{ env.UNIQUE_WORKSPACE }}
-          clean: false
           fetch-depth: 1
 
+      # LHCI launches a real Chrome through chrome-launcher, and this job installs no browser --
+      # on the Mac Mini it silently used the desktop Chrome at /Applications. Ubicloud documents
+      # nothing about its image contents, and its published Arm image inventory omits Chrome
+      # entirely, so resolve it explicitly: a runner image without Chrome must fail here with a
+      # clear message rather than inside `lhci autorun`.
+      #
+      # The version is echoed on purpose. Chrome 132 REMOVED old headless, so on a current
+      # browser the `--headless` flag in .lighthouserc.js selects new headless regardless of what
+      # that file's comment says. That is fine on Linux (the process-group conflict was
+      # macOS-specific), but the version is the only way to know which mode actually ran.
+      - name: Preflight — resolve Chrome
+        run: |
+          set -euo pipefail
+          for candidate in google-chrome google-chrome-stable chromium-browser chromium; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+              echo "CHROME_PATH=$(command -v "$candidate")" >> "$GITHUB_ENV"
+              "$candidate" --version
+              exit 0
+            fi
+          done
+          echo "::error::no Chrome/Chromium on this runner image — install one before lhci autorun"
+          exit 1
+
       - name: Setup Bun
+        id: setup-bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: latest
+          # From package.json's packageManager field, not `latest` -- see e2e-test's Setup Bun.
+          bun-version-file: package.json
+
+      # `npx lhci` and `npx serve` both need a predictable Node; this job previously had none and
+      # used whatever the Mac Mini happened to provide.
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          # `cache:` intentionally LEFT UNSET -- see e2e-test's Set up Node for the full
+          # argument. In short: unlike setup-go, omitting setup-node's `cache` input is already
+          # a no-op (no caching, no error), while the literal boolean `false` is NOT a no-op --
+          # it serializes to the string "false", which setup-node rejects as an unsupported
+          # package manager. This job uses bun, not npm/yarn/pnpm, so this input has nothing to
+          # cache regardless.
+
+      # Same key as e2e-test and warm-ci-cache.yml. Keep the three byte-identical.
+      #
+      # Restore-only here: this job does NOT save this cache. e2e-test and lighthouse-audit run
+      # concurrently on the same PR, install the same --frozen-lockfile deps from the same
+      # bun.lock, and would therefore always write a byte-identical entry -- one job's save was
+      # observed losing the race in real CI ("Failed to save: Unable to reserve cache with key
+      # bun-store-Linux-X64-1.3.14-... another job may be creating this cache"), wasting a 203.9 MB
+      # upload attempt (~24s) for zero benefit. Under Ubicloud's shared-branch caching (see
+      # "Caching" below), any branch's save already serves every branch, so e2e-test alone is a
+      # sufficient sole writer (#1598).
+      - name: Restore Bun package store
+        id: cache-bun
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-bun.outputs.bun-version }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-bun.outputs.bun-version }}-
 
       - name: Install workspace dependencies
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bun install --frozen-lockfile
 
+      # ⚠ VITE_CLERK_PUBLISHABLE_KEY is REQUIRED for this build, and its absence is why the very
+      # first Ubicloud run of this job failed. That failure was NOT a Linux or Ubicloud problem,
+      # and it was not the threshold variance this migration anticipated -- it is a latent defect
+      # that has been in this job since #995 created it, invisible because the job has never once
+      # executed (it was `if: false` from 2026-04-09 onward).
+      #
+      # The mechanism: `bun run build` is a PRODUCTION build, so `import.meta.env.MODE` is
+      # 'production' and `isDevelopment` is false in apps/web/src/main.tsx. The runtime
+      # `window.ENV` shim (apps/web/public/config.js) ships with CLERK_PUBLISHABLE_KEY explicitly
+      # `undefined` -- the real values are injected by docker-entrypoint.sh at CONTAINER start,
+      # which never happens here because Lighthouse serves the static dist with `npx serve`. With
+      # neither source present, main.tsx throws at module top level:
+      #   "FATAL: Clerk configuration not loaded. window.ENV is undefined or empty."
+      # Nothing renders, and Lighthouse reports only `NO_FCP` ("The page did not paint any
+      # content"), which names neither Clerk nor the missing variable.
+      #
+      # Reproduced locally to be sure, rather than inferred: building with the key absent gives
+      # `#root` innerHTML length 0 and that exact pageerror; building with a real key gives ~49KB
+      # of rendered DOM. A syntactically valid DUMMY key is NOT sufficient -- it clears the throw
+      # but Clerk's SDK then fails to load its script from the encoded domain
+      # (ERR_NAME_NOT_RESOLVED) and the app still never paints. It must be a real publishable key.
+      #
+      # Embedding it is safe by design: a Clerk PUBLISHABLE key is public and already ships inside
+      # every production frontend bundle. The secret key is not used here.
+      - name: Guard — Clerk publishable key must be present for the build
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VITE_CLERK_PUBLISHABLE_KEY:-}" ]; then
+            echo "::error::CLERK_PUBLISHABLE_KEY resolved empty. The frontend build would produce a bundle that throws before first paint, and Lighthouse would report only NO_FCP. Check the 'e2e' environment secret and this job's environment: declaration."
+            exit 1
+          fi
+          echo "Clerk publishable key present (${#VITE_CLERK_PUBLISHABLE_KEY} chars)"
+
       - name: Build frontend
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        working-directory: apps/web
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
         run: bun run build
 
-      - name: Allocate dynamic LHCI port
-        env:
-          RUN_ID: ${{ github.run_id }}
+      # Fails loudly if the bundle cannot paint, instead of leaving Lighthouse to report NO_FCP --
+      # which is what made the original failure take a local reproduction to diagnose. Cheap
+      # (~2s) relative to three Lighthouse runs, and it names the actual cause.
+      - name: Guard — built bundle must render before auditing
+        working-directory: apps/web
         run: |
-          # Derive isolated port range from GITHUB_RUN_ID (same pattern as E2E tests)
-          # LHCI range: 45000-49900 (50 ranges of 100 ports, supports 50 concurrent jobs)
-          PORT_OFFSET=$(( (${RUN_ID:-0} % 50) * 100 ))
-          LHCI_PORT=$(( 45000 + PORT_OFFSET ))
-          echo "LHCI_PORT=${LHCI_PORT}" >> "$GITHUB_ENV"
-          echo "Allocated LHCI port ${LHCI_PORT}"
+          set -euo pipefail
+          npx --yes serve dist -l 31001 --no-clipboard --single >/tmp/serve-probe.log 2>&1 &
+          for _ in $(seq 1 20); do
+            curl -sf "http://localhost:31001/" >/dev/null 2>&1 && break
+            sleep 1
+          done
+          node --input-type=module -e "
+            import { chromium } from '@playwright/test';
+            // executablePath is REQUIRED here, not an optimisation. This job never runs
+            // \\`playwright install\\` (only e2e-test does), so Playwright's own bundled Chromium is
+            // not on disk and a bare launch() dies with 'Executable doesn't exist at
+            // .../chromium_headless_shell-.../chrome-headless-shell'. That is exactly how the
+            // first version of this guard failed -- masking the very question it exists to
+            // answer. Reusing CHROME_PATH (resolved by the preflight above) also makes the probe
+            // faithful rather than merely cheap: it exercises the SAME browser lhci will launch.
+            const b = await chromium.launch({
+              executablePath: process.env.CHROME_PATH,
+              args: ['--no-sandbox'],
+            });
+            const p = await b.newPage();
+            const errors = [];
+            p.on('pageerror', e => errors.push(e.message));
+            await p.goto('http://localhost:31001/', { waitUntil: 'load' });
+            await p.waitForTimeout(3000);
+            const size = await p.evaluate(() => (document.getElementById('root')?.innerHTML || '').length);
+            await b.close();
+            if (size < 500) {
+              console.error('::error::the built bundle rendered ' + size + ' bytes into #root — Lighthouse would report NO_FCP. Page errors: ' + (errors.join(' | ') || '(none)'));
+              process.exit(1);
+            }
+            console.log('bundle renders (' + size + ' bytes into #root)');
+          "
+
+      - name: Allocate LHCI port
+        # Was `45000 + (run_id % 50) * 100`, to keep 50 concurrent jobs from colliding on one
+        # shared Mac Mini. This runner is a dedicated ephemeral VM with no siblings, so the
+        # arithmetic bought nothing -- and its range (45000-49900) sits INSIDE Linux's default
+        # ip_local_port_range (32768-60999), meaning the kernel could hand the same port to an
+        # outbound socket while `npx serve` was trying to bind it. 31000 is below the 32768
+        # floor, so it is unreachable by ephemeral allocation and needs no sysctl change.
+        run: echo "LHCI_PORT=31000" >> "$GITHUB_ENV"
 
       - name: Run Lighthouse CI
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         env:
           LHCI_PORT: ${{ env.LHCI_PORT }}
         run: npx lhci autorun
 
-      - name: Final workspace cleanup
+      # .lighthouserc.js writes its reports to /tmp/lhci-reports, which vanishes with the VM.
+      # Without this, a threshold failure leaves nothing to look at -- and the thresholds were
+      # calibrated on completely different hardware, so the first failures are the ones most
+      # worth reading.
+      # ⚠ `always()`, not `failure()` (#1601). Uploading only on failure made a PASSING run's
+      # scores unobservable, and that became a real gap the moment the thresholds were ratcheted
+      # to measured values (0.55 / 0.45 performance, 0.78 best-practices): a run sitting at 0.56
+      # against a 0.55 floor is one point from red and looks identical to one at 0.79. LHCI prints
+      # category values only for assertions that FAIL, so a green job's log says nothing either.
+      #
+      # Concretely: I could not tell from a passing run whether deferring the Paddle SDK had moved
+      # performance at all — the question the change was made to answer. Six reports at ~800KB
+      # with 3-day retention is a negligible price for being able to see headroom trend.
+      - name: Upload Lighthouse reports
+        id: upload-lighthouse-reports
         if: always()
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: lighthouse-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/lhci-reports
+          retention-days: 3
+          if-no-files-found: warn
 
   # =============================================================================
   # Bundle Size Check (size-limit + orphan-chunk guard)
@@ -2848,6 +3299,17 @@ jobs:
       - name: Test orphan-chunk checker
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-orphan-chunks.test.sh
+
+      # #1601. Hosted here rather than in e2e-test (where the other shell guards live) for two
+      # reasons: check-route-weight.sh needs a BUILT apps/web/dist, which only this job produces
+      # (via `make check-bundle-size` below), and the sibling bundle guard's suite is already
+      # hosted here. The guard itself runs inside that make target, so it is gated on the same
+      # frontend/workflow filters as the rest of this job -- correct here, because unlike the
+      # #1569/#1598 whole-tree guards its subject IS the frontend, so it is deliberately NOT in
+      # check-ungated-guard-steps.py's REQUIRED_UNGATED_STEPS.
+      - name: Test route-weight guard (#1601 regression suite)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/check-route-weight.test.sh
 
       - name: Check bundle size
         working-directory: ${{ env.UNIQUE_WORKSPACE }}

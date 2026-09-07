@@ -123,6 +123,35 @@ function buildFetchSpy() {
 }
 
 /**
+ * Generate an RFC 7636 S256 PKCE pair.
+ *
+ * Required, not optional: workers-oauth-provider refuses `response_type=code`
+ * from a public client (`tokenEndpointAuthMethod: 'none'`) that sends no
+ * code_challenge — see oauth-provider.js, "Public clients must use PKCE with
+ * the authorization code flow." Only S256 is accepted unless the provider is
+ * built with `allowPlainPKCE`, which we deliberately do not set.
+ *
+ * The verifier is the unreserved-character set per RFC 7636 §4.1 (43-128 chars);
+ * the challenge is BASE64URL(SHA256(ASCII(verifier))) per §4.2.
+ */
+async function createPkcePair(): Promise<{ verifier: string; challenge: string }> {
+  const bytes = crypto.getRandomValues(new Uint8Array(32))
+  // base64url with padding stripped — a verifier of 32 bytes yields 43 chars.
+  const verifier = btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
+
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))
+  const challenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
+
+  return { verifier, challenge }
+}
+
+/**
  * Produce an OAuthProvider opaque access token that the Worker's OAuthProvider will accept.
  *
  * The flow bypasses the Clerk redirect — we call getOAuthApi() directly to register
@@ -156,6 +185,16 @@ export async function mintAccessToken(worker: WorkerFetch, env: Env): Promise<st
   authorizeUrl.searchParams.set('scope', 'openid email profile')
   authorizeUrl.searchParams.set('state', crypto.randomUUID())
 
+  // PKCE is mandatory for this client: it is registered with
+  // tokenEndpointAuthMethod 'none', which the provider treats as a public
+  // client and therefore requires a code_challenge. Sending it here (and the
+  // matching verifier at the token endpoint below) mirrors what a real MCP
+  // client does, rather than downgrading the fixture to a confidential client
+  // that production never creates.
+  const pkce = await createPkcePair()
+  authorizeUrl.searchParams.set('code_challenge', pkce.challenge)
+  authorizeUrl.searchParams.set('code_challenge_method', 'S256')
+
   const authRequest = await helpers.parseAuthRequest(new Request(authorizeUrl.toString()))
 
   // 3. Complete authorization directly — store clerkUserId + fake Clerk accessToken as props.
@@ -188,6 +227,8 @@ export async function mintAccessToken(worker: WorkerFetch, env: Env): Promise<st
         client_id: client.clientId,
         code,
         redirect_uri: 'http://mcp.test/callback',
+        // Must match the code_challenge sent to /oauth/authorize above.
+        code_verifier: pkce.verifier,
       }).toString(),
     }),
   )
