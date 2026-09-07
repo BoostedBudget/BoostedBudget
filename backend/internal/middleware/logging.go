@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -81,18 +82,38 @@ func StructuredLogging(logger *slog.Logger) echo.MiddlewareFunc {
 
 			duration := time.Since(start)
 			status := c.Response().Status
+
+			// Issue #1609 Item 4: when the handler RETURNS an *echo.HTTPError instead of
+			// writing a response, Echo's HTTPErrorHandler writes the real status only after
+			// this middleware chain unwinds — so c.Response().Status still holds the
+			// unwritten default. Production logs showed the result directly:
+			//
+			//	{"level":"WARN","path":"/","status":200,"error":"code=404, message=Not Found"}
+			//
+			// status 200 alongside a 404. The level was already escalated correctly for this
+			// case (below), but the STATUS FIELD kept the stale value, so any dashboard or
+			// alert counting by status silently undercounted 4xx/5xx. Every propagated error
+			// is affected — router 404s, IPRateLimiter's 429, Huma handler errors.
+			//
+			// Prefer the error's own code whenever the response has not been committed.
+			// c.Response().Committed is the authoritative "did anything get written" signal;
+			// a handler that wrote its own status (CloudflareOnly's c.String(403, ...)) keeps
+			// that status verbatim.
+			// Pinned by TestStructuredLogging_PropagatedHTTPErrorLogsRealStatus.
+			if err != nil && !c.Response().Committed {
+				var httpErr *echo.HTTPError
+				if errors.As(err, &httpErr) && httpErr.Code != 0 {
+					status = httpErr.Code
+				}
+			}
+
 			level := slog.LevelInfo
 			if status >= 500 {
 				level = slog.LevelError
 			} else if status >= 400 {
 				level = slog.LevelWarn
 			} else if err != nil {
-				// Error returned but status not yet written (e.g. Echo error handler not run)
-				if httpErr, ok := err.(*echo.HTTPError); ok && httpErr.Code >= 500 {
-					level = slog.LevelError
-				} else if err != nil {
-					level = slog.LevelWarn
-				}
+				level = slog.LevelWarn
 			}
 
 			attrs := []slog.Attr{
