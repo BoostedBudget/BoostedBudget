@@ -7638,6 +7638,10 @@ components:
           type:
             - integer
             - "null"
+        exclude_investment_sync:
+          type:
+            - boolean
+            - "null"
         is_hidden:
           type:
             - boolean
@@ -7653,6 +7657,7 @@ components:
         - custom_emoji
         - display_order
         - is_hidden
+        - exclude_investment_sync
       type: object
     UpdateUserTagRequest:
       additionalProperties: false
@@ -7812,6 +7817,8 @@ components:
         display_order:
           format: int64
           type: integer
+        exclude_investment_sync:
+          type: boolean
         id:
           type: string
         institution_id:
@@ -7836,6 +7843,7 @@ components:
         - user_id
         - institution_id
         - is_hidden
+        - exclude_investment_sync
         - created_at
         - updated_at
       type: object
