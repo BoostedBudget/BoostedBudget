@@ -1490,8 +1490,13 @@ const (
 // `UPDATE accounts SET display_order` for every account. Task 3b then made the read
 // chain-authoritative — `ORDER BY COALESCE(CASE WHEN a.user_account_id IS NOT NULL THEN
 // a_ua.display_order ELSE a.display_order END, 999999)` — at which point a chained account's
-// reorder was written to a column nothing reads any more, and every drag of a Plaid-linked
+// reorder was written to a column nothing reads any more, and every reorder of a Plaid-linked
 // account silently reverted on the next refresh.
+//
+// ⚠ Reachable by API, MCP and integration clients — NOT by a UI gesture. There is no drag-reorder
+// UI in this app (`reorderAccounts` in useAccountCustomization.ts has zero production callers).
+// Corrected in fix round 1 (F1); an earlier version of this comment claimed a user drag was being
+// lost, which overstated it.
 //
 // So the write is routed the same way the read resolves: `user_accounts.display_order` for a
 // chained account, `accounts.display_order` for an unchained one. SINGLE-SOURCE, not a dual
@@ -1504,6 +1509,11 @@ const (
 // reported for a perfectly valid unchained account. The ownership predicate rides on both legs
 // (`user_id = $4`, the actor) — the chained leg re-asserts it against user_accounts, so a chain
 // id reached through somebody else's account row still matches nothing.
+//
+// ⚠ ONE WRITE PER RESOLVED TARGET, NOT PER SUBMITTED ENTRY (#1609 fix round 1, F2). Two accounts
+// of the same re-link chain resolve to the same user_accounts row, and a list-shaped payload
+// routinely names both. See the collapse comment in the body for the rule (lowest display order
+// wins) and why it is the payload-order-independent one.
 //
 // Still one transaction: a partial reorder is a scrambled list, so the batch commits or it does
 // not.
@@ -1520,6 +1530,23 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 
 	now := time.Now()
 
+	// PASS 1 — resolve and VALIDATE every submitted id, in the order given.
+	//
+	// Every entry is resolved, including one whose order the collapse below discards: a discarded
+	// entry is still an id the caller submitted, and it must still be proved to exist and to
+	// belong to the actor. Skipping it would let a batch smuggle a stranger's id past the
+	// ownership check by pairing it with a sibling that wins the collapse. Pinned by
+	// TestAccountRepository_UpdateDisplayOrders_CollapsedAwayEntryIsStillValidated_Integration.
+	type displayOrderWrite struct {
+		query        string
+		targetID     string
+		displayOrder int
+	}
+	writes := make([]displayOrderWrite, 0, len(orders))
+	// byTarget maps a resolved target id to its index in `writes`, which is what makes the
+	// collapse below a single pass.
+	byTarget := make(map[string]int, len(orders))
+
 	for _, order := range orders {
 		var userAccountID *string
 		if err := tx.QueryRow(ctx, displayOrderResolveChainQuery, order.AccountID, userID).Scan(&userAccountID); err != nil {
@@ -1534,7 +1561,38 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 			query, targetID = displayOrderChainSideQuery, *userAccountID
 		}
 
-		ct, err := tx.Exec(ctx, query, order.DisplayOrder, now, targetID, userID)
+		// COLLAPSE BY RESOLVED TARGET, LOWEST DISPLAY ORDER WINS (#1609 fix round 1, F2).
+		//
+		// A re-link chain holds MANY accounts rows, and both are renderable together —
+		// AccountsPage fetches status=all_statuses and "Show closed accounts" surfaces the
+		// replaced/removed member — so a list-shaped payload names both and both resolve to the
+		// SAME user_accounts row. Writing that row once per entry meant LAST WRITE WINS: the
+		// account the caller positioned first ended up carrying its sibling's order, the pair
+		// tied, and the read fell back to `a.created_at ASC`. The row did not land where it was
+		// placed.
+		//
+		// Lowest-wins rather than first-wins because a chain occupies ONE position and the
+		// truthful one is the topmost its members were given. It is also the only rule of the
+		// three that is INDEPENDENT of the order the caller happened to serialise the batch in —
+		// nothing in this endpoint's contract requires the list to be sorted, and an MCP or
+		// integration client is under no obligation to sort it. First-wins and last-wins both
+		// answer differently for two payloads describing the same arrangement.
+		//
+		// Ties (the same order submitted twice for one target) keep the first occurrence, so the
+		// result is total rather than planner- or map-dependent.
+		if idx, seen := byTarget[targetID]; seen {
+			if order.DisplayOrder < writes[idx].displayOrder {
+				writes[idx].displayOrder = order.DisplayOrder
+			}
+			continue
+		}
+		byTarget[targetID] = len(writes)
+		writes = append(writes, displayOrderWrite{query: query, targetID: targetID, displayOrder: order.DisplayOrder})
+	}
+
+	// PASS 2 — one statement per TARGET, not per submitted entry.
+	for _, w := range writes {
+		ct, err := tx.Exec(ctx, w.query, w.displayOrder, now, w.targetID, userID)
 		if err != nil {
 			return err
 		}
