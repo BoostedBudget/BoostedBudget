@@ -92,6 +92,12 @@ var reissuedColumnComments = map[string]int{
 	// databases that had applied 000135 already). 000136's header instructs that the bodies stay
 	// verbatim copies "and must never become one [a summary]" — enforced by nobody until now.
 	"plaid_orphaned_items.token_expires_at": 2,
+	// 000065 (origin, corrected in place) and 000186 (the catch-up for databases that already
+	// applied 000065). #1609 Item 11: the original text called the column a display hint that
+	// "does not restrict usage", which was false the day it shipped (budget roll-up already
+	// resolved through it) and became more so when the analytics transfer filter started doing
+	// the same. See 000186's banner.
+	"custom_categories.parent_pfc_primary": 2,
 }
 
 // columnCommentHeadRegexp matches the `COMMENT ON COLUMN <qualified column> IS` prefix; the body
