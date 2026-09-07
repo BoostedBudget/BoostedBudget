@@ -134,7 +134,13 @@ test.describe('Hiding an account persists (Issue #1609)', () => {
     await expect(page.getByText('Customize Account')).toBeVisible()
 
     // Hide it. The toggle raises a confirmation first (Issue #542).
-    await page.getByRole('button', { name: 'Hide account' }).click()
+    //
+    // ⚠ role 'switch', not 'button'. src/components/ui/switch.tsx renders
+    // `<button type="button" role="switch">`, and an explicit role REPLACES the implicit one, so
+    // a getByRole('button') locator matches nothing here and the spec times out. Every other spec
+    // in this tree uses 'switch' for the same component (household-invite.auth.spec.ts:148,
+    // household-share-exclusion.auth.spec.ts:161/229). Fix round 1, F3.
+    await page.getByRole('switch', { name: 'Hide account' }).click()
     await page.getByRole('button', { name: 'Hide Account', exact: true }).click()
     await page.getByRole('button', { name: 'Save Changes' }).click()
 
