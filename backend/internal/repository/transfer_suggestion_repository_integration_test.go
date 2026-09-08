@@ -1241,6 +1241,102 @@ func TestGetByUserIDStatuses_Enrichment_Integration(t *testing.T) {
 	assert.WithinDuration(t, txnCreatedAt, *got.MatchedTransactionAt, time.Second)
 }
 
+// TestGetByUserIDStatuses_ChainNicknameWinsOverPlaidName_Integration pins #1611 on the second
+// surface sharing resolveDestinationName. Both to_acc and from_acc must route the chain overlay
+// (accountCustomizationExpr) INSIDE their respective plaid_name legs, using their OWN
+// accountCustomizationJoin aliases (to_acc_ua / from_acc_ua) — distinct from the pre-existing
+// to_ua / from_ua joins, which resolve MANUAL account nicknames via to_user_account_id and serve
+// an unrelated purpose.
+//
+// Also proves the CASE-not-COALESCE half: a cleared chain override (a_ua.nickname NULL) must fall
+// back to accounts.name and must not resurrect a stale accounts.nickname.
+func TestGetByUserIDStatuses_ChainNicknameWinsOverPlaidName_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "test|chain-ts-"+userID.String(), "chain-ts-"+userID.String()+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	linkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-chain-ts-token')
+	`, linkedItemID, userID, "item-chain-ts-"+linkedItemID.String())
+	require.NoError(t, err, "seed linked_item")
+
+	// to-account: chained, chain nickname must win over both the Plaid name and a stale
+	// accounts.nickname.
+	toUAID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id, nickname)
+		VALUES ($1, $2, 'inst-chain-ts-to', 'Chain To Nickname')
+	`, toUAID, userID)
+	require.NoError(t, err, "seed to-account chain row")
+
+	toAccID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, nickname, type, user_account_id)
+		VALUES ($1, $2, $3, 'plaid-chain-ts-to', 'Plaid To Name', 'Stale To Nickname', 'depository', $4)
+	`, toAccID, linkedItemID, userID, toUAID)
+	require.NoError(t, err, "seed chained to-account with stale legacy nickname")
+
+	// from-account: chained but the chain override is CLEARED (NULL nickname). Must fall back to
+	// accounts.name, and must NOT resurrect the stale accounts.nickname still present on the row.
+	fromUAID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id)
+		VALUES ($1, $2, 'inst-chain-ts-from')
+	`, fromUAID, userID)
+	require.NoError(t, err, "seed from-account chain row with cleared nickname")
+
+	fromAccID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, nickname, type, user_account_id)
+		VALUES ($1, $2, $3, 'plaid-chain-ts-from', 'Plaid From Name', 'Stale From Nickname', 'depository', $4)
+	`, fromAccID, linkedItemID, userID, fromUAID)
+	require.NoError(t, err, "seed chained from-account with cleared chain override")
+
+	suggID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transfer_suggestions
+			(id, user_id, from_account_id, to_account_id,
+			 amount, source, status, actual_amount, completion_source,
+			 completed_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4,
+		        250.00, 'boost', 'completed', 250.00, 'exact_match',
+		        NOW(), NOW(), NOW())
+	`, suggID, userID, fromAccID, toAccID)
+	require.NoError(t, err, "seed completed suggestion")
+
+	repo := NewTransferSuggestionRepository(tx)
+
+	items, total, err := repo.GetByUserIDStatuses(ctx, userID.String(),
+		[]domain.SuggestionStatus{domain.SuggestionStatusCompleted}, 10, 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, items, 1)
+
+	got := items[0]
+	assert.Equal(t, suggID, got.ID)
+
+	require.NotNil(t, got.ToAccountName, "ToAccountName must be populated")
+	assert.Equal(t, "Chain To Nickname", *got.ToAccountName,
+		"the to-account chain nickname must win over the Plaid name AND the stale accounts.nickname")
+
+	require.NotNil(t, got.FromAccountName, "FromAccountName must be populated")
+	assert.Equal(t, "Plaid From Name", *got.FromAccountName,
+		"a cleared chain override on the from-account must fall back to accounts.name and must NOT "+
+			"resurrect the stale accounts.nickname")
+}
+
 // TestGetByUserIDStatuses_EventTimeOrdering_Integration proves that results are ordered
 // by event-time (COALESCE(completed_at, user_action_at, updated_at, created_at) DESC)
 // rather than raw created_at DESC. A suggestion created long ago but completed recently

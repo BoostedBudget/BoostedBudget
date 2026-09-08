@@ -173,8 +173,14 @@ func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID stri
 
 	// LEFT JOIN accounts (Plaid) and user_accounts (manual) to fetch plaintext name fields.
 	// account_name_hint is encrypted at rest — decryption happens in-Go below (≤5 rows, bounded).
-	// COALESCE(NULLIF(a.nickname,''), a.name): prefer user-set nickname, fall back to Plaid name.
-	// ua.nickname is plaintext; ua.account_name_hint is fetched raw for app-side decryption.
+	// COALESCE(NULLIF(<chain overlay>,''), a.name): prefer the CHAIN-authoritative customization
+	// overlay (accountCustomizationExpr — see account_liveness_sql.go), fall back to Plaid name.
+	// #1611: a bare a.nickname here made the ua_nickname leg below dead code for every Plaid-linked
+	// account, because a.name is always populated for one — the chain nickname must win INSIDE
+	// plaid_account_name, via the same CASE-not-COALESCE overlay every other account read uses, so
+	// a cleared chain override falls back to a.name instead of resurrecting a stale a.nickname.
+	// ua (the manual-account join below, on to_user_account_id) is unrelated to a_ua (the chain
+	// overlay join on a.user_account_id) and serves manual accounts only.
 	itemsQuery := `
 		SELECT
 			ts.id,
@@ -184,11 +190,12 @@ func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID stri
 			ts.to_user_account_id,
 			ts.completed_at,
 			ts.completion_source,
-			COALESCE(NULLIF(a.nickname, ''), a.name)   AS plaid_account_name,
+			COALESCE(NULLIF(` + accountCustomizationExpr("a", "nickname") + `, ''), a.name) AS plaid_account_name,
 			NULLIF(ua.nickname, '')                      AS ua_nickname,
 			ua.account_name_hint                         AS ua_hint_encrypted
 		FROM transfer_suggestions ts
-		LEFT JOIN accounts a     ON a.id  = ts.to_account_id     AND a.user_id  = ts.user_id
+		LEFT JOIN accounts a     ON a.id  = ts.to_account_id     AND a.user_id  = ts.user_id` +
+		accountCustomizationJoin("a") + `
 		LEFT JOIN user_accounts ua ON ua.id = ts.to_user_account_id AND ua.user_id = ts.user_id
 		WHERE ts.user_id = $1
 		  AND ts.status = 'completed'
