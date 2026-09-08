@@ -502,3 +502,58 @@ type FinancialSummaryResponse struct {
 	NetWorthTrend  *NetWorthTrendResponse       `json:"net_worth_trend,omitempty"`
 	GeneratedAt    string                       `json:"generated_at"`
 }
+
+// ─── Category hierarchy (#1626) ──────────────────────────────────────────────────────────────────
+
+// CategoryDirection selects which side of the ledger a hierarchy read aggregates. The sign
+// convention is the repository's: income is amount < 0, expense is amount > 0.
+type CategoryDirection string
+
+const (
+	CategoryDirectionExpense CategoryDirection = "expense"
+	CategoryDirectionIncome  CategoryDirection = "income"
+)
+
+// IsValid reports whether d names a direction the repository can serve.
+func (d CategoryDirection) IsValid() bool {
+	return d == CategoryDirectionExpense || d == CategoryDirectionIncome
+}
+
+// CategoryHierarchyRow is a raw DB row for GetCategoryHierarchy: one grouped leaf, carrying the
+// whole ancestor path that leads to it. L2/L3 are empty where the branch is shallower — the tree is
+// ragged, and a branch simply ends where its data ends.
+//
+// Display fields carry CUSTOM category names only. A PFC key has no name in the database — the
+// denormalized column holds the raw enum — so the service resolves those from the pfc registry.
+type CategoryHierarchyRow struct {
+	L1Key, L1Display string
+	L2Key, L2Display string
+	L3Key, L3Display string
+	Total            float64
+	TransactionCount int
+}
+
+// CategoryHierarchyNode is one node of the tree the API returns.
+//
+// Total is the ROLL-UP: this node plus everything beneath it. DirectTotal is the part belonging to
+// this node's own transactions, i.e. Total minus the sum of the children's Totals. A node can have
+// both — a PFC primary with rows carrying no detailed value, or a custom parent used directly — and
+// without DirectTotal a renderer cannot make the flows into and out of that node balance.
+type CategoryHierarchyNode struct {
+	Category         string                  `json:"category"`
+	Display          string                  `json:"display"`
+	Total            float64                 `json:"total"`
+	DirectTotal      float64                 `json:"direct_total"`
+	TransactionCount int                     `json:"transaction_count"`
+	Percentage       float64                 `json:"percentage"`
+	Children         []CategoryHierarchyNode `json:"children,omitempty"`
+}
+
+// CategoryHierarchyResponse is the response for GET /analytics/category-hierarchy.
+type CategoryHierarchyResponse struct {
+	Levels    []CategoryHierarchyNode `json:"levels"`
+	Total     float64                 `json:"total"`
+	Direction string                  `json:"direction"`
+	StartDate string                  `json:"start_date"`
+	EndDate   string                  `json:"end_date"`
+}

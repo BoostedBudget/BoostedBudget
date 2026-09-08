@@ -270,19 +270,33 @@ var tiebreakerLegRe = regexp.MustCompile(`\b(category_display|merchant_name)\s+A
 
 // spendingOrderByTotalClauses folds analytics_repository.go and returns every ORDER BY clause in it
 // that sorts on `total`, each prefixed with the source line the query starts on.
+// analyticsSQLFiles are the files whose SQL this guard reads.
+//
+// #1626 added the second entry, and the reason is a hole this guard had: it parsed exactly one
+// file, so a new spending read that landed in ANY other file escaped the inventory silently — no
+// count change, no failure, no tiebreaker enforced. The hierarchy read is in its own file precisely
+// because it is a self-contained subject, and it would have slipped straight past.
+var analyticsSQLFiles = []string{
+	"analytics_repository.go",
+	"analytics_category_path.go",
+}
+
 func spendingOrderByTotalClauses(t *testing.T) []string {
 	t.Helper()
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "analytics_repository.go", nil, 0)
-	require.NoError(t, err, "parse analytics_repository.go")
 
 	var found []string
-	for _, expr := range sqlStringExprs(file) {
-		for _, clause := range orderByClauses(expr.SQL) {
-			if orderByTotalRe.MatchString(clause) {
-				found = append(found,
-					"analytics_repository.go:"+strconv.Itoa(fset.Position(expr.Pos).Line)+
-						"  ORDER BY "+clause)
+	for _, name := range analyticsSQLFiles {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		require.NoError(t, err, "parse %s", name)
+
+		for _, expr := range sqlStringExprs(file) {
+			for _, clause := range orderByClauses(expr.SQL) {
+				if orderByTotalRe.MatchString(clause) {
+					found = append(found,
+						name+":"+strconv.Itoa(fset.Position(expr.Pos).Line)+
+							"  ORDER BY "+clause)
+				}
 			}
 		}
 	}
@@ -302,9 +316,11 @@ func spendingOrderByTotalClauses(t *testing.T) []string {
 func TestNoSpendingReadOrdersByTotalWithoutATiebreaker(t *testing.T) {
 	found := spendingOrderByTotalClauses(t)
 
-	assert.Len(t, found, 8,
-		"expected the six spending reads #1585 fixed plus the income pair #1626 brought into scope; "+
-			"if a read was added or removed, extend "+
+	assert.Len(t, found, 9,
+		"expected the six spending reads #1585 fixed, plus the income pair #1626 brought into scope, "+
+			"plus the ONE literal the hierarchy pair shares (both its personal and household reads "+
+			"order through categoryHierarchyGroupAndOrder, so one clause covers two reads and they "+
+			"cannot drift apart); if a read was added or removed, extend "+
 			"TestSpendingReads_OrderByCarriesTheDocumentedTiebreaker to name it explicitly. Found:\n%s",
 		strings.Join(found, "\n"))
 

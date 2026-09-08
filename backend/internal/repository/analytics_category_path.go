@@ -1,5 +1,13 @@
 package repository
 
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+)
+
 // ─── The three-level category path (#1626) ───────────────────────────────────────────────────────
 //
 // The Sankey needs parents AND children in one payload, and a custom category's parent is only
@@ -130,4 +138,134 @@ func categoryPathExprs() (l1Key, l1Display, l2Key, l2Display, l3Key, l3Display s
 	END`
 
 	return l1Key, l1Display, l2Key, l2Display, l3Key, l3Display
+}
+
+// GetCategoryHierarchy returns one grouped row per leaf, carrying the whole ancestor path that
+// leads to it, for a single flow direction. One round trip: the Sankey builds every view mode
+// (consolidated, expanded, focused) from this payload without refetching.
+//
+// custom_category_ids deliberately narrows the WHOLE tree to custom-kind rows. buildSpendingFilter
+// appends that scope as an unconditional `AND category_override_kind = 'custom'` with no PFC arm,
+// which is the right meaning for "scope this report to these custom categories" — and it is what
+// the reports page's CustomCategoryFilter already does to the Sankey today. It is NOT the same
+// question as the transactions-list filter, which #1626 widened to an OR, so the two must not be
+// unified.
+func (r *analyticsRepository) GetCategoryHierarchy(ctx context.Context, userID string, filters domain.SpendingFilters, direction domain.CategoryDirection) ([]domain.CategoryHierarchyRow, error) {
+	if filters.HouseholdScope != nil {
+		return r.getCategoryHierarchyHousehold(ctx, userID, filters, direction)
+	}
+
+	args := []interface{}{userID, filters.StartDate, filters.EndDate}
+	filterClause, args, _ := buildSpendingFilter(filters, args)
+
+	query := fmt.Sprintf(`
+		%s
+		FROM transactions t
+		LEFT JOIN accounts a ON t.account_id = a.id
+		%s
+		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
+		  AND t.date >= $2
+		  AND t.date <= $3
+		  AND %s
+		  AND t.pending = false
+		  %s
+		%s
+	`, categoryHierarchySelect(), customCategoryPathJoins(), directionPredicate(direction), filterClause,
+		categoryHierarchyGroupAndOrder())
+
+	return r.scanCategoryHierarchy(ctx, query, args, "category hierarchy")
+}
+
+// getCategoryHierarchyHousehold is the household-scope twin. Every category-dimensioned read in
+// this file has one, and they are spelled out separately on purpose: a divergence between the two
+// members of a pair is how a defect hid on this branch before.
+func (r *analyticsRepository) getCategoryHierarchyHousehold(ctx context.Context, requestingUserID string, filters domain.SpendingFilters, direction domain.CategoryDirection) ([]domain.CategoryHierarchyRow, error) {
+	args := householdScopeArgs(requestingUserID, filters.HouseholdScope)
+	args = append(args, filters.StartDate, filters.EndDate)
+	filterClause, args, _ := buildSpendingFilter(filters, args)
+
+	query := fmt.Sprintf(`
+		WITH %s
+		%s
+		FROM transactions t
+		JOIN accounts a ON t.account_id = a.id
+		%s
+		WHERE %s
+		  AND t.date >= $4::date
+		  AND t.deleted_at IS NULL
+		  AND t.date <= $5
+		  AND %s
+		  AND t.pending = false
+		  %s
+		%s
+	`, householdGrantsCTE(), categoryHierarchySelect(), customCategoryPathJoins(),
+		householdSharedTransactionPredicate("t", "a"), directionPredicate(direction), filterClause,
+		categoryHierarchyGroupAndOrder())
+
+	return r.scanCategoryHierarchy(ctx, query, args, "household category hierarchy")
+}
+
+// directionPredicate renders the amount test for a flow direction. The sign convention is this
+// file's: income is amount < 0, expense is amount > 0.
+func directionPredicate(direction domain.CategoryDirection) string {
+	if direction == domain.CategoryDirectionIncome {
+		return "t.amount < 0"
+	}
+	return "t.amount > 0"
+}
+
+// categoryHierarchySelect renders the SELECT list: the six path columns, a leaf display used for
+// ordering, and the aggregates.
+func categoryHierarchySelect() string {
+	l1k, l1d, l2k, l2d, l3k, l3d := categoryPathExprs()
+	return fmt.Sprintf(`SELECT
+			(%s) AS l1_key, (%s) AS l1_display,
+			(%s) AS l2_key, (%s) AS l2_display,
+			(%s) AS l3_key, (%s) AS l3_display,
+			COALESCE(%s, %s, %s, %s, %s) AS category_display,
+			COALESCE(SUM(ABS(t.amount)), 0) AS total,
+			COUNT(*) AS transaction_count`,
+		l1k, l1d, l2k, l2d, l3k, l3d,
+		// The deepest name available for the row's own (leaf) category, falling back to the leaf
+		// KEY so a PFC leaf — which has no stored name — still sorts alphabetically rather than
+		// collapsing every PFC row onto a single NULL.
+		l3d, l2d, l1d, fmt.Sprintf("COALESCE(%s, %s)", l3k, l2k), l1k)
+}
+
+// categoryHierarchyGroupAndOrder renders the GROUP BY and the #1585 deterministic ORDER BY.
+//
+// `category_display ASC` is the sanctioned alphabetical leg the tie-order guard looks for; the
+// three keys after it are what actually separate two rows whose leaf names are identical, which is
+// reachable because custom category names are not unique across parents.
+func categoryHierarchyGroupAndOrder() string {
+	return `GROUP BY l1_key, l1_display, l2_key, l2_display, l3_key, l3_display, category_display
+		ORDER BY total DESC, category_display ASC, l1_key ASC, l2_key ASC, l3_key ASC`
+}
+
+func (r *analyticsRepository) scanCategoryHierarchy(ctx context.Context, query string, args []interface{}, what string) ([]domain.CategoryHierarchyRow, error) {
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get %s: %w", what, err)
+	}
+	defer rows.Close()
+
+	results := make([]domain.CategoryHierarchyRow, 0)
+	for rows.Next() {
+		var row domain.CategoryHierarchyRow
+		// Every path column past L1 is nullable — the tree is ragged — and the display columns are
+		// null for PFC levels by design.
+		var l1d, l2k, l2d, l3k, l3d, leafDisplay sql.NullString
+		if err := rows.Scan(&row.L1Key, &l1d, &l2k, &l2d, &l3k, &l3d, &leafDisplay,
+			&row.Total, &row.TransactionCount); err != nil {
+			return nil, fmt.Errorf("failed to scan %s row: %w", what, err)
+		}
+		row.L1Display, row.L2Key, row.L2Display = l1d.String, l2k.String, l2d.String
+		row.L3Key, row.L3Display = l3k.String, l3d.String
+		results = append(results, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating %s rows: %w", what, err)
+	}
+	return results, nil
 }
