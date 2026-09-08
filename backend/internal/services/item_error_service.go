@@ -320,7 +320,10 @@ func (s *itemErrorService) HandleError(
 	}
 
 	// 2. Create notification (non-blocking - log error but continue)
-	// Note: No action URL for general errors (unlike LOGIN_REQUIRED)
+	// Issue #1609 P3-T8, M5: 'error' IS a repairableStatuses member (see that var above), so this
+	// is the one state most likely to be reached by a sync-discovered failure — and until this fix
+	// it was the only repairable-status notification with no ActionURL, i.e. no button. Give it the
+	// same /accounts/reconnect CTA the login-required path uses (HandleLoginRequired above).
 	// Issue #1609 P3-T3: errorMessage may legitimately be empty — webhook_processing.go has no
 	// stable ErrorMessage field to forward for every webhook shape, so an absent message is an
 	// expected input, not a bug. Omit the ": <message>" clause entirely rather than rendering a
@@ -329,12 +332,16 @@ func (s *itemErrorService) HandleError(
 	if errorMessage != "" {
 		message = fmt.Sprintf("We're experiencing a connection issue with %s: %s.", linkedItem.InstitutionName, errorMessage)
 	}
+	actionURL := fmt.Sprintf("/accounts/reconnect?item_id=%s", linkedItem.ItemID)
+	actionLabel := "Reconnect Bank"
 	notification := &domain.Notification{
 		UserID:             linkedItem.UserID,
 		Type:               "item_error",
 		Title:              "Connection Error",
 		Message:            message + " We'll automatically retry, but you can also try reconnecting your account if the issue persists.",
-		InteractionPattern: "informational",
+		ActionURL:          &actionURL,
+		ActionLabel:        &actionLabel,
+		InteractionPattern: "action_required",
 		Read:               false,
 		SentEmail:          false,
 	}

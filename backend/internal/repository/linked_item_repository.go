@@ -105,6 +105,18 @@ type LinkedItemRepository interface {
 	// user predicate), which could resurrect a 'disconnected'/'replaced' item to 'active' and erase
 	// replaced_at/replaced_by_id.
 	//
+	// Issue #1609 P3-T8 (Phase 3 review H2): the same statement ALSO clears cleanup_notified_at and
+	// cleanup_scheduled_at. Before this, a repair left cleanup_scheduled_at set — nothing cleared it
+	// on reconnection — and ClaimItemForCleanup's recheck (cleanupCandidateReasonPredicate) has an
+	// UNCONDITIONAL stale-last-synced-at leg this repair does not touch, so a connection that broke,
+	// went stale, and was then repaired through Plaid Link update mode could still be claimed and
+	// removed via Plaid /item/remove immediately after the user fixed it. Clearing the schedule here
+	// denies every future claim via ClaimItemForCleanup's own `cleanup_scheduled_at IS NOT NULL`
+	// precondition, regardless of which leg of the predicate would otherwise still match — it does
+	// not require last_synced_at to be refreshed, which would assert a sync that never happened and
+	// corrupt that column's meaning for every other reader. See
+	// TestClaimItemForCleanup_Integration_RealisticReconnectSequence_SurvivesStaleSyncCleanup.
+	//
 	// Returns (true, nil) if the row transitioned. Returns (false, nil) — NOT an error — if the
 	// UPDATE matched zero rows: the item does not exist, is not owned by userID, or its status
 	// (read fresh, inside this statement, not the caller's stale copy) is not in allowedStatuses.
@@ -199,9 +211,11 @@ type LinkedItemRepository interface {
 	// MarkForCleanup marks an item for cleanup with notification and scheduled cleanup timestamp.
 	MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error
 
-	// ClearCleanupSchedule clears the cleanup schedule for an item. NOT called on reconnection:
-	// repairing an item through Plaid Link update mode leaves cleanup_scheduled_at set. See
-	// cleanupCandidateReasonPredicate for the full list of production callers and why that matters.
+	// ClearCleanupSchedule clears the cleanup schedule for an item. NOT itself called on
+	// reconnection — RepairStatus clears the same two columns directly, in the same atomic UPDATE
+	// as the status transition, rather than via this method (Issue #1609 P3-T8). See
+	// cleanupCandidateReasonPredicate for the full list of THIS method's production callers and why
+	// that matters.
 	ClearCleanupSchedule(ctx context.Context, itemID string) error
 
 	// Issue #679, #680: Trial expiration - mark items as disconnected to preserve history
@@ -832,7 +846,7 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 }
 
 // RepairStatus implements LinkedItemRepository.RepairStatus — see that method's doc comment for
-// the full contract (Issue #1609 round 2, BLOCKING 2).
+// the full contract (Issue #1609 round 2, BLOCKING 2; cleanup-schedule clearing added P3-T8).
 func (r *linkedItemRepository) RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus) (bool, error) {
 	if len(allowedStatuses) == 0 {
 		return false, nil
@@ -849,6 +863,8 @@ func (r *linkedItemRepository) RepairStatus(ctx context.Context, id string, user
 		    error_code = NULL,
 		    error_message = NULL,
 		    last_error_at = NULL,
+		    cleanup_notified_at = NULL,
+		    cleanup_scheduled_at = NULL,
 		    status_changed_at = $1,
 		    updated_at = $1
 		WHERE id = $2
@@ -1233,10 +1249,19 @@ const cleanupCandidateSelectQuery = `
 //     releaseDeclinedCleanupSchedule helper both of that worker's decline points share — Codex
 //     pass-5 Medium 2) — see Work's #1486 comment for the enumeration, and
 //     jobs.TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet, which fails if it drifts
-//     again (grep `\.ClearCleanupSchedule(`). The half this bullet actually rests on is unchanged and
-//     still true: NOTHING clears cleanup_scheduled_at on reconnection, so a
-//     reconnected, fully repaired item still carries its schedule.
-//     ClaimItemForCleanup therefore requires the INVERSE (IS NOT NULL) and adds it itself.
+//     again (grep `\.ClearCleanupSchedule(`). Until Issue #1609 P3-T8, NOTHING cleared
+//     cleanup_scheduled_at on reconnection, so a reconnected, fully repaired item still carried its
+//     schedule — and this predicate's own unconditional stale-last-synced-at leg meant a repair that
+//     did not also refresh last_synced_at (RepairStatus never has) could still be claimed. RepairStatus
+//     now clears cleanup_notified_at/cleanup_scheduled_at itself, directly, in the same atomic UPDATE
+//     as the status transition — NOT via ClearCleanupSchedule, so it is not a fifth entry in that
+//     method's caller enumeration above. A reconnected item's schedule is therefore gone by the time
+//     any of the FOUR ClearCleanupSchedule callers or this recheck would ever see it, which is exactly
+//     why ClaimItemForCleanup requiring the INVERSE (IS NOT NULL) is still correct and not redundant:
+//     an item that was never scheduled (never a candidate) and one that WAS scheduled and has since
+//     been repaired now look identical to this recheck — both decline, for the same reason.
+//     See TestLinkedItemRepository_RepairStatus_Integration_ClearsCleanupSchedule and
+//     TestClaimItemForCleanup_Integration_RealisticReconnectSequence_SurvivesStaleSyncCleanup.
 //   - The sweep's own `li.plaid_removed_at IS NULL AND (li.status IS NULL OR li.status <> 'replaced')`
 //     pair is also sweep-only (Issue #1495 split what was one `li.status NOT IN ('replaced',
 //     'disconnected')` clause; see cleanupCandidateSelectQuery for why), and including the 'replaced'
@@ -1652,10 +1677,12 @@ func (r *linkedItemRepository) ClaimItemForCleanup(ctx context.Context, itemID s
 	return ct.RowsAffected() > 0, nil
 }
 
-// ClearCleanupSchedule clears the cleanup schedule for an item. Despite the name's suggestion, it is
-// NOT called on reconnection — a user repairing an item through Plaid Link update mode leaves
-// cleanup_scheduled_at set, which is exactly why ClaimItemForCleanup re-verifies ELIGIBILITY instead
-// of re-reading the schedule. See cleanupCandidateReasonPredicate.
+// ClearCleanupSchedule clears the cleanup schedule for an item. Despite the name's suggestion, this
+// METHOD is not itself called on reconnection — since Issue #1609 P3-T8, RepairStatus clears the
+// same two columns directly, in the same atomic UPDATE as the status transition, so a reconnect
+// never needs this method at all. ClaimItemForCleanup still re-verifies ELIGIBILITY rather than
+// merely re-reading the schedule (see cleanupCandidateReasonPredicate for why that recheck is
+// necessary independent of who clears the schedule and when).
 func (r *linkedItemRepository) ClearCleanupSchedule(ctx context.Context, itemID string) error {
 	now := time.Now()
 

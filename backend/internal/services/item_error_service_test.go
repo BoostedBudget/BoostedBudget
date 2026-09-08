@@ -322,13 +322,16 @@ func TestHandleError_Success(t *testing.T) {
 		"ITEM_ERROR", "Connection error, please try again later", terminalLinkedItemStatuses).
 		Return(true, nil)
 
-	// Mock: Create notification (no action URL for general errors)
+	// Mock: Create notification WITH an action URL (Issue #1609 P3-T8, M5: 'error' IS a
+	// repairableStatuses member, so the one state most likely to be reached by a sync-discovered
+	// failure must offer a way to act, the same /accounts/reconnect CTA the login-required path
+	// uses).
 	mockNotificationRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
 		return n.UserID == "user-456" &&
 			n.Type == "item_error" &&
 			n.Title == "Connection Error" &&
-			n.ActionURL == nil && // No action URL for general errors
-			n.ActionLabel == nil
+			n.ActionURL != nil && *n.ActionURL == "/accounts/reconnect?item_id=plaid-item-789" &&
+			n.ActionLabel != nil && *n.ActionLabel == "Reconnect Bank"
 	})).Return(nil)
 
 	// Mock: Fetch user email
@@ -590,7 +593,9 @@ func TestHandleError_NotificationType_IsItemError(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, capturedNotification)
 	assert.Equal(t, "item_error", capturedNotification.Type, "HandleError must use type 'item_error', not 'error'")
-	assert.Equal(t, "informational", capturedNotification.InteractionPattern)
+	// Issue #1609 P3-T8, M5: this is now "action_required", not "informational" — the notification
+	// carries an ActionURL/ActionLabel (the /accounts/reconnect CTA), matching login_required.
+	assert.Equal(t, "action_required", capturedNotification.InteractionPattern)
 
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockNotificationRepo.AssertExpectations(t)

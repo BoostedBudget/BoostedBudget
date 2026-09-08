@@ -95,6 +95,15 @@ func NewItemCleanupWorker(deps ItemCleanupWorkerDeps) *ItemCleanupWorker {
 // released (releaseDeclinedCleanupSchedule, one path for both), and the job returns nil WITHOUT
 // calling Plaid. What it does NOT do is check "is the grace period expired": that is River's job,
 // not this worker's (the sweep enqueues with WithScheduledAt), and nothing here re-derives it.
+//
+// "The user reconnected it" above covers EVERY leg of cleanupCandidateReasonPredicate, including the
+// unconditional stale-last-synced-at one — this was NOT true before Issue #1609 P3-T8. RepairStatus
+// (repository/linked_item_repository.go) never refreshes last_synced_at, so a connection that broke,
+// went stale past staleDaysThreshold, and was then reconnected used to still match that leg and
+// still get claimed here, destroying the connection the user just fixed. RepairStatus now clears
+// cleanup_notified_at/cleanup_scheduled_at itself in the same atomic UPDATE as the status
+// transition, which denies the claim via ClaimItemForCleanup's own `cleanup_scheduled_at IS NOT
+// NULL` precondition — no leg of the predicate needs to stop matching for the decline to happen.
 func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanupArgs]) (err error) {
 	args := job.Args
 
@@ -123,8 +132,12 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 	// This job may have been queued for a long time — the error/login_required/stale legs schedule
 	// it a full gracePeriodDays out (ItemCleanupCheckWorker), and River retries add more — and the
 	// user can repair the connection through Plaid Link update mode at any point in that window.
-	// Nothing marks that repair on the cleanup schedule. Issue #1486 follow-up part E: there are
-	// FOUR production callers of ClearCleanupSchedule, not two — re-derive with
+	// Since Issue #1609 P3-T8, that repair DOES mark the cleanup schedule — RepairStatus clears
+	// cleanup_notified_at/cleanup_scheduled_at atomically alongside the status transition — but this
+	// recheck stays in place regardless: an item that was scheduled and never repaired must still be
+	// caught here, and (see the enumeration below) this is not the only path that releases a stamp.
+	// Issue #1486 follow-up part E: there are FOUR production callers of ClearCleanupSchedule
+	// specifically (RepairStatus is not one of them; it writes the columns directly) — re-derive with
 	// `grep -rn '\.ClearCleanupSchedule(' internal | grep -v _test.go`, and see
 	// TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet (item_cleanup_test.go), which
 	// fails if this enumeration drifts again:
@@ -137,12 +150,18 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 	//      set when the zero-account cleanup enqueue fails;
 	//   4. ItemCleanupCheckWorker.Work (item_cleanup_check.go), releasing the stamp it just set when
 	//      the sweep's own enqueue fails (#1486 follow-up part D).
-	// The load-bearing half is unchanged and still true: none of the four is a reconnection hook —
-	// NOTHING clears cleanup_scheduled_at on reconnection. So a
-	// reconnected item still carries cleanup_scheduled_at, and a recheck of "is it still
-	// scheduled" would authorise removing it. The recheck therefore re-asks the sweep's own
-	// question — "is this still a cleanup candidate?" — against the same shared SQL predicate the
-	// sweep selected it with (repository.cleanupCandidateReasonPredicate).
+	// None of these four is a reconnection hook. Until Issue #1609 P3-T8, NOTHING cleared
+	// cleanup_scheduled_at on reconnection at all, so a reconnected item still carried it, and a
+	// recheck of "is it still scheduled" would have authorised removing it. That is now WRONG in one
+	// respect: RepairStatus (repository/linked_item_repository.go) clears cleanup_notified_at and
+	// cleanup_scheduled_at directly, in the same atomic UPDATE as the status transition — but NOT
+	// via ClearCleanupSchedule, so it is deliberately not a fifth entry in the enumeration above, and
+	// this recheck still cannot be simplified to "is it still scheduled": an item that was never a
+	// candidate in the first place is also unscheduled, and the two must not be conflated. The
+	// recheck therefore still re-asks the sweep's own question — "is this still a cleanup
+	// candidate?" — against the same shared SQL predicate the sweep selected it with
+	// (repository.cleanupCandidateReasonPredicate), which ALSO now requires cleanup_scheduled_at IS
+	// NOT NULL; a reconnected item fails that requirement rather than one of the predicate's legs.
 	//
 	// The recheck closure is defined once and reused for both the initial claim and the callback
 	// passed to RemoveItem, eliminating duplication of the eligibility question.
