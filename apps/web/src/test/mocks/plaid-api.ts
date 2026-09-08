@@ -61,8 +61,17 @@ mock.module('@boostedbudget/api-client/endpoints/plaid/plaid', () => ({
 // #1609: capture the options usePlaidLink is called with (a plain mock(), not
 // a bare arrow function) so tests can retrieve the real onExit/onSuccess
 // callbacks a component wired up and invoke them directly.
+//
+// #1609 round 2, should-fix 2: `open` is a SINGLE shared mock instance, not a fresh `mock(() =>
+// {})` created inside the factory on every call. A per-call `open` is uncapturable — nothing
+// hoists a reference to it out of the render that created it — which is exactly why
+// ReconnectPage.test.tsx's "opens Plaid Link" test used to assert only the preceding
+// trackEvent call and would still pass if the component's `open()` call were deleted entirely.
+// A shared instance lets a test import mockPlaidLinkOpen directly and assert it was called,
+// regardless of which render's usePlaidLink() call produced the closure that invoked it.
+export const mockPlaidLinkOpen = mock(() => {})
 export const mockUsePlaidLink = mock((_options: Record<string, unknown>) => ({
-  open: mock(() => {}),
+  open: mockPlaidLinkOpen,
   ready: true,
 }))
 

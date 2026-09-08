@@ -15,10 +15,19 @@ import (
 
 // ErrLinkedItemNotRepairable indicates a linked item is not in a state the reconnect flow can
 // repair (Issue #1609). Only an item with an error status — login_required, error,
-// pending_expiration, revoked — is repairable:
+// pending_expiration — is repairable via update-mode Link:
 //   - "active" needs no repair (nothing is broken).
 //   - "replaced" and "disconnected" were deliberately superseded/disconnected; a stale
 //     notification's reconnect link must not silently resurrect either one.
+//   - "revoked" is deliberately EXCLUDED (Issue #1609 round 2, BLOCKING 1): Plaid's own spec says
+//     "[o]nce access to an Item has been revoked, it cannot be restored. If the user subsequently
+//     returns to your application, a new Item must be created for the user" (plaid-go's vendored
+//     openapi.yaml, USER_PERMISSION_REVOKED). Update mode re-authenticates the SAME Item; running
+//     it against a revoked Item and then marking the item 'active' produces a false-healthy row —
+//     the connection reports fine and silently never syncs again, which is worse than the dead
+//     button this whole flow was built to replace. A revoked item needs a brand-new Item via the
+//     normal Plaid Link (non-update-mode) flow, not a repair — see HandlePermissionRevoked's
+//     notification, which routes there instead of here.
 var ErrLinkedItemNotRepairable = errors.New("linked item is not in a repairable state")
 
 // ItemErrorService handles Plaid ITEM webhook error processing.
@@ -31,10 +40,10 @@ var ErrLinkedItemNotRepairable = errors.New("linked item is not in a repairable 
 // - USER_PERMISSION_REVOKED: User revoked access at their bank
 //
 // For each error type, the service:
-// 1. Updates LinkedItem status and error details in database
-// 2. Creates update mode link token for re-authentication (if applicable)
-// 3. Creates in-app notification for the user
-// 4. Sends email notification (stub in MVP, real email in Phase 3+)
+//  1. Updates LinkedItem status and error details in database
+//  2. Creates in-app notification for the user (Issue #1609: the reconnect page mints its own
+//     update-mode link token on demand — no token is minted or embedded here)
+//  3. Sends email notification (stub in MVP, real email in Phase 3+)
 //
 // Error handling follows graceful degradation:
 // - Notification/email failures do NOT block webhook processing
@@ -83,11 +92,15 @@ type ItemErrorService interface {
 	HandlePendingExpiration(ctx context.Context, linkedItem *domain.LinkedItem, errorCode string, errorMessage string) error
 
 	// HandlePermissionRevoked processes USER_PERMISSION_REVOKED webhook.
-	// User explicitly revoked access at their bank - requires re-linking.
+	// User explicitly revoked access at their bank. Per Plaid's spec this is UNRECOVERABLE for
+	// this Item (see ErrLinkedItemNotRepairable) — requires a brand-new Item via the normal Link
+	// flow, not update-mode repair.
 	//
 	// Actions:
 	// 1. Updates LinkedItem status to "revoked" with error details
-	// 2. Creates notification with action URL (item_id only — Issue #1609; see HandleLoginRequired)
+	// 2. Creates notification routed to the normal connect-a-bank flow (/accounts, NOT
+	//    /accounts/reconnect — Issue #1609 round 2, BLOCKING 1: update mode cannot restore a
+	//    revoked Item, and marking it 'active' after "repairing" it would be false-healthy)
 	// 3. Sends email notification (non-blocking)
 	HandlePermissionRevoked(ctx context.Context, linkedItem *domain.LinkedItem, errorCode string, errorMessage string) error
 
@@ -380,15 +393,24 @@ func (s *itemErrorService) HandlePermissionRevoked(
 		return fmt.Errorf("failed to update linked item status for item %s: %w", linkedItem.ItemID, err)
 	}
 
-	// 3. Create notification with action URL (non-blocking)
-	actionURL := fmt.Sprintf("/accounts/reconnect?item_id=%s", linkedItem.ItemID)
-	actionLabel := "Reconnect Bank"
+	// 3. Create notification with action URL (non-blocking).
+	//
+	// Issue #1609 round 2, BLOCKING 1: deliberately NOT /accounts/reconnect. That page mints an
+	// update-mode Link token for THIS item — but Plaid says a revoked Item "cannot be restored"
+	// and "a new Item must be created" (see ErrLinkedItemNotRepairable). Sending the user to
+	// update mode for a revoked item would either fail at Plaid, or — the whole reason
+	// isRepairableStatus/RepairStatus now refuse 'revoked' — mark this permanently-dead item
+	// 'active' again, a false-healthy state. Routing to /accounts instead puts the user on the
+	// page that hosts PlaidLinkButton, the NORMAL (non-update-mode) Link flow that creates a
+	// fresh Item; the old item stays 'revoked' and is superseded the way any other re-link is.
+	actionURL := "/accounts"
+	actionLabel := "Connect Your Bank"
 
 	notification := &domain.Notification{
 		UserID:             linkedItem.UserID,
 		Type:               "permission_revoked",
 		Title:              "Bank Access Revoked",
-		Message:            fmt.Sprintf("You have revoked BoostedBudget's access to %s at your bank. To restore access and continue syncing your transactions, please reconnect your account.", linkedItem.InstitutionName),
+		Message:            fmt.Sprintf("You have revoked BoostedBudget's access to %s at your bank. To restore access and continue syncing your transactions, please connect your bank again.", linkedItem.InstitutionName),
 		ActionURL:          &actionURL,
 		ActionLabel:        &actionLabel,
 		InteractionPattern: "action_required",
@@ -444,38 +466,30 @@ func (s *itemErrorService) ProcessWebhook(
 	}
 }
 
-// isRepairableStatus reports whether a linked item's status represents a broken connection that
-// the reconnect flow (or the LOGIN_REPAIRED webhook) may repair. See ErrLinkedItemNotRepairable.
-func isRepairableStatus(status domain.LinkedItemStatus) bool {
-	switch status {
-	case domain.LinkedItemStatusLoginRequired,
-		domain.LinkedItemStatusError,
-		domain.LinkedItemStatusPendingExpiration,
-		domain.LinkedItemStatusRevoked:
-		return true
-	default:
-		return false
-	}
+// repairableStatuses is the single source of truth for which statuses a USER-INITIATED repair
+// (CreateReconnectLinkToken / RepairItem) accepts. Issue #1609 round 2, BLOCKING 1: 'revoked' is
+// deliberately absent — see ErrLinkedItemNotRepairable's doc comment. HandleLoginRepaired does
+// NOT use this list; it uses its own, narrower predicate (should-fix 1 — see its doc comment).
+var repairableStatuses = []domain.LinkedItemStatus{
+	domain.LinkedItemStatusLoginRequired,
+	domain.LinkedItemStatusError,
+	domain.LinkedItemStatusPendingExpiration,
 }
 
-// clearErrorState resets a linked item's status to "active" and clears its error tracking fields.
-// Shared by RepairItem (user completed the reconnect page's Link flow) and HandleLoginRepaired
-// (Plaid's LOGIN_REPAIRED webhook — repaired through some other path). This is deliberately the
-// ONLY place that writes LinkedItemStatusActive outside of brand-new link creation
-// (AccountService.LinkAccounts) — Issue #1609 found no other mechanism that clears an item's error
-// state, so this needed inventing rather than reusing something.
-func (s *itemErrorService) clearErrorState(ctx context.Context, linkedItem *domain.LinkedItem) error {
-	now := time.Now()
-	linkedItem.Status = domain.LinkedItemStatusActive
-	linkedItem.StatusChangedAt = &now
-	linkedItem.ErrorCode = nil
-	linkedItem.ErrorMessage = nil
-	linkedItem.LastErrorAt = nil
-
-	if err := s.linkedItemRepo.Update(ctx, linkedItem); err != nil {
-		return fmt.Errorf("failed to clear error state for item %s: %w", linkedItem.ItemID, err)
+// isRepairableStatus reports whether a linked item's status represents a broken connection that
+// the reconnect flow may repair via update-mode Link. See ErrLinkedItemNotRepairable and
+// repairableStatuses. This is a best-effort PRE-check only (read-then-decide, not atomic) — used
+// to fail fast and with a specific error before touching Plaid or the database. The actual state
+// transition is guarded atomically by LinkedItemRepository.RepairStatus, which re-checks status
+// (and ownership) in the same UPDATE statement; see RepairItem's doc comment for why the
+// pre-check alone would be TOCTOU-unsafe.
+func isRepairableStatus(status domain.LinkedItemStatus) bool {
+	for _, s := range repairableStatuses {
+		if status == s {
+			return true
+		}
 	}
-	return nil
+	return false
 }
 
 // CreateReconnectLinkToken mints an update-mode Plaid Link token for the /accounts/reconnect page.
@@ -499,6 +513,14 @@ func (s *itemErrorService) CreateReconnectLinkToken(ctx context.Context, userID 
 
 // RepairItem clears a linked item's error state after the user completes the reconnect page's
 // update-mode Link flow. See the interface doc comment for the authorization and state reasoning.
+//
+// The isRepairableStatus check below is a fast-fail pre-check only — it lets an obviously-bad
+// call (wrong user, already-active item) return without a database write. The actual transition
+// is made atomically by RepairStatus, which re-checks status AND ownership inside the same
+// UPDATE (Issue #1609 round 2, BLOCKING 2): a full read-then-Update sequence here was TOCTOU-
+// unsafe — a concurrent disconnect/re-link landing between the read and the write could be
+// silently overwritten by a stale full-row Update. RepairStatus returning false (item vanished,
+// or its FRESH status is no longer repairable) is treated identically to the pre-check failing.
 func (s *itemErrorService) RepairItem(ctx context.Context, userID string, itemID string) error {
 	linkedItem, err := s.linkedItemRepo.GetByItemID(ctx, itemID)
 	if err != nil {
@@ -511,19 +533,46 @@ func (s *itemErrorService) RepairItem(ctx context.Context, userID string, itemID
 		return ErrLinkedItemNotRepairable
 	}
 
-	return s.clearErrorState(ctx, linkedItem)
+	repaired, err := s.linkedItemRepo.RepairStatus(ctx, linkedItem.ID, userID, repairableStatuses)
+	if err != nil {
+		return fmt.Errorf("failed to clear error state for item %s: %w", itemID, err)
+	}
+	if !repaired {
+		return ErrLinkedItemNotRepairable
+	}
+	return nil
 }
 
 // HandleLoginRepaired processes the Plaid LOGIN_REPAIRED webhook. See the interface doc comment
 // for why this is a no-op (not an error) when the item is not in a repairable state.
+//
+// Issue #1609 should-fix 1: Plaid documents LOGIN_REPAIRED as meaning the Item specifically
+// exited ITEM_LOGIN_REQUIRED — not a general "any error cleared" signal. Restricting the atomic
+// predicate to LinkedItemStatusLoginRequired ALONE (rather than the wider repairableStatuses set
+// RepairItem uses) matters: a delayed or duplicate webhook arriving after the item has since
+// moved to a CURRENT 'error' or 'pending_expiration' must not clobber that current state — the
+// webhook only proves the login issue was fixed, not that whatever is broken NOW is fixed.
+//
+// No ownership check and no user_id filter (empty string passed to RepairStatus): this is
+// system-triggered (no authenticated user), and ProcessWebhook has already resolved the item
+// unambiguously by Plaid's own item_id — there is no caller-supplied userID to compare against.
+//
+// Issue #1609 round 2, BLOCKING 2: like RepairItem, this used to read-then-check-then-full-row-
+// Update. RepairStatus makes the transition atomic; RepairStatus returning false means the
+// item's FRESH status was not login_required (already active, or superseded/disconnected/
+// revoked concurrently), which is exactly the no-op case this method has always documented.
 func (s *itemErrorService) HandleLoginRepaired(ctx context.Context, linkedItem *domain.LinkedItem) error {
-	if !isRepairableStatus(linkedItem.Status) {
+	repaired, err := s.linkedItemRepo.RepairStatus(
+		ctx, linkedItem.ID, "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to clear error state for item %s: %w", linkedItem.ItemID, err)
+	}
+	if !repaired {
 		s.logger.Info("LOGIN_REPAIRED webhook received for a linked item not in a repairable state; ignoring",
 			"item_id", linkedItem.ItemID,
 			"status", linkedItem.Status,
 		)
-		return nil
 	}
-
-	return s.clearErrorState(ctx, linkedItem)
+	return nil
 }

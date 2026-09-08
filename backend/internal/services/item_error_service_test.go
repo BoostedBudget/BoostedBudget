@@ -811,12 +811,14 @@ func TestHandlePermissionRevoked_Success(t *testing.T) {
 			item.LastErrorAt != nil
 	})).Return(nil)
 
-	// Mock: Create notification with action URL
+	// Mock: Create notification with action URL. Issue #1609 round 2, BLOCKING 1: routes to
+	// /accounts (the normal, non-update-mode Link flow), NOT /accounts/reconnect — a revoked
+	// Item cannot be repaired via update mode (see ErrLinkedItemNotRepairable).
 	mockNotificationRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
 		return n.UserID == "user-456" &&
 			n.Type == "permission_revoked" &&
 			n.Title == "Bank Access Revoked" &&
-			n.ActionURL != nil &&
+			n.ActionURL != nil && *n.ActionURL == "/accounts" &&
 			n.ActionLabel != nil
 	})).Return(nil)
 
@@ -1569,6 +1571,29 @@ func TestCreateReconnectLinkToken_ReplacedItem_ReturnsNotRepairable(t *testing.T
 	mockassert.NoCallTo(t, &mockPlaidService.Mock, "CreateUpdateModeLinkToken")
 }
 
+// TestCreateReconnectLinkToken_RevokedItem_ReturnsNotRepairable pins BLOCKING 1 (Issue #1609
+// round 2): Plaid says a revoked Item cannot be restored, so the mint endpoint must refuse to
+// hand out an update-mode token for one at all — never mind what RepairItem would later do.
+func TestCreateReconnectLinkToken_RevokedItem_ReturnsNotRepairable(t *testing.T) {
+	ctx := context.Background()
+	service, mockLinkedItemRepo, mockPlaidService := newReconnectTestService()
+
+	linkedItem := &domain.LinkedItem{
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
+		AccessToken: "decrypted-access-token",
+		Status:      domain.LinkedItemStatusRevoked, // permanently unrecoverable per Plaid
+	}
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+
+	_, err := service.CreateReconnectLinkToken(ctx, "user-456", "plaid-item-789")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrLinkedItemNotRepairable)
+	mockassert.NoCallTo(t, &mockPlaidService.Mock, "CreateUpdateModeLinkToken")
+}
+
 func TestCreateReconnectLinkToken_ItemNotFound(t *testing.T) {
 	ctx := context.Background()
 	service, mockLinkedItemRepo, mockPlaidService := newReconnectTestService()
@@ -1603,13 +1628,8 @@ func TestRepairItem_Success_ClearsErrorStateAndReactivates(t *testing.T) {
 		LastErrorAt:  &lastErrorAt,
 	}
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
-	mockLinkedItemRepo.On("Update", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
-		return item.Status == domain.LinkedItemStatusActive &&
-			item.ErrorCode == nil &&
-			item.ErrorMessage == nil &&
-			item.LastErrorAt == nil &&
-			item.StatusChangedAt != nil
-	})).Return(nil)
+	mockLinkedItemRepo.On("RepairStatus", ctx, "linked-item-123", "user-456", repairableStatuses).
+		Return(true, nil)
 
 	err := service.RepairItem(ctx, "user-456", "plaid-item-789")
 
@@ -1633,7 +1653,7 @@ func TestRepairItem_WrongUser_ReturnsNotFound(t *testing.T) {
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, repository.ErrLinkedItemNotFound)
-	mockassert.NoCallTo(t, &mockLinkedItemRepo.Mock, "Update")
+	mockassert.NoCallTo(t, &mockLinkedItemRepo.Mock, "RepairStatus")
 }
 
 func TestRepairItem_ActiveItem_ReturnsNotRepairable(t *testing.T) {
@@ -1652,7 +1672,74 @@ func TestRepairItem_ActiveItem_ReturnsNotRepairable(t *testing.T) {
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrLinkedItemNotRepairable)
-	mockassert.NoCallTo(t, &mockLinkedItemRepo.Mock, "Update")
+	mockassert.NoCallTo(t, &mockLinkedItemRepo.Mock, "RepairStatus")
+}
+
+// TestRepairItem_RevokedItem_ReturnsNotRepairable pins BLOCKING 1 (Issue #1609 round 2): Plaid
+// says a revoked Item cannot be restored — update-mode repair must never mark it 'active'.
+func TestRepairItem_RevokedItem_ReturnsNotRepairable(t *testing.T) {
+	ctx := context.Background()
+	service, mockLinkedItemRepo, _ := newReconnectTestService()
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+		ItemID: "plaid-item-789",
+		Status: domain.LinkedItemStatusRevoked,
+	}
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+
+	err := service.RepairItem(ctx, "user-456", "plaid-item-789")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrLinkedItemNotRepairable)
+	mockassert.NoCallTo(t, &mockLinkedItemRepo.Mock, "RepairStatus")
+}
+
+// TestRepairItem_ConcurrentStateChange_ReturnsNotRepairable pins BLOCKING 2 (Issue #1609 round
+// 2): the pre-check in Go read a status that was still repairable, but RepairStatus's atomic
+// UPDATE — re-checking status fresh, in the same statement — found the row no longer matched
+// (e.g. a concurrent disconnect landed between the read and the write) and correctly affected
+// zero rows. RepairItem must treat that the same as "not repairable", not as success.
+func TestRepairItem_ConcurrentStateChange_ReturnsNotRepairable(t *testing.T) {
+	ctx := context.Background()
+	service, mockLinkedItemRepo, _ := newReconnectTestService()
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+		ItemID: "plaid-item-789",
+		Status: domain.LinkedItemStatusLoginRequired, // stale read
+	}
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+	mockLinkedItemRepo.On("RepairStatus", ctx, "linked-item-123", "user-456", repairableStatuses).
+		Return(false, nil) // concurrent disconnect/re-link won the race
+
+	err := service.RepairItem(ctx, "user-456", "plaid-item-789")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrLinkedItemNotRepairable)
+}
+
+func TestRepairItem_RepairStatusError_IsWrapped(t *testing.T) {
+	ctx := context.Background()
+	service, mockLinkedItemRepo, _ := newReconnectTestService()
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+		ItemID: "plaid-item-789",
+		Status: domain.LinkedItemStatusLoginRequired,
+	}
+	dbErr := errors.New("connection reset")
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+	mockLinkedItemRepo.On("RepairStatus", ctx, "linked-item-123", "user-456", repairableStatuses).
+		Return(false, dbErr)
+
+	err := service.RepairItem(ctx, "user-456", "plaid-item-789")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, dbErr)
 }
 
 // ============================================================================
@@ -1671,9 +1758,9 @@ func TestHandleLoginRepaired_ClearsErrorState(t *testing.T) {
 		Status:    domain.LinkedItemStatusLoginRequired,
 		ErrorCode: &errCode,
 	}
-	mockLinkedItemRepo.On("Update", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
-		return item.Status == domain.LinkedItemStatusActive && item.ErrorCode == nil
-	})).Return(nil)
+	mockLinkedItemRepo.On(
+		"RepairStatus", ctx, "linked-item-123", "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired},
+	).Return(true, nil)
 
 	err := service.HandleLoginRepaired(ctx, linkedItem)
 
@@ -1691,13 +1778,64 @@ func TestHandleLoginRepaired_DisconnectedItem_IsNoOp(t *testing.T) {
 		ItemID: "plaid-item-789",
 		Status: domain.LinkedItemStatusDisconnected,
 	}
+	// The atomic predicate (status = login_required) is what actually rejects this — not a Go
+	// pre-check — so RepairStatus is still called, and reports no rows affected.
+	mockLinkedItemRepo.On(
+		"RepairStatus", ctx, "linked-item-123", "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired},
+	).Return(false, nil)
 
 	// Then: no-op, NOT an error — a webhook the user did not act on must not resurrect a
 	// deliberately disconnected item, and must not be retried/DLQ'd either.
 	err := service.HandleLoginRepaired(ctx, linkedItem)
 
 	require.NoError(t, err)
-	mockassert.NoCallTo(t, &mockLinkedItemRepo.Mock, "Update")
+	mockLinkedItemRepo.AssertExpectations(t)
+}
+
+// TestHandleLoginRepaired_CurrentErrorStatus_IsNotClobbered pins should-fix 1: Plaid documents
+// LOGIN_REPAIRED as meaning the Item specifically exited ITEM_LOGIN_REQUIRED, not "any error
+// cleared". A delayed/duplicate webhook must not clear a CURRENT 'error' or 'pending_expiration'
+// that arose after the login issue was already fixed — the predicate is scoped to
+// login_required alone (not the wider repairableStatuses RepairItem uses).
+func TestHandleLoginRepaired_CurrentErrorStatus_IsNotClobbered(t *testing.T) {
+	ctx := context.Background()
+	service, mockLinkedItemRepo, _ := newReconnectTestService()
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+		ItemID: "plaid-item-789",
+		Status: domain.LinkedItemStatusError, // a NEW, different error since LOGIN_REPAIRED fired
+	}
+	mockLinkedItemRepo.On(
+		"RepairStatus", ctx, "linked-item-123", "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired},
+	).Return(false, nil)
+
+	err := service.HandleLoginRepaired(ctx, linkedItem)
+
+	require.NoError(t, err)
+	mockLinkedItemRepo.AssertExpectations(t)
+}
+
+func TestHandleLoginRepaired_RepairStatusError_IsWrapped(t *testing.T) {
+	ctx := context.Background()
+	service, mockLinkedItemRepo, _ := newReconnectTestService()
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+		ItemID: "plaid-item-789",
+		Status: domain.LinkedItemStatusLoginRequired,
+	}
+	dbErr := errors.New("connection reset")
+	mockLinkedItemRepo.On(
+		"RepairStatus", ctx, "linked-item-123", "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired},
+	).Return(false, dbErr)
+
+	err := service.HandleLoginRepaired(ctx, linkedItem)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, dbErr)
 }
 
 func TestProcessWebhook_LoginRepaired_RoutesToHandleLoginRepaired(t *testing.T) {
@@ -1711,9 +1849,9 @@ func TestProcessWebhook_LoginRepaired_RoutesToHandleLoginRepaired(t *testing.T) 
 		Status: domain.LinkedItemStatusLoginRequired,
 	}
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
-	mockLinkedItemRepo.On("Update", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
-		return item.Status == domain.LinkedItemStatusActive
-	})).Return(nil)
+	mockLinkedItemRepo.On(
+		"RepairStatus", ctx, "linked-item-123", "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired},
+	).Return(true, nil)
 
 	err := service.ProcessWebhook(ctx, "plaid-item-789", "LOGIN_REPAIRED", "", "")
 

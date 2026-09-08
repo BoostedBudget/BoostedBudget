@@ -13538,7 +13538,7 @@ paths:
         - Plaid
   /api/v1/plaid/reconnect-link-token:
     post:
-      description: Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration, revoked).
+      description: Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration). A 'revoked' item is deliberately excluded — Plaid documents revoked access as unrecoverable via update mode; see ErrLinkedItemNotRepairable in item_error_service.go.
       operationId: createReconnectLinkToken
       requestBody:
         content:

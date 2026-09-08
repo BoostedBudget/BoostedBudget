@@ -172,6 +172,12 @@ func (m *MockLinkedItemRepository) GetByIDAndUser(ctx context.Context, id, userI
 	return args.Get(0).(*domain.LinkedItem), args.Error(1)
 }
 
+// RepairStatus atomically transitions a linked item to 'active' (Issue #1609 round 2).
+func (m *MockLinkedItemRepository) RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus) (bool, error) {
+	args := m.Called(ctx, id, userID, allowedStatuses)
+	return args.Bool(0), args.Error(1)
+}
+
 // Issue #1569, Task 6: permanently destroy a linked item and every account under it.
 func (m *MockLinkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID, userID string, auditLog repository.AuditLogRepository) error {
 	args := m.Called(ctx, linkedItemID, userID, auditLog)

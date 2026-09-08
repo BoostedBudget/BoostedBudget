@@ -96,6 +96,26 @@ type LinkedItemRepository interface {
 	// Returns ErrLinkedItemNotFound if the item doesn't exist or belongs to a different user.
 	GetByIDAndUser(ctx context.Context, id, userID string) (*domain.LinkedItem, error)
 
+	// RepairStatus atomically transitions a linked item to 'active' and clears its error tracking
+	// fields (error_code, error_message, last_error_at), but ONLY if — in the SAME statement — its
+	// current status is one of allowedStatuses, and, when userID is non-empty, it is still owned by
+	// userID. Issue #1609 round 2 (BLOCKING 2): replaces a read-in-Go-then-check-then-full-row-
+	// Update sequence that was TOCTOU-unsafe — a concurrent disconnect/re-link landing between the
+	// read and the write was silently overwritten by the full-row Update (17 columns, no status or
+	// user predicate), which could resurrect a 'disconnected'/'replaced' item to 'active' and erase
+	// replaced_at/replaced_by_id.
+	//
+	// Returns (true, nil) if the row transitioned. Returns (false, nil) — NOT an error — if the
+	// UPDATE matched zero rows: the item does not exist, is not owned by userID, or its status
+	// (read fresh, inside this statement, not the caller's stale copy) is not in allowedStatuses.
+	// Callers must treat false the same as "not repairable" rather than success.
+	//
+	// Deliberately narrow: this does NOT reuse Update's 17-column full-row write. A state
+	// transition should touch only the columns the transition means, or an unrelated caller's
+	// in-memory copy of other fields (institution name, cursor, retry count, ...) can clobber a
+	// concurrent write to THOSE fields too.
+	RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus) (bool, error)
+
 	// PurgeLinkedItem permanently and transactionally destroys the linked item and every account
 	// under it: balance_snapshots for those accounts (explicit — SET NULL, migration 000150), then
 	// the linked_items row itself, which CASCADEs to its accounts (fk_accounts_linked_item_id,
@@ -781,6 +801,42 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 	}
 
 	return &item, nil
+}
+
+// RepairStatus implements LinkedItemRepository.RepairStatus — see that method's doc comment for
+// the full contract (Issue #1609 round 2, BLOCKING 2).
+func (r *linkedItemRepository) RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus) (bool, error) {
+	if len(allowedStatuses) == 0 {
+		return false, nil
+	}
+	statuses := make([]string, len(allowedStatuses))
+	for i, s := range allowedStatuses {
+		statuses[i] = string(s)
+	}
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET status = 'active',
+		    error_code = NULL,
+		    error_message = NULL,
+		    last_error_at = NULL,
+		    status_changed_at = $1,
+		    updated_at = $1
+		WHERE id = $2
+		  AND status = ANY($3)
+	`
+	args := []any{now, id, statuses}
+	if userID != "" {
+		query += ` AND user_id = $4`
+		args = append(args, userID)
+	}
+
+	tag, err := r.db.Exec(ctx, query, args...)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // PurgeLinkedItem implements LinkedItemRepository.PurgeLinkedItem — see that method's doc comment

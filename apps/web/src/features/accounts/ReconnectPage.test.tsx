@@ -14,6 +14,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReconnectPage } from './ReconnectPage'
 import {
   mockUsePlaidLink,
+  mockPlaidLinkOpen,
   mockCreateReconnectLinkTokenMutateAsync,
   mockUseCreateReconnectLinkToken,
   mockRepairLinkedItemMutateAsync,
@@ -74,6 +75,7 @@ describe('ReconnectPage', () => {
   beforeEach(() => {
     mockTrackEvent.mockClear()
     mockUsePlaidLink.mockClear()
+    mockPlaidLinkOpen.mockClear()
     mockToastSuccess.mockClear()
     mockToastError.mockClear()
     mockUseCreateReconnectLinkToken.mockClear()
@@ -115,6 +117,14 @@ describe('ReconnectPage', () => {
     })
     await waitFor(() => {
       expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.ACCOUNT_RECONNECT_LINK_STARTED)
+    })
+    // #1609 round 2, should-fix 2: the assertions above only prove the token was minted and an
+    // analytics event fired — NOT that Plaid Link was actually opened. Before this fix the test
+    // passed even with the component's `open()` call deleted entirely, because `open` was never
+    // captured (mockUsePlaidLink used to return a fresh, uncapturable mock() per render). Assert
+    // the actual open() invocation.
+    await waitFor(() => {
+      expect(mockPlaidLinkOpen).toHaveBeenCalled()
     })
   })
 
@@ -183,7 +193,7 @@ describe('ReconnectPage', () => {
     expect(mockRepairLinkedItemMutateAsync).not.toHaveBeenCalled()
   })
 
-  it('shows the mint failure detail and never opens Plaid Link when minting the token fails', async () => {
+  it('shows the mint failure detail, fires ACCOUNT_RECONNECT_FAILED, and never opens Plaid Link when minting the token fails', async () => {
     mockCreateReconnectLinkTokenMutateAsync.mockImplementation(() =>
       Promise.reject({
         response: { data: { detail: 'This connection is not in a state that can be reconnected' } },
@@ -195,6 +205,12 @@ describe('ReconnectPage', () => {
       expect(
         screen.getByText('This connection is not in a state that can be reconnected')
       ).toBeTruthy()
+    })
+    // #1609 round 2, should-fix 3: a mint failure used to show an error without ever emitting
+    // analytics — ACCOUNT_RECONNECT_FAILED fired only for a Link exit or a repair failure, so a
+    // mint failure (the FIRST thing that can go wrong on this page) was invisible to analytics.
+    expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.ACCOUNT_RECONNECT_FAILED, {
+      stage: 'mint',
     })
     expect(mockRepairLinkedItemMutateAsync).not.toHaveBeenCalled()
   })
