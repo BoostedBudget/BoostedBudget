@@ -291,6 +291,24 @@ function buildHandlerCore(
     const auditEvents: ExecuteAuditEvent[] = []
     let batchCharsUsed = 0
 
+    // Issue #1612 round 2: charge EVERY string that ends up in the returned text against the
+    // budget, not just the rendered payload. Previously only `rendered.length` was counted while
+    // the "✅ <operationId>: " prefixes, the ❌/⚠️ refusal and error lines, the '\n\n' separators
+    // and the exhaustion marker were all appended afterward and charged to nothing — so the text
+    // actually handed back could exceed MAX_BATCH_RESULT_CHARS. The `+ 2` is the separator
+    // join('\n\n') will insert; charging it on every push (rather than every push but the last)
+    // over-counts by exactly 2 characters per batch, which errs toward the cap, not past it.
+    //
+    // What this still does NOT make it: a hard cap on the returned string. The check is a
+    // PRE-check — it stops the batch before starting the next call, so the final text is bounded
+    // by MAX_BATCH_RESULT_CHARS + one call's rendered output (itself capped at MAX_RESULT_CHARS)
+    // + the exhaustion marker. Bounding it exactly would mean truncating a result mid-render,
+    // which would hand the model malformed JSON. State the real bound; do not claim the tighter one.
+    const pushResult = (text: string): void => {
+      batchCharsUsed += text.length + 2
+      results.push(text)
+    }
+
     for (const call of calls) {
       // Issue #1612: the batch aggregate is unbounded per-call but was unbounded in total.
       // Once the running total across this batch already exceeds the budget, stop — same
@@ -298,11 +316,11 @@ function buildHandlerCore(
       // hint), and the same "break, not continue" idiom the manifest-denial path below uses:
       // once the batch can no longer usefully surface more output, the rest is not run.
       if (batchCharsUsed >= MAX_BATCH_RESULT_CHARS) {
-        results.push(
+        pushResult(
           `⚠️ Batch result budget exhausted after ${auditEvents.length} of ${calls.length} call(s) ` +
-            `(${batchCharsUsed} of ${MAX_BATCH_RESULT_CHARS} character budget used). Remaining calls ` +
-            `were not executed. Split this batch into smaller invocations, or narrow filters/limits ` +
-            `to reduce individual result sizes.`,
+            `(${batchCharsUsed} of ${MAX_BATCH_RESULT_CHARS} character budget used). ` +
+            `${calls.length - auditEvents.length} call(s) were not executed. Split this batch into ` +
+            `smaller invocations, or narrow filters/limits to reduce individual result sizes.`,
         )
         break
       }
@@ -310,7 +328,7 @@ function buildHandlerCore(
       const capability = getCapability(call.operationId)
 
       if (!capability || capability.excluded) {
-        results.push(`❌ ${call.operationId}: not available via MCP`)
+        pushResult(`❌ ${call.operationId}: not available via MCP`)
         // Emit a denied audit event so the audit trail is complete (R5-9). Its class
         // comes from the HTTP method, NOT from the manifest — see
         // deniedOperationClass for why the manifest cannot answer here (CC-1).
@@ -325,7 +343,7 @@ function buildHandlerCore(
       if (opts.admissionGate) {
         const refusal = opts.admissionGate(call, capability, specEntries)
         if (refusal) {
-          results.push(`❌ ${call.operationId}: ${refusal}`)
+          pushResult(`❌ ${call.operationId}: ${refusal}`)
           auditEvents.push({ operationId: call.operationId, operationClass: capability.class, result: 'denied' })
           break
         }
@@ -344,24 +362,23 @@ function buildHandlerCore(
           confirmationToken: capability.confirmationRequired ? confirmationToken : undefined,
         })
         const rendered = renderResult(result)
-        batchCharsUsed += rendered.length
-        results.push(`✅ ${call.operationId}: ${rendered}`)
+        pushResult(`✅ ${call.operationId}: ${rendered}`)
         auditEvents.push({ operationId: call.operationId, operationClass, result: 'success' })
       } catch (err) {
         if (err instanceof HostProxyError) {
           if (err.code === 'confirmation_required') {
             const token = err.confirmationToken
-            results.push(
+            pushResult(
               `⚠️ ${call.operationId} requires confirmation.\n` +
                 `Re-invoke writeExecute() with confirmationToken: "${token}"`,
             )
             auditEvents.push({ operationId: call.operationId, operationClass, result: 'confirmation_required' })
           } else {
-            results.push(`❌ ${call.operationId}: ${err.message} (${err.code})`)
+            pushResult(`❌ ${call.operationId}: ${err.message} (${err.code})`)
             auditEvents.push({ operationId: call.operationId, operationClass, result: 'error' })
           }
         } else {
-          results.push(`❌ ${call.operationId}: unexpected error`)
+          pushResult(`❌ ${call.operationId}: unexpected error`)
           auditEvents.push({ operationId: call.operationId, operationClass, result: 'error' })
         }
         break // stop on first error
