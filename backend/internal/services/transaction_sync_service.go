@@ -740,7 +740,7 @@ func (s *transactionSyncService) SyncTransactions(
 
 	// Step 5: Build account maps for transaction mapping (O(1) lookups)
 	// Issue #171: Also builds userAccountMap for stable UserAccountID reference
-	accountMap, userAccountMap, err := s.buildAccountMaps(ctx, linkedItem.ID)
+	accountMap, userAccountMap, err := s.buildAccountMaps(ctx, linkedItem.ID, linkedItem.UserID)
 	if err != nil {
 		// #1570: this returns an ERROR (an earlier comment here claimed "successful sync result",
 		// which was never true). It is also the failure that used to lose every page of a
@@ -908,10 +908,12 @@ func (s *transactionSyncService) upsertMerchants(ctx context.Context, transactio
 
 // buildAccountMaps builds both accountMap and userAccountMap for transaction mapping.
 // Issue #171: userAccountMap provides stable UserAccountID that survives re-links.
+// ownerUserID is the linked item's owner (Issue #1615): any account whose UserID does not
+// match it is skipped and logged rather than mapped, mirroring the investment sync guard.
 // Returns:
 //   - accountMap: Plaid account_id -> Internal account UUID
 //   - userAccountMap: Plaid account_id -> UserAccount UUID (stable reference)
-func (s *transactionSyncService) buildAccountMaps(ctx context.Context, linkedItemID string) (map[string]string, map[string]string, error) {
+func (s *transactionSyncService) buildAccountMaps(ctx context.Context, linkedItemID string, ownerUserID string) (map[string]string, map[string]string, error) {
 	// Load ALL accounts for this linked item, regardless of status (Issue #1569 Task 1b).
 	// GetByLinkedItemID (active-only) would drop a 'removed'/'expired'/'replaced' account
 	// from this map, and every transaction Plaid delivers for it would then miss accountMap
@@ -940,6 +942,21 @@ func (s *transactionSyncService) buildAccountMaps(ctx context.Context, linkedIte
 	userAccountMap := make(map[string]string, len(accounts))
 
 	for _, account := range accounts {
+		// #1615 / #1537 (F14): mirrors the investment side's guard (investment_sync_service.go
+		// ~:282-298, ~:523). GetByLinkedItemIDIncludingRetained is keyed on linked_item_id only —
+		// it carries no user_id predicate — so ownerUserID (the linked item's owner) and each
+		// account's UserID come from two sources nothing forces to agree. If they ever diverged,
+		// this is the only place both values are in scope to catch it before a transaction gets
+		// written against someone else's account.
+		if account.UserID != ownerUserID {
+			s.logger.Error("skipping an account that does not belong to the linked item's owner",
+				"linked_item_id", linkedItemID,
+				"account_id", account.ID,
+				"account_user_id", account.UserID,
+				"linked_item_user_id", ownerUserID,
+			)
+			continue
+		}
 		accountMap[account.PlaidAccountID] = account.ID
 		// Issue #171: Also map to UserAccountID for stable reference
 		if account.UserAccountID != nil {
