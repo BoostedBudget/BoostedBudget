@@ -318,7 +318,7 @@ func main() {
 	// the real CORS middleware at the end of this chain. It never short-circuits itself
 	// (does not handle OPTIONS/preflight) — see CORSErrorHeaders' doc comment for why moving
 	// the REAL CORS middleware here instead was rejected as an unmetered perimeter bypass.
-	e.Use(middleware.CORSErrorHeaders(cfg.CORSAllowedOrigins)) // 3. Error-path CORS headers (must run before the gate)
+	e.Use(middleware.CORSErrorHeaders(cfg.CORSAllowedOrigins))                                                         // 3. Error-path CORS headers (must run before the gate)
 	registerCloudflareAndRateLimitMiddlewareWithBackend(e, cfCIDRRef, cfg, rateLimitBackend, rateLimitDone, appLogger) // 4-5. Cloudflare gate, then per-IP rate limiting (order load-bearing, see helper doc)
 	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                                                        // 6. Panic recovery (formats RFC 9457 response)
 	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                                                           // 7. Sentry panic reporting
@@ -2887,6 +2887,21 @@ func buildRateLimitBackend(ctx context.Context, limiterClient redisclient.Client
 	}), nil
 }
 
+// precheckSentinelCeiling resolves the sentinel tier's AUTHORITATIVE limit the same way
+// ratelimitstore.Options.withDefaults does, so the cost pre-check's sentinel ceiling can never sit
+// below the budget Redis actually enforces.
+//
+// RATE_LIMIT_SENTINEL_LIMIT is an operator escape hatch for RAISING the sentinel bucket during a
+// live Cloudflare header anomaly — the incident where every request collapses onto one shared
+// identity. Deriving the pre-check ceiling from RateLimitIP instead silently capped that knob, at
+// maximum blast radius, during the precise outage it was built for.
+func precheckSentinelCeiling(cfg *config.Config) int {
+	if cfg.RateLimitSentinelLimit > 0 {
+		return cfg.RateLimitSentinelLimit
+	}
+	return cfg.RateLimitIP
+}
+
 func registerCloudflareAndRateLimitMiddleware(e *echo.Echo, cfCIDRRef *atomic.Pointer[[]netip.Prefix], cfg *config.Config) {
 	// Delegates to the Task 7 variant with a nil backend/done/logger — RateLimitConfig treats all
 	// three as OPTIONAL (nil Backend: memory-only; nil Done: cleanup goroutine never stops; nil
@@ -2920,21 +2935,47 @@ func registerCloudflareAndRateLimitMiddlewareWithBackend(e *echo.Echo, cfCIDRRef
 		// single-machine liveness check), so the fleet-machine-count divisor above must not apply
 		// to it. See RateLimitConfig.ExemptPathLimit's doc comment.
 		ExemptPathLimit: cfg.RateLimitIP,
-		// PrecheckLimit is the COST circuit breaker (2026-09-08 review), and like ExemptPathLimit
-		// it is the RAW, UNDIVIDED cfg.RateLimitIP — deliberately NOT rateLimitFallbackLimit'd.
-		// The divisor above exists so N machines falling back to memory do not multiply the
-		// fleet budget by N; that reasoning is inverted here. This bucket must sit at or ABOVE
-		// the authoritative fleet-wide limit, because it runs BEFORE the Redis backend and must
-		// never reject traffic the backend would have allowed. Dividing it would do exactly that.
+		// The COST circuit breaker (2026-09-08 review). Like ExemptPathLimit these are the RAW,
+		// UNDIVIDED limits — deliberately NOT rateLimitFallbackLimit'd. The divisor above exists
+		// so N machines falling back to memory do not multiply the fleet budget by N; that
+		// reasoning is inverted here. These buckets must sit at or ABOVE the authoritative limit,
+		// because they run BEFORE the Redis backend and must never reject traffic it would have
+		// allowed. Dividing them would do exactly that.
 		//
-		// cfg.RateLimitIP (the regular tier) is >= cfg.RateLimitAuth in every shipped config, so
-		// one ceiling safely covers both tiers.
+		// ⚠ CORRECTED. This block previously passed ONE ceiling and justified it with
+		// "cfg.RateLimitIP (the regular tier) is >= cfg.RateLimitAuth in every shipped config, so
+		// one ceiling safely covers both tiers." That sentence is wrong twice over, and two
+		// independent adversarial reviewers each executed a reproduction:
 		//
-		// Why it exists: the Redis backend is billed per command and is consulted on every
-		// request, INCLUDING rejected ones. /webhooks/ carries no Cloudflare rate-limit rule (by
-		// design — throttling it would drop real Plaid/Paddle deliveries), so a POST flood there
-		// cost one billable command per request without bound. This caps it per identity.
-		PrecheckLimit: cfg.RateLimitIP,
+		//   - There are THREE tiers, not two. It never mentioned the sentinel tier — the one with
+		//     an operator-settable limit (RATE_LIMIT_SENTINEL_LIMIT) that is DOCUMENTED as
+		//     intended to exceed RateLimitIP during a live Cloudflare header anomaly. A single
+		//     RateLimitIP ceiling silently neutered that escape hatch during the exact incident it
+		//     exists for, with every customer sharing the sentinel key.
+		//   - Per-tier ceilings are not sufficient either: one SHARED bucket charged an identity's
+		//     regular traffic against its auth allowance, so 100 ordinary API calls followed by a
+		//     single legitimate POST /webhooks/plaid returned 429 — on the traffic that must never
+		//     be dropped.
+		//
+		// So each tier now carries its own ceiling, taken from that tier's own authoritative
+		// limit. RateLimitConfig applies precheckHeadroomFactor on top; see that constant for why
+		// parity would be fragile rather than tight.
+		//
+		// The "100 >= 10" claim was also unguarded: both are plain env vars, so
+		// `fly secrets set RATE_LIMIT_AUTH=500` would have broken the invariant with no test
+		// failing. Wiring each tier from its own limit removes the dependency on that ordering
+		// entirely rather than asserting it.
+		//
+		// Why any of this exists: the Redis backend is billed per command and is consulted on
+		// every request, INCLUDING rejected ones. /webhooks/ carries no Cloudflare rate-limit rule
+		// (by design — throttling it would drop real Plaid/Paddle deliveries), so a POST flood
+		// there cost one billable command per request without bound. This caps it per identity.
+		PrecheckLimit:     cfg.RateLimitIP,
+		PrecheckAuthLimit: cfg.RateLimitAuth,
+		// Mirrors ratelimitstore.Options.withDefaults: a <=0 RATE_LIMIT_SENTINEL_LIMIT means "use
+		// RegularLimit" there, so the pre-check ceiling has to resolve the same way or it would
+		// under-cover the sentinel tier by exactly the amount of that default.
+		PrecheckSentinelLimit: precheckSentinelCeiling(cfg),
 		// PrimaryTimeout (Issue #1531 L7): cfg.RedisTimeoutMs already reaches the go-redis
 		// CLIENT's own read/write timeouts (see newRedisClientOptions) but, before this fix, had
 		// no path to the LIMITER's per-call budget — that was a hardcoded, uncustomizable 50ms
@@ -2942,12 +2983,12 @@ func registerCloudflareAndRateLimitMiddlewareWithBackend(e *echo.Echo, cfCIDRRef
 		// incident changed nothing about the limiter's own cutoff, which kept tripping the
 		// circuit breaker regardless. Wiring the same config value through here makes
 		// REDIS_TIMEOUT_MS the operative knob it was already documented (config.go) as being.
-		PrimaryTimeout:    time.Duration(cfg.RedisTimeoutMs) * time.Millisecond,
-		WindowDuration:    time.Minute,
-		MaxEntries:        cfg.RateLimitMaxEntries,
-		Backend:           backend,
-		Done:              done,
-		Logger:            logger,
+		PrimaryTimeout: time.Duration(cfg.RedisTimeoutMs) * time.Millisecond,
+		WindowDuration: time.Minute,
+		MaxEntries:     cfg.RateLimitMaxEntries,
+		Backend:        backend,
+		Done:           done,
+		Logger:         logger,
 	}))
 }
 
