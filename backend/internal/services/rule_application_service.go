@@ -105,6 +105,9 @@ type ruleApplicationService struct {
 	ruleEngine  *rules.RuleEngine
 	analytics   phclient.Analytics
 	historyRepo RuleExecutionHistoryRepository
+	// logger defaults to slog.Default() so every existing NewRuleApplicationService call site
+	// keeps compiling and shadow-mode quarantine still reports even where none is injected.
+	logger *slog.Logger
 }
 
 // NewRuleApplicationService creates a new RuleApplicationService instance.
@@ -112,6 +115,14 @@ func NewRuleApplicationService(ruleRepo RuleApplicationRepository) *ruleApplicat
 	return &ruleApplicationService{
 		ruleRepo:   ruleRepo,
 		ruleEngine: rules.NewRuleEngine(),
+		logger:     slog.Default(),
+	}
+}
+
+// SetLogger overrides the default logger (setter injection, as with analytics and history).
+func (s *ruleApplicationService) SetLogger(logger *slog.Logger) {
+	if logger != nil {
+		s.logger = logger
 	}
 }
 
@@ -147,6 +158,8 @@ func (s *ruleApplicationService) ApplyRulesToTransaction(ctx context.Context, tx
 	if len(userRules) == 0 {
 		return nil
 	}
+
+	s.reportQuarantineCandidates(ctx, tx.UserID, userRules)
 
 	// Evaluate rules against transaction
 	result, err := s.ruleEngine.EvaluateRules(tx, userRules)
@@ -243,6 +256,8 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 		rulesByID[r.ID] = r
 	}
 
+	s.reportQuarantineCandidates(ctx, userID, userRules)
+
 	var applications []BatchRuleApplication
 
 	for i := range txns {
@@ -266,6 +281,16 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 		result, err := s.ruleEngine.EvaluateRules(tx, userRules)
 		if err != nil {
 			// Non-fatal: log and continue with remaining transactions.
+			//
+			// #1625: this comment said "log and continue" while the code only continued — the
+			// error was discarded with no record anywhere. One bad condition silently stopped
+			// EVERY rule from applying to this transaction (EvaluateRules returns on the first
+			// error), and nothing said so.
+			s.logger.WarnContext(ctx, "rule evaluation failed for transaction — no rules applied to it",
+				slog.String("user_id", userID),
+				slog.String("transaction_id", tx.ID),
+				slog.String("error", err.Error()),
+			)
 			continue
 		}
 
@@ -667,4 +692,55 @@ func (s *ruleApplicationService) writeExecutionHistory(ctx context.Context, user
 			)
 		}
 	}
+}
+
+// ─── Shadow-mode quarantine (#1625) ─────────────────────────────────────────────────────────
+//
+// A rule whose conditions do not validate has always executed anyway: unknown condition types
+// evaluate to no-match per condition, which under OR logic lets a VALID sibling still fire the
+// rule. So a rule the user cannot see is broken quietly matches on a condition set that is not
+// what it says. Three more traps ride along: a rule with ZERO conditions matches EVERY
+// transaction (engine.go), an invalid condition_logic silently degrades to AND, and one
+// evaluator error aborts every other rule for that transaction.
+//
+// This is SHADOW MODE. It counts and logs what a future enforcement pass WOULD quarantine and
+// changes no matching behaviour whatsoever — deliberately, because the blast radius is unknown
+// until the inventory has been run against real data, and silently disabling a rule a user
+// depends on is a worse failure than the one being fixed. Enforcement is a follow-up, after the
+// counts are known and the FieldSpecs matrix has been widened to accept every legitimate legacy
+// shape the inventory turns up.
+func (s *ruleApplicationService) reportQuarantineCandidates(ctx context.Context, userID string, rules []*domain.CategorizationRule) {
+	for _, rule := range rules {
+		reason := quarantineReason(rule)
+		if reason == "" {
+			continue
+		}
+		s.logger.WarnContext(ctx, "categorization rule would be quarantined (shadow mode — still executing)",
+			slog.String("user_id", userID),
+			slog.String("rule_id", rule.ID),
+			slog.String("reason", reason),
+		)
+	}
+}
+
+// quarantineReason returns a non-empty reason when a rule would be refused at write time today.
+// It never inspects user CONTENT — only structure — so it is safe to log.
+func quarantineReason(rule *domain.CategorizationRule) string {
+	if len(rule.Conditions) == 0 {
+		// engine.go treats this as "match everything", which would recategorise a whole ledger.
+		return "no_conditions_matches_everything"
+	}
+	if rule.ConditionLogic != "AND" && rule.ConditionLogic != "OR" {
+		return "invalid_condition_logic_defaults_to_and"
+	}
+	for i := range rule.Conditions {
+		c := rule.Conditions[i] // copy: Normalize mutates, and this must not touch the live rule
+		if err := c.Normalize(); err != nil {
+			return "unnormalizable_condition"
+		}
+		if err := c.ValidateShape(); err != nil {
+			return "invalid_condition_value_shape"
+		}
+	}
+	return ""
 }

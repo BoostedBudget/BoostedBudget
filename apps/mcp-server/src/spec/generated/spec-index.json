@@ -2496,6 +2496,151 @@
       ]
     },
     {
+      "operationId": "previewRule",
+      "method": "POST",
+      "path": "/api/v1/auto-categorization/preview",
+      "summary": "Preview a categorization rule",
+      "tags": [
+        "Auto-Categorization"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Reports which of your recent transactions a candidate rule would match, WITHOUT saving the rule. Validation is identical to createRule, so a rule that previews cleanly will also save cleanly.",
+      "requestBody": [
+        {
+          "name": "condition_logic",
+          "type": "string"
+        },
+        {
+          "name": "conditions",
+          "type": "array of object",
+          "required": true
+        },
+        {
+          "name": "conditions[].field",
+          "type": "string",
+          "enum": [
+            "merchant",
+            "name",
+            "merchant_id",
+            "amount",
+            "signed_amount",
+            "direction",
+            "account_id",
+            "account_type",
+            "payment_channel",
+            "date",
+            "pfc_primary",
+            "pfc_detailed"
+          ]
+        },
+        {
+          "name": "conditions[].operator",
+          "type": "string",
+          "enum": [
+            "eq",
+            "neq",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
+            "between",
+            "contains",
+            "starts_with",
+            "ends_with",
+            "in"
+          ]
+        },
+        {
+          "name": "conditions[].type",
+          "type": "string",
+          "enum": [
+            "merchant_contains",
+            "merchant_equals",
+            "merchant_starts_with",
+            "merchant_ends_with",
+            "amount_greater_than",
+            "amount_less_than",
+            "amount_equals",
+            "amount_range",
+            "account_id",
+            "account_type",
+            "payment_channel",
+            "date_range",
+            "existing_pfc_primary",
+            "existing_pfc_detailed",
+            "expression"
+          ]
+        },
+        {
+          "name": "conditions[].value",
+          "required": true
+        },
+        {
+          "name": "conditions[].value_display",
+          "type": "string"
+        },
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "type": "integer"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "priority",
+          "type": "integer"
+        },
+        {
+          "name": "tag_behavior",
+          "type": "string"
+        },
+        {
+          "name": "target_custom_category_id",
+          "type": "string"
+        },
+        {
+          "name": "target_kind",
+          "type": "string"
+        },
+        {
+          "name": "target_pfc_detailed",
+          "type": "string"
+        },
+        {
+          "name": "target_pfc_primary",
+          "type": "string"
+        },
+        {
+          "name": "target_tags",
+          "type": "array of string"
+        }
+      ],
+      "responseBody": [
+        {
+          "name": "match_count",
+          "type": "integer",
+          "required": true
+        },
+        {
+          "name": "matches",
+          "type": "array of object",
+          "required": true
+        },
+        {
+          "name": "scanned_count",
+          "type": "integer",
+          "required": true
+        }
+      ]
+    },
+    {
       "operationId": "getRuleByID",
       "method": "GET",
       "path": "/api/v1/auto-categorization/{id}",

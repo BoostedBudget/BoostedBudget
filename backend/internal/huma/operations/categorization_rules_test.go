@@ -24,6 +24,8 @@ type mockCategorizationRuleService struct {
 	updateErr   error
 	deleteErr   error
 	toggleErr   error
+	previewResult *domain.RulePreviewResult
+	previewErr    error
 }
 
 func (m *mockCategorizationRuleService) GetUserRules(ctx context.Context, userID string) ([]*domain.CategorizationRule, error) {
@@ -258,6 +260,19 @@ func TestCreateRule_DuplicateName(t *testing.T) {
 
 	assert.Nil(t, output)
 	require.Error(t, err)
+}
+
+// PreviewRule satisfies the service interface for the handler tests (#1625).
+func (m *mockCategorizationRuleService) PreviewRule(
+	_ context.Context, _ string, _ *domain.CategorizationRule, _ int,
+) (*domain.RulePreviewResult, error) {
+	if m.previewErr != nil {
+		return nil, m.previewErr
+	}
+	if m.previewResult != nil {
+		return m.previewResult, nil
+	}
+	return &domain.RulePreviewResult{}, nil
 }
 
 // TestCreateRule_ValidationError tests 400 for validation errors.

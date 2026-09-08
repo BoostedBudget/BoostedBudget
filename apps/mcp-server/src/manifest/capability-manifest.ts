@@ -382,6 +382,14 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // proper standing-auth model.
   read('getUserRules'),
   read('getRuleByID'),
+  // #1625: previewRule is a POST, but it is a pure READ — it persists nothing, bumps no match
+  // count, and writes no execution history (pinned by TestPreviewRule_HasNoWriteSideEffects).
+  // Classified `read` so it is reachable from readExecute and needs no confirmation: making an
+  // agent confirm a dry run would defeat the point of offering one. ⚠ It is deliberately NOT
+  // admitted by readExecute's method check, which requires a conventionally non-mutating verb —
+  // see the SECURITY POINT in tools/execute.ts. It runs through writeExecute, where a `read`
+  // class simply means no confirmation challenge.
+  read('previewRule'),
   write('createRule'),
   write('updateRule', { idempotent: true }),
   // Hard `DELETE FROM categorization_rules` (repository/categorization_rule_repository.go:348).

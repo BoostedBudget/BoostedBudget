@@ -788,6 +788,14 @@ func main() {
 		customCategoryService.SetAuditLogRepository(repository.NewAuditLogRepository(db))
 		// Issue #346: Categorization rules services
 		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo, customCategoryRepo)
+		// #1625: backs POST /auto-categorization/preview. Setter injection so every other
+		// NewCategorizationRuleService call site keeps compiling; preview reports itself
+		// unavailable rather than panicking when this is not wired.
+		if svc, ok := categorizationRuleService.(interface {
+			SetTransactionReader(services.PreviewTransactionReader)
+		}); ok {
+			svc.SetTransactionReader(transactionRepo)
+		}
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
 		ruleApplicationService.SetAnalytics(phClient)
 		// Issue #1569 Task 5 (#1572): the automation audit trail's writer. Until this line

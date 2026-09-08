@@ -5139,6 +5139,56 @@ components:
         - day_change_pct
         - holdings_count
       type: object
+    PreviewRuleBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/PreviewRuleBody.json
+          format: uri
+          readOnly: true
+          type: string
+        condition_logic:
+          type: string
+        conditions:
+          items:
+            $ref: "#/components/schemas/RuleCondition"
+          type:
+            - array
+            - "null"
+        description:
+          type: string
+        limit:
+          format: int64
+          maximum: 500
+          minimum: 1
+          type: integer
+        name:
+          type: string
+        priority:
+          format: int64
+          type: integer
+        tag_behavior:
+          type: string
+        target_custom_category_id:
+          type: string
+        target_kind:
+          type: string
+        target_pfc_detailed:
+          type: string
+        target_pfc_primary:
+          type: string
+        target_tags:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - name
+        - conditions
+      type: object
     PreviewUpdateInputBody:
       additionalProperties: false
       properties:
@@ -5929,6 +5979,63 @@ components:
         - total
         - limit
         - offset
+      type: object
+    RulePreviewMatch:
+      additionalProperties: false
+      properties:
+        amount:
+          format: double
+          type: number
+        current_category:
+          type: string
+        date:
+          format: date-time
+          type: string
+        merchant_name:
+          type: string
+        name:
+          type: string
+        transaction_id:
+          type: string
+        would_add_tags:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - transaction_id
+        - date
+        - name
+        - amount
+        - current_category
+      type: object
+    RulePreviewResult:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RulePreviewResult.json
+          format: uri
+          readOnly: true
+          type: string
+        match_count:
+          format: int64
+          type: integer
+        matches:
+          items:
+            $ref: "#/components/schemas/RulePreviewMatch"
+          type:
+            - array
+            - "null"
+        scanned_count:
+          format: int64
+          type: integer
+      required:
+        - scanned_count
+        - match_count
+        - matches
       type: object
     SaveDashboardPreferencesInputBody:
       additionalProperties: false
@@ -10598,6 +10705,34 @@ paths:
       security:
         - clerk: []
       summary: Create a new categorization rule
+      tags:
+        - Auto-Categorization
+  /api/v1/auto-categorization/preview:
+    post:
+      description: Reports which of your recent transactions a candidate rule would match, WITHOUT saving the rule. Validation is identical to createRule, so a rule that previews cleanly will also save cleanly.
+      operationId: previewRule
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreviewRuleBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RulePreviewResult"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Preview a categorization rule
       tags:
         - Auto-Categorization
   /api/v1/auto-categorization/{id}:

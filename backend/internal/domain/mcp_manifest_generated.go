@@ -176,6 +176,7 @@ var MCPOperationManifest = map[string]MCPOperationClass{
 	"paddle-webhook":                                 MCPClassExcluded,
 	"preview-paddle-subscription-update":             MCPClassExcluded,
 	"previewCategoryMatches":                         MCPClassRead,
+	"previewRule":                                    MCPClassRead,
 	"purgeAccount":                                   MCPClassExcluded,
 	"purgeInstitution":                               MCPClassExcluded,
 	"purgeSavingsGoal":                               MCPClassExcluded,
