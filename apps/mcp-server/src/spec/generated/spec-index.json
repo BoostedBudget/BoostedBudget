@@ -7677,6 +7677,46 @@
       "description": "Generates a Plaid Link token for initiating bank account connection flow."
     },
     {
+      "operationId": "repairLinkedItem",
+      "method": "POST",
+      "path": "/api/v1/plaid/reconnect",
+      "summary": "Clear a linked item's error state after a successful reconnect",
+      "tags": [
+        "Plaid"
+      ],
+      "manifestClass": "write",
+      "excluded": true,
+      "description": "Marks the caller's own linked item active again and clears its error tracking fields. Call only after the update-mode Plaid Link flow (using the token from createReconnectLinkToken) has succeeded.",
+      "requestBody": [
+        {
+          "name": "item_id",
+          "type": "string",
+          "required": true,
+          "description": "The Plaid item_id of the linked item that was just repaired via Plaid Link"
+        }
+      ]
+    },
+    {
+      "operationId": "createReconnectLinkToken",
+      "method": "POST",
+      "path": "/api/v1/plaid/reconnect-link-token",
+      "summary": "Create a Plaid update-mode link token to repair a broken connection",
+      "tags": [
+        "Plaid"
+      ],
+      "manifestClass": "write",
+      "excluded": true,
+      "description": "Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration). A 'revoked' item is deliberately excluded — Plaid documents revoked access as unrecoverable via update mode; see ErrLinkedItemNotRepairable in item_error_service.go.",
+      "requestBody": [
+        {
+          "name": "item_id",
+          "type": "string",
+          "required": true,
+          "description": "The Plaid item_id of the linked item to reconnect (from the notification's action_url)"
+        }
+      ]
+    },
+    {
       "operationId": "qaAuthBypass",
       "method": "POST",
       "path": "/api/v1/qa/auth/bypass",

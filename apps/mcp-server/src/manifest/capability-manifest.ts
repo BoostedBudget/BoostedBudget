@@ -516,6 +516,12 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // ── Plaid (account-linking permanently non-MCP) ──────────────────────────
   excludedWrite('exchangePublicToken', REASON_PLAID_LINKING, 'bank-connections'),
   excludedWrite('createLinkToken', REASON_PLAID_LINKING, 'bank-connections'),
+  // #1609 P3-T1: the reconnect flow. Same exclusion and the same reason as the rest of Plaid
+  // linking, and here it is not merely policy — it is a capability fact. Repairing a connection
+  // REQUIRES a human to complete Plaid Link in a browser; an MCP agent cannot do that, so exposing
+  // either endpoint would advertise something no agent could actually carry out.
+  excludedWrite('createReconnectLinkToken', REASON_PLAID_LINKING, 'bank-connections'),
+  excludedWrite('repairLinkedItem', REASON_PLAID_LINKING, 'bank-connections'),
 
   // ── Privacy / Profile ────────────────────────────────────────────────────
   // ⚠ #1610: both admitted by readExecute (class 'read', method GET, confirmationRequired

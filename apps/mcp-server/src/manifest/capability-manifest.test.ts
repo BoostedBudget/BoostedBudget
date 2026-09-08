@@ -317,7 +317,7 @@ describe('helper functions', () => {
 // ── Completeness: every known operationId is classified ───────────────────
 
 describe('completeness', () => {
-  it('covers all 205 known operationIds (no unknown ops in the spec)', async () => {
+  it('covers every known operationId (no unknown ops in the spec)', async () => {
     // We import the full list to ensure no ops are silently absent
     // +8 from Issue #138: getHoldings, getPortfolioSummary, getPortfolioHistory,
     //   getInvestmentTransactions, getPortfolioAllocationBreakdown, getTopMovers,
@@ -365,7 +365,13 @@ describe('completeness', () => {
     //   all: GetLatestByAccountID returned ONE last-known figure and getBalanceHistory has never
     //   taken an account id. Same per-resource shape, same reasoning, same expiry condition.)
     const { ALL_OPERATION_IDS } = await import('./capability-manifest')
-    expect(ALL_OPERATION_IDS.length).toBe(206)
+    // +2 from Issue #1609 P3-T1: createReconnectLinkToken and repairLinkedItem (both excluded
+    //   writes). The exclusion is a CAPABILITY fact, not just policy: repairing a bank connection
+    //   requires a human to complete Plaid Link in a browser, so an MCP agent could never carry
+    //   either one out. They shipped in the spec before being classified, which broke
+    //   check:manifest and the spec-index build until this entry — the same failure mode Task 16
+    //   records above.
+    expect(ALL_OPERATION_IDS.length).toBe(208)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified
