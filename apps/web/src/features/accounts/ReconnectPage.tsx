@@ -1,11 +1,16 @@
 /**
  * ReconnectPage
  *
- * Handles the "Reconnect Bank" flow from a login_required / pending_expiration /
- * permission_revoked notification (Issue #1609). The notification's action_url is
+ * Handles the "Reconnect Bank" flow from a login_required / error / pending_expiration
+ * notification (Issue #1609). The notification's action_url is
  * `/accounts/reconnect?item_id=<plaid item_id>` — deliberately item_id only, never a Plaid Link
  * token (see item_error_service.go and migration 000188 for why one used to be embedded there
  * and no longer is).
+ *
+ * Issue #1609 round 2, BLOCKING 1: a `permission_revoked` notification does NOT route here.
+ * Plaid says a revoked Item cannot be restored via update mode — its notification's action_url
+ * points at `/accounts` instead, the normal (non-update-mode) Link flow that creates a fresh
+ * Item. See ErrLinkedItemNotRepairable and HandlePermissionRevoked (item_error_service.go).
  *
  * This page mints its OWN update-mode Plaid Link token on demand (via
  * createReconnectLinkToken), opens Plaid Link in update mode, and on success calls the REPAIR
@@ -66,6 +71,7 @@ export function ReconnectPage() {
       })
       .catch(err => {
         console.error('Failed to mint reconnect link token:', err)
+        trackEvent(ANALYTICS_EVENTS.ACCOUNT_RECONNECT_FAILED, { stage: 'mint' })
         if (!cancelled) setError(mutationFailureMessage(err))
       })
 

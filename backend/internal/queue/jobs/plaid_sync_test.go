@@ -132,6 +132,12 @@ func (m *MockLinkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedIt
 	return args.Error(0)
 }
 
+// RepairStatus atomically transitions a linked item to 'active' (Issue #1609 round 2).
+func (m *MockLinkedItemRepository) RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus) (bool, error) {
+	args := m.Called(ctx, id, userID, allowedStatuses)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockLinkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id string) (*domain.LinkedItem, error) {
 	args := m.Called(ctx, tx, id)
 	if args.Get(0) == nil {

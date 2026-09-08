@@ -107,7 +107,7 @@ func RegisterPlaidReconnectRoutes(api huma.API, handler *PlaidReconnectHandler) 
 		Method:      http.MethodPost,
 		Path:        "/api/v1/plaid/reconnect-link-token",
 		Summary:     "Create a Plaid update-mode link token to repair a broken connection",
-		Description: "Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration, revoked).",
+		Description: "Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration). A 'revoked' item is deliberately excluded — Plaid documents revoked access as unrecoverable via update mode; see ErrLinkedItemNotRepairable in item_error_service.go.",
 		Tags:        []string{"Plaid"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.CreateReconnectLinkToken)
