@@ -151,10 +151,16 @@ func TestBuildAccountMaps_ReplacedAccount_Mapped(t *testing.T) {
 // be written against another tenant's account. This proves the account is excluded from
 // both maps rather than mapped.
 //
-// The investment side (investment_sync_service.go ~:282-298, ~:523) carries the identical
-// guard but, as of this writing, no test of its own pins the skip behavior directly --
-// verified: no test file under internal/services matches "does not belong to the linked
-// item". This test is that coverage for the banking side only.
+// The investment side carries the identical guard and IS covered by its own tests --
+// TestSyncHoldings_AccountOwnedByAnotherUser_IsSkipped,
+// TestSyncInvestmentTransactions_AccountOwnedByAnotherUser_IsSkipped and
+// TestSyncInvestmentTransactions_RetainedAndOwnedByAnotherUser_IsSkipped, all in
+// investment_sync_account_tenancy_test.go. This test is the banking-side equivalent.
+//
+// #1609 Phase 4: this comment previously asserted that coverage did not exist, "verified" by
+// grepping for the log message "does not belong to the linked item". That was the wrong
+// technique and the wrong answer -- those tests assert on BEHAVIOUR (the account is skipped),
+// not on the log line, so a message grep could never find them.
 func TestBuildAccountMaps_CrossTenantAccount_SkippedAndLogged(t *testing.T) {
 	mockAccountRepo := new(MockAccountRepository)
 	service := newBuildAccountMapsService(mockAccountRepo)
