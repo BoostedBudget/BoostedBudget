@@ -78,7 +78,8 @@ import (
 const repairSelectSQL = `
 WITH RECURSIVE candidate AS (
     SELECT ps.user_id, ps.snapshot_date,
-           ps.total_value, ps.total_cost_basis, ps.total_gain_loss, ps.total_gain_loss_pct
+           ps.total_value, ps.total_cost_basis, ps.total_gain_loss, ps.total_gain_loss_pct,
+           ps.total_value_investment_only
     FROM portfolio_snapshots ps
     WHERE ps.user_id = $1::uuid
       AND ps.snapshot_date < (now() AT TIME ZONE 'UTC')::date
@@ -176,13 +177,30 @@ rebuilt AS (
                        / SUM(hs.cost_basis) FILTER (WHERE hs.cost_basis IS NOT NULL AND hs.institution_value IS NOT NULL)
                     ) * 100, 4)
                ELSE NULL
-           END AS total_gain_loss_pct
+           END AS total_gain_loss_pct,
+           -- FIFTH column, mirroring Upsert's total_value_investment_only (#1613 P4-T3). Without
+           -- it a repair rewrites total_value and leaves the gated column describing a DIFFERENT
+           -- day, and GetPortfolioSummary -- which only checks that column for NULL -- subtracts
+           -- the stale number and calls it DayChange. Found by Codex adversarial review.
+           --
+           -- The gate reads rinv.type, the account's CURRENT type, and that is not an
+           -- approximation: the figure this must stay comparable with is the LIVE holdings read,
+           -- which is gated on the same current type. Reconstructing from current type is the
+           -- SAME predicate the other operand uses. (An earlier draft of this work left the
+           -- repair alone on the reasoning that no as-of account type can be reconstructed --
+           -- true, and irrelevant, because none is needed.)
+           COALESCE(SUM(hs.institution_value) FILTER (WHERE rinv.type = 'investment'), 0)
+             AS total_value_investment_only
     FROM live l
     JOIN holding_snapshots hs
       ON hs.account_id = l.account_id
      AND hs.as_of_date = l.snapshot_date
      AND hs.user_id = $1::uuid
      AND hs.present
+    -- LEFT JOIN on the primary key: accounts.id is unique, so this cannot multiply a snapshot
+    -- row, and LEFT means an unmatchable row still counts toward the ungated total exactly as it
+    -- did before this column existed. Its only job is to supply rinv.type to the FILTER above.
+    LEFT JOIN accounts rinv ON rinv.id = l.account_id
     GROUP BY l.snapshot_date
 ),
 decided AS (
@@ -191,12 +209,14 @@ decided AS (
            c.total_cost_basis AS prev_total_cost_basis,
            c.total_gain_loss AS prev_total_gain_loss,
            c.total_gain_loss_pct AS prev_total_gain_loss_pct,
+           c.total_value_investment_only AS prev_total_value_investment_only,
            (SELECT count(*) FROM expected e WHERE e.snapshot_date = c.snapshot_date)::int AS expected_count,
            (SELECT count(*) FROM observed o WHERE o.snapshot_date = c.snapshot_date)::int AS observed_count,
            COALESCE(rb.total_value, 0) AS new_total_value,
            COALESCE(rb.total_cost_basis, 0) AS new_total_cost_basis,
            COALESCE(rb.total_gain_loss, 0) AS new_total_gain_loss,
            rb.total_gain_loss_pct AS new_total_gain_loss_pct,
+           COALESCE(rb.total_value_investment_only, 0) AS new_total_value_investment_only,
            -- F2: rows can exist for a day and still be excluded by liveness, which is a DIFFERENT
            -- fact from "this day was never captured" and must not be reported as the same one.
            -- Deliberately NOT restricted to live accounts — that is the whole point of it.
@@ -223,7 +243,8 @@ updated AS (
     SET total_value         = d.new_total_value,
         total_cost_basis    = d.new_total_cost_basis,
         total_gain_loss     = d.new_total_gain_loss,
-        total_gain_loss_pct = d.new_total_gain_loss_pct
+        total_gain_loss_pct = d.new_total_gain_loss_pct,
+        total_value_investment_only = d.new_total_value_investment_only
     FROM decided d
     WHERE ps.user_id = d.user_id
       AND ps.snapshot_date = d.snapshot_date
@@ -231,6 +252,22 @@ updated AS (
       -- Write only a day that actually disagrees. An already-correct day must come out of this
       -- repair byte-identical, updated_at included, or "the repair changed nothing the second
       -- time" stops being observable.
+      -- ⚠ total_value_investment_only is in the SET list ABOVE but deliberately NOT in this
+      -- tuple, and the asymmetry is the whole point. This predicate answers "did the
+      -- reconstruction DISAGREE with the stored day" — it is what makes "repaired" mean something
+      -- in the audit ledger. Every row written before migration 000189 has a NULL gated column,
+      -- so including it here would make NULL IS DISTINCT FROM <number> true for EVERY historical
+      -- day and relabel a shelf of already-correct days as "repaired". That is a false signal in
+      -- a ledger whose only job is to record which days were wrong.
+      -- (TestPortfolioRepair_ExaminedCountsEveryCandidateDay caught exactly that when the first
+      -- draft of this fix did include it — the guard, not review.)
+      --
+      -- Leaving it out costs nothing, because the gated column cannot go stale on its own: it is
+      -- derived from the same reconstruction as the other four, so the only thing that can make
+      -- it disagree is a repair of those four — and such a repair passes this predicate and
+      -- writes both. A correct day therefore keeps its NULL (day-change simply unavailable, the
+      -- documented and accepted cost) and a repaired day never carries a gated total describing
+      -- a different day.
       AND (ps.total_value, ps.total_cost_basis, ps.total_gain_loss, ps.total_gain_loss_pct)
           IS DISTINCT FROM
           (d.new_total_value, d.new_total_cost_basis, d.new_total_gain_loss, d.new_total_gain_loss_pct)

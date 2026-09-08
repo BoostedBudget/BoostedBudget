@@ -927,3 +927,111 @@ func TestPortfolioRepair_ConfirmedEmptySuccessor_RebuildsToZeroNotTheStalePredec
 			"replaced it had already been observed holding nothing")
 	assert.InDelta(t, 0.0, got.totalCostBasis, 0.001)
 }
+
+// ── #1613 P4-T3 item I, Codex finding 4: the repair must not leave the GATED total stale ──────
+//
+// RepairUserFromHistory rewrites a past day's total_value from holding_snapshots. Once
+// portfolio_snapshots also carries total_value_investment_only (migration 000189), a repair that
+// corrects the ungated column and leaves the gated one untouched produces a row whose two totals
+// describe DIFFERENT days — and GetPortfolioSummary, which only checks the gated column for NULL,
+// would happily subtract that stale number and call it DayChange.
+//
+// ⚠ This corrects the first draft of this work, which deliberately left the repair alone on the
+// reasoning that "nothing can reconstruct an as-of account type". That reasoning was wrong in the
+// direction that matters: the repair does not NEED an as-of type, because the figure it must be
+// comparable with — the LIVE read in GetPortfolioSummary — is itself gated on the account's
+// CURRENT type. Reconstructing from current type is not an approximation here; it is the same
+// predicate the other operand uses.
+func TestPortfolioRepair_RepairsTheTypeGatedTotalToo_NeverLeavingItStale(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, linkedItemID, invAccountID, secA := seedInvestmentFixture(ctx, t, tx, "repair-gated")
+	backdateLiveness(ctx, t, tx, invAccountID, 30)
+
+	// A depository account carrying holdings — the cash-management shape this whole work stream
+	// exists for. It belongs in total_value and must NOT appear in total_value_investment_only.
+	depAccountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
+		VALUES ($1, $2, $3, $4, 'Cash Management', 'depository', 'active')
+	`, depAccountID, linkedItemID, userID, "repair-gated-dep-"+depAccountID.String())
+	require.NoError(t, err)
+	backdateLiveness(ctx, t, tx, depAccountID, 30)
+
+	secB := seedSecurity(ctx, t, tx, "repair-gated-b")
+
+	day := dayUTC(ctx, t, tx, 3)
+	seedHoldingSnapshot(ctx, t, tx, userID, invAccountID, secA, day, true, f64(4000), f64(5000))
+	seedHoldingSnapshot(ctx, t, tx, userID, depAccountID, secB, day, true, f64(3900), f64(3900))
+
+	// A row that is wrong in the ungated column AND carries a stale gated value. 1234 is not
+	// reconstructible from anything on this day, so seeing it survive is unambiguous.
+	seedPortfolioSnapshot(ctx, t, tx, userID, day, 1500, 1500, 0, nil)
+	_, err = tx.Exec(ctx, `
+		UPDATE portfolio_snapshots SET total_value_investment_only = 1234
+		WHERE user_id = $1 AND snapshot_date = $2::date`, userID, day)
+	require.NoError(t, err)
+
+	repo := NewPortfolioSnapshotRepository(tx)
+	sum, err := repo.RepairUserFromHistory(ctx, userID.String())
+	require.NoError(t, err)
+	require.Equal(t, 1, sum.Repaired, "the day disagrees, so it must be repaired")
+
+	var totalValue float64
+	var gated *float64
+	require.NoError(t, tx.QueryRow(ctx, `
+		SELECT total_value, total_value_investment_only
+		FROM portfolio_snapshots WHERE user_id = $1 AND snapshot_date = $2::date`,
+		userID, day).Scan(&totalValue, &gated))
+
+	require.InDelta(t, 8900.0, totalValue, 0.001,
+		"total_value stays UNGATED — it is the historical series and both accounts were live")
+	require.NotNil(t, gated, "the repair must write the gated total, not blank it")
+	require.InDelta(t, 5000.0, *gated, 0.001,
+		"1234 here means the repair rewrote total_value and left the gated column describing a "+
+			"different day — GetPortfolioSummary would subtract that stale number and call it "+
+			"DayChange. 8900 here means the type gate is not being applied in the repair.")
+}
+
+// TestPortfolioRepair_SecondRunChangesNothing_IncludingTheGatedTotal extends the byte-identical
+// guarantee to the new column. If total_value_investment_only were written but left OUT of the
+// IS DISTINCT FROM guard, an already-correct day would be rewritten on every pass and
+// "the repair changed nothing the second time" would stop being observable.
+func TestPortfolioRepair_SecondRunChangesNothing_IncludingTheGatedTotal(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secA := seedInvestmentFixture(ctx, t, tx, "repair-gated-stable")
+	backdateLiveness(ctx, t, tx, accountID, 30)
+
+	day := dayUTC(ctx, t, tx, 3)
+	seedHoldingSnapshot(ctx, t, tx, userID, accountID, secA, day, true, f64(4000), f64(5000))
+	seedPortfolioSnapshot(ctx, t, tx, userID, day, 1500, 1500, 0, nil)
+
+	repo := NewPortfolioSnapshotRepository(tx)
+	first, err := repo.RepairUserFromHistory(ctx, userID.String())
+	require.NoError(t, err)
+	require.Equal(t, 1, first.Repaired)
+
+	var gatedAfterFirst *float64
+	require.NoError(t, tx.QueryRow(ctx, `
+		SELECT total_value_investment_only FROM portfolio_snapshots
+		WHERE user_id = $1 AND snapshot_date = $2::date`, userID, day).Scan(&gatedAfterFirst))
+	require.NotNil(t, gatedAfterFirst)
+	require.InDelta(t, 5000.0, *gatedAfterFirst, 0.001)
+
+	second, err := repo.RepairUserFromHistory(ctx, userID.String())
+	require.NoError(t, err)
+	require.Equal(t, 0, second.Repaired,
+		"an already-correct day must come out of a second repair untouched; a non-zero count here "+
+			"means the new column is written but missing from the IS DISTINCT FROM guard")
+}
