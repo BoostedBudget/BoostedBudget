@@ -43,10 +43,47 @@ fi
 # can resolve package paths in the coverage file.
 COVERAGE_DIR=$(dirname "$COVERAGE_FILE")
 COVERAGE_BASENAME=$(basename "$COVERAGE_FILE")
-COVERAGE_OUTPUT=$(cd "$COVERAGE_DIR" && go tool cover -func="$COVERAGE_BASENAME" | grep total)
+
+# Issue #1622. `COVERAGE_OUTPUT=$(... | grep total)` under `set -euo pipefail` exits the script
+# AT THIS LINE when `go tool cover` fails, so the friendly error below could never print: a
+# corrupt profile produced a bare one-line `cover: ...` parse error naming neither the file nor
+# the target, and the operator had no idea which artifact to regenerate. Demonstrated, not
+# assumed -- a profile with one malformed line reproduces it exactly.
+#
+# The `|| true` and the explicit status capture are what keep the failure reportable here. Do
+# NOT collapse this back into a single assignment.
+#
+# ⚠ Corrected while fixing: the path was dead ONE way, not two. `grep total` matching nothing is
+# NOT reachable for a profile go tool cover can parse -- `-func` always emits a `total:` line,
+# so a valid-but-empty profile reports 0.0% and fails the threshold loudly rather than falling
+# into the -z branch. Only the parse failure was silent.
+set +e
+COVERAGE_RAW=$(cd "$COVERAGE_DIR" && go tool cover -func="$COVERAGE_BASENAME" 2>&1)
+COVER_STATUS=$?
+set -e
+
+if [ "$COVER_STATUS" -ne 0 ]; then
+  print_error "go tool cover could not read the coverage profile: $COVERAGE_FILE"
+  echo "  go tool cover said:"
+  echo "$COVERAGE_RAW" | sed 's/^/    /'
+  echo ""
+  echo "  The profile is malformed, not merely below threshold. Regenerate it:"
+  echo "    cd backend && go test -coverprofile=coverage.out -coverpkg=./... ./..."
+  echo ""
+  echo "  Profile on disk: $(wc -c < "$COVERAGE_FILE" | tr -d ' ') bytes, last modified $(date -r "$COVERAGE_FILE" 2>/dev/null || echo unknown)"
+  echo "  ⚠ .gitignore's '*.out' wildcard hides coverage artifacts from 'git status', so a stale"
+  echo "    or half-written profile from an earlier run can sit in the tree unnoticed. Check the"
+  echo "    timestamp above against the test run you expected to produce it."
+  exit 1
+fi
+
+COVERAGE_OUTPUT=$(echo "$COVERAGE_RAW" | grep total || true)
 
 if [ -z "$COVERAGE_OUTPUT" ]; then
-  print_error "Could not extract coverage from $COVERAGE_FILE"
+  print_error "Could not extract a total line from $COVERAGE_FILE"
+  echo "  go tool cover parsed the profile but emitted no 'total:' line, which it normally"
+  echo "  always does. Regenerate the profile:"
+  echo "    cd backend && go test -coverprofile=coverage.out -coverpkg=./... ./..."
   exit 1
 fi
 
