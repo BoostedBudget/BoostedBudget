@@ -132,6 +132,8 @@ describe('AccountCustomizationModal', () => {
     currency_code: 'USD',
     institution_name: 'Chase',
     status: 'active',
+    is_hidden: false,
+    exclude_investment_sync: false,
     created_at: '2025-10-18T14:30:00Z',
     updated_at: '2025-10-20T10:15:00Z',
   }
@@ -612,7 +614,7 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      const toggle = screen.getByRole('switch')
+      const toggle = screen.getByRole('switch', { name: /hide account|show account/i })
       expect(toggle).toHaveAttribute('aria-checked', 'false')
 
       await user.click(toggle)
@@ -635,7 +637,7 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      const toggle = screen.getByRole('switch')
+      const toggle = screen.getByRole('switch', { name: /hide account|show account/i })
       await user.click(toggle)
       const dialog = screen.getByRole('alertdialog')
       await user.click(within(dialog).getByRole('button', { name: 'Hide Account' }))
@@ -775,7 +777,7 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      await user.click(screen.getByRole('switch'))
+      await user.click(screen.getByRole('switch', { name: /hide account|show account/i }))
 
       expect(screen.getByRole('alertdialog')).toBeInTheDocument()
       expect(screen.getByText('Hide Account?')).toBeInTheDocument()
@@ -794,7 +796,7 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      await user.click(screen.getByRole('switch'))
+      await user.click(screen.getByRole('switch', { name: /hide account|show account/i }))
 
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
@@ -811,7 +813,7 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      const toggle = screen.getByRole('switch')
+      const toggle = screen.getByRole('switch', { name: /hide account|show account/i })
       await user.click(toggle)
 
       const dialog = screen.getByRole('alertdialog')
@@ -834,7 +836,7 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      const toggle = screen.getByRole('switch')
+      const toggle = screen.getByRole('switch', { name: /hide account|show account/i })
       await user.click(toggle)
 
       const dialog = screen.getByRole('alertdialog')
@@ -857,7 +859,7 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      await user.click(screen.getByRole('switch'))
+      await user.click(screen.getByRole('switch', { name: /hide account|show account/i }))
       const dialog = screen.getByRole('alertdialog')
       await user.click(within(dialog).getByRole('button', { name: 'Hide Account' }))
 
@@ -867,6 +869,109 @@ describe('AccountCustomizationModal', () => {
         expect(mockOnSave).toHaveBeenCalledWith(
           mockAccount,
           expect.objectContaining({ is_hidden: true }),
+        )
+      })
+    })
+  })
+
+  describe('Exclude Investment Activity Toggle (Issue #1609 Item 5 / #1618b)', () => {
+    it('reflects the stored value when the account already excludes investment sync', () => {
+      const excludedAccount: Account = { ...mockAccount, exclude_investment_sync: true }
+
+      renderModal(
+        <AccountCustomizationModal
+          account={excludedAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      const toggle = screen.getByRole('switch', { name: /investment activity/i })
+      expect(toggle).toHaveAttribute('aria-checked', 'true')
+    })
+
+    it('reflects the stored value when the account does not exclude investment sync', () => {
+      renderModal(
+        <AccountCustomizationModal
+          account={mockAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      const toggle = screen.getByRole('switch', { name: /investment activity/i })
+      expect(toggle).toHaveAttribute('aria-checked', 'false')
+    })
+
+    it('sends exclude_investment_sync: true in the PATCH body when flipped on', async () => {
+      const user = userEvent.setup()
+
+      renderModal(
+        <AccountCustomizationModal
+          account={mockAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.click(screen.getByRole('switch', { name: /investment activity/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalledWith(
+          mockAccount,
+          expect.objectContaining({ exclude_investment_sync: true }),
+        )
+      })
+    })
+
+    it('sends exclude_investment_sync: false in the PATCH body when flipped off', async () => {
+      const user = userEvent.setup()
+      const excludedAccount: Account = { ...mockAccount, exclude_investment_sync: true }
+
+      renderModal(
+        <AccountCustomizationModal
+          account={excludedAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.click(screen.getByRole('switch', { name: /investment activity/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalledWith(
+          excludedAccount,
+          expect.objectContaining({ exclude_investment_sync: false }),
+        )
+      })
+    })
+
+    it('does not include exclude_investment_sync in the PATCH body when left unchanged', async () => {
+      const user = userEvent.setup()
+
+      renderModal(
+        <AccountCustomizationModal
+          account={mockAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      // Change something unrelated so a save actually fires, without touching the toggle.
+      await user.type(screen.getByLabelText('Nickname'), 'x')
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalledWith(
+          mockAccount,
+          expect.not.objectContaining({ exclude_investment_sync: expect.anything() }),
         )
       })
     })
@@ -891,8 +996,9 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      // Only the pre-existing "Hide Account" switch should be present.
-      expect(screen.getAllByRole('switch')).toHaveLength(1)
+      // Only the pre-existing "Hide Account" and "Exclude Investment Activity" switches
+      // should be present (household share switch absent).
+      expect(screen.getAllByRole('switch')).toHaveLength(2)
       expect(screen.queryByText('Share with household')).not.toBeInTheDocument()
       expect(screen.queryByText('Hidden from household')).not.toBeInTheDocument()
     })
@@ -910,7 +1016,7 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      expect(screen.getAllByRole('switch')).toHaveLength(1)
+      expect(screen.getAllByRole('switch')).toHaveLength(2)
       expect(screen.queryByText('Share with household')).not.toBeInTheDocument()
       expect(screen.queryByText('Hidden from household')).not.toBeInTheDocument()
     })
@@ -928,7 +1034,7 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
-      expect(screen.getAllByRole('switch')).toHaveLength(2)
+      expect(screen.getAllByRole('switch')).toHaveLength(3)
     })
 
     it('initializes checked when the account visibility is "shared"', () => {
