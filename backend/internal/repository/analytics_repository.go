@@ -67,6 +67,10 @@ type AnalyticsRepository interface {
 	// Single DB round-trip (Issue #1215 PR2).
 	GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
 
+	// GetCategoryHierarchy returns one grouped row per leaf carrying its whole ancestor path,
+	// for a single flow direction (#1626).
+	GetCategoryHierarchy(ctx context.Context, userID string, filters domain.SpendingFilters, direction domain.CategoryDirection) ([]domain.CategoryHierarchyRow, error)
+
 	// GetIncomeSourceBreakdown returns income (amount < 0) totals grouped by category.
 	// Single DB round-trip (Issue #1215 PR2).
 	GetIncomeSourceBreakdown(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.IncomeSourceRow, error)
