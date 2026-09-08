@@ -41,3 +41,22 @@ describe('formatConditionValue partial ranges (#1625)', () => {
     expect(formatConditionValue({ type: 'amount_range', value: { min: 10, max: 20 } })).toBe('10 - 20')
   })
 })
+
+// Codex review: conditionLabel shipped with tests but was not actually WIRED into the card or
+// the history panel, so a condition with no fused ancestor rendered as the bare word
+// "Condition" — e.g. "Condition jack" instead of "Description contains jack". These pin the
+// composition that the two render sites now rely on.
+describe('the expression case the render sites had been getting wrong', () => {
+  it('renders a name condition as its field + operator, not as "Condition"', () => {
+    const cond = { type: 'expression' as const, field: 'name' as const, operator: 'contains' as const }
+    expect(conditionLabel(cond)).toBe('Description contains')
+    expect(conditionLabel(cond)).not.toBe('Condition')
+  })
+
+  it('renders every pair that has no fused ancestor', () => {
+    expect(conditionLabel({ type: 'expression', field: 'merchant_id', operator: 'eq' } as never)).toBe('Merchant ID is')
+    expect(conditionLabel({ type: 'expression', field: 'direction', operator: 'eq' } as never)).toBe('Money in / out is')
+    expect(conditionLabel({ type: 'expression', field: 'signed_amount', operator: 'gt' } as never))
+      .toBe('Amount (signed) is greater than')
+  })
+})

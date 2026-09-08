@@ -133,6 +133,14 @@ func matchAccountID(tx *domain.Transaction, op domain.RuleConditionOperator, val
 	if len(values) == 0 {
 		return false
 	}
+	// A transaction with no account identity at all matches NOTHING, including a negative
+	// predicate. Codex review: without this, `account_id neq X` returned true for a transaction
+	// with an empty AccountID and nil UserAccountID, which is both surprising and inconsistent
+	// with matchText/matchExactCaseSensitive, which reject an empty subject outright.
+	hasIdentity := tx.AccountID != "" || (tx.UserAccountID != nil && *tx.UserAccountID != "")
+	if !hasIdentity {
+		return false
+	}
 	matches := func(subject string) bool {
 		if subject == "" {
 			return false

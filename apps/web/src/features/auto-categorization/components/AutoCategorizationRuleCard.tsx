@@ -3,9 +3,9 @@ import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import type { CategorizationRule } from '../types'
-import { CONDITION_TYPE_LABELS } from '../types'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { formatPFCEnum } from '@/shared/categories/formatPfc'
+import { conditionLabel } from '../utils/conditionLabel'
 import { formatConditionValue } from '../utils/formatConditionValue'
 
 export interface AutoCategorizationRuleCardProps {
@@ -65,7 +65,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
             {rule.conditions.map((condition, index) => (
               <li key={index} className="flex items-center gap-1 bg-muted px-2 py-1 rounded text-[0.8125rem]">
                 <span className="text-muted-foreground">
-                  {CONDITION_TYPE_LABELS[condition.type] || condition.type}
+                  {conditionLabel(condition)}
                 </span>
                 <span className="text-foreground font-medium" data-ph-mask>
                   {formatConditionValue(condition)}

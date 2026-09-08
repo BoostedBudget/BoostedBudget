@@ -192,9 +192,18 @@ var tripleToFused = func() map[[2]string]ConditionType {
 }()
 
 // ConditionTypeExpression is emitted for a triple with no fused ancestor (name, merchant_id,
-// signed_amount, direction, open-ended dates). `type` is a REQUIRED response field, so emitting
-// a reserved value keeps the contract intact for clients that read it; it is response-only and
-// is never something a client needs to send.
+// signed_amount, direction, open-ended dates), and stamped by the repository onto any persisted
+// condition that cannot be normalized — so a RESPONSE always carries a `type`.
+//
+// ⚠ The JSON tag is `omitempty` and the schema therefore no longer marks `type` required. That
+// is a deliberate contract change, and it is about INPUT: a client may now send field+operator
+// instead of a fused name. Responses still always populate it. A consumer that relied on `type`
+// being present in a response is unaffected; one that relied on the SCHEMA marking it required
+// sees a widened type. Codex review flagged this; the widening is intended, the response
+// guarantee is preserved by the repository fallback above.
+//
+// It is response-oriented, not input-oriented: sending it with no field+operator is rejected,
+// because the sentinel on its own carries no information about what to match.
 const ConditionTypeExpression ConditionType = "expression"
 
 // Condition-shape errors. All wrap ErrInvalidCondition, which wraps ErrInvalidRule, so the Huma
@@ -425,8 +434,14 @@ func parseDateValue(v interface{}) (time.Time, error) {
 }
 
 // textValues accepts a scalar string or an array of strings — the two shapes already in the
-// database. Numbers are accepted and stringified because payment_channel/account_type values
-// have historically been written loosely.
+// database.
+//
+// ⚠ A MIXED array silently drops its non-string members rather than failing. That mirrors
+// matching.ExtractStringValues, which is what actually runs at evaluation time: a persisted
+// `["uber", 42]` still matches "uber" today. Rejecting it here would leave such a rule
+// matchable but permanently un-updatable — the user could not save an unrelated edit to it —
+// which is precisely the quarantine-a-working-rule failure this validator is meant to avoid.
+// An array with NO usable string member is still rejected, because that one can never match.
 func textValues(v interface{}) ([]string, bool) {
 	switch val := v.(type) {
 	case string:
@@ -436,13 +451,11 @@ func textValues(v interface{}) ([]string, bool) {
 	case []interface{}:
 		out := make([]string, 0, len(val))
 		for _, item := range val {
-			s, ok := item.(string)
-			if !ok {
-				return nil, false
+			if s, ok := item.(string); ok {
+				out = append(out, s)
 			}
-			out = append(out, s)
 		}
-		return out, true
+		return out, len(out) > 0
 	default:
 		return nil, false
 	}
