@@ -126,8 +126,16 @@ test.describe('Hiding an account persists (Issue #1609)', () => {
   test('stays hidden after a reload', async ({ page }) => {
     const server = await mockDependencies(page)
 
+    // The card shows official_name ("Premium Checking Account"), NOT the bare `name`
+    // ("Primary Checking") — AccountCard.tsx's displayName priority is
+    // nickname || official_name || name, and this fixture sets both fields to different values
+    // (matching how Plaid actually shapes an account). The fixture's `name` is used only in the
+    // dashboard widget's own raw-field render, never on this page — see the same gotcha
+    // documented at household-invite.auth.spec.ts:129-134, which this spec fell into: it asserted
+    // on `name` and the element it waited for could never appear, burning the full 15s timeout
+    // on every run in CI (P3-T7).
     await page.goto('/accounts')
-    await expect(page.getByText('Primary Checking').first()).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText('Premium Checking Account').first()).toBeVisible({ timeout: 15000 })
 
     // Open the customization modal from the card.
     await page.getByRole('button', { name: 'Edit account' }).first().click()
@@ -153,10 +161,10 @@ test.describe('Hiding an account persists (Issue #1609)', () => {
     // renders here is what the server said.
     await page.reload()
     await expect(page.getByRole('button', { name: /Show Hidden/ })).toBeVisible({ timeout: 15000 })
-    await expect(page.getByText('Primary Checking')).toBeHidden()
+    await expect(page.getByText('Premium Checking Account')).toBeHidden()
 
     // And it is hidden rather than gone: revealing hidden accounts brings it back.
     await page.getByRole('button', { name: /Show Hidden/ }).click()
-    await expect(page.getByText('Primary Checking').first()).toBeVisible()
+    await expect(page.getByText('Premium Checking Account').first()).toBeVisible()
   })
 })
