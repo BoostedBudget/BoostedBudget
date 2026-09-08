@@ -29,8 +29,10 @@ interface PartialUpdateAccountRequest {
   // #1609 Item 5 — the per-chain opt-out that hides an account's investment_transactions from
   // both the activity feed and the investments page, for a brokerage account Plaid reports on
   // BOTH /transactions/sync and /investments/transactions/get. Read-layer only and fully
-  // reversible; there is no toggle UI yet, so today this reaches the server only from callers
-  // that set it explicitly.
+  // reversible. #1618b added the toggle in AccountCustomizationModal, so this now reaches the
+  // server from ordinary user action — it is no longer only set by explicit callers.
+  // ⚠ It is carried ONLY on the user-accounts branch below; the legacy accounts branch strips it,
+  // because the column lives on `user_accounts` and UpdateAccountRequest does not declare it.
   exclude_investment_sync?: boolean | null
 }
 
@@ -150,9 +152,23 @@ export function useAccountCustomization(): UseAccountCustomizationResult {
     }
 
     // Fallback: Use legacy Account endpoint (for accounts without user_account_id)
+    //
+    // ⚠ #1618b: exclude_investment_sync MUST be stripped here, and the reason is structural rather
+    // than cosmetic. The flag is a column on `user_accounts`; an account with no user_account_id
+    // has no chain row to store it in. It is also absent from UpdateAccountRequest — only
+    // UpdateUserAccountRequest declares it — so sending it to PATCH /accounts/{id} is either a 422
+    // or a silent drop depending on how strictly the decoder rejects unknown fields. Both outcomes
+    // are wrong, and the silent one is worse: the modal would close as if it had saved.
+    //
+    // The modal disables the toggle for these accounts, so this should be unreachable in practice.
+    // It is stripped here anyway because "unreachable via the UI" is not the same as unreachable,
+    // and this hook is the last place that can tell the difference.
+    // Pinned by "must NOT send exclude_investment_sync down the legacy Account endpoint".
+    const { exclude_investment_sync: _unsupportedOnLegacyEndpoint, ...legacyRequestData } = requestData
+    void _unsupportedOnLegacyEndpoint
     const response = await updateAccountMutation.mutateAsync({
       id: account.id,
-      data: requestData,
+      data: legacyRequestData,
     })
     return response.account
   }
