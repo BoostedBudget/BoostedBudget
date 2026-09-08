@@ -172,6 +172,7 @@ func (r *categorizationRuleRepository) GetByID(ctx context.Context, id string) (
 	if err := json.Unmarshal(conditionsJSON, &rule.Conditions); err != nil {
 		return nil, err
 	}
+	normalizeLoadedConditions(rule)
 	if err := json.Unmarshal(tagsJSON, &rule.TargetTags); err != nil {
 		return nil, err
 	}
@@ -279,6 +280,7 @@ func (r *categorizationRuleRepository) GetByName(ctx context.Context, userID, na
 	if err := json.Unmarshal(conditionsJSON, &rule.Conditions); err != nil {
 		return nil, err
 	}
+	normalizeLoadedConditions(rule)
 	if err := json.Unmarshal(tagsJSON, &rule.TargetTags); err != nil {
 		return nil, err
 	}
@@ -455,6 +457,7 @@ func (r *categorizationRuleRepository) queryRules(ctx context.Context, query str
 		if err := json.Unmarshal(conditionsJSON, &rule.Conditions); err != nil {
 			return nil, err
 		}
+		normalizeLoadedConditions(rule)
 		if err := json.Unmarshal(tagsJSON, &rule.TargetTags); err != nil {
 			return nil, err
 		}
@@ -467,4 +470,16 @@ func (r *categorizationRuleRepository) queryRules(ctx context.Context, query str
 	}
 
 	return rules, nil
+}
+
+// normalizeLoadedConditions maps each persisted condition into its canonical
+// (Field, Operator) pair so legacy fused rows evaluate through the post-#1625 registry with NO
+// data migration. Errors are deliberately IGNORED: a row that cannot be normalized is junk that
+// was written before the value shape was validated, and it must keep behaving exactly as it did
+// (the registry returns no-match for an unknown field) rather than failing a read of the user's
+// whole rule list. Shadow-mode quarantine is what makes such rows visible.
+func normalizeLoadedConditions(rule *domain.CategorizationRule) {
+	for i := range rule.Conditions {
+		_ = rule.Conditions[i].Normalize()
+	}
 }

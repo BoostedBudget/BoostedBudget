@@ -20,6 +20,9 @@ export type ConditionType =
   | 'existing_pfc_primary'
   | 'existing_pfc_detailed'
   | 'date_range'
+  // #1625: emitted by the server for a {field, operator} pair with no legacy fused ancestor
+  // (name, merchant_id, signed_amount, direction, open-ended dates). RESPONSE-ONLY — never send it.
+  | 'expression'
 
 /**
  * Human-readable labels for condition types
@@ -39,7 +42,94 @@ export const CONDITION_TYPE_LABELS: Record<ConditionType, string> = {
   existing_pfc_primary: 'PFC Primary',
   existing_pfc_detailed: 'PFC Detailed',
   date_range: 'Date between',
+  expression: 'Condition',
 }
+
+/**
+ * #1625: the {field, operator, value} vocabulary. Mirrors backend
+ * `domain/condition_schema.go` — keep FIELD_OPERATORS in step with `FieldSpecs` there.
+ *
+ * The legacy fused `ConditionType` names above remain valid on the wire (the server still emits
+ * one whenever a pair has a fused equivalent), which is why both vocabularies live here.
+ */
+export type ConditionField =
+  | 'merchant'
+  | 'name'
+  | 'merchant_id'
+  | 'amount'
+  | 'signed_amount'
+  | 'direction'
+  | 'account_id'
+  | 'account_type'
+  | 'payment_channel'
+  | 'date'
+  | 'pfc_primary'
+  | 'pfc_detailed'
+
+export type ConditionOperator =
+  | 'eq'
+  | 'neq'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'between'
+  | 'contains'
+  | 'starts_with'
+  | 'ends_with'
+  | 'in'
+
+export const CONDITION_FIELD_LABELS: Record<ConditionField, string> = {
+  merchant: 'Merchant name',
+  name: 'Description',
+  merchant_id: 'Merchant ID',
+  amount: 'Amount',
+  signed_amount: 'Amount (signed)',
+  direction: 'Money in / out',
+  account_id: 'Account',
+  account_type: 'Account type',
+  payment_channel: 'Payment channel',
+  date: 'Date',
+  pfc_primary: 'PFC Primary',
+  pfc_detailed: 'PFC Detailed',
+}
+
+export const CONDITION_OPERATOR_LABELS: Record<ConditionOperator, string> = {
+  eq: 'is',
+  neq: 'is not',
+  gt: 'is greater than',
+  gte: 'is at least',
+  lt: 'is less than',
+  lte: 'is at most',
+  between: 'is between',
+  contains: 'contains',
+  starts_with: 'starts with',
+  ends_with: 'ends with',
+  in: 'is any of',
+}
+
+const TEXT_OPERATORS: ConditionOperator[] = ['eq', 'neq', 'in', 'contains', 'starts_with', 'ends_with']
+const ID_OPERATORS: ConditionOperator[] = ['eq', 'neq', 'in']
+const NUMBER_OPERATORS: ConditionOperator[] = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between']
+
+/** Which operators each field accepts. Mirrors `FieldSpecs` in condition_schema.go. */
+export const FIELD_OPERATORS: Record<ConditionField, ConditionOperator[]> = {
+  merchant: TEXT_OPERATORS,
+  name: TEXT_OPERATORS,
+  account_type: TEXT_OPERATORS,
+  payment_channel: TEXT_OPERATORS,
+  merchant_id: ID_OPERATORS,
+  account_id: ID_OPERATORS,
+  pfc_primary: ID_OPERATORS,
+  pfc_detailed: ID_OPERATORS,
+  amount: NUMBER_OPERATORS,
+  signed_amount: NUMBER_OPERATORS,
+  direction: ['eq', 'neq', 'in'],
+  date: ['eq', 'gte', 'lte', 'between'],
+}
+
+/** Legal values for the `direction` field. */
+export const DIRECTION_VALUES = ['inflow', 'outflow'] as const
 
 /**
  * Target dimension discriminator for a rule's category action.
@@ -54,9 +144,19 @@ export type RuleTargetKind = 'pfc' | 'custom' | 'clear'
  * A single condition within a categorization rule
  */
 export interface RuleCondition {
+  /**
+   * Legacy fused discriminator. Still emitted by the server for every pair that has a fused
+   * equivalent, and still accepted on input, so frozen `definition_snapshot` rows keep rendering.
+   */
   type: ConditionType
+  /** #1625: the transaction attribute being matched. Absent on pre-#1625 snapshots. */
+  field?: ConditionField
+  /**
+   * #1625: the comparison. Before then this field was declared and serialized but never
+   * validated or read by any evaluator — which is why callers guessed at it.
+   */
+  operator?: ConditionOperator
   value: string | number | string[] | AmountRangeValue | DateRangeValue
-  operator?: string // for amount comparisons
   value_display?: string // populated by backend for PFC-typed conditions
 }
 

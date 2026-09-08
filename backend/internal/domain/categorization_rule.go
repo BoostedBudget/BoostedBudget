@@ -75,11 +75,37 @@ func validatePFCValue(val string, isDetailed bool) error {
 }
 
 // RuleCondition represents a single condition within a categorization rule.
+//
+// #1625: conditions are a {Field, Operator, Value} triple. The fourteen legacy FUSED Type names
+// remain accepted on input and are still emitted on output (see ConditionTypeExpression for the
+// combinations that have no fused ancestor), so persisted rows and older clients keep working
+// without a data migration. Normalize() maps between the two shapes.
 type RuleCondition struct {
-	Type         ConditionType `json:"type"`
-	Value        interface{}   `json:"value"`                    // string, number, or object depending on type
-	Operator     string        `json:"operator,omitempty"`       // for amount comparisons
-	ValueDisplay string        `json:"value_display,omitempty"` // populated by PopulatePFCDisplay for PFC-typed conditions
+	// Type is the legacy fused discriminator. On input it is an alias for a (Field, Operator)
+	// pair; on output it is DERIVED from that pair. Sending both is fine as long as they agree —
+	// a contradiction is ErrConditionShapeConflict rather than a silent choice between them.
+	Type ConditionType `json:"type,omitempty" enum:"merchant_contains,merchant_equals,merchant_starts_with,merchant_ends_with,amount_greater_than,amount_less_than,amount_equals,amount_range,account_id,account_type,payment_channel,date_range,existing_pfc_primary,existing_pfc_detailed,expression"`
+
+	// Field is the transaction attribute to match. See FieldSpecs for the field × operator matrix.
+	Field RuleConditionField `json:"field,omitempty" enum:"merchant,name,merchant_id,amount,signed_amount,direction,account_id,account_type,payment_channel,date,pfc_primary,pfc_detailed"`
+
+	// Operator is the comparison to apply. Before #1625 this field was declared, serialized into
+	// the public schema, and then never validated or read by ANY evaluator — which is precisely
+	// why callers guessed at it. It is now load-bearing.
+	Operator string `json:"operator,omitempty" enum:"eq,neq,gt,gte,lt,lte,between,contains,starts_with,ends_with,in"`
+
+	// Value is a string, an array of strings ("any of"), a number, or a bounded range object,
+	// depending on the field and operator. See FieldSpecs.
+	Value interface{} `json:"value"`
+
+	// ValueDisplay is populated by PopulatePFCDisplay for PFC-typed conditions.
+	ValueDisplay string `json:"value_display,omitempty"`
+
+	// LegacyOperator preserves an operator string that was persisted before #1625, when the
+	// field was never validated and could hold anything. It is never sent to a client and never
+	// consulted for matching; it exists so a read-modify-write cycle cannot silently discard a
+	// value the user never touched.
+	LegacyOperator string `json:"-"`
 }
 
 // CategorizationRule represents a user-defined rule for automatic transaction categorization.
@@ -136,99 +162,88 @@ func initPFCValidationSets() {
 // Validate checks that the CategorizationRule has all required fields and valid values.
 func (r *CategorizationRule) Validate() error {
 	if r.UserID == "" {
-		return errors.New("user_id is required")
+		return fmt.Errorf("%w: user_id is required", ErrInvalidRule)
 	}
 
 	if r.Name == "" {
-		return errors.New("name is required")
+		return fmt.Errorf("%w: name is required", ErrInvalidRule)
 	}
 
 	if len(r.Name) > 100 {
-		return errors.New("name must be 100 characters or less")
+		return fmt.Errorf("%w: name must be 100 characters or less", ErrInvalidRule)
 	}
 
 	// Validate conditions
 	if len(r.Conditions) == 0 {
-		return errors.New("at least one condition is required")
+		return fmt.Errorf("%w: at least one condition is required", ErrInvalidRule)
 	}
 
-	for _, cond := range r.Conditions {
-		if !cond.Type.IsValid() {
-			return errors.New("invalid condition type: " + string(cond.Type))
+	// #1625: normalize each condition into its canonical (Field, Operator) pair, then check the
+	// Value against the field × operator × shape matrix. Previously only `type` membership was
+	// checked and Value was never shape-checked for non-PFC types, so a rule with e.g. a string
+	// amount_range persisted cleanly and then silently never matched.
+	for i := range r.Conditions {
+		if err := r.Conditions[i].Normalize(); err != nil {
+			return err
 		}
-		if cond.Type == ConditionExistingPFCPrimary {
-			val, ok := cond.Value.(string)
-			if !ok {
-				return errors.New("existing_pfc_primary value must be a string")
-			}
-			if err := validatePFCValue(val, false); err != nil {
-				return err
-			}
-		}
-		if cond.Type == ConditionExistingPFCDetailed {
-			val, ok := cond.Value.(string)
-			if !ok {
-				return errors.New("existing_pfc_detailed value must be a string")
-			}
-			if err := validatePFCValue(val, true); err != nil {
-				return err
-			}
+		if err := r.Conditions[i].ValidateShape(); err != nil {
+			return err
 		}
 	}
 
 	// Validate condition logic
 	if r.ConditionLogic != "AND" && r.ConditionLogic != "OR" {
-		return errors.New("condition_logic must be AND or OR")
+		return fmt.Errorf("%w: condition_logic must be AND or OR", ErrInvalidRule)
 	}
 
 	// Validate that at least one action is set
 	if !r.HasCategoryAction() && !r.HasTagAction() {
-		return errors.New("rule must have at least one action (category or tags)")
+		return fmt.Errorf("%w: rule must have at least one action (category or tags)", ErrInvalidRule)
 	}
 
 	if r.TargetKind != nil {
 		switch *r.TargetKind {
 		case "pfc":
 			if r.TargetPFCPrimary == nil || *r.TargetPFCPrimary == "" {
-				return errors.New("target_pfc_primary is required when target_kind is pfc")
+				return fmt.Errorf("%w: target_pfc_primary is required when target_kind is pfc", ErrInvalidRule)
 			}
 			if err := validatePFCValue(*r.TargetPFCPrimary, false); err != nil {
-				return fmt.Errorf("target_pfc_primary: %w", err)
+				return fmt.Errorf("%w: target_pfc_primary: %s", ErrInvalidRule, err.Error())
 			}
 			if r.TargetPFCDetailed != nil {
 				if err := validatePFCValue(*r.TargetPFCDetailed, true); err != nil {
-					return fmt.Errorf("target_pfc_detailed: %w", err)
+					return fmt.Errorf("%w: target_pfc_detailed: %s", ErrInvalidRule, err.Error())
 				}
 			}
 			if r.TargetCustomCategoryID != nil {
-				return errors.New("target_custom_category_id must not be set when target_kind is pfc")
+				return fmt.Errorf("%w: target_custom_category_id must not be set when target_kind is pfc", ErrInvalidRule)
 			}
 		case "custom":
 			if r.TargetCustomCategoryID == nil || *r.TargetCustomCategoryID == "" {
-				return errors.New("target_custom_category_id is required when target_kind is custom")
+				return fmt.Errorf("%w: target_custom_category_id is required when target_kind is custom", ErrInvalidRule)
 			}
 			if r.TargetPFCPrimary != nil || r.TargetPFCDetailed != nil {
-				return errors.New("target_pfc_primary and target_pfc_detailed must not be set when target_kind is custom")
+				return fmt.Errorf("%w: target_pfc_primary and target_pfc_detailed must not be set when target_kind is custom", ErrInvalidRule)
 			}
 		case "clear":
 			if r.TargetPFCPrimary != nil || r.TargetPFCDetailed != nil || r.TargetCustomCategoryID != nil {
-				return errors.New("clear target_kind must not include target category fields")
+				return fmt.Errorf("%w: clear target_kind must not include target category fields", ErrInvalidRule)
 			}
 		default:
-			return errors.New("target_kind must be one of pfc, custom, or clear")
+			return fmt.Errorf("%w: target_kind must be one of pfc, custom, or clear", ErrInvalidRule)
 		}
 	} else if r.TargetPFCPrimary != nil || r.TargetPFCDetailed != nil || r.TargetCustomCategoryID != nil {
-		return errors.New("target category fields require target_kind")
+		return fmt.Errorf("%w: target category fields require target_kind", ErrInvalidRule)
 	}
 
 	// Validate tag behavior
 	if r.TagBehavior != "add" && r.TagBehavior != "replace" {
-		return errors.New("tag_behavior must be add or replace")
+		return fmt.Errorf("%w: tag_behavior must be add or replace", ErrInvalidRule)
 	}
 
 	// Validate source
 	if r.Source != "manual" && r.Source != "ai" && r.Source != "template" {
-		return errors.New("source must be manual, ai, or template")
+		return fmt.Errorf("%w: source must be manual, ai, or template", ErrInvalidRule)
 	}
 
 	return nil

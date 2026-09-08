@@ -119,13 +119,13 @@ func (h *CategorizationRuleHandler) GetRuleByID(ctx context.Context, input *GetR
 func (h *CategorizationRuleHandler) CreateRule(ctx context.Context, input *CreateRuleInput) (*CreateRuleOutput, error) {
 	rule, err := h.service.CreateRule(ctx, input.UserID, &input.Body)
 	if err != nil {
-		// Check for validation errors - return as 400
-		errMsg := err.Error()
-		if errMsg == "name is required" ||
-			errMsg == "at least one condition is required" ||
-			errMsg == "rule must have at least one action (category or tags)" {
-			return nil, huma.Error400BadRequest(errMsg)
-		}
+		// #1625: no allowlist here any more. This used to exact-string-match THREE messages to
+		// map them to 400; every other validation failure — an unknown condition type included —
+		// fell through to the mapper's default and became a 500 that also fired
+		// sentry.CaptureException, so client input mistakes were logged as server errors.
+		// domain.Validate() now returns sentinel-wrapped errors that the mapper classifies, which
+		// fixes create and update together and stops the Sentry noise as a side effect
+		// (LoggingMapError only reports at >= 500).
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 

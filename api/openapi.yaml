@@ -5812,15 +5812,57 @@ components:
     RuleCondition:
       additionalProperties: false
       properties:
+        field:
+          enum:
+            - merchant
+            - name
+            - merchant_id
+            - amount
+            - signed_amount
+            - direction
+            - account_id
+            - account_type
+            - payment_channel
+            - date
+            - pfc_primary
+            - pfc_detailed
+          type: string
         operator:
+          enum:
+            - eq
+            - neq
+            - gt
+            - gte
+            - lt
+            - lte
+            - between
+            - contains
+            - starts_with
+            - ends_with
+            - in
           type: string
         type:
+          enum:
+            - merchant_contains
+            - merchant_equals
+            - merchant_starts_with
+            - merchant_ends_with
+            - amount_greater_than
+            - amount_less_than
+            - amount_equals
+            - amount_range
+            - account_id
+            - account_type
+            - payment_channel
+            - date_range
+            - existing_pfc_primary
+            - existing_pfc_detailed
+            - expression
           type: string
         value: {}
         value_display:
           type: string
       required:
-        - type
         - value
       type: object
     RuleExecution:

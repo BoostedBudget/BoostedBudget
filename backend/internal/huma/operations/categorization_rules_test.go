@@ -3,7 +3,7 @@ package operations
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -261,9 +261,15 @@ func TestCreateRule_DuplicateName(t *testing.T) {
 }
 
 // TestCreateRule_ValidationError tests 400 for validation errors.
+//
+// #1625: the mock now returns the SENTINEL-WRAPPED error the real service returns. It used to
+// return a bare errors.New, which passed only because the handler exact-string-matched three
+// literal messages to 400. That allowlist is gone — classification lives in the error mapper —
+// so a bare error here would (correctly) map to 500, exactly as an unwrapped service error
+// should.
 func TestCreateRule_ValidationError(t *testing.T) {
 	mockService := &mockCategorizationRuleService{
-		createErr: errors.New("name is required"),
+		createErr: fmt.Errorf("%w: name is required", domain.ErrInvalidRule),
 	}
 
 	handler := NewCategorizationRuleHandler(mockService)
