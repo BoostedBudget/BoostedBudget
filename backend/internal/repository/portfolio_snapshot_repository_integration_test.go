@@ -867,3 +867,120 @@ func TestPortfolioSnapshot_DailySweepCannotVouchViaTheHoldingsRouteEither(t *tes
 		"control: the sweep really did run and really does write rows, so the zero above is the "+
 			"absence of a vouch and not the absence of a sweep")
 }
+
+// ── #1613 P4-T3 item I: the snapshot must ALSO record a type-gated total ─────────────────────
+//
+// total_value is deliberately UNGATED by account type and must stay that way (see Upsert's own
+// comment: gating a historical series mid-stream steps it down on deploy day with no backfill).
+// But GetPortfolioSummary SUBTRACTS that snapshot from a live total that IS type-gated
+// (holding_repository.go: `AND a.type = 'investment'`), so DayChange was wrong by the entire value
+// of any depository account carrying holdings — every day, for exactly the cash-management account
+// this work stream exists to fix.
+//
+// The fix records BOTH totals. This test is an integration test rather than a pgxmock one on
+// purpose: it is a new aggregate over a new join, and a pgxmock test can only assert that the
+// string we wrote is the string we wrote — it would pass against a query Postgres rejects, and
+// against a FILTER that filters the wrong thing.
+func TestPortfolioSnapshot_Upsert_RecordsATypeGatedTotalBesideTheUngatedOne(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// seedInvestmentFixture's account is type 'investment'.
+	userID, linkedItemID, invAccountID, secID := seedInvestmentFixture(ctx, t, tx, "psnap-gated")
+
+	// A DEPOSITORY account on the same item, carrying holdings. This is not hypothetical: a
+	// cash-management / brokerage-sweep account is typed 'depository' by Plaid and still reports
+	// positions, which is the whole reason the live reads are type-gated at all.
+	depAccountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
+		VALUES ($1, $2, $3, $4, 'Cash Management', 'depository', 'active')
+	`, depAccountID, linkedItemID, userID, "psnap-gated-dep-"+depAccountID.String())
+	require.NoError(t, err, "seed depository account")
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+		VALUES ($1, $2, $3, $4, 10, 4000.00, 5000.00)
+	`, uuid.New(), userID, invAccountID, secID)
+	require.NoError(t, err, "seed investment-account holding")
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+		VALUES ($1, $2, $3, $4, 39, 3900.00, 3900.00)
+	`, uuid.New(), userID, depAccountID, secID)
+	require.NoError(t, err, "seed depository-account holding")
+
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), today)
+	require.NoError(t, err)
+
+	require.InDelta(t, 8900.0, snap.TotalValue, 0.001,
+		"total_value stays UNGATED — 5000 here would mean the historical series had been gated "+
+			"mid-stream, the change Upsert's own comment forbids because it steps the curve down "+
+			"on deploy day with no backfill")
+
+	require.NotNil(t, snap.TotalValueInvestmentOnly,
+		"the type-gated total must be written on every new snapshot; NULL is reserved for rows "+
+			"that predate migration 000189 and cannot be reconstructed")
+	require.InDelta(t, 5000.0, *snap.TotalValueInvestmentOnly, 0.001,
+		"8900 here means the FILTER is not applying the a.type = 'investment' gate, and DayChange "+
+			"is once again subtracting two different account universes")
+
+	// And it survives the round trip through the reader GetPortfolioSummary actually uses.
+	tomorrow := today.AddDate(0, 0, 1)
+	prior, err := NewPortfolioSnapshotRepository(tx).GetLatestBefore(ctx, userID.String(), tomorrow)
+	require.NoError(t, err)
+	require.NotNil(t, prior)
+	require.NotNil(t, prior.TotalValueInvestmentOnly,
+		"GetLatestBefore is the read GetPortfolioSummary uses for DayChange — a column written but "+
+			"not selected here would make every day-change silently unavailable instead of wrong, "+
+			"which is quieter but still broken")
+	require.InDelta(t, 5000.0, *prior.TotalValueInvestmentOnly, 0.001)
+}
+
+// TestPortfolioSnapshot_Upsert_TypeGatedTotalIsZeroNotNullWhenOnlyDepositoryHoldingsExist pins the
+// difference between "no investment holdings" and "no type-gated total on record". A user whose
+// only holdings sit on a depository account has a type-gated total of ZERO, and that is a real
+// answer: their live portfolio reads 0 too, so DayChange is 0 and must be shown. NULL would make
+// it unavailable forever for that user.
+func TestPortfolioSnapshot_Upsert_TypeGatedTotalIsZeroNotNullWhenOnlyDepositoryHoldingsExist(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, linkedItemID, _, secID := seedInvestmentFixture(ctx, t, tx, "psnap-gated-zero")
+
+	depAccountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
+		VALUES ($1, $2, $3, $4, 'Cash Management', 'depository', 'active')
+	`, depAccountID, linkedItemID, userID, "psnap-gated-zero-dep-"+depAccountID.String())
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+		VALUES ($1, $2, $3, $4, 39, 3900.00, 3900.00)
+	`, uuid.New(), userID, depAccountID, secID)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), today)
+	require.NoError(t, err)
+
+	require.InDelta(t, 3900.0, snap.TotalValue, 0.001)
+	require.NotNil(t, snap.TotalValueInvestmentOnly,
+		"zero investment holdings is a KNOWN total of 0, not an unknown one — NULL here would "+
+			"strand this user without a day-change permanently")
+	require.InDelta(t, 0.0, *snap.TotalValueInvestmentOnly, 0.001)
+}

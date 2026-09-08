@@ -15,8 +15,23 @@ type PortfolioSnapshot struct {
 	TotalCostBasis   float64   `json:"total_cost_basis" db:"total_cost_basis"`
 	TotalGainLoss    float64   `json:"total_gain_loss" db:"total_gain_loss"`
 	TotalGainLossPct *float64  `json:"total_gain_loss_pct,omitempty" db:"total_gain_loss_pct"` // nil when cost_basis=0
-	CreatedAt        time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at" db:"updated_at"`
+
+	// TotalValueInvestmentOnly is TotalValue restricted to accounts of type 'investment'
+	// (#1613 P4-T3). It exists because TotalValue is deliberately UNGATED by account type — see
+	// portfolio_snapshot_repository.go Upsert for why gating the historical series mid-stream is
+	// forbidden — while every LIVE holdings read is type-gated. GetPortfolioSummary subtracts a
+	// prior snapshot from a live total, so without this column the two sides of that subtraction
+	// came from different account universes and DayChange was wrong by the whole value of any
+	// depository account carrying holdings.
+	//
+	// ⚠ NIL means UNAVAILABLE, not zero. Every row written before migration 000189 has it NULL
+	// and nothing can reconstruct it (holdings carry no as-of account type). Readers must render
+	// day-change as unavailable in that case — never fall back to TotalValue, which is precisely
+	// the wrong number this field exists to stop being shown.
+	TotalValueInvestmentOnly *float64 `json:"total_value_investment_only,omitempty" db:"total_value_investment_only"`
+
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
 
 // PortfolioSummary is the live portfolio summary returned by GET /portfolio/summary.
@@ -93,7 +108,7 @@ func NewHoldingView(h *Holding) *HoldingView {
 const (
 	AllocationGroupBySecurityType = "security_type" // default — groups by securities.type
 	AllocationGroupByAssetClass   = "asset_class"   // collapses into Investments / Cash / Liabilities
-	AllocationGroupByAccount      = "account"        // one bucket per account
+	AllocationGroupByAccount      = "account"       // one bucket per account
 )
 
 // AllocationBasis constants for the basis query parameter.
@@ -202,11 +217,11 @@ type GainLossSummary struct {
 
 // AccountGainLoss is the gain/loss breakdown for one account.
 type AccountGainLoss struct {
-	AccountID               string   `json:"account_id"`
-	UnrealizedGainLoss      float64  `json:"unrealized_gain_loss"`
-	UnrealizedGainLossPct   *float64 `json:"unrealized_gain_loss_pct,omitempty"`
-	CostBasis               float64  `json:"cost_basis"`
-	Value                   float64  `json:"value"`
+	AccountID             string   `json:"account_id"`
+	UnrealizedGainLoss    float64  `json:"unrealized_gain_loss"`
+	UnrealizedGainLossPct *float64 `json:"unrealized_gain_loss_pct,omitempty"`
+	CostBasis             float64  `json:"cost_basis"`
+	Value                 float64  `json:"value"`
 }
 
 // IncomeSummary is the response for GET /portfolio/income.
@@ -222,7 +237,7 @@ type IncomeSummary struct {
 
 // IncomeByType is the income breakdown by normalized income subtype.
 type IncomeByType struct {
-	IncomeType  string  `json:"income_type"`  // "dividend", "interest", "dividend_reinvestment", "interest_reinvestment", "other_income"
+	IncomeType  string  `json:"income_type"` // "dividend", "interest", "dividend_reinvestment", "interest_reinvestment", "other_income"
 	TotalAmount float64 `json:"total_amount"`
 	Count       int     `json:"count"`
 }

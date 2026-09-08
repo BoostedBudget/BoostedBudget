@@ -45,10 +45,10 @@ type InvestmentService interface {
 }
 
 type investmentService struct {
-	holdingRepo   repository.HoldingRepository
-	snapshotRepo  repository.PortfolioSnapshotRepository
-	invTxnRepo    repository.InvestmentTransactionRepository
-	analytics     phclient.Analytics
+	holdingRepo  repository.HoldingRepository
+	snapshotRepo repository.PortfolioSnapshotRepository
+	invTxnRepo   repository.InvestmentTransactionRepository
+	analytics    phclient.Analytics
 }
 
 // NewInvestmentService creates a new InvestmentService.
@@ -88,8 +88,10 @@ func (s *investmentService) ListHoldings(ctx context.Context, userID string, acc
 // GetPortfolioSummary returns the live portfolio summary computed from current holdings.
 // TotalValue, TotalCostBasis, TotalGainLoss, and TotalGainLossPct are computed in Go
 // from the current holdings rows (live, no lag). DayChange compares against the most
-// recent prior portfolio snapshot (strict < today). DayChange is null when no prior
-// snapshot exists (first use, or never synced before today).
+// recent prior portfolio snapshot (strict < today), using that snapshot's TYPE-GATED total so
+// both sides of the subtraction cover the same accounts (#1613 P4-T3). DayChange is null when no
+// prior snapshot exists (first use, or never synced before today) AND when the prior snapshot
+// predates migration 000189 and therefore carries no type-gated total.
 func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID string) (*domain.PortfolioSummary, error) {
 	holdings, err := s.holdingRepo.GetByUserIDWithSecurities(ctx, userID, nil)
 	if err != nil {
@@ -132,12 +134,31 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 		return nil, fmt.Errorf("GetPortfolioSummary: prior snapshot: %w", err)
 	}
 
+	// ⚠ #1613 P4-T3 item I — the two sides of this subtraction MUST come from the same account
+	// universe, and until this fix they did not.
+	//
+	//   totalValue      is summed from GetByUserIDWithSecurities, which is TYPE-GATED
+	//                   (holding_repository.go: `AND a.type = 'investment'`).
+	//   prior.TotalValue is portfolio_snapshots.total_value, whose writer is deliberately UNGATED
+	//                   (portfolio_snapshot_repository.go Upsert — gating the historical series
+	//                   mid-stream would step it down on deploy day with no backfill, which reads
+	//                   to a user as losing money).
+	//
+	// Subtracting the second from the first made DayChange wrong by the entire value of any
+	// depository account carrying holdings, every day. The snapshot now ALSO records the
+	// type-gated total, and that is the only figure comparable with the live one.
+	//
+	// ⚠ A snapshot written before migration 000189 has TotalValueInvestmentOnly nil and nothing
+	// can reconstruct it. Day-change is then UNAVAILABLE — never computed from the ungated column
+	// and never coerced to zero. One day without a day-change is the accepted cost of not showing
+	// a fabricated one. The guard covers the percentage too: it divides by the same prior total.
 	var dayChange, dayChangePct *float64
-	if prior != nil {
-		dc := totalValue - prior.TotalValue
+	if prior != nil && prior.TotalValueInvestmentOnly != nil {
+		priorGated := *prior.TotalValueInvestmentOnly
+		dc := totalValue - priorGated
 		dayChange = &dc
-		if prior.TotalValue != 0 {
-			pct := dc / prior.TotalValue * 100
+		if priorGated != 0 {
+			pct := dc / priorGated * 100
 			dayChangePct = &pct
 		}
 	}

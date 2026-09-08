@@ -87,6 +87,7 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 			total_cost_basis,
 			total_gain_loss,
 			total_gain_loss_pct,
+			total_value_investment_only,
 			created_at,
 			updated_at
 		)
@@ -111,6 +112,22 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 				) * 100
 				ELSE NULL
 			END,
+			-- total_value_investment_only (#1613 P4-T3): the SAME total as total_value above,
+			-- restricted to accounts of type 'investment'. It exists because the column beside it
+			-- is deliberately ungated (see the block comment below) while every LIVE holdings read
+			-- IS gated, and GetPortfolioSummary SUBTRACTS this snapshot from a live total — so
+			-- without a gated figure here, DayChange was wrong by the whole value of any
+			-- depository account carrying holdings, every day.
+			--
+			-- ⚠ COALESCE to 0, NOT left NULL, when no investment holding matches: "this user holds
+			-- nothing in an investment account" is a KNOWN total of zero, and their live gated
+			-- total reads zero too, so their day-change is a real 0. NULL is reserved for the one
+			-- case nothing can reconstruct — a row written before migration 000189.
+			--
+			-- ⚠ The gate reads ainv.type, from the LEFT JOIN below. It must NOT be pushed into
+			-- the FROM clause: an inner join or a WHERE would drop depository holdings out of
+			-- total_value too, which is exactly the mid-stream gating this file forbids.
+			COALESCE(SUM(h.institution_value) FILTER (WHERE ainv.type = 'investment'), 0),
 			NOW(),
 			NOW()
 		-- Deliberately UNGATED by account type (#1569 T8 / Issue #1616) — do not add
@@ -119,22 +136,39 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 		-- builds a historical series (portfolio_snapshots, one row per user per UTC day); gating
 		-- it mid-stream would make tomorrow's snapshot incomparable with every one already
 		-- recorded — the series would step down on the day the gate ships, with no backfill and
-		-- no marker, and to the user that reads as losing money. A small live-read-vs-history gap
-		-- (a depository account carrying holdings shows up in this snapshot's total but not in
-		-- ListHoldings/GetPortfolioSummary/allocation/gain-loss/top-movers) is the accepted lesser
-		-- evil. If this is ever revisited, it needs a backfill or an explicit marker on the
-		-- series, not a silent predicate change.
+		-- no marker, and to the user that reads as losing money.
+		--
+		-- ⚠ CORRECTED #1613 P4-T3. This comment used to describe the live-read-vs-history gap as
+		-- "small" and list only DISPLAY surfaces (a depository account carrying holdings shows up
+		-- in this snapshot's total but not in ListHoldings / GetPortfolioSummary / allocation /
+		-- gain-loss / top-movers). That list was incomplete in the one way that hid a real defect:
+		-- GetPortfolioSummary does not merely display the two universes side by side, it
+		-- SUBTRACTS this snapshot from a type-gated live total to produce DayChange. A gap that is
+		-- cosmetic in a displayed figure is a fabricated number in a difference — the user saw a
+		-- daily change wrong by the depository holding's entire value, every day.
+		--
+		-- The resolution is NOT to gate this write. It is the extra type-gated aggregate above:
+		-- both universes are recorded, and the subtraction picks the one that matches its other
+		-- operand. Anything that revisits the UNGATED column still needs a backfill or an explicit
+		-- marker on the series, not a silent predicate change.
 		FROM holdings h
 		JOIN live lv ON lv.account_id = h.account_id
+		-- LEFT JOIN, and on the PRIMARY KEY: accounts.id is unique, so this cannot multiply a
+		-- holding's row, and LEFT means an unmatchable holding still counts toward the ungated
+		-- total exactly as it did before this column existed. Its only job is to supply
+		-- ainv.type to the FILTER above.
+		LEFT JOIN accounts ainv ON ainv.id = h.account_id
 		WHERE h.user_id = $1::uuid
 		ON CONFLICT (user_id, snapshot_date) DO UPDATE SET
 			total_value       = EXCLUDED.total_value,
 			total_cost_basis  = EXCLUDED.total_cost_basis,
 			total_gain_loss   = EXCLUDED.total_gain_loss,
 			total_gain_loss_pct = EXCLUDED.total_gain_loss_pct,
+			total_value_investment_only = EXCLUDED.total_value_investment_only,
 			updated_at        = NOW()
 		RETURNING id, user_id, snapshot_date, total_value, total_cost_basis,
-		          total_gain_loss, total_gain_loss_pct, created_at, updated_at
+		          total_gain_loss, total_gain_loss_pct, total_value_investment_only,
+		          created_at, updated_at
 	`
 
 	snap := &domain.PortfolioSnapshot{}
@@ -146,6 +180,7 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 		&snap.TotalCostBasis,
 		&snap.TotalGainLoss,
 		&snap.TotalGainLossPct,
+		&snap.TotalValueInvestmentOnly,
 		&snap.CreatedAt,
 		&snap.UpdatedAt,
 	)
@@ -159,7 +194,8 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 func (r *portfolioSnapshotRepository) GetByUserDateRange(ctx context.Context, userID string, start, end time.Time) ([]domain.PortfolioSnapshot, error) {
 	query := `
 		SELECT id, user_id, snapshot_date, total_value, total_cost_basis,
-		       total_gain_loss, total_gain_loss_pct, created_at, updated_at
+		       total_gain_loss, total_gain_loss_pct, total_value_investment_only,
+		       created_at, updated_at
 		FROM portfolio_snapshots
 		WHERE user_id = $1
 		  AND snapshot_date >= $2::date
@@ -178,7 +214,8 @@ func (r *portfolioSnapshotRepository) GetByUserDateRange(ctx context.Context, us
 		s := domain.PortfolioSnapshot{}
 		if err := rows.Scan(
 			&s.ID, &s.UserID, &s.SnapshotDate, &s.TotalValue, &s.TotalCostBasis,
-			&s.TotalGainLoss, &s.TotalGainLossPct, &s.CreatedAt, &s.UpdatedAt,
+			&s.TotalGainLoss, &s.TotalGainLossPct, &s.TotalValueInvestmentOnly,
+			&s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -198,7 +235,8 @@ func (r *portfolioSnapshotRepository) GetByUserDateRange(ctx context.Context, us
 func (r *portfolioSnapshotRepository) GetLatestBefore(ctx context.Context, userID string, date time.Time) (*domain.PortfolioSnapshot, error) {
 	query := `
 		SELECT id, user_id, snapshot_date, total_value, total_cost_basis,
-		       total_gain_loss, total_gain_loss_pct, created_at, updated_at
+		       total_gain_loss, total_gain_loss_pct, total_value_investment_only,
+		       created_at, updated_at
 		FROM portfolio_snapshots
 		WHERE user_id = $1
 		  AND snapshot_date < $2::date
@@ -209,7 +247,8 @@ func (r *portfolioSnapshotRepository) GetLatestBefore(ctx context.Context, userI
 	s := &domain.PortfolioSnapshot{}
 	err := r.db.QueryRow(ctx, query, userID, date).Scan(
 		&s.ID, &s.UserID, &s.SnapshotDate, &s.TotalValue, &s.TotalCostBasis,
-		&s.TotalGainLoss, &s.TotalGainLossPct, &s.CreatedAt, &s.UpdatedAt,
+		&s.TotalGainLoss, &s.TotalGainLossPct, &s.TotalValueInvestmentOnly,
+		&s.CreatedAt, &s.UpdatedAt,
 	)
 	if err != nil {
 		// pgx returns pgx.ErrNoRows; treat as "no prior snapshot" (nil, nil)
