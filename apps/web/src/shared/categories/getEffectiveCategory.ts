@@ -82,3 +82,24 @@ export function getEffectiveCategoryLabel(effective: EffectiveCategory | null): 
   if (effective.pfc_primary_display) return effective.pfc_primary_display
   return formatPFCEnum(effective.pfc_detailed ?? effective.pfc_primary)
 }
+
+/**
+ * Returns a transaction's effective category as the `string[]` shape that `CategoryEditor`
+ * takes for `selectedCategory` — `[custom_category_id]`, `[pfc_primary]`, or
+ * `[pfc_primary, pfc_detailed]`. Empty array means genuinely uncategorized.
+ *
+ * Issue #1625: extracted from TransactionEditor so the triage recategorize panel seeds from
+ * the same source. TriageDetailView previously opened with `[]`, which rendered a
+ * well-categorized transaction as "Uncategorized" AND — because an empty selection is read as
+ * `{ kind: 'clear' }` on save — destroyed the category when Apply was pressed without touching it.
+ *
+ * ⚠ These are raw enums / UUIDs, NOT display names. `CategoryEditor` already resolves all three
+ * conventions for display, but any consumer mapping the value BACK to a request must accept a
+ * raw id or enum as well as a display name — see TriageDetailView.handleSaveCategory.
+ */
+export function effectiveCategoryToStringArray(transaction: Transaction): string[] {
+  const eff = getEffectiveCategory(transaction)
+  if (!eff) return []
+  if (eff.kind === 'custom') return [eff.custom_category_id]
+  return eff.pfc_detailed ? [eff.pfc_primary, eff.pfc_detailed] : [eff.pfc_primary]
+}

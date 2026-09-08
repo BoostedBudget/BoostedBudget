@@ -10,7 +10,7 @@ import type { Primary } from '@boostedbudget/api-client/models/primary'
 import { TagEditor } from '../../tags/components/TagEditor'
 import { CategoryEditor } from '../../categories/components/CategoryEditor'
 import { useReviewMutations } from '../hooks/useReviewMutations'
-import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
+import { effectiveCategoryToStringArray } from '@/shared/categories/getEffectiveCategory'
 import { getMerchantDisplayName } from '@/shared/transactions/merchant'
 import { ReviewBadge, reviewBadgeVariantFromTransaction } from '@/shared/components/ReviewBadge'
 import {
@@ -28,13 +28,6 @@ interface TransactionEditorProps {
   onTagCreated?: (tag: UserTag) => void
   onCategoryCreated?: (category: CustomCategory) => void
   isOpen: boolean
-}
-
-function effectiveCategoryToStringArray(transaction: Transaction): string[] {
-  const eff = getEffectiveCategory(transaction)
-  if (!eff) return []
-  if (eff.kind === 'custom') return [eff.custom_category_id]
-  return eff.pfc_detailed ? [eff.pfc_primary, eff.pfc_detailed] : [eff.pfc_primary]
 }
 
 export function TransactionEditor({
