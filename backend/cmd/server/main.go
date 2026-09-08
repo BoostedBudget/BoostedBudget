@@ -2920,6 +2920,21 @@ func registerCloudflareAndRateLimitMiddlewareWithBackend(e *echo.Echo, cfCIDRRef
 		// single-machine liveness check), so the fleet-machine-count divisor above must not apply
 		// to it. See RateLimitConfig.ExemptPathLimit's doc comment.
 		ExemptPathLimit: cfg.RateLimitIP,
+		// PrecheckLimit is the COST circuit breaker (2026-09-08 review), and like ExemptPathLimit
+		// it is the RAW, UNDIVIDED cfg.RateLimitIP — deliberately NOT rateLimitFallbackLimit'd.
+		// The divisor above exists so N machines falling back to memory do not multiply the
+		// fleet budget by N; that reasoning is inverted here. This bucket must sit at or ABOVE
+		// the authoritative fleet-wide limit, because it runs BEFORE the Redis backend and must
+		// never reject traffic the backend would have allowed. Dividing it would do exactly that.
+		//
+		// cfg.RateLimitIP (the regular tier) is >= cfg.RateLimitAuth in every shipped config, so
+		// one ceiling safely covers both tiers.
+		//
+		// Why it exists: the Redis backend is billed per command and is consulted on every
+		// request, INCLUDING rejected ones. /webhooks/ carries no Cloudflare rate-limit rule (by
+		// design — throttling it would drop real Plaid/Paddle deliveries), so a POST flood there
+		// cost one billable command per request without bound. This caps it per identity.
+		PrecheckLimit: cfg.RateLimitIP,
 		// PrimaryTimeout (Issue #1531 L7): cfg.RedisTimeoutMs already reaches the go-redis
 		// CLIENT's own read/write timeouts (see newRedisClientOptions) but, before this fix, had
 		// no path to the LIMITER's per-call budget — that was a hardcoded, uncustomizable 50ms

@@ -63,6 +63,28 @@ type RateLimitConfig struct {
 	// cleanup time. Default: 20000.
 	MaxEntries int
 
+	// PrecheckLimit enables an in-process token bucket that is consulted BEFORE Backend, purely
+	// to bound COST. Backend is billed per command (Redis), and IPRateLimiter consults it on
+	// every request — including the ones it goes on to reject — so before this existed, a flood
+	// against an endpoint with no Cloudflare rate-limit rule cost one billable command per
+	// request, without bound. /webhooks/ is exactly such an endpoint: it is deliberately excluded
+	// from the edge rate-limit rule so real provider deliveries are never dropped. With
+	// PrecheckLimit set, once one client identity exhausts its bucket, further requests are
+	// rejected without touching Backend at all.
+	//
+	// 🔴 INVARIANT: PrecheckLimit must be >= the largest AUTHORITATIVE per-tier limit Backend
+	// enforces, because the pre-check must never deny a request Backend would have allowed. It is
+	// a cost ceiling, not a second enforcement layer.
+	//
+	// This is why the existing per-tier memory stores cannot serve as the pre-check: IPLimit is
+	// already fleet-DIVIDED by the time it reaches them (see IPLimit's doc comment), so they
+	// reject well below the authoritative fleet-wide limit — correct as an outage fallback,
+	// wrong as a pre-check. Pass the UNDIVIDED limit here.
+	//
+	// OPTIONAL. Default (<=0): disabled, and Backend is consulted on every request exactly as
+	// before — every existing call site and test that omits this field is unchanged.
+	PrecheckLimit int
+
 	// Backend is the primary (typically Redis-backed, fleet-wide) rate-limit backend. OPTIONAL:
 	// nil means memory-only, exactly today's pre-#1531 behaviour — every existing call site and
 	// test that constructs a RateLimitConfig without this field compiles and behaves unchanged.
@@ -484,6 +506,14 @@ func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 	// share the regular tier's (possibly fleet-divided) capacity. Issue #1531 L3.
 	exemptStore := newIPLimiterStore(c.ExemptPathLimit, c.WindowDuration, c.MaxEntries)
 
+	// precheckStore is nil unless PrecheckLimit is set — see RateLimitConfig.PrecheckLimit.
+	// Deliberately its own store rather than a reuse of the tier stores above, whose budgets are
+	// fleet-divided and would reject inside the authoritative limit.
+	var precheckStore *ipLimiterStore
+	if c.PrecheckLimit > 0 {
+		precheckStore = newIPLimiterStore(c.PrecheckLimit, c.WindowDuration, c.MaxEntries)
+	}
+
 	memBackend := &memoryBackend{regular: regularStore, auth: authStore, sentinel: sentinelStore, exempt: exemptStore, window: c.WindowDuration}
 	effective := newFallbackLimiter(cfg.Backend, memBackend, c.PrimaryTimeout, logger, cfg.Done)
 
@@ -499,6 +529,9 @@ func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 				authStore.cleanup(c.CleanupInterval * 2)
 				sentinelStore.cleanup(c.CleanupInterval * 2)
 				exemptStore.cleanup(c.CleanupInterval * 2)
+				if precheckStore != nil {
+					precheckStore.cleanup(c.CleanupInterval * 2)
+				}
 			case <-cfg.Done:
 				// cleanupGoroutineStopped is nil in production (see its doc comment) — this is a
 				// no-op there. It exists solely so a test can observe THIS specific goroutine's
@@ -514,7 +547,7 @@ func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(ec echo.Context) error {
-			allowed, retryAfterSecs := ipRateLimiterDecide(ec, effective, memBackend, logger)
+			allowed, retryAfterSecs := ipRateLimiterDecide(ec, effective, memBackend, precheckStore, c.WindowDuration, logger)
 			if !allowed {
 				ec.Response().Header().Set("Retry-After", strconv.Itoa(retryAfterSecs))
 				return echo.NewHTTPError(http.StatusTooManyRequests,
@@ -549,7 +582,7 @@ func logRateLimitRejection(ec echo.Context, logger *slog.Logger, path string, ti
 		"retry_after_secs", retryAfterSecs)
 }
 
-func ipRateLimiterDecide(ec echo.Context, effective *fallbackLimiter, memBackend *memoryBackend, logger *slog.Logger) (allowed bool, retryAfterSecs int) {
+func ipRateLimiterDecide(ec echo.Context, effective *fallbackLimiter, memBackend *memoryBackend, precheckStore *ipLimiterStore, window time.Duration, logger *slog.Logger) (allowed bool, retryAfterSecs int) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("rate limiter panicked; allowing request through",
@@ -583,6 +616,24 @@ func ipRateLimiterDecide(ec echo.Context, effective *fallbackLimiter, memBackend
 	}
 
 	tier := tierForRequest(path, key)
+
+	// Cost circuit breaker. Consulted BEFORE the backend so a flood from one identity stops
+	// costing billable backend commands once its bucket is empty. Placed AFTER the exempt-path
+	// branch above, which already bypasses the backend entirely, so /health is untouched.
+	//
+	// Reaching here is a genuine rate-limit rejection and is reported as one — same metric, same
+	// log line, same Retry-After — because PrecheckLimit is set at or above the authoritative
+	// limit, so anything it rejects is traffic the backend would have rejected too.
+	if precheckStore != nil && !precheckStore.get(key).Allow() {
+		observability.RateLimitRejectionsTotal.WithLabelValues(tier.String()).Inc()
+		secs := int(window.Seconds())
+		if secs < 1 {
+			secs = 1
+		}
+		logRateLimitRejection(ec, logger, path, tier, key, secs)
+		return false, secs
+	}
+
 	decision, dErr := effective.Allow(ec.Request().Context(), tier, key)
 	if dErr != nil {
 		// Neither memoryBackend nor fallbackLimiter (which always resolves through memoryBackend
