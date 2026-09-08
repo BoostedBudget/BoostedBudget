@@ -13064,7 +13064,7 @@ paths:
         - MCP Recipes
   /api/v1/mcp/recipes/{id}/run:
     post:
-      description: Resolve a recipe's spec for execution. Returns the ordered list of API calls to chain through execute().
+      description: Resolve a recipe's spec for execution. Returns the ordered list of API calls to chain through readExecute() or writeExecute().
       operationId: runMCPRecipe
       parameters:
         - description: Recipe ID

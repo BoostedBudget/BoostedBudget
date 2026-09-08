@@ -41,10 +41,11 @@ Follow your client's instructions for adding a remote MCP server at `https://mcp
 | Tool | Description |
 |------|-------------|
 | `search` | Discover available API operations by keyword, tag, or class |
-| `execute` | Chain API calls against your account (reads + confirmation-gated writes) |
+| `readExecute` | Chain READ-ONLY API calls against your account (no confirmationToken input) |
+| `writeExecute` | Chain any API calls against your account, including confirmation-gated writes |
 | `recipe.list` | List your saved workflow recipes |
 | `recipe.save` | Save a named read-only workflow recipe for later reuse |
-| `recipe.run` | Resolve a saved recipe's calls to execute |
+| `recipe.run` | Resolve a saved recipe's calls to pass to readExecute()/writeExecute() |
 
 ---
 
@@ -52,7 +53,7 @@ Follow your client's instructions for adding a remote MCP server at `https://mcp
 
 ### 1. "What's my dining spend this month?"
 
-The agent uses `search` to find the right analytics operation, then `execute` to fetch the data:
+The agent uses `search` to find the right analytics operation, then `readExecute` to fetch the data:
 
 ```
 You: What's my dining spend this month?
@@ -61,7 +62,7 @@ Agent calls:
   search({ query: "spending category", tag: "Analytics" })
   → finds getCategoryTotalForPeriod
 
-  execute({
+  readExecute({
     calls: [{
       operationId: "getCategoryTotalForPeriod",
       params: {
@@ -85,7 +86,7 @@ The review workflow has two phases:
 1. **Triage phase** — check the inbox, recategorize any misclassified transactions (`bulkUpdateTransactionCategory`)
 2. **Approve phase** — mark the batch as reviewed (`bulkSetTransactionReviewed`)
 
-> **Important:** `execute` truncates each call result to ~500 characters. Always use a small `limit` (≤ 10) when fetching transactions and page through with `next_cursor` if `unreviewed_count` is larger. `getTransactionReviewSummary` gives you the total before you start paging.
+> **Important:** each call's result is truncated at ~100,000 characters, and self-describes when it is. Always use a small `limit` (≤ 10) when fetching transactions and page through with `next_cursor` if `unreviewed_count` is larger. `getTransactionReviewSummary` gives you the total before you start paging.
 
 ```
 You: Review my unreviewed transactions.
@@ -95,14 +96,14 @@ Agent calls:
   → finds getTransactionReviewSummary, getTransactions, bulkUpdateTransactionCategory,
            bulkSetTransactionReviewed
 
-  execute({
+  readExecute({
     calls: [
       {
         operationId: "getTransactionReviewSummary"
       },
       {
         operationId: "getTransactions",
-        params: { reviewed: false, limit: 10 }  // keep limit small — results truncated at ~500 chars
+        params: { reviewed: false, limit: 10 }
       }
     ]
   })
@@ -116,7 +117,7 @@ Agent: I see 23 unreviewed transactions. Showing the first 10. "Starbucks" is ta
        and then approve the batch?
 You: Yes, recategorize Netflix to Subscriptions and approve all 10.
 
-  execute({
+  writeExecute({
     calls: [
       {
         operationId: "bulkUpdateTransactionCategory",    // recategorize first
@@ -147,7 +148,7 @@ Agent: Done. 13 unreviewed transactions remain (next_cursor: "abc123" to continu
 **Approval-only shortcut** (when no recategorization is needed):
 
 ```
-  execute({
+  writeExecute({
     calls: [{
       operationId: "bulkSetTransactionReviewed",
       body: { transaction_ids: ["txn-1", ..., "txn-10"], reviewed: true }
@@ -193,7 +194,7 @@ Agent calls:
 Agent responds:
   Saved "Weekly Cash Flow" recipe (id: rec_abc123).
   Run it anytime with: recipe.run({ id: "rec_abc123" })
-  This will return the API calls to pass to execute().
+  This will return the API calls to pass to readExecute() (or writeExecute() if any are writes).
 ```
 
 ---
@@ -210,7 +211,7 @@ Agent calls:
   → finds getTransferSuggestions
   → description: "Use the `status` query parameter... Valid values: pending, accepted, completed, rejected, expired."
 
-  execute({
+  readExecute({
     calls: [{
       operationId: "getTransferSuggestions",
       params: { status: "pending" }
@@ -220,7 +221,7 @@ Agent calls:
 
 You: Which ones are waiting for a matching transaction?
 
-  execute({
+  readExecute({
     calls: [{
       operationId: "getTransferSuggestions",
       params: { status: "accepted" }
@@ -248,7 +249,7 @@ Agent calls:
   → finds getBoosts
   → description: "Use the repeatable `boost_type` query parameter... Transfer-generating types are transfer_suggestion and savings_goal."
 
-  execute({
+  readExecute({
     calls: [{
       operationId: "getBoosts",
       params: { boost_type: ["transfer_suggestion", "savings_goal"] }
@@ -272,7 +273,7 @@ Agent: You have 1 transfer boost: "Monthly Savings" (savings_goal type, enabled)
 
 All write operations (categorize transactions, create budgets, etc.) require **explicit confirmation** before executing:
 
-1. Agent calls `execute` with a write operation
+1. Agent calls `writeExecute` with a write operation
 2. Server returns a `confirmationToken` and describes what will happen
 3. Agent presents the confirmation to you
 4. You say yes → agent re-invokes with the `confirmationToken`
@@ -290,7 +291,7 @@ Tokens are **one-time use** and expire in 5 minutes.
 Claude Desktop  ←→  mcp.boostedbudget.com/mcp  (Cloudflare Worker)
                           │  Clerk OAuth 2.1 (DCR + PKCE)
                           │  McpAgent (Durable Object)
-                          │  search / execute / recipe.*
+                          │  search / readExecute / writeExecute / recipe.*
                           ▼
                     api.boostedbudget.com  (Go backend, unchanged)
                           │
@@ -305,7 +306,7 @@ The Worker **never** touches the database directly. All data goes through the Go
 ## Known Limitations
 
 - **Revocation**: Revoking the OAuth grant in the **Clerk dashboard** (or via a BoostedBudget account settings page once that UI is built) is detected within approximately **30–60 seconds** via a layer-2 Clerk token introspection check on every `/mcp` and `/sse` request (cached per isolate for 30 s). This is a best-effort SLA — not a hard security boundary. Caveats: (a) the check fails open if Clerk's API is unreachable (Clerk outages do not block MCP); (b) the per-isolate cache means a revoked grant may remain valid for up to 30 s per Worker isolate; (c) long-lived `/sse` streams are checked at connection time, not per message — they may survive until the next reconnect after revocation. The underlying Clerk OAuth access token TTL is ~1 day.
-- **Sandbox**: `execute()` calls a typed API client (not agent-authored TypeScript in a V8 isolate). This is a simplified Code Mode implementation.
+- **Sandbox**: `readExecute()`/`writeExecute()` call a typed API client (not agent-authored TypeScript in a V8 isolate). This is a simplified Code Mode implementation.
 - **Rate limits**: 60 requests/minute, 5 concurrent per session.
 - **Unattended writes**: Automation rules and scheduled write recipes are not yet supported (planned for a future release).
 

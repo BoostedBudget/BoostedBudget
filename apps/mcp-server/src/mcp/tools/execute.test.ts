@@ -1,5 +1,5 @@
 import { describe, expect, it, mock } from 'bun:test'
-import { buildExecuteHandler, type ExecuteCall } from './execute'
+import { buildWriteExecuteHandler, buildReadExecuteHandler, type ExecuteCall } from './execute'
 import { HostProxyError } from '../../sandbox/host-proxy'
 
 // Minimal proxy stub for testing
@@ -17,10 +17,10 @@ function makeFailingProxy(code: string, message: string, confirmationToken?: str
   }
 }
 
-describe('buildExecuteHandler', () => {
+describe('buildWriteExecuteHandler', () => {
   it('returns results for allowed read operations', async () => {
     const proxy = makeProxy({ transactions: [] })
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     const { toolResult, auditEvents } = await handler({
       calls: [{ operationId: 'getTransactions', params: { limit: 5 } }],
@@ -42,7 +42,7 @@ describe('buildExecuteHandler', () => {
 
   it('returns confirmation challenge for write operations without token', async () => {
     const proxy = makeFailingProxy('confirmation_required', 'Requires confirmation', 'conf-token-xyz')
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     const { toolResult, auditEvents } = await handler({
       calls: [{ operationId: 'updateTransactionCategory', pathParams: { id: 'txn-1' }, body: { categoryId: 'cat-1' } }],
@@ -60,7 +60,7 @@ describe('buildExecuteHandler', () => {
 
   it('proceeds with write when confirmation token is provided — audits as write/success', async () => {
     const proxy = makeProxy({ success: true })
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     const { toolResult, auditEvents } = await handler({
       calls: [{ operationId: 'updateTransactionCategory', pathParams: { id: 'txn-1' }, body: { categoryId: 'cat-1' } }],
@@ -82,7 +82,7 @@ describe('buildExecuteHandler', () => {
 
   it('returns denied error for excluded operations and emits a denied audit event (R5-9)', async () => {
     const proxy = makeFailingProxy('excluded', "Operation 'checkRole' is not available via MCP")
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     const { toolResult, auditEvents } = await handler({
       calls: [{ operationId: 'checkRole' }],
@@ -123,7 +123,7 @@ describe('buildExecuteHandler', () => {
     ['grantTrial', 'POST'],
   ])('audits a denied mutating operation (%s, %s) with its true class, never read', async (operationId) => {
     const proxy = makeFailingProxy('excluded', `Operation '${operationId}' is not available via MCP`)
-    const handler = buildExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
+    const handler = buildWriteExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
 
     const { auditEvents } = await handler({ calls: [{ operationId }] })
 
@@ -143,7 +143,7 @@ describe('buildExecuteHandler', () => {
   // while being just as dishonest in the other direction.
   it('audits a denied read-only operation as read', async () => {
     const proxy = makeFailingProxy('excluded', "Operation 'checkRole' is not available via MCP")
-    const handler = buildExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
+    const handler = buildWriteExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
 
     const { auditEvents } = await handler({ calls: [{ operationId: 'checkRole' }] })
 
@@ -156,7 +156,7 @@ describe('buildExecuteHandler', () => {
   // class that gets an operator's attention rather than the one that hides.
   it('audits a denial for an unknown operationId as write', async () => {
     const proxy = makeProxy()
-    const handler = buildExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
+    const handler = buildWriteExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
 
     const { auditEvents } = await handler({ calls: [{ operationId: 'notAnOperation' }] })
 
@@ -168,7 +168,7 @@ describe('buildExecuteHandler', () => {
   // permitted-read branch, which still takes its class from the manifest.
   it('still audits an ordinary permitted read as read', async () => {
     const proxy = makeProxy({ transactions: [] })
-    const handler = buildExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
+    const handler = buildWriteExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
 
     const { auditEvents } = await handler({ calls: [{ operationId: 'getTransactions' }] })
 
@@ -178,7 +178,7 @@ describe('buildExecuteHandler', () => {
 
   it('executes multiple operations in sequence — emits one audit event per call', async () => {
     const proxy = makeProxy({ ok: true })
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     const calls: ExecuteCall[] = [
       { operationId: 'getTransactions' },
@@ -205,7 +205,7 @@ describe('buildExecuteHandler', () => {
         return Promise.resolve({})
       }),
     }
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     const { toolResult, auditEvents } = await handler({
       calls: [
@@ -225,7 +225,7 @@ describe('buildExecuteHandler', () => {
 
   it('returns error for empty calls array', async () => {
     const proxy = makeProxy()
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     const { toolResult, auditEvents } = await handler({ calls: [] })
     expect(toolResult.content[0]?.text).toContain('No operations')
@@ -250,7 +250,7 @@ describe('buildExecuteHandler', () => {
         reversal: false,
       }))
       const proxy = makeProxy({ transactions: bigArray })
-      const handler = buildExecuteHandler(proxy)
+      const handler = buildWriteExecuteHandler(proxy)
 
       const { toolResult } = await handler({
         calls: [{ operationId: 'getTransactions' }],
@@ -266,7 +266,7 @@ describe('buildExecuteHandler', () => {
     it('reports the ACTUAL full size, not a hardcoded or cap-derived number', async () => {
       const bigArray = Array.from({ length: 3000 }, (_, i) => ({ id: `txn-${i}`, note: 'x'.repeat(50) }))
       const proxy = makeProxy({ items: bigArray })
-      const handler = buildExecuteHandler(proxy)
+      const handler = buildWriteExecuteHandler(proxy)
 
       const { toolResult } = await handler({
         calls: [{ operationId: 'getTransactions' }],
@@ -284,7 +284,7 @@ describe('buildExecuteHandler', () => {
     it('leaves a small result byte-identical to today\'s output — no marker', async () => {
       const small = { transactions: [{ id: 'txn-1', merchant: 'Coffee Shop', amount: -4.5 }] }
       const proxy = makeProxy(small)
-      const handler = buildExecuteHandler(proxy)
+      const handler = buildWriteExecuteHandler(proxy)
 
       const { toolResult } = await handler({
         calls: [{ operationId: 'getTransactions' }],
@@ -316,7 +316,7 @@ describe('buildExecuteHandler', () => {
       expect(str.length).toBe(target)
 
       const proxy = makeProxy(payload)
-      const handler = buildExecuteHandler(proxy)
+      const handler = buildWriteExecuteHandler(proxy)
 
       const { toolResult } = await handler({
         calls: [{ operationId: 'getTransactions' }],
@@ -326,5 +326,93 @@ describe('buildExecuteHandler', () => {
       expect(text).toBe(`✅ getTransactions: ${str}`)
       expect(text).not.toContain('truncated')
     })
+  })
+})
+
+// ── Issue #1610b: readExecute's three-way admission gate ────────────────────
+//
+// THE SECURITY POINT: `capability.class === 'read'` alone is not a safe gate. Two REAL
+// counter-examples in this manifest prove each single-field check is bypassable on its own:
+//   - `cancelDeletion` is `excluded()`, which hard-codes `class: 'read'` regardless of the
+//     operation's real behaviour — GET /api/v1/user/delete/cancel/{token} is genuinely
+//     state-changing (deletion_service.go:373-375). Blocked today only by `excluded`, not by
+//     `class`.
+//   - `runMCPRecipe` is REAL, non-excluded, and invocable: `read('runMCPRecipe')` gives it
+//     class 'read' AND confirmationRequired: false (honestly — it's read('...')-built), yet its
+//     HTTP method is POST. class+confirmationRequired alone would wrongly admit it; only the
+//     method check catches it.
+// readExecute must therefore require ALL THREE: class === 'read', method is read-only, AND
+// confirmationRequired === false.
+describe('buildReadExecuteHandler — the three-way admission gate (#1610b)', () => {
+  const READ_EXECUTE_SPEC_ENTRIES = [
+    { operationId: 'getTransactions', method: 'GET', path: '/api/v1/transactions' },
+    { operationId: 'updateTransactionCategory', method: 'PATCH', path: '/api/v1/transactions/{id}/category' },
+    { operationId: 'runMCPRecipe', method: 'POST', path: '/api/v1/mcp/recipes/{id}/run' },
+  ]
+
+  it('admits a real read-only, non-confirmation-gated GET operation', async () => {
+    const proxy = makeProxy({ transactions: [] })
+    const handler = buildReadExecuteHandler(proxy, READ_EXECUTE_SPEC_ENTRIES)
+
+    const { toolResult, auditEvents } = await handler({
+      calls: [{ operationId: 'getTransactions', params: { limit: 5 } }],
+    })
+
+    expect(toolResult.content[0]?.text).toContain('getTransactions')
+    expect(proxy.invoke).toHaveBeenCalledTimes(1)
+    expect(auditEvents[0]).toMatchObject({ operationId: 'getTransactions', operationClass: 'read', result: 'success' })
+  })
+
+  it('REFUSES runMCPRecipe — class="read" and confirmationRequired=false are BOTH honestly true, but its method is POST', async () => {
+    // The proof this gate exists: a check on class+confirmationRequired alone would admit this
+    // call. It must be refused anyway, and the proxy must never be invoked.
+    const proxy = makeProxy({ calls: [] })
+    const handler = buildReadExecuteHandler(proxy, READ_EXECUTE_SPEC_ENTRIES)
+
+    const { toolResult, auditEvents } = await handler({
+      calls: [{ operationId: 'runMCPRecipe', pathParams: { id: 'recipe-1' } }],
+    })
+
+    expect(toolResult.content[0]?.text).toContain('runMCPRecipe')
+    expect(toolResult.content[0]?.text).toContain('writeExecute')
+    expect(proxy.invoke).not.toHaveBeenCalled()
+    expect(auditEvents).toHaveLength(1)
+    expect(auditEvents[0]).toMatchObject({ operationId: 'runMCPRecipe', result: 'denied' })
+  })
+
+  it('refuses a genuine write operation, naming writeExecute as the alternative', async () => {
+    const proxy = makeProxy()
+    const handler = buildReadExecuteHandler(proxy, READ_EXECUTE_SPEC_ENTRIES)
+
+    const { toolResult, auditEvents } = await handler({
+      calls: [{ operationId: 'updateTransactionCategory', pathParams: { id: 'txn-1' }, body: { categoryId: 'cat-1' } }],
+    })
+
+    expect(toolResult.content[0]?.text).toContain('writeExecute')
+    expect(proxy.invoke).not.toHaveBeenCalled()
+    expect(auditEvents[0]).toMatchObject({ operationId: 'updateTransactionCategory', result: 'denied' })
+  })
+
+  it('still refuses an excluded operation via the ordinary manifest gate (before the admission gate even runs)', async () => {
+    const proxy = makeProxy()
+    const handler = buildReadExecuteHandler(proxy, READ_EXECUTE_SPEC_ENTRIES)
+
+    const { toolResult, auditEvents } = await handler({ calls: [{ operationId: 'checkRole' }] })
+
+    expect(toolResult.content[0]?.text).toContain('not available via MCP')
+    expect(auditEvents[0]).toMatchObject({ operationId: 'checkRole', result: 'denied' })
+  })
+
+  it('has no confirmationToken input field — passing one is simply ignored, never reaches the proxy', async () => {
+    const proxy = makeProxy({ transactions: [] })
+    const handler = buildReadExecuteHandler(proxy, READ_EXECUTE_SPEC_ENTRIES)
+
+    await handler({ calls: [{ operationId: 'getTransactions' }] } as never)
+
+    expect(proxy.invoke).toHaveBeenCalledWith(
+      'getTransactions',
+      expect.any(Object),
+      expect.objectContaining({ confirmationToken: undefined }),
+    )
   })
 })

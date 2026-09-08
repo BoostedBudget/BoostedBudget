@@ -241,4 +241,67 @@ describe('buildSearchResult', () => {
     ])
     expect(result.content[0]?.text).not.toContain('body:')
   })
+
+  // Issue #1610a: search() must render the response shape so a client can discover what an
+  // operation RETURNS without calling it first.
+  it('renders a returns: block for an operation with a responseBody (#1610a)', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'getAccount',
+        method: 'GET',
+        path: '/api/v1/accounts/{id}',
+        summary: 'Get an account',
+        tags: ['Accounts'],
+        manifestClass: 'read',
+        excluded: false,
+        responseBody: [
+          { name: 'id', type: 'string', required: true },
+          { name: 'name', type: 'string' },
+          { name: 'status', type: 'string', enum: ['active', 'removed'] },
+        ],
+      },
+    ])
+    const text = result.content[0]?.text ?? ''
+    expect(text).toContain('returns:')
+    expect(text).toContain('id (string, required)')
+    expect(text).toContain('status (string) [active|removed]')
+  })
+
+  it('omits the returns: block entirely when there is no responseBody', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'getTransactions',
+        method: 'GET',
+        path: '/api/v1/transactions',
+        summary: 'List transactions',
+        tags: ['Transactions'],
+        manifestClass: 'read',
+        excluded: false,
+      },
+    ])
+    expect(result.content[0]?.text).not.toContain('returns:')
+  })
+
+  it('renders returns: AFTER body: and BEFORE tags: — parts.push order is render order', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'createRule',
+        method: 'POST',
+        path: '/api/v1/auto-categorization',
+        summary: 'Create a rule',
+        tags: ['Auto-Categorization'],
+        manifestClass: 'write',
+        excluded: false,
+        requestBody: [{ name: 'name', type: 'string', required: true }],
+        responseBody: [{ name: 'id', type: 'string', required: true }],
+      },
+    ])
+    const text = result.content[0]?.text ?? ''
+    const bodyIdx = text.indexOf('  body:')
+    const returnsIdx = text.indexOf('  returns:')
+    const tagsIdx = text.indexOf('  tags:')
+    expect(bodyIdx).toBeGreaterThanOrEqual(0)
+    expect(returnsIdx).toBeGreaterThan(bodyIdx)
+    expect(tagsIdx).toBeGreaterThan(returnsIdx)
+  })
 })
