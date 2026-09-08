@@ -146,6 +146,94 @@ func TestPlaidSyncWorker_OwnershipMismatchStillRejectedBeforeSync(t *testing.T) 
 		"sync must not run for an item the job's user does not own; events=%v", events)
 }
 
+// TestInvestmentTransactionsSyncWorker_LockTxCommitsBeforeSync mirrors
+// TestPlaidSyncWorker_LockTxCommitsBeforeSync for InvestmentTransactionsSyncWorker. Before this
+// test existed, an independent audit found that this file pinned the commit-before-sync ordering
+// for PlaidSyncWorker only — reverting the fix in either investment worker failed no test here.
+// It pins ORDERING (commitIdx < syncIdx), not merely that Commit was called: a "Commit was
+// called" assertion passes against the pre-fix code too, which commits, just after the sync.
+func TestInvestmentTransactionsSyncWorker_LockTxCommitsBeforeSync(t *testing.T) {
+	var events []string
+
+	userID := uuid.New().String()
+	itemID := uuid.New().String()
+	item := &domain.LinkedItem{ID: itemID, UserID: userID}
+
+	linkedItemRepo := new(MockLinkedItemRepository)
+	linkedItemRepo.On("GetByIDForUpdate", mock.Anything, mock.Anything, itemID).
+		Run(func(mock.Arguments) { events = append(events, "GetByIDForUpdate") }).
+		Return(item, nil)
+
+	syncSvc := new(MockInvestmentSyncService)
+	syncSvc.On("SyncInvestmentTransactions", mock.Anything, item).
+		Run(func(mock.Arguments) { events = append(events, "SyncInvestmentTransactions") }).
+		Return(&domain.InvestmentTransactionSyncResult{}, nil)
+
+	worker := &InvestmentTransactionsSyncWorker{
+		investmentSyncSvc: syncSvc,
+		linkedItemRepo:    linkedItemRepo,
+		db:                &recordingBeginner{events: &events},
+		logger:            slog.Default(),
+	}
+
+	err := worker.Work(context.Background(), newTestTransactionsJob(InvestmentTransactionsSyncArgs{UserID: userID, ItemID: itemID}))
+	require.NoError(t, err)
+
+	commitIdx := indexOf(events, "tx.Commit")
+	syncIdx := indexOf(events, "SyncInvestmentTransactions")
+
+	require.NotEqual(t, -1, commitIdx, "lock transaction was never committed; events=%v", events)
+	require.NotEqual(t, -1, syncIdx, "sync never ran; events=%v", events)
+
+	require.Less(t, commitIdx, syncIdx,
+		"the lock transaction MUST commit before SyncInvestmentTransactions runs, otherwise the "+
+			"connection sits idle-in-transaction for the whole multi-page Plaid sync and "+
+			"Postgres kills it (SQLSTATE 25P03). events=%v", events)
+}
+
+// TestInvestmentHoldingsSyncWorker_LockTxCommitsBeforeSync mirrors
+// TestPlaidSyncWorker_LockTxCommitsBeforeSync for InvestmentHoldingsSyncWorker. Same coverage
+// gap as TestInvestmentTransactionsSyncWorker_LockTxCommitsBeforeSync above: reverting the
+// commit-before-sync fix in this worker previously failed no test in this file.
+func TestInvestmentHoldingsSyncWorker_LockTxCommitsBeforeSync(t *testing.T) {
+	var events []string
+
+	userID := uuid.New().String()
+	itemID := uuid.New().String()
+	item := &domain.LinkedItem{ID: itemID, UserID: userID}
+
+	linkedItemRepo := new(MockLinkedItemRepository)
+	linkedItemRepo.On("GetByIDForUpdate", mock.Anything, mock.Anything, itemID).
+		Run(func(mock.Arguments) { events = append(events, "GetByIDForUpdate") }).
+		Return(item, nil)
+
+	syncSvc := new(MockInvestmentSyncService)
+	syncSvc.On("SyncHoldings", mock.Anything, item).
+		Run(func(mock.Arguments) { events = append(events, "SyncHoldings") }).
+		Return(&domain.HoldingSyncResult{}, nil)
+
+	worker := &InvestmentHoldingsSyncWorker{
+		investmentSyncSvc: syncSvc,
+		linkedItemRepo:    linkedItemRepo,
+		db:                &recordingBeginner{events: &events},
+		logger:            slog.Default(),
+	}
+
+	err := worker.Work(context.Background(), newTestHoldingsJob(InvestmentHoldingsSyncArgs{UserID: userID, ItemID: itemID}))
+	require.NoError(t, err)
+
+	commitIdx := indexOf(events, "tx.Commit")
+	syncIdx := indexOf(events, "SyncHoldings")
+
+	require.NotEqual(t, -1, commitIdx, "lock transaction was never committed; events=%v", events)
+	require.NotEqual(t, -1, syncIdx, "sync never ran; events=%v", events)
+
+	require.Less(t, commitIdx, syncIdx,
+		"the lock transaction MUST commit before SyncHoldings runs, otherwise the "+
+			"connection sits idle-in-transaction for the whole multi-page Plaid sync and "+
+			"Postgres kills it (SQLSTATE 25P03). events=%v", events)
+}
+
 func indexOf(haystack []string, needle string) int {
 	for i, v := range haystack {
 		if v == needle {

@@ -121,7 +121,8 @@ func (w *InvestmentHoldingsSyncWorker) Work(ctx context.Context, job *river.Job[
 	// terminated it (SQLSTATE 25P03 — a production DLQ entry burned all 5 attempts).
 	// Safe because the webhook path takes no lock at all and worker-vs-worker
 	// serialization already comes from River job uniqueness. See plaid_sync.go for the
-	// full rationale; pinned by the ordering tests in issue1609_lock_tx_lifetime_test.go.
+	// full rationale; pinned by TestInvestmentHoldingsSyncWorker_LockTxCommitsBeforeSync
+	// in issue1609_lock_tx_lifetime_test.go.
 	if tx != nil {
 		if commitErr := tx.Commit(ctx); commitErr != nil {
 			return fmt.Errorf("failed to commit transaction: %w", commitErr)
