@@ -60,7 +60,7 @@ func TestBuildAccountMaps_AfterRelink_OnlyContainsNewAccount(t *testing.T) {
 	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).
 		Return([]domain.Account{newAccount}, nil)
 
-	accountMap, userAccountMap, err := service.buildAccountMaps(ctx, linkedItemID)
+	accountMap, userAccountMap, err := service.buildAccountMaps(ctx, linkedItemID, "")
 	require.NoError(t, err)
 
 	// accountMap should only contain the new account
@@ -108,7 +108,7 @@ func TestBuildAccountMaps_Depth2Chain_OnlyContainsCurrentAccount(t *testing.T) {
 	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).
 		Return([]domain.Account{acctCurrent}, nil)
 
-	accountMap, userAccountMap, err := service.buildAccountMaps(ctx, linkedItemID)
+	accountMap, userAccountMap, err := service.buildAccountMaps(ctx, linkedItemID, "")
 	require.NoError(t, err)
 
 	assert.Len(t, accountMap, 1, "accountMap should only contain the current active account")

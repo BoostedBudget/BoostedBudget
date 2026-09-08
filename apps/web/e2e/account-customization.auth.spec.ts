@@ -24,6 +24,13 @@ const mockAccounts = {
       linked_item_id: 'item-1',
       user_id: 'user-123',
       plaid_account_id: 'plaid-acc-1',
+      // ⚠ Both fields are set, and the app renders `nickname || official_name || name`
+      // (AccountCard.tsx). So `name` NEVER appears on screen while official_name is populated —
+      // locate cards by 'Premium Checking Account', never by 'Primary Checking'.
+      // This exact trap made account-hide-persists.auth.spec.ts fail 6/6 deterministically across
+      // two CI runners (#1609 P3-T7) and is also documented at household-invite.auth.spec.ts:129.
+      // ⚠ These specs are describe.skip'd (#1523/#615), so this correction is reasoned from the
+      // render order rather than observed — the assertions could not be executed here.
       name: 'Primary Checking',
       official_name: 'Premium Checking Account',
       type: 'depository',
@@ -376,7 +383,7 @@ test.describe.skip('Account Customization - Nickname (Requires Auth)', () => {
 
   test('should update nickname and display it', async ({ page }) => {
     await navigateToAccountsPage(page);
-    await openCustomizationModal(page, 'Primary Checking');
+    await openCustomizationModal(page, 'Premium Checking Account');
 
     const dialog = page.getByRole('dialog');
     const nicknameInput = dialog.getByLabel(/nickname/i);
@@ -440,7 +447,7 @@ test.describe.skip('Account Customization - Color (Requires Auth)', () => {
 
   test('should apply color to account card', async ({ page }) => {
     await navigateToAccountsPage(page);
-    const cardName = 'Primary Checking';
+    const cardName = 'Premium Checking Account';
     await openCustomizationModal(page, cardName);
 
     const dialog = page.getByRole('dialog');
@@ -505,7 +512,7 @@ test.describe.skip('Account Customization - Icon (Requires Auth)', () => {
 
   test('should display selected icon on card', async ({ page }) => {
     await navigateToAccountsPage(page);
-    const cardName = 'Primary Checking';
+    const cardName = 'Premium Checking Account';
     await openCustomizationModal(page, cardName);
 
     const dialog = page.getByRole('dialog');
@@ -564,7 +571,7 @@ test.describe.skip('Account Customization - Emoji (Requires Auth)', () => {
 
   test('should display emoji on card', async ({ page }) => {
     await navigateToAccountsPage(page);
-    const cardName = 'Primary Checking';
+    const cardName = 'Premium Checking Account';
     await openCustomizationModal(page, cardName);
 
     const dialog = page.getByRole('dialog');
@@ -597,7 +604,7 @@ test.describe.skip('Account Customization - Hide/Show Toggle (Requires Auth)', (
 
   test('should hide account when toggle is enabled', async ({ page }) => {
     await navigateToAccountsPage(page);
-    const cardName = 'Primary Checking';
+    const cardName = 'Premium Checking Account';
 
     // Verify account is visible before hiding
     await expect(getAccountCard(page, cardName)).toBeVisible();

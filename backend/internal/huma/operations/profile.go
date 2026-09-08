@@ -163,6 +163,11 @@ func RegisterProfileRoutes(api huma.API, handler *ProfileHandler) {
 		Description: "Retrieves the authenticated user's profile, creating one if it's their first login.",
 		Tags:        []string{"Profile"},
 		Security:    []map[string][]string{{"clerk": {}}},
+		// #1610: this GET lazily creates the caller's own profile row on first login — it is
+		// not pure-read despite being admitted by the MCP server's readExecute path. Flows into
+		// api/openapi.yaml as a sibling of operationId (huma.Operation.Extensions is marshaled,
+		// unlike Metadata) so apps/mcp-server can assert on it instead of only a by-name allowlist.
+		Extensions: map[string]any{"x-mcp-lazy-init": true},
 	}, handler.GetProfile)
 
 	// PUT /api/v1/user/profile - Update user profile

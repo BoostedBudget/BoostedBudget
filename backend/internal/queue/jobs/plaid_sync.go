@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -54,6 +55,8 @@ type PlaidSyncWorker struct {
 	jobQueue       queue.JobQueue
 	logger         *slog.Logger
 	db             TxBeginner
+	itemErrorSvc   ItemErrorNotifier  // Issue #1609 P3-T2: nil-safe, notifies on permanent errors
+	analytics      phclient.Analytics // Issue #1609 P3-T2: nil-safe, first sync-failure analytics coverage in this worker
 }
 
 // PlaidSyncWorkerDeps contains the dependencies for PlaidSyncWorker.
@@ -64,6 +67,11 @@ type PlaidSyncWorkerDeps struct {
 	JobQueue       queue.JobQueue
 	Logger         *slog.Logger
 	DB             TxBeginner
+	// ItemErrorSvc routes a permanent Plaid error into the same in-app notification the ITEM
+	// webhook path produces (Issue #1609 P3-T2). Optional: a nil value means permanent errors are
+	// still classified and not retried, but no notification fires — matches the worker's
+	// pre-P3-T2 behavior for callers (tests) that don't wire it.
+	ItemErrorSvc ItemErrorNotifier
 }
 
 // NewPlaidSyncWorker creates a new Plaid sync worker with the given dependencies.
@@ -78,6 +86,7 @@ func NewPlaidSyncWorker(deps PlaidSyncWorkerDeps) *PlaidSyncWorker {
 		jobQueue:       deps.JobQueue,
 		logger:         logger,
 		db:             deps.DB,
+		itemErrorSvc:   deps.ItemErrorSvc,
 	}
 }
 
@@ -85,6 +94,15 @@ func NewPlaidSyncWorker(deps PlaidSyncWorkerDeps) *PlaidSyncWorker {
 // This resolves the circular dependency: worker registration before client creation.
 func (w *PlaidSyncWorker) SetJobQueue(jq queue.JobQueue) {
 	w.jobQueue = jq
+}
+
+// SetAnalytics injects the PostHog analytics client (setter injection, matching this codebase's
+// convention for optional per-service analytics — see CLAUDE.md § Analytics Instrumentation).
+// Issue #1609 P3-T2: this is the FIRST analytics coverage for this worker's sync-failure path —
+// the only existing EventSyncFailed fire site (plaid_sync_provider.go) is explicitly not wired
+// into production.
+func (w *PlaidSyncWorker) SetAnalytics(a phclient.Analytics) {
+	w.analytics = a
 }
 
 // Work processes a Plaid sync job.
@@ -124,7 +142,7 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 
 	// Acquire row-level lock via transaction
 	// This prevents concurrent sync operations on the same linked item
-	linkedItem, tx, lockErr := w.acquireLockAndGetItem(ctx, args.ItemID, args.UserID)
+	linkedItem, tx, lockErr := acquireLinkedItemLock(ctx, w.db, w.linkedItemRepo, args.ItemID, args.UserID)
 	if lockErr != nil {
 		if errors.Is(lockErr, repository.ErrLinkedItemNotFound) {
 			w.logger.Warn("linked item not found, skipping job",
@@ -150,6 +168,39 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 			_ = tx.Rollback(ctx) // No-op if already committed
 		}
 	}()
+	if tx != nil {
+		w.logger.Debug("acquired lock on linked item",
+			"item_id", args.ItemID,
+			"user_id", args.UserID,
+		)
+	}
+
+	// Issue #1609 Item 7: release the lock BEFORE the sync, not after.
+	//
+	// This transaction exists only to take a `SELECT ... FOR UPDATE` row lock on
+	// linked_items and validate ownership; it performs no writes, and every write the
+	// sync makes goes on a DIFFERENT pool connection. Previously the commit happened
+	// after SyncTransactions returned, so this connection sat idle-in-transaction for
+	// the whole multi-page Plaid sync. Postgres eventually terminated it and the job
+	// failed at Commit with SQLSTATE 25P03 — a production DLQ entry burned all 5
+	// attempts that way, and no timeout tuning fixes it (holding a pooled connection
+	// across unbounded external HTTP exhausts the pool regardless).
+	//
+	// Committing here is safe because the lock protected less than it appeared:
+	//   - The webhook path takes NO lock at all — transactionSyncService.ProcessWebhook
+	//     does a plain GetByItemID then calls SyncTransactions directly. A webhook sync
+	//     could always run concurrently with a job sync; this lock never prevented it.
+	//   - Worker-vs-worker serialization already comes from River's job uniqueness
+	//     (ByArgs + ByState including Running — plaidSyncUniqueOpts).
+	//
+	// Pinned by TestPlaidSyncWorker_LockTxCommitsBeforeSync, which asserts ORDERING —
+	// a test that merely asserted "Commit was called" passes against the old code too.
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit transaction: %w", err)
+		}
+		tx = nil // the deferred Rollback above must not fire for a committed tx
+	}
 
 	// Perform the sync - this is fully self-contained and handles:
 	// - Cursor-based pagination until has_more=false
@@ -190,8 +241,26 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 				"job_id", job.ID,
 				"error_code", plaidErr.ErrorCode,
 			)
+
+			// Issue #1609 P3-T2: notify the user through the same handlers the ITEM webhook path
+			// uses (ItemErrorService is the ONLY writer of linked_items error status — before
+			// this, a connection break discovered by a SYNC rather than a webhook left the user
+			// with no signal at all: transactions simply stopped arriving). Excludes
+			// PRODUCTS_NOT_SUPPORTED (the connection is fine; see notifyPermanentPlaidError).
+			// Non-blocking: a sync must not fail because a notification failed.
+			notifyPermanentPlaidError(ctx, w.itemErrorSvc, w.logger, linkedItem, plaidErr)
+
+			// Issue #1609 P3-T2: first sync-failure analytics coverage for this worker — the only
+			// existing EventSyncFailed fire site (plaid_sync_provider.go) is not wired into
+			// production, and this worker fired no sync-failure event at all before this.
+			if w.analytics != nil {
+				w.analytics.Capture(args.UserID, phclient.EventSyncFailed, map[string]interface{}{
+					"item_id":    args.ItemID,
+					"error_code": errorCode,
+				})
+			}
+
 			// Return nil to mark job as complete (not retryable)
-			// TODO: Create user notification about the failure
 			return nil
 		}
 
@@ -212,13 +281,8 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 		"duration_ms", time.Since(startTime).Milliseconds(),
 	)
 
-	// Commit the transaction to release the lock (if we're using locking)
-	// This must happen before enqueueing follow-up jobs to avoid holding the lock
-	if tx != nil {
-		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("failed to commit transaction: %w", err)
-		}
-	}
+	// Issue #1609 Item 7: the lock transaction was already committed above, before the
+	// sync ran. Nothing to commit here.
 
 	// Enqueue follow-up job if there were transaction changes
 	// This allows us to decouple sync from budget notifications
@@ -277,51 +341,4 @@ func plaidErrorTypeLabel(t domain.PlaidErrorType) string {
 	default:
 		return "temporary"
 	}
-}
-
-// acquireLockAndGetItem starts a transaction, acquires an exclusive row-level lock
-// on the linked item, and validates ownership.
-//
-// The returned transaction MUST be committed or rolled back by the caller.
-// The lock is held until the transaction ends.
-//
-// Returns:
-//   - The linked item if successful
-//   - The transaction (caller must commit/rollback)
-//   - repository.ErrLinkedItemNotFound if the item doesn't exist
-//   - errOwnershipMismatch if the item belongs to a different user
-//   - Other errors for database failures
-func (w *PlaidSyncWorker) acquireLockAndGetItem(ctx context.Context, itemID, userID string) (*domain.LinkedItem, pgx.Tx, error) {
-	// If DB is not configured, fall back to non-locking behavior
-	// This allows graceful degradation in tests or when locking is not needed
-	if w.db == nil {
-		item, err := w.linkedItemRepo.GetByIDAndUser(ctx, itemID, userID)
-		return item, nil, err
-	}
-
-	// Start transaction for row-level locking
-	tx, err := w.db.Begin(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to begin transaction: %w", err)
-	}
-
-	// Acquire exclusive lock and get the item
-	item, err := w.linkedItemRepo.GetByIDForUpdate(ctx, tx, itemID)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return nil, nil, err
-	}
-
-	// Validate ownership - the item must belong to the specified user
-	if item.UserID != userID {
-		_ = tx.Rollback(ctx)
-		return nil, nil, errOwnershipMismatch
-	}
-
-	w.logger.Debug("acquired lock on linked item",
-		"item_id", itemID,
-		"user_id", userID,
-	)
-
-	return item, tx, nil
 }

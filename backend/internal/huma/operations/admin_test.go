@@ -142,6 +142,31 @@ func (m *mockLinkedItemRepo) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id
 	return m.item, m.getErr
 }
 
+// RepairStatus atomically transitions a linked item to 'active' (Issue #1609 round 2). Unused by
+// this package's tests; stubbed only to satisfy repository.LinkedItemRepository.
+func (m *mockLinkedItemRepo) RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus, notNewerThan *time.Time) (bool, error) {
+	return false, nil
+}
+
+// TransitionErrorStatus atomically transitions a linked item to an error status (Issue #1609
+// P3-T2). Unused by this package's tests; stubbed only to satisfy
+// repository.LinkedItemRepository.
+// MarkFailureAsserted stamps last_failure_asserted_at unconditionally (Issue #1623).
+func (m *mockLinkedItemRepo) MarkFailureAsserted(ctx context.Context, id string, terminalStatuses []domain.LinkedItemStatus) error {
+	return nil
+}
+
+// SetInvestmentsSkippedAtLink records whether the investment jobs were skipped at link time
+// (Issue #1613 P4-T3 item E). Unused by this package's tests; stubbed only to satisfy
+// repository.LinkedItemRepository.
+func (m *mockLinkedItemRepo) SetInvestmentsSkippedAtLink(ctx context.Context, id string, skipped bool) error {
+	return nil
+}
+
+func (m *mockLinkedItemRepo) TransitionErrorStatus(ctx context.Context, id string, newStatus domain.LinkedItemStatus, errorCode, errorMessage string, terminalStatuses []domain.LinkedItemStatus) (bool, error) {
+	return false, nil
+}
+
 // GetByUserAndInstitution retrieves a linked item by user ID, institution ID, and status.
 // Issue #171 - Plaid Re-Link Handling
 func (m *mockLinkedItemRepo) GetByUserAndInstitution(ctx context.Context, userID, institutionID, status string) (*domain.LinkedItem, error) {

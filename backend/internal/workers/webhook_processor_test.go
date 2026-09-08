@@ -64,8 +64,8 @@ type MockItemErrorServiceForWorker struct {
 	mock.Mock
 }
 
-func (m *MockItemErrorServiceForWorker) ProcessWebhook(ctx context.Context, itemID string, errorType string, errorCode string, errorMessage string) error {
-	args := m.Called(ctx, itemID, errorType, errorCode, errorMessage)
+func (m *MockItemErrorServiceForWorker) ProcessWebhook(ctx context.Context, itemID string, errorType string, errorCode string, errorMessage string, receivedAt time.Time) error {
+	args := m.Called(ctx, itemID, errorType, errorCode, errorMessage, receivedAt)
 	return args.Error(0)
 }
 
@@ -86,6 +86,27 @@ func (m *MockItemErrorServiceForWorker) HandlePendingExpiration(ctx context.Cont
 
 func (m *MockItemErrorServiceForWorker) HandlePermissionRevoked(ctx context.Context, linkedItem *domain.LinkedItem, errorCode string, errorMessage string) error {
 	args := m.Called(ctx, linkedItem, errorCode, errorMessage)
+	return args.Error(0)
+}
+
+// HandleLoginRepaired, CreateReconnectLinkToken, and RepairItem (Issue #1609) are not exercised
+// by WebhookProcessor's own tests — ProcessWebhook is mocked wholesale above — but must exist to
+// satisfy services.ItemErrorService.
+func (m *MockItemErrorServiceForWorker) HandleLoginRepaired(ctx context.Context, linkedItem *domain.LinkedItem, webhookReceivedAt time.Time) error {
+	args := m.Called(ctx, linkedItem, webhookReceivedAt)
+	return args.Error(0)
+}
+
+func (m *MockItemErrorServiceForWorker) CreateReconnectLinkToken(ctx context.Context, userID string, itemID string) (*domain.ReconnectLinkTokenResponse, error) {
+	args := m.Called(ctx, userID, itemID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.ReconnectLinkTokenResponse), args.Error(1)
+}
+
+func (m *MockItemErrorServiceForWorker) RepairItem(ctx context.Context, userID string, itemID string, repairNonce string) error {
+	args := m.Called(ctx, userID, itemID, repairNonce)
 	return args.Error(0)
 }
 
@@ -410,7 +431,7 @@ func TestWebhookProcessor_ProcessPendingWebhooks_ItemWebhook_Success(t *testing.
 	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).Return([]domain.WebhookEvent{itemWebhook}, nil)
 
 	// Mock: ItemErrorService.ProcessWebhook succeeds
-	mockItemErrorService.On("ProcessWebhook", ctx, "item-1", "ITEM_LOGIN_REQUIRED", "ITEM_LOGIN_REQUIRED", "User credentials changed").Return(nil)
+	mockItemErrorService.On("ProcessWebhook", ctx, "item-1", "ITEM_LOGIN_REQUIRED", "ITEM_LOGIN_REQUIRED", "User credentials changed", mock.AnythingOfType("time.Time")).Return(nil)
 
 	// Execute
 	err := processor.ProcessPendingWebhooks(ctx)
@@ -462,9 +483,9 @@ func TestWebhookProcessor_ProcessPendingWebhooks_ItemWebhook_PartialFailure(t *t
 	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).Return(webhooks, nil)
 
 	// Mock: First webhook fails, second succeeds
-	mockItemErrorService.On("ProcessWebhook", ctx, "item-1", "ITEM_LOGIN_REQUIRED", "ITEM_LOGIN_REQUIRED", "User credentials changed").
+	mockItemErrorService.On("ProcessWebhook", ctx, "item-1", "ITEM_LOGIN_REQUIRED", "ITEM_LOGIN_REQUIRED", "User credentials changed", mock.AnythingOfType("time.Time")).
 		Return(errors.New("failed to process ITEM webhook"))
-	mockItemErrorService.On("ProcessWebhook", ctx, "item-2", "ERROR", "INSTITUTION_DOWN", "Institution temporarily unavailable").
+	mockItemErrorService.On("ProcessWebhook", ctx, "item-2", "ERROR", "INSTITUTION_DOWN", "Institution temporarily unavailable", mock.AnythingOfType("time.Time")).
 		Return(nil)
 
 	// Execute
@@ -521,7 +542,7 @@ func TestWebhookProcessor_ProcessPendingWebhooks_MixedWebhooks(t *testing.T) {
 	mockSyncService.On("ProcessWebhook", ctx, &transactionWebhook).Return(nil)
 
 	// Mock: ItemErrorService processes ITEM webhook
-	mockItemErrorService.On("ProcessWebhook", ctx, "item-2", "PENDING_EXPIRATION", "PENDING_EXPIRATION", "Item expiring soon").Return(nil)
+	mockItemErrorService.On("ProcessWebhook", ctx, "item-2", "PENDING_EXPIRATION", "PENDING_EXPIRATION", "Item expiring soon", mock.AnythingOfType("time.Time")).Return(nil)
 
 	// Execute
 	err := processor.ProcessPendingWebhooks(ctx)
@@ -806,7 +827,7 @@ func TestWebhookProcessor_ProcessPendingWebhooks_ItemWebhook_Analytics(t *testin
 	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).Return([]domain.WebhookEvent{webhook}, nil)
 
 	// Mock: ItemErrorService.ProcessWebhook succeeds
-	mockItemErrorService.On("ProcessWebhook", ctx, "item-1", "ITEM_LOGIN_REQUIRED", "ITEM_LOGIN_REQUIRED", "User credentials changed").Return(nil)
+	mockItemErrorService.On("ProcessWebhook", ctx, "item-1", "ITEM_LOGIN_REQUIRED", "ITEM_LOGIN_REQUIRED", "User credentials changed", mock.AnythingOfType("time.Time")).Return(nil)
 
 	// Mock: Analytics.Capture called with correct parameters for ITEM webhook
 	mockAnalytics.On("Capture", "item-1", posthog.EventWebhookReceived, mock.MatchedBy(func(props map[string]interface{}) bool {

@@ -191,7 +191,7 @@ func RegisterRecipeRoutes(api huma.API, handler *RecipeHandler) {
 		Method:      http.MethodPost,
 		Path:        "/api/v1/mcp/recipes/{id}/run",
 		Summary:     "Run a recipe",
-		Description: "Resolve a recipe's spec for execution. Returns the ordered list of API calls to chain through execute().",
+		Description: "Resolve a recipe's spec for execution. Returns the ordered list of API calls to chain through readExecute() or writeExecute().",
 		Tags:        []string{"MCP Recipes"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.RunRecipe)

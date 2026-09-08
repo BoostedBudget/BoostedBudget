@@ -119,6 +119,7 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).
 		AddRow(
@@ -126,6 +127,7 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 			"Checking", strPtr("Chase Total Checking"), "depository", strPtr("checking"), strPtr("1234"),
 			&balance1, &available1, "USD",
 			"active", nil, nil, nil,
+			false,
 			now, now,
 		).
 		AddRow(
@@ -133,6 +135,7 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 			"Savings", nil, "depository", strPtr("savings"), strPtr("5678"),
 			&balance2, &available2, "USD",
 			"active", nil, nil, nil,
+			false,
 			now, now,
 		)
 
@@ -141,14 +144,15 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 	// (item D) changed exactly these two columns in ten places at once. Calling the renderer means
 	// this expectation cannot disagree with what the method emits.
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       created_at, updated_at
-		FROM accounts
-		WHERE linked_item_id = $1 AND status = 'active'
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.linked_item_id = $1 AND a.status = 'active'
+		ORDER BY a.created_at ASC
 	`)).WithArgs(linkedItemID).WillReturnRows(rows)
 
 	// Execute
@@ -180,24 +184,30 @@ func TestAccountRepository_GetByUserID(t *testing.T) {
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "acc-1",
 		"Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&balance, &available, "USD",
 		"active", nil, nil, nil,
+		false,
 		now, now,
 	)
 
+	// #1618b: aliased `a` and given accountCustomizationJoin so this read (dashboard_service.go's
+	// net-worth/balance-summary path, account_chain_resolver.go, savings_goal_service.go) surfaces
+	// exclude_investment_sync instead of reading it back as an unconditional false.
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       created_at, updated_at
-		FROM accounts
-		WHERE user_id = $1 AND status = 'active'
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.user_id = $1 AND a.status = 'active'
+		ORDER BY a.created_at ASC
 	`)).WithArgs(userID).WillReturnRows(rows)
 
 	// Execute
@@ -346,6 +356,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at", "institution_name",
 	}).
 		AddRow(
@@ -353,6 +364,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 			"Chase Checking", strPtr("Chase Total Checking®"), "depository", strPtr("checking"), strPtr("1234"),
 			&bal1, &avail1, "USD",
 			"active", nil, nil, nil, nil,
+			false,
 			time.Now(), time.Now(), "Chase",
 		).
 		AddRow(
@@ -360,6 +372,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 			"Chase Savings", strPtr("Chase Savings℠"), "depository", strPtr("savings"), strPtr("5678"),
 			&bal2, &avail2, "USD",
 			"active", nil, nil, nil, nil,
+			false,
 			time.Now(), time.Now(), "Chase",
 		).
 		AddRow(
@@ -367,6 +380,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 			"Wells Fargo Checking", nil, "depository", strPtr("checking"), strPtr("9012"),
 			&bal3, &avail3, "USD",
 			"active", nil, nil, nil, nil,
+			false,
 			time.Now(), time.Now(), "Wells Fargo",
 		)
 
@@ -375,11 +389,12 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
 		WHERE a.user_id = $1 AND a.status = 'active'
-		ORDER BY a.created_at ASC
+		ORDER BY a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -425,6 +440,7 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at", "institution_name",
 	})
 
@@ -433,11 +449,12 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
 		WHERE a.user_id = $1 AND a.status = 'active'
-		ORDER BY a.created_at ASC
+		ORDER BY a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -470,12 +487,14 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at", "institution_name",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "plaid-acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&bal, &bal, "USD",
 		"active", nil, nil, nil, nil,
+		false,
 		time.Now(), time.Now(), "Chase",
 	)
 	// Note: expired account not in rows — DB filters it via WHERE a.status != 'expired'
@@ -485,11 +504,12 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
 		WHERE a.user_id = $1 AND a.status = 'active'
-		ORDER BY a.created_at ASC
+		ORDER BY a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -535,6 +555,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
+		"exclude_investment_sync",
 		"user_account_id", "status", "removed_at", "replaced_at", "expired_at", "replaced_by_id",
 		"created_at", "updated_at",
 	}).AddRow(
@@ -543,20 +564,21 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		&balance, &available, "USD",
 		strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), strPtr("💰"),
 		&displayOrder, false,
+		false,
 		&userAccountID, domain.AccountStatusActive, nil, nil, nil, nil,
 		now, now,
 	)
 
 	expectedQuery := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden,
-		       user_account_id, status, removed_at, replaced_at, expired_at, replaced_by_id,
-		       created_at, updated_at
-		FROM accounts
-		WHERE id = $1 AND user_id = $2
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.user_account_id, a.status, a.removed_at, a.replaced_at, a.expired_at, a.replaced_by_id,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.id = $1 AND a.user_id = $2
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -595,15 +617,15 @@ func TestAccountRepository_GetByIDAndUser_NotFound(t *testing.T) {
 	userID := uuid.New().String()
 
 	expectedQuery := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden,
-		       user_account_id, status, removed_at, replaced_at, expired_at, replaced_by_id,
-		       created_at, updated_at
-		FROM accounts
-		WHERE id = $1 AND user_id = $2
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.user_account_id, a.status, a.removed_at, a.replaced_at, a.expired_at, a.replaced_by_id,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.id = $1 AND a.user_id = $2
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -715,15 +737,21 @@ func TestAccountRepository_UpdateDisplayOrders_Success(t *testing.T) {
 		{AccountID: acc2ID, DisplayOrder: 1},
 	}
 
-	expectedQuery := `
-		UPDATE accounts
-		SET display_order = $1, updated_at = $2
-		WHERE id = $3 AND user_id = $4
-	`
-
 	mock.ExpectBegin()
+	// #1609: every order first resolves whether the account is chained, because the target column
+	// follows the chain. Both accounts here are UNCHAINED (NULL user_account_id), so both take the
+	// legacy accounts leg — the no-regression half of the routing.
+	//
+	// ⚠ TWO PASSES, and the expectation order pins that. Fix round 1 (F2) moved the writes behind
+	// a full resolve pass, because a discarded duplicate must still be validated and because the
+	// collapse cannot know a target's lowest order until every entry has been resolved.
 	for _, order := range orders {
-		mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
+		mock.ExpectQuery(regexp.QuoteMeta(displayOrderResolveChainQuery)).
+			WithArgs(order.AccountID, userID).
+			WillReturnRows(pgxmock.NewRows([]string{"user_account_id"}).AddRow(nil))
+	}
+	for _, order := range orders {
+		mock.ExpectExec(regexp.QuoteMeta(displayOrderAccountsSideQuery)).
 			WithArgs(order.DisplayOrder, pgxmock.AnyArg(), order.AccountID, userID).
 			WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	}
@@ -768,21 +796,22 @@ func TestAccountRepository_UpdateDisplayOrders_AccountNotFound(t *testing.T) {
 		{AccountID: acc2ID, DisplayOrder: 1},
 	}
 
-	expectedQuery := `
-		UPDATE accounts
-		SET display_order = $1, updated_at = $2
-		WHERE id = $3 AND user_id = $4
-	`
-
 	mock.ExpectBegin()
-	// First update succeeds
-	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
-		WithArgs(orders[0].DisplayOrder, pgxmock.AnyArg(), orders[0].AccountID, userID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	// Second update returns 0 rows (not found)
-	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
-		WithArgs(orders[1].DisplayOrder, pgxmock.AnyArg(), orders[1].AccountID, userID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	// The first account resolves (unchained: a NULL chain id).
+	mock.ExpectQuery(regexp.QuoteMeta(displayOrderResolveChainQuery)).
+		WithArgs(orders[0].AccountID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"user_account_id"}).AddRow(nil))
+	// The second account does not exist, so the RESOLVE finds no row — #1609 moved the
+	// not-found detection ahead of the UPDATE so that "no such account" stays distinguishable
+	// from "this account is simply not chained".
+	//
+	// ⚠ NO Exec is expected at all. Fix round 1 (F2) put every resolve ahead of every write, so a
+	// rejected batch never reaches the write pass — the rollback has nothing to undo rather than
+	// one statement's worth. That is a strictly narrower window, and pgxmock's ordered
+	// expectations are what pin it: an interleaved implementation fails here.
+	mock.ExpectQuery(regexp.QuoteMeta(displayOrderResolveChainQuery)).
+		WithArgs(orders[1].AccountID, userID).
+		WillReturnError(pgx.ErrNoRows)
 	mock.ExpectRollback()
 
 	// Execute
@@ -790,6 +819,40 @@ func TestAccountRepository_UpdateDisplayOrders_AccountNotFound(t *testing.T) {
 
 	// Assert
 	assert.ErrorIs(t, err, ErrAccountNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_UpdateDisplayOrders_ChainedAccountTargetsUserAccounts pins the STATEMENT
+// SHAPE of the chained leg: the UPDATE goes to user_accounts, keyed by the chain id the resolve
+// returned, and still carries the actor's user_id.
+//
+// This is a shape assertion only. What the write actually does — that the value comes back out of
+// the chain-authoritative read, and that the legacy accounts column is left alone — is not
+// something pgxmock can see (it returns rows the test author invented), so it is pinned by
+// account_display_order_routing_integration_test.go against real Postgres.
+func TestAccountRepository_UpdateDisplayOrders_ChainedAccountTargetsUserAccounts(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+	userAccountID := uuid.New().String()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(displayOrderResolveChainQuery)).
+		WithArgs(accountID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"user_account_id"}).AddRow(&userAccountID))
+	mock.ExpectExec(regexp.QuoteMeta(displayOrderChainSideQuery)).
+		WithArgs(3, pgxmock.AnyArg(), userAccountID, userID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
+
+	err := repo.UpdateDisplayOrders(ctx, userID, []domain.AccountOrder{
+		{AccountID: accountID, DisplayOrder: 3},
+	})
+
+	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -814,6 +877,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
+		"exclude_investment_sync",
 		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
@@ -823,6 +887,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 			&bal1, &avail1, "USD",
 			strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), nil,
 			&order0, false,
+			false,
 			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
@@ -832,6 +897,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 			&bal2, &avail2, "USD",
 			nil, nil, nil, nil,
 			&order1, false,
+			false,
 			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		)
@@ -842,13 +908,13 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
-		       a.display_order, a.is_hidden,
+		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status = 'active' AND a.is_hidden = FALSE ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
+		WHERE a.user_id = $1 AND a.status = 'active' AND ` + accountHiddenExpr("a") + ` = FALSE ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -887,6 +953,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
+		"exclude_investment_sync",
 		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
@@ -896,6 +963,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 			&bal1, &avail1, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
+			false,
 			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
@@ -905,6 +973,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 			&bal2, &avail2, "USD",
 			strPtr("Closed Account"), nil, nil, nil,
 			nil, true, // This one is hidden
+			false,
 			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Bank of America"), strPtr("active"),
 		)
@@ -915,13 +984,13 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
-		       a.display_order, a.is_hidden,
+		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status = 'active' ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
+		WHERE a.user_id = $1 AND a.status = 'active' ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -963,6 +1032,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_Active(t *testing.T) {
 		"current_balance", "available_balance", "currency_code",
 		"user_account_id", "status", "replaced_at", "replaced_by_id",
 		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).
 		AddRow(
@@ -971,12 +1041,13 @@ func TestAccountRepository_GetByUserAccountAndStatus_Active(t *testing.T) {
 			&bal1, &avail1, "USD",
 			&userAccountID, "active", nil, nil,
 			nil, nil, nil, nil, nil, false,
+			false,
 			now, now,
 		)
 
 	userID := uuid.New().String()
 
-	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status.*AND user_id").
+	mock.ExpectQuery("SELECT.*FROM accounts a.*WHERE a\\.user_account_id.*AND a\\.status.*AND a\\.user_id").
 		WithArgs(userAccountID, "active", userID).
 		WillReturnRows(rows)
 
@@ -1011,6 +1082,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_Replaced(t *testing.T) {
 		"current_balance", "available_balance", "currency_code",
 		"user_account_id", "status", "replaced_at", "replaced_by_id",
 		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).
 		AddRow(
@@ -1019,12 +1091,13 @@ func TestAccountRepository_GetByUserAccountAndStatus_Replaced(t *testing.T) {
 			&bal1, &avail1, "USD",
 			&userAccountID, "replaced", &replacedAt, &replacedByID,
 			nil, nil, nil, nil, nil, false,
+			false,
 			now, now,
 		)
 
 	userID := uuid.New().String()
 
-	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status.*AND user_id").
+	mock.ExpectQuery("SELECT.*FROM accounts a.*WHERE a\\.user_account_id.*AND a\\.status.*AND a\\.user_id").
 		WithArgs(userAccountID, "replaced", userID).
 		WillReturnRows(rows)
 
@@ -1055,12 +1128,13 @@ func TestAccountRepository_GetByUserAccountAndStatus_NotFound(t *testing.T) {
 		"current_balance", "available_balance", "currency_code",
 		"user_account_id", "status", "replaced_at", "replaced_by_id",
 		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	})
 
 	userID := uuid.New().String()
 
-	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id.*AND status.*AND user_id").
+	mock.ExpectQuery("SELECT.*FROM accounts a.*WHERE a\\.user_account_id.*AND a\\.status.*AND a\\.user_id").
 		WithArgs(userAccountID, "active", userID).
 		WillReturnRows(rows)
 
@@ -1092,13 +1166,14 @@ func TestAccountRepository_GetByUserAccountAndStatus_ScopesToUserID(t *testing.T
 		"current_balance", "available_balance", "currency_code",
 		"user_account_id", "status", "replaced_at", "replaced_by_id",
 		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	})
 
 	// pgxmock.WithArgs matches positionally: if the implementation dropped the user_id bind
 	// parameter (or put it in the wrong position), this expectation would not match and the
 	// query would error — that failure IS the assertion.
-	mock.ExpectQuery(`SELECT.*FROM accounts.*WHERE user_account_id = \$1 AND status = \$2 AND user_id = \$3`).
+	mock.ExpectQuery(`SELECT.*FROM accounts a.*WHERE a\.user_account_id = \$1 AND a\.status = \$2 AND a\.user_id = \$3`).
 		WithArgs(userAccountID, "active", userID).
 		WillReturnRows(rows)
 
@@ -1131,6 +1206,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_MultipleAccounts(t *testing
 		"current_balance", "available_balance", "currency_code",
 		"user_account_id", "status", "replaced_at", "replaced_by_id",
 		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).
 		AddRow(
@@ -1139,6 +1215,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_MultipleAccounts(t *testing
 			&bal1, &avail1, "USD",
 			&userAccountID, "replaced", &replacedAt, nil,
 			nil, nil, nil, nil, nil, false,
+			false,
 			now.Add(-2*time.Hour), now,
 		).
 		AddRow(
@@ -1147,11 +1224,12 @@ func TestAccountRepository_GetByUserAccountAndStatus_MultipleAccounts(t *testing
 			&bal2, &avail2, "USD",
 			&userAccountID, "active", nil, nil,
 			nil, nil, nil, nil, nil, false,
+			false,
 			now, now,
 		)
 
 	// When querying without status filter (nil), return all
-	mock.ExpectQuery("SELECT.*FROM accounts.*WHERE user_account_id").
+	mock.ExpectQuery("SELECT.*FROM accounts a.*WHERE a\\.user_account_id").
 		WithArgs(userAccountID).
 		WillReturnRows(rows)
 
@@ -1188,14 +1266,15 @@ func TestAccountRepository_UpdateStatus(t *testing.T) {
 	// Expect update to set status, replaced_at, replaced_by_id, removed_at and removed_reason
 	// (Issue #1569 Task 5: the cause is stamped in the same statement as removed_at, so the two
 	// can never disagree — migration 000154's accounts_removed_reason_valid CHECK requires it).
+	// replaced_at/removed_at are now CASE-WHEN NOW() expressions keyed off $1 (a root-cause fix
+	// for TestAccountRepository_Reads_Integration_ReturnRemovedAt's clock-split flake), so they
+	// are no longer bound parameters — only status, replaced_by_id, removed_reason, id, user_id
+	// are. updated_at is never bound: the migration-000007 trigger owns it.
 	mock.ExpectExec("UPDATE accounts.*SET.*status.*replaced_at.*replaced_by_id.*removed_at.*removed_reason").
 		WithArgs(
 			pgxmock.AnyArg(), // status
-			pgxmock.AnyArg(), // replaced_at
 			pgxmock.AnyArg(), // replaced_by_id
-			pgxmock.AnyArg(), // removed_at
 			pgxmock.AnyArg(), // removed_reason
-			pgxmock.AnyArg(), // updated_at
 			pgxmock.AnyArg(), // id
 			pgxmock.AnyArg(), // user_id
 		).
@@ -1583,25 +1662,28 @@ func TestAccountRepository_GetByUserID_ExcludesReplaced(t *testing.T) {
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&balance, &balance, "USD",
 		"active", nil, nil, nil,
+		false,
 		now, now,
 	)
 	// Note: replaced account not in rows — DB filters it via WHERE status = 'active'
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       created_at, updated_at
-		FROM accounts
-		WHERE user_id = $1 AND status = 'active'
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.user_id = $1 AND a.status = 'active'
+		ORDER BY a.created_at ASC
 	`)).WithArgs(userID).WillReturnRows(rows)
 
 	accounts, err := repo.GetByUserID(ctx, userID)
@@ -1629,12 +1711,14 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesReplaced(t *testin
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at", "institution_name",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "plaid-acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&bal, &bal, "USD",
 		"active", nil, nil, nil, nil,
+		false,
 		time.Now(), time.Now(), "Chase",
 	)
 
@@ -1643,11 +1727,12 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesReplaced(t *testin
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
 		WHERE a.user_id = $1 AND a.status = 'active'
-		ORDER BY a.created_at ASC
+		ORDER BY a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -1680,24 +1765,27 @@ func TestAccountRepository_GetByLinkedItemID_ExcludesReplaced(t *testing.T) {
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), linkedItemID, uuid.New().String(), "acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&balance, &available, "USD",
 		"active", nil, nil, nil,
+		false,
 		now, now,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       created_at, updated_at
-		FROM accounts
-		WHERE linked_item_id = $1 AND status = 'active'
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.linked_item_id = $1 AND a.status = 'active'
+		ORDER BY a.created_at ASC
 	`)).WithArgs(linkedItemID).WillReturnRows(rows)
 
 	accounts, err := repo.GetByLinkedItemID(ctx, linkedItemID)
@@ -1729,6 +1817,7 @@ func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuse
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at",
 		"removed_reason",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), linkedItemID, uuid.New().String(), "acc-active",
@@ -1736,6 +1825,7 @@ func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuse
 		&balance, &available, "USD",
 		"active", nil, nil, nil,
 		nil,
+		false,
 		now, now,
 	).AddRow(
 		uuid.New().String(), linkedItemID, uuid.New().String(), "acc-removed",
@@ -1743,19 +1833,25 @@ func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuse
 		nil, nil, "USD",
 		"removed", nil, nil, nil,
 		strPtr("provider_absent"),
+		true,
 		now, now,
 	)
 
+	// #1618b: aliased `a` and given accountCustomizationJoin so this read (used by
+	// investment_sync_service.SyncInvestmentTransactions — the very subsystem this flag governs)
+	// surfaces exclude_investment_sync instead of reading it back as an unconditional false. A LEFT
+	// JOIN adds a column, never removes a row: both statuses are still returned.
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       removed_reason,
-		       created_at, updated_at
-		FROM accounts
-		WHERE linked_item_id = $1
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       a.removed_reason,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.linked_item_id = $1
+		ORDER BY a.created_at ASC
 	`)).WithArgs(linkedItemID).WillReturnRows(rows)
 
 	accounts, err := repo.GetByLinkedItemIDIncludingRetained(ctx, linkedItemID)
@@ -1770,6 +1866,8 @@ func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuse
 	assert.Nil(t, accounts[0].RemovedReason)
 	require.NotNil(t, accounts[1].RemovedReason)
 	assert.Equal(t, "provider_absent", *accounts[1].RemovedReason)
+	assert.False(t, accounts[0].ExcludeInvestmentSync)
+	assert.True(t, accounts[1].ExcludeInvestmentSync)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1820,6 +1918,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
+		"exclude_investment_sync",
 		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
@@ -1829,6 +1928,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 			&bal1, &avail1, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
+			false,
 			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
@@ -1838,6 +1938,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 			&bal2, &avail2, "USD",
 			nil, nil, nil, nil,
 			nil, false,
+			false,
 			nil, "replaced", &replacedAt, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		)
@@ -1848,13 +1949,13 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
-		       a.display_order, a.is_hidden,
+		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status IN ('active', 'replaced') AND a.is_hidden = FALSE ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
+		WHERE a.user_id = $1 AND a.status IN ('active', 'replaced') AND ` + accountHiddenExpr("a") + ` = FALSE ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
@@ -1898,6 +1999,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
+		"exclude_investment_sync",
 		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
@@ -1907,6 +2009,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 			nil, nil, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
+			false,
 			nil, "active", nil, nil, nil, nil,
 			now, now, nil, nil, // l.institution_name = NULL, l.status = NULL
 		)
@@ -1915,13 +2018,13 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
-		       a.display_order, a.is_hidden,
+		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
-		WHERE a.user_id = $1 AND a.status = 'active' AND a.is_hidden = FALSE ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
+		WHERE a.user_id = $1 AND a.status = 'active' AND ` + accountHiddenExpr("a") + ` = FALSE ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC, a.id ASC
 	`
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).

@@ -399,4 +399,16 @@ COMMENT ON COLUMN budget_categories.pfc_primary IS 'PFC primary enum to match ag
 COMMENT ON COLUMN budget_categories.pfc_detailed IS 'Optional PFC detailed refinement. Only when category_kind=''pfc''.';
 COMMENT ON COLUMN budget_categories.custom_category_id IS 'FK to custom_categories. Required when category_kind=''custom''. CASCADE removes budget entry when custom category is deleted.';
 
-COMMENT ON COLUMN custom_categories.parent_pfc_primary IS 'Optional PFCv2 primary hint for icon/color fallback resolution. Does not restrict usage.';
+COMMENT ON COLUMN custom_categories.parent_pfc_primary IS
+'Which PFCv2 primary this custom category nests under, or NULL for a category that nests '
+'under nothing. This is NOT a display hint. The original wording said it was ("Optional '
+'PFCv2 primary hint for icon/color fallback resolution. Does not restrict usage.") and that '
+'was already false when it shipped: budget roll-up counts this category''s transactions '
+'under that primary (repository.categoryMatchClause), and since issue #1609 the analytics '
+'transfer filter classifies them through it (repository.effectiveTransferExpr) -- a category '
+'nested under TRANSFER_IN or TRANSFER_OUT makes its transactions TRANSFERS, so they leave '
+'cash flow whenever include_transfers is false. NULL keeps a category out of both mechanisms '
+'rather than defaulting it into one, which was the behaviour of EVERY custom category before '
+'#1609. CHECK valid_custom_category_parent_pfc constrains the value to the 18 PFCv2 '
+'primaries and the API advertises that same set as an enum; '
+'TestPFCPrimaryEnumsMatchTheCustomCategoryParentCheck keeps the two in step.';

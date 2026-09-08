@@ -105,11 +105,15 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
     // +1 across totals/allowed/read from Issue #1569: getAccountBalanceHistory, the per-account
     // retained balance history reader (read, invocable). write/excluded/destructive are unchanged
     // — it mutates nothing and destroys nothing.
-    expect(fresh.totalOperations).toBe(206)
+    // +2 across totals/excluded from Issue #1609 P3-T1: createReconnectLinkToken and
+    // repairLinkedItem. Both are excludedWrite, so `allowed`/`read`/`write` are UNCHANGED and only
+    // total and excluded move — reconnecting a bank needs a human in Plaid Link, so neither is a
+    // capability an agent could ever exercise.
+    expect(fresh.totalOperations).toBe(208)
     expect(fresh.allowedOperations).toBe(139)
     expect(fresh.readOperations).toBe(94)
     expect(fresh.writeOperations).toBe(45)
-    expect(fresh.excludedOperations).toBe(67)
+    expect(fresh.excludedOperations).toBe(69)
     expect(fresh.destructiveWriteOperations).toBe(4)
     expect(fresh.allowedOperations).toBe(fresh.readOperations + fresh.writeOperations)
     expect(fresh.totalOperations).toBe(fresh.allowedOperations + fresh.excludedOperations)

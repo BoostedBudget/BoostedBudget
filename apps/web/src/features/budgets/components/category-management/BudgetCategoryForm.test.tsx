@@ -28,7 +28,9 @@ import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 const makeCustomCategory = (
   id: string,
   name: string,
-  parent_pfc_primary?: string
+  // #1609 narrowed this field to the 18 PFCv2 primaries: it now decides transfer classification
+  // in analytics, so the API advertises the legal set as an enum rather than a free string.
+  parent_pfc_primary?: CustomCategory['parent_pfc_primary']
 ): CustomCategory => ({
   id,
   user_id: 'user-1',

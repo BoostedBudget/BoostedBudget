@@ -1852,6 +1852,22 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/summarize-go-test.test.sh
 
+      # Sibling of the step above and on this side of "Set up Go" for the same reason: it drives
+      # scripts/check-coverage.sh against synthetic coverage profiles in a temp dir and needs a Go
+      # toolchain for `go tool cover`. No database, no network, well under a second.
+      #
+      # Deliberately NOT added to check-ungated-guard-steps.py's REQUIRED_UNGATED_STEPS. That list
+      # is for guards whose subject no paths filter covers; this suite's subject is
+      # scripts/check-coverage.sh, and `scripts/**` IS in the `backend` filter (detect-changes,
+      # filters: backend), which is exactly what gates this job. Being gated here is correct, not
+      # a hole — the same reasoning that keeps the summarizer suite above off that list.
+      #
+      # Like its sibling, its "go not on PATH" branch fails closed when $CI is set, so wiring it
+      # here cannot degrade into a step that silently exits 0.
+      - name: Test backend coverage-gate diagnostics (#1622 falsification suite)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/check-coverage.test.sh
+
       - name: Configure job-local Go build cache
         # runner context is unavailable in job-level env blocks (GitHub Actions limitation),
         # so we export GOCACHE here where $RUNNER_TEMP is a real shell variable.

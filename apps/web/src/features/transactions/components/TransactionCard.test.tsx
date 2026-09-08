@@ -51,6 +51,7 @@ const createMockAccount = (overrides: Partial<Account> = {}): Account => ({
   currency_code: 'USD',
   institution_name: 'Chase',
   is_hidden: false,
+  exclude_investment_sync: false,
   status: 'active',
   created_at: '2025-01-01T00:00:00Z',
   updated_at: '2025-01-01T00:00:00Z',

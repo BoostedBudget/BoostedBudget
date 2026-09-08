@@ -30,7 +30,7 @@ type RecipeService interface {
 	Update(ctx context.Context, id string, userID string, req domain.UpdateMCPRecipeRequest) (*domain.MCPRecipe, error)
 	Delete(ctx context.Context, id string, userID string) error
 	// Run resolves the recipe's spec for execution by the Worker.
-	// Returns the ordered list of API calls to chain through execute().
+	// Returns the ordered list of API calls to chain through readExecute()/writeExecute().
 	Run(ctx context.Context, id string, userID string) (*domain.MCPRecipeRunResult, error)
 }
 
@@ -149,7 +149,7 @@ func (s *recipeService) Run(ctx context.Context, id string, userID string) (*dom
 	}
 	// Re-validate spec at run time (defense-in-depth: GAP-R3-10).
 	// A recipe saved before a manifest change must not be allowed to run write-class ops.
-	// The Worker's execute() tool also gates on the manifest, but we enforce here too
+	// The Worker's readExecute()/writeExecute() tools also gate on the manifest, but we enforce here too
 	// so the backend never silently resolves a spec that violates the v1 read-only constraint.
 	if err := validateSpec(recipe.Spec); err != nil {
 		return nil, fmt.Errorf("recipe spec no longer valid: %w", err)

@@ -133,6 +133,9 @@ const AccountDetailPage = lazy(() =>
 const PlaidOAuthCallback = lazy(() =>
   import('./features/accounts/PlaidOAuthCallback').then(m => ({ default: m.PlaidOAuthCallback }))
 )
+const ReconnectPage = lazy(() =>
+  import('./features/accounts/ReconnectPage').then(m => ({ default: m.ReconnectPage }))
+)
 const TransactionsPage = lazy(() =>
   import('./features/transactions/TransactionsPage').then(m => ({ default: m.TransactionsPage }))
 )
@@ -416,6 +419,18 @@ function App() {
                   <PremiumRoute>
                     <Suspense fallback={<PageSkeleton />}>
                       <AccountsPage />
+                    </Suspense>
+                  </PremiumRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/accounts/reconnect"
+              element={
+                <ProtectedRoute>
+                  <PremiumRoute>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <ReconnectPage />
                     </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>

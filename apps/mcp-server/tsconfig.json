@@ -25,6 +25,7 @@
     "src/**/*.spec.ts",
     "src/**/*.integration.test.ts",
     "src/spec/index-builder.ts",
+    "src/manifest/lazy-init-extension.ts",
     "scripts/**"
   ]
 }

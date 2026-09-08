@@ -40,6 +40,7 @@ export interface UserAccount {
   custom_emoji?: string;
   custom_icon?: string;
   display_order?: number;
+  exclude_investment_sync: boolean;
   id: string;
   institution_id: string;
   is_hidden: boolean;

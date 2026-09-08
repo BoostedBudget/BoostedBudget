@@ -353,7 +353,7 @@ export function PrivacyPolicy() {
             Do not paraphrase — a paraphrase is how the two drifted apart the first time.
           */}
           <ul>
-            <li>your bank connections and every account on them, including accounts you have already closed or disconnected, and the record of when each one was connected, disconnected or closed</li>
+            <li>your bank connections and every account on them, including accounts you have already closed or disconnected, the record of when each one was connected, disconnected or closed, and any reconnection you had started</li>
             <li>your day-by-day balance history for every account</li>
             <li>your transactions, together with every category, note, tag and merchant name you set on them, and the record of those edits</li>
             <li>your investment holdings and their day-by-day snapshots, every buy and sell recorded against them, and your portfolio value history</li>

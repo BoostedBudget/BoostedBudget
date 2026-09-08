@@ -3,6 +3,7 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -53,8 +54,14 @@ type TransactionSyncService interface {
 
 // ItemErrorService defines the methods needed to process ITEM webhooks.
 type ItemErrorService interface {
-	// ProcessWebhook processes an ITEM webhook for errors
-	ProcessWebhook(ctx context.Context, itemID, errorType, errorCode, errorMessage string) error
+	// ProcessWebhook processes an ITEM webhook for errors.
+	//
+	// Issue #1623: receivedAt is webhook_events.created_at — Postgres-stamped on insert
+	// (webhook_repository.go's INSERT lets the column DEFAULT and reads it back via RETURNING),
+	// never a Go clock. The LOGIN_REPAIRED path compares it against
+	// linked_items.last_failure_asserted_at, which is also written by now(), so the ordering is
+	// one database's clock against itself.
+	ProcessWebhook(ctx context.Context, itemID, errorType, errorCode, errorMessage string, receivedAt time.Time) error
 }
 
 // InvestmentSyncService defines the methods needed to process HOLDINGS and
@@ -273,7 +280,38 @@ func (w *WebhookProcessingWorker) processItemWebhook(ctx context.Context, webhoo
 		errorCode = *webhook.ErrorCode
 	}
 
-	return w.itemErrorSvc.ProcessWebhook(ctx, *webhook.ItemID, errorType, errorCode, "")
+	// webhook.CreatedAt is "when this webhook event was received", DEFAULTed by Postgres on
+	// insert — see the interface doc comment for why nothing here may substitute time.Now().
+	return w.itemErrorSvc.ProcessWebhook(ctx, *webhook.ItemID, errorType, errorCode, itemWebhookErrorMessage(webhook.Payload), webhook.CreatedAt)
+}
+
+// itemWebhookErrorMessage recovers Plaid's human-readable error_message from a stored ITEM
+// webhook's raw payload. Issue #1609 P3-T3: domain.WebhookEvent/webhook_events only ever stored
+// error_code (migration 000011), never error_message, so there is no domain field to forward. But
+// Plaid's ITEM webhook schema always nests it the same way regardless of webhook_code
+// (LOGIN_REQUIRED, ERROR, PENDING_EXPIRATION, PERMISSION_REVOKED all share one "error" object
+// shape — see plaid-go's vendored openapi.yaml and https://plaid.com/docs/api/webhooks/), and this
+// helper is only ever reached from the ITEM branch of processWebhookByType, so there is no
+// cross-webhook-type shape variance to worry about here.
+//
+// Best-effort: an empty/malformed/absent payload (or one missing the field) yields "", which
+// item_error_service.go's notification template now tolerates instead of rendering a dangling
+// "with Chase: ." sentence. This must never fail webhook processing itself.
+func itemWebhookErrorMessage(payload json.RawMessage) string {
+	if len(payload) == 0 {
+		return ""
+	}
+
+	var parsed struct {
+		Error struct {
+			ErrorMessage string `json:"error_message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		return ""
+	}
+
+	return parsed.Error.ErrorMessage
 }
 
 // WebhookProcessingUniqueOpts returns the recommended uniqueness options.

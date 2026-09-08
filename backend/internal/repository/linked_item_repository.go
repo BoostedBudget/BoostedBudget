@@ -96,6 +96,132 @@ type LinkedItemRepository interface {
 	// Returns ErrLinkedItemNotFound if the item doesn't exist or belongs to a different user.
 	GetByIDAndUser(ctx context.Context, id, userID string) (*domain.LinkedItem, error)
 
+	// RepairStatus atomically transitions a linked item to 'active' and clears its error tracking
+	// fields (error_code, error_message, last_error_at), but ONLY if — in the SAME statement — its
+	// current status is one of allowedStatuses, and, when userID is non-empty, it is still owned by
+	// userID. Issue #1609 round 2 (BLOCKING 2): replaces a read-in-Go-then-check-then-full-row-
+	// Update sequence that was TOCTOU-unsafe — a concurrent disconnect/re-link landing between the
+	// read and the write was silently overwritten by the full-row Update (17 columns, no status or
+	// user predicate), which could resurrect a 'disconnected'/'replaced' item to 'active' and erase
+	// replaced_at/replaced_by_id.
+	//
+	// Issue #1609 P3-T8 (Phase 3 review H2): the same statement ALSO clears cleanup_notified_at and
+	// cleanup_scheduled_at. Before this, a repair left cleanup_scheduled_at set — nothing cleared it
+	// on reconnection — and ClaimItemForCleanup's recheck (cleanupCandidateReasonPredicate) has an
+	// UNCONDITIONAL stale-last-synced-at leg this repair does not touch, so a connection that broke,
+	// went stale, and was then repaired through Plaid Link update mode could still be claimed and
+	// removed via Plaid /item/remove immediately after the user fixed it. Clearing the schedule here
+	// denies every future claim via ClaimItemForCleanup's own `cleanup_scheduled_at IS NOT NULL`
+	// precondition, regardless of which leg of the predicate would otherwise still match — it does
+	// not require last_synced_at to be refreshed, which would assert a sync that never happened and
+	// corrupt that column's meaning for every other reader. See
+	// TestClaimItemForCleanup_Integration_RealisticReconnectSequence_SurvivesStaleSyncCleanup.
+	//
+	// Returns (true, nil) if the row transitioned. Returns (false, nil) — NOT an error — if the
+	// UPDATE matched zero rows: the item does not exist, is not owned by userID, or its status
+	// (read fresh, inside this statement, not the caller's stale copy) is not in allowedStatuses.
+	// Callers must treat false the same as "not repairable" rather than success.
+	//
+	// Deliberately narrow: this does NOT reuse Update's 17-column full-row write. A state
+	// transition should touch only the columns the transition means, or an unrelated caller's
+	// in-memory copy of other fields (institution name, cursor, retry count, ...) can clobber a
+	// concurrent write to THOSE fields too.
+	// Issue #1623: notNewerThan, when non-nil, adds `AND (last_failure_asserted_at IS NULL OR
+	// last_failure_asserted_at <= $N)` to the same statement — refusing to clear a failure that
+	// was asserted AFTER the event this clear is acting on. Pass nil to apply no such bound.
+	//
+	// Its value MUST be a database-stamped instant (webhook_events.created_at, which Postgres
+	// DEFAULTs), never a Go time.Now(): the column it is compared against is written by now(),
+	// and comparing two clocks would make the ordering a property of clock skew. See
+	// MarkFailureAsserted for why status_changed_at cannot serve this purpose.
+	RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus, notNewerThan *time.Time) (bool, error)
+
+	// MarkFailureAsserted stamps last_failure_asserted_at = now() for the item, UNCONDITIONALLY
+	// with respect to status: it is written even when the failure being asserted does not change
+	// the item's status (Issue #1623).
+	//
+	// 🔴 This exists because TransitionErrorStatus CANNOT do it. That statement's predicate is
+	// `... AND status <> $1`, so a re-asserted SAME-status failure (login_required → fixed →
+	// login_required again) matches ZERO rows and writes NOTHING — which is correct for its own
+	// purpose (two producers reporting one failure must produce one notification) but means
+	// status_changed_at never advances for the SECOND failure, and the second failure therefore
+	// looks exactly as old as the first. A delayed LOGIN_REPAIRED webhook for the first failure
+	// then clears the second, and the user's connection reports healthy while it is broken.
+	// Ordering two same-status failures needs a write that lands even when the status did not
+	// change, which is why this is a separate statement rather than a widened one.
+	//
+	// Stamped with the DATABASE clock, deliberately: both readers (RepairStatus's notNewerThan
+	// and the repair nonce's snapshot comparison) compare it against another server-side
+	// timestamp.
+	//
+	// terminalStatuses is excluded exactly as TransitionErrorStatus excludes it, so the two
+	// writes agree about which items a background error signal may touch at all: an item the
+	// user deliberately disconnected or replaced, or one Plaid has revoked, must not have a
+	// failure-assert clock advanced on it by a stale signal.
+	//
+	// Returns nil whether or not a row matched: a no-op here is not an error, and callers must
+	// not branch on it. Nothing downstream is entitled to assume a stamp happened — every reader
+	// treats a NULL / unchanged value as "not newer".
+	MarkFailureAsserted(ctx context.Context, id string, terminalStatuses []domain.LinkedItemStatus) error
+
+	// SetInvestmentsSkippedAtLink records whether the two investment sync jobs were skipped for
+	// this item at link time because Plaid granted no investments product (#1613 P4-T3 item E).
+	//
+	// ⚠ It takes the value rather than only setting TRUE. ⚠ CORRECTED — the first version of this
+	// comment justified that with "LinkAccounts reuses an existing linked_items row on re-link",
+	// which is FALSE and was not checked before it was written: LinkAccounts marks the old item
+	// `replaced` and always Creates a NEW row, then passes that new id to enqueueInitialSync. So
+	// today every call lands on a freshly created row whose column already defaults to FALSE, and
+	// the FALSE write is a no-op in practice.
+	//
+	// It is still a setter and not a latch, for a reason that IS true: this method's contract is
+	// "record the decision enqueueInitialSync just made", and a column default is not a decision.
+	// Nothing in enqueueInitialSync's signature — it takes an id, not a freshly built object —
+	// prevents a future caller from running it against an existing row, and a one-way latch would
+	// then strand a stale TRUE on an item whose institution had started serving investments.
+	// A latch is a hazard bought for nothing; the setter costs the same UPDATE.
+	//
+	// ⚠ Nothing READS this column yet, deliberately: see enqueueInitialSync's own comment for the
+	// ruling that declined the per-sync product re-check, and for what a future reader would need.
+	// It is written so the fact is durable and countable, not because a consumer exists.
+	SetInvestmentsSkippedAtLink(ctx context.Context, id string, skipped bool) error
+
+	// TransitionErrorStatus atomically transitions a linked item to newStatus while setting its
+	// error tracking fields (error_code, error_message, last_error_at), but ONLY if — in the SAME
+	// statement — its current status is not already newStatus and is not one of terminalStatuses.
+	// Issue #1609 P3-T2.
+	//
+	// This exists for the same reason RepairStatus does: HandleLoginRequired/HandleError/
+	// HandlePendingExpiration/HandlePermissionRevoked used to read a LinkedItem, mutate it in Go,
+	// then call the 17-column full-row Update with no status predicate — the exact "last-write-
+	// wins" defect class that already shipped once this phase (commit 5d75eab0, fixed in
+	// b668e408). Adding a second producer of these transitions (PlaidSyncWorker, discovering the
+	// same failure a webhook already reported, or vice versa) makes that race reachable on a
+	// SHARED item: two producers racing on the same row must not clobber each other's write of
+	// unrelated columns, and must not each independently "win" with a stale in-memory copy.
+	//
+	// terminalStatuses is the caller's set of statuses a background/webhook error signal must
+	// never overwrite — e.g. 'disconnected' and 'replaced' (user-deliberate terminal states) and
+	// 'revoked' (Plaid-unrecoverable for this Item; see ErrLinkedItemNotRepairable). Passing an
+	// empty slice applies no exclusion (SQL `<> ALL(ARRAY[]::text[])` is vacuously true).
+	//
+	// Returns (true, nil) if the row transitioned — the caller should notify.
+	// Returns (false, nil) — NOT an error — if the UPDATE matched zero rows: the item doesn't
+	// exist, its FRESH status already equals newStatus (treated as a duplicate signal — this is
+	// the two-producer dedup mechanism: a webhook and a sync discovering the same failure within
+	// seconds of each other produce only ONE notification, whichever commits first), or its FRESH
+	// status is one of terminalStatuses. Callers must treat false as "no notification", not as an
+	// error.
+	//
+	// ⚠ Issue #1623: the dedup above is still true and still wanted, but it is no longer the
+	// whole story. Because a same-status re-assert writes NOTHING here, this statement cannot be
+	// used to ORDER two consecutive failures of the same kind — status_changed_at does not
+	// advance for the second one. Every caller of this method must ALSO call MarkFailureAsserted,
+	// which is unconditional with respect to status, or a delayed clear will erase the newer
+	// failure. Do not "simplify" that second write away by folding a timestamp into this SET
+	// list: the predicate, not the SET list, is what suppresses it.
+	TransitionErrorStatus(ctx context.Context, id string, newStatus domain.LinkedItemStatus, errorCode, errorMessage string, terminalStatuses []domain.LinkedItemStatus) (bool, error)
+
 	// PurgeLinkedItem permanently and transactionally destroys the linked item and every account
 	// under it: balance_snapshots for those accounts (explicit — SET NULL, migration 000150), then
 	// the linked_items row itself, which CASCADEs to its accounts (fk_accounts_linked_item_id,
@@ -151,9 +277,11 @@ type LinkedItemRepository interface {
 	// MarkForCleanup marks an item for cleanup with notification and scheduled cleanup timestamp.
 	MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error
 
-	// ClearCleanupSchedule clears the cleanup schedule for an item. NOT called on reconnection:
-	// repairing an item through Plaid Link update mode leaves cleanup_scheduled_at set. See
-	// cleanupCandidateReasonPredicate for the full list of production callers and why that matters.
+	// ClearCleanupSchedule clears the cleanup schedule for an item. NOT itself called on
+	// reconnection — RepairStatus clears the same two columns directly, in the same atomic UPDATE
+	// as the status transition, rather than via this method (Issue #1609 P3-T8). See
+	// cleanupCandidateReasonPredicate for the full list of THIS method's production callers and why
+	// that matters.
 	ClearCleanupSchedule(ctx context.Context, itemID string) error
 
 	// Issue #679, #680: Trial expiration - mark items as disconnected to preserve history
@@ -783,6 +911,126 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 	return &item, nil
 }
 
+// RepairStatus implements LinkedItemRepository.RepairStatus — see that method's doc comment for
+// the full contract (Issue #1609 round 2, BLOCKING 2; cleanup-schedule clearing added P3-T8).
+func (r *linkedItemRepository) RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus, notNewerThan *time.Time) (bool, error) {
+	if len(allowedStatuses) == 0 {
+		return false, nil
+	}
+	statuses := make([]string, len(allowedStatuses))
+	for i, s := range allowedStatuses {
+		statuses[i] = string(s)
+	}
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET status = 'active',
+		    error_code = NULL,
+		    error_message = NULL,
+		    last_error_at = NULL,
+		    cleanup_notified_at = NULL,
+		    cleanup_scheduled_at = NULL,
+		    status_changed_at = $1,
+		    updated_at = $1
+		WHERE id = $2
+		  AND status = ANY($3)
+	`
+	args := []any{now, id, statuses}
+	if userID != "" {
+		query += ` AND user_id = $4`
+		args = append(args, userID)
+	}
+	if notNewerThan != nil {
+		// Issue #1623. NULL means "no failure has been asserted since the column existed", which
+		// is treated as NOT newer — an item with no assert on record must stay repairable, or
+		// this predicate would make every pre-migration item permanently unclearable.
+		query += fmt.Sprintf(`
+		  AND (last_failure_asserted_at IS NULL OR last_failure_asserted_at <= $%d)`, len(args)+1)
+		args = append(args, *notNewerThan)
+	}
+
+	tag, err := r.db.Exec(ctx, query, args...)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// MarkFailureAsserted implements LinkedItemRepository.MarkFailureAsserted — see that method's doc
+// comment for why this is a SEPARATE statement from TransitionErrorStatus rather than part of it.
+//
+// ⚠ Deliberately does NOT touch status, error_code, error_message, last_error_at or
+// status_changed_at. Those are TransitionErrorStatus's columns and carry its dedup semantics; the
+// whole point of this write is to advance ONE clock that the dedup predicate must not suppress.
+// It also does not clear on repair: RepairStatus leaves last_failure_asserted_at where it is, so
+// a repaired-then-rebroken item's stamp advances to the NEW failure on the next assert, which is
+// what both readers need.
+func (r *linkedItemRepository) MarkFailureAsserted(ctx context.Context, id string, terminalStatuses []domain.LinkedItemStatus) error {
+	terminal := make([]string, len(terminalStatuses))
+	for i, s := range terminalStatuses {
+		terminal[i] = string(s)
+	}
+
+	const query = `
+		UPDATE linked_items
+		SET last_failure_asserted_at = now(),
+		    updated_at = now()
+		WHERE id = $1
+		  AND status <> ALL($2)
+	`
+
+	_, err := r.db.Exec(ctx, query, id, terminal)
+	return err
+}
+
+// SetInvestmentsSkippedAtLink implements LinkedItemRepository.SetInvestmentsSkippedAtLink — see
+// that method's doc comment for why it takes the value instead of only setting TRUE.
+//
+// Unconditional on status: this records what Plaid granted at link time, which is a fact about the
+// Item and not about its health, so none of the error/terminal predicates that guard the status
+// columns apply here.
+func (r *linkedItemRepository) SetInvestmentsSkippedAtLink(ctx context.Context, id string, skipped bool) error {
+	const query = `
+		UPDATE linked_items
+		SET investments_skipped_at_link = $2,
+		    updated_at = now()
+		WHERE id = $1
+	`
+
+	_, err := r.db.Exec(ctx, query, id, skipped)
+	return err
+}
+
+// TransitionErrorStatus implements LinkedItemRepository.TransitionErrorStatus — see that method's
+// doc comment for the full contract (Issue #1609 P3-T2).
+func (r *linkedItemRepository) TransitionErrorStatus(ctx context.Context, id string, newStatus domain.LinkedItemStatus, errorCode, errorMessage string, terminalStatuses []domain.LinkedItemStatus) (bool, error) {
+	terminal := make([]string, len(terminalStatuses))
+	for i, s := range terminalStatuses {
+		terminal[i] = string(s)
+	}
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET status = $1,
+		    error_code = $2,
+		    error_message = $3,
+		    last_error_at = $4,
+		    status_changed_at = $4,
+		    updated_at = $4
+		WHERE id = $5
+		  AND status <> $1
+		  AND status <> ALL($6)
+	`
+
+	tag, err := r.db.Exec(ctx, query, string(newStatus), errorCode, errorMessage, now, id, terminal)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // PurgeLinkedItem implements LinkedItemRepository.PurgeLinkedItem — see that method's doc comment
 // for the full contract.
 func (r *linkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID, userID string, auditLog AuditLogRepository) error {
@@ -1120,10 +1368,19 @@ const cleanupCandidateSelectQuery = `
 //     releaseDeclinedCleanupSchedule helper both of that worker's decline points share — Codex
 //     pass-5 Medium 2) — see Work's #1486 comment for the enumeration, and
 //     jobs.TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet, which fails if it drifts
-//     again (grep `\.ClearCleanupSchedule(`). The half this bullet actually rests on is unchanged and
-//     still true: NOTHING clears cleanup_scheduled_at on reconnection, so a
-//     reconnected, fully repaired item still carries its schedule.
-//     ClaimItemForCleanup therefore requires the INVERSE (IS NOT NULL) and adds it itself.
+//     again (grep `\.ClearCleanupSchedule(`). Until Issue #1609 P3-T8, NOTHING cleared
+//     cleanup_scheduled_at on reconnection, so a reconnected, fully repaired item still carried its
+//     schedule — and this predicate's own unconditional stale-last-synced-at leg meant a repair that
+//     did not also refresh last_synced_at (RepairStatus never has) could still be claimed. RepairStatus
+//     now clears cleanup_notified_at/cleanup_scheduled_at itself, directly, in the same atomic UPDATE
+//     as the status transition — NOT via ClearCleanupSchedule, so it is not a fifth entry in that
+//     method's caller enumeration above. A reconnected item's schedule is therefore gone by the time
+//     any of the FOUR ClearCleanupSchedule callers or this recheck would ever see it, which is exactly
+//     why ClaimItemForCleanup requiring the INVERSE (IS NOT NULL) is still correct and not redundant:
+//     an item that was never scheduled (never a candidate) and one that WAS scheduled and has since
+//     been repaired now look identical to this recheck — both decline, for the same reason.
+//     See TestLinkedItemRepository_RepairStatus_Integration_ClearsCleanupSchedule and
+//     TestClaimItemForCleanup_Integration_RealisticReconnectSequence_SurvivesStaleSyncCleanup.
 //   - The sweep's own `li.plaid_removed_at IS NULL AND (li.status IS NULL OR li.status <> 'replaced')`
 //     pair is also sweep-only (Issue #1495 split what was one `li.status NOT IN ('replaced',
 //     'disconnected')` clause; see cleanupCandidateSelectQuery for why), and including the 'replaced'
@@ -1539,10 +1796,12 @@ func (r *linkedItemRepository) ClaimItemForCleanup(ctx context.Context, itemID s
 	return ct.RowsAffected() > 0, nil
 }
 
-// ClearCleanupSchedule clears the cleanup schedule for an item. Despite the name's suggestion, it is
-// NOT called on reconnection — a user repairing an item through Plaid Link update mode leaves
-// cleanup_scheduled_at set, which is exactly why ClaimItemForCleanup re-verifies ELIGIBILITY instead
-// of re-reading the schedule. See cleanupCandidateReasonPredicate.
+// ClearCleanupSchedule clears the cleanup schedule for an item. Despite the name's suggestion, this
+// METHOD is not itself called on reconnection — since Issue #1609 P3-T8, RepairStatus clears the
+// same two columns directly, in the same atomic UPDATE as the status transition, so a reconnect
+// never needs this method at all. ClaimItemForCleanup still re-verifies ELIGIBILITY rather than
+// merely re-reading the schedule (see cleanupCandidateReasonPredicate for why that recheck is
+// necessary independent of who clears the schedule and when).
 func (r *linkedItemRepository) ClearCleanupSchedule(ctx context.Context, itemID string) error {
 	now := time.Now()
 

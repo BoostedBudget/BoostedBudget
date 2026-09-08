@@ -159,6 +159,51 @@ type Account struct {
 	DisplayOrder *int    `json:"display_order,omitempty" db:"display_order"` // Sort order
 	IsHidden     bool    `json:"is_hidden" db:"is_hidden"`                   // Hide from default views
 
+	// ExcludeInvestmentSync surfaces user_accounts.exclude_investment_sync (Issue #1618a) — see
+	// domain.UserAccount.ExcludeInvestmentSync for the full semantics (hides this chain's
+	// investment_transactions from all three read surfaces — feed, investment-transactions, and
+	// portfolio income (#1614); enforced by investmentSyncExclusionCondition at each of those
+	// reads, NOT by this field).
+	//
+	// ⚠ NOT one of the six accountCustomizationColumns (account_liveness_sql.go) — it has no
+	// `accounts`-side column to fall back to, so it is projected directly as
+	// COALESCE(<alias>_ua.exclude_investment_sync, FALSE) rather than through
+	// accountCustomizationProjection/accountCustomizationExpr's CASE. FALSE (not NULL) is the
+	// correct default for an unchained account: no chain means nothing has ever excluded it.
+	//
+	// ⚠ #1618a scoped this to "reads that already carry accountCustomizationJoin", and its guard
+	// (a join-conditioned test in account_investment_sync_exclusion_guard_test.go, since replaced)
+	// enforced ONLY that scope — so a read that omitted the join ENTIRELY was invisible to it by
+	// construction. #1618b found 5 of the
+	// 12 accountRepository methods returning domain.Account did exactly that (GetByUserID and
+	// GetByLinkedItemIDIncludingRetained — both with real production callers — plus the three
+	// household-scoped reads), all reading this field back as an unconditional `false` regardless of
+	// the chain's actual setting. #1618b fixed GetByUserID and GetByLinkedItemIDIncludingRetained
+	// (both now carry accountCustomizationJoin, the same two-leg join keyed on `user_account_id` AND
+	// `user_id`) and replaced the join-conditioned guard with an UNCONDITIONAL one,
+	// TestNoAccountProjectionOmitsExcludeInvestmentSync: every account-shaped SELECT must project
+	// this field UNLESS an explicit, written-reason entry excuses it in
+	// excludeInvestmentSyncExceptions (account_investment_sync_exclusion_guard_test.go) — the same
+	// discipline customizationOverlayExceptions applies to the six columns below.
+	//
+	// The three household-scoped reads (GetForHouseholdScopeActiveNow, GetForHouseholdScopeLiveAsOf,
+	// getForHouseholdScope) ARE excepted, for the SAME reason the six customization columns never
+	// reach them at all: householdScopeQuery deliberately carries no accountCustomizationJoin
+	// whatsoever (see account_liveness_sql.go's "NOT applied to householdScopeQuery" note and the
+	// Issue #1369 decision 3 / migration 000110 privacy ruling it cites) — a query that structurally
+	// carries no join has nothing to project this field from either, and nothing downstream of those
+	// three reads consults Account.ExcludeInvestmentSync (they feed household net-worth/balance
+	// aggregation only; the actual sync exclusion is enforced directly in SQL by
+	// investmentSyncExclusionCondition, never through this Go field). See the exception's own
+	// written reason for the full argument — do not assume it is true without reading it.
+	//
+	// Populated by (as of #1618b): GetByIDAndUser, GetByUserAccountIDAndUser,
+	// GetAccountsWithInstitutionFiltered, GetByUserAccountAndStatus, GetByUserAccountID,
+	// GetByLinkedItemID, GetAccountsWithInstitution, GetByUserID, GetByLinkedItemIDIncludingRetained
+	// — i.e. every accountRepository method returning domain.Account except the three excepted
+	// household reads.
+	ExcludeInvestmentSync bool `json:"exclude_investment_sync" db:"exclude_investment_sync"`
+
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }

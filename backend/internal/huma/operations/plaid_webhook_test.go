@@ -146,7 +146,10 @@ func TestHandlePlaidWebhook_TransactionsUpdate(t *testing.T) {
 	assert.Equal(t, "TRANSACTIONS", mockRepo.events[0].WebhookType)
 }
 
-// TestHandlePlaidWebhook_ItemError tests handling of ITEM error webhook.
+// TestHandlePlaidWebhook_ItemError tests handling of ITEM error webhook. Issue #1621: a login
+// failure arrives as webhook_code "ERROR" carrying error.error_code "ITEM_LOGIN_REQUIRED" — Plaid
+// has no "LOGIN_REQUIRED" webhook_code (the previous version of this test used one, exercising a
+// shape Plaid never actually sends).
 func TestHandlePlaidWebhook_ItemError(t *testing.T) {
 	mockService := &mockWebhookService{verifyResult: true}
 	mockRepo := &mockWebhookRepository{}
@@ -158,8 +161,11 @@ func TestHandlePlaidWebhook_ItemError(t *testing.T) {
 
 	payload := PlaidWebhookPayload{
 		WebhookType: "ITEM",
-		WebhookCode: "LOGIN_REQUIRED",
+		WebhookCode: "ERROR",
 		ItemID:      "item-123",
+		Error: map[string]interface{}{
+			"error_code": "ITEM_LOGIN_REQUIRED",
+		},
 	}
 	rawBody, _ := json.Marshal(payload)
 
@@ -173,7 +179,7 @@ func TestHandlePlaidWebhook_ItemError(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	assert.Equal(t, "ok", output.Body.Status)
-	assert.Contains(t, output.Body.Message, "Login required")
+	assert.Contains(t, output.Body.Message, "Item error processed")
 }
 
 // TestHandlePlaidWebhook_InvalidJSON tests handling of invalid JSON payload — with a VALID

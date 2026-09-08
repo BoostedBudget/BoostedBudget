@@ -114,6 +114,12 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"not user-visible financial or preference data."},
 	"dlq_cleanup_check.go": {dispositionNoCacheImpact, "deletes old rows from the dead-letter job " +
 		"table only — job-queue operational bookkeeping, not cached domain data."},
+	"plaid_permanent_error_notify.go": {dispositionNoCacheImpact, "shared helper (Issue #1609 " +
+		"P3-T2) called by plaid_sync.go/investment_holdings_sync.go/investment_transactions_sync.go " +
+		"on a permanent Plaid error; it only calls ItemErrorNotifier.HandleLoginRequired/HandleError " +
+		"(item_error_service.go), the SAME notification-writing calls webhook_processing.go's ITEM " +
+		"branch already makes — notifications are not one of the cached namespaces (see " +
+		"notification_email.go's entry below)."},
 	"notification_email.go": {dispositionNoCacheImpact, "sends an email for an already-created " +
 		"notification; notifications are not one of the cached namespaces (analytics, " +
 		"analytics_rows, dashprefs, identity)."},

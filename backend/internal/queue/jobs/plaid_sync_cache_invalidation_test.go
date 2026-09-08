@@ -63,7 +63,7 @@ func (fakeSinglePagePlaidService) TransactionsSync(_ context.Context, _ string, 
 
 // fakeCursorLinkedItemRepo satisfies both repository.LinkedItemRepository (used by
 // transactionSyncService.UpdateCursor) and, via GetByIDAndUser, PlaidSyncWorker's own
-// non-locking lookup path (w.db is nil in this test, so acquireLockAndGetItem falls back to
+// non-locking lookup path (w.db is nil in this test, so acquireLinkedItemLock falls back to
 // linkedItemRepo.GetByIDAndUser).
 type fakeCursorLinkedItemRepo struct {
 	repository.LinkedItemRepository

@@ -441,8 +441,17 @@ func (r *holdingSnapshotRepository) ListHistoryDatesForAccount(ctx context.Conte
 
 // getHistoryForAccountOnDateSQL — $1 = user_id, $2 = account_id, $3 = as_of_date.
 //
-// LEFT JOIN securities, matching the live holdings read (GetByUserIDWithSecurities). ⚠ It is a
-// LEFT join for CONSISTENCY, not for reachability: security_id is NOT NULL under a VALIDATED FK to
+// LEFT JOIN securities, matching the live holdings read's (GetByUserIDWithSecurities) LEFT JOIN
+// securities shape — that is the only aspect this comment claims to match. ⚠ Since #1569 T8
+// (Issue #1616) GetByUserIDWithSecurities also gates its accounts JOIN to a.type = 'investment';
+// this query has no accounts JOIN at all (it is looked up by account_id directly, already scoped
+// by its caller), so it is UNGATED by type. A depository account's history rows are still
+// readable here even though the live read would now exclude that account's current holdings.
+// That gap is accepted, not fixed by this task — see the reasoning at portfolio_snapshot_repository.go's
+// Upsert, which the same trade-off (a small live-vs-history disagreement being less bad than the
+// alternative) applies to.
+//
+// It is a LEFT join for CONSISTENCY, not for reachability: security_id is NOT NULL under a VALIDATED FK to
 // securities with ON DELETE RESTRICT (migration 000160), so the matching row provably exists and
 // INNER would return the same rows today. A mutant swapping it to INNER was checked and found to
 // change nothing, which is why no test pins it — do not add one that pretends otherwise. What can

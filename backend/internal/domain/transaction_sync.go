@@ -123,6 +123,32 @@ func ClassifyPlaidError(err error) *PlaidSyncError {
 			ErrorCode:     plaidErr.ErrorCode,
 		}
 
+	case "PRODUCTS_NOT_SUPPORTED":
+		// Issue #1613: the institution does not support the product being requested
+		// (e.g. investments) for this item. Permanent for THAT product/request only -
+		// it says nothing about the item's other products, and an institution will not
+		// start supporting a product mid-retry, so retrying burns all attempts into the
+		// DLQ for no benefit. This code can also reach here from the banking sync path;
+		// classifying it Permanent is correct there too, for the same reason.
+		return &PlaidSyncError{
+			OriginalError: err,
+			ErrorType:     PlaidErrorPermanent,
+			ErrorCode:     plaidErr.ErrorCode,
+		}
+
+	case "NO_INVESTMENT_ACCOUNTS":
+		// Issue #1621 (#1613's remaining edge): the investments product IS supported/granted
+		// for this item, but the item has zero investment accounts at this institution. Permanent
+		// for THAT product/request only - same honest scoping as PRODUCTS_NOT_SUPPORTED above,
+		// and for the same reason: an institution will not grow an investment account mid-retry,
+		// so retrying burns all five River attempts into the DLQ for no benefit. This says nothing
+		// about the item's other (e.g. depository) products.
+		return &PlaidSyncError{
+			OriginalError: err,
+			ErrorType:     PlaidErrorPermanent,
+			ErrorCode:     plaidErr.ErrorCode,
+		}
+
 	default:
 		// Other Plaid errors (INTERNAL_SERVER_ERROR, etc.) - retry
 		return &PlaidSyncError{

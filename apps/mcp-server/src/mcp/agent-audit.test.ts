@@ -5,7 +5,7 @@
  * in the bun:test unit runner — it requires the Workers runtime. These tests cover the
  * key correctness properties by testing the collaborators and documented behaviors:
  *
- * 1. execute() returns per-call audit events with correct operationClass/result (R4-1)
+ * 1. writeExecute() returns per-call audit events with correct operationClass/result (R4-1)
  * 2. host-proxy tokens are user+grant bound — agent passes correct props (R4-3)
  *
  * NOTE: The DO lifecycle (fetch() updateProps on every request, agent.ts:80-86) is
@@ -15,23 +15,23 @@
  */
 
 import { describe, expect, it, mock } from 'bun:test'
-import { buildExecuteHandler } from './tools/execute'
+import { buildWriteExecuteHandler } from './tools/execute'
 import { buildRecipeTools } from './tools/recipes'
 import { createHostProxy } from '../sandbox/host-proxy'
 import { toAuditEntry } from './audit-mapping'
 
 const WRITE_OP = 'updateTransactionCategory'
 
-describe('agent.ts execute audit wiring (R4-1 + R4-9)', () => {
+describe('agent.ts writeExecute audit wiring (R4-1 + R4-9)', () => {
   it('audit events carry the real operationId and write class for a confirmed write', async () => {
-    // Simulate what agent.ts does: build execute handler, run it, capture auditEvents
+    // Simulate what agent.ts does: build writeExecute handler, run it, capture auditEvents
     const proxy = createHostProxy({
       mutator: mock(() => Promise.resolve({ success: true })) as never,
       userId: 'user-abc',
       grantId: 'grant-xyz',
     })
 
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     // Step 1: get confirmation challenge
     const { auditEvents: challengeEvents } = await handler({
@@ -51,9 +51,9 @@ describe('agent.ts execute audit wiring (R4-1 + R4-9)', () => {
     })
 
     const writeCall = { operationId: WRITE_OP, pathParams: { id: 'txn-1' }, body: { categoryId: 'c1' } }
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
-    // Step 1: execute without token → get the challenge audit event
+    // Step 1: invoke writeExecute without token → get the challenge audit event
     const { auditEvents: challengeEvents, toolResult: challengeResult } = await handler({
       calls: [writeCall],
     })
@@ -63,7 +63,7 @@ describe('agent.ts execute audit wiring (R4-1 + R4-9)', () => {
     const token = tokenMatch?.[1]
     expect(token).toBeTruthy()
 
-    // Step 2: execute with the token → should succeed and audit as write/success
+    // Step 2: invoke writeExecute with the token → should succeed and audit as write/success
     const { auditEvents: successEvents } = await handler({
       calls: [writeCall],
       confirmationToken: token!,
@@ -83,7 +83,7 @@ describe('agent.ts execute audit wiring (R4-1 + R4-9)', () => {
       userId: 'user-abc',
       grantId: 'grant-xyz',
     })
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
     const { auditEvents } = await handler({ calls: [] })
     expect(auditEvents).toHaveLength(0)
   })
@@ -94,7 +94,7 @@ describe('agent.ts execute audit wiring (R4-1 + R4-9)', () => {
       userId: 'user-abc',
       grantId: 'grant-xyz',
     })
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
     const { auditEvents } = await handler({
       calls: [{ operationId: 'getTransactions' }],
     })

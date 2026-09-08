@@ -63,6 +63,56 @@ type RateLimitConfig struct {
 	// cleanup time. Default: 20000.
 	MaxEntries int
 
+	// PrecheckLimit enables an in-process token bucket that is consulted BEFORE Backend, purely
+	// to bound COST. Backend is billed per command (Redis), and IPRateLimiter consults it on
+	// every request — including the ones it goes on to reject — so before this existed, a flood
+	// against an endpoint with no Cloudflare rate-limit rule cost one billable command per
+	// request, without bound. /webhooks/ is exactly such an endpoint: it is deliberately excluded
+	// from the edge rate-limit rule so real provider deliveries are never dropped. With
+	// PrecheckLimit set, once one client identity exhausts its bucket, further requests are
+	// rejected without touching Backend at all.
+	//
+	// 🔴 INVARIANT: the pre-check must NEVER deny a request Backend would have allowed. It is a
+	// cost ceiling, not a second enforcement layer.
+	//
+	// ⚠ The first draft of this mechanism was a SINGLE bucket keyed on the RAW identity, and two
+	// independent adversarial reviewers each EXECUTED reproductions breaking that invariant three
+	// ways. All three had one root cause — one bucket, raw key, standing in for THREE
+	// independently-budgeted authoritative buckets keyed on a CANONICAL identity:
+	//
+	//   1. CROSS-TIER. Backend namespaces its buckets by tier (ratelimitstore bucketKey), so one
+	//      identity legitimately holds regular + auth allowance. A shared bucket charged both to
+	//      one budget: 100 regular requests then a single legitimate POST /webhooks/plaid → 429,
+	//      on the traffic that must never be dropped.
+	//   2. SENTINEL. RATE_LIMIT_SENTINEL_LIMIT is a documented escape hatch for RAISING the
+	//      sentinel budget during a live Cloudflare header anomaly. A ceiling derived from the
+	//      regular limit silently neutered that knob during the exact incident it exists for,
+	//      affecting every customer at once (they all share the sentinel key).
+	//   3. REFILL. Backend derives GCRA's emission interval by INTEGER microsecond division
+	//      (ratelimitstore.emissionAndDVT), so for a limit that does not divide the window evenly
+	//      — 34/min is 1_764_705us vs 1_764_705.88us — truncation makes GCRA fractionally MORE
+	//      permissive than a float-rate token bucket.
+	//
+	// So each tier now gets its OWN pre-check store, sized from that tier's own UNDIVIDED
+	// authoritative limit and multiplied by precheckHeadroomFactor. The headroom is the answer to
+	// (3) and it is deliberate: a COST ceiling does not need to be tight, and slack makes "never
+	// stricter" robust rather than arithmetically lucky — it also absorbs clock skew and the fact
+	// that this bucket is per-MACHINE while Backend's is fleet-wide. Bounded at
+	// factor × limit commands per identity per window is still bounded; unbounded was the bug.
+	//
+	// This is also why the existing per-tier memory stores cannot serve as the pre-check: IPLimit
+	// is already fleet-DIVIDED by the time it reaches them (see IPLimit's doc comment), so they
+	// reject well below the authoritative fleet-wide limit — correct as an outage fallback, wrong
+	// as a pre-check. Pass the UNDIVIDED per-tier limits here.
+	//
+	// ALL THREE ARE OPTIONAL and independent. A tier whose limit is <=0 has its pre-check
+	// DISABLED and consults Backend on every request exactly as before — deliberately NOT
+	// defaulted to one of the others, because a silent default is how (2) happened. Every existing
+	// call site and test that omits these fields is unchanged.
+	PrecheckLimit         int // regular tier
+	PrecheckAuthLimit     int // auth tier (isAuthEndpoint: /webhooks/*, /api/v1/qa/auth/*)
+	PrecheckSentinelLimit int // sentinel tier (unresolved client identity)
+
 	// Backend is the primary (typically Redis-backed, fleet-wide) rate-limit backend. OPTIONAL:
 	// nil means memory-only, exactly today's pre-#1531 behaviour — every existing call site and
 	// test that constructs a RateLimitConfig without this field compiles and behaves unchanged.
@@ -266,6 +316,70 @@ type ipLimiterStore struct {
 	limit      rate.Limit
 	burst      int
 	maxEntries int
+}
+
+// precheckHeadroomFactor multiplies every pre-check budget above its authoritative counterpart.
+//
+// It exists because the pre-check must never be STRICTER than the authoritative backend, and
+// exact parity is fragile in at least three independent ways:
+//
+//   - Arithmetic. The backend derives GCRA's emission interval by integer microsecond division
+//     (ratelimitstore.emissionAndDVT); the pre-check is a float-rate token bucket. For a limit
+//     that does not divide the window evenly (34/min → 1_764_705us vs 1_764_705.88us) truncation
+//     makes GCRA fractionally more permissive, so a request at exactly the backend's interval can
+//     be allowed there and refused here.
+//   - Scope. The backend's bucket is FLEET-wide; this one is per-machine. Parity would make a
+//     single machine's bucket the fleet's ceiling.
+//   - Clocks. Redis TIME versus this process's monotonic clock.
+//
+// A cost ceiling does not need to be tight. Doubling keeps the bound a bound — factor × limit
+// billable commands per identity per window instead of unbounded, which was the actual defect —
+// while making "never stricter" robust instead of arithmetically lucky.
+const precheckHeadroomFactor = 2
+
+// precheckStores holds the per-tier cost pre-check buckets. A nil member means that tier's
+// pre-check is disabled and the backend is consulted on every request, exactly as before this
+// mechanism existed.
+//
+// ⚠ Per-TIER, mirroring ratelimitstore's bucketKey, because the authoritative backend budgets each
+// tier independently. A single shared bucket charged an identity's regular traffic against its
+// auth allowance and returned 429 for a legitimate POST /webhooks/plaid — see
+// RateLimitConfig.PrecheckLimit for the full account of what that broke.
+type precheckStores struct {
+	regular  *ipLimiterStore
+	auth     *ipLimiterStore
+	sentinel *ipLimiterStore
+}
+
+// newPrecheckStore builds one tier's pre-check store, or nil when that tier's limit is unset.
+// ⚠ Deliberately NOT defaulting an unset tier to another tier's limit: a silent default is exactly
+// how the sentinel-override defect shipped.
+func newPrecheckStore(limit int, window time.Duration, maxEntries int) *ipLimiterStore {
+	if limit <= 0 {
+		return nil
+	}
+	return newIPLimiterStore(limit*precheckHeadroomFactor, window, maxEntries)
+}
+
+// forTier selects the pre-check store for a tier, mirroring memoryBackend's storeFor and
+// ratelimitstore's bucketKey so all three agree about what a tier is.
+func (p precheckStores) forTier(tier domain.RateLimitTier) *ipLimiterStore {
+	switch tier {
+	case domain.RateLimitTierAuth:
+		return p.auth
+	case domain.RateLimitTierSentinel:
+		return p.sentinel
+	default:
+		return p.regular
+	}
+}
+
+func (p precheckStores) cleanup(olderThan time.Duration) {
+	for _, s := range []*ipLimiterStore{p.regular, p.auth, p.sentinel} {
+		if s != nil {
+			s.cleanup(olderThan)
+		}
+	}
 }
 
 func newIPLimiterStore(requestsPerWindow int, window time.Duration, maxEntries int) *ipLimiterStore {
@@ -484,6 +598,16 @@ func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 	// share the regular tier's (possibly fleet-divided) capacity. Issue #1531 L3.
 	exemptStore := newIPLimiterStore(c.ExemptPathLimit, c.WindowDuration, c.MaxEntries)
 
+	// One pre-check store PER TIER — see RateLimitConfig.PrecheckLimit for why a single shared
+	// bucket broke the invariant three ways. Each is its own store rather than a reuse of the tier
+	// stores above, whose budgets are fleet-divided and would reject inside the authoritative
+	// limit. A tier left at <=0 stays nil, i.e. that tier's pre-check is disabled.
+	precheck := precheckStores{
+		regular:  newPrecheckStore(c.PrecheckLimit, c.WindowDuration, c.MaxEntries),
+		auth:     newPrecheckStore(c.PrecheckAuthLimit, c.WindowDuration, c.MaxEntries),
+		sentinel: newPrecheckStore(c.PrecheckSentinelLimit, c.WindowDuration, c.MaxEntries),
+	}
+
 	memBackend := &memoryBackend{regular: regularStore, auth: authStore, sentinel: sentinelStore, exempt: exemptStore, window: c.WindowDuration}
 	effective := newFallbackLimiter(cfg.Backend, memBackend, c.PrimaryTimeout, logger, cfg.Done)
 
@@ -499,6 +623,7 @@ func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 				authStore.cleanup(c.CleanupInterval * 2)
 				sentinelStore.cleanup(c.CleanupInterval * 2)
 				exemptStore.cleanup(c.CleanupInterval * 2)
+				precheck.cleanup(c.CleanupInterval * 2)
 			case <-cfg.Done:
 				// cleanupGoroutineStopped is nil in production (see its doc comment) — this is a
 				// no-op there. It exists solely so a test can observe THIS specific goroutine's
@@ -514,7 +639,7 @@ func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(ec echo.Context) error {
-			allowed, retryAfterSecs := ipRateLimiterDecide(ec, effective, memBackend, logger)
+			allowed, retryAfterSecs := ipRateLimiterDecide(ec, effective, memBackend, precheck, c.WindowDuration, logger)
 			if !allowed {
 				ec.Response().Header().Set("Retry-After", strconv.Itoa(retryAfterSecs))
 				return echo.NewHTTPError(http.StatusTooManyRequests,
@@ -533,7 +658,23 @@ func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 // is recovered HERE — scoped to this function only, never to next(ec) — logged, and treated as
 // "allow" (fail open on an internal bug, the same availability bias used everywhere else in this
 // file). See IPRateLimiter's doc comment for why the recover must not extend to next(ec).
-func ipRateLimiterDecide(ec echo.Context, effective *fallbackLimiter, memBackend *memoryBackend, logger *slog.Logger) (allowed bool, retryAfterSecs int) {
+// logRateLimitRejection emits the WARN log line for a 429 rejection, modelled on CloudflareOnly's
+// slog.WarnContext branches (cloudflare.go:144-217) so the two gates read alike: same level, same
+// "path" field name. It additionally carries "tier" (the same value already used for
+// observability.RateLimitRejectionsTotal's label, so logs and metrics join up on the same key) and
+// "client_identity" (the clientIdentity() bucket key — an IP address or identitySentinelFallback,
+// never a header value that could carry a secret). Unlike CloudflareOnly, this gate has no secret
+// to compare in the first place, so there is nothing here for a future edit to accidentally leak —
+// keep it that way; never add a raw header value to this call.
+func logRateLimitRejection(ec echo.Context, logger *slog.Logger, path string, tier domain.RateLimitTier, identity string, retryAfterSecs int) {
+	logger.WarnContext(ec.Request().Context(), "rate-limit: blocked — request over limit",
+		"path", path,
+		"tier", tier.String(),
+		"client_identity", identity,
+		"retry_after_secs", retryAfterSecs)
+}
+
+func ipRateLimiterDecide(ec echo.Context, effective *fallbackLimiter, memBackend *memoryBackend, precheck precheckStores, window time.Duration, logger *slog.Logger) (allowed bool, retryAfterSecs int) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("rate limiter panicked; allowing request through",
@@ -554,17 +695,45 @@ func ipRateLimiterDecide(ec echo.Context, effective *fallbackLimiter, memBackend
 		// and giving it its own store makes that structural rather than incidental.
 		decision := memBackend.AllowExempt(key)
 		if !decision.Allowed {
-			observability.RateLimitRejectionsTotal.WithLabelValues(domain.RateLimitTierRegular.String()).Inc()
+			exemptTier := domain.RateLimitTierRegular
+			observability.RateLimitRejectionsTotal.WithLabelValues(exemptTier.String()).Inc()
 			secs := int(decision.RetryAfter.Seconds())
 			if secs < 1 {
 				secs = 1
 			}
+			logRateLimitRejection(ec, logger, path, exemptTier, key, secs)
 			return false, secs
 		}
 		return true, 0
 	}
 
 	tier := tierForRequest(path, key)
+
+	// Cost circuit breaker. Consulted BEFORE the backend so a flood from one identity stops
+	// costing billable backend commands once its bucket is empty. Placed AFTER the exempt-path
+	// branch above, which already bypasses the backend entirely, so /health is untouched.
+	//
+	// Reaching here is a genuine rate-limit rejection and is reported as one — same metric, same
+	// log line, same Retry-After — because PrecheckLimit is set at or above the authoritative
+	// limit, so anything it rejects is traffic the backend would have rejected too.
+	//
+	// ⚠ Keyed on domain.AggregateIPv6Identity(key), the SAME canonical identity Backend buckets
+	// by, not the raw key. With the raw key an attacker rotating /128s inside one routed /64 —
+	// precisely the attacker aggregateIPv6Identity was written about — minted a fresh full bucket
+	// per address, so the cost bound did not apply to the identity Backend actually enforces.
+	// Reproduced at 200 addresses; pinned by
+	// TestIPRateLimiter_PrecheckBucketsIPv6ByTheSameIdentityRedisDoes.
+	if store := precheck.forTier(tier); store != nil && !store.get(domain.AggregateIPv6Identity(key)).Allow() {
+		observability.RateLimitRejectionsTotal.WithLabelValues(tier.String()).Inc()
+		observability.RateLimitPrecheckRejectionsTotal.WithLabelValues(tier.String()).Inc()
+		secs := int(window.Seconds())
+		if secs < 1 {
+			secs = 1
+		}
+		logRateLimitRejection(ec, logger, path, tier, key, secs)
+		return false, secs
+	}
+
 	decision, dErr := effective.Allow(ec.Request().Context(), tier, key)
 	if dErr != nil {
 		// Neither memoryBackend nor fallbackLimiter (which always resolves through memoryBackend
@@ -579,6 +748,7 @@ func ipRateLimiterDecide(ec echo.Context, effective *fallbackLimiter, memBackend
 		if secs < 1 {
 			secs = 1
 		}
+		logRateLimitRejection(ec, logger, path, tier, key, secs)
 		return false, secs
 	}
 

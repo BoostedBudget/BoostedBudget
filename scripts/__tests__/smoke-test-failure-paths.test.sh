@@ -73,6 +73,9 @@ status_for() {
     */version) echo 200 ;;
     */.well-known/oauth-protected-resource) echo 200 ;;
     */mcp) echo 401 ;;
+    # A healthy webhook endpoint rejects an unsigned POST with 401. Without this the
+    # catch-all below would answer 200 and the happy-path case would fail.
+    */webhooks/*) echo 401 ;;
     */assets|*/static) echo 200 ;;
     http://boostedbudget.com) echo 301 ;;
     *) echo 200 ;;
@@ -190,6 +193,7 @@ echo "Test 2: a definite non-redirect on http:// is FATAL in production"
 fixture <<'EOF'
 status_for() {
   case "$1" in
+    */webhooks/*) echo 401 ;;
     http://boostedbudget.com) echo 200 ;;
     */health) echo 200 ;;
     */metrics) echo 404 ;;
@@ -213,6 +217,7 @@ echo "Test 3: an unreachable http:// probe stays a WARNING"
 fixture <<'EOF'
 status_for() {
   case "$1" in
+    */webhooks/*) echo 401 ;;
     http://boostedbudget.com) echo 000 ;;
     */health) echo 200 ;;
     */metrics) echo 404 ;;
@@ -288,6 +293,7 @@ echo "Test 7: /version absent and /assets unreachable stay WARNINGS"
 fixture <<'EOF'
 status_for() {
   case "$1" in
+    */webhooks/*) echo 401 ;;
     */version) echo 404 ;;
     */assets|*/static) echo 404 ;;
     */health) echo 200 ;;
@@ -348,6 +354,7 @@ echo "Test 10: an already-fatal check still fails (no regression from the refact
 fixture <<'EOF'
 status_for() {
   case "$1" in
+    */webhooks/*) echo 401 ;;
     */metrics) echo 200 ;;
     */health) echo 200 ;;
     *) echo 200 ;;
@@ -359,6 +366,112 @@ if [ "$LAST_RC" -ne 0 ] && grep -q "PUBLICLY REACHABLE" "$LAST_OUT"; then
   pass "the pre-existing /metrics gate still exits non-zero"
 else
   fail "the /metrics gate regressed (rc=$LAST_RC)"; cat "$LAST_OUT"
+fi
+
+echo ""
+echo "Test 11: a CHALLENGED webhook path is FATAL in production (#1609 / 2026-09-08)"
+# The real incident: Cloudflare Bot Fight Mode Managed-Challenged POST /webhooks/plaid,
+# Plaid recorded 403, and no existing check noticed for 11 hours. This case constructs
+# exactly that response and asserts the deploy gate now fails on it.
+fixture <<'EOF'
+status_for() {
+  case "$1" in
+    */webhooks/plaid) echo 403 ;;
+    */health) echo 200 ;;
+    */metrics) echo 404 ;;
+    */version) echo 200 ;;
+    */.well-known/oauth-protected-resource) echo 200 ;;
+    */mcp) echo 401 ;;
+    */webhooks/*) echo 401 ;;
+    */assets|*/static) echo 200 ;;
+    http://boostedbudget.com) echo 301 ;;
+    *) echo 200 ;;
+  esac
+}
+headers_for() {
+  case "$1" in
+    */webhooks/plaid)
+      echo "HTTP/1.1 403 Forbidden"
+      echo "cf-mitigated: challenge"
+      ;;
+    *)
+      echo "HTTP/1.1 200 OK"
+      echo "Access-Control-Allow-Origin: https://boostedbudget.com"
+      ;;
+  esac
+}
+EOF
+run_case "$F" production
+if [ "$LAST_RC" -ne 0 ] && grep -q "webhooks/plaid returned HTTP 403" "$LAST_OUT"; then
+  pass "a 403 on /webhooks/plaid fails the production deploy gate"
+else
+  fail "expected a fatal 403 on /webhooks/plaid, got rc=$LAST_RC"
+fi
+
+echo ""
+echo "Test 12: the failure NAMES Cloudflare's challenge instead of reporting a bare 403"
+# A bare '403' sends an operator hunting through the origin's own gate, which was not the
+# culprit. cf-mitigated is the fingerprint pointing straight at the edge, so the message
+# must surface it and carry the Bot-Fight-Mode-cannot-be-WAF-skipped caveat.
+if grep -q "cf-mitigated: challenge" "$LAST_OUT" && grep -q "Bot fight mode" "$LAST_OUT"; then
+  pass "the diagnostic names the Cloudflare challenge and the Bot Fight Mode caveat"
+else
+  fail "expected the cf-mitigated challenge and Bot Fight Mode guidance in the output"
+fi
+
+echo ""
+echo "Test 13: a challenged PADDLE webhook is fatal too (not just Plaid)"
+# Paddle sits on the same host behind the same zone-wide setting, so the same edge rule
+# drops subscription lifecycle events. Pinning both stops a future edit from narrowing
+# the check to Plaid alone.
+fixture <<'EOF'
+status_for() {
+  case "$1" in
+    */webhooks/paddle) echo 403 ;;
+    */health) echo 200 ;;
+    */metrics) echo 404 ;;
+    */version) echo 200 ;;
+    */.well-known/oauth-protected-resource) echo 200 ;;
+    */mcp) echo 401 ;;
+    */webhooks/*) echo 401 ;;
+    */assets|*/static) echo 200 ;;
+    http://boostedbudget.com) echo 301 ;;
+    *) echo 200 ;;
+  esac
+}
+EOF
+run_case "$F" production
+if [ "$LAST_RC" -ne 0 ] && grep -q "webhooks/paddle returned HTTP 403" "$LAST_OUT"; then
+  pass "a 403 on /webhooks/paddle also fails the production deploy gate"
+else
+  fail "expected a fatal 403 on /webhooks/paddle, got rc=$LAST_RC"
+fi
+
+echo ""
+echo "Test 14: the same failure stays a WARNING on staging, and does not exit non-zero"
+# Deliberate, documented scope: staging-api was already fully unreachable for unrelated
+# reasons when this check was written, so a fatal there would block every staging deploy
+# on a pre-existing outage. It must still count as a warning so the banner cannot lie.
+run_case "$F" staging
+# Asserts the SPECIFIC webhook warning line, not merely "exit 0 with some warning":
+# staging already emits unrelated warnings (no frontend URL), so the looser form passed
+# against a script with no webhook check at all and pinned nothing.
+if [ "$LAST_RC" -eq 0 ] && grep -q "webhooks/paddle returned HTTP 403" "$LAST_OUT"; then
+  pass "staging reports the webhook failure as a warning without blocking the deploy"
+else
+  fail "expected staging to warn and exit 0, got rc=$LAST_RC"
+fi
+
+echo ""
+echo "Test 15: a healthy production run still passes the new checks"
+# Guards against 'fixing' the gate by making it unable to say yes.
+fixture <<'EOF'
+EOF
+run_case "$F" production
+if [ "$LAST_RC" -eq 0 ] && grep -q "webhooks/plaid is reachable" "$LAST_OUT"; then
+  pass "healthy webhook endpoints pass and the run exits 0"
+else
+  fail "expected a clean production run, got rc=$LAST_RC"
 fi
 
 echo ""

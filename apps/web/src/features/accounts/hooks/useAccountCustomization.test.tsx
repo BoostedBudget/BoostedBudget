@@ -145,6 +145,31 @@ describe('useAccountCustomization', () => {
       expect(result.current.updateError).toBeNull()
     })
 
+    // #1618b review finding: exclude_investment_sync lives on user_accounts. An account with no
+    // user_account_id has no chain row to store it in, AND the legacy PATCH /accounts/{id} schema
+    // (UpdateAccountRequest) does not define the field at all — only UpdateUserAccountRequest does.
+    // Sending it down this branch is therefore either a 422 or a silent drop. Neither is acceptable,
+    // so the field must not be in the legacy payload.
+    it('must NOT send exclude_investment_sync down the legacy Account endpoint', async () => {
+      const { result } = renderHook(() => useAccountCustomization(), {
+        wrapper: createWrapper(),
+      })
+
+      await act(async () => {
+        await result.current.updateAccount(mockAccountLegacy, {
+          nickname: 'Updated Name',
+          exclude_investment_sync: true,
+        })
+      })
+
+      expect(mockUpdateAccountMutateAsync).toHaveBeenCalled()
+      const calls = mockUpdateAccountMutateAsync.mock.calls as unknown as Array<
+        [{ data: Record<string, unknown> }]
+      >
+      expect(calls.length).toBeGreaterThan(0)
+      expect(Object.keys(calls[0][0].data)).not.toContain('exclude_investment_sync')
+    })
+
     it('should update account via UserAccount endpoint when user_account_id exists', async () => {
       const { result } = renderHook(() => useAccountCustomization(), {
         wrapper: createWrapper(),
@@ -168,6 +193,47 @@ describe('useAccountCustomization', () => {
       expect(result.current.updateError).toBeNull()
     })
 
+    // #1609 Item 5: exclude_investment_sync is the per-chain opt-out for a brokerage account
+    // Plaid reports on BOTH product endpoints, so the same movement appears twice in the feed.
+    // There is no toggle UI yet — this pins that the hook can carry the flag, and that an update
+    // which says nothing about it sends null (the server's "no change"), rather than silently
+    // un-excluding a chain the user excluded.
+    it('should forward exclude_investment_sync to the UserAccount endpoint', async () => {
+      const { result } = renderHook(() => useAccountCustomization(), {
+        wrapper: createWrapper(),
+      })
+
+      await act(async () => {
+        await result.current.updateAccount(mockAccountWithUserAccount, {
+          exclude_investment_sync: true,
+        })
+      })
+
+      expect(mockUpdateUserAccountMutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ exclude_investment_sync: true }),
+        })
+      )
+    })
+
+    it('should send a null exclude_investment_sync when the update does not mention it', async () => {
+      const { result } = renderHook(() => useAccountCustomization(), {
+        wrapper: createWrapper(),
+      })
+
+      await act(async () => {
+        await result.current.updateAccount(mockAccountWithUserAccount, {
+          nickname: 'Platinum CashPlus',
+        })
+      })
+
+      expect(mockUpdateUserAccountMutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ exclude_investment_sync: null }),
+        })
+      )
+    })
+
     it('should set isUpdating to true during update', () => {
       mockUseUpdateAccount.mockReturnValue({
         mutateAsync: mockUpdateAccountMutateAsync,
@@ -184,7 +250,15 @@ describe('useAccountCustomization', () => {
       expect(result.current.isUpdating).toBe(true)
     })
 
-    it('should set updateError on failure', async () => {
+    // #1609: a failed save must REJECT, not resolve with null.
+    //
+    // The `catch { return null }` this replaces turned a rejection into a resolved value, which
+    // defeated the modal's own failure detection one layer down: AccountCustomizationModal
+    // decides whether to close from `Promise.allSettled(...).status === 'rejected'`, so a
+    // swallowed failure closed the modal exactly as a success would. The user saw their edit
+    // "save" and revert on the next refresh -- indistinguishable from the backend bug this batch
+    // exists to fix, which is precisely why that bug stayed invisible for so long.
+    it('should reject when the save fails', async () => {
       const error = new Error('Network error')
       mockUpdateAccountMutateAsync.mockRejectedValue(error)
       mockUseUpdateAccount.mockReturnValue({
@@ -199,14 +273,12 @@ describe('useAccountCustomization', () => {
         wrapper: createWrapper(),
       })
 
-      let returnedAccount: Account | null = null
       await act(async () => {
-        returnedAccount = await result.current.updateAccount(mockAccountLegacy, {
-          nickname: 'Test',
-        })
+        await expect(
+          result.current.updateAccount(mockAccountLegacy, { nickname: 'Test' })
+        ).rejects.toThrow('Network error')
       })
 
-      expect(returnedAccount).toBeNull()
       expect(result.current.updateError).toBeInstanceOf(Error)
     })
 

@@ -41,10 +41,14 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  CreateReconnectLinkTokenInputBody,
   ErrorModel,
   ExchangePublicTokenInputBody,
   ExchangePublicTokenOutputBody,
-  LinkTokenResponse
+  LinkTokenResponse,
+  ReconnectLinkTokenResponse,
+  RepairLinkedItemInputBody,
+  RepairLinkedItemOutputBody
 } from '../../models';
 
 import { customInstance } from '../../client';
@@ -209,4 +213,134 @@ export const useCreateLinkToken = <TError = ErrorType<ErrorModel>,
         TContext
       > => {
       return useMutation(getCreateLinkTokenMutationOptions(options), queryClient);
+    }
+    /**
+ * Marks the caller's own linked item active again and clears its error tracking fields. Call only after the update-mode Plaid Link flow (using the token from createReconnectLinkToken) has succeeded, presenting the repair_nonce returned alongside that token. The nonce is single-use and item-scoped; it proves the caller went through this server's own reconnect mint, not that Plaid Link succeeded.
+ * @summary Clear a linked item's error state after a successful reconnect
+ */
+export const repairLinkedItem = (
+    repairLinkedItemInputBody: BodyType<NonReadonly<RepairLinkedItemInputBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RepairLinkedItemOutputBody>(
+      {url: `/api/v1/plaid/reconnect`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: repairLinkedItemInputBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getRepairLinkedItemMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof repairLinkedItem>>, TError,{data: BodyType<NonReadonly<RepairLinkedItemInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof repairLinkedItem>>, TError,{data: BodyType<NonReadonly<RepairLinkedItemInputBody>>}, TContext> => {
+
+const mutationKey = ['repairLinkedItem'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof repairLinkedItem>>, {data: BodyType<NonReadonly<RepairLinkedItemInputBody>>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  repairLinkedItem(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RepairLinkedItemMutationResult = NonNullable<Awaited<ReturnType<typeof repairLinkedItem>>>
+    export type RepairLinkedItemMutationBody = BodyType<NonReadonly<RepairLinkedItemInputBody>>
+    export type RepairLinkedItemMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Clear a linked item's error state after a successful reconnect
+ */
+export const useRepairLinkedItem = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof repairLinkedItem>>, TError,{data: BodyType<NonReadonly<RepairLinkedItemInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof repairLinkedItem>>,
+        TError,
+        {data: BodyType<NonReadonly<RepairLinkedItemInputBody>>},
+        TContext
+      > => {
+      return useMutation(getRepairLinkedItemMutationOptions(options), queryClient);
+    }
+    /**
+ * Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration). A 'revoked' item is deliberately excluded — Plaid documents revoked access as unrecoverable via update mode; see ErrLinkedItemNotRepairable in item_error_service.go. Also returns a single-use repair_nonce that the reconnect endpoint requires; it shares the link token's expiry and must be kept out of URLs and logs.
+ * @summary Create a Plaid update-mode link token to repair a broken connection
+ */
+export const createReconnectLinkToken = (
+    createReconnectLinkTokenInputBody: BodyType<NonReadonly<CreateReconnectLinkTokenInputBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<ReconnectLinkTokenResponse>(
+      {url: `/api/v1/plaid/reconnect-link-token`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: createReconnectLinkTokenInputBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getCreateReconnectLinkTokenMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createReconnectLinkToken>>, TError,{data: BodyType<NonReadonly<CreateReconnectLinkTokenInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof createReconnectLinkToken>>, TError,{data: BodyType<NonReadonly<CreateReconnectLinkTokenInputBody>>}, TContext> => {
+
+const mutationKey = ['createReconnectLinkToken'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createReconnectLinkToken>>, {data: BodyType<NonReadonly<CreateReconnectLinkTokenInputBody>>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createReconnectLinkToken(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateReconnectLinkTokenMutationResult = NonNullable<Awaited<ReturnType<typeof createReconnectLinkToken>>>
+    export type CreateReconnectLinkTokenMutationBody = BodyType<NonReadonly<CreateReconnectLinkTokenInputBody>>
+    export type CreateReconnectLinkTokenMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Create a Plaid update-mode link token to repair a broken connection
+ */
+export const useCreateReconnectLinkToken = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createReconnectLinkToken>>, TError,{data: BodyType<NonReadonly<CreateReconnectLinkTokenInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof createReconnectLinkToken>>,
+        TError,
+        {data: BodyType<NonReadonly<CreateReconnectLinkTokenInputBody>>},
+        TContext
+      > => {
+      return useMutation(getCreateReconnectLinkTokenMutationOptions(options), queryClient);
     }

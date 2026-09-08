@@ -280,7 +280,25 @@ type AccountRepository interface {
 	UpdateDisplayOrders(ctx context.Context, userID string, orders []domain.AccountOrder) error
 
 	// GetAccountsWithInstitutionFiltered retrieves accounts with institution names and flexible filtering.
-	// Results are sorted by display_order ASC (nulls last), then created_at ASC.
+	// Results are sorted by effective display_order ASC, then created_at ASC, then id ASC.
+	//
+	// ⚠ #1609 fix round 2 (F2): this comment used to say "(nulls last)", and that is not what the
+	// query does. A NULL display_order is mapped to the SENTINEL 999999 by COALESCE, so it sorts
+	// last only for as long as every real display_order is BELOW 999999 — `display_order` carries
+	// no upper-bound constraint (migration 000024_add_account_customization.up.sql), so a value of
+	// 1000000 sorts AFTER the unordered rows and a value of exactly 999999 TIES with them. The
+	// sentinel is kept rather than swapped for NULLS LAST because changing it would change the
+	// order existing data comes back in, which a comment correction has no business doing; the
+	// assumption it rests on is written down here instead of being implied.
+	//
+	// ⚠ The final `id ASC` is what makes the ordering TOTAL (#1609 F1). CreateBatch stamps one
+	// `now` on every row of a batch, so the accounts of a single Plaid connection share a
+	// created_at exactly; with no display_order override they also share the sentinel, and the
+	// pair is completely tied. Postgres may return a complete tie in any order — measurably so:
+	// see account_list_total_order_integration_test.go, where the same two rows come back in
+	// OPPOSITE orders depending only on which INSERT was issued first. accounts.id is the primary
+	// key, so appending it separates any two distinct rows and the list stops reshuffling between
+	// refreshes.
 	GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error)
 
 	// GetByUserAccountAndStatus retrieves accounts by user_account_id and status, SCOPED to
@@ -739,16 +757,23 @@ func supersedeStrandedChainSiblings(ctx context.Context, tx pgx.Tx, userID strin
 }
 
 // GetByLinkedItemID retrieves all accounts for a specific linked item
+//
+// #1618a: aliased `a` and given accountCustomizationJoin specifically to surface
+// exclude_investment_sync — this is investment_sync_service's own read of the accounts it is about
+// to sync holdings for. Every other column reference was requalified with `a.` at the same time:
+// user_accounts and accounts both have created_at/updated_at, so leaving those bare would have
+// made the query ambiguous the moment the join was added, not merely inconsistent.
 func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID string) ([]domain.Account, error) {
 	query := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       created_at, updated_at
-		FROM accounts
-		WHERE linked_item_id = $1 AND status = 'active'
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.linked_item_id = $1 AND a.status = 'active'
+		ORDER BY a.created_at ASC
 	`
 
 	rows, err := r.db.Query(ctx, query, linkedItemID)
@@ -777,6 +802,7 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 			&account.UserAccountID,
 			&account.ReplacedByID,
 			&account.ReplacedAt,
+			&account.ExcludeInvestmentSync,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 		)
@@ -806,17 +832,23 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 // that enumerates them, and a second enumeration is how this exact drift happened (Issue
 // #1569 round 11 fix-round-2 found this copy silently missing createBalanceSnapshots after
 // round 11 task 1 added a caller to the interface comment but not here).
+//
+// #1618b: aliased `a` and given accountCustomizationJoin specifically to surface
+// exclude_investment_sync — this is the read investment_sync_service.SyncInvestmentTransactions
+// uses to build its account map, the very subsystem this flag governs. A LEFT JOIN adds a column,
+// never removes a row, so the retained-account universe this method exists to return is unchanged.
 func (r *accountRepository) GetByLinkedItemIDIncludingRetained(ctx context.Context, linkedItemID string) ([]domain.Account, error) {
 	query := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       removed_reason,
-		       created_at, updated_at
-		FROM accounts
-		WHERE linked_item_id = $1
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       a.removed_reason,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.linked_item_id = $1
+		ORDER BY a.created_at ASC
 	`
 
 	rows, err := r.db.Query(ctx, query, linkedItemID)
@@ -848,6 +880,7 @@ func (r *accountRepository) GetByLinkedItemIDIncludingRetained(ctx context.Conte
 			// Issue #1569 Task 5: this is the ONLY read that populates RemovedReason — see that
 			// field's doc comment for why, and why nil is the safe default everywhere else.
 			&account.RemovedReason,
+			&account.ExcludeInvestmentSync,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 		)
@@ -874,16 +907,23 @@ func (r *accountRepository) GetByLinkedItemIDIncludingRetained(ctx context.Conte
 // callers that need every status (the point-in-time universe) need AllStatuses=true. There is no
 // repository-level "StatusFilter" option — that name belongs to services.AccountFilterOptions,
 // where "all" maps to IncludeReplaced and therefore also stops short of 'expired'.
+//
+// #1618b: aliased `a` and given accountCustomizationJoin specifically to surface
+// exclude_investment_sync — this read has real production callers (dashboard_service.go's
+// net-worth/balance-summary path, account_chain_resolver.go, savings_goal_service.go's ownership
+// check), so a caller rendering Account.ExcludeInvestmentSync from any of them previously always
+// saw false regardless of the chain's actual setting.
 func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       created_at, updated_at
-		FROM accounts
-		WHERE user_id = $1 AND status = 'active'
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.user_id = $1 AND a.status = 'active'
+		ORDER BY a.created_at ASC
 	`
 
 	rows, err := r.db.Query(ctx, query, userID)
@@ -912,6 +952,7 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 			&account.UserAccountID,
 			&account.ReplacedByID,
 			&account.ReplacedAt,
+			&account.ExcludeInvestmentSync,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 		)
@@ -994,6 +1035,15 @@ func (f householdStatusFilter) statusClause() string {
 
 // householdScopeQuery builds the household-scope account SELECT. Pure and separate from the
 // read itself so the exact SQL each filter produces can be asserted without a database.
+//
+// ⚠ DELIBERATELY WITHOUT the #1609 customization overlay, and do NOT "finish the job" by adding
+// it. is_hidden is the OWNER'S PERSONAL-VIEW control and must not travel into a household view —
+// householdGrantsCTE in analytics_repository.go records the ruling (Issue #1369 decision 3,
+// migration 000110's documented contract): household inclusion is governed SOLELY by the share.
+// A member hiding an account from their own sidebar is not withdrawing it from the household they
+// shared it with, and making it so would be a privacy regression dressed as a consistency fix.
+// The query projects none of the six today; there is an entry in customizationOverlayExceptions
+// (account_customization_overlay_guard_test.go) so that whoever adds one finds this ruling.
 func householdScopeQuery(statuses householdStatusFilter) string {
 	return "WITH " + householdAccountsCTEForBalancesAsOf() + `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
@@ -1071,17 +1121,27 @@ func (r *accountRepository) getForHouseholdScope(ctx context.Context, requesting
 // currency_code (matching the column's own default intent), '' for institution_name (the natural
 // zero for this omitempty field, matching GetAccountsWithInstitutionFiltered's established rule
 // for the same column).
+// ⚠ #1609 fix round 2 (F1): the trailing `a.id ASC` is what makes this ORDER BY a TOTAL order,
+// and it is load-bearing rather than cosmetic. Every account of one Plaid connection is written by
+// a single CreateBatch, which stamps ONE `now` on the whole batch, so their created_at values are
+// byte-identical and the sort was completely tied with nothing left to decide it — the planner
+// picked. This is the GET /api/v1/accounts list, so the symptom was a user-visible reshuffle
+// between refreshes. Pinned by account_list_total_order_integration_test.go.
+// #1618a: given accountCustomizationJoin specifically to surface exclude_investment_sync on this
+// read too (account_service.go's other whole-list read, alongside
+// GetAccountsWithInstitutionFiltered).
 func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
 		WHERE a.user_id = $1 AND a.status = 'active'
-		ORDER BY a.created_at ASC
+		ORDER BY a.created_at ASC, a.id ASC
 	`
 
 	rows, err := r.db.Query(ctx, query, userID)
@@ -1111,6 +1171,7 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 			&account.ReplacedByID,
 			&account.ReplacedAt,
 			&account.RemovedAt,
+			&account.ExcludeInvestmentSync,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 			&account.InstitutionName,
@@ -1338,15 +1399,15 @@ func (r *accountRepository) PurgeAccount(ctx context.Context, accountID, userID 
 // Pinned by TestAccountRepository_ExpiredAtSurvivesACosmeticWrite_Integration.
 func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userID string) (*domain.Account, error) {
 	query := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden,
-		       user_account_id, status, removed_at, replaced_at, expired_at, replaced_by_id,
-		       created_at, updated_at
-		FROM accounts
-		WHERE id = $1 AND user_id = $2
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.user_account_id, a.status, a.removed_at, a.replaced_at, a.expired_at, a.replaced_by_id,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.id = $1 AND a.user_id = $2
 	`
 
 	var account domain.Account
@@ -1356,6 +1417,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
 		&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 		&account.DisplayOrder, &account.IsHidden,
+		&account.ExcludeInvestmentSync,
 		&account.UserAccountID, &account.Status, &account.RemovedAt,
 		&account.ReplacedAt, &account.ExpiredAt, &account.ReplacedByID,
 		&account.CreatedAt, &account.UpdatedAt,
@@ -1390,16 +1452,16 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 // comparing against AccountStatusActive would silently read every account as not-live.
 func (r *accountRepository) GetByUserAccountIDAndUser(ctx context.Context, userAccountID, userID string) (*domain.Account, error) {
 	query := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       nickname, custom_color, custom_icon, custom_emoji,
-		       display_order, is_hidden,
-		       user_account_id, status, removed_at,
-		       created_at, updated_at
-		FROM accounts
-		WHERE user_account_id = $1 AND user_id = $2
-		ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.user_account_id, a.status, a.removed_at,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.user_account_id = $1 AND a.user_id = $2
+		ORDER BY CASE WHEN a.status = 'active' THEN 0 ELSE 1 END
 		LIMIT 1
 	`
 
@@ -1410,6 +1472,7 @@ func (r *accountRepository) GetByUserAccountIDAndUser(ctx context.Context, userA
 		&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
 		&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 		&account.DisplayOrder, &account.IsHidden,
+		&account.ExcludeInvestmentSync,
 		&account.UserAccountID, &account.Status, &account.RemovedAt,
 		&account.CreatedAt, &account.UpdatedAt,
 	)
@@ -1453,7 +1516,63 @@ func (r *accountRepository) Update(ctx context.Context, account *domain.Account,
 	return nil
 }
 
+// The three statements UpdateDisplayOrders runs. Package-level rather than function-local so the
+// shape tests reference the SAME strings the method executes — a pgxmock expectation written out
+// by hand drifts silently the moment the statement is edited.
+const (
+	// displayOrderResolveChainQuery answers "is this account chained, and is it the actor's?" in
+	// one step. ErrNoRows here is the not-found/not-yours case; a NULL user_account_id is the
+	// unchained case, and the two must not be conflated.
+	displayOrderResolveChainQuery = `
+		SELECT user_account_id
+		FROM accounts
+		WHERE id = $1 AND user_id = $2
+	`
+	displayOrderAccountsSideQuery = `
+		UPDATE accounts
+		SET display_order = $1, updated_at = $2
+		WHERE id = $3 AND user_id = $4
+	`
+	displayOrderChainSideQuery = `
+		UPDATE user_accounts
+		SET display_order = $1, updated_at = $2
+		WHERE id = $3 AND user_id = $4
+	`
+)
+
 // UpdateDisplayOrders updates the display_order for multiple accounts atomically.
+//
+// ⚠ THE TARGET COLUMN FOLLOWS THE CHAIN (#1609, task 3c). This used to be one
+// `UPDATE accounts SET display_order` for every account. Task 3b then made the read
+// chain-authoritative — `ORDER BY COALESCE(CASE WHEN a.user_account_id IS NOT NULL THEN
+// a_ua.display_order ELSE a.display_order END, 999999)` — at which point a chained account's
+// reorder was written to a column nothing reads any more, and every reorder of a Plaid-linked
+// account silently reverted on the next refresh.
+//
+// ⚠ Reachable by API, MCP and integration clients — NOT by a UI gesture. There is no drag-reorder
+// UI in this app (`reorderAccounts` in useAccountCustomization.ts has zero production callers).
+// Corrected in fix round 1 (F1); an earlier version of this comment claimed a user drag was being
+// lost, which overstated it.
+//
+// So the write is routed the same way the read resolves: `user_accounts.display_order` for a
+// chained account, `accounts.display_order` for an unchained one. SINGLE-SOURCE, not a dual
+// write — writing both would re-create exactly the split-brain this batch is removing, with
+// nothing to say which copy was right once they diverged.
+//
+// The chain id is resolved INSIDE the transaction rather than joined into the UPDATE so that
+// "this account does not exist / is not yours" stays distinguishable from "this account is not
+// chained": both would otherwise present as RowsAffected == 0 and the ownership error would be
+// reported for a perfectly valid unchained account. The ownership predicate rides on both legs
+// (`user_id = $4`, the actor) — the chained leg re-asserts it against user_accounts, so a chain
+// id reached through somebody else's account row still matches nothing.
+//
+// ⚠ ONE WRITE PER RESOLVED TARGET, NOT PER SUBMITTED ENTRY (#1609 fix round 1, F2). Two accounts
+// of the same re-link chain resolve to the same user_accounts row, and a list-shaped payload
+// routinely names both. See the collapse comment in the body for the rule (lowest display order
+// wins) and why it is the payload-order-independent one.
+//
+// Still one transaction: a partial reorder is a scrambled list, so the batch commits or it does
+// not.
 func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID string, orders []domain.AccountOrder) error {
 	if len(orders) == 0 {
 		return nil
@@ -1465,16 +1584,71 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
-	query := `
-		UPDATE accounts
-		SET display_order = $1, updated_at = $2
-		WHERE id = $3 AND user_id = $4
-	`
-
 	now := time.Now()
 
+	// PASS 1 — resolve and VALIDATE every submitted id, in the order given.
+	//
+	// Every entry is resolved, including one whose order the collapse below discards: a discarded
+	// entry is still an id the caller submitted, and it must still be proved to exist and to
+	// belong to the actor. Skipping it would let a batch smuggle a stranger's id past the
+	// ownership check by pairing it with a sibling that wins the collapse. Pinned by
+	// TestAccountRepository_UpdateDisplayOrders_CollapsedAwayEntryIsStillValidated_Integration.
+	type displayOrderWrite struct {
+		query        string
+		targetID     string
+		displayOrder int
+	}
+	writes := make([]displayOrderWrite, 0, len(orders))
+	// byTarget maps a resolved target id to its index in `writes`, which is what makes the
+	// collapse below a single pass.
+	byTarget := make(map[string]int, len(orders))
+
 	for _, order := range orders {
-		ct, err := tx.Exec(ctx, query, order.DisplayOrder, now, order.AccountID, userID)
+		var userAccountID *string
+		if err := tx.QueryRow(ctx, displayOrderResolveChainQuery, order.AccountID, userID).Scan(&userAccountID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrAccountNotFound
+			}
+			return err
+		}
+
+		query, targetID := displayOrderAccountsSideQuery, order.AccountID
+		if userAccountID != nil {
+			query, targetID = displayOrderChainSideQuery, *userAccountID
+		}
+
+		// COLLAPSE BY RESOLVED TARGET, LOWEST DISPLAY ORDER WINS (#1609 fix round 1, F2).
+		//
+		// A re-link chain holds MANY accounts rows, and both are renderable together —
+		// AccountsPage fetches status=all_statuses and "Show closed accounts" surfaces the
+		// replaced/removed member — so a list-shaped payload names both and both resolve to the
+		// SAME user_accounts row. Writing that row once per entry meant LAST WRITE WINS: the
+		// account the caller positioned first ended up carrying its sibling's order, the pair
+		// tied, and the read fell back to `a.created_at ASC`. The row did not land where it was
+		// placed.
+		//
+		// Lowest-wins rather than first-wins because a chain occupies ONE position and the
+		// truthful one is the topmost its members were given. It is also the only rule of the
+		// three that is INDEPENDENT of the order the caller happened to serialise the batch in —
+		// nothing in this endpoint's contract requires the list to be sorted, and an MCP or
+		// integration client is under no obligation to sort it. First-wins and last-wins both
+		// answer differently for two payloads describing the same arrangement.
+		//
+		// Ties (the same order submitted twice for one target) keep the first occurrence, so the
+		// result is total rather than planner- or map-dependent.
+		if idx, seen := byTarget[targetID]; seen {
+			if order.DisplayOrder < writes[idx].displayOrder {
+				writes[idx].displayOrder = order.DisplayOrder
+			}
+			continue
+		}
+		byTarget[targetID] = len(writes)
+		writes = append(writes, displayOrderWrite{query: query, targetID: targetID, displayOrder: order.DisplayOrder})
+	}
+
+	// PASS 2 — one statement per TARGET, not per submitted entry.
+	for _, w := range writes {
+		ct, err := tx.Exec(ctx, w.query, w.displayOrder, now, w.targetID, userID)
 		if err != nil {
 			return err
 		}
@@ -1633,7 +1807,10 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 	}
 	hiddenClause := ""
 	if !opts.IncludeHidden {
-		hiddenClause = " AND a.is_hidden = FALSE"
+		// #1609: the FILTER reads the same overlay the projection does. Reading a.is_hidden here
+		// while projecting the chain's value is the worst of both — the list shows the row as
+		// hidden and keeps returning it.
+		hiddenClause = " AND " + accountHiddenExpr("a") + " = FALSE"
 	}
 
 	userAccountClause := ""
@@ -1666,14 +1843,14 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
-		       a.display_order, a.is_hidden,
+		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status` + lastKnownProjection + `
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + lastKnownJoin + `
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + lastKnownJoin + `
 		WHERE a.user_id = $1` + statusClause + hiddenClause + userAccountClause + `
-		ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC`
+		ORDER BY COALESCE(` + accountDisplayOrderExpr("a") + `, 999999) ASC, a.created_at ASC, a.id ASC`
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1699,6 +1876,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 			&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
 			&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 			&account.DisplayOrder, &account.IsHidden,
+			&account.ExcludeInvestmentSync,
 			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID, &account.RemovedAt, &account.ExpiredAt,
 			&account.CreatedAt, &account.UpdatedAt, &institutionNameRaw, &linkedItemStatusRaw,
 		}
@@ -1733,15 +1911,16 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 // Issue #1569 R11 T2: added the user_id predicate — see the interface doc comment.
 func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userAccountID, status, userID string) ([]domain.Account, error) {
 	query := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       user_account_id, status, replaced_at, replaced_by_id,
-		       nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden,
-		       created_at, updated_at
-		FROM accounts
-		WHERE user_account_id = $1 AND status = $2 AND user_id = $3
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.user_account_id = $1 AND a.status = $2 AND a.user_id = $3
+		ORDER BY a.created_at ASC
 	`
 
 	rows, err := r.db.Query(ctx, query, userAccountID, status, userID)
@@ -1760,6 +1939,7 @@ func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userA
 			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID,
 			&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 			&account.DisplayOrder, &account.IsHidden,
+			&account.ExcludeInvestmentSync,
 			&account.CreatedAt, &account.UpdatedAt,
 		)
 		if err != nil {
@@ -1782,15 +1962,16 @@ func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userA
 // Issue #171: Plaid Re-Link Handling
 func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountID string) ([]domain.Account, error) {
 	query := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       user_account_id, status, replaced_at, replaced_by_id,
-		       nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden,
-		       created_at, updated_at
-		FROM accounts
-		WHERE user_account_id = $1
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.user_account_id = $1
+		ORDER BY a.created_at ASC
 	`
 
 	rows, err := r.db.Query(ctx, query, userAccountID)
@@ -1809,6 +1990,7 @@ func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountI
 			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID,
 			&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 			&account.DisplayOrder, &account.IsHidden,
+			&account.ExcludeInvestmentSync,
 			&account.CreatedAt, &account.UpdatedAt,
 		)
 		if err != nil {
@@ -1864,8 +2046,6 @@ func (r *accountRepository) MarkRemovedByProvider(ctx context.Context, accountID
 // transition writes NULL, which keeps migration 000154's accounts_removed_reason_valid CHECK
 // satisfied by construction rather than by each caller remembering.
 func (r *accountRepository) updateStatusWithRemovalReason(ctx context.Context, accountID, userID string, status domain.AccountStatus, replacedByID *string, removalReason domain.RemovalReason) error {
-	now := time.Now()
-
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -1895,34 +2075,46 @@ func (r *accountRepository) updateStatusWithRemovalReason(ctx context.Context, a
 		return ErrAccountAlreadyDisconnected
 	}
 
-	// Set replaced_at only when transitioning to replaced status
-	var replacedAt *time.Time
-	if status == domain.AccountStatusReplaced {
-		replacedAt = &now
-	}
-
-	// Set removed_at only when transitioning to removed status (Issue #1569). Required by
-	// migration 000149's accounts_removed_at_consistency CHECK: status='removed' demands
-	// removed_at IS NOT NULL, mirroring the replaced_at pairing above.
-	//
-	// removed_reason is stamped in the same breath, and NULLed for every other transition —
-	// migration 000154's accounts_removed_reason_valid CHECK requires the two to agree, and pairing
-	// them in one statement is what makes that impossible to violate. Issue #1569 Task 5.
-	var removedAt *time.Time
+	// removed_reason is stamped only when transitioning to removed status (Issue #1569), and
+	// NULLed for every other transition — migration 000154's accounts_removed_reason_valid CHECK
+	// requires it to agree with removed_at, and pairing them in one statement is what makes that
+	// impossible to violate. Issue #1569 Task 5.
 	var removedReason *string
 	if status == domain.AccountStatusRemoved {
-		removedAt = &now
 		reason := string(removalReason)
 		removedReason = &reason
 	}
 
+	// replaced_at and removed_at are stamped from the DATABASE clock (NOW()), not a Go-side
+	// time.Now(), and conditioned on $1 directly rather than bound as Go-computed *time.Time —
+	// only when transitioning to that status, NULL otherwise, exactly mirroring the old
+	// conditional-pointer logic. Required by migration 000149's accounts_removed_at_consistency
+	// CHECK (status='removed' demands removed_at IS NOT NULL).
+	//
+	// Postgres's NOW() is the TRANSACTION's start time, stable for the whole transaction, so this
+	// value and the migration-000007 BEFORE UPDATE trigger's own NOW() call (which stamps
+	// updated_at) are byte-identical within this statement's transaction. The old code bound a
+	// Go-side time.Now() to removed_at/replaced_at while the trigger independently stamped
+	// updated_at from the Postgres clock — two different clock sources on one row, which under
+	// host/DB clock skew could make updated_at read BEFORE removed_at
+	// (TestAccountRepository_Reads_Integration_ReturnRemovedAt). updated_at itself is no longer
+	// bound here at all: the trigger owns that column and overwrites any value bound here
+	// regardless, so binding it was always dead code.
+	// $1::text casts are required, not decorative: without them Postgres cannot deduce one
+	// consistent type for $1 across its three uses (assigned to the status column, and compared
+	// to a text literal twice in the CASE expressions) and errors with SQLSTATE 42P08
+	// ("indeterminate datatype") before the statement ever runs.
 	query := `
 		UPDATE accounts
-		SET status = $1, replaced_at = $2, replaced_by_id = $3, removed_at = $4, removed_reason = $5, updated_at = $6
-		WHERE id = $7 AND user_id = $8
+		SET status = $1::text,
+		    replaced_at = CASE WHEN $1::text = 'replaced' THEN NOW() ELSE NULL END,
+		    replaced_by_id = $2,
+		    removed_at = CASE WHEN $1::text = 'removed' THEN NOW() ELSE NULL END,
+		    removed_reason = $3
+		WHERE id = $4 AND user_id = $5
 	`
 
-	result, err := tx.Exec(ctx, query, status, replacedAt, replacedByID, removedAt, removedReason, now, accountID, userID)
+	result, err := tx.Exec(ctx, query, status, replacedByID, removedReason, accountID, userID)
 	if err != nil {
 		return err
 	}
@@ -1975,11 +2167,16 @@ func (r *accountRepository) RestoreProviderRemovedAccount(ctx context.Context, a
 	// live account whose removed_at still reads six months ago is a lie about current state, and
 	// the schema will not catch it. Any new path back to 'active' must clear it too.
 	// removed_reason is different — 000154's CHECK really does forbid it off a 'removed' row.
+	//
+	// updated_at is intentionally NOT bound here: migration 000007's BEFORE UPDATE trigger stamps
+	// it from the Postgres clock unconditionally, overwriting any value bound in this statement,
+	// so a Go-side time.Now() bind was dead code (same class of bug as
+	// updateStatusWithRemovalReason's removed_at/replaced_at, fixed alongside it).
 	result, err := tx.Exec(ctx, `
 		UPDATE accounts
-		SET status = 'active', removed_at = NULL, removed_reason = NULL, updated_at = $1
-		WHERE id = $2 AND user_id = $3
-	`, time.Now(), accountID, userID)
+		SET status = 'active', removed_at = NULL, removed_reason = NULL
+		WHERE id = $1 AND user_id = $2
+	`, accountID, userID)
 	if err != nil {
 		return err
 	}

@@ -496,6 +496,27 @@ type backfillAccountRow struct {
 	instID      *string // nullable on linked_items
 	acctType    *string // #1569: carried so a synthesised identity is not typeless
 	acctSubtype *string
+	// isHidden and status carry the account's LEGACY hide and liveness up to the chain row
+	// (#1609). Migrations run before the server boots (backend/scripts/docker-entrypoint.sh), so
+	// an account whose user_account_id was still NULL when 000185 ran MISSED that migration's
+	// is_hidden lift entirely; the chain row this repair gives it would otherwise be born visible
+	// (user_accounts.is_hidden is NOT NULL DEFAULT FALSE) and the chain-authoritative read overlay
+	// would silently un-hide an account the user hid. Fixing it HERE rather than by re-ordering
+	// the migration is what makes it durable: the repair runs on every boot, the migration once.
+	isHidden bool
+	status   string
+	// The other five customization columns, carried up to the chain row for the SAME reason
+	// isHidden is (#1609, task 3c). 3a carried only the hide because it is the most damaging
+	// loss; the rest have an identical hazard. An account customized while UNCHAINED — through
+	// the legacy PATCH /api/v1/accounts/{id} endpoint, which is exactly the endpoint the
+	// frontend uses for an unchained account — and chained later by this repair would otherwise
+	// lose its nickname, colour, icon, emoji and order, because the chain-authoritative overlay
+	// reads the (empty) chain row.
+	nickname     *string
+	customColor  *string
+	customIcon   *string
+	customEmoji  *string
+	displayOrder *int
 	// createdAt is the scan's leading sort key (#1569 task 9) and the only part of the position
 	// that is ever persisted — see backfill_accounts_cursor.go on why the stored position may not
 	// be a row identity.
@@ -542,7 +563,10 @@ func fetchBackfillAccountPage(ctx context.Context, db backfillQuerier, cursor *b
 		}
 	}
 	rows, err := db.Query(ctx, `
-		SELECT a.id, a.user_id, a.mask, li.institution_id, a.type, a.subtype, a.created_at
+		SELECT a.id, a.user_id, a.mask, li.institution_id, a.type, a.subtype,
+		       a.is_hidden, a.status,
+		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji, a.display_order,
+		       a.created_at
 		FROM accounts a
 		JOIN linked_items li ON a.linked_item_id = li.id
 		WHERE a.user_account_id IS NULL
@@ -560,7 +584,10 @@ func fetchBackfillAccountPage(ctx context.Context, db backfillQuerier, cursor *b
 	var page []backfillAccountRow
 	for rows.Next() {
 		var r backfillAccountRow
-		if err := rows.Scan(&r.id, &r.userID, &r.mask, &r.instID, &r.acctType, &r.acctSubtype, &r.createdAt); err != nil {
+		if err := rows.Scan(&r.id, &r.userID, &r.mask, &r.instID, &r.acctType, &r.acctSubtype,
+			&r.isHidden, &r.status,
+			&r.nickname, &r.customColor, &r.customIcon, &r.customEmoji, &r.displayOrder,
+			&r.createdAt); err != nil {
 			return nil, fmt.Errorf("scan account row: %w", err)
 		}
 		page = append(page, r)
@@ -752,6 +779,22 @@ func repairBackfillAccountPage(
 				"account_id", r.id, "user_account_id", uaID)
 		}
 
+		// ⚠ ORDER IS LOAD-BEARING, and it is the opposite of the intuitive one. This runs against
+		// a *pgxpool.Pool (BackfillUserAccountIDs), so every statement AUTOCOMMITS — there is no
+		// surrounding transaction covering these two writes. Attaching the account FIRST makes it
+		// invisible to every future run (the page query is `WHERE a.user_account_id IS NULL`), so a
+		// crash, a cancelled context or a pool error before the hide write would lose the hide
+		// PERMANENTLY, with no repair path. Hiding first is safe in the mirror case: the hide write
+		// is idempotent, hiding a chain the account has not joined yet converges to the same end
+		// state, and the failure leaves user_account_id NULL so the next boot retries the row.
+		// Pinned by TestBackfillUserAccountIDs_Hide_HideIsWrittenBeforeTheAccountIsAttached.
+		if err := carryLegacyHideForward(ctx, db, r, uaID); err != nil {
+			return err
+		}
+		if err := carryLegacyCustomizationForward(ctx, db, r, uaID); err != nil {
+			return err
+		}
+
 		if _, err := db.Exec(ctx,
 			"UPDATE accounts SET user_account_id = $1 WHERE id = $2 AND user_account_id IS NULL",
 			uaID, r.id,
@@ -759,6 +802,140 @@ func repairBackfillAccountPage(
 			return fmt.Errorf("update account %s: %w", r.id, err)
 		}
 		*repaired++
+	}
+	return nil
+}
+
+// carryLegacyHideForward lifts an account's LEGACY accounts.is_hidden onto the chain row the
+// repair just attached it to — the SAME chain-OR rule migration 000185 applies, applied on the
+// path that migration structurally cannot reach.
+//
+// WHY IT HAS TO LIVE HERE (#1609, the ordering hazard):
+//
+//	container migrations run BEFORE the server boots (backend/scripts/docker-entrypoint.sh), and
+//	the server THEN calls BackfillUserAccountIDs (cmd/server/main.go). An account whose
+//	user_account_id was still NULL when 000185 ran was invisible to that migration's
+//	`EXISTS (SELECT 1 FROM accounts WHERE user_account_id = ua.id ...)` lift — it belonged to no
+//	chain yet. Moments later this repair gives it one, and user_accounts.is_hidden is
+//	NOT NULL DEFAULT FALSE (000031), so the chain is born VISIBLE. Under the chain-authoritative
+//	read overlay that FALSE wins, and an account the user deliberately hid quietly reappears.
+//
+// Re-ordering the migration would not fix it: the NULL user_account_id can be created at any time
+// (a fresh link between two boots), whereas this repair runs on EVERY boot.
+//
+// Both outcomes of the repair need it, not just synthesis. A hidden account that MATCHES an
+// existing visible chain reopens exactly the same hole, which is why this runs after uaID is
+// resolved rather than inside synthesiseUserAccountID.
+//
+// The hidden_source it stamps is 000185's classification applied to the account joining the chain:
+// only a human could have hidden a LIVE account ('user'); anything else is genuinely ambiguous
+// ('unknown'), and 'unknown' is never auto-un-hidden. It is deliberately NOT 'system' — labelling
+// an ambiguous hide 'system' is what would let the next re-link destroy a real user hide.
+//
+// The cause is written monotonically: a NULL is filled, and a 'system' cause is UPGRADED to 'user'
+// when the joining account is live. That upgrade is not hypothetical — task 3c starts writing
+// 'system' for the automatic "the chain lost its last active account" hide AND un-hides only
+// 'system' chains on re-link, so a real user hide left sitting at 'system' is destroyed by the
+// next re-link. Nothing is ever downgraded: a 'user' cause stands, and 'unknown' is left as it is
+// (it is already never auto-un-hidden, so rewriting it would buy nothing and would erase the
+// record that migration 000185 genuinely could not tell). The migration's own Step 4 keeps its
+// `AND hidden_source IS NULL` guard, which is correct THERE for the same reason: at migration time
+// there is no better information to be had.
+func carryLegacyHideForward(ctx context.Context, db backfillQuerier, r backfillAccountRow, uaID string) error {
+	if !r.isHidden {
+		// Nothing to carry. Notably this does NOT un-hide anything: a visible account joining a
+		// hidden chain says nothing about why the chain was hidden.
+		return nil
+	}
+	source := "unknown"
+	if r.status == "active" {
+		source = "user"
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE user_accounts
+		SET is_hidden     = TRUE,
+		    hidden_source = CASE
+		        WHEN hidden_source IS NULL                          THEN $1
+		        WHEN hidden_source = 'system' AND $1 = 'user'       THEN 'user'
+		        ELSE hidden_source
+		    END,
+		    updated_at    = now()
+		WHERE id = $2
+		  AND (is_hidden = FALSE
+		       OR hidden_source IS NULL
+		       OR (hidden_source = 'system' AND $1 = 'user'))
+	`, source, uaID); err != nil {
+		return fmt.Errorf("carry legacy hide forward for account %s: %w", r.id, err)
+	}
+	slog.WarnContext(ctx, "#1609: carried a legacy account hide onto its chain row",
+		"account_id", r.id, "user_account_id", uaID, "hidden_source", source)
+	return nil
+}
+
+// carryLegacyCustomizationForward lifts an account's LEGACY nickname / colour / icon / emoji /
+// display order onto the chain row the repair just attached it to — the same lift migration
+// 000185's Step 2 performs, on the path that migration structurally cannot reach.
+//
+// The hazard is IDENTICAL to carryLegacyHideForward's, and the reason it needs saying separately
+// is that #1609's task 3a fixed only the hide: an account whose user_account_id was still NULL
+// when 000185 ran was invisible to that migration, and the chain row this repair gives it moments
+// later is born with all five columns NULL. Under task 3b's chain-authoritative overlay a chained
+// row reads the CHAIN, so those NULLs are the answer and the user's nickname, colour, icon, emoji
+// and order all vanish at once.
+//
+// This is a RUNTIME gap rather than a data one — 000185 handles every row that existed when it
+// ran — and it stays open forever, because a NULL user_account_id can be created at any time (a
+// fresh link between two boots) while the migration runs once. That is why it is fixed here.
+//
+// THE CHAIN'S OWN VALUE WINS, per COLUMN. COALESCE(ua.<f>, $n) fills holes only: the chain is the
+// source of truth, and overwriting would let a stale accounts-side label defeat a rename the user
+// made on the chain — the same class of silently-ineffective edit this batch exists to remove,
+// pointed the other way. This mirrors 000185 Step 2's COALESCE exactly, and it mirrors
+// carryLegacyHideForward's "never downgrade" discipline in the shape the nullable columns take.
+//
+// ⚠ Unlike the hide, there is no ORDERING hazard here, and it is worth saying why rather than
+// leaving a reader to assume the two are symmetric. Losing the hide permanently required the
+// account to be ATTACHED first (the page query is `WHERE user_account_id IS NULL`, so an attached
+// row is never revisited). This call sits on the same side of that attach, so the same argument
+// covers it: a crash between the carry and the attach leaves user_account_id NULL and the next
+// boot retries the row, and the write is idempotent.
+//
+// A separate statement from the hide rather than one merged UPDATE: the hide carries the
+// hidden_source logic that 3a's review settled (NULL→cause, 'system'→'user' only for a live
+// account, never a downgrade, 'unknown' untouched), and folding a second, differently-shaped
+// guard into that CASE would put settled logic at risk to extend a column list. The two touch
+// disjoint columns, so their order is irrelevant and each is independently idempotent.
+func carryLegacyCustomizationForward(ctx context.Context, db backfillQuerier, r backfillAccountRow, uaID string) error {
+	if r.nickname == nil && r.customColor == nil && r.customIcon == nil &&
+		r.customEmoji == nil && r.displayOrder == nil {
+		// Nothing to carry. Returning early keeps the common case free: this repair runs on every
+		// boot, and an UPDATE per uncustomized account would be a full-table updated_at churn for
+		// no gain.
+		return nil
+	}
+	ct, err := db.Exec(ctx, `
+		UPDATE user_accounts
+		SET nickname      = COALESCE(nickname,      $1),
+		    custom_color  = COALESCE(custom_color,  $2),
+		    custom_icon   = COALESCE(custom_icon,   $3),
+		    custom_emoji  = COALESCE(custom_emoji,  $4),
+		    display_order = COALESCE(display_order, $5),
+		    updated_at    = now()
+		WHERE id = $6
+		  -- Touch only a row that actually GAINS something, so a second boot is a genuine no-op
+		  -- rather than a rewrite of every chain row with the same values.
+		  AND (   (nickname      IS NULL AND $1::varchar IS NOT NULL)
+		       OR (custom_color  IS NULL AND $2::varchar IS NOT NULL)
+		       OR (custom_icon   IS NULL AND $3::varchar IS NOT NULL)
+		       OR (custom_emoji  IS NULL AND $4::varchar IS NOT NULL)
+		       OR (display_order IS NULL AND $5::int     IS NOT NULL))
+	`, r.nickname, r.customColor, r.customIcon, r.customEmoji, r.displayOrder, uaID)
+	if err != nil {
+		return fmt.Errorf("carry legacy customization forward for account %s: %w", r.id, err)
+	}
+	if ct.RowsAffected() > 0 {
+		slog.InfoContext(ctx, "#1609: carried legacy account customization onto its chain row",
+			"account_id", r.id, "user_account_id", uaID)
 	}
 	return nil
 }

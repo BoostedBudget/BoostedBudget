@@ -2946,6 +2946,62 @@ func retainedAccountVisibilityLegs(alias, dateCol string) string {
 	return activeChainSiblingLeg(alias) + retainedAccountNoLiveSuccessorLeg(alias, dateCol)
 }
 
+// investmentSyncExclusionCondition renders the predicate that hides an investment_transactions row
+// belonging to a chain whose owner set user_accounts.exclude_investment_sync (#1609 Item 5,
+// migration 000187).
+//
+// WHY THIS EXISTS. Plaid reports a brokerage cash-management account through BOTH
+// /transactions/sync and /investments/transactions/get, so one real movement lands once in
+// `transactions` and once in `investment_transactions` and the unified feed shows it twice. The
+// flag is the user's per-chain opt-out, and it is applied HERE, at read time, because the rows
+// themselves are legitimate Plaid-reported history: deleting them, tombstoning them, or dropping
+// them at ingestion would all be destruction as a side effect of a preference
+// (docs/decisions/2026-08-24-financial-history-retained-by-default.md). Clearing the flag brings
+// exactly the same rows back — TestExcludeInvestmentSync_IsReversible pins that.
+//
+// ⚠ NOT EXISTS, NOT A JOIN. One user_account has MANY accounts rows — that is what a re-link chain
+// IS (000033) — so joining user_accounts through accounts would multiply every feed row by the
+// number of chain members. A semi-join asks the only question that matters ("is this row's chain
+// flagged?") and cannot fan out. TestExcludeInvestmentSync_MultipleAccountsOnOneChainDoNotFanOut
+// is the guard.
+//
+// ⚠ NULL-TOLERANT, AND THAT IS THE LOAD-BEARING PART. investment_transactions.user_account_id has
+// been nullable since 000071 and a great many legacy rows carry NULL. An inner
+// `JOIN user_accounts ... WHERE NOT exclude_investment_sync` would drop EVERY one of them from
+// both read surfaces — invisible data loss, and a far worse defect than the double-count it was
+// written to fix. Here a NULL-attribution row is attributed the way every other chain-expanding
+// read in this package already attributes one: through accounts.user_account_id for its
+// account_id (see investmentTransactionRepository.GetByAccountID and the unified feed's own
+// account filter). If that yields no chain, or yields an unflagged one, the row stays VISIBLE.
+// TestExcludeInvestmentSync_LegacyNullUserAccountIDStaysVisible and
+// TestExcludeInvestmentSync_LegacyNullRowOnTheFlaggedAccountIsStillExcluded pin both directions —
+// the second matters because without the accounts fallback the reported defect would survive this
+// fix for exactly the accounts whose rows predate the 000071 backfill.
+//
+// No user_id predicate is needed inside: ownership is transitive through the user_accounts FK
+// (000033) and every caller's outer query is already gated on user_id, exactly as
+// activeChainSiblingLeg documents. TestExcludeInvestmentSync_IsScopedToItsOwnChain holds that to
+// account.
+func investmentSyncExclusionCondition(alias string) string {
+	return fmt.Sprintf(`
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM user_accounts excl_ua
+		      WHERE excl_ua.exclude_investment_sync
+		        AND (
+		            excl_ua.id = %s.user_account_id
+		            OR (
+		                %s.user_account_id IS NULL
+		                AND EXISTS (
+		                    SELECT 1 FROM accounts excl_a
+		                    WHERE excl_a.id = %s.account_id
+		                      AND excl_a.user_account_id = excl_ua.id
+		                )
+		            )
+		        )
+		  )`, alias, alias, alias)
+}
+
 // activeChainSiblingLeg renders the RE-LINK half: a row whose own account is no longer active is
 // still visible while an ACTIVE account shares its user_account_id — the stable chain key set at
 // insert time (Issue #1109). EXISTS rather than a JOIN so that several accounts sharing one chain
@@ -3480,6 +3536,11 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		      EXISTS (SELECT 1 FROM accounts WHERE id = it.account_id AND status = 'active')
 %s
 		  )
+		  -- The per-chain investment opt-out (#1609 Item 5). Deliberately NOT mirrored into the
+		  -- banking branch above: the flag exists to suppress the DUPLICATE that Plaid reports
+		  -- through /investments/transactions/get, and the banking row is the real movement the
+		  -- user still needs to see.
+%s
 		%s%s%s%s%s%s
 
 		ORDER BY sort_date DESC, source_disc ASC, id ASC
@@ -3490,6 +3551,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		retainedAccountVisibilityLegs("t", "t.date"),
 		bankingAcctFilter, bankingDateFilter, bankingSearchFilter, bankingExtraFilter, bankingCursorFilter, bankingActivityFilter,
 		retainedAccountVisibilityLegs("it", "it.date"),
+		investmentSyncExclusionCondition("it"),
 		investAcctFilter, investDateFilter, investSearchFilter, investActivityFilter, investCursorFilter, investBankingOnlyFilter,
 		limitPH,
 	)

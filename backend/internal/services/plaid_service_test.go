@@ -709,7 +709,10 @@ func TestRemoveItem_EmptyAccessToken(t *testing.T) {
 // TestCreateUpdateModeLinkToken_Success tests successful creation of update mode link token.
 // Update mode is used for user re-authentication when Plaid returns LOGIN_REQUIRED error.
 // Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
-// Phase 2 (#241): Update mode uses same products as initial link: TRANSACTIONS + LIABILITIES + INVESTMENTS.
+// Phase 2 (#241) originally sent the same products as initial link (TRANSACTIONS required,
+// LIABILITIES + INVESTMENTS optional). Issue #1609 P3-T8 corrected this: Plaid's spec requires
+// `products` to be OMITTED in update mode (we don't add Income/Assets), so only the optional
+// products remain — see TestCreateUpdateModeLinkToken_OmitsProducts.
 //
 // This integration test requires real Plaid sandbox credentials and validates that:
 // 1. Link token is created in "update" mode (SetAccessToken is called)

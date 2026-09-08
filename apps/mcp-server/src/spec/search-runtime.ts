@@ -15,6 +15,21 @@ export interface SpecParameter {
   type?: string
 }
 
+/**
+ * A single field extracted from an operation's request body schema (issue #1609 Task 6).
+ * Flattened from JSON Schema (with `$ref` resolved) to a token-frugal shape: name, type,
+ * required flag, enum, description — never the full schema. Nested objects/array-of-object
+ * fields are flattened to a shallow depth using dotted names (`action.custom_category_id`)
+ * or bracket-dotted array item names (`conditions[].field`).
+ */
+export interface SpecBodyField {
+  name: string
+  type?: string
+  required?: boolean
+  enum?: string[]
+  description?: string
+}
+
 export interface SpecEntry {
   operationId: string
   method: string
@@ -28,6 +43,15 @@ export interface SpecEntry {
   excluded: boolean
   /** Query and path parameters extracted from the OpenAPI spec for AI discoverability. */
   parameters?: SpecParameter[]
+  /** Request body fields extracted from the OpenAPI spec, flattened and token-frugal. */
+  requestBody?: SpecBodyField[]
+  /**
+   * Response body fields extracted from the operation's JSON 200/201 success response
+   * (issue #1610a), flattened one level deep (MAX_RESPONSE_DEPTH) and allowed-operations-only —
+   * see index-builder.ts. Deliberately NOT included in searchSpec's haystack (search-runtime.ts):
+   * matching on response field names would make almost every query match almost everything.
+   */
+  responseBody?: SpecBodyField[]
 }
 
 export interface SpecIndex {
@@ -70,6 +94,10 @@ export function searchSpec(
         entry.path,
         ...entry.tags,
         ...(entry.parameters?.map((p) => `${p.name} ${p.description ?? ''} ${(p.enum ?? []).join(' ')}`) ?? []),
+        // Body field names (not descriptions — kept minimal for index size) so "how do I
+        // create a rule with conditions" matches createRule even when "conditions" never
+        // appears in its summary/description. See issue #1609 Task 6.
+        ...(entry.requestBody?.map((f) => f.name) ?? []),
       ]
         .join(' ')
         .toLowerCase()

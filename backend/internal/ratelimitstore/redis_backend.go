@@ -45,7 +45,6 @@ package ratelimitstore
 import (
 	"context"
 	"fmt"
-	"net/netip"
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
@@ -191,19 +190,13 @@ func (b *RedisBackend) bucketKey(tier domain.RateLimitTier, key string) string {
 // string, though the sentinel tier never reaches this function at all — see bucketKey above) pass
 // through unchanged: aggregation is strictly additive risk mitigation, never a source of new
 // collisions for values that were never addresses in the first place.
+// ⚠ The implementation now lives in domain.AggregateIPv6Identity, and this is a thin delegation
+// rather than a second copy. The middleware's in-process cost pre-check must bucket by the SAME
+// canonical identity as this backend, and it cannot import this package (see the package doc
+// comment on keeping go-redis out of middleware's hermetic suite). Two copies is how the two
+// would come to disagree; one shared function makes the drift inexpressible.
 func aggregateIPv6Identity(key string) string {
-	addr, err := netip.ParseAddr(key)
-	if err != nil {
-		return key
-	}
-	if addr.Is4() || addr.Is4In6() {
-		return key
-	}
-	if !addr.Is6() {
-		return key
-	}
-	prefix := netip.PrefixFrom(addr, 64)
-	return prefix.Masked().Addr().String()
+	return domain.AggregateIPv6Identity(key)
 }
 
 // emissionAndDVT derives the script's ARGV[1] (emission_interval_us) and ARGV[2] (dvt_us) from

@@ -864,3 +864,72 @@ func TestRateLimitRejections_OnlyEmitsBoundedTierLabelsFromProductionCode(t *tes
 	}
 	assert.Greater(t, seen, 0, "test must have actually observed at least one tier label, or this assertion is vacuous")
 }
+
+// recordingHandler is a minimal slog.Handler that captures every record it handles, along with
+// its attrs flattened into a map, so tests can assert on specific field names/values rather than
+// just "some record was emitted" (panicCapturingHandler above only proves the latter).
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	h.records = append(h.records, r)
+	h.mu.Unlock()
+	return nil
+}
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+func (h *recordingHandler) all() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]slog.Record, len(h.records))
+	copy(out, h.records)
+	return out
+}
+
+func attrsOf(r slog.Record) map[string]string {
+	out := make(map[string]string)
+	r.Attrs(func(a slog.Attr) bool {
+		out[a.Key] = a.Value.String()
+		return true
+	})
+	return out
+}
+
+// TestIPRateLimiter_RejectionEmitsLogLine is the RED test for issue #1617: a 429 rejection
+// produces NO HTTP log line anywhere (IPRateLimiter short-circuits before StructuredLogging runs
+// -- see logging.go:99-103), so the rejection itself must log. Modelled on CloudflareOnly's
+// slog.WarnContext branches (cloudflare.go:144-217): same shape (WARN level, "path" field), plus
+// the tier and identity fields this gate already has that CloudflareOnly does not.
+func TestIPRateLimiter_RejectionEmitsLogLine(t *testing.T) {
+	capture := &recordingHandler{}
+	cfg := middleware.RateLimitConfig{
+		IPLimit:        1,
+		WindowDuration: time.Minute,
+		Logger:         slog.New(capture),
+	}
+	e := newEchoWithGateStatus(cfg, middleware.GateStatusUnknown)
+
+	doRateLimitedRequest(e, "/test", "203.0.113.99:1", nil)
+	code := doRateLimitedRequest(e, "/test", "203.0.113.99:2", nil)
+	require.Equal(t, http.StatusTooManyRequests, code)
+
+	var found *slog.Record
+	for _, rec := range capture.all() {
+		if rec.Level == slog.LevelWarn {
+			r := rec
+			found = &r
+			break
+		}
+	}
+	require.NotNil(t, found, "expected a WARN log record for the rejected request, but none was emitted")
+
+	attrs := attrsOf(*found)
+	assert.Equal(t, "/test", attrs["path"], "log line must carry the request path")
+	assert.Equal(t, "regular", attrs["tier"], "log line must carry the same tier value used for the rejection metric, so logs and metrics join up")
+	assert.NotEmpty(t, attrs["client_identity"], "log line must carry the identity key used for the rate-limit bucket")
+	assert.NotContains(t, attrs, "secret", "rate limiter has no secret to compare, but guard against ever accidentally logging one under this or a similar key")
+}

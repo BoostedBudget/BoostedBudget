@@ -138,7 +138,10 @@ func (r *savingsImpactRepository) GetAggregateSavingsStats(ctx context.Context) 
 // not in per-user queries.
 //
 // Recent items include a resolved ToAccountName (GAP CA, #972):
-//   - Plaid-linked accounts: COALESCE(accounts.nickname, accounts.name) — both plaintext.
+//   - Plaid-linked accounts: COALESCE(<chain-overlaid nickname>, accounts.name) — both plaintext.
+//     ⚠ #1611: the nickname leg is accountCustomizationExpr(...), NOT a raw accounts.nickname.
+//     The raw column was UNREACHABLE for a Plaid account (accounts.name is always populated),
+//     which is precisely the bug #1611 fixed. Do not 'simplify' this back to accounts.nickname.
 //   - Manual accounts (user_accounts): COALESCE(ua.nickname, decrypted ua.account_name_hint).
 //     account_name_hint is encrypted at rest (migration 000053); decryption happens in-Go
 //     for the ≤5 bounded rows via FieldEncryptor.DecryptNullableString.
@@ -173,8 +176,14 @@ func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID stri
 
 	// LEFT JOIN accounts (Plaid) and user_accounts (manual) to fetch plaintext name fields.
 	// account_name_hint is encrypted at rest — decryption happens in-Go below (≤5 rows, bounded).
-	// COALESCE(NULLIF(a.nickname,''), a.name): prefer user-set nickname, fall back to Plaid name.
-	// ua.nickname is plaintext; ua.account_name_hint is fetched raw for app-side decryption.
+	// COALESCE(NULLIF(<chain overlay>,''), a.name): prefer the CHAIN-authoritative customization
+	// overlay (accountCustomizationExpr — see account_liveness_sql.go), fall back to Plaid name.
+	// #1611: a bare a.nickname here made the ua_nickname leg below dead code for every Plaid-linked
+	// account, because a.name is always populated for one — the chain nickname must win INSIDE
+	// plaid_account_name, via the same CASE-not-COALESCE overlay every other account read uses, so
+	// a cleared chain override falls back to a.name instead of resurrecting a stale a.nickname.
+	// ua (the manual-account join below, on to_user_account_id) is unrelated to a_ua (the chain
+	// overlay join on a.user_account_id) and serves manual accounts only.
 	itemsQuery := `
 		SELECT
 			ts.id,
@@ -184,11 +193,12 @@ func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID stri
 			ts.to_user_account_id,
 			ts.completed_at,
 			ts.completion_source,
-			COALESCE(NULLIF(a.nickname, ''), a.name)   AS plaid_account_name,
+			COALESCE(NULLIF(` + accountCustomizationExpr("a", "nickname") + `, ''), a.name) AS plaid_account_name,
 			NULLIF(ua.nickname, '')                      AS ua_nickname,
 			ua.account_name_hint                         AS ua_hint_encrypted
 		FROM transfer_suggestions ts
-		LEFT JOIN accounts a     ON a.id  = ts.to_account_id     AND a.user_id  = ts.user_id
+		LEFT JOIN accounts a     ON a.id  = ts.to_account_id     AND a.user_id  = ts.user_id` +
+		accountCustomizationJoin("a") + `
 		LEFT JOIN user_accounts ua ON ua.id = ts.to_user_account_id AND ua.user_id = ts.user_id
 		WHERE ts.user_id = $1
 		  AND ts.status = 'completed'
@@ -238,7 +248,7 @@ func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID stri
 
 // resolveDestinationName returns the best available display name for a transfer destination.
 // Resolution order (first non-empty wins):
-//  1. plaidName  — COALESCE(accounts.nickname, accounts.name) for Plaid-linked destinations.
+//  1. plaidName  — COALESCE(<chain-overlaid nickname>, accounts.name); see the #1611 note above.
 //  2. uaNickname — user_accounts.nickname (plaintext) for manual destinations.
 //  3. Decrypted uaHintEncrypted — user_accounts.account_name_hint, encrypted at rest.
 //
