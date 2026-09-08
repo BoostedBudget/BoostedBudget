@@ -97,7 +97,10 @@ func TestInvestmentService_ListHoldings_Empty(t *testing.T) {
 }
 
 // TestInvestmentService_GetPortfolioSummary_WithPriorSnapshot verifies that
-// DayChange is computed as totalValue − prior.TotalValue.
+// DayChange is computed as totalValue − prior.TotalValueInvestmentOnly (#1613 P4-T3: the
+// TYPE-GATED snapshot total, because totalValue is itself type-gated; prior.TotalValue is the
+// deliberately UNGATED historical series and is NOT comparable with it). Here the user holds
+// nothing outside an investment account, so the two snapshot totals coincide.
 func TestInvestmentService_GetPortfolioSummary_WithPriorSnapshot(t *testing.T) {
 	holdingRepo := new(MockHoldingRepository)
 	snapshotRepo := new(MockPortfolioSnapshotRepository)
@@ -114,8 +117,9 @@ func TestInvestmentService_GetPortfolioSummary_WithPriorSnapshot(t *testing.T) {
 
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	priorSnap := &domain.PortfolioSnapshot{
-		UserID:     userID,
-		TotalValue: 1100.0,
+		UserID:                   userID,
+		TotalValue:               1100.0,
+		TotalValueInvestmentOnly: ptr64(1100.0),
 	}
 	snapshotRepo.On("GetLatestBefore", ctx, userID, today).Return(priorSnap, nil)
 
@@ -399,4 +403,94 @@ func TestInvestmentService_SetAnalytics_DoesNotPanic(t *testing.T) {
 		svc.SetAnalytics(nil)
 	}, "SetAnalytics with nil must not panic")
 	assert.Nil(t, is.analytics, "analytics field should be nil after SetAnalytics(nil)")
+}
+
+// ── #1613 P4-T3 item I: DayChange must not subtract two different account universes ─────────
+//
+// The defect this pins: `totalValue` is summed from GetByUserIDWithSecurities, which is
+// TYPE-GATED (holding_repository.go: `AND a.type = 'investment'`), while `prior.TotalValue` is
+// read from portfolio_snapshots, whose writer is deliberately UNGATED
+// (portfolio_snapshot_repository.go — gating it mid-stream would step the historical series down
+// on deploy day with no backfill). Subtracting one from the other made DayChange wrong by the
+// full value of every depository account carrying holdings, EVERY DAY — the exact cash-management
+// account shape this work stream exists to fix.
+//
+// The fix compares gated-live against the gated column the snapshot now also writes.
+
+// TestInvestmentService_GetPortfolioSummary_DayChangeUsesTheTypeGatedSnapshotTotal is the
+// regression. The prior snapshot's ungated total (5000) includes a depository holding worth 3900
+// that the live read cannot see; its type-gated total is 1100. DayChange must be 1200 − 1100, not
+// 1200 − 5000.
+func TestInvestmentService_GetPortfolioSummary_DayChangeUsesTheTypeGatedSnapshotTotal(t *testing.T) {
+	holdingRepo := new(MockHoldingRepository)
+	snapshotRepo := new(MockPortfolioSnapshotRepository)
+	invTxnRepo := new(MockInvestmentTransactionRepository)
+
+	svc := NewInvestmentService(holdingRepo, snapshotRepo, invTxnRepo)
+	ctx := context.Background()
+	userID := "user-gated-daychange"
+
+	// Live holdings, already type-gated by the repository: 1200 of investment-account value.
+	holdings := []domain.Holding{
+		makeTestHolding("h1", userID, "acct-inv", "sec-1", ptr64(1200.0), ptr64(1000.0), nil),
+	}
+	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).Return(holdings, nil)
+
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	priorSnap := &domain.PortfolioSnapshot{
+		UserID:                   userID,
+		TotalValue:               5000.0, // ungated: 1100 investment + 3900 depository
+		TotalValueInvestmentOnly: ptr64(1100.0),
+	}
+	snapshotRepo.On("GetLatestBefore", ctx, userID, today).Return(priorSnap, nil)
+
+	summary, err := svc.GetPortfolioSummary(ctx, userID)
+
+	require.NoError(t, err)
+	require.NotNil(t, summary.DayChange)
+	assert.InDelta(t, 100.0, *summary.DayChange, 0.01,
+		"DayChange must be gated-live minus gated-snapshot (1200−1100). A value near −3800 means "+
+			"the ungated total_value is still being subtracted from a type-gated live total.")
+	require.NotNil(t, summary.DayChangePct)
+	assert.InDelta(t, 9.09, *summary.DayChangePct, 0.1,
+		"DayChangePct divides by the SAME prior total DayChange used — fixing one and leaving the "+
+			"other on the ungated column just moves the defect into the percentage.")
+}
+
+// TestInvestmentService_GetPortfolioSummary_DayChangeUnavailableWhenSnapshotPredatesTheGatedColumn
+// pins the NULL case. Every portfolio_snapshots row written before migration 000189 has
+// total_value_investment_only NULL and there is nothing to reconstruct it from. Unavailable for a
+// day is the accepted cost; falling back to the ungated column, or coercing to zero, is not —
+// both would render a fabricated number the user cannot tell apart from a real one.
+func TestInvestmentService_GetPortfolioSummary_DayChangeUnavailableWhenSnapshotPredatesTheGatedColumn(t *testing.T) {
+	holdingRepo := new(MockHoldingRepository)
+	snapshotRepo := new(MockPortfolioSnapshotRepository)
+	invTxnRepo := new(MockInvestmentTransactionRepository)
+
+	svc := NewInvestmentService(holdingRepo, snapshotRepo, invTxnRepo)
+	ctx := context.Background()
+	userID := "user-prehistoric-snapshot"
+
+	holdings := []domain.Holding{
+		makeTestHolding("h1", userID, "acct-inv", "sec-1", ptr64(1200.0), ptr64(1000.0), nil),
+	}
+	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).Return(holdings, nil)
+
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	priorSnap := &domain.PortfolioSnapshot{
+		UserID:                   userID,
+		TotalValue:               1100.0,
+		TotalValueInvestmentOnly: nil, // written before migration 000189
+	}
+	snapshotRepo.On("GetLatestBefore", ctx, userID, today).Return(priorSnap, nil)
+
+	summary, err := svc.GetPortfolioSummary(ctx, userID)
+
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	assert.Equal(t, 1200.0, summary.TotalValue, "the live totals are unaffected by the NULL")
+	assert.Nil(t, summary.DayChange,
+		"DayChange must be UNAVAILABLE, never computed from the ungated total_value and never 0")
+	assert.Nil(t, summary.DayChangePct,
+		"DayChangePct must be unavailable for exactly the same reason — one guard, both fields")
 }
