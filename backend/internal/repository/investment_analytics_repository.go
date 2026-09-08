@@ -589,9 +589,20 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 // condition to this query's WHERE clause.
 //
 // STANDING DECISION (governs both #1614 and #1616, do not re-litigate): exclude_investment_sync
-// governs investment_transactions reads ONLY. Holdings-based surfaces (AllocationBreakdown,
-// UnrealizedGainLoss, TopMovers — all in this file) are governed by accounts.type instead, never
-// by this flag. Reason: the feed duplication this flag exists for is a per-account user
+// governs investment_transactions reads ONLY. Holdings-based surfaces are never governed by this
+// flag; the intent is that they be governed by accounts.type instead.
+//
+// ⚠ BE PRECISE ABOUT WHAT IS ACTUALLY GATED TODAY — an earlier draft of this comment named
+// AllocationBreakdown, UnrealizedGainLoss and TopMovers together, which was FALSE for two of the
+// three and would have led a reader to believe coverage that does not exist:
+//   - AllocationBreakdown / allocationBreakdownByAccount: type-gated (a.type = 'investment', #1616).
+//   - UnrealizedGainLoss (~:483) and TopMovers (~:380): NOT type-gated. They join accounts through
+//     currentStateAccountLeg only, with no type predicate, so a depository cash-management account
+//     carrying holdings still contributes to both. That is a PRE-EXISTING gap, not a #1616
+//     regression — #1616 was an arithmetic double-count (the same dollars summed twice in one
+//     total), which those two do not have, since neither adds a cash branch. Whether they SHOULD
+//     be type-gated is a product question about what belongs in a portfolio view, tracked
+//     separately. Reason: the feed duplication this flag exists for is a per-account user
 // preference; the #1616 allocation double-count it does NOT touch was an arithmetic error — the
 // same dollars summed twice — wrong for every user regardless of preference. Consequence,
 // intended and not an oversight: an 'investment'-typed account whose owner HAS set the flag still
