@@ -1028,9 +1028,15 @@ func TestGetIncomeSourceBreakdown(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"category", "total", "count"}).
-			AddRow("INCOME", 5000.0, 3).
-			AddRow("TRANSFER_IN", 1000.0, 2)
+		// #1626: the read now also selects effective_category_name AS category_display. The third
+		// row is the regression case — a custom-categorised income source, whose key is the
+		// synthetic `custom:<uuid>` token and whose only human-readable name is the display column.
+		// The fourth is the NULL case: the column is nullable and app-maintained asynchronously.
+		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "count"}).
+			AddRow("INCOME", "INCOME", 5000.0, 3).
+			AddRow("TRANSFER_IN", "TRANSFER_IN", 1000.0, 2).
+			AddRow("custom:9f1c2b3a-0000-4000-8000-000000000001", "Side hustle", 750.0, 4).
+			AddRow("custom:9f1c2b3a-0000-4000-8000-000000000002", nil, 250.0, 1)
 
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate).
@@ -1038,10 +1044,20 @@ func TestGetIncomeSourceBreakdown(t *testing.T) {
 
 		result, err := repo.GetIncomeSourceBreakdown(ctx, userID, filters)
 		require.NoError(t, err)
-		assert.Len(t, result, 2)
+		assert.Len(t, result, 4)
 		assert.Equal(t, "INCOME", result[0].Category)
+		assert.Equal(t, "INCOME", result[0].CategoryDisplay)
 		assert.InDelta(t, 5000.0, result[0].Total, 0.001)
 		assert.Equal(t, 3, result[0].Count)
+
+		assert.Equal(t, "custom:9f1c2b3a-0000-4000-8000-000000000001", result[2].Category)
+		assert.Equal(t, "Side hustle", result[2].CategoryDisplay,
+			"a custom income category's own name must survive the read — without it the service "+
+				"title-cases the raw token and the Sankey renders a UUID (#1626)")
+
+		assert.Empty(t, result[3].CategoryDisplay,
+			"a NULL display must scan to the empty string, not error: the column is nullable and "+
+				"maintained asynchronously by the effective_category_refresh job (#1626)")
 	})
 
 	t.Run("returns empty slice when no data", func(t *testing.T) {

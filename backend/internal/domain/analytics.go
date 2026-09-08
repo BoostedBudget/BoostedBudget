@@ -206,12 +206,12 @@ type CategoryTotalRow struct {
 
 // CategoryTotalResponse is the response for GET /analytics/category-total (AI-tool-callable)
 type CategoryTotalResponse struct {
-	Category         string  `json:"category"`
-	PFCPrimaryDisplay string `json:"pfc_primary_display"`
-	Total            float64 `json:"total"`
-	TransactionCount int     `json:"transaction_count"`
-	StartDate        string  `json:"start_date"`
-	EndDate          string  `json:"end_date"`
+	Category          string  `json:"category"`
+	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
+	Total             float64 `json:"total"`
+	TransactionCount  int     `json:"transaction_count"`
+	StartDate         string  `json:"start_date"`
+	EndDate           string  `json:"end_date"`
 }
 
 // TopExpenseRow is a raw database row for GetTopExpense
@@ -307,7 +307,7 @@ type MonthOverMonthBucketRow struct {
 
 // MonthOverMonthBucket is a single month in the month-over-month response.
 type MonthOverMonthBucket struct {
-	Month     string   `json:"month"`      // "2024-01-01" (first day of month)
+	Month     string   `json:"month"` // "2024-01-01" (first day of month)
 	Total     float64  `json:"total"`
 	ChangePct *float64 `json:"change_pct"` // nil for first bucket
 	ChangeAbs *float64 `json:"change_abs"` // nil for first bucket
@@ -316,7 +316,7 @@ type MonthOverMonthBucket struct {
 // MonthOverMonthResponse is the response for GET /analytics/month-over-month (AI-tool-callable).
 type MonthOverMonthResponse struct {
 	Buckets    []MonthOverMonthBucket `json:"buckets"`
-	Category   string                 `json:"category"`    // "" = all spending
+	Category   string                 `json:"category"` // "" = all spending
 	MonthCount int                    `json:"month_count"`
 }
 
@@ -375,10 +375,19 @@ type CategoryBreakdownForMerchantResponse struct {
 }
 
 // IncomeSourceRow is a raw DB row for GetIncomeSourceBreakdown.
+//
+// CategoryDisplay carries t.effective_category_name — the custom category's own name for a
+// custom-kind row, the raw PFC enum for a PFC-kind row. It is INTERNAL: the wire contract keeps
+// exposing the resolved label through IncomeSourceItem.PFCPrimaryDisplay, so adding this field
+// changes no OpenAPI schema and no generated client (#1626).
+//
+// The column is nullable and app-maintained asynchronously, so it is scanned through a nullable
+// type and normalised to "" — never assume it is populated.
 type IncomeSourceRow struct {
-	Category string
-	Total    float64
-	Count    int
+	Category        string
+	CategoryDisplay string
+	Total           float64
+	Count           int
 }
 
 // IncomeSourceItem is a single income source in the breakdown response.
@@ -433,10 +442,10 @@ type UnusualSpendResponse struct {
 
 // NetWorthBucket represents one time period in the net worth trend.
 type NetWorthBucket struct {
-	Date      string   `json:"date"`        // first day of bucket period (YYYY-MM-DD)
+	Date      string   `json:"date"` // first day of bucket period (YYYY-MM-DD)
 	NetWorth  float64  `json:"net_worth"`
-	ChangeAbs *float64 `json:"change_abs"`  // nil for first bucket
-	ChangePct *float64 `json:"change_pct"`  // nil for first bucket; nil if prev=0
+	ChangeAbs *float64 `json:"change_abs"` // nil for first bucket
+	ChangePct *float64 `json:"change_pct"` // nil for first bucket; nil if prev=0
 }
 
 // NetWorthTrendResponse is the response for GET /analytics/net-worth-trend (AI-tool-callable).
@@ -485,11 +494,11 @@ type BudgetVsActualResponse struct {
 // omitted (nil) rather than propagating a 500. Designed as an AI-tool-callable
 // single round-trip for "how am I doing financially?" questions.
 type FinancialSummaryResponse struct {
-	SavingsRate   *SavingsRateResponse         `json:"savings_rate,omitempty"`
-	AverageSpend  *AverageMonthlySpendResponse  `json:"average_monthly_spend,omitempty"`
-	TopCategories *SpendingByCategoryResponse   `json:"top_categories,omitempty"`
-	MomChange     *MonthOverMonthResponse       `json:"mom_spending_change,omitempty"`
+	SavingsRate    *SavingsRateResponse         `json:"savings_rate,omitempty"`
+	AverageSpend   *AverageMonthlySpendResponse `json:"average_monthly_spend,omitempty"`
+	TopCategories  *SpendingByCategoryResponse  `json:"top_categories,omitempty"`
+	MomChange      *MonthOverMonthResponse      `json:"mom_spending_change,omitempty"`
 	BudgetVsActual *BudgetVsActualResponse      `json:"budget_vs_actual,omitempty"`
-	NetWorthTrend *NetWorthTrendResponse        `json:"net_worth_trend,omitempty"`
-	GeneratedAt   string                        `json:"generated_at"`
+	NetWorthTrend  *NetWorthTrendResponse       `json:"net_worth_trend,omitempty"`
+	GeneratedAt    string                       `json:"generated_at"`
 }
