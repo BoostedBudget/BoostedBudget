@@ -294,15 +294,13 @@ func (s *analyticsService) GetSpendingByCategory(ctx context.Context, userID str
 		return nil, fmt.Errorf("failed to get spending by category: %w", err)
 	}
 
-	// Merge by raw category token (UUID for custom, enum for PFC) to keep distinct rows.
-	// Use server-resolved display from repo when available; fall back to pfcDisplayName for PFC.
+	// Merge by raw category token (UUID for custom, enum for PFC) to keep distinct rows — never by
+	// display, which is not unique and can change mid-rename while the async
+	// effective_category_refresh job catches up.
 	merged := make(map[string]*domain.SpendingByCategory)
 	var order []string
 	for _, c := range categories {
-		displayName := c.PFCPrimaryDisplay
-		if displayName == "" {
-			displayName = pfcDisplayName(c.Category)
-		}
+		displayName := resolveCategoryDisplay(c.Category, c.PFCPrimaryDisplay)
 		if existing, ok := merged[c.Category]; ok {
 			existing.Total += c.Total
 			existing.TransactionCount += c.TransactionCount
@@ -323,6 +321,10 @@ func (s *analyticsService) GetSpendingByCategory(ctx context.Context, userID str
 		categories = append(categories, *merged[key])
 		totalSpent += merged[key].Total
 	}
+
+	// Re-sort on the RESOLVED label (#1626). The SQL ordered by category_display, which is the raw
+	// PFC enum, so "FOOD_AND_DRINK" sorted where "Food And Drink" does not.
+	sortSpendingByCategory(categories)
 
 	for i := range categories {
 		categories[i].Percentage = calculatePercentage(categories[i].Total, totalSpent)
@@ -713,14 +715,18 @@ func (s *analyticsService) GetIncomeSourceBreakdown(ctx context.Context, userID 
 	sources := make([]domain.IncomeSourceItem, 0, len(rows))
 	for _, row := range rows {
 		item := domain.IncomeSourceItem{
-			Category:          row.Category,
-			PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+			Category: row.Category,
+			// #1626: NOT PFCPrimaryDisplayName(row.Category). For a custom-categorised income
+			// source the key is `custom:<uuid>`, which that function title-cases into a UUID.
+			PFCPrimaryDisplay: resolveCategoryDisplay(row.Category, row.CategoryDisplay),
 			Total:             row.Total,
 			TransactionCount:  row.Count,
 			Percentage:        calculatePercentage(row.Total, totalIncome),
 		}
 		sources = append(sources, item)
 	}
+
+	sortIncomeSources(sources)
 
 	return &domain.IncomeSourceBreakdownResponse{
 		Sources:     sources,
