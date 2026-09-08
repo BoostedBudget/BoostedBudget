@@ -9,6 +9,7 @@ import (
 	"log/slog"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -50,10 +51,13 @@ var terminalLinkedItemStatuses = []domain.LinkedItemStatus{
 // Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
 //
 // Processes ITEM webhook errors from Plaid including:
-// - LOGIN_REQUIRED: User needs to re-authenticate (credentials changed, MFA, session expired)
-// - ERROR: General connection error
-// - PENDING_EXPIRATION: Item access expiring soon
-// - USER_PERMISSION_REVOKED: User revoked access at their bank
+//   - ERROR with error_code ITEM_LOGIN_REQUIRED or INVALID_ACCESS_TOKEN: user needs to
+//     re-authenticate (credentials changed, MFA, session expired) — Issue #1621: this is
+//     ProcessWebhook's routing, keyed on error_code, NOT a webhook_code named LOGIN_REQUIRED;
+//     Plaid has no such webhook_code.
+//   - ERROR (any other error_code): general connection error
+//   - PENDING_EXPIRATION / PENDING_DISCONNECT: item access expiring/disconnecting soon
+//   - USER_PERMISSION_REVOKED: user revoked access at their bank
 //
 // For each error type, the service:
 //  1. Updates LinkedItem status and error details in database
@@ -65,7 +69,10 @@ var terminalLinkedItemStatuses = []domain.LinkedItemStatus{
 // - Notification/email failures do NOT block webhook processing
 // - Errors are logged but webhook returns 200 OK to Plaid
 type ItemErrorService interface {
-	// HandleLoginRequired processes LOGIN_REQUIRED webhook error.
+	// HandleLoginRequired processes a login-required signal (Issue #1621: routed from
+	// ProcessWebhook's "ERROR" case by error_code ITEM_LOGIN_REQUIRED/INVALID_ACCESS_TOKEN —
+	// there is no Plaid webhook_code named LOGIN_REQUIRED — and also called directly by the sync
+	// path for the same two error codes; see plaid_permanent_error_notify.go).
 	// This occurs when user needs to re-authenticate due to:
 	// - Credentials changed at bank
 	// - MFA required
@@ -494,13 +501,30 @@ func (s *itemErrorService) ProcessWebhook(
 		return fmt.Errorf("failed to lookup linked item for item_id %s: %w", itemID, err)
 	}
 
-	// 2. Route to appropriate handler based on error type
+	// 2. Route to appropriate handler based on the ITEM webhook's `webhook_code` (Issue #1621:
+	// `errorType` here IS the webhook_code — see webhook_processing.go's processItemWebhook,
+	// which passes *webhook.WebhookCode as this parameter. `ITEM_LOGIN_REQUIRED` is never a Plaid
+	// webhook_code; per the vendored spec it is only ever an error_code nested inside an `ERROR`
+	// webhook's `error` object (Plaid's ITEM_LOGIN_REQUIRED webhook was deprecated in favor of
+	// this shape). A case keyed on errorType == "ITEM_LOGIN_REQUIRED" therefore could never match
+	// in production; login failures are routed below, by errorCode, inside the "ERROR" case.
 	switch errorType {
-	case "ITEM_LOGIN_REQUIRED":
-		return s.HandleLoginRequired(ctx, linkedItem, errorCode, errorMessage)
 	case "ERROR":
-		return s.HandleError(ctx, linkedItem, errorCode, errorMessage)
-	case "PENDING_EXPIRATION":
+		switch errorCode {
+		case "ITEM_LOGIN_REQUIRED", "INVALID_ACCESS_TOKEN":
+			// Routing parity with the sync path (plaid_permanent_error_notify.go): both codes
+			// mean the same thing — only the user can fix this by re-authenticating — so both
+			// route to HandleLoginRequired there, and must here too, or the two producers of
+			// this same signal diverge (the exact defect class this branch keeps finding).
+			return s.HandleLoginRequired(ctx, linkedItem, errorCode, errorMessage)
+		default:
+			return s.HandleError(ctx, linkedItem, errorCode, errorMessage)
+		}
+	case "PENDING_EXPIRATION", "PENDING_DISCONNECT":
+		// PENDING_DISCONNECT ("fired when an Item is expected to be disconnected") is absent
+		// from the vendored Plaid spec but live in Plaid's docs and observed in production
+		// (Issue #1621). It deserves the same treatment as PENDING_EXPIRATION: warn the user to
+		// reconnect before data stops, rather than falling into the unknown-code default below.
 		return s.HandlePendingExpiration(ctx, linkedItem, errorCode, errorMessage)
 	case "USER_PERMISSION_REVOKED":
 		return s.HandlePermissionRevoked(ctx, linkedItem, errorCode, errorMessage)
@@ -510,8 +534,25 @@ func (s *itemErrorService) ProcessWebhook(
 		// after the user fixed it (through any path, not just our reconnect page).
 		return s.HandleLoginRepaired(ctx, linkedItem)
 	default:
-		// Unknown error type - log and return error (webhook cannot be processed)
-		return fmt.Errorf("unsupported error type %s for item_id %s", errorType, itemID)
+		// Unhandled/unknown ITEM webhook_code (Issue #1621). Known-unhandled codes that land
+		// here today: USER_ACCOUNT_REVOKED, NEW_ACCOUNTS_AVAILABLE, and
+		// WEBHOOK_UPDATE_ACKNOWLEDGED (self-inflicted — plaid_service.go sets a webhook URL,
+		// which the spec says triggers this webhook). Any future code not yet given an explicit
+		// case above also lands here.
+		//
+		// Log and return nil rather than erroring, mirroring webhook_processing.go:215-220's
+		// handling of an unknown webhook TYPE one level up: an error here means River retries the
+		// job five times and then DLQs it forever, which is no better than never having a case
+		// at all. This is only safe because of the counter below — a Warn log alone is not an
+		// alert, and could silently swallow a future code the way this one nearly did for
+		// PENDING_DISCONNECT before this fix added it explicitly above.
+		observability.UnknownItemWebhookCodeTotal.WithLabelValues(errorType).Inc()
+		s.logger.Warn("unknown ITEM webhook code, skipping",
+			"item_id", itemID,
+			"webhook_code", errorType,
+			"error_code", errorCode,
+		)
+		return nil
 	}
 }
 
