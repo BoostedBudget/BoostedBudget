@@ -1,5 +1,15 @@
 /**
- * MCP `execute` tool — chains API calls through the host-proxy.
+ * MCP `readExecute` / `writeExecute` tools — chain API calls through the host-proxy.
+ *
+ * Issue #1610b split the original single `execute` tool into two, hard cut (no alias kept —
+ * production has zero users, and MCP clients re-enumerate tools on connect, so a retained
+ * alias would leave the agent three overlapping choices instead of two clear ones):
+ *
+ *   readExecute()  — only calls that are read-only BY CONSTRUCTION (see the security note below).
+ *                    Takes no `confirmationToken` — under that gate, one is unreachable.
+ *   writeExecute() — every class, confirmation-gated writes included. Reads stay legal inside a
+ *                    write batch (a read-then-write chain must keep working); the property that
+ *                    matters is that a client can bind readExecute ALONE.
  *
  * Each call is described by:
  *   operationId   — the API operation to invoke (from search())
@@ -7,15 +17,35 @@
  *   body          — request body for write operations
  *   pathParams    — path parameters (e.g. { id: "abc" })
  *
- * Write operations require a confirmation token (issued by the host-proxy
- * on the first attempt). Pass the token back in confirmationToken to confirm.
+ * writeExecute's write operations require a confirmation token (issued by the host-proxy on the
+ * first attempt). Pass the token back in confirmationToken to confirm.
  *
- * The host-proxy enforces: manifest gate, write gating, credential injection,
- * rate limits, and error redaction. This tool only handles orchestration.
+ * The host-proxy enforces: manifest gate, write gating, credential injection, rate limits, and
+ * error redaction. This tool only handles orchestration (plus, for readExecute, the additional
+ * read-only admission gate below).
+ *
+ * ── THE SECURITY POINT: `capability.class === 'read'` alone is NOT a safe gate ──────────────
+ * `excluded()` in capability-manifest.ts hard-codes `class: 'read'` onto EVERY excluded entry,
+ * regardless of the operation's real HTTP method or behaviour — `GET /api/v1/user/delete/cancel/
+ * {token}` is genuinely state-changing (backend/internal/services/deletion_service.go:373-375)
+ * and its manifest entry is `excluded()`, which reads `class: 'read'`. It is blocked today only
+ * because `excluded` is checked first. And `runMCPRecipe` — a REAL, non-excluded, invocable
+ * operation — is `read('runMCPRecipe')` (confirmationRequired: false, by construction of the
+ * `read()` helper) yet its HTTP method is POST: a case where the class is honestly 'read' and
+ * confirmationRequired is honestly false, but the method still isn't safe to admit on class
+ * alone without also checking the verb.
+ *
+ * So readExecute admits a call only when ALL THREE hold:
+ *   1. capability.class === 'read', AND
+ *   2. the spec entry's method is in READ_ONLY_METHODS, AND
+ *   3. capability.confirmationRequired === false.
+ * Any one of the three alone is bypassable — see the two real counter-examples above (the first
+ * defeats class-alone, the second defeats class+confirmationRequired without also checking the
+ * verb). A call that fails the gate is refused, naming writeExecute as the alternative.
  */
 
 import { getCapability } from '../../manifest/capability-manifest'
-import type { OperationClass as AuditOperationClass } from '../../manifest/capability-manifest'
+import type { CapabilityEntry, OperationClass as AuditOperationClass } from '../../manifest/capability-manifest'
 import { HostProxyError } from '../../sandbox/host-proxy'
 import type { McpToolResult } from './search'
 
@@ -26,7 +56,14 @@ export interface ExecuteCall {
   pathParams?: Record<string, string>
 }
 
-export interface ExecuteInput {
+/** readExecute's input — deliberately has NO confirmationToken field: under the three-way
+ * admission gate one is unreachable by construction, so omitting it is the ergonomic win. */
+export interface ReadExecuteInput {
+  calls: ExecuteCall[]
+}
+
+/** writeExecute's input — accepts every class and keeps confirmationToken. */
+export interface WriteExecuteInput {
   calls: ExecuteCall[]
   confirmationToken?: string
 }
@@ -47,10 +84,17 @@ export interface ExecuteAuditEvent {
   result: 'success' | 'confirmation_required' | 'denied' | 'error'
 }
 
-/** Return type for the execute handler — includes tool output AND per-call audit trail */
+/** Return type for the execute handlers — includes tool output AND per-call audit trail */
 export interface ExecuteResult {
   toolResult: McpToolResult
   auditEvents: ExecuteAuditEvent[]
+}
+
+/** A spec-index entry, reduced to the fields buildRequestArgs / deniedOperationClass need. */
+export interface ExecuteSpecEntry {
+  operationId: string
+  method: string
+  path: string
 }
 
 /**
@@ -59,7 +103,7 @@ export interface ExecuteResult {
  */
 function buildRequestArgs(
   call: ExecuteCall,
-  specEntries: { operationId: string; method: string; path: string }[],
+  specEntries: ExecuteSpecEntry[],
 ): Record<string, unknown> {
   const spec = specEntries.find((e) => e.operationId === call.operationId)
   if (!spec) {
@@ -150,7 +194,7 @@ function renderResult(result: unknown): string {
  */
 function deniedOperationClass(
   operationId: string,
-  specEntries: { operationId: string; method: string; path: string }[],
+  specEntries: ExecuteSpecEntry[],
 ): AuditOperationClass {
   const capability = getCapability(operationId)
   if (capability) return capability.class
@@ -160,19 +204,45 @@ function deniedOperationClass(
 }
 
 /**
- * Build the execute tool handler bound to a host-proxy and spec index.
- *
- * Returns an `ExecuteResult` containing both the MCP tool output and per-call
- * audit events that the caller (agent.ts) must record via audit-client. This
- * separation ensures each call is audited with the correct operationClass and
- * result — the previous behaviour hardcoded 'read'/'success' for all calls.
+ * readExecute's admission gate (see the module doc's SECURITY POINT). Returns a refusal
+ * message when the call must NOT be admitted, or undefined to proceed.
  */
-export function buildExecuteHandler(
+function readExecuteRefusal(
+  call: ExecuteCall,
+  capability: CapabilityEntry,
+  specEntries: ExecuteSpecEntry[],
+): string | undefined {
+  const spec = specEntries.find((e) => e.operationId === call.operationId)
+  const methodIsReadOnly = !!spec && READ_ONLY_METHODS.has(spec.method.toUpperCase())
+  const admitted =
+    capability.class === 'read' && methodIsReadOnly && capability.confirmationRequired === false
+
+  return admitted
+    ? undefined
+    : `not available via readExecute — use writeExecute for this operation`
+}
+
+interface BuildHandlerOptions {
+  /** writeExecute threads confirmationToken through; readExecute has no such input field. */
+  acceptsConfirmationToken: boolean
+  /** readExecute's extra admission gate. Absent for writeExecute — reads stay legal inside a
+   * write batch, so a write handler applies no additional per-call restriction. */
+  admissionGate?: (call: ExecuteCall, capability: CapabilityEntry, specEntries: ExecuteSpecEntry[]) => string | undefined
+}
+
+/**
+ * Shared core for readExecute and writeExecute — both walk the same batch, hit the same
+ * manifest gate, and render results/truncation/audit events identically. Only the admission
+ * gate and whether a confirmationToken is honoured differ between them.
+ */
+function buildHandlerCore(
   proxy: HostProxy,
-  specEntries: { operationId: string; method: string; path: string }[] = [],
-): (input: ExecuteInput) => Promise<ExecuteResult> {
-  return async (input: ExecuteInput): Promise<ExecuteResult> => {
-    const { calls, confirmationToken } = input
+  specEntries: ExecuteSpecEntry[],
+  opts: BuildHandlerOptions,
+): (input: { calls: ExecuteCall[]; confirmationToken?: string }) => Promise<ExecuteResult> {
+  return async (input): Promise<ExecuteResult> => {
+    const { calls } = input
+    const confirmationToken = opts.acceptsConfirmationToken ? input.confirmationToken : undefined
 
     if (!calls || calls.length === 0) {
       return {
@@ -200,6 +270,15 @@ export function buildExecuteHandler(
         break
       }
 
+      if (opts.admissionGate) {
+        const refusal = opts.admissionGate(call, capability, specEntries)
+        if (refusal) {
+          results.push(`❌ ${call.operationId}: ${refusal}`)
+          auditEvents.push({ operationId: call.operationId, operationClass: capability.class, result: 'denied' })
+          break
+        }
+      }
+
       // The manifest class verbatim, since #1569 Task 16: it distinguishes a destructive call
       // from an ordinary write, which deriving from `confirmationRequired` could not (both are
       // confirmation-gated). An operator filtering mcp_audit_log for attempts against
@@ -212,7 +291,8 @@ export function buildExecuteHandler(
         const result = await proxy.invoke(call.operationId, args, {
           confirmationToken: capability.confirmationRequired ? confirmationToken : undefined,
         })
-        results.push(`✅ ${call.operationId}: ${renderResult(result)}`)
+        const rendered = renderResult(result)
+        results.push(`✅ ${call.operationId}: ${rendered}`)
         auditEvents.push({ operationId: call.operationId, operationClass, result: 'success' })
       } catch (err) {
         if (err instanceof HostProxyError) {
@@ -220,7 +300,7 @@ export function buildExecuteHandler(
             const token = err.confirmationToken
             results.push(
               `⚠️ ${call.operationId} requires confirmation.\n` +
-                `Re-invoke execute() with confirmationToken: "${token}"`,
+                `Re-invoke writeExecute() with confirmationToken: "${token}"`,
             )
             auditEvents.push({ operationId: call.operationId, operationClass, result: 'confirmation_required' })
           } else {
@@ -240,4 +320,31 @@ export function buildExecuteHandler(
       auditEvents,
     }
   }
+}
+
+/**
+ * Build the readExecute tool handler. Admits a call only when the three-way gate in
+ * readExecuteRefusal holds — see the module doc's SECURITY POINT. No confirmationToken input.
+ */
+export function buildReadExecuteHandler(
+  proxy: HostProxy,
+  specEntries: ExecuteSpecEntry[] = [],
+): (input: ReadExecuteInput) => Promise<ExecuteResult> {
+  const core = buildHandlerCore(proxy, specEntries, {
+    acceptsConfirmationToken: false,
+    admissionGate: (call, capability, entries) => readExecuteRefusal(call, capability, entries),
+  })
+  return (input: ReadExecuteInput) => core({ calls: input.calls })
+}
+
+/**
+ * Build the writeExecute tool handler. Accepts every capability class and threads
+ * confirmationToken through to the host-proxy for confirmation-gated writes. Reads stay legal
+ * inside a write batch — a read-then-write chain must keep working.
+ */
+export function buildWriteExecuteHandler(
+  proxy: HostProxy,
+  specEntries: ExecuteSpecEntry[] = [],
+): (input: WriteExecuteInput) => Promise<ExecuteResult> {
+  return buildHandlerCore(proxy, specEntries, { acceptsConfirmationToken: true })
 }

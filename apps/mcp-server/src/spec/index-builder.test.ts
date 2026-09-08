@@ -10,6 +10,9 @@
  */
 
 import { describe, expect, it, beforeAll } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { buildSpecIndex, indexFromSpec } from './index-builder'
 import type { SpecEntry } from './search-runtime'
 
@@ -307,5 +310,167 @@ describe('issue #1609 task 6: request body extraction', () => {
     const entry = index.entries.find((e) => e.operationId === 'createRule')
     expect(entry?.requestBody?.some((f) => f.name === '$schema')).toBe(false)
     expect(entry?.requestBody?.some((f) => f.name === 'name')).toBe(true)
+  })
+})
+
+// ── Issue #1610a: response schema extraction ─────────────────────────────────
+//
+// search() exposed request-body schemas (#1609 Task 6) but nothing about what an operation
+// RETURNS, so a client can construct a valid write body but has no way to discover a response
+// shape without calling the operation first. Measured size cost drove the design: depth 2
+// mirroring the request side would be +162% (486,582 bytes); depth 1 + allowed-only is the
+// implemented row, +56% (289,705 bytes at measurement time — see the byte-budget test below for
+// why that number is NOT pinned exactly).
+
+describe('issue #1610a: response body extraction', () => {
+  const specWithResponseBody = {
+    paths: {
+      '/api/v1/accounts': {
+        get: {
+          operationId: 'getAccounts',
+          summary: 'Get an account',
+          responses: {
+            '200': {
+              content: {
+                'application/json': { schema: { $ref: '#/components/schemas/AccountResponse' } },
+              },
+            },
+          },
+        },
+      },
+      '/api/v1/boosts': {
+        get: {
+          operationId: 'getBoosts',
+          summary: 'List boosts',
+          responses: {
+            '200': {
+              content: {
+                'application/json': {
+                  schema: { type: 'array', items: { $ref: '#/components/schemas/BoostResponse' } },
+                },
+              },
+            },
+          },
+        },
+      },
+      // excluded op — response schema must NOT be computed for it (allowed-only, −68 KB row)
+      '/api/v1/admin/check-role': {
+        get: { operationId: 'checkRole', summary: 'Check role', responses: {
+          '200': { content: { 'application/json': { schema: { $ref: '#/components/schemas/AccountResponse' } } } },
+        } },
+      },
+      '/api/v1/transactions': {
+        get: { operationId: 'getTransactions', summary: 'No responses declared at all' },
+      },
+    },
+    components: {
+      schemas: {
+        AccountResponse: {
+          type: 'object',
+          required: ['id', 'name'],
+          properties: {
+            $schema: { type: 'string', readOnly: true, description: 'A URL to the JSON Schema.' },
+            id: { type: 'string', readOnly: true },
+            name: { type: 'string' },
+            balance: {
+              type: 'object',
+              properties: { current: { type: 'number' }, available: { type: 'number' } },
+            },
+          },
+        },
+        BoostResponse: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            boost_type: { type: 'string', enum: ['transfer_suggestion', 'savings_goal'] },
+          },
+        },
+      },
+    },
+  }
+
+  it('extracts response fields, resolving $ref, never a raw ref string', () => {
+    const index = indexFromSpec(specWithResponseBody)
+    const entry = index.entries.find((e) => e.operationId === 'getAccounts')
+    expect(entry?.responseBody).toBeDefined()
+    expect(entry?.responseBody?.some((f) => f.name === 'name')).toBe(true)
+    expect(JSON.stringify(entry?.responseBody)).not.toContain('$ref')
+  })
+
+  it('KEEPS a readOnly response field (opposite of the request-body policy)', () => {
+    // `id` is readOnly:true — on the request side this would be dropped. On the response
+    // side it is exactly the kind of field a client needs (a server-assigned identifier).
+    const index = indexFromSpec(specWithResponseBody)
+    const entry = index.entries.find((e) => e.operationId === 'getAccounts')
+    expect(entry?.responseBody?.some((f) => f.name === 'id')).toBe(true)
+  })
+
+  it('skips ONLY the $schema tooling property by name, not by readOnly', () => {
+    const index = indexFromSpec(specWithResponseBody)
+    const entry = index.entries.find((e) => e.operationId === 'getAccounts')
+    expect(entry?.responseBody?.some((f) => f.name === '$schema')).toBe(false)
+  })
+
+  it('caps nesting at depth 1 — a nested object is marked but not expanded', () => {
+    const index = indexFromSpec(specWithResponseBody)
+    const entry = index.entries.find((e) => e.operationId === 'getAccounts')
+    const balance = entry?.responseBody?.find((f) => f.name === 'balance')
+    expect(balance?.type).toBe('object')
+    // Depth 2 would produce 'balance.current' — MUST be absent at MAX_RESPONSE_DEPTH = 1.
+    expect(entry?.responseBody?.some((f) => f.name === 'balance.current')).toBe(false)
+  })
+
+  it('flattens a bare-array root response using the item schema, with no name prefix', () => {
+    const index = indexFromSpec(specWithResponseBody)
+    const entry = index.entries.find((e) => e.operationId === 'getBoosts')
+    expect(entry?.responseBody?.some((f) => f.name === 'boost_type')).toBe(true)
+    expect(entry?.responseBody?.find((f) => f.name === 'boost_type')?.enum).toEqual([
+      'transfer_suggestion',
+      'savings_goal',
+    ])
+  })
+
+  it('computes NO response schema for an excluded operation (allowed-only)', () => {
+    const index = indexFromSpec(specWithResponseBody)
+    const entry = index.entries.find((e) => e.operationId === 'checkRole')
+    expect(entry?.excluded).toBe(true)
+    expect(entry?.responseBody).toBeUndefined()
+  })
+
+  it('an operation with no responses object produces no responseBody key', () => {
+    const index = indexFromSpec(specWithResponseBody)
+    const entry = index.entries.find((e) => e.operationId === 'getTransactions')
+    expect(entry?.responseBody).toBeUndefined()
+  })
+
+  it('the committed spec produces responseBody for at least one real allowed GET operation', () => {
+    const entry = entries.find((e) => e.operationId === 'getTransactions')
+    expect(entry?.excluded).toBe(false)
+    expect(entry?.responseBody?.length ?? 0).toBeGreaterThan(0)
+  })
+})
+
+// ── Issue #1610a: the byte-budget regression test that did not exist ────────
+//
+// Nothing anywhere previously asserted a SIZE on spec-index.json — only drift gates (does the
+// generated file match the committed one), which say nothing about whether that committed file
+// is reasonably sized. This is what stops the next contributor from re-adding response depth 2
+// (measured +162%, see the module doc comment) or dropping the allowed-only filter (+68 KB).
+//
+// ⚠ NOT pinned to the exact measured byte count (289,705 at measurement time): T1 in this same
+// branch added a field to the Account response schema, which is this index's own input, so the
+// true count has already moved and will keep moving as the API grows. This asserts a CEILING
+// with headroom instead — its only job is to catch a gross regression (e.g. depth 2 creeping
+// back in, which alone would roughly triple the file), not to pin today's exact size.
+describe('issue #1610a: spec-index.json byte budget', () => {
+  const __dirname = dirname(fileURLToPath(import.meta.url))
+  const COMMITTED_INDEX_PATH = resolve(__dirname, 'generated/spec-index.json')
+
+  it('stays under a generous ceiling — regression guard against depth-2 response schemas, not a precision pin', () => {
+    const raw = readFileSync(COMMITTED_INDEX_PATH, 'utf-8')
+    const bytes = Buffer.byteLength(raw, 'utf-8')
+    // ~320 KB: headroom above the ~290 KB measured at depth 1 + allowed-only, comfortably below
+    // the ~467-487 KB a depth-2 (with-or-without-descriptions) response schema would produce.
+    expect(bytes).toBeLessThan(320_000)
   })
 })

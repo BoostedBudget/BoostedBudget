@@ -6,16 +6,17 @@
  * requests reach this class — clerkUserId is passed via props.
  *
  * Tools registered here:
- *   search   — Discover API operations from the spec index (no auth needed)
- *   execute  — Run typed API calls against the BoostedBudget backend (Phase 5)
- *   recipe.* — Saved read-only workflow recipes (Phase 7)
+ *   search        — Discover API operations from the spec index (no auth needed)
+ *   readExecute   — Run read-only API calls (issue #1610b split of the old `execute`)
+ *   writeExecute  — Run any API calls, including confirmation-gated writes
+ *   recipe.*      — Saved read-only workflow recipes (Phase 7)
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { McpAgent } from 'agents/mcp'
 import { z } from 'zod'
 import { handleSearch } from './tools/search'
-import { buildExecuteHandler } from './tools/execute'
+import { buildReadExecuteHandler, buildWriteExecuteHandler } from './tools/execute'
 import { buildRecipeTools } from './tools/recipes'
 import { createHostProxy } from '../sandbox/host-proxy'
 import { createFetchMutator } from '../client/fetch-mutator'
@@ -136,17 +137,21 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
         description:
           'Search the BoostedBudget API spec to discover available operations. ' +
           'Returns matching operations with their operationId, method, path, and summary. ' +
-          'Use this to find the right operation before calling execute().',
+          'Use this to find the right operation before calling readExecute() or writeExecute().',
         inputSchema: {
           query: z.string().optional().describe('Keyword search (e.g. "spending category", "budget create")'),
-          class: z.enum(['read', 'write']).optional().describe('Filter by operation class'),
+          // Issue #1610b: this enum previously omitted 'destructive', diverging from
+          // search.ts's SearchInputSchema (which has accepted it since #1569 Task 16) — an
+          // agent asking to filter FOR or AGAINST destructive operations got a schema mismatch
+          // instead of the results it asked for. Reconciled here.
+          class: z.enum(['read', 'write', 'destructive']).optional().describe('Filter by operation class'),
           tag: z.string().optional().describe('Filter by API tag (e.g. "Analytics", "Budgets", "Transactions")'),
           limit: z.number().int().min(1).max(50).optional().describe('Max results to return (default: 20)'),
         },
       },
       // Explicit type annotation: the `as any` cast above erases the inferred input type,
       // so this is what keeps the handler's argument checked.
-      async (input: { query?: string; class?: 'read' | 'write'; tag?: string; limit?: number }) => {
+      async (input: { query?: string; class?: 'read' | 'write' | 'destructive'; tag?: string; limit?: number }) => {
         const p = this.props as McpAgentProps
         posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'search' })
         const result = handleSearch(input, specIndex)
@@ -156,18 +161,68 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       },
     )
 
-    // ── execute tool (reads + confirmation-gated writes) ─────────────────────
-    const executeHandler = buildExecuteHandler(proxy, specIndex.entries)
+    // ── readExecute / writeExecute tools (issue #1610b) ───────────────────────
+    // Hard cut from the old single `execute` tool — no alias kept. Production has zero users,
+    // and MCP clients re-enumerate tools on connect, so a retained alias would leave the agent
+    // three overlapping choices instead of two clear ones.
+    //
+    // readExecute admits a call only when it is read-only BY CONSTRUCTION: class === 'read' AND
+    // its HTTP method is read-only AND confirmationRequired === false — see the SECURITY POINT
+    // in tools/execute.ts for why `class` alone is not a safe gate (excluded() hard-codes
+    // class:'read' onto a genuinely state-changing GET; runMCPRecipe is honestly class:'read'
+    // and confirmationRequired:false yet its method is POST). It therefore has NO
+    // confirmationToken input — under that gate, one is unreachable by construction.
+    const readExecuteHandler = buildReadExecuteHandler(proxy, specIndex.entries)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see search tool comment above
     ;(this.server as any).registerTool(
-      'execute',
+      'readExecute',
       {
         description:
-          'Execute one or more BoostedBudget API operations. ' +
-          'Use search() first to find the right operationId, then call execute() ' +
+          'Execute one or more READ-ONLY BoostedBudget API operations. ' +
+          'Use search() first to find the right operationId, then call readExecute() ' +
+          'with a list of operation calls to chain. Only operations that are read-only ' +
+          '(cannot change your data) are admitted here — use writeExecute() for anything else.',
+        inputSchema: {
+          calls: z.array(
+            z.object({
+              operationId: z.string().describe('The operationId from search() results'),
+              params: z.record(z.string(), z.unknown()).optional().describe('Query parameters'),
+              pathParams: z.record(z.string(), z.string()).optional().describe('Path parameters (e.g. { id: "abc" })'),
+            }),
+          ).max(25, 'Maximum 25 calls per readExecute() invocation').describe('Ordered list of read-only API calls to execute (max 25)'),
+        },
+      },
+      async (input: {
+        calls: Array<{ operationId: string; params?: Record<string, unknown>; pathParams?: Record<string, string> }>
+      }) => {
+        const p = this.props as McpAgentProps
+        posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'readExecute' })
+        const { toolResult, auditEvents } = await readExecuteHandler(input)
+        const callCount = input.calls?.length ?? 0
+        posthog.capture(p.clerkUserId, MCP_EVENTS.CODE_EXECUTED, { callCount })
+        const actor = { clerkUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown' }
+        for (const event of auditEvents) {
+          void audit.record(toAuditEntry(event, actor))
+        }
+        return toolResult
+      },
+    )
+
+    // writeExecute accepts every class and keeps confirmationToken. Reads stay legal inside a
+    // write batch — a read-then-write chain must keep working; the property that matters is
+    // that a client can bind readExecute ALONE.
+    const writeExecuteHandler = buildWriteExecuteHandler(proxy, specIndex.entries)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see search tool comment above
+    ;(this.server as any).registerTool(
+      'writeExecute',
+      {
+        description:
+          'Execute one or more BoostedBudget API operations, including writes. ' +
+          'Use search() first to find the right operationId, then call writeExecute() ' +
           'with a list of operation calls to chain. ' +
           'Write operations will return a confirmation challenge on first call — ' +
-          're-invoke with the provided confirmationToken to complete the write.',
+          're-invoke with the provided confirmationToken to complete the write. ' +
+          'Prefer readExecute() for read-only calls.',
         inputSchema: {
           calls: z.array(
             z.object({
@@ -176,7 +231,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
               body: z.record(z.string(), z.unknown()).optional().describe('Request body for write operations'),
               pathParams: z.record(z.string(), z.string()).optional().describe('Path parameters (e.g. { id: "abc" })'),
             }),
-          ).max(25, 'Maximum 25 calls per execute() invocation').describe('Ordered list of API calls to execute (max 25)'),
+          ).max(25, 'Maximum 25 calls per writeExecute() invocation').describe('Ordered list of API calls to execute (max 25)'),
           confirmationToken: z.string().optional().describe('Confirmation token for write operations'),
         },
       },
@@ -185,10 +240,10 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
         confirmationToken?: string
       }) => {
         const p = this.props as McpAgentProps
-        posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'execute' })
+        posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'writeExecute' })
         // ExecuteResult includes per-call audit events with the correct operationClass/result.
         // Previously this hardcoded operationClass:'read'/'execute' for all calls — fixed here.
-        const { toolResult, auditEvents } = await executeHandler(input)
+        const { toolResult, auditEvents } = await writeExecuteHandler(input)
         const callCount = input.calls?.length ?? 0
         posthog.capture(p.clerkUserId, MCP_EVENTS.CODE_EXECUTED, { callCount })
         // Record one audit entry per executed call with the real class and result.
@@ -267,7 +322,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
     ;(this.server as any).registerTool(
       'recipe.run',
       {
-        description: 'Resolve a saved recipe to its ordered list of API calls, then pass them to execute().',
+        description: 'Resolve a saved recipe to its ordered list of API calls, then pass them to readExecute() or writeExecute().',
         inputSchema: {
           id: z.string().describe('Recipe ID (from recipe.list())'),
         },

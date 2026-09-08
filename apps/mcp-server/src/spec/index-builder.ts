@@ -60,6 +60,12 @@ interface OpenAPIRequestBody {
   [key: string]: unknown
 }
 
+interface OpenAPIResponse {
+  content?: Record<string, { schema?: OpenAPISchema } | undefined>
+  description?: string
+  [key: string]: unknown
+}
+
 interface OpenAPIOperation {
   operationId?: string
   summary?: string
@@ -68,6 +74,8 @@ interface OpenAPIOperation {
   security?: unknown[]
   parameters?: OpenAPIParameter[]
   requestBody?: OpenAPIRequestBody
+  /** Response objects keyed by status code (e.g. '200', '201', 'default'). */
+  responses?: Record<string, OpenAPIResponse | undefined>
 }
 
 interface OpenAPIPathItem {
@@ -124,9 +132,50 @@ function primaryType(type: string | string[] | undefined): string | undefined {
 // without bound."
 const MAX_BODY_DEPTH = 2
 
+// Response schemas get their OWN, shallower depth cap. Task #1610a measured the cost: depth 2
+// on the response side (mirroring the request side) would add 162% to spec-index.json's size
+// (2,650 fields vs 1,423 at depth 1) for 133 KB of the 162 — field COUNT drives the cost, not
+// descriptions. Depth 1 (a response's own top-level fields, `object`/`array of object` marked
+// but not expanded) plus allowed-only filtering (excluded ops can never be executed, so their
+// response shape is dead weight) is the implemented row: +56%, not +162%. Do NOT repoint
+// MAX_BODY_DEPTH here — that would silently shallow out every request body too.
+const MAX_RESPONSE_DEPTH = 1
+
+/**
+ * Per-property skip policy for flattenBodySchema — request and response bodies need OPPOSITE
+ * answers for `readOnly`, so this cannot be a single hardcoded rule (see the two exported
+ * extract functions below for how each side sets this).
+ *
+ *  - Request bodies: skip every `readOnly` property. It is server-set and "not yours to send" —
+ *    Huma stamps a `readOnly: true` `$schema` property onto every generated request-body schema
+ *    for tooling/editor use, and surfacing it would mislead a client into thinking it's part of
+ *    the write body.
+ *  - Response bodies: do NOT skip `readOnly` — a `readOnly` field is server-set but definitely
+ *    RETURNED, so hiding it would hide real response shape. Only `$schema` itself is skipped, by
+ *    name, because it is the one property that is never meaningful API output either way. This
+ *    only looks equivalent to "skip readOnly" today because `$schema` happens to be the sole
+ *    `readOnly` property in this spec — that coincidence must not be load-bearing.
+ */
+interface FlattenPolicy {
+  maxDepth: number
+  skipProperty: (key: string, prop: OpenAPISchema) => boolean
+}
+
+const REQUEST_BODY_POLICY: FlattenPolicy = {
+  maxDepth: MAX_BODY_DEPTH,
+  skipProperty: (_key, prop) => prop.readOnly === true,
+}
+
+const RESPONSE_BODY_POLICY: FlattenPolicy = {
+  maxDepth: MAX_RESPONSE_DEPTH,
+  skipProperty: (key) => key === '$schema',
+}
+
 /**
  * Flatten an object schema's properties into token-frugal SpecBodyField entries, recursing
- * into nested objects and array-of-object items up to MAX_BODY_DEPTH using dotted names.
+ * into nested objects and array-of-object items up to `policy.maxDepth` using dotted names.
+ * `policy` also controls which properties are skipped — see FlattenPolicy above; request and
+ * response bodies need different (in fact opposite) answers for `readOnly`.
  */
 function flattenBodySchema(
   schema: OpenAPISchema | undefined,
@@ -134,6 +183,7 @@ function flattenBodySchema(
   depth: number,
   prefix: string,
   out: SpecBodyField[],
+  policy: FlattenPolicy,
 ): void {
   const resolved = resolveSchema(schema, spec)
   if (!resolved?.properties) return
@@ -143,10 +193,7 @@ function flattenBodySchema(
   for (const [key, rawProp] of Object.entries(resolved.properties)) {
     const prop = resolveSchema(rawProp, spec)
     if (!prop) continue
-    // Huma stamps a `$schema` (readOnly) property onto every generated request-body schema
-    // for tooling/editor use; it is never a field the client is meant to send. Surfacing it
-    // here would mislead an MCP client into thinking it's part of the write body.
-    if (prop.readOnly === true) continue
+    if (policy.skipProperty(key, prop)) continue
 
     const fieldName = prefix ? `${prefix}.${key}` : key
     const isRequired = required.includes(key)
@@ -165,8 +212,8 @@ function flattenBodySchema(
         ...(itemSchema?.enum && { enum: itemSchema.enum.map(String) }),
       })
 
-      if (isItemObject && depth < MAX_BODY_DEPTH) {
-        flattenBodySchema(itemSchema, spec, depth + 1, `${fieldName}[]`, out)
+      if (isItemObject && depth < policy.maxDepth) {
+        flattenBodySchema(itemSchema, spec, depth + 1, `${fieldName}[]`, out, policy)
       }
       continue
     }
@@ -179,8 +226,8 @@ function flattenBodySchema(
         ...(prop.description && { description: prop.description }),
       })
 
-      if (depth < MAX_BODY_DEPTH) {
-        flattenBodySchema(prop, spec, depth + 1, fieldName, out)
+      if (depth < policy.maxDepth) {
+        flattenBodySchema(prop, spec, depth + 1, fieldName, out, policy)
       }
       continue
     }
@@ -208,7 +255,51 @@ function extractRequestBodyFields(
   if (!schema) return []
 
   const out: SpecBodyField[] = []
-  flattenBodySchema(schema, spec, 1, '', out)
+  flattenBodySchema(schema, spec, 1, '', out, REQUEST_BODY_POLICY)
+  return out
+}
+
+/**
+ * Find the operation's JSON success response schema — prefer '200', then '201' (the only two
+ * status codes this spec ever documents a JSON body for on success). Never falls through to
+ * 'default' (the error schema).
+ */
+function findJsonSuccessResponseSchema(
+  responses: Record<string, OpenAPIResponse | undefined> | undefined,
+): OpenAPISchema | undefined {
+  if (!responses) return undefined
+  for (const code of ['200', '201']) {
+    const schema = responses[code]?.content?.['application/json']?.schema
+    if (schema) return schema
+  }
+  return undefined
+}
+
+/**
+ * Extract and flatten an operation's JSON success-response body schema (issue #1610a). Unlike
+ * request bodies, `readOnly` properties are KEPT (see RESPONSE_BODY_POLICY) and only the
+ * `$schema` tooling property is dropped by name.
+ *
+ * A response whose root schema is itself an array (many list endpoints return a bare array
+ * rather than `{ items: [...] }`) flattens the ITEM schema's fields directly, with no prefix —
+ * there is no meaningful top-level field name for "the array itself" to hang a dotted path off.
+ */
+function extractResponseBodyFields(
+  responses: Record<string, OpenAPIResponse | undefined> | undefined,
+  spec: OpenAPISpec,
+): SpecBodyField[] {
+  const schema = findJsonSuccessResponseSchema(responses)
+  if (!schema) return []
+
+  const resolved = resolveSchema(schema, spec)
+  if (!resolved) return []
+
+  const out: SpecBodyField[] = []
+  if (primaryType(resolved.type) === 'array') {
+    flattenBodySchema(resolved.items, spec, 1, '', out, RESPONSE_BODY_POLICY)
+  } else {
+    flattenBodySchema(schema, spec, 1, '', out, RESPONSE_BODY_POLICY)
+  }
   return out
 }
 
@@ -274,6 +365,13 @@ export function indexFromSpec(spec: OpenAPISpec): SpecIndex {
       // resolves $ref against components.schemas locally (spec is already in scope).
       const requestBody = extractRequestBodyFields(operation.requestBody, spec)
 
+      // Extract the response body schema (issue #1610a) — allowed operations ONLY. An
+      // excluded operation can never be executed through MCP, so a response schema for one
+      // is dead weight in the index (measured: −68 KB of the +56% budget row). Computing it
+      // unconditionally would silently regress the size budget the moment a new operation is
+      // excluded.
+      const responseBody = capability.excluded ? [] : extractResponseBodyFields(operation.responses, spec)
+
       const entry: SpecEntry = {
         operationId,
         method: method.toUpperCase(),
@@ -286,6 +384,7 @@ export function indexFromSpec(spec: OpenAPISpec): SpecIndex {
       if (description) entry.description = description
       if (parameters.length > 0) entry.parameters = parameters
       if (requestBody.length > 0) entry.requestBody = requestBody
+      if (responseBody.length > 0) entry.responseBody = responseBody
 
       entries.push(entry)
     }

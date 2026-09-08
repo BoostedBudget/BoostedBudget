@@ -263,20 +263,21 @@ describe('MCP transport integration', () => {
       | Array<{ name: string }>
       | undefined
 
-    // The server exposes at least search and execute tools
+    // The server exposes at least search, readExecute, and writeExecute tools
     expect(Array.isArray(tools)).toBe(true)
     expect(tools!.length).toBeGreaterThan(0)
     const toolNames = tools!.map((t) => t.name)
     expect(toolNames).toContain('search')
-    expect(toolNames).toContain('execute')
+    expect(toolNames).toContain('readExecute')
+    expect(toolNames).toContain('writeExecute')
 
-    // Step 3: tools/call — execute getCashFlowSummary
+    // Step 3: tools/call — readExecute getCashFlowSummary (a read-only operation)
     const callResult = await sendMcp(
       worker,
       bearerToken,
       'tools/call',
       {
-        name: 'execute',
+        name: 'readExecute',
         arguments: {
           calls: [{ operationId: 'getCashFlowSummary' }],
         },
@@ -332,7 +333,7 @@ describe('MCP transport integration', () => {
     // Initialize a session
     const { sessionId } = await initialize(worker, bearerToken)
 
-    // Step 0: search for the operation first (issue describes "search → execute write" flow)
+    // Step 0: search for the operation first (issue describes "search → writeExecute write" flow)
     // The search tool queries the spec index (static, no backend call) — the audit event it
     // fires is intercepted by the existing `handleBaseUrls` mock in setupFetchMock.
     const searchResult = await sendMcp(worker, bearerToken, 'tools/call', {
@@ -348,13 +349,13 @@ describe('MCP transport integration', () => {
     const searchText = searchContent?.[0]?.text ?? ''
     expect(searchText.toLowerCase()).toContain('recipe')
 
-    // Step 1: call execute createMCPRecipe — expect confirmation challenge
+    // Step 1: call writeExecute createMCPRecipe — expect confirmation challenge
     const challengeResult = await sendMcp(
       worker,
       bearerToken,
       'tools/call',
       {
-        name: 'execute',
+        name: 'writeExecute',
         arguments: {
           calls: [
             {
@@ -385,7 +386,7 @@ describe('MCP transport integration', () => {
     expect(backendInterceptors[0]!.callCount).toBe(0)
 
     // Step 2: extract confirmation token from challenge text
-    // Format: `Re-invoke execute() with confirmationToken: "<token>"`
+    // Format: `Re-invoke writeExecute() with confirmationToken: "<token>"`
     const tokenMatch = /confirmationToken: "([^"]+)"/.exec(challengeText)
     expect(tokenMatch).not.toBeNull()
     const confirmationToken = tokenMatch![1]!
@@ -400,7 +401,7 @@ describe('MCP transport integration', () => {
       bearerToken,
       'tools/call',
       {
-        name: 'execute',
+        name: 'writeExecute',
         arguments: {
           calls: [
             {
@@ -483,13 +484,13 @@ describe('MCP transport integration', () => {
       'X-MCP-Origin': 'attacker-origin',
     })
 
-    // Call the backend via execute — this triggers header injection via fetch-mutator
+    // Call the backend via readExecute — this triggers header injection via fetch-mutator
     const callResult = await sendMcp(
       worker,
       bearerToken,
       'tools/call',
       {
-        name: 'execute',
+        name: 'readExecute',
         arguments: { calls: [{ operationId: 'getCashFlowSummary' }] },
       },
       sessionId,

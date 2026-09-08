@@ -93,6 +93,16 @@ export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
       )
       parts.push(`  body:\n${bodyLines.join('\n')}`)
     }
+    // Issue #1610a: render the response shape so an MCP client can discover what an operation
+    // RETURNS without having to call it first. See the `f.type ?? 'any'` note above — the same
+    // ambiguity applies here.
+    if (e.responseBody?.length) {
+      const returnLines = e.responseBody.map(
+        (f) =>
+          `    ${f.name} (${f.type ?? 'any'}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
+      )
+      parts.push(`  returns:\n${returnLines.join('\n')}`)
+    }
     parts.push(`  tags: ${e.tags.join(', ')}`)
     return parts.join('\n')
   })

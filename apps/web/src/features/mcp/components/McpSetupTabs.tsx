@@ -195,7 +195,8 @@ function ClaudeDesktopPanel({ serverUrl, onCopy }: TabPanelProps) {
         <li>A browser window opens for you to sign in with your BoostedBudget account and authorize access.</li>
       </Steps>
       <WorksWhen>
-        <code>boostedbudget</code> appears under Connectors with <code>search</code> and <code>execute</code> listed.
+        <code>boostedbudget</code> appears under Connectors with <code>search</code>, <code>readExecute</code>, and{' '}
+        <code>writeExecute</code> listed.
       </WorksWhen>
     </div>
   )

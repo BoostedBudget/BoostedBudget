@@ -485,7 +485,7 @@ export const useUpdateMCPRecipe = <TError = ErrorType<ErrorModel>,
       return useMutation(getUpdateMCPRecipeMutationOptions(options), queryClient);
     }
     /**
- * Resolve a recipe's spec for execution. Returns the ordered list of API calls to chain through execute().
+ * Resolve a recipe's spec for execution. Returns the ordered list of API calls to chain through readExecute() or writeExecute().
  * @summary Run a recipe
  */
 export const runMCPRecipe = (

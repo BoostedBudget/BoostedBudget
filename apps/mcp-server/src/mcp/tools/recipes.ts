@@ -7,7 +7,21 @@
  * Tools registered:
  *   recipe.list  — list saved recipes
  *   recipe.save  — create/update a recipe (write, confirmation-gated)
- *   recipe.run   — resolve a recipe's calls for execution via execute()
+ *   recipe.run   — resolve a recipe's calls for execution via readExecute()/writeExecute()
+ *
+ * ── recipe.run and the readExecute/writeExecute split (issue #1610b) ────────────────────────
+ * `recipe.run` is NOT subject to the read/write boundary, and this is deliberate rather than an
+ * oversight: it only RESOLVES a saved recipe into its ordered list of API calls (one proxy call
+ * to `POST /api/v1/mcp/recipes/{id}/run`, see `run()` below) — it never executes any of those
+ * calls itself. The model receives the call list as plain data and must hand it to readExecute()
+ * or writeExecute() itself, where the read/write boundary applies normally to each individual
+ * call. So there is no hole here: the boundary is enforced at the point calls are actually
+ * invoked, not at the point they are merely listed. Writing this down because "a tool named
+ * `run` that isn't subject to the read/write split" is exactly the kind of thing an auditor
+ * would otherwise flag as a gap.
+ *
+ * (Out of scope, note only: `recipe.run` is itself a POST audited as `operationClass: 'read'`
+ * in agent.ts — a pre-existing mislabel unrelated to the above.)
  */
 
 import { HostProxyError } from '../../sandbox/host-proxy'
@@ -213,7 +227,7 @@ export function buildRecipeTools(proxy: HostProxy): RecipeTools {
         const text =
           `Recipe "${result['name']}" resolved to ${calls.length} call(s):\n` +
           calls.map((c, i) => `  ${i + 1}. ${c.operation_id}`).join('\n') +
-          '\n\nPass these to execute() to run the recipe.'
+          '\n\nPass these to readExecute() (if all read-only) or writeExecute() to run the recipe.'
 
         return { content: [{ type: 'text', text }] }
       } catch (err) {

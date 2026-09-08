@@ -45,6 +45,13 @@ export interface SpecEntry {
   parameters?: SpecParameter[]
   /** Request body fields extracted from the OpenAPI spec, flattened and token-frugal. */
   requestBody?: SpecBodyField[]
+  /**
+   * Response body fields extracted from the operation's JSON 200/201 success response
+   * (issue #1610a), flattened one level deep (MAX_RESPONSE_DEPTH) and allowed-operations-only —
+   * see index-builder.ts. Deliberately NOT included in searchSpec's haystack (search-runtime.ts):
+   * matching on response field names would make almost every query match almost everything.
+   */
+  responseBody?: SpecBodyField[]
 }
 
 export interface SpecIndex {
