@@ -213,3 +213,98 @@ func TestLinkedItemRepairNonce_Integration_CascadesWithItsLinkedItem(t *testing.
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM linked_item_repair_nonces WHERE id = $1`, nonce.ID).Scan(&count))
 	assert.Zero(t, count, "a nonce must not outlive the linked item it authorizes")
 }
+
+// ============================================================================
+// Issue #1623 — the mint-time snapshot of last_failure_asserted_at
+// ============================================================================
+
+// TestLinkedItemRepairNonce_Integration_BurnRefusesAfterANewerFailureIsAsserted is the RepairItem
+// half of #1623. The user starts a repair against failure A; failure B lands before they finish;
+// the burn must refuse, so the repair cannot mark a currently-broken connection healthy.
+func TestLinkedItemRepairNonce_Integration_BurnRefusesAfterANewerFailureIsAsserted(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+	itemRepo := NewLinkedItemRepository(pool, enc)
+	repo := NewLinkedItemRepairNonceRepository(pool)
+	f := newNonceFixture(t, ctx, pool)
+
+	// Failure A, then the user opens /accounts/reconnect and mints.
+	require.NoError(t, itemRepo.MarkFailureAsserted(ctx, f.item.ID, nil))
+	nonce := mintNonce(t, ctx, repo, f, "hash-newer-failure-"+f.item.ID, time.Now().Add(30*time.Minute))
+	require.NotNil(t, nonce.LastFailureAssertedAt,
+		"the mint must snapshot the item's live last_failure_asserted_at, server-side")
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Failure B is asserted while the Link session is open.
+	require.NoError(t, itemRepo.MarkFailureAsserted(ctx, f.item.ID, nil))
+
+	burned, err := repo.Burn(ctx, nonce.TokenHash, f.userID, f.item.ID)
+	require.NoError(t, err)
+	assert.False(t, burned, "a repair begun against an older failure must not burn once a newer one lands")
+
+	// And it must not have been consumed: the refusal is not a silent spend.
+	var usedAt *time.Time
+	require.NoError(t, pool.QueryRow(ctx, `SELECT used_at FROM linked_item_repair_nonces WHERE id = $1`, nonce.ID).Scan(&usedAt))
+	assert.Nil(t, usedAt)
+}
+
+// TestLinkedItemRepairNonce_Integration_BurnAcceptsAnUnchangedAssertClock is the falsifying
+// counterpart: a predicate that refused unconditionally would pass the test above while breaking
+// every legitimate repair. Same shape, no second failure.
+func TestLinkedItemRepairNonce_Integration_BurnAcceptsAnUnchangedAssertClock(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+	itemRepo := NewLinkedItemRepository(pool, enc)
+	repo := NewLinkedItemRepairNonceRepository(pool)
+	f := newNonceFixture(t, ctx, pool)
+
+	require.NoError(t, itemRepo.MarkFailureAsserted(ctx, f.item.ID, nil))
+	nonce := mintNonce(t, ctx, repo, f, "hash-unchanged-"+f.item.ID, time.Now().Add(30*time.Minute))
+
+	burned, err := repo.Burn(ctx, nonce.TokenHash, f.userID, f.item.ID)
+	require.NoError(t, err)
+	assert.True(t, burned, "an unchanged assert clock must still allow the repair the user actually performed")
+}
+
+// TestLinkedItemRepairNonce_Integration_NullSnapshotMatchesNullLiveValue covers the case the
+// comparison operator is chosen for. An item with no failure assert on record snapshots NULL, and
+// SQL `=` would make NULL = NULL evaluate to NULL — refusing every such repair. IS NOT DISTINCT
+// FROM is what makes "unchanged" mean unchanged rather than "known and unchanged".
+func TestLinkedItemRepairNonce_Integration_NullSnapshotMatchesNullLiveValue(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	repo := NewLinkedItemRepairNonceRepository(pool)
+	f := newNonceFixture(t, ctx, pool)
+
+	nonce := mintNonce(t, ctx, repo, f, "hash-null-snapshot-"+f.item.ID, time.Now().Add(30*time.Minute))
+	require.Nil(t, nonce.LastFailureAssertedAt, "fixture precondition: no failure assert on record")
+
+	burned, err := repo.Burn(ctx, nonce.TokenHash, f.userID, f.item.ID)
+	require.NoError(t, err)
+	assert.True(t, burned, "NULL must match NULL — an item with no assert on record stays repairable")
+}
+
+// TestLinkedItemRepairNonce_Integration_NullSnapshotRefusesOnceAFailureIsAsserted is the other
+// side of the NULL case, and the one a naive `IS NOT DISTINCT FROM` reader might assume is
+// symmetric-and-therefore-untested: an item that had no assert at mint, then acquires one, must
+// still refuse.
+func TestLinkedItemRepairNonce_Integration_NullSnapshotRefusesOnceAFailureIsAsserted(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+	itemRepo := NewLinkedItemRepository(pool, enc)
+	repo := NewLinkedItemRepairNonceRepository(pool)
+	f := newNonceFixture(t, ctx, pool)
+
+	nonce := mintNonce(t, ctx, repo, f, "hash-null-then-set-"+f.item.ID, time.Now().Add(30*time.Minute))
+	require.Nil(t, nonce.LastFailureAssertedAt)
+
+	require.NoError(t, itemRepo.MarkFailureAsserted(ctx, f.item.ID, nil))
+
+	burned, err := repo.Burn(ctx, nonce.TokenHash, f.userID, f.item.ID)
+	require.NoError(t, err)
+	assert.False(t, burned, "a failure asserted after the mint must refuse the burn even from a NULL snapshot")
+}

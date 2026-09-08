@@ -33,6 +33,17 @@ type LinkedItemRepairNonce struct {
 	// UsedAt is stamped by the burn's conditional UPDATE. NULL/nil means unburned.
 	UsedAt *time.Time `json:"used_at,omitempty" db:"used_at"`
 
+	// LastFailureAssertedAt is the snapshot of linked_items.last_failure_asserted_at taken
+	// server-side at mint (Issue #1623). The burn refuses when the item's live value is no longer
+	// IS NOT DISTINCT FROM this one — i.e. a failure was asserted after this repair began — so a
+	// repair started against failure A cannot silently clear a later failure B. nil is a real,
+	// MATCHING value (an item with no assert on record), which is why the comparison is
+	// IS NOT DISTINCT FROM and not `=`.
+	//
+	// Written by the Mint statement itself, from linked_items, never by a Go value: the burn
+	// compares it against that same column, and both must therefore be the database's clock.
+	LastFailureAssertedAt *time.Time `json:"last_failure_asserted_at,omitempty" db:"last_failure_asserted_at"`
+
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }

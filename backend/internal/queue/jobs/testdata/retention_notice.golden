@@ -9,8 +9,8 @@
 # THOSE tables. No test can decide that.
 
 ### item 01
-tables: linked_items, accounts, user_accounts, account_status_history
-phrase: your bank connections and every account on them, including accounts you have already closed or disconnected, and the record of when each one was connected, disconnected or closed
+tables: linked_items, accounts, user_accounts, account_status_history, linked_item_repair_nonces
+phrase: your bank connections and every account on them, including accounts you have already closed or disconnected, the record of when each one was connected, disconnected or closed, and any reconnection you had started
 
 ### item 02
 tables: balance_snapshots
@@ -63,7 +63,7 @@ phrase: the internal job and activity records tied to your account — deleted, 
 ### BEGIN 30-day notice body
 Your account data is preserved in read-only mode. In 30 days, unless you resubscribe, we will permanently delete everything in your BoostedBudget account, except where the law requires us to keep a record. This cannot be undone, and there is no way to restore it afterwards. In full, we will delete:
 
-- your bank connections and every account on them, including accounts you have already closed or disconnected, and the record of when each one was connected, disconnected or closed
+- your bank connections and every account on them, including accounts you have already closed or disconnected, the record of when each one was connected, disconnected or closed, and any reconnection you had started
 - your day-by-day balance history for every account
 - your transactions, together with every category, note, tag and merchant name you set on them, and the record of those edits
 - your investment holdings and their day-by-day snapshots, every buy and sell recorded against them, and your portfolio value history
@@ -83,7 +83,7 @@ If you want to keep any of this, resubscribe at boostedbudget.com/pricing to res
 ### BEGIN 7-day notice body
 This is your final warning. In 7 days, we will permanently delete everything in your BoostedBudget account, except where the law requires us to keep a record. This cannot be undone, and there is no way to restore it afterwards. In full, we will delete:
 
-- your bank connections and every account on them, including accounts you have already closed or disconnected, and the record of when each one was connected, disconnected or closed
+- your bank connections and every account on them, including accounts you have already closed or disconnected, the record of when each one was connected, disconnected or closed, and any reconnection you had started
 - your day-by-day balance history for every account
 - your transactions, together with every category, note, tag and merchant name you set on them, and the record of those edits
 - your investment holdings and their day-by-day snapshots, every buy and sell recorded against them, and your portfolio value history

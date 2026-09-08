@@ -74,8 +74,8 @@ type MockItemErrorService struct {
 	mock.Mock
 }
 
-func (m *MockItemErrorService) ProcessWebhook(ctx context.Context, itemID, errorType, errorCode, errorMessage string) error {
-	args := m.Called(ctx, itemID, errorType, errorCode, errorMessage)
+func (m *MockItemErrorService) ProcessWebhook(ctx context.Context, itemID, errorType, errorCode, errorMessage string, receivedAt time.Time) error {
+	args := m.Called(ctx, itemID, errorType, errorCode, errorMessage, receivedAt)
 	return args.Error(0)
 }
 
@@ -146,6 +146,11 @@ func TestWebhookProcessingWorker_Work_ItemWebhook_Success(t *testing.T) {
 	webhookID := uuid.New().String()
 	itemID := "plaid-item-123"
 
+	// Issue #1623: a DISTINCTIVE, non-zero receipt instant. webhook_events.created_at is
+	// Postgres-DEFAULTed on insert, and it is the only ordering signal a LOGIN_REPAIRED webhook
+	// has (its payload carries none), so this worker must forward it verbatim. A zero value here
+	// would let a worker that substituted time.Now() — or dropped the argument — pass.
+	receivedAt := time.Date(2026, 9, 7, 11, 30, 0, 0, time.UTC)
 	webhook := &domain.WebhookEvent{
 		ID:             webhookID,
 		WebhookType:    "ITEM",
@@ -154,6 +159,7 @@ func TestWebhookProcessingWorker_Work_ItemWebhook_Success(t *testing.T) {
 		ErrorCode:      stringPtr("ITEM_LOGIN_REQUIRED"),
 		SignatureValid: true,
 		Processed:      false,
+		CreatedAt:      receivedAt,
 	}
 
 	mockRepo := new(MockWebhookRepository)
@@ -161,7 +167,7 @@ func TestWebhookProcessingWorker_Work_ItemWebhook_Success(t *testing.T) {
 	mockItemErrorSvc := new(MockItemErrorService)
 
 	mockRepo.On("GetByID", ctx, webhookID).Return(webhook, nil)
-	mockItemErrorSvc.On("ProcessWebhook", ctx, itemID, "ERROR", "ITEM_LOGIN_REQUIRED", "").Return(nil)
+	mockItemErrorSvc.On("ProcessWebhook", ctx, itemID, "ERROR", "ITEM_LOGIN_REQUIRED", "", receivedAt).Return(nil)
 
 	worker := NewWebhookProcessingWorker(WebhookProcessingWorkerDeps{
 		WebhookRepo:        mockRepo,
@@ -213,7 +219,7 @@ func TestWebhookProcessingWorker_Work_ItemWebhook_RecoversErrorMessageFromPayloa
 
 	mockRepo.On("GetByID", ctx, webhookID).Return(webhook, nil)
 	mockItemErrorSvc.On("ProcessWebhook", ctx, itemID, "ERROR", "ITEM_LOGIN_REQUIRED",
-		"the login details of this item have changed").Return(nil)
+		"the login details of this item have changed", webhook.CreatedAt).Return(nil)
 
 	worker := NewWebhookProcessingWorker(WebhookProcessingWorkerDeps{
 		WebhookRepo:        mockRepo,
@@ -260,7 +266,7 @@ func TestWebhookProcessingWorker_Work_ItemWebhook_MalformedPayload_FallsBackToEm
 	mockItemErrorSvc := new(MockItemErrorService)
 
 	mockRepo.On("GetByID", ctx, webhookID).Return(webhook, nil)
-	mockItemErrorSvc.On("ProcessWebhook", ctx, itemID, "ERROR", "ITEM_LOGIN_REQUIRED", "").Return(nil)
+	mockItemErrorSvc.On("ProcessWebhook", ctx, itemID, "ERROR", "ITEM_LOGIN_REQUIRED", "", webhook.CreatedAt).Return(nil)
 
 	worker := NewWebhookProcessingWorker(WebhookProcessingWorkerDeps{
 		WebhookRepo:        mockRepo,

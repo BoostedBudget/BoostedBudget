@@ -173,9 +173,19 @@ func (m *MockLinkedItemRepository) GetByIDAndUser(ctx context.Context, id, userI
 }
 
 // RepairStatus atomically transitions a linked item to 'active' (Issue #1609 round 2).
-func (m *MockLinkedItemRepository) RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus) (bool, error) {
-	args := m.Called(ctx, id, userID, allowedStatuses)
+//
+// notNewerThan IS recorded (Issue #1623): it is the whole difference between a LOGIN_REPAIRED
+// that clears a stale failure and one that erases a current one, so a test must be able to assert
+// on it. A mock that dropped it from m.Called would let "pass nil everywhere" pass every test.
+func (m *MockLinkedItemRepository) RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus, notNewerThan *time.Time) (bool, error) {
+	args := m.Called(ctx, id, userID, allowedStatuses, notNewerThan)
 	return args.Bool(0), args.Error(1)
+}
+
+// MarkFailureAsserted stamps last_failure_asserted_at unconditionally (Issue #1623).
+func (m *MockLinkedItemRepository) MarkFailureAsserted(ctx context.Context, id string, terminalStatuses []domain.LinkedItemStatus) error {
+	args := m.Called(ctx, id, terminalStatuses)
+	return args.Error(0)
 }
 
 // TransitionErrorStatus atomically transitions a linked item to an error status (Issue #1609 P3-T2).

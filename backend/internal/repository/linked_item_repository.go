@@ -126,7 +126,43 @@ type LinkedItemRepository interface {
 	// transition should touch only the columns the transition means, or an unrelated caller's
 	// in-memory copy of other fields (institution name, cursor, retry count, ...) can clobber a
 	// concurrent write to THOSE fields too.
-	RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus) (bool, error)
+	// Issue #1623: notNewerThan, when non-nil, adds `AND (last_failure_asserted_at IS NULL OR
+	// last_failure_asserted_at <= $N)` to the same statement — refusing to clear a failure that
+	// was asserted AFTER the event this clear is acting on. Pass nil to apply no such bound.
+	//
+	// Its value MUST be a database-stamped instant (webhook_events.created_at, which Postgres
+	// DEFAULTs), never a Go time.Now(): the column it is compared against is written by now(),
+	// and comparing two clocks would make the ordering a property of clock skew. See
+	// MarkFailureAsserted for why status_changed_at cannot serve this purpose.
+	RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus, notNewerThan *time.Time) (bool, error)
+
+	// MarkFailureAsserted stamps last_failure_asserted_at = now() for the item, UNCONDITIONALLY
+	// with respect to status: it is written even when the failure being asserted does not change
+	// the item's status (Issue #1623).
+	//
+	// 🔴 This exists because TransitionErrorStatus CANNOT do it. That statement's predicate is
+	// `... AND status <> $1`, so a re-asserted SAME-status failure (login_required → fixed →
+	// login_required again) matches ZERO rows and writes NOTHING — which is correct for its own
+	// purpose (two producers reporting one failure must produce one notification) but means
+	// status_changed_at never advances for the SECOND failure, and the second failure therefore
+	// looks exactly as old as the first. A delayed LOGIN_REPAIRED webhook for the first failure
+	// then clears the second, and the user's connection reports healthy while it is broken.
+	// Ordering two same-status failures needs a write that lands even when the status did not
+	// change, which is why this is a separate statement rather than a widened one.
+	//
+	// Stamped with the DATABASE clock, deliberately: both readers (RepairStatus's notNewerThan
+	// and the repair nonce's snapshot comparison) compare it against another server-side
+	// timestamp.
+	//
+	// terminalStatuses is excluded exactly as TransitionErrorStatus excludes it, so the two
+	// writes agree about which items a background error signal may touch at all: an item the
+	// user deliberately disconnected or replaced, or one Plaid has revoked, must not have a
+	// failure-assert clock advanced on it by a stale signal.
+	//
+	// Returns nil whether or not a row matched: a no-op here is not an error, and callers must
+	// not branch on it. Nothing downstream is entitled to assume a stamp happened — every reader
+	// treats a NULL / unchanged value as "not newer".
+	MarkFailureAsserted(ctx context.Context, id string, terminalStatuses []domain.LinkedItemStatus) error
 
 	// TransitionErrorStatus atomically transitions a linked item to newStatus while setting its
 	// error tracking fields (error_code, error_message, last_error_at), but ONLY if — in the SAME
@@ -154,6 +190,14 @@ type LinkedItemRepository interface {
 	// seconds of each other produce only ONE notification, whichever commits first), or its FRESH
 	// status is one of terminalStatuses. Callers must treat false as "no notification", not as an
 	// error.
+	//
+	// ⚠ Issue #1623: the dedup above is still true and still wanted, but it is no longer the
+	// whole story. Because a same-status re-assert writes NOTHING here, this statement cannot be
+	// used to ORDER two consecutive failures of the same kind — status_changed_at does not
+	// advance for the second one. Every caller of this method must ALSO call MarkFailureAsserted,
+	// which is unconditional with respect to status, or a delayed clear will erase the newer
+	// failure. Do not "simplify" that second write away by folding a timestamp into this SET
+	// list: the predicate, not the SET list, is what suppresses it.
 	TransitionErrorStatus(ctx context.Context, id string, newStatus domain.LinkedItemStatus, errorCode, errorMessage string, terminalStatuses []domain.LinkedItemStatus) (bool, error)
 
 	// PurgeLinkedItem permanently and transactionally destroys the linked item and every account
@@ -847,7 +891,7 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 
 // RepairStatus implements LinkedItemRepository.RepairStatus — see that method's doc comment for
 // the full contract (Issue #1609 round 2, BLOCKING 2; cleanup-schedule clearing added P3-T8).
-func (r *linkedItemRepository) RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus) (bool, error) {
+func (r *linkedItemRepository) RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus, notNewerThan *time.Time) (bool, error) {
 	if len(allowedStatuses) == 0 {
 		return false, nil
 	}
@@ -875,12 +919,47 @@ func (r *linkedItemRepository) RepairStatus(ctx context.Context, id string, user
 		query += ` AND user_id = $4`
 		args = append(args, userID)
 	}
+	if notNewerThan != nil {
+		// Issue #1623. NULL means "no failure has been asserted since the column existed", which
+		// is treated as NOT newer — an item with no assert on record must stay repairable, or
+		// this predicate would make every pre-migration item permanently unclearable.
+		query += fmt.Sprintf(`
+		  AND (last_failure_asserted_at IS NULL OR last_failure_asserted_at <= $%d)`, len(args)+1)
+		args = append(args, *notNewerThan)
+	}
 
 	tag, err := r.db.Exec(ctx, query, args...)
 	if err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// MarkFailureAsserted implements LinkedItemRepository.MarkFailureAsserted — see that method's doc
+// comment for why this is a SEPARATE statement from TransitionErrorStatus rather than part of it.
+//
+// ⚠ Deliberately does NOT touch status, error_code, error_message, last_error_at or
+// status_changed_at. Those are TransitionErrorStatus's columns and carry its dedup semantics; the
+// whole point of this write is to advance ONE clock that the dedup predicate must not suppress.
+// It also does not clear on repair: RepairStatus leaves last_failure_asserted_at where it is, so
+// a repaired-then-rebroken item's stamp advances to the NEW failure on the next assert, which is
+// what both readers need.
+func (r *linkedItemRepository) MarkFailureAsserted(ctx context.Context, id string, terminalStatuses []domain.LinkedItemStatus) error {
+	terminal := make([]string, len(terminalStatuses))
+	for i, s := range terminalStatuses {
+		terminal[i] = string(s)
+	}
+
+	const query = `
+		UPDATE linked_items
+		SET last_failure_asserted_at = now(),
+		    updated_at = now()
+		WHERE id = $1
+		  AND status <> ALL($2)
+	`
+
+	_, err := r.db.Exec(ctx, query, id, terminal)
+	return err
 }
 
 // TransitionErrorStatus implements LinkedItemRepository.TransitionErrorStatus — see that method's

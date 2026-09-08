@@ -54,8 +54,14 @@ type TransactionSyncService interface {
 
 // ItemErrorService defines the methods needed to process ITEM webhooks.
 type ItemErrorService interface {
-	// ProcessWebhook processes an ITEM webhook for errors
-	ProcessWebhook(ctx context.Context, itemID, errorType, errorCode, errorMessage string) error
+	// ProcessWebhook processes an ITEM webhook for errors.
+	//
+	// Issue #1623: receivedAt is webhook_events.created_at — Postgres-stamped on insert
+	// (webhook_repository.go's INSERT lets the column DEFAULT and reads it back via RETURNING),
+	// never a Go clock. The LOGIN_REPAIRED path compares it against
+	// linked_items.last_failure_asserted_at, which is also written by now(), so the ordering is
+	// one database's clock against itself.
+	ProcessWebhook(ctx context.Context, itemID, errorType, errorCode, errorMessage string, receivedAt time.Time) error
 }
 
 // InvestmentSyncService defines the methods needed to process HOLDINGS and
@@ -274,7 +280,9 @@ func (w *WebhookProcessingWorker) processItemWebhook(ctx context.Context, webhoo
 		errorCode = *webhook.ErrorCode
 	}
 
-	return w.itemErrorSvc.ProcessWebhook(ctx, *webhook.ItemID, errorType, errorCode, itemWebhookErrorMessage(webhook.Payload))
+	// webhook.CreatedAt is "when this webhook event was received", DEFAULTed by Postgres on
+	// insert — see the interface doc comment for why nothing here may substitute time.Now().
+	return w.itemErrorSvc.ProcessWebhook(ctx, *webhook.ItemID, errorType, errorCode, itemWebhookErrorMessage(webhook.Payload), webhook.CreatedAt)
 }
 
 // itemWebhookErrorMessage recovers Plaid's human-readable error_message from a stored ITEM

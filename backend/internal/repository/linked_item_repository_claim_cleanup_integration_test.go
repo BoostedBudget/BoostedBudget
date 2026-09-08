@@ -542,7 +542,7 @@ func TestClaimItemForCleanup_Integration_RealisticReconnectSequence_SurvivesStal
 	require.NoError(t, repo.MarkForCleanup(ctx, itemID, time.Now()))
 
 	// Step 3: the user repairs it through the real reconnect flow.
-	repaired, err := repo.RepairStatus(ctx, itemID, userID, []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired})
+	repaired, err := repo.RepairStatus(ctx, itemID, userID, []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired}, nil)
 	require.NoError(t, err)
 	require.True(t, repaired, "precondition: the repair itself must succeed, or the decline below would "+
 		"prove nothing about cleanup eligibility")
