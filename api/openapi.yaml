@@ -95,6 +95,8 @@ components:
         display_order:
           format: int64
           type: integer
+        exclude_investment_sync:
+          type: boolean
         expired_at:
           format: date-time
           type: string
@@ -160,6 +162,7 @@ components:
         - currency_code
         - status
         - is_hidden
+        - exclude_investment_sync
         - created_at
         - updated_at
       type: object
@@ -2416,6 +2419,27 @@ components:
         parent_id:
           type: string
         parent_pfc_primary:
+          description: "The PFCv2 primary this custom category nests under. This is NOT a cosmetic label: budget roll-up counts the category's transactions under this primary, and analytics classifies them through it -- a category nested under TRANSFER_IN or TRANSFER_OUT makes its transactions TRANSFERS, so they are excluded from cash flow when include_transfers is false (Issue #1609). Leave unset for a category with no PFC parent. Send an empty string to clear it."
+          enum:
+            - BANK_FEES
+            - ENTERTAINMENT
+            - FOOD_AND_DRINK
+            - GENERAL_MERCHANDISE
+            - GENERAL_SERVICES
+            - GOVERNMENT_AND_NON_PROFIT
+            - HOME_IMPROVEMENT
+            - INCOME
+            - LOAN_DISBURSEMENTS
+            - LOAN_PAYMENTS
+            - MEDICAL
+            - OTHER
+            - PERSONAL_CARE
+            - RENT_AND_UTILITIES
+            - TRANSFER_IN
+            - TRANSFER_OUT
+            - TRANSPORTATION
+            - TRAVEL
+            - ""
           type: string
       required:
         - name
@@ -2499,6 +2523,22 @@ components:
         - name
         - spec
       type: object
+    CreateReconnectLinkTokenInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CreateReconnectLinkTokenInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        item_id:
+          description: The Plaid item_id of the linked item to reconnect (from the notification's action_url)
+          type: string
+      required:
+        - item_id
+      type: object
     CreateSavingsGoalRequest:
       additionalProperties: false
       properties:
@@ -2579,6 +2619,26 @@ components:
         parent_name:
           type: string
         parent_pfc_primary:
+          description: "The PFCv2 primary this custom category nests under. This is NOT a cosmetic label: budget roll-up counts the category's transactions under this primary, and analytics classifies them through it -- a category nested under TRANSFER_IN or TRANSFER_OUT makes its transactions TRANSFERS, so they are excluded from cash flow when include_transfers is false (Issue #1609). Leave unset for a category with no PFC parent."
+          enum:
+            - BANK_FEES
+            - ENTERTAINMENT
+            - FOOD_AND_DRINK
+            - GENERAL_MERCHANDISE
+            - GENERAL_SERVICES
+            - GOVERNMENT_AND_NON_PROFIT
+            - HOME_IMPROVEMENT
+            - INCOME
+            - LOAN_DISBURSEMENTS
+            - LOAN_PAYMENTS
+            - MEDICAL
+            - OTHER
+            - PERSONAL_CARE
+            - RENT_AND_UTILITIES
+            - TRANSFER_IN
+            - TRANSFER_OUT
+            - TRANSPORTATION
+            - TRAVEL
           type: string
         parent_pfc_primary_display:
           type: string
@@ -5269,6 +5329,31 @@ components:
         - failed
         - completed_last_hour
       type: object
+    ReconnectLinkTokenResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ReconnectLinkTokenResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        expiration:
+          format: date-time
+          type: string
+        link_token:
+          type: string
+        repair_nonce:
+          type: string
+        request_id:
+          type: string
+      required:
+        - link_token
+        - expiration
+        - request_id
+        - repair_nonce
+      type: object
     RecordMCPAuditBody:
       additionalProperties: false
       properties:
@@ -5622,6 +5707,41 @@ components:
             - "null"
       required:
         - account_orders
+      type: object
+    RepairLinkedItemInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RepairLinkedItemInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        item_id:
+          description: The Plaid item_id of the linked item that was just repaired via Plaid Link
+          type: string
+        repair_nonce:
+          description: The single-use repair nonce returned by createReconnectLinkToken for this item
+          type: string
+      required:
+        - item_id
+        - repair_nonce
+      type: object
+    RepairLinkedItemOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RepairLinkedItemOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        success:
+          type: boolean
+      required:
+        - success
       type: object
     RequestDeletionResponseBody:
       additionalProperties: false
@@ -7303,6 +7423,27 @@ components:
         parent_id:
           type: string
         parent_pfc_primary:
+          description: "The PFCv2 primary this custom category nests under. This is NOT a cosmetic label: budget roll-up counts the category's transactions under this primary, and analytics classifies them through it -- a category nested under TRANSFER_IN or TRANSFER_OUT makes its transactions TRANSFERS, so they are excluded from cash flow when include_transfers is false (Issue #1609). Leave unset for a category with no PFC parent. Send an empty string to clear it."
+          enum:
+            - BANK_FEES
+            - ENTERTAINMENT
+            - FOOD_AND_DRINK
+            - GENERAL_MERCHANDISE
+            - GENERAL_SERVICES
+            - GOVERNMENT_AND_NON_PROFIT
+            - HOME_IMPROVEMENT
+            - INCOME
+            - LOAN_DISBURSEMENTS
+            - LOAN_PAYMENTS
+            - MEDICAL
+            - OTHER
+            - PERSONAL_CARE
+            - RENT_AND_UTILITIES
+            - TRANSFER_IN
+            - TRANSFER_OUT
+            - TRANSPORTATION
+            - TRAVEL
+            - ""
           type: string
       type: object
     UpdateHouseholdNameRequestBody:
@@ -7576,6 +7717,10 @@ components:
           type:
             - integer
             - "null"
+        exclude_investment_sync:
+          type:
+            - boolean
+            - "null"
         is_hidden:
           type:
             - boolean
@@ -7591,6 +7736,7 @@ components:
         - custom_emoji
         - display_order
         - is_hidden
+        - exclude_investment_sync
       type: object
     UpdateUserTagRequest:
       additionalProperties: false
@@ -7750,6 +7896,8 @@ components:
         display_order:
           format: int64
           type: integer
+        exclude_investment_sync:
+          type: boolean
         id:
           type: string
         institution_id:
@@ -7774,6 +7922,7 @@ components:
         - user_id
         - institution_id
         - is_hidden
+        - exclude_investment_sync
         - created_at
         - updated_at
       type: object
@@ -12991,7 +13140,7 @@ paths:
         - MCP Recipes
   /api/v1/mcp/recipes/{id}/run:
     post:
-      description: Resolve a recipe's spec for execution. Returns the ordered list of API calls to chain through execute().
+      description: Resolve a recipe's spec for execution. Returns the ordered list of API calls to chain through readExecute() or writeExecute().
       operationId: runMCPRecipe
       parameters:
         - description: Recipe ID
@@ -13386,6 +13535,62 @@ paths:
       security:
         - clerk: []
       summary: Create Plaid link token
+      tags:
+        - Plaid
+  /api/v1/plaid/reconnect:
+    post:
+      description: Marks the caller's own linked item active again and clears its error tracking fields. Call only after the update-mode Plaid Link flow (using the token from createReconnectLinkToken) has succeeded, presenting the repair_nonce returned alongside that token. The nonce is single-use and item-scoped; it proves the caller went through this server's own reconnect mint, not that Plaid Link succeeded.
+      operationId: repairLinkedItem
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepairLinkedItemInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepairLinkedItemOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Clear a linked item's error state after a successful reconnect
+      tags:
+        - Plaid
+  /api/v1/plaid/reconnect-link-token:
+    post:
+      description: Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration). A 'revoked' item is deliberately excluded — Plaid documents revoked access as unrecoverable via update mode; see ErrLinkedItemNotRepairable in item_error_service.go. Also returns a single-use repair_nonce that the reconnect endpoint requires; it shares the link token's expiry and must be kept out of URLs and logs.
+      operationId: createReconnectLinkToken
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReconnectLinkTokenInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconnectLinkTokenResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Create a Plaid update-mode link token to repair a broken connection
       tags:
         - Plaid
   /api/v1/qa/auth/bypass:
@@ -15406,6 +15611,7 @@ paths:
       summary: Get privacy settings
       tags:
         - Privacy
+      x-mcp-lazy-init: true
     put:
       description: Updates the authenticated user's privacy settings with GDPR validation.
       operationId: updatePrivacySettings
@@ -15455,6 +15661,7 @@ paths:
       summary: Get user profile
       tags:
         - Profile
+      x-mcp-lazy-init: true
     put:
       description: Updates the authenticated user's profile with validated data.
       operationId: updateUserProfile

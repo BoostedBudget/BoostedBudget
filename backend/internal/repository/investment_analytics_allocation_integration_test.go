@@ -12,6 +12,7 @@ package repository
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/google/uuid"
@@ -424,6 +425,116 @@ func TestAllocationBreakdown_GroupByAssetClass_Integration(t *testing.T) {
 	}
 	assert.True(t, hasInvestments, "must have 'investments' asset class bucket")
 	assert.True(t, hasCash, "must have 'cash' asset class bucket from depository")
+}
+
+// TestAllocationBreakdown_DepositoryAccountWithHoldings_CountedOnce_Integration is the
+// regression test for #1616: a Plaid cash-management account is typed 'depository' by Plaid
+// but ALSO returns rows in the holdings table. Before the fix, the holdings branch of the
+// UNION carried no a.type predicate, so such an account contributed BOTH its
+// h.institution_value (via the holdings branch) AND its a.current_balance (via the cash
+// branch) to grandTotal — the same underlying dollars counted twice.
+//
+// Fixture uses DISTINCT values for institution_value (4321.55) and current_balance (987.65)
+// deliberately: an equal-valued fixture would pass whichever number survived the fix and prove
+// nothing about which one is authoritative. Per the standing decision written into
+// AllocationBreakdown/allocationBreakdownByAccount, exclude_investment_sync governs
+// investment_transactions only — holdings-based surfaces are governed by accounts.type. So
+// after the fix, an account not typed 'investment' contributes NOTHING from the holdings
+// branch; a depository account's holdings value (4321.55) must NOT appear anywhere in the
+// allocation response, and its current_balance (987.65) — the cash branch — is the sole
+// authoritative number.
+func TestAllocationBreakdown_DepositoryAccountWithHoldings_CountedOnce_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New()
+	linkedItemID := uuid.New()
+	depAcctID := uuid.New()
+	secID := uuid.New()
+	prefix := "alloc-dep-holdings"
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "test|"+prefix+"-"+userID.String(), prefix+"-"+userID.String()+"@example.com")
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-test-token')
+	`, linkedItemID, userID, prefix+"-item-"+linkedItemID.String())
+	require.NoError(t, err)
+
+	// A Plaid cash-management account: type='depository', current_balance=987.65.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, current_balance)
+		VALUES ($1, $2, $3, $4, 'Cash Management', 'depository', 'active', 987.65)
+	`, depAcctID, linkedItemID, userID, prefix+"-dep-"+depAcctID.String())
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO securities (id, plaid_security_id, name, type)
+		VALUES ($1, $2, 'MMFXX', 'money market')
+	`, secID, prefix+"-sec-"+secID.String())
+	require.NoError(t, err)
+
+	// Same account ALSO carries a holding, with a DISTINCT value from current_balance.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_value)
+		VALUES ($1, $2, $3, $4, 10, 4321.55)
+	`, uuid.New(), userID, depAcctID, secID)
+	require.NoError(t, err)
+
+	repo := NewInvestmentAnalyticsRepository(tx)
+
+	t.Run("security_type mode: counted once, cash value is authoritative", func(t *testing.T) {
+		opts := domain.AllocationOptions{Include: []string{"cash"}}
+		result, err := repo.AllocationBreakdown(ctx, userID.String(), opts)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Authoritative total is the cash branch's current_balance (987.65), NOT
+		// institution_value (4321.55) and NOT their sum (5309.20).
+		assert.InDelta(t, 987.65, result.TotalValue, 0.01,
+			"depository account with holdings must be counted ONCE, via its current_balance "+
+				"(accounts.type governs holdings surfaces) — not via institution_value, and not both")
+
+		// The holdings value (4321.55) must not appear anywhere — a depository account
+		// (a.type != 'investment') must contribute nothing from the holdings branch.
+		for _, b := range result.Buckets {
+			assert.False(t, math.Abs(b.TotalValue-4321.55) < 0.01,
+				"a depository account's holdings must not appear in any bucket — holdings-based "+
+					"surfaces are governed by accounts.type, and this account is not 'investment' "+
+					"(bucket %q had value %v)", b.SecurityType, b.TotalValue)
+		}
+	})
+
+	t.Run("group_by=account mode: one bucket, not two", func(t *testing.T) {
+		opts := domain.AllocationOptions{
+			Include: []string{"cash"},
+			GroupBy: domain.AllocationGroupByAccount,
+		}
+		result, err := repo.AllocationBreakdown(ctx, userID.String(), opts)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		var matching []domain.AllocationItem
+		for _, b := range result.Buckets {
+			if b.SecurityType == "Cash Management" {
+				matching = append(matching, b)
+			}
+		}
+		require.Len(t, matching, 1,
+			"a depository account with holdings must produce exactly ONE bucket bearing its name, "+
+				"not two (one from the holdings branch, one from the cash branch)")
+		assert.InDelta(t, 987.65, matching[0].TotalValue, 0.01,
+			"the single bucket's value must be the current_balance (cash), not institution_value")
+		assert.Equal(t, "depository", matching[0].AssetClass)
+	})
 }
 
 // TestAllocationBreakdown_OverdrawnDepository_CashBucketIsZero_Integration proves that

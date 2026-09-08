@@ -13,13 +13,20 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
 import { getCapability } from '../src/manifest/capability-manifest'
+import {
+  ACKNOWLEDGED_LAZY_INIT_OPERATIONS,
+  extractLazyInitOperationIds,
+  findUnacknowledgedLazyInitOperations,
+} from '../src/manifest/lazy-init-extension'
 import { HTTP_METHODS } from '../src/spec/index-builder'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const OPENAPI_PATH = resolve(__dirname, '../../../api/openapi.yaml')
 
 const rawYaml = readFileSync(OPENAPI_PATH, 'utf-8')
-const spec = parseYaml(rawYaml) as { paths?: Record<string, Record<string, { operationId?: string }>> }
+const spec = parseYaml(rawYaml) as {
+  paths?: Record<string, Record<string, { operationId?: string; 'x-mcp-lazy-init'?: unknown }>>
+}
 
 const missing: string[] = []
 
@@ -44,4 +51,24 @@ if (missing.length > 0) {
   process.exit(1)
 }
 
+// #1610: scan for a NEW admitted-read-that-writes operation. A GET tagged x-mcp-lazy-init in
+// api/openapi.yaml that isn't in ACKNOWLEDGED_LAZY_INIT_OPERATIONS is a lazy-init write nobody
+// has reviewed yet — see src/manifest/lazy-init-extension.ts for the full mechanism.
+const lazyInitTagged = extractLazyInitOperationIds(spec)
+const unacknowledged = findUnacknowledgedLazyInitOperations(lazyInitTagged, ACKNOWLEDGED_LAZY_INIT_OPERATIONS)
+
+if (unacknowledged.length > 0) {
+  console.error('❌ Manifest completeness check FAILED — unacknowledged lazy-init operation(s):')
+  for (const id of unacknowledged) {
+    console.error(`   ${id}`)
+  }
+  console.error('')
+  console.error('This operation is tagged x-mcp-lazy-init: true in api/openapi.yaml (it lazily')
+  console.error('writes on an admitted GET) but is not in ACKNOWLEDGED_LAZY_INIT_OPERATIONS')
+  console.error('(apps/mcp-server/src/manifest/lazy-init-extension.ts). Review it, then add it')
+  console.error('to that list AND to execute.test.ts\'s pinned expectation.')
+  process.exit(1)
+}
+
 console.log(`✅ Manifest completeness check passed — all OpenAPI operations are classified`)
+console.log(`✅ Lazy-init scan passed — ${lazyInitTagged.length} tagged operation(s), all acknowledged`)

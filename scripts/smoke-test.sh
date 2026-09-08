@@ -287,6 +287,135 @@ else
 fi
 
 # =============================================================================
+# Webhook Reachability Checks
+# =============================================================================
+#
+# WHY THIS EXISTS (#1609 follow-up, 2026-09-08 production incident).
+#
+# Cloudflare Bot Fight Mode was enabled zone-wide on boostedbudget.com. It issues a
+# Managed Challenge to automated clients, and Plaid's webhook sender is exactly that
+# (`Go-http-client/2.0` from AS14618/Amazon). Plaid cannot solve an interstitial
+# challenge, so it recorded every delivery as a 403. Confirmed from Cloudflare
+# Security Events: two "Bot fight mode / Managed Challenge" rows at 2026-09-08
+# 07:12:48 EDT for POST api.boostedbudget.com/webhooks/plaid, matching the two
+# TRANSACTIONS deliveries Plaid logged as 403 in the same second.
+#
+# It went undetected for at least 11 hours across THREE webhook types (HOLDINGS
+# 06:52Z, TRANSACTIONS 11:12Z, LIABILITIES 17:14Z) because every existing check
+# probed GET endpoints that the edge never challenged. Nothing in this script
+# exercised a webhook path at all.
+#
+# WHAT THIS ASSERTS: an unsigned POST to each webhook endpoint returns 401. That is
+# the correct fail-closed answer from the application (both handlers reject with
+# "invalid or missing webhook signature"), and it proves the whole path is intact:
+# DNS -> Cloudflare edge -> CloudflareOnly origin gate -> Huma route -> signature
+# verification. Any OTHER status means a layer in front of the app ate the request:
+#   403 -> the edge (Bot Fight Mode / WAF) or the CloudflareOnly origin gate
+#   404 -> the route is not registered
+#   000 -> DNS or TLS failure (retried before being believed)
+#
+# WHY UNSIGNED, AND WHY NO Plaid-Verification HEADER: with no verification header the
+# handler rejects immediately and makes NO outbound call. Sending a header with a
+# parseable `kid` makes the server call Plaid's /webhook_verification_key/get to
+# resolve it, which pollutes the Plaid API log with INVALID_WEBHOOK_VERIFICATION_KEY_ID
+# errors on every deploy. Verified during the incident: exactly two key-fetch calls
+# were logged, matching exactly the two probes that carried a kid. Keep this probe
+# header-free.
+#
+# This CANNOT detect a webhook whose signature verification is misconfigured — a
+# wrong Plaid environment also produces 401. It detects reachability only, which is
+# the failure that actually happened.
+check_webhook_reachable() {
+  local path=$1
+  local attempts=${2:-3}
+  local interval=${3:-3}
+
+  local i
+  webhook_status=""
+  webhook_mitigated=""
+  for i in $(seq 1 "$attempts"); do
+    webhook_status=$(curl -s -o /dev/null -w "%{http_code}" \
+      -X POST "$API_URL$path" \
+      -H "Content-Type: application/json" \
+      -d '{}' --max-time 15 || echo "000")
+
+    if [ "$webhook_status" == "401" ]; then
+      return 0
+    fi
+
+    # Only a transport failure is worth retrying. A definite HTTP status from the edge
+    # will not change on a retry, and retrying it just slows the deploy gate.
+    if [ "$webhook_status" != "000" ]; then
+      # Fetch headers ONLY on failure, to name a Cloudflare challenge precisely rather
+      # than reporting a bare 403. Cloudflare stamps `cf-mitigated: challenge` on a
+      # Managed Challenge response — the exact fingerprint of the 2026-09-08 incident.
+      # Kept off the happy path so a healthy deploy costs one request per endpoint.
+      webhook_mitigated=$(curl -s -i \
+        -X POST "$API_URL$path" \
+        -H "Content-Type: application/json" \
+        -d '{}' --max-time 15 2>/dev/null \
+        | tr -d '\r' | sed -n 's/^[Cc][Ff]-[Mm]itigated: *//p' | head -1)
+      return 1
+    fi
+
+    if [ "$i" -lt "$attempts" ]; then
+      sleep "$interval"
+    fi
+  done
+
+  return 1
+}
+
+if [ "$ENVIRONMENT" == "production" ] || [ "$ENVIRONMENT" == "staging" ]; then
+  echo ""
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${BLUE}  Webhook Reachability Checks${NC}"
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+  for webhook_path in "/webhooks/plaid" "/webhooks/paddle"; do
+    if check_webhook_reachable "$webhook_path"; then
+      print_test "pass" "Webhook endpoint $webhook_path is reachable (401 unsigned, as expected)"
+    else
+      hint=""
+      if [ -n "$webhook_mitigated" ]; then
+        hint=" — Cloudflare reports cf-mitigated: $webhook_mitigated. This is an EDGE block, not the application. Check Security → Events; if the Service is 'Bot fight mode', it must be DISABLED (plain Bot Fight Mode cannot be bypassed with a WAF skip rule — see docs/FLYIO_SETUP.md)."
+      elif [ "$webhook_status" == "403" ]; then
+        hint=" — 403 means something in front of the app rejected this. Either Cloudflare (Security → Events) or the CloudflareOnly origin gate (which logs 'cloudflare-only: blocked — <reason>'). Providers will silently stop delivering."
+      elif [ "$webhook_status" == "000" ]; then
+        hint=" — no response at all (DNS or TLS failure). The hostname may not resolve or may not be proxied."
+      fi
+
+      # Production is FATAL: a challenged or blocked webhook path means Plaid and
+      # Paddle deliveries are being dropped, which is silent financial-data loss and
+      # missed subscription lifecycle events. That is worth blocking a deploy over.
+      #
+      # Staging is a WARNING, deliberately and narrowly: at the time this check was
+      # written staging-api.boostedbudget.com was already fully unreachable for
+      # reasons unrelated to this incident, and making it fatal would block every
+      # staging deploy on a pre-existing outage this check did not diagnose. It still
+      # increments WARNING_COUNT, so the closing banner cannot claim a clean run.
+      # Promote it to fatal once staging is healthy again.
+      if [ "$ENVIRONMENT" == "production" ]; then
+        print_test "fail" "Webhook endpoint $webhook_path returned HTTP $webhook_status (expected 401)$hint"
+        exit 1
+      else
+        print_test "warn" "Webhook endpoint $webhook_path returned HTTP $webhook_status (expected 401)$hint"
+      fi
+    fi
+  done
+else
+  echo ""
+  echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${YELLOW}  Webhook Reachability Checks (SKIPPED for $ENVIRONMENT)${NC}"
+  echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  # Not a silent skip: qa runs with ENVIRONMENT=qa, which bypassEnvironments puts
+  # around CloudflareOnly entirely, and may register the webhook route with "no
+  # verifier configured" (see cmd/server/main.go) — in which case an unsigned POST
+  # does NOT return 401 and this assertion would be wrong rather than useful.
+  print_test "warn" "Webhook reachability checks skipped - only meaningful for production/staging"
+fi
+
+# =============================================================================
 # Frontend Checks (skip if WEB_URL is empty)
 # =============================================================================
 if [ -n "$WEB_URL" ]; then

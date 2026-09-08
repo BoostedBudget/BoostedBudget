@@ -151,6 +151,30 @@ func TestRecipeService_Create(t *testing.T) {
 		}
 	})
 
+	t.Run("#1610 P3-T6: accepts recipes using read ops missing from the stale Go/TS mirror", func(t *testing.T) {
+		// getMerchants, listMCPRecipes, getMyHousehold, getAccountBalanceHistory and 16 other
+		// read-class TS-manifest operations were absent from the hand-maintained Go mirror
+		// (backend/internal/domain/mcp_manifest.go), so validateSpec rejected them with
+		// "operation ... is not available via MCP" even though they are read-only and valid.
+		readOnlyButPreviouslyMissing := []string{
+			"getMerchants",
+			"listMCPRecipes",
+			"getMyHousehold",
+			"getAccountBalanceHistory",
+		}
+		for _, opID := range readOnlyButPreviouslyMissing {
+			repo := &mockRecipeRepository{}
+			svc := NewRecipeService(repo)
+			req := domain.CreateMCPRecipeRequest{
+				Name: "Recipe using " + opID,
+				Spec: []domain.MCPRecipeCall{{OperationID: opID}},
+			}
+			if _, err := svc.Create(ctx, "user-1", req); err != nil {
+				t.Errorf("operation %q: expected read-only recipe to be accepted, got error: %v", opID, err)
+			}
+		}
+	})
+
 	t.Run("propagates repository error", func(t *testing.T) {
 		repo := &mockRecipeRepository{
 			createFn: func(_ context.Context, _ *domain.MCPRecipe) error {

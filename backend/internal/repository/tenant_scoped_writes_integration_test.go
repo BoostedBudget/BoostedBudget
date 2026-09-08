@@ -158,10 +158,14 @@ func TestAccountRepository_CreateBatch_CrossTenantRow_Rejected_Integration(t *te
 	assert.Equal(t, 0, actorCount, "a rejected batch must insert nothing at all")
 }
 
-// TestUserAccountRepository_UpdateHidden_CrossTenantRow_Untouched_Integration proves the
+// TestUserAccountRepository_SetHiddenBySystem_CrossTenantRow_Untouched_Integration proves the
 // statement is scoped by user_id in SQL: passing another tenant's user_accounts id with the
 // actor's userID must match zero rows and leave that row unchanged.
-func TestUserAccountRepository_UpdateHidden_CrossTenantRow_Untouched_Integration(t *testing.T) {
+//
+// #1609 renamed the subject (UpdateHidden(bool) became SetHiddenBySystem/ClearHidden); the
+// assertion is unchanged, and the hide direction is the one worth pinning here because it is the
+// one a hostile caller would want.
+func TestUserAccountRepository_SetHiddenBySystem_CrossTenantRow_Untouched_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
 
@@ -174,14 +178,17 @@ func TestUserAccountRepository_UpdateHidden_CrossTenantRow_Untouched_Integration
 
 	repo := NewUserAccountRepository(tx, newTestFieldEncryptor(t))
 
-	err = repo.UpdateHidden(ctx, victimUAID.String(), actorID.String(), true)
+	err = repo.SetHiddenBySystem(ctx, victimUAID.String(), actorID.String())
 	require.ErrorIs(t, err, ErrUserAccountNotFound,
 		"an id the actor does not own must match zero rows")
 
 	var isHidden bool
+	var hiddenSource *string
 	require.NoError(t, tx.QueryRow(ctx,
-		`SELECT is_hidden FROM user_accounts WHERE id = $1`, victimUAID).Scan(&isHidden))
+		`SELECT is_hidden, hidden_source FROM user_accounts WHERE id = $1`, victimUAID).
+		Scan(&isHidden, &hiddenSource))
 	assert.False(t, isHidden, "the other tenant's user_accounts row must not be flipped")
+	assert.Nil(t, hiddenSource, "nor may it acquire a cause for a hide that never happened")
 }
 
 // TestUserAccountRepository_UpdatePrimaryTypeAndSubtype_CrossTenantRow_Untouched_Integration is

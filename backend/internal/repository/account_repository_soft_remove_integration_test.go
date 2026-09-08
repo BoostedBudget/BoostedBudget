@@ -404,6 +404,58 @@ func TestAccountRepository_Reads_Integration_ReturnRemovedAt(t *testing.T) {
 	assert.WithinDuration(t, stamped, *found.RemovedAt, time.Second)
 }
 
+// TestAccountRepository_UpdateStatus_Integration_RemovedAtAndUpdatedAtShareOneClock is the T0
+// root-cause proof for TestAccountRepository_Reads_Integration_ReturnRemovedAt's intermittent
+// "updated_at is now later than removed_at" failure. That failure is a genuine RACE — it depends
+// on the host clock and the Docker Postgres clock disagreeing by more than the elapsed real time
+// between two statements — so it does not reproduce reliably on demand (confirmed: 100/100 green
+// locally even against the pre-fix code). This test proves the MECHANISM directly instead, and
+// does so deterministically rather than by timing luck.
+//
+// The mechanism: Postgres's NOW() (== CURRENT_TIMESTAMP == transaction_timestamp()) returns the
+// enclosing TRANSACTION's start time — stable for the whole transaction, not the wall-clock
+// instant the statement runs. UpdateStatus's UPDATE and the migration-000007 BEFORE UPDATE
+// trigger that stamps updated_at both run inside the SAME transaction. So if removed_at is ALSO
+// sourced from Postgres's NOW() (the fix), the two columns must come back byte-identical.
+//
+// Before the fix, removed_at was bound from Go's own time.Now() — the HOST clock — while
+// updated_at was (and always was, on both sides of this fix) stamped by the trigger's NOW() call
+// — the POSTGRES clock. Two independent clock reads, sampled microseconds apart by two different
+// clock sources, are astronomically unlikely to agree to microsecond precision — so this
+// assertion reliably fails pre-fix and reliably passes post-fix, without depending on any race
+// window at all.
+func TestAccountRepository_UpdateStatus_Integration_RemovedAtAndUpdatedAtShareOneClock(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	ctx := context.Background()
+	profileRepo := NewProfileRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+	accountRepo := NewAccountRepository(pool, enc)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := createMarkDisconnectedFixtureUser(t, ctx, pool, profileRepo, suffix)
+	item := createMarkDisconnectedFixtureItem(t, ctx, linkedItemRepo, userID, suffix)
+
+	var accountID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, 'Clock Check', 'depository')
+		RETURNING id`,
+		item.ID, userID, "plaid-acct-clockcheck-"+suffix).Scan(&accountID))
+
+	require.NoError(t, accountRepo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusRemoved, nil))
+
+	var removedAt, updatedAt time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT removed_at, updated_at FROM accounts WHERE id = $1`, accountID,
+	).Scan(&removedAt, &updatedAt))
+
+	assert.True(t, removedAt.Equal(updatedAt),
+		"removed_at and updated_at must be stamped from the SAME clock (Postgres's NOW(), stable "+
+			"for one transaction) — got removed_at=%v updated_at=%v (diff=%v)",
+		removedAt, updatedAt, updatedAt.Sub(removedAt))
+}
+
 // TestAccountRepository_SoftRemove_Integration_RetainsEveryDerivedTable is #1569 residual E12.
 //
 // The two retention tests above assert balance_snapshots and nothing else, which is the ONE table

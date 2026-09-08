@@ -67,7 +67,7 @@ func TestBuildAccountMaps_RemovedAndActiveAccounts_BothMapped(t *testing.T) {
 	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).
 		Return([]domain.Account{activeAccount, removedAccount}, nil)
 
-	accountMap, userAccountMap, err := service.buildAccountMaps(ctx, linkedItemID)
+	accountMap, userAccountMap, err := service.buildAccountMaps(ctx, linkedItemID, "")
 	require.NoError(t, err)
 
 	require.Len(t, accountMap, 2, "both the active sibling and the removed account must be mapped")
@@ -103,7 +103,7 @@ func TestBuildAccountMaps_ExpiredAccount_Mapped(t *testing.T) {
 	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).
 		Return([]domain.Account{expiredAccount}, nil)
 
-	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID)
+	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, "account-expired-uuid", accountMap["plaid-acc-expired-hold"],
@@ -135,11 +135,70 @@ func TestBuildAccountMaps_ReplacedAccount_Mapped(t *testing.T) {
 	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).
 		Return([]domain.Account{replacedAccount}, nil)
 
-	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID)
+	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, "account-replaced-uuid", accountMap["plaid-acc-pre-relink"],
 		"a replaced account must still be mapped so its transactions are stored, not skipped")
+
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestBuildAccountMaps_CrossTenantAccount_SkippedAndLogged is the #1615 regression test.
+// GetByLinkedItemIDIncludingRetained is keyed on linked_item_id only, with no user_id
+// predicate — see the guard's comment in buildAccountMaps. If accounts.user_id ever
+// diverged from the linked item's owner (the ownerUserID parameter), a transaction would
+// be written against another tenant's account. This proves the account is excluded from
+// both maps rather than mapped.
+//
+// The investment side carries the identical guard and IS covered by its own tests --
+// TestSyncHoldings_AccountOwnedByAnotherUser_IsSkipped,
+// TestSyncInvestmentTransactions_AccountOwnedByAnotherUser_IsSkipped and
+// TestSyncInvestmentTransactions_RetainedAndOwnedByAnotherUser_IsSkipped, all in
+// investment_sync_account_tenancy_test.go. This test is the banking-side equivalent.
+//
+// #1609 Phase 4: this comment previously asserted that coverage did not exist, "verified" by
+// grepping for the log message "does not belong to the linked item". That was the wrong
+// technique and the wrong answer -- those tests assert on BEHAVIOUR (the account is skipped),
+// not on the log line, so a message grep could never find them.
+func TestBuildAccountMaps_CrossTenantAccount_SkippedAndLogged(t *testing.T) {
+	mockAccountRepo := new(MockAccountRepository)
+	service := newBuildAccountMapsService(mockAccountRepo)
+
+	ctx := context.Background()
+	linkedItemID := "linked-item-cross-tenant-test"
+	ownerUserID := "user-owner"
+	otherUserAccountID := "user-acct-other-tenant"
+
+	ownedAccount := domain.Account{
+		ID:             "account-owned-uuid",
+		PlaidAccountID: "plaid-acc-owned",
+		Name:           "Checking (owned)",
+		Status:         domain.AccountStatusActive,
+		UserID:         ownerUserID,
+	}
+	crossTenantAccount := domain.Account{
+		ID:             "account-cross-tenant-uuid",
+		PlaidAccountID: "plaid-acc-cross-tenant",
+		Name:           "Checking (wrong tenant)",
+		Status:         domain.AccountStatusActive,
+		UserID:         "user-someone-else",
+		UserAccountID:  &otherUserAccountID,
+	}
+
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).
+		Return([]domain.Account{ownedAccount, crossTenantAccount}, nil)
+
+	accountMap, userAccountMap, err := service.buildAccountMaps(ctx, linkedItemID, ownerUserID)
+	require.NoError(t, err)
+
+	require.Len(t, accountMap, 1, "only the account owned by the linked item's owner may be mapped")
+	assert.Equal(t, "account-owned-uuid", accountMap["plaid-acc-owned"])
+
+	_, crossTenantPresent := accountMap["plaid-acc-cross-tenant"]
+	assert.False(t, crossTenantPresent, "a cross-tenant account must not be mapped")
+	_, crossTenantUserAccountPresent := userAccountMap["plaid-acc-cross-tenant"]
+	assert.False(t, crossTenantUserAccountPresent, "a cross-tenant account must not appear in userAccountMap either")
 
 	mockAccountRepo.AssertExpectations(t)
 }

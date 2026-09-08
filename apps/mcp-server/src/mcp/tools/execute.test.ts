@@ -1,6 +1,13 @@
 import { describe, expect, it, mock } from 'bun:test'
-import { buildExecuteHandler, type ExecuteCall } from './execute'
+import { buildWriteExecuteHandler, buildReadExecuteHandler, type ExecuteCall, type ExecuteSpecEntry } from './execute'
 import { HostProxyError } from '../../sandbox/host-proxy'
+import { ALL_OPERATION_IDS, getCapability } from '../../manifest/capability-manifest'
+import {
+  ACKNOWLEDGED_LAZY_INIT_OPERATIONS,
+  findUnacknowledgedLazyInitOperations,
+  readLazyInitOperationIds,
+} from '../../manifest/lazy-init-extension'
+import { readSpecIndex } from '../../../scripts/generate-mcp-capability-summary'
 
 // Minimal proxy stub for testing
 function makeProxy(invokeResult: unknown = {}) {
@@ -17,10 +24,10 @@ function makeFailingProxy(code: string, message: string, confirmationToken?: str
   }
 }
 
-describe('buildExecuteHandler', () => {
+describe('buildWriteExecuteHandler', () => {
   it('returns results for allowed read operations', async () => {
     const proxy = makeProxy({ transactions: [] })
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     const { toolResult, auditEvents } = await handler({
       calls: [{ operationId: 'getTransactions', params: { limit: 5 } }],
@@ -42,7 +49,7 @@ describe('buildExecuteHandler', () => {
 
   it('returns confirmation challenge for write operations without token', async () => {
     const proxy = makeFailingProxy('confirmation_required', 'Requires confirmation', 'conf-token-xyz')
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     const { toolResult, auditEvents } = await handler({
       calls: [{ operationId: 'updateTransactionCategory', pathParams: { id: 'txn-1' }, body: { categoryId: 'cat-1' } }],
@@ -60,7 +67,7 @@ describe('buildExecuteHandler', () => {
 
   it('proceeds with write when confirmation token is provided — audits as write/success', async () => {
     const proxy = makeProxy({ success: true })
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     const { toolResult, auditEvents } = await handler({
       calls: [{ operationId: 'updateTransactionCategory', pathParams: { id: 'txn-1' }, body: { categoryId: 'cat-1' } }],
@@ -82,7 +89,7 @@ describe('buildExecuteHandler', () => {
 
   it('returns denied error for excluded operations and emits a denied audit event (R5-9)', async () => {
     const proxy = makeFailingProxy('excluded', "Operation 'checkRole' is not available via MCP")
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     const { toolResult, auditEvents } = await handler({
       calls: [{ operationId: 'checkRole' }],
@@ -123,7 +130,7 @@ describe('buildExecuteHandler', () => {
     ['grantTrial', 'POST'],
   ])('audits a denied mutating operation (%s, %s) with its true class, never read', async (operationId) => {
     const proxy = makeFailingProxy('excluded', `Operation '${operationId}' is not available via MCP`)
-    const handler = buildExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
+    const handler = buildWriteExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
 
     const { auditEvents } = await handler({ calls: [{ operationId }] })
 
@@ -143,7 +150,7 @@ describe('buildExecuteHandler', () => {
   // while being just as dishonest in the other direction.
   it('audits a denied read-only operation as read', async () => {
     const proxy = makeFailingProxy('excluded', "Operation 'checkRole' is not available via MCP")
-    const handler = buildExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
+    const handler = buildWriteExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
 
     const { auditEvents } = await handler({ calls: [{ operationId: 'checkRole' }] })
 
@@ -156,7 +163,7 @@ describe('buildExecuteHandler', () => {
   // class that gets an operator's attention rather than the one that hides.
   it('audits a denial for an unknown operationId as write', async () => {
     const proxy = makeProxy()
-    const handler = buildExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
+    const handler = buildWriteExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
 
     const { auditEvents } = await handler({ calls: [{ operationId: 'notAnOperation' }] })
 
@@ -168,7 +175,7 @@ describe('buildExecuteHandler', () => {
   // permitted-read branch, which still takes its class from the manifest.
   it('still audits an ordinary permitted read as read', async () => {
     const proxy = makeProxy({ transactions: [] })
-    const handler = buildExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
+    const handler = buildWriteExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
 
     const { auditEvents } = await handler({ calls: [{ operationId: 'getTransactions' }] })
 
@@ -178,7 +185,7 @@ describe('buildExecuteHandler', () => {
 
   it('executes multiple operations in sequence — emits one audit event per call', async () => {
     const proxy = makeProxy({ ok: true })
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     const calls: ExecuteCall[] = [
       { operationId: 'getTransactions' },
@@ -205,7 +212,7 @@ describe('buildExecuteHandler', () => {
         return Promise.resolve({})
       }),
     }
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     const { toolResult, auditEvents } = await handler({
       calls: [
@@ -225,10 +232,400 @@ describe('buildExecuteHandler', () => {
 
   it('returns error for empty calls array', async () => {
     const proxy = makeProxy()
-    const handler = buildExecuteHandler(proxy)
+    const handler = buildWriteExecuteHandler(proxy)
 
     const { toolResult, auditEvents } = await handler({ calls: [] })
     expect(toolResult.content[0]?.text).toContain('No operations')
     expect(auditEvents).toHaveLength(0)
+  })
+
+  // ── Result truncation must be explicit, not silent (issue #1609, item 8) ──────
+  //
+  // Production impact (2026-09-07): a user asked for recent transactions; the
+  // client received a silently-truncated result, couldn't see merchant names or
+  // the reversal field (both sat in the discarded portion), and fell back to
+  // reconstructing the data from analytics endpoints — reporting a confident
+  // answer built on a fragment. A visible truncation marker turns that into an
+  // explicit "I received partial data" instead of a silent falsehood.
+  describe('result truncation', () => {
+    it('truncates an oversized result and marks it explicitly with shown/full sizes', async () => {
+      // Build an object whose JSON is comfortably larger than the cap.
+      const bigArray = Array.from({ length: 5000 }, (_, i) => ({
+        id: `txn-${i}`,
+        merchant: 'Some Merchant Name',
+        amount: -12.34,
+        reversal: false,
+      }))
+      const proxy = makeProxy({ transactions: bigArray })
+      const handler = buildWriteExecuteHandler(proxy)
+
+      const { toolResult } = await handler({
+        calls: [{ operationId: 'getTransactions' }],
+      })
+
+      const text = toolResult.content[0]?.text ?? ''
+      const fullLength = JSON.stringify({ transactions: bigArray }).length
+
+      expect(text).toContain('truncated')
+      expect(text).toContain(String(fullLength))
+    })
+
+    it('reports the ACTUAL full size, not a hardcoded or cap-derived number', async () => {
+      const bigArray = Array.from({ length: 3000 }, (_, i) => ({ id: `txn-${i}`, note: 'x'.repeat(50) }))
+      const proxy = makeProxy({ items: bigArray })
+      const handler = buildWriteExecuteHandler(proxy)
+
+      const { toolResult } = await handler({
+        calls: [{ operationId: 'getTransactions' }],
+      })
+
+      const text = toolResult.content[0]?.text ?? ''
+      const fullLength = JSON.stringify({ items: bigArray }).length
+
+      // The marker must cite the real length of THIS payload, not a fixed number
+      // a lazy implementation might hardcode into the message.
+      expect(text).toContain(String(fullLength))
+      expect(fullLength).toBeGreaterThan(100_000)
+    })
+
+    it('leaves a small result byte-identical to today\'s output — no marker', async () => {
+      const small = { transactions: [{ id: 'txn-1', merchant: 'Coffee Shop', amount: -4.5 }] }
+      const proxy = makeProxy(small)
+      const handler = buildWriteExecuteHandler(proxy)
+
+      const { toolResult } = await handler({
+        calls: [{ operationId: 'getTransactions' }],
+      })
+
+      const text = toolResult.content[0]?.text ?? ''
+      expect(text).toBe(`✅ getTransactions: ${JSON.stringify(small)}`)
+      expect(text).not.toContain('truncated')
+    })
+
+    it('does not mark a result exactly at the cap as truncated', async () => {
+      // Construct a value whose JSON.stringify length is EXACTLY MAX_RESULT_CHARS,
+      // by measuring and then adjusting one character at a time.
+      const target = 100_000
+      let payload = { s: '' }
+      let str = JSON.stringify(payload)
+      const padLength = target - str.length
+      payload = { s: 'a'.repeat(Math.max(0, padLength)) }
+      str = JSON.stringify(payload)
+      // Adjust by +/-1 in case of off-by-one from the padding math above.
+      while (str.length < target) {
+        payload.s += 'a'
+        str = JSON.stringify(payload)
+      }
+      while (str.length > target) {
+        payload.s = payload.s.slice(0, -1)
+        str = JSON.stringify(payload)
+      }
+      expect(str.length).toBe(target)
+
+      const proxy = makeProxy(payload)
+      const handler = buildWriteExecuteHandler(proxy)
+
+      const { toolResult } = await handler({
+        calls: [{ operationId: 'getTransactions' }],
+      })
+
+      const text = toolResult.content[0]?.text ?? ''
+      expect(text).toBe(`✅ getTransactions: ${str}`)
+      expect(text).not.toContain('truncated')
+    })
+  })
+})
+
+// ── Issue #1610b: readExecute's three-way admission gate ────────────────────
+//
+// THE SECURITY POINT: `capability.class === 'read'` alone is not a safe gate. Two REAL
+// counter-examples in this manifest prove each single-field check is bypassable on its own:
+//   - `cancelDeletion` is `excluded()`, which hard-codes `class: 'read'` regardless of the
+//     operation's real behaviour — GET /api/v1/user/delete/cancel/{token} is genuinely
+//     state-changing (deletion_service.go:373-375). Blocked today only by `excluded`, not by
+//     `class`.
+//   - `runMCPRecipe` is REAL, non-excluded, and invocable: `read('runMCPRecipe')` gives it
+//     class 'read' AND confirmationRequired: false (honestly — it's read('...')-built), yet its
+//     HTTP method is POST. class+confirmationRequired alone would wrongly admit it; only the
+//     method check catches it.
+// readExecute must therefore require ALL THREE: class === 'read', method is read-only, AND
+// confirmationRequired === false.
+describe('buildReadExecuteHandler — the three-way admission gate (#1610b)', () => {
+  const READ_EXECUTE_SPEC_ENTRIES = [
+    { operationId: 'getTransactions', method: 'GET', path: '/api/v1/transactions' },
+    { operationId: 'updateTransactionCategory', method: 'PATCH', path: '/api/v1/transactions/{id}/category' },
+    { operationId: 'runMCPRecipe', method: 'POST', path: '/api/v1/mcp/recipes/{id}/run' },
+  ]
+
+  it('admits a real read-only, non-confirmation-gated GET operation', async () => {
+    const proxy = makeProxy({ transactions: [] })
+    const handler = buildReadExecuteHandler(proxy, READ_EXECUTE_SPEC_ENTRIES)
+
+    const { toolResult, auditEvents } = await handler({
+      calls: [{ operationId: 'getTransactions', params: { limit: 5 } }],
+    })
+
+    expect(toolResult.content[0]?.text).toContain('getTransactions')
+    expect(proxy.invoke).toHaveBeenCalledTimes(1)
+    expect(auditEvents[0]).toMatchObject({ operationId: 'getTransactions', operationClass: 'read', result: 'success' })
+  })
+
+  it('REFUSES runMCPRecipe — class="read" and confirmationRequired=false are BOTH honestly true, but its method is POST', async () => {
+    // The proof this gate exists: a check on class+confirmationRequired alone would admit this
+    // call. It must be refused anyway, and the proxy must never be invoked.
+    const proxy = makeProxy({ calls: [] })
+    const handler = buildReadExecuteHandler(proxy, READ_EXECUTE_SPEC_ENTRIES)
+
+    const { toolResult, auditEvents } = await handler({
+      calls: [{ operationId: 'runMCPRecipe', pathParams: { id: 'recipe-1' } }],
+    })
+
+    expect(toolResult.content[0]?.text).toContain('runMCPRecipe')
+    expect(toolResult.content[0]?.text).toContain('writeExecute')
+    expect(proxy.invoke).not.toHaveBeenCalled()
+    expect(auditEvents).toHaveLength(1)
+    expect(auditEvents[0]).toMatchObject({ operationId: 'runMCPRecipe', result: 'denied' })
+  })
+
+  it('refuses a genuine write operation, naming writeExecute as the alternative', async () => {
+    const proxy = makeProxy()
+    const handler = buildReadExecuteHandler(proxy, READ_EXECUTE_SPEC_ENTRIES)
+
+    const { toolResult, auditEvents } = await handler({
+      calls: [{ operationId: 'updateTransactionCategory', pathParams: { id: 'txn-1' }, body: { categoryId: 'cat-1' } }],
+    })
+
+    expect(toolResult.content[0]?.text).toContain('writeExecute')
+    expect(proxy.invoke).not.toHaveBeenCalled()
+    expect(auditEvents[0]).toMatchObject({ operationId: 'updateTransactionCategory', result: 'denied' })
+  })
+
+  it('still refuses an excluded operation via the ordinary manifest gate (before the admission gate even runs)', async () => {
+    const proxy = makeProxy()
+    const handler = buildReadExecuteHandler(proxy, READ_EXECUTE_SPEC_ENTRIES)
+
+    const { toolResult, auditEvents } = await handler({ calls: [{ operationId: 'checkRole' }] })
+
+    expect(toolResult.content[0]?.text).toContain('not available via MCP')
+    expect(auditEvents[0]).toMatchObject({ operationId: 'checkRole', result: 'denied' })
+  })
+
+  it('has no confirmationToken input field — passing one is simply ignored, never reaches the proxy', async () => {
+    const proxy = makeProxy({ transactions: [] })
+    const handler = buildReadExecuteHandler(proxy, READ_EXECUTE_SPEC_ENTRIES)
+
+    await handler({ calls: [{ operationId: 'getTransactions' }] } as never)
+
+    expect(proxy.invoke).toHaveBeenCalledWith(
+      'getTransactions',
+      expect.any(Object),
+      expect.objectContaining({ confirmationToken: undefined }),
+    )
+  })
+})
+
+// ── Issue #1610: readExecute's REAL guarantee (not "read-only by construction") ─────────────
+//
+// Codex adversarial review of d8567c2e found the module doc's old claim false: `getPrivacySettings`
+// and `getUserProfile` pass all three admission legs yet lazily `repo.Create` the caller's own
+// default row on first access (privacy_service.go / user profile equivalent — see each operation's
+// OpenAPI description). The fix keeps both operations admitted (the user's explicit choice) and
+// replaces the false claim with the properties that ARE true of every admitted call. These tests
+// pin those properties against the REAL manifest + spec index, not a fabricated one, so a future
+// widening of the gate (e.g. dropping the method check, or admitting confirmationRequired: true)
+// is caught here even if no other test happens to exercise the specific operation that regresses.
+describe("readExecute's REAL guarantee, checked against the real manifest + spec index (#1610)", () => {
+  const specIndex = readSpecIndex()
+  const specEntries: ExecuteSpecEntry[] = specIndex.entries.map((e) => ({
+    operationId: e.operationId,
+    method: e.method,
+    path: e.path,
+  }))
+  const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+
+  it('every operation readExecute actually admits is non-destructive, non-confirmation-gated, and uses a conventionally read-only verb', async () => {
+    const admittedOperationIds: string[] = []
+
+    for (const operationId of ALL_OPERATION_IDS) {
+      const proxy = makeProxy({})
+      const handler = buildReadExecuteHandler(proxy, specEntries)
+      await handler({ calls: [{ operationId }] })
+      if ((proxy.invoke as unknown as { mock: { calls: unknown[] } }).mock.calls.length > 0) {
+        admittedOperationIds.push(operationId)
+      }
+    }
+
+    // Sanity: the probe actually admitted a non-trivial slice of the manifest (if this drops to
+    // 0, the loop above is broken, not the manifest).
+    expect(admittedOperationIds.length).toBeGreaterThan(10)
+
+    for (const operationId of admittedOperationIds) {
+      const capability = getCapability(operationId)
+      const spec = specEntries.find((e) => e.operationId === operationId)
+      expect(capability, `admitted operation ${operationId} has no manifest entry`).toBeTruthy()
+      expect(capability!.destructive, `${operationId} is admitted but destructive`).toBe(false)
+      expect(capability!.confirmationRequired, `${operationId} is admitted but confirmation-gated`).toBe(false)
+      expect(
+        !!spec && READ_ONLY_METHODS.has(spec.method.toUpperCase()),
+        `${operationId} is admitted but its method (${spec?.method}) is not conventionally read-only`,
+      ).toBe(true)
+    }
+  })
+
+  // The properties above are true of EVERY admitted operation, including these two — but they do
+  // NOT prove "readExecute cannot write". These two are known, named exceptions: both lazily
+  // create the caller's own default row on first access.
+  //
+  // #1610: this used to be a hardcoded array here — a tripwire that pinned the two known
+  // exceptions but couldn't see a THIRD one added later, since nothing in this package can see
+  // the Go implementation to detect a write on its own. It is now derived from
+  // ACKNOWLEDGED_LAZY_INIT_OPERATIONS (manifest/lazy-init-extension.ts), which is itself checked
+  // against api/openapi.yaml's `x-mcp-lazy-init` extension by
+  // scripts/check-manifest-completeness.ts (a real CI gate, not just this vitest suite) — see
+  // that module's doc comment for the full mechanism.
+  it.each(ACKNOWLEDGED_LAZY_INIT_OPERATIONS)(
+    'acknowledges %s as an admitted GET that lazily creates a row on first access',
+    async (operationId) => {
+      const proxy = makeProxy({})
+      const handler = buildReadExecuteHandler(proxy, specEntries)
+
+      await handler({ calls: [{ operationId }] })
+
+      // Admitted: the proxy was actually invoked, not refused.
+      expect(proxy.invoke).toHaveBeenCalledTimes(1)
+      const capability = getCapability(operationId)
+      expect(capability?.class).toBe('read')
+      expect(capability?.confirmationRequired).toBe(false)
+    },
+  )
+
+  it('the acknowledged list is exactly these two — a new admitted read-with-a-write needs a human to update this list', () => {
+    // This does not (and cannot) detect a new lazy-init write on its own; it only pins the
+    // count/names of the ones already acknowledged, so a PR adding a third stands out in review.
+    expect(ACKNOWLEDGED_LAZY_INIT_OPERATIONS).toEqual(['getPrivacySettings', 'getUserProfile'])
+  })
+
+  it('api/openapi.yaml tags exactly the acknowledged operations with x-mcp-lazy-init — no unreviewed drift', () => {
+    // The actual scanner: derive what the SPEC currently tags and diff it against what has been
+    // reviewed. A non-empty result here means a third lazy-init-tagged operation was added to the
+    // Go layer without anyone updating ACKNOWLEDGED_LAZY_INIT_OPERATIONS — the exact gap the
+    // by-name-only tripwire above could not close.
+    const specTagged = readLazyInitOperationIds()
+    expect(findUnacknowledgedLazyInitOperations(specTagged, ACKNOWLEDGED_LAZY_INIT_OPERATIONS)).toEqual([])
+  })
+})
+
+// ── Issue #1612: the batch aggregate is unbounded ────────────────────────────
+//
+// MAX_RESULT_CHARS (100_000) bounds a SINGLE call's result, but `calls` is capped at 25 →
+// 25 * 100_000 = a 2.5 MB aggregate with no bound at all across the whole batch. These tests
+// pin a running total tracked across the batch that stops rendering (and stops invoking further
+// calls) once exhausted — using the same self-describing marker style as the per-result
+// truncation marker (shown/full-equivalent sizes, an actionable hint).
+describe('batch aggregate result bound (#1612)', () => {
+  // A single result whose rendered length sits comfortably under MAX_RESULT_CHARS (so no
+  // per-call truncation marker fires) but where several of them together blow the aggregate cap.
+  function makeBigResult(sizeChars: number): { id: string; note: string } {
+    return { id: 'x', note: 'a'.repeat(Math.max(0, sizeChars - 20)) }
+  }
+
+  it('stops invoking further calls once the running total exceeds the aggregate budget', async () => {
+    const bigResult = makeBigResult(90_000) // under the 100k per-call cap
+    const proxy = { invoke: mock(() => Promise.resolve(bigResult)) }
+    const handler = buildWriteExecuteHandler(proxy)
+
+    // 300_000 / ~90_000-ish rendered chars each → budget exhausted partway through 5 calls.
+    const calls: ExecuteCall[] = Array.from({ length: 5 }, () => ({ operationId: 'getTransactions' }))
+
+    const { toolResult, auditEvents } = await handler({ calls })
+
+    // Fewer than all 5 calls were actually invoked.
+    expect(proxy.invoke.mock.calls.length).toBeLessThan(5)
+    expect(auditEvents.length).toBeLessThan(5)
+    expect(auditEvents.every((e) => e.result === 'success')).toBe(true)
+
+    const text = toolResult.content[0]?.text ?? ''
+    expect(text).toContain('Batch result budget exhausted')
+    expect(text).toContain('300000')
+  })
+
+  it('does not fire the batch marker when the aggregate stays under budget', async () => {
+    const small = { id: 'x' }
+    const proxy = makeProxy(small)
+    const handler = buildWriteExecuteHandler(proxy)
+
+    const calls: ExecuteCall[] = [
+      { operationId: 'getTransactions' },
+      { operationId: 'getAccounts' },
+      { operationId: 'getCashFlowSummary' },
+    ]
+
+    const { toolResult, auditEvents } = await handler({ calls })
+
+    expect(proxy.invoke).toHaveBeenCalledTimes(3)
+    expect(auditEvents).toHaveLength(3)
+    expect(toolResult.content[0]?.text ?? '').not.toContain('Batch result budget exhausted')
+  })
+
+  it('charges the per-call prefix and separator, not just the rendered payload', async () => {
+    // #1612 round 2 regression. Each success line is `✅ <operationId>: <rendered>` joined by
+    // '\n\n', but only `rendered.length` used to be charged against the budget. With many small
+    // results the UNCHARGED text (prefix + separator, ~22 chars) dominates the charged text
+    // (~10 chars), so the returned string ran roughly 3x past the cap while the counter still
+    // read as under it. Against the old accounting all 20_000 calls execute and the marker never
+    // fires; against the corrected accounting the batch stops partway.
+    const small = { id: 'x' }
+    const proxy = makeProxy(small)
+    const handler = buildWriteExecuteHandler(proxy)
+
+    const calls: ExecuteCall[] = Array.from({ length: 20_000 }, () => ({ operationId: 'getTransactions' }))
+
+    const { toolResult } = await handler({ calls })
+
+    const text = toolResult.content[0]?.text ?? ''
+    expect(text).toContain('Batch result budget exhausted')
+    expect(proxy.invoke.mock.calls.length).toBeLessThan(20_000)
+  })
+
+  it('bounds the returned text at the budget plus one call plus the marker', async () => {
+    // The honest bound, pinned. The budget check is a PRE-check, so the text may exceed
+    // MAX_BATCH_RESULT_CHARS by at most one call's rendered output (itself capped at
+    // MAX_RESULT_CHARS) plus the exhaustion marker. This asserts that bound rather than the
+    // tighter "never exceeds 300_000", which is not what the implementation provides.
+    const MAX_BATCH = 300_000
+    const MAX_RESULT = 100_000
+    const MARKER_SLACK = 1_000
+
+    // Deliberately the many-small-results shape, NOT a few large ones: with large payloads the
+    // payload-only accounting trips the cap at nearly the right place anyway, so the assertion
+    // would pass against the old code and pin nothing. Here the uncharged prefixes dominate, so
+    // the old accounting overshoots this bound by ~240_000 characters.
+    const small = { id: 'x' }
+    const proxy = makeProxy(small)
+    const handler = buildWriteExecuteHandler(proxy)
+
+    const calls: ExecuteCall[] = Array.from({ length: 20_000 }, () => ({ operationId: 'getTransactions' }))
+
+    const { toolResult } = await handler({ calls })
+
+    // Length first, deliberately: this test exists to pin the BOUND, so the bound must be the
+    // assertion that fires when the accounting regresses -- not the marker check, which would
+    // otherwise mask it and duplicate the test above.
+    const text = toolResult.content[0]?.text ?? ''
+    expect(text.length).toBeLessThanOrEqual(MAX_BATCH + MAX_RESULT + MARKER_SLACK)
+    expect(text).toContain('Batch result budget exhausted')
+  })
+
+  it('the manifest-denial break behaviour is untouched by the new budget check (denial still aborts the rest of the batch)', async () => {
+    const proxy = makeFailingProxy('excluded', "Operation 'checkRole' is not available via MCP")
+    const handler = buildWriteExecuteHandler(proxy)
+
+    const { auditEvents } = await handler({
+      calls: [{ operationId: 'checkRole' }, { operationId: 'getTransactions' }],
+    })
+
+    // Only the first (denied) call produces an audit event — the second was never reached.
+    expect(auditEvents).toHaveLength(1)
+    expect(auditEvents[0]?.result).toBe('denied')
   })
 })

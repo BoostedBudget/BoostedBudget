@@ -1567,6 +1567,7 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		// #1569 Task 6 (#1579): the before/after record of every category or review-state overwrite.
 		// It carries NO FK to transactions (a purge of one transaction must not take the record of
 		// what was overwritten on it), so this users FK is its only route to erasure.
+		{Table: "linked_item_repair_nonces", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "transaction_annotation_history", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "transactions", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "transfer_suggestions", Column: "user_id", DeleteRule: "CASCADE"},
@@ -1684,6 +1685,15 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 	// Plaid-item guard (that's UncleanedPlaidItemRemains_NotDeleted/AllItemsDisconnected_Deletes
 	// above) — mark the item already-cleaned-up so the guard does not abort this cascade.
 	execNoErr(t, ctx, pool, `UPDATE linked_items SET status = 'disconnected', plaid_removed_at = NOW() WHERE id = $1`, item.ID) // Issue #1495: the guard reads plaid_removed_at
+
+	// linked_item_repair_nonces (Issue #1620): the artifact of an in-flight reconnect. It carries
+	// BOTH a user_id and a linked_item_id CASCADE, so this one row covers the users-rooted edge
+	// this test enumerates; it would also vanish via linked_items, but that is a different edge
+	// and does not discharge this one.
+	execNoErr(t, ctx, pool, `
+		INSERT INTO linked_item_repair_nonces (linked_item_id, user_id, token_hash, expires_at)
+		VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')`,
+		item.ID, target.ID, "repair-nonce-hash-"+suffix)
 
 	var accountID string
 	require.NoError(t, pool.QueryRow(ctx, `

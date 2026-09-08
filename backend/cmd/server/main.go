@@ -312,14 +312,21 @@ func main() {
 		appLogger.Error("Failed to build rate-limit backend", "error", err)
 		os.Exit(1)
 	}
-	registerCloudflareAndRateLimitMiddlewareWithBackend(e, cfCIDRRef, cfg, rateLimitBackend, rateLimitDone, appLogger) // 3-4. Cloudflare gate, then per-IP rate limiting (order load-bearing, see helper doc)
-	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                                                        // 5. Panic recovery (formats RFC 9457 response)
-	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                                                           // 6. Sentry panic reporting
-	e.Use(otelecho.Middleware("boostedbudget-api"))                                                                    // 7. OTEL tracing
-	e.Use(middleware.StructuredLogging(appLogger))                                                                     // 8. slog-based HTTP logging
-	e.Use(middleware.MetricsMiddleware())                                                                              // 9. Prometheus metrics
-	e.Use(echomiddleware.BodyLimit(cfg.MaxBodySize))                                                                   // 10. Request body size limit
-	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins)))                             // 10. CORS handling with configured origins
+	// #1609: header-only CORS middleware, registered BEFORE the Cloudflare gate and rate
+	// limiter so a 403/429 rejection still carries Access-Control-Allow-Origin (and
+	// -Credentials, Vary, Expose-Headers) — those two paths short-circuit and never reach
+	// the real CORS middleware at the end of this chain. It never short-circuits itself
+	// (does not handle OPTIONS/preflight) — see CORSErrorHeaders' doc comment for why moving
+	// the REAL CORS middleware here instead was rejected as an unmetered perimeter bypass.
+	e.Use(middleware.CORSErrorHeaders(cfg.CORSAllowedOrigins))                                                         // 3. Error-path CORS headers (must run before the gate)
+	registerCloudflareAndRateLimitMiddlewareWithBackend(e, cfCIDRRef, cfg, rateLimitBackend, rateLimitDone, appLogger) // 4-5. Cloudflare gate, then per-IP rate limiting (order load-bearing, see helper doc)
+	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                                                        // 6. Panic recovery (formats RFC 9457 response)
+	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                                                           // 7. Sentry panic reporting
+	e.Use(otelecho.Middleware("boostedbudget-api"))                                                                    // 8. OTEL tracing
+	e.Use(middleware.StructuredLogging(appLogger))                                                                     // 9. slog-based HTTP logging
+	e.Use(middleware.MetricsMiddleware())                                                                              // 10. Prometheus metrics
+	e.Use(echomiddleware.BodyLimit(cfg.MaxBodySize))                                                                   // 11. Request body size limit
+	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins)))                             // 12. CORS handling with configured origins
 
 	// Initialize Huma API wrapping Echo for OpenAPI generation
 	// Huma provides automatic OpenAPI 3.1 spec generation from Go code
@@ -440,6 +447,11 @@ func main() {
 	var plaidService services.PlaidService
 	// Declare accountService at package scope for Huma handler registration
 	var accountService services.AccountService
+	// Declare itemErrorService at outer scope: it's constructed inside the "if cfg.PlaidClientID
+	// != ..." block (Issue #257) but registered as a Huma handler dependency inside a later,
+	// separate "if plaidService != nil && accountService != nil" block (Issue #1609). Both blocks
+	// close before the other opens, so this can't be a := inside either one.
+	var itemErrorService services.ItemErrorService
 	// Issue #1569: userAccountService must be constructed BEFORE accountService, not alongside the
 	// user-account routes further down. LinkAccounts now REFUSES to create an account without a
 	// stable user_accounts identity (ErrStableAccountIdentityUnavailable), because an identity-less
@@ -1507,12 +1519,19 @@ func main() {
 
 				// Initialize Item Error Service for ITEM webhook processing
 				// Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
-				itemErrorService := services.NewItemErrorService(
+				// Issue #1620: repairNonceRepo backs the single-use nonce that binds
+				// POST /api/v1/plaid/reconnect to a token this server minted. Deliberately the
+				// DATABASE and not the cache: this process boots with a NoopCache when Redis is
+				// absent or unreachable (see the cache wiring above), so a Redis-backed nonce
+				// would fail open or fail closed depending on deploy configuration, silently.
+				repairNonceRepo := repository.NewLinkedItemRepairNonceRepository(db)
+				itemErrorService = services.NewItemErrorService(
 					linkedItemRepo,
 					notificationRepo,
 					profileRepo,
 					plaidService,
 					emailService,
+					repairNonceRepo,
 					appLogger,
 				)
 
@@ -1575,30 +1594,41 @@ func main() {
 
 				// Issue #666: Create PlaidSyncWorker for auto-sync after account linking
 				// Issue #171: Add DB for row-level locking to prevent concurrent syncs
+				// Issue #1609 P3-T2: ItemErrorSvc routes permanent Plaid errors (INVALID_ACCESS_TOKEN,
+				// ITEM_LOGIN_REQUIRED) discovered by a SYNC — not just a webhook — into the same
+				// in-app notification. Wired for all three sync workers below (transaction and both
+				// investment kinds): all three are enqueued together for a given item and a broken
+				// access token fails all three identically.
 				plaidSyncWorker = jobs.NewPlaidSyncWorker(jobs.PlaidSyncWorkerDeps{
 					SyncService:    transactionSyncService,
 					LinkedItemRepo: linkedItemRepo,
 					JobQueue:       nil, // Set after River client created (circular dependency)
 					Logger:         appLogger,
 					DB:             db, // For row-level locking via FOR UPDATE
+					ItemErrorSvc:   itemErrorService,
 				})
 				appLogger.Info("Plaid sync worker created")
+				plaidSyncWorker.SetAnalytics(phClient)
 
 				// Issue #659: Create InvestmentHoldingsSyncWorker
+				// Issue #1609 P3-T2: ItemErrorSvc — see PlaidSyncWorker comment above.
 				investmentHoldingsSyncWorker = jobs.NewInvestmentHoldingsSyncWorker(jobs.InvestmentHoldingsSyncWorkerDeps{
 					InvestmentSyncSvc: investmentSyncService,
 					LinkedItemRepo:    linkedItemRepo,
 					Logger:            appLogger,
 					DB:                db,
+					ItemErrorSvc:      itemErrorService,
 				})
 				appLogger.Info("Investment holdings sync worker created")
 
 				// Issue #659: Create InvestmentTransactionsSyncWorker
+				// Issue #1609 P3-T2: ItemErrorSvc — see PlaidSyncWorker comment above.
 				investmentTransactionsSyncWorker = jobs.NewInvestmentTransactionsSyncWorker(jobs.InvestmentTransactionsSyncWorkerDeps{
 					InvestmentSyncSvc: investmentSyncService,
 					LinkedItemRepo:    linkedItemRepo,
 					Logger:            appLogger,
 					DB:                db,
+					ItemErrorSvc:      itemErrorService,
 				})
 				appLogger.Info("Investment transactions sync worker created")
 
@@ -2336,6 +2366,15 @@ func main() {
 			appLogger.Info("Huma plaid routes registered")
 		}
 
+		// Register the reconnect-flow routes (Issue #1609): mint an update-mode link token for a
+		// broken linked item, and clear its error state once Plaid Link succeeds. Separate from
+		// RegisterPlaidRoutes above because it depends on itemErrorService, not accountService.
+		if itemErrorService != nil {
+			humaPlaidReconnectHandler := operations.NewPlaidReconnectHandler(itemErrorService)
+			operations.RegisterPlaidReconnectRoutes(humaAPI, humaPlaidReconnectHandler)
+			appLogger.Info("Huma plaid reconnect routes registered")
+		}
+
 		// Register Huma profile routes (Issue #559: Huma migration)
 		humaProfileHandler := operations.NewProfileHandler(profileService)
 		// Issue #1413 round-5: same validator as profileRepo above, so the profile response's
@@ -2848,6 +2887,21 @@ func buildRateLimitBackend(ctx context.Context, limiterClient redisclient.Client
 	}), nil
 }
 
+// precheckSentinelCeiling resolves the sentinel tier's AUTHORITATIVE limit the same way
+// ratelimitstore.Options.withDefaults does, so the cost pre-check's sentinel ceiling can never sit
+// below the budget Redis actually enforces.
+//
+// RATE_LIMIT_SENTINEL_LIMIT is an operator escape hatch for RAISING the sentinel bucket during a
+// live Cloudflare header anomaly — the incident where every request collapses onto one shared
+// identity. Deriving the pre-check ceiling from RateLimitIP instead silently capped that knob, at
+// maximum blast radius, during the precise outage it was built for.
+func precheckSentinelCeiling(cfg *config.Config) int {
+	if cfg.RateLimitSentinelLimit > 0 {
+		return cfg.RateLimitSentinelLimit
+	}
+	return cfg.RateLimitIP
+}
+
 func registerCloudflareAndRateLimitMiddleware(e *echo.Echo, cfCIDRRef *atomic.Pointer[[]netip.Prefix], cfg *config.Config) {
 	// Delegates to the Task 7 variant with a nil backend/done/logger — RateLimitConfig treats all
 	// three as OPTIONAL (nil Backend: memory-only; nil Done: cleanup goroutine never stops; nil
@@ -2881,6 +2935,47 @@ func registerCloudflareAndRateLimitMiddlewareWithBackend(e *echo.Echo, cfCIDRRef
 		// single-machine liveness check), so the fleet-machine-count divisor above must not apply
 		// to it. See RateLimitConfig.ExemptPathLimit's doc comment.
 		ExemptPathLimit: cfg.RateLimitIP,
+		// The COST circuit breaker (2026-09-08 review). Like ExemptPathLimit these are the RAW,
+		// UNDIVIDED limits — deliberately NOT rateLimitFallbackLimit'd. The divisor above exists
+		// so N machines falling back to memory do not multiply the fleet budget by N; that
+		// reasoning is inverted here. These buckets must sit at or ABOVE the authoritative limit,
+		// because they run BEFORE the Redis backend and must never reject traffic it would have
+		// allowed. Dividing them would do exactly that.
+		//
+		// ⚠ CORRECTED. This block previously passed ONE ceiling and justified it with
+		// "cfg.RateLimitIP (the regular tier) is >= cfg.RateLimitAuth in every shipped config, so
+		// one ceiling safely covers both tiers." That sentence is wrong twice over, and two
+		// independent adversarial reviewers each executed a reproduction:
+		//
+		//   - There are THREE tiers, not two. It never mentioned the sentinel tier — the one with
+		//     an operator-settable limit (RATE_LIMIT_SENTINEL_LIMIT) that is DOCUMENTED as
+		//     intended to exceed RateLimitIP during a live Cloudflare header anomaly. A single
+		//     RateLimitIP ceiling silently neutered that escape hatch during the exact incident it
+		//     exists for, with every customer sharing the sentinel key.
+		//   - Per-tier ceilings are not sufficient either: one SHARED bucket charged an identity's
+		//     regular traffic against its auth allowance, so 100 ordinary API calls followed by a
+		//     single legitimate POST /webhooks/plaid returned 429 — on the traffic that must never
+		//     be dropped.
+		//
+		// So each tier now carries its own ceiling, taken from that tier's own authoritative
+		// limit. RateLimitConfig applies precheckHeadroomFactor on top; see that constant for why
+		// parity would be fragile rather than tight.
+		//
+		// The "100 >= 10" claim was also unguarded: both are plain env vars, so
+		// `fly secrets set RATE_LIMIT_AUTH=500` would have broken the invariant with no test
+		// failing. Wiring each tier from its own limit removes the dependency on that ordering
+		// entirely rather than asserting it.
+		//
+		// Why any of this exists: the Redis backend is billed per command and is consulted on
+		// every request, INCLUDING rejected ones. /webhooks/ carries no Cloudflare rate-limit rule
+		// (by design — throttling it would drop real Plaid/Paddle deliveries), so a POST flood
+		// there cost one billable command per request without bound. This caps it per identity.
+		PrecheckLimit:     cfg.RateLimitIP,
+		PrecheckAuthLimit: cfg.RateLimitAuth,
+		// Mirrors ratelimitstore.Options.withDefaults: a <=0 RATE_LIMIT_SENTINEL_LIMIT means "use
+		// RegularLimit" there, so the pre-check ceiling has to resolve the same way or it would
+		// under-cover the sentinel tier by exactly the amount of that default.
+		PrecheckSentinelLimit: precheckSentinelCeiling(cfg),
 		// PrimaryTimeout (Issue #1531 L7): cfg.RedisTimeoutMs already reaches the go-redis
 		// CLIENT's own read/write timeouts (see newRedisClientOptions) but, before this fix, had
 		// no path to the LIMITER's per-call budget — that was a hardcoded, uncustomizable 50ms
@@ -2888,12 +2983,12 @@ func registerCloudflareAndRateLimitMiddlewareWithBackend(e *echo.Echo, cfCIDRRef
 		// incident changed nothing about the limiter's own cutoff, which kept tripping the
 		// circuit breaker regardless. Wiring the same config value through here makes
 		// REDIS_TIMEOUT_MS the operative knob it was already documented (config.go) as being.
-		PrimaryTimeout:    time.Duration(cfg.RedisTimeoutMs) * time.Millisecond,
-		WindowDuration:    time.Minute,
-		MaxEntries:        cfg.RateLimitMaxEntries,
-		Backend:           backend,
-		Done:              done,
-		Logger:            logger,
+		PrimaryTimeout: time.Duration(cfg.RedisTimeoutMs) * time.Millisecond,
+		WindowDuration: time.Minute,
+		MaxEntries:     cfg.RateLimitMaxEntries,
+		Backend:        backend,
+		Done:           done,
+		Logger:         logger,
 	}))
 }
 

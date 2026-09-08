@@ -386,6 +386,13 @@ var DataExportWithheldTables = map[string]string{
 	"user_email_prefix_indices": "Internal lookup shard for email-prefix search. Its only non-key " +
 		"column is a blind index, which is unreadable to the user and derived from the master " +
 		"encryption key; the email it indexes is exported in full under `users`.",
+	"linked_item_repair_nonces": "Internal single-use authorization artifact (#1620). Each row is " +
+		"a sha256 digest of a nonce the user's own browser held for the minutes of one Plaid Link " +
+		"reconnection, plus two foreign keys and three timestamps. The digest is one-way and the " +
+		"raw value was never stored, so there is nothing in the row the user could read, verify " +
+		"or re-use; and the fact it records — that they reconnected a bank — is already visible " +
+		"to them as the connection's restored status under `linked_items`. Rows are dead within " +
+		"the Plaid link token's own expiry (~30 minutes) by construction.",
 	"idempotency_keys": "Internal request de-duplication. The keys are opaque client-generated " +
 		"tokens and response_body is a cached copy of an API response the user already received; " +
 		"rows are short-lived by construction.",
@@ -399,7 +406,7 @@ var DataExportWithheldTables = map[string]string{
 		"`holding_snapshots`; this table exists only so that an account observed holding nothing " +
 		"is distinguishable from one never observed, which is a fact about our sync schedule " +
 		"rather than about the user's finances.",
-		"audit_logs": "Security audit trail. It is retained under a legal-obligation basis rather than " +
+	"audit_logs": "Security audit trail. It is retained under a legal-obligation basis rather than " +
 		"held on the user's behalf, it is redacted rather than deleted on erasure, and its " +
 		"`changes` column can carry before/after values of rows that were subsequently corrected. " +
 		"Requests for it go through privacy@boostedbudget.com so they can be answered individually.",

@@ -172,4 +172,136 @@ describe('buildSearchResult', () => {
     expect(result.content[0]?.text).not.toContain('description:')
     expect(result.content[0]?.text).not.toContain('params:')
   })
+
+  // Issue #1609 Task 6: search() must render request body shape so an MCP client can
+  // construct a valid write body instead of guessing (the createRule incident).
+  it('renders a body: block for an operation with a requestBody (#1609)', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'createRule',
+        method: 'POST',
+        path: '/api/v1/auto-categorization',
+        summary: 'Create a new categorization rule',
+        tags: ['Auto-Categorization'],
+        manifestClass: 'write',
+        excluded: false,
+        requestBody: [
+          { name: 'name', type: 'string', required: true, description: 'Human-readable rule name' },
+          { name: 'priority', type: 'integer', description: 'Lower runs first' },
+          { name: 'conditions', type: 'array of object', required: true },
+          { name: 'conditions[].type', type: 'string', required: true, enum: ['merchant', 'amount', 'category'] },
+          { name: 'conditions[].operator', type: 'string', required: true, enum: ['contains', 'equals', 'gt', 'lt'] },
+          { name: 'conditions[].value', required: true },
+        ],
+      },
+    ])
+    const text = result.content[0]?.text ?? ''
+    expect(text).toContain('body:')
+    expect(text).toContain('name (string, required)')
+    expect(text).toContain('conditions (array of object, required)')
+    expect(text).toContain('conditions[].type')
+    expect(text).toContain('merchant|amount|category')
+  })
+
+  // #1609 fix round 1: a field with no `type` (e.g. RuleCondition.value, declared as a
+  // literal `{}` schema in api/openapi.yaml because the Go field is genuinely untyped `any`)
+  // must render distinguishably from a tooling failure. The old `?? 'unknown'` fallback read
+  // identically whether the extractor failed or the API truly accepts any JSON value — exactly
+  // the ambiguity this task exists to eliminate, since `value` is a REQUIRED field on the very
+  // operation (createRule) the incident was about.
+  it('renders a typeless field (schema {}) as "any", never the literal "unknown" (#1609 fix round 1)', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'createRule',
+        method: 'POST',
+        path: '/api/v1/auto-categorization',
+        summary: 'Create a new categorization rule',
+        tags: ['Auto-Categorization'],
+        manifestClass: 'write',
+        excluded: false,
+        requestBody: [{ name: 'conditions[].value', required: true }],
+      },
+    ])
+    const text = result.content[0]?.text ?? ''
+    expect(text).toContain('conditions[].value (any, required)')
+    expect(text).not.toContain('unknown')
+  })
+
+  it('omits the body: block entirely when there is no requestBody (byte-identical to today for GETs)', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'getTransactions',
+        method: 'GET',
+        path: '/api/v1/transactions',
+        summary: 'List transactions',
+        tags: ['Transactions'],
+        manifestClass: 'read',
+        excluded: false,
+      },
+    ])
+    expect(result.content[0]?.text).not.toContain('body:')
+  })
+
+  // Issue #1610a: search() must render the response shape so a client can discover what an
+  // operation RETURNS without calling it first.
+  it('renders a returns: block for an operation with a responseBody (#1610a)', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'getAccount',
+        method: 'GET',
+        path: '/api/v1/accounts/{id}',
+        summary: 'Get an account',
+        tags: ['Accounts'],
+        manifestClass: 'read',
+        excluded: false,
+        responseBody: [
+          { name: 'id', type: 'string', required: true },
+          { name: 'name', type: 'string' },
+          { name: 'status', type: 'string', enum: ['active', 'removed'] },
+        ],
+      },
+    ])
+    const text = result.content[0]?.text ?? ''
+    expect(text).toContain('returns:')
+    expect(text).toContain('id (string, required)')
+    expect(text).toContain('status (string) [active|removed]')
+  })
+
+  it('omits the returns: block entirely when there is no responseBody', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'getTransactions',
+        method: 'GET',
+        path: '/api/v1/transactions',
+        summary: 'List transactions',
+        tags: ['Transactions'],
+        manifestClass: 'read',
+        excluded: false,
+      },
+    ])
+    expect(result.content[0]?.text).not.toContain('returns:')
+  })
+
+  it('renders returns: AFTER body: and BEFORE tags: — parts.push order is render order', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'createRule',
+        method: 'POST',
+        path: '/api/v1/auto-categorization',
+        summary: 'Create a rule',
+        tags: ['Auto-Categorization'],
+        manifestClass: 'write',
+        excluded: false,
+        requestBody: [{ name: 'name', type: 'string', required: true }],
+        responseBody: [{ name: 'id', type: 'string', required: true }],
+      },
+    ])
+    const text = result.content[0]?.text ?? ''
+    const bodyIdx = text.indexOf('  body:')
+    const returnsIdx = text.indexOf('  returns:')
+    const tagsIdx = text.indexOf('  tags:')
+    expect(bodyIdx).toBeGreaterThanOrEqual(0)
+    expect(returnsIdx).toBeGreaterThan(bodyIdx)
+    expect(tagsIdx).toBeGreaterThan(returnsIdx)
+  })
 })

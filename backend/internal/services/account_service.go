@@ -750,7 +750,10 @@ func (s *accountService) LinkAccounts(
 
 	// Step 6c: Issue #658 — Enqueue initial sync job to fetch transactions
 	// This is non-blocking - if it fails, account linking still succeeds
-	s.enqueueInitialSync(ctx, linkedItem.ID, user.ID)
+	// Issue #1613 (P3-T4): only enqueue the investment jobs when Plaid actually granted
+	// investments for this item — see itemSupportsProduct's doc comment.
+	investmentsSupported := itemSupportsProduct(plaidItem, plaid.PRODUCTS_INVESTMENTS)
+	s.enqueueInitialSync(ctx, linkedItem.ID, user.ID, investmentsSupported)
 
 	return &LinkAccountsResult{
 		LinkedItem: linkedItem,
@@ -1342,6 +1345,17 @@ func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string,
 	return accounts, nil
 }
 
+// upperCaseHexColor normalizes a hex colour the way the legacy accounts-side write does, so the
+// two UpdateAccount legs cannot disagree about the stored casing. nil (no change) and "" (clear)
+// pass through untouched — both are meaningful to the update request and neither is a colour.
+func upperCaseHexColor(color *string) *string {
+	if color == nil || *color == "" {
+		return color
+	}
+	upper := strings.ToUpper(*color)
+	return &upper
+}
+
 // UpdateAccount updates account customization fields (Issue #307)
 //
 // Flow:
@@ -1364,6 +1378,42 @@ func (s *accountService) UpdateAccount(
 	account, err := s.accountRepo.GetByIDAndUser(ctx, accountID, userID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Step 2b: THE WRITE FOLLOWS THE CHAIN (#1609, task 3c).
+	//
+	// Task 3b made every account read chain-authoritative — for a chained account the six
+	// customization fields come from user_accounts, and accounts.<field> stops being read at all.
+	// Writing `accounts` here would therefore save into a column nothing reads and revert on the
+	// next refresh: the exact defect this batch exists to fix, relocated to this endpoint.
+	//
+	// So a chained account is delegated to the user-account service — the SAME method
+	// PATCH /api/v1/user-accounts/{id} calls — and the response is RE-READ through the
+	// chain-authoritative query rather than reconstructed from the request, so the body this
+	// endpoint returns is what the next GET will return.
+	//
+	// ⚠ Not redundant with the frontend, which already routes chained accounts to the
+	// user-accounts endpoint (useAccountCustomization.ts). The API must not depend on client
+	// discipline: MCP tools, integrations and anyone holding the OpenAPI contract reach this
+	// endpoint directly.
+	//
+	// userAccountSvc is an OPTIONAL dependency (nil in several construction paths), so a nil one
+	// falls back to the legacy write rather than panicking. That fallback is a strictly better
+	// outcome than a crash and is exactly what the code did before this change; it is not an
+	// endorsement of the accounts-side write.
+	if account.UserAccountID != nil && s.userAccountSvc != nil {
+		if _, err := s.userAccountSvc.UpdateCustomization(ctx, *account.UserAccountID, userID,
+			&domain.UpdateUserAccountRequest{
+				Nickname:     req.Nickname,
+				CustomColor:  upperCaseHexColor(req.CustomColor),
+				CustomIcon:   req.CustomIcon,
+				CustomEmoji:  req.CustomEmoji,
+				DisplayOrder: req.DisplayOrder,
+				IsHidden:     req.IsHidden,
+			}); err != nil {
+			return nil, fmt.Errorf("failed to update account customization on its chain: %w", err)
+		}
+		return s.accountRepo.GetByIDAndUser(ctx, accountID, userID)
 	}
 
 	// Step 3: Apply updates (nil = no change, empty string = clear)
@@ -1520,7 +1570,17 @@ func (s *accountService) bumpCacheForDispossessedOwner(ctx context.Context, user
 // This method is non-blocking: if the job queue fails, we log a warning but don't
 // fail the account linking operation. The user will still have their accounts linked,
 // and transactions will be synced when webhooks arrive.
-func (s *accountService) enqueueInitialSync(ctx context.Context, linkedItemID, userID string) {
+//
+// Issue #1613 (P3-T4): investmentsSupported gates ONLY the two investment jobs, never the
+// plaid_sync job. plaid_sync/TRANSACTIONS is the required product for every Plaid Link in this
+// app (plaid_service.go's CreateLinkToken) and Plaid enforces PRODUCTS_NOT_SUPPORTED per
+// product requested, not per item (transaction_sync.go's PlaidErrorPermanent case) — an item
+// that genuinely can't do investments (e.g. a plain checking/savings bank like Rocket Mortgage)
+// still needs its transactions synced. Gating the whole helper, as a prior draft of this fix
+// did, would have silently stopped that customer's transactions from ever syncing — the same
+// false-negative shape this phase already withdrew once for account-type gating. See
+// itemSupportsProduct's doc comment for how the caller decides investmentsSupported.
+func (s *accountService) enqueueInitialSync(ctx context.Context, linkedItemID, userID string, investmentsSupported bool) {
 	if s.jobQueue == nil {
 		return
 	}
@@ -1532,8 +1592,129 @@ func (s *accountService) enqueueInitialSync(ctx context.Context, linkedItemID, u
 	}
 
 	s.enqueueJob(ctx, plaidSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
+
+	// #1613 P4-T3 item E: make the grant decision DURABLE. Until this, the only place in the
+	// system that knew Plaid had granted no investments for an Item was this function, for the
+	// duration of one call — it logged the fact and dropped it.
+	//
+	// ⚠ Written in BOTH directions, and ⚠ CORRECTED: the first version of this comment said that
+	// was because "LinkAccounts reuses an existing linked_items row on re-link". It does NOT — it
+	// marks the old item `replaced` and Creates a new row, whose id is what reaches this call — so
+	// the FALSE write is a no-op against today's only caller. It stays a setter rather than a
+	// latch because this records a DECISION and a column default is not one, and because this
+	// helper takes an id rather than a freshly built row: nothing in its signature stops a future
+	// caller passing an existing item, where a latch would strand a stale TRUE.
+	//
+	// ⚠ Non-blocking, like every other write in this helper: a failed bookkeeping write must
+	// never cost the user their transaction sync.
+	s.recordInvestmentsSkippedAtLink(ctx, linkedItemID, userID, !investmentsSupported)
+
+	if !investmentsSupported {
+		s.logger.Info("skipping initial investment sync: Plaid did not grant investments for this item",
+			"linked_item_id", linkedItemID,
+			"user_id", userID,
+		)
+		return
+	}
+
 	s.enqueueJob(ctx, investmentHoldingsSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
 	s.enqueueJob(ctx, investmentTransactionsSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
+}
+
+// recordInvestmentsSkippedAtLink persists linked_items.investments_skipped_at_link. It never
+// returns an error: enqueueInitialSync is documented non-blocking, and this is bookkeeping.
+//
+// ── RULING (#1613 P4-T3 item E): the per-sync product RE-CHECK was considered and DECLINED. ──
+//
+// The proposal was to re-read Plaid's product grants on later syncs, gated on this flag, so an
+// investments grant that materialises AFTER link (an OAuth or institution-side delay) still
+// enqueues the investment jobs. It is not done, for three reasons, and the reasoning is written
+// here rather than in a ticket because this is where the next person will look:
+//
+//  1. It is NOT free, and the obvious cheap version does not exist. plaid-go's
+//     TransactionsSyncResponse carries Accounts, NextCursor and the change arrays — there is no
+//     Item field on it — so a re-check cannot read product grants off a sync we already make. It
+//     costs one extra AccountsGet call.
+//  2. The cost falls almost entirely on the population it cannot help. The dominant flagged item
+//     is a plain bank that genuinely cannot serve investments; its flag NEVER clears, so an
+//     "every sync while flagged" re-check bills that item an extra Plaid call on every sync,
+//     forever. The population that benefits — a grant that appears later — is bounded by Plaid's
+//     own documented behaviour that an optional product the institution cannot support is simply
+//     never added to the Item.
+//  3. The failure being fixed is a FALSE NEGATIVE with an independent recovery path already in
+//     the tree: webhook_processing.go handles HOLDINGS and INVESTMENTS_TRANSACTIONS webhooks, so
+//     a grant that does materialise is picked up without a poll. Adding an outbound Plaid call to
+//     the transaction-sync path would add a new outage dependency to a path that must not break,
+//     in exchange for closing a gap that is already covered in the common case.
+//
+// ⚠ What is NOT claimed: that the webhook path is GUARANTEED. It is not, and that is precisely
+// why the flag is written even though nothing reads it. A future re-check needs exactly this
+// column, and — more usefully — the flag makes the affected population COUNTABLE before anyone
+// pays for a poll, which is the measurement this decision was made without. If it turns out to be
+// large, the right shape is a ONE-SHOT re-check on the first webhook-driven sync (bounded at one
+// extra AccountsGet per item, ever), not an every-sync poll. It must ride a LATER sync in any
+// case: the first transactions sync runs 5 seconds after link (queue.WithDelay above), and a
+// product grant re-read 5 seconds after the link-time read will essentially never see a change.
+func (s *accountService) recordInvestmentsSkippedAtLink(ctx context.Context, linkedItemID, userID string, skipped bool) {
+	// Mirrors the `s.jobQueue == nil` guard at the top of enqueueInitialSync. Unreachable in
+	// production — NewAccountService takes linkedItemRepo as a required positional parameter —
+	// and present only so a partially-constructed service in a unit test does not panic.
+	if s.linkedItemRepo == nil {
+		return
+	}
+	if err := s.linkedItemRepo.SetInvestmentsSkippedAtLink(ctx, linkedItemID, skipped); err != nil && s.logger != nil {
+		s.logger.Warn("could not record investments_skipped_at_link; the initial sync jobs are unaffected",
+			"linked_item_id", linkedItemID,
+			"user_id", userID,
+			"skipped", skipped,
+			"error", err,
+		)
+	}
+}
+
+// itemSupportsProduct reports whether Plaid actually granted the given product for this Item,
+// using only data already returned by the AccountsGet call LinkAccounts makes (Step 3) — no new
+// Plaid API call is needed.
+//
+// Issue #1613 (P3-T4), Codex finding 3: plaid-go v23's Item carries FOUR product arrays
+// (AvailableProducts, BilledProducts, Products, ConsentedProducts) and they are not
+// interchangeable. AvailableProducts ("available for the Item that have not yet been accessed")
+// and BilledProducts ("billed for the Item") are documented as mutually exclusive — together
+// they are Plaid's own record of what it added to the Item. Products "in almost all cases" only
+// mirrors BilledProducts, but model_item.go's own comment carves out exactly the optional-product
+// case this task cares about: a product "may appear in products but not in billed_products" when
+// it was added but not yet billed (INVESTMENTS is requested as an optional product in
+// CreateLinkToken). Checking all three — never ConsentedProducts, which tracks Data Transparency
+// consent collection, not product availability — is the closest read of "will this item serve
+// investments" obtainable from data already in hand. Plaid's own docs (plaid.com/docs/link/
+// initializing-products) say an optional product that the institution can't actually support is
+// simply never added to the Item, so its absence from all three arrays here is the same fact
+// that would otherwise surface later as PRODUCTS_NOT_SUPPORTED.
+//
+// This is deliberately conservative in the direction that protects the feature: HOLDINGS and
+// INVESTMENTS_TRANSACTIONS webhooks (webhook_processing.go's processInvestmentWebhook) are the
+// only OTHER path that syncs investments, and Plaid only sends those webhooks for items it has
+// actually granted investments to — so if this check is ever wrong in the false-negative
+// direction (skips an item that later turns out to support investments, e.g. after an update-mode
+// re-auth), the webhook path still recovers it. It does not silently and permanently strand the
+// feature the way the withdrawn account-type gate did.
+func itemSupportsProduct(item plaid.Item, product plaid.Products) bool {
+	for _, p := range item.GetAvailableProducts() {
+		if p == product {
+			return true
+		}
+	}
+	for _, p := range item.GetBilledProducts() {
+		if p == product {
+			return true
+		}
+	}
+	for _, p := range item.GetProducts() {
+		if p == product {
+			return true
+		}
+	}
+	return false
 }
 
 // enqueueJob enqueues a single job and logs success or failure.

@@ -18,8 +18,8 @@ import (
 type UserAccount struct {
 	ID              string  `json:"id" db:"id"`
 	UserID          string  `json:"user_id" db:"user_id"`
-	InstitutionID   string  `json:"institution_id" db:"institution_id"`         // Plaid institution ID (stable)
-	Mask            *string `json:"mask,omitempty" db:"mask"`                   // Last 4 digits (stable)
+	InstitutionID   string  `json:"institution_id" db:"institution_id"`                 // Plaid institution ID (stable)
+	Mask            *string `json:"mask,omitempty" db:"mask"`                           // Last 4 digits (stable)
 	AccountNameHint *string `json:"account_name_hint,omitempty" db:"account_name_hint"` // Original name
 
 	// User customization (stable across re-links)
@@ -29,6 +29,25 @@ type UserAccount struct {
 	CustomEmoji  *string `json:"custom_emoji,omitempty" db:"custom_emoji"`   // UTF-8 emoji
 	DisplayOrder *int    `json:"display_order,omitempty" db:"display_order"` // Sort order
 	IsHidden     bool    `json:"is_hidden" db:"is_hidden"`                   // Hide from default views
+
+	// ExcludeInvestmentSync hides this chain's investment_transactions from all THREE read surfaces:
+	// the unified activity feed, GET /api/v1/investments/investment-transactions (both #1609 Item 5,
+	// migration 000187), and GET /api/v1/investments/portfolio/income (#1614 — added later; the
+	// count above said "both" until that surface was covered, so re-derive it rather than trusting
+	// it if a fourth appears). It exists for a brokerage cash-management account that Plaid reports
+	// through BOTH /transactions/sync and /investments/transactions/get, which otherwise shows
+	// every real movement twice.
+	//
+	// ⚠ It is a READ FILTER AND NOTHING ELSE. No investment_transactions row is deleted,
+	// tombstoned, or suppressed at ingestion, so clearing the flag makes exactly the same rows
+	// reappear. Destroying them because a user reclassified an account would be side-effect
+	// destruction (docs/decisions/2026-08-24-financial-history-retained-by-default.md), and the
+	// reversibility is the reason no backfill or cleanup script exists: turning the flag on IS the
+	// cleanup.
+	//
+	// It lives on the chain rather than on accounts so it survives a Plaid re-link, for the same
+	// reason every other customization above does.
+	ExcludeInvestmentSync bool `json:"exclude_investment_sync" db:"exclude_investment_sync"`
 
 	// Account type info (from most recent Plaid account)
 	PrimaryType    *string `json:"primary_type,omitempty" db:"primary_type"`       // depository, credit, etc.
@@ -57,9 +76,40 @@ type UserAccount struct {
 	IdentityType    *string `json:"-" db:"identity_type"`
 	IdentitySubtype *string `json:"-" db:"identity_subtype"`
 
+	// HiddenSource records WHY this chain is hidden, for rows with IsHidden = true; NULL when
+	// IsHidden = false. Added by migration 000185 (#1609) because two different things hide a
+	// chain and current state cannot tell them apart: the SYSTEM hides a chain that lost its last
+	// active account, and the USER hides it via PATCH /api/v1/user-accounts/{id}. Both have zero
+	// active accounts by the time a re-link asks, so before this column normalizeExistingUserAccount
+	// un-hid BOTH — silently destroying a deliberate user hide on the next re-link.
+	//
+	// Only HiddenSourceSystem is eligible for that automatic un-hide. HiddenSourceUser is the
+	// user's own decision; HiddenSourceUnknown is 000185's conservative classification for rows it
+	// genuinely could not tell apart; and a NULL cause on a hidden row is treated the same way as
+	// unknown, for the same reason. Un-hiding an account the user hid is a privacy regression they
+	// cannot even detect, whereas leaving a system hide in place is an annoyance they can undo.
+	//
+	// json:"-" for the same reason as IdentityType above: it is not part of the API surface, and
+	// adding it to the response body would drift the checked-in openapi.yaml.
+	HiddenSource *string `json:"-" db:"hidden_source"`
+
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
+
+// The user_accounts.hidden_source vocabulary, constrained in SQL by
+// user_accounts_valid_hidden_source (migration 000185). See UserAccount.HiddenSource.
+const (
+	// HiddenSourceUser — a human hid this chain via PATCH /api/v1/user-accounts/{id}. Never
+	// un-hidden automatically.
+	HiddenSourceUser = "user"
+	// HiddenSourceSystem — hidden automatically because the chain lost its last active account,
+	// so it would otherwise linger as a ghost. The ONLY cause a re-link may un-hide.
+	HiddenSourceSystem = "system"
+	// HiddenSourceUnknown — migration 000185 could not tell the two apart. Deliberately never
+	// un-hidden automatically; do not "simplify" it into HiddenSourceSystem.
+	HiddenSourceUnknown = "unknown"
+)
 
 // Validate checks that the UserAccount has all required fields and valid values
 func (ua *UserAccount) Validate() error {
@@ -123,6 +173,11 @@ type UpdateUserAccountRequest struct {
 	CustomEmoji  *string `json:"custom_emoji"`  // nil = no change, empty string = clear
 	DisplayOrder *int    `json:"display_order"` // nil = no change
 	IsHidden     *bool   `json:"is_hidden"`     // nil = no change
+
+	// ExcludeInvestmentSync — nil = no change. See UserAccount.ExcludeInvestmentSync: a read
+	// filter for a brokerage account Plaid reports on both product endpoints (#1609 Item 5).
+	// Fully reversible; setting it back to false restores every hidden row.
+	ExcludeInvestmentSync *bool `json:"exclude_investment_sync"`
 }
 
 // Validate validates the UpdateUserAccountRequest

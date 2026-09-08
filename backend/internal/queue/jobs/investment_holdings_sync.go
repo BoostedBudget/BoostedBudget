@@ -42,6 +42,7 @@ type InvestmentHoldingsSyncWorker struct {
 	linkedItemRepo    repository.LinkedItemRepository
 	logger            *slog.Logger
 	db                TxBeginner
+	itemErrorSvc      ItemErrorNotifier // Issue #1609 P3-T2: nil-safe, notifies on permanent errors
 }
 
 // InvestmentHoldingsSyncWorkerDeps contains the dependencies for InvestmentHoldingsSyncWorker.
@@ -50,6 +51,9 @@ type InvestmentHoldingsSyncWorkerDeps struct {
 	LinkedItemRepo    repository.LinkedItemRepository
 	Logger            *slog.Logger
 	DB                TxBeginner
+	// ItemErrorSvc routes a permanent Plaid error into the same in-app notification the ITEM
+	// webhook path produces (Issue #1609 P3-T2). Optional — see plaid_permanent_error_notify.go.
+	ItemErrorSvc ItemErrorNotifier
 }
 
 // NewInvestmentHoldingsSyncWorker creates a new worker with the given dependencies.
@@ -63,6 +67,7 @@ func NewInvestmentHoldingsSyncWorker(deps InvestmentHoldingsSyncWorkerDeps) *Inv
 		linkedItemRepo:    deps.LinkedItemRepo,
 		logger:            logger,
 		db:                deps.DB,
+		itemErrorSvc:      deps.ItemErrorSvc,
 	}
 }
 
@@ -115,6 +120,21 @@ func (w *InvestmentHoldingsSyncWorker) Work(ctx context.Context, job *river.Job[
 		}
 	}()
 
+	// Issue #1609 Item 7: release the lock BEFORE the sync, not after. This tx takes
+	// only a `SELECT ... FOR UPDATE` row lock and does no writes, so committing it after
+	// the multi-page Plaid sync left the connection idle-in-transaction until Postgres
+	// terminated it (SQLSTATE 25P03 — a production DLQ entry burned all 5 attempts).
+	// Safe because the webhook path takes no lock at all and worker-vs-worker
+	// serialization already comes from River job uniqueness. See plaid_sync.go for the
+	// full rationale; pinned by TestInvestmentHoldingsSyncWorker_LockTxCommitsBeforeSync
+	// in issue1609_lock_tx_lifetime_test.go.
+	if tx != nil {
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			return fmt.Errorf("failed to commit transaction: %w", commitErr)
+		}
+		tx = nil // the deferred Rollback above must not fire for a committed tx
+	}
+
 	result, err := w.investmentSyncSvc.SyncHoldings(ctx, linkedItem)
 	if err != nil {
 		var plaidErr *domain.PlaidSyncError
@@ -133,6 +153,7 @@ func (w *InvestmentHoldingsSyncWorker) Work(ctx context.Context, job *river.Job[
 			"item_id", args.ItemID,
 			"error", err,
 			"error_type", plaidErr.ErrorType,
+			"error_code", plaidErr.ErrorCode,
 			"duration_ms", time.Since(startTime).Milliseconds(),
 		)
 
@@ -141,17 +162,16 @@ func (w *InvestmentHoldingsSyncWorker) Work(ctx context.Context, job *river.Job[
 				"job_id", job.ID,
 				"error_code", plaidErr.ErrorCode,
 			)
+			// Issue #1609 P3-T2: see notifyPermanentPlaidError — same handlers the ITEM webhook
+			// path uses, non-blocking, excludes PRODUCTS_NOT_SUPPORTED.
+			notifyPermanentPlaidError(ctx, w.itemErrorSvc, w.logger, linkedItem, plaidErr)
 			return nil
 		}
 
 		return fmt.Errorf("investment holdings sync failed: %w", err)
 	}
 
-	if tx != nil {
-		if commitErr := tx.Commit(ctx); commitErr != nil {
-			return fmt.Errorf("failed to commit transaction: %w", commitErr)
-		}
-	}
+	// Issue #1609 Item 7: lock tx already committed above, before the sync ran.
 
 	observability.InvestmentHoldingsSyncDuration.Observe(time.Since(startTime).Seconds())
 	observability.InvestmentHoldingsSynced.WithLabelValues("replaced").Add(float64(result.HoldingsReplaced))

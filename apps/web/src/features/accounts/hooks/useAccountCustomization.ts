@@ -26,6 +26,14 @@ interface PartialUpdateAccountRequest {
   custom_emoji?: string | null
   display_order?: number | null
   is_hidden?: boolean | null
+  // #1609 Item 5 — the per-chain opt-out that hides an account's investment_transactions from
+  // both the activity feed and the investments page, for a brokerage account Plaid reports on
+  // BOTH /transactions/sync and /investments/transactions/get. Read-layer only and fully
+  // reversible. #1618b added the toggle in AccountCustomizationModal, so this now reaches the
+  // server from ordinary user action — it is no longer only set by explicit callers.
+  // ⚠ It is carried ONLY on the user-accounts branch below; the legacy accounts branch strips it,
+  // because the column lives on `user_accounts` and UpdateAccountRequest does not declare it.
+  exclude_investment_sync?: boolean | null
 }
 
 interface AccountOrder {
@@ -34,8 +42,13 @@ interface AccountOrder {
 }
 
 export interface UseAccountCustomizationResult {
-  // Update account - uses UserAccount if available for stable storage
-  updateAccount: (account: Account, changes: PartialUpdateAccountRequest) => Promise<Account | null>
+  // Update account - uses UserAccount if available for stable storage.
+  //
+  // ⚠ REJECTS on failure (#1609). It used to swallow the error and resolve with `null`, which
+  // defeated AccountCustomizationModal's own failure detection: the modal decides whether to
+  // close from `Promise.allSettled(...).status === 'rejected'`, so a swallowed failure closed
+  // the modal exactly as a success would and the user was told their edit had saved.
+  updateAccount: (account: Account, changes: PartialUpdateAccountRequest) => Promise<Account>
   isUpdating: boolean
   updateError: Error | null
 
@@ -63,11 +76,11 @@ export interface UseAccountCustomizationResult {
  *   const { updateAccount, isUpdating, updateError } = useAccountCustomization()
  *
  *   const handleNicknameChange = async (nickname: string) => {
- *     // Pass the full account object - hook will use user_account_id if available
+ *     // Pass the full account object - hook will use user_account_id if available.
+ *     // #1609: this REJECTS on failure. Let the rejection reach whoever decides what a failed
+ *     // save means for the UI; do not swallow it here.
  *     const result = await updateAccount(account, { nickname })
- *     if (result) {
- *       console.log('Account updated:', result.nickname)
- *     }
+ *     console.log('Account updated:', result.nickname)
  *   }
  *
  *   return (
@@ -94,46 +107,70 @@ export function useAccountCustomization(): UseAccountCustomizationResult {
   async function updateAccount(
     account: Account,
     changes: PartialUpdateAccountRequest
-  ): Promise<Account | null> {
-    try {
-      // Normalize request data (convert undefined to null)
-      const requestData: GeneratedUpdateUserAccountRequest = {
-        nickname: changes.nickname ?? null,
-        custom_color: changes.custom_color ?? null,
-        custom_icon: changes.custom_icon ?? null,
-        custom_emoji: changes.custom_emoji ?? null,
-        display_order: changes.display_order ?? null,
-        is_hidden: changes.is_hidden ?? null,
-      }
+  ): Promise<Account> {
+    // ⚠ NO try/catch (#1609). A rejection must reach the caller: the modal closes only when
+    // nothing failed, and turning the rejection into a resolved `null` here made every failed
+    // save look like a successful one. The mutation hooks still surface the error through
+    // `updateError`, so nothing is lost by letting it propagate.
 
-      // If account has a stable UserAccount reference, use that endpoint
-      // This ensures customizations survive Plaid re-links (Issue #171)
-      if (account.user_account_id) {
-        await updateUserAccountMutation.mutateAsync({
-          id: account.user_account_id,
-          data: requestData,
-        })
-        // Return updated account with changed values (others preserved)
-        return {
-          ...account,
-          nickname: changes.nickname !== undefined ? (changes.nickname ?? undefined) : account.nickname,
-          custom_color: changes.custom_color !== undefined ? (changes.custom_color ?? undefined) : account.custom_color,
-          custom_icon: changes.custom_icon !== undefined ? (changes.custom_icon ?? undefined) : account.custom_icon,
-          custom_emoji: changes.custom_emoji !== undefined ? (changes.custom_emoji ?? undefined) : account.custom_emoji,
-          display_order: changes.display_order !== undefined ? (changes.display_order ?? undefined) : account.display_order,
-          is_hidden: changes.is_hidden !== undefined ? (changes.is_hidden ?? false) : account.is_hidden,
-        }
-      }
+    // Normalize request data (convert undefined to null)
+    const requestData: GeneratedUpdateUserAccountRequest = {
+      nickname: changes.nickname ?? null,
+      custom_color: changes.custom_color ?? null,
+      custom_icon: changes.custom_icon ?? null,
+      custom_emoji: changes.custom_emoji ?? null,
+      display_order: changes.display_order ?? null,
+      is_hidden: changes.is_hidden ?? null,
+      // null is the server's "no change" for every field on this request, so an update that says
+      // nothing about the flag must send null rather than false — false would UN-exclude a chain
+      // the user deliberately excluded, on every unrelated rename.
+      exclude_investment_sync: changes.exclude_investment_sync ?? null,
+    }
 
-      // Fallback: Use legacy Account endpoint (for accounts without user_account_id)
-      const response = await updateAccountMutation.mutateAsync({
-        id: account.id,
+    // If account has a stable UserAccount reference, use that endpoint
+    // This ensures customizations survive Plaid re-links (Issue #171)
+    if (account.user_account_id) {
+      await updateUserAccountMutation.mutateAsync({
+        id: account.user_account_id,
         data: requestData,
       })
-      return response.account
-    } catch {
-      return null
+      // Return updated account with changed values (others preserved).
+      //
+      // ⚠ This is an OPTIMISTIC guess, not the server's answer, and it cannot be anything else:
+      // PATCH /user-accounts/{id} returns a UserAccount, a different shape from Account. The
+      // caller is responsible for reconciling it — AccountsPage invalidates the accounts query
+      // after writing this into the cache (#1609). Do not treat it as authoritative.
+      return {
+        ...account,
+        nickname: changes.nickname !== undefined ? (changes.nickname ?? undefined) : account.nickname,
+        custom_color: changes.custom_color !== undefined ? (changes.custom_color ?? undefined) : account.custom_color,
+        custom_icon: changes.custom_icon !== undefined ? (changes.custom_icon ?? undefined) : account.custom_icon,
+        custom_emoji: changes.custom_emoji !== undefined ? (changes.custom_emoji ?? undefined) : account.custom_emoji,
+        display_order: changes.display_order !== undefined ? (changes.display_order ?? undefined) : account.display_order,
+        is_hidden: changes.is_hidden !== undefined ? (changes.is_hidden ?? false) : account.is_hidden,
+      }
     }
+
+    // Fallback: Use legacy Account endpoint (for accounts without user_account_id)
+    //
+    // ⚠ #1618b: exclude_investment_sync MUST be stripped here, and the reason is structural rather
+    // than cosmetic. The flag is a column on `user_accounts`; an account with no user_account_id
+    // has no chain row to store it in. It is also absent from UpdateAccountRequest — only
+    // UpdateUserAccountRequest declares it — so sending it to PATCH /accounts/{id} is either a 422
+    // or a silent drop depending on how strictly the decoder rejects unknown fields. Both outcomes
+    // are wrong, and the silent one is worse: the modal would close as if it had saved.
+    //
+    // The modal disables the toggle for these accounts, so this should be unreachable in practice.
+    // It is stripped here anyway because "unreachable via the UI" is not the same as unreachable,
+    // and this hook is the last place that can tell the difference.
+    // Pinned by "must NOT send exclude_investment_sync down the legacy Account endpoint".
+    const { exclude_investment_sync: _unsupportedOnLegacyEndpoint, ...legacyRequestData } = requestData
+    void _unsupportedOnLegacyEndpoint
+    const response = await updateAccountMutation.mutateAsync({
+      id: account.id,
+      data: legacyRequestData,
+    })
+    return response.account
   }
 
   /**

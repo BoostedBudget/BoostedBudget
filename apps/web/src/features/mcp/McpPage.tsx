@@ -257,8 +257,9 @@ export function McpPage() {
 
             <Section id="how-it-works" title="How it works">
               <p className="text-foreground">
-                Your agent uses two tools: <code>search</code> finds the right capability, and <code>execute</code>{' '}
-                carries it out. You can ask in plain language, then review the answer or confirm a proposed change.
+                Your agent uses a few tools: <code>search</code> finds the right capability, <code>readExecute</code>{' '}
+                carries out read-only requests, and <code>writeExecute</code> carries out anything that changes your
+                data. You can ask in plain language, then review the answer or confirm a proposed change.
               </p>
               <p className="text-foreground">
                 Saved recipes let you keep a repeatable financial review and run it again when you ask for it — see{' '}
@@ -371,11 +372,12 @@ export function McpPage() {
                   session against the same account gets its own limit.
                 </li>
                 <li>
-                  <code>execute</code> accepts at most 25 calls per invocation.
+                  <code>readExecute</code>/<code>writeExecute</code> each accept at most 25 calls per invocation.
                 </li>
                 <li>
-                  Each call&apos;s result is truncated to about 500 characters — ask for a small <code>limit</code> and
-                  page through results rather than requesting everything at once.
+                  Each call&apos;s result is capped at about 100,000 characters, and a whole batch at about 300,000 —
+                  ask for a small <code>limit</code> and page through results rather than requesting everything at
+                  once. A truncated result says so, and tells you how much was left out.
                 </li>
               </ul>
             </Section>

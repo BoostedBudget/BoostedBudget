@@ -216,8 +216,11 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getMCPRecipe'),
   // runMCPRecipe is READ in v1: recipes can only compose read-class ops, so running
   // them produces no writes. The tool resolves the recipe to ordered API calls and
-  // returns them for the agent to pass to execute(). Classifying as write would
-  // require a confirmation token that the recipe.run tool has no input field for.
+  // returns them for the agent to pass to readExecute()/writeExecute(). Classifying as
+  // write would require a confirmation token that the recipe.run tool has no input field for.
+  // ⚠ Its HTTP method is POST despite class 'read' — this is EXACTLY why readExecute's
+  // admission gate (tools/execute.ts) checks the method too, not class alone: see the
+  // module doc's SECURITY POINT.
   read('runMCPRecipe'),
   write('createMCPRecipe', { idempotent: false }),
   write('updateMCPRecipe', { idempotent: true }),
@@ -513,8 +516,24 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // ── Plaid (account-linking permanently non-MCP) ──────────────────────────
   excludedWrite('exchangePublicToken', REASON_PLAID_LINKING, 'bank-connections'),
   excludedWrite('createLinkToken', REASON_PLAID_LINKING, 'bank-connections'),
+  // #1609 P3-T1: the reconnect flow. Same exclusion and the same reason as the rest of Plaid
+  // linking, and here it is not merely policy — it is a capability fact. Repairing a connection
+  // REQUIRES a human to complete Plaid Link in a browser; an MCP agent cannot do that, so exposing
+  // either endpoint would advertise something no agent could actually carry out.
+  excludedWrite('createReconnectLinkToken', REASON_PLAID_LINKING, 'bank-connections'),
+  excludedWrite('repairLinkedItem', REASON_PLAID_LINKING, 'bank-connections'),
 
   // ── Privacy / Profile ────────────────────────────────────────────────────
+  // ⚠ #1610: both admitted by readExecute (class 'read', method GET, confirmationRequired
+  // false) yet each lazily `repo.Create`s the caller's OWN default row on first access
+  // (privacy_service.go / user profile equivalent; see each op's OpenAPI description) — a
+  // real, acknowledged write. Left admitted rather than excluded because it's scoped to the
+  // caller, idempotent after the first call, and destroys nothing. The backend tags each
+  // huma.Operation literal `Extensions: {"x-mcp-lazy-init": true}` (privacy.go, profile.go),
+  // which flows into api/openapi.yaml; manifest/lazy-init-extension.ts's
+  // ACKNOWLEDGED_LAZY_INIT_OPERATIONS is the reviewed list, and
+  // scripts/check-manifest-completeness.ts fails the build if the spec ever tags a THIRD
+  // operation nobody has added to that list — see that module's doc comment.
   read('getPrivacySettings'),
   read('getUserProfile'),
   excludedWrite('updatePrivacySettings', REASON_PRIVACY_INAPP, 'household-sharing'),

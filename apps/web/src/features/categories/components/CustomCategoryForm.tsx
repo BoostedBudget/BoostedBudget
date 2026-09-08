@@ -73,7 +73,13 @@ export function CustomCategoryForm({
       color,
       icon: icon ?? undefined,
       // Send empty strings so the API clears the opposite parent dimension.
-      parent_pfc_primary: parent.startsWith('pfc:') ? parent.slice(4) : '',
+      // The cast is the one place the select's `pfc:<ENUM>` option value re-enters the type
+      // system. #1609 narrowed this field to the 18 PFCv2 primaries (plus '' to clear); the
+      // options are built from that same registry (see the parent <select> below), so the slice
+      // is a member by construction, and the server re-validates it against the DB CHECK anyway.
+      parent_pfc_primary: (parent.startsWith('pfc:')
+        ? parent.slice(4)
+        : '') as CreateCategoryRequest['parent_pfc_primary'],
       parent_id: parent.startsWith('custom:') ? parent.slice(7) : '',
     }
 

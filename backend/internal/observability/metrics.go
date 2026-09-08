@@ -134,6 +134,28 @@ var (
 		Help: "Total PaddleWebhookService.VerifyWebhook rejections by reason (invalid_format, timestamp_out_of_tolerance, signature_mismatch). A sustained rate of timestamp_out_of_tolerance with signature_mismatch flat suggests host clock skew silently dropping genuine Paddle deliveries, not an attack.",
 	}, []string{"reason"})
 
+	// UnknownItemWebhookCodeTotal counts ITEM webhook `webhook_code` values that
+	// itemErrorService.ProcessWebhook's switch does not recognize (Issue #1621). That switch's
+	// `default` case logs and returns nil rather than erroring — mirroring
+	// webhook_processing.go:215-220's handling of an unknown webhook TYPE one level up — so a
+	// never-before-seen code no longer retries forever into the DLQ. That safety net is only safe
+	// because THIS counter exists: a log line alone is easy to miss, and the vendored Plaid spec
+	// has already been caught missing a live code once (PENDING_DISCONNECT, handled explicitly
+	// below rather than falling into this default) — a NINTH code must be visible here, not
+	// silently swallowed.
+	//
+	// Expected label values: any ITEM `webhook_code` string Plaid sends that this switch does not
+	// have an explicit case for. Includes codes the vendored spec enumerates but this service does
+	// not yet act on (USER_ACCOUNT_REVOKED, NEW_ACCOUNTS_AVAILABLE, WEBHOOK_UPDATE_ACKNOWLEDGED —
+	// the last is self-inflicted: plaid_service.go sets a webhook URL, which the spec says
+	// triggers that webhook) as well as any code neither the spec nor this codebase knows about
+	// yet. Should be non-zero for the three known-unhandled codes above and near-zero otherwise;
+	// a sustained new label value is the signal to add explicit handling.
+	UnknownItemWebhookCodeTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "unknown_item_webhook_code_total",
+		Help: "Total ITEM webhook events with a webhook_code itemErrorService.ProcessWebhook does not have an explicit case for, by code. Non-zero for known-unhandled codes (USER_ACCOUNT_REVOKED, NEW_ACCOUNTS_AVAILABLE, WEBHOOK_UPDATE_ACKNOWLEDGED) is expected; any other/new label value should be investigated.",
+	}, []string{"code"})
+
 	// RateLimitIdentitySentinelFallbackTotal counts requests that reached the
 	// rate limiter with GateStatusPassed (i.e. CloudflareOnly already verified
 	// the immediate peer and the origin secret) but presented a missing,
@@ -205,6 +227,27 @@ var (
 	RateLimitRejectionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "ratelimit_rejections_total",
 		Help: "Total number of requests rejected by the rate limiter, by tier (regular, auth, sentinel).",
+	}, []string{"tier"})
+
+	// RateLimitPrecheckRejectionsTotal counts the SUBSET of rate-limit rejections that were
+	// decided by the in-process cost pre-check rather than by the authoritative backend, by tier.
+	//
+	// It exists because the pre-check reuses RateLimitRejectionsTotal and the same WARN line (so a
+	// rejection looks identical to an operator either way), and the pre-check's failure mode is
+	// "some customers get spurious 429s". Without a way to separate the two counts, that failure
+	// is undiagnosable from metrics — which is exactly how three invariant violations sat in the
+	// first draft of the mechanism. A sustained non-zero rate here means the pre-check is denying
+	// traffic, and if it ever exceeds what the authoritative limits would reject, it is acting as
+	// a second enforcement layer, which it must never do.
+	//
+	// ⚠ Every request counted here is ALSO counted in RateLimitRejectionsTotal. This is a
+	// breakdown, not a disjoint counter — do not add the two together.
+	//
+	// ⚠ LABEL HYGIENE, NON-NEGOTIABLE: "tier" is one of a small fixed set — regular | auth |
+	// sentinel — and must never become a cache key, IP address, Redis URL, or raw error string.
+	RateLimitPrecheckRejectionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ratelimit_precheck_rejections_total",
+		Help: "Rate-limit rejections decided by the in-process cost pre-check rather than the authoritative backend, by tier (regular, auth, sentinel). A SUBSET of ratelimit_rejections_total, not disjoint from it.",
 	}, []string{"tier"})
 
 	// RedisCommandErrorsTotal counts Redis command errors, by client and command.

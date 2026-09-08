@@ -753,7 +753,7 @@ func TestBuildAccountMap_Success(t *testing.T) {
 	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).Return(accounts, nil)
 
 	// Execute
-	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID)
+	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID, "")
 
 	// Assert
 	assert.NoError(t, err)
@@ -794,7 +794,7 @@ func TestBuildAccountMap_EmptyAccounts(t *testing.T) {
 	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).Return([]domain.Account{}, nil)
 
 	// Execute
-	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID)
+	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID, "")
 
 	// Assert
 	assert.NoError(t, err)
@@ -832,7 +832,7 @@ func TestBuildAccountMap_RepositoryError(t *testing.T) {
 	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).Return(nil, errors.New("database error"))
 
 	// Execute
-	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID)
+	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID, "")
 
 	// Assert
 	assert.Error(t, err)

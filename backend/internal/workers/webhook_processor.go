@@ -358,6 +358,9 @@ func (w *WebhookProcessor) processItemWebhooks(ctx context.Context) error {
 			payload.Error.ErrorType,
 			payload.Error.ErrorCode,
 			payload.Error.ErrorMessage,
+			// Issue #1623: the stored row's Postgres-stamped receipt instant, which bounds how
+			// far back a LOGIN_REPAIRED may reach when clearing a failure.
+			webhook.CreatedAt,
 		); err != nil {
 			// Log error but continue processing other webhooks
 			w.logger.Error("error processing ITEM webhook",

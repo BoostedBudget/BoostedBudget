@@ -13,6 +13,7 @@ function makeAccount(overrides: Partial<Account>): Account {
     current_balance: 1000,
     currency_code: 'USD',
     is_hidden: false,
+    exclude_investment_sync: false,
     linked_item_id: 'item-1',
     plaid_account_id: 'plaid-1',
     created_at: '2024-01-01',

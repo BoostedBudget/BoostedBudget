@@ -480,48 +480,148 @@ fly secrets set CF_ORIGIN_SECRET=<64-char-hex> --app boostedbudget-api
 
 ### Cloudflare Transform Rules (inject X-Origin-Secret)
 
-In **Cloudflare dashboard → boostedbudget.com → Rules → Transform Rules → Request Header Modification**, create two rules:
+In **Cloudflare dashboard → boostedbudget.com → Rules → Transform Rules → Request Header Modification**, create three rules:
 
 | Rule name | Filter expression | Header name | Header value |
 |-----------|------------------|-------------|--------------|
 | `Inject Origin Secret — Production API` | `(http.host eq "api.boostedbudget.com")` | `X-Origin-Secret` | `<CF_ORIGIN_SECRET for boostedbudget-api>` |
 | `Inject Origin Secret — Staging API` | `(http.host eq "staging-api.boostedbudget.com")` | `X-Origin-Secret` | `<CF_ORIGIN_SECRET for staging-boostedbudget-api>` |
+| `Inject Origin Secret — MCP Worker subrequests` | `(cf.worker.upstream_zone != "")` | `X-Origin-Secret` | `<CF_ORIGIN_SECRET for boostedbudget-api>` |
 
 Click **Deploy** after each rule. The header value must exactly match the corresponding `CF_ORIGIN_SECRET` Fly.io secret.
 
+⚠️ The third rule exists because a Cloudflare Worker's subrequest does not re-enter the zone the way
+a client request does, so the host-matched rules above never fire for it and the MCP Worker would be
+rejected by the origin gate. Verified live on 2026-09-08: all three rules present and enabled.
+
+### 🔴 The cardinal rule: no challenge action may ever apply to `/webhooks/`
+
+**A Cloudflare `managed_challenge` is equivalent to `block` for any non-browser client.** Webhook
+senders are HTTP clients — they cannot solve an interstitial challenge — so a challenge on a webhook
+path is a silent, total outage that the provider reports as a plain `403`.
+
+This has happened **twice**, on 2026-09-08, from two different rules:
+
+1. **Bot Fight Mode** (zone-wide) Managed-Challenged Plaid's `Go-http-client/2.0` from AS14618
+   (Amazon). Confirmed in Security Events: two `Bot fight mode / Managed Challenge` rows at
+   07:12:48 EDT for `POST api.boostedbudget.com/webhooks/plaid`, matching the two `TRANSACTIONS`
+   deliveries Plaid logged as 403 in the same second. Undetected for 11+ hours across three webhook
+   types. **Fixed by disabling Bot Fight Mode** — plain BFM runs ahead of WAF custom rules and
+   Cloudflare provides no exclusion mechanism, so a skip rule cannot save you. On Free there is no
+   way to keep it enabled and exempt a path.
+2. **A WAF custom rule** challenging requests with no `User-Agent` header, which had no path scope.
+   Reproduced live: `POST /webhooks/plaid` with an empty UA returned `403` while the same request
+   with a UA returned `401`. **Fixed by scoping the rule to exclude `/webhooks/`.**
+
+`scripts/smoke-test.sh` now fails the production deploy when either webhook endpoint returns
+anything but `401` to an unsigned POST, and reports Cloudflare's `cf-mitigated` header so an edge
+block is named as an edge block. See `scripts/__tests__/smoke-test-failure-paths.test.sh`.
+
 ### WAF Managed Rules
 
-In **Cloudflare dashboard → Security → WAF → Managed rules**:
+⚠️ **Not deployed, and mostly not available on this plan.** The zone is **Free**
+(verified via `GET /zones/{id}` → `plan.name = "Free Website"`). `GET` on the
+`http_request_firewall_managed` phase returns `10003: could not find entrypoint ruleset` — nothing
+is deployed. The `Cloudflare Managed Free Ruleset` *is* in the catalog and could be deployed; the
+**OWASP Core Ruleset requires Business**.
 
-> ⚠️ **Start in Log mode, not Block.** API JSON traffic (merchant names, transaction descriptions, user notes) can trigger OWASP false positives. Monitor for 1 week before switching to Block.
-
-For each API hostname (`api.boostedbudget.com` and `staging-api.boostedbudget.com`):
-
-1. **Deploy Cloudflare Managed Ruleset** → Deploy
-2. **Deploy Cloudflare OWASP Core Ruleset** (Pro+ plans) → Deploy with:
-   - Paranoia Level: **PL1** (reduces false positives on API JSON)
-   - Score threshold: **Medium (≥40)**
-   - Action: **Log** → change to **Block** after 1 week without false positives
-
-> ⚠️ Do **not** enable plain Bot Fight Mode for these hostnames. It can challenge legitimate mobile and API traffic and cannot be bypassed with WAF rules. If on Business/Enterprise and using Super Bot Fight Mode, create a skip rule for `/api/`, `/webhooks/`, and `/health` paths. (`/metrics` no longer needs one — issue #1514 moved it off the public listener entirely, so no Cloudflare traffic reaches it.)
+If you ever deploy the free managed ruleset, **scope an exception for `/webhooks/` from the start**
+rather than discovering the need during an outage, and start in Log mode — API JSON (merchant names,
+transaction descriptions, user notes) triggers OWASP-style false positives.
 
 ### Cloudflare Rate Limiting Rules
 
-In **Cloudflare dashboard → Security → WAF → Rate limiting rules** (create most-specific rules first):
+⚠️ **Free allows exactly ONE rate limiting rule**, minimum period 10s. The three production rules
+this document used to list could never all exist. The live rule, read from the API:
 
-**Staging:**
+| Field | Value |
+|---|---|
+| Expression | `(http.host eq "api.boostedbudget.com") and starts_with(http.request.uri.path, "/api/")` |
+| Action | `block` |
+| Rate | **34 requests / 10s** (≈204/min) |
+| Characteristics | `cf.colo.id`, `ip.src` — `cf.colo.id` is **mandatory** |
+| Mitigation timeout | **10s** |
 
-| Rule name | Expression | Rate | Block duration |
-|-----------|-----------|------|----------------|
-| `Staging API — General` | `(http.host eq "staging-api.boostedbudget.com") and starts_with(http.request.uri.path, "/api/")` | 100 req/min per IP | 1 min |
+Two properties that are easy to misread:
 
-**Production:**
+- **The limit is per Cloudflare colo, not global.** A distributed source gets ~204/min *per
+  datacenter*. This is inherent to the plan, not a misconfiguration.
+- **`/webhooks/` is deliberately NOT rate limited.** Throttling it risks dropping real deliveries,
+  which loses financial data — a worse outcome than the compute cost. Do not "fix" this by widening
+  the expression to the whole host without weighing that trade-off explicitly.
 
-| Rule name | Expression | Rate | Block duration |
-|-----------|-----------|------|----------------|
-| `Prod API — Auth endpoints` | `(http.host eq "api.boostedbudget.com") and starts_with(http.request.uri.path, "/api/v1/auth/")` | 20 req/min per IP | 10 min |
-| `Prod API — Plaid endpoints` | `(http.host eq "api.boostedbudget.com") and starts_with(http.request.uri.path, "/api/v1/plaid/")` | 30 req/min per IP | 5 min |
-| `Prod API — General` | `(http.host eq "api.boostedbudget.com") and starts_with(http.request.uri.path, "/api/")` | 200 req/min per IP | 1 min |
+### WAF Custom Rules
+
+Free allows **5**. All five slots are in use; adding one means consolidating another.
+
+| # | Action | Purpose |
+|---|---|---|
+| 1 | block | OFAC-sanctioned countries (`KP`, `IR`, `SY`, `CU`) — US fintech compliance |
+| 2 | block | Scanner UAs + probe paths + traversal/SQLi patterns (**consolidated** from three rules) |
+| 3 | managed_challenge | Empty `User-Agent` — **`/webhooks/` exempt**, see the cardinal rule above |
+| 4 | block | Allowlist: only `/api/`, `/webhooks/`, `/health` reach the origin |
+| 5 | block | `/webhooks/` accepts **POST only** |
+
+⚠️ **Rule 4 is an allowlist and is a standing maintenance hazard.** Any future endpoint outside those
+three prefixes gets a silent edge `403` that looks exactly like the outages above. It deliberately
+blocks the OpenAPI spec (both the JSON and YAML forms), the docs UI and the JSON-schema
+directory on the production API host — verified that nothing fetches
+these at runtime (every reference in the tree is to the local build-time `api/openapi.yaml`), and
+serving them publicly leaked the full API surface. **If you add a public non-`/api/` route, this
+rule is the first place to look.**
+
+⚠️ Rule 2 matches User-Agent **substrings**, so a legitimate client whose UA ever contains `Nmap` or
+`Hydra` is silently blocked. **No rule blocks POST floods to any path** — see *Cost exposure* below.
+(That sentence previously read "Rule 4 blocks POST floods to no path", which reads as though rule 4
+*provides* flood protection. It does not; nothing does.)
+
+### Cost exposure (what these rules do and do not bound)
+
+Requests blocked at the edge are **free**. Requests reaching the origin cost Fly compute, and *used
+to* cost **at least one Redis command each**: `IPRateLimiter` (`main.go`, immediately after
+`CloudflareOnly`) consulted Redis on every request — *including the ones it rejected* — so rate
+limiting was a per-request toll on hostile traffic rather than free protection.
+
+⚠️ **This section described that as unfixed, and prescribed the fix that does not work. Both are
+corrected below.** It said "the structural fix is to have `IPRateLimiter` consult its in-memory
+limiter before Redis". Following that literally reintroduces a real bug: the existing in-memory
+stores are built from a **fleet-divided** limit (see `RateLimitConfig.IPLimit`), so using them as a
+pre-check rejects traffic well inside the authoritative fleet-wide budget.
+
+**What is implemented now.** `RateLimitConfig.PrecheckLimit` / `PrecheckAuthLimit` /
+`PrecheckSentinelLimit` add a **separate, undivided, per-tier** in-process token bucket consulted
+*before* Redis. Once one client identity exhausts its bucket, further requests are rejected without
+touching Redis at all, so the billable cost is bounded at `precheckHeadroomFactor × limit` commands
+per identity per tier per window instead of unbounded.
+
+Three properties are load-bearing and each closes a violation that two independent adversarial
+reviewers reproduced against the first draft:
+
+- **Per-tier**, because Redis budgets `regular` / `auth` / `sentinel` independently. One shared
+  bucket charged an identity's ordinary API traffic against its auth allowance and returned `429`
+  for a legitimate `POST /webhooks/plaid`.
+- **Keyed by the canonical identity** (`domain.AggregateIPv6Identity`, IPv6 → /64), the same
+  identity Redis buckets by. Keyed on the raw address, an attacker rotating `/128`s inside one
+  routed `/64` minted a fresh full bucket per address and the cost stayed unbounded.
+- **`RATE_LIMIT_SENTINEL_LIMIT` is honoured.** That knob exists to *raise* the sentinel budget
+  during a Cloudflare header anomaly; a ceiling derived from `RATE_LIMIT_IP` silently neutered it
+  during the exact incident it exists for.
+
+**What is still not bounded.** Fly compute is unbounded regardless — a flood still costs CPU, a
+WARN log line and a metric increment per request. `/webhooks/plaid` and `/webhooks/paddle` carry no
+edge rate limit **by design** (throttling them risks dropping real provider deliveries and losing
+financial data), so the origin is their only gate. Data is never at risk — Plaid webhooks are
+verified with ES256 + a `request_body_sha256` claim + a 5-minute `iat` window
+(`internal/services/webhook_service.go`). The Redis bound also degrades above
+`RateLimitConfig.MaxEntries` distinct identities, where LRU eviction hands a returning identity a
+fresh bucket.
+
+Watch `ratelimit_precheck_rejections_total` (a labelled **subset** of `ratelimit_rejections_total`,
+not disjoint from it) to see the pre-check working — and to distinguish a cost-breaker rejection
+from an authoritative one, which is otherwise impossible from metrics alone.
+
+The only true ceiling remains a **spend cap** at the provider (Upstash monthly budget, Fly
+machine-count cap).
 
 ### Webhook Pre-Deploy Check
 
@@ -534,6 +634,18 @@ Cloudflare protection blocks direct `*.fly.dev` access. Confirm all webhook prov
 
 Also confirm both CNAME records in Cloudflare DNS are **Proxied (orange cloud ☁️)**, not DNS-only.
 
+🔴 **Check the hostname character by character.** As of 2026-09-08 the Plaid dashboard's staging
+entries pointed at **`api-staging.boostedbudget.com`** — the components transposed. That hostname has
+**no DNS record at all** (`dig +short A api-staging.boostedbudget.com` → empty), so every staging
+webhook was being delivered nowhere, silently, with no dashboard error resembling the production
+403s. The correct host is `staging-api.boostedbudget.com`, which is also what the `X-Origin-Secret`
+Transform Rule matches on (`http.host eq "staging-api.boostedbudget.com"`) — a transposed hostname
+would fail the origin gate even if it did resolve.
+
+⚠️ Separately, `staging-api.boostedbudget.com` resolves to Cloudflare but was **completely
+unreachable** on 2026-09-08 (15s timeout on `/health`, while production `/health` returned 200 in
+145ms). Verify staging is actually serving before trusting any staging webhook test.
+
 ### Post-Deploy Smoke Tests
 
 After setting Fly.io secrets and deploying Transform Rules, verify the protection is active:
@@ -541,12 +653,12 @@ After setting Fly.io secrets and deploying Transform Rules, verify the protectio
 ```bash
 # 1. Direct fly.dev access must return 403
 curl -s -o /dev/null -w "Status: %{http_code}\n" \
-  https://staging-boostedbudget-api.fly.dev/api/v1/profile
+  https://staging-boostedbudget-api.fly.dev/api/v1/user/profile
 # Expected: 403
 
 # 2. Via Cloudflare domain must return 401 (CF check passed, Clerk rejected)
 curl -s -o /dev/null -w "Status: %{http_code}\n" \
-  https://staging-api.boostedbudget.com/api/v1/profile
+  https://staging-api.boostedbudget.com/api/v1/user/profile
 # Expected: 401
 
 # 3. Health check via fly.dev must return 200 (exempted from Cloudflare check)
@@ -574,7 +686,7 @@ curl -s -o /dev/null -w "Status: %{http_code}\n" \
 # 5. Spoofed CF-Connecting-IP (original naive approach) must still return 403
 curl -s -o /dev/null -w "Status: %{http_code}\n" \
   -H "CF-Connecting-IP: 1.2.3.4" \
-  https://staging-boostedbudget-api.fly.dev/api/v1/profile
+  https://staging-boostedbudget-api.fly.dev/api/v1/user/profile
 # Expected: 403 (proves the original header-only approach is insufficient)
 ```
 

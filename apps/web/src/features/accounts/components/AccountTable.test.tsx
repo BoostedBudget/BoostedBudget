@@ -20,6 +20,8 @@ function createMockAccount(overrides?: Partial<Account>): Account {
     available_balance: 2400.0,
     currency_code: 'USD',
     institution_name: 'Chase',
+    is_hidden: false,
+    exclude_investment_sync: false,
     status: 'active',
     display_order: 0,
     created_at: '2024-01-01T00:00:00Z',

@@ -58,7 +58,7 @@ package repository
 //     were stale at birth). Four re-points from the first pass were text-faithful but landed in the
 //     wrong construct and are corrected. These eight are what is left:
 //
-//       repo_test.go:197 → analytics_repository.go:532  (`AND ua.user_id = ANY($3)`, now nowhere)
+//       repo_test.go:197 → analytics_repository.go:568  (`AND ua.user_id = ANY($3)`, now nowhere)
 //       repo_test.go:240 → account_service.go:576       (anchor was a blank line)
 //       repo_test.go:240 → account_repository.go:244    (anchor was a blank line)
 //       repo_test.go:297 → cmd/server/main.go:2080                 (anchor was a blank line)
@@ -76,12 +76,12 @@ package repository
 //     anchor the construct method is actively misleading: it faithfully tracks the text that WAS at
 //     that line, finds exactly one landing spot for it, and hands you a confident number for a
 //     citation whose author meant something else entirely. Those two were fixed from the PROSE
-//     (it names the methods), not from the text. `analytics_repository.go:789` is the same shape
+//     (it names the methods), not from the text. `analytics_repository.go:825` is the same shape
 //     and was NOT fixed: a plausible unique candidate exists 56 lines away, and nothing identifies
 //     what the citation meant, so it is left visibly stale rather than confidently wrong.
 //
 //     ⚠ AND THE SAME LINE NUMBER SHOWS THE STANDARD CUTTING BOTH WAYS, which is why it is worth
-//     spelling out. There were TWO citations of `analytics_repository.go:789`, in different files,
+//     spelling out. There were TWO citations of `analytics_repository.go:825`, in different files,
 //     and they got opposite treatments -- correctly:
 //       - the one described above has no prose naming a target, so intent is unrecoverable and it
 //         stays stale;

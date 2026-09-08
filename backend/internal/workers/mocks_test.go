@@ -15,11 +15,11 @@ import (
 
 // Ensure mocks implement their interfaces
 var (
-	_ repository.LinkedItemRepository    = (*MockLinkedItemRepository)(nil)
-	_ repository.TransactionRepository   = (*MockTransactionRepository)(nil)
-	_ PlaidClient                       = (*MockPlaidClient)(nil)
-	_ events.EventEmitter               = (*MockEventEmitter)(nil)
-	_ phclient.Analytics                = (*MockAnalytics)(nil)
+	_ repository.LinkedItemRepository  = (*MockLinkedItemRepository)(nil)
+	_ repository.TransactionRepository = (*MockTransactionRepository)(nil)
+	_ PlaidClient                      = (*MockPlaidClient)(nil)
+	_ events.EventEmitter              = (*MockEventEmitter)(nil)
+	_ phclient.Analytics               = (*MockAnalytics)(nil)
 )
 
 // MockAnalytics is a mock for the Analytics interface
@@ -96,6 +96,31 @@ func (m *MockLinkedItemRepository) GetByIDAndUser(ctx context.Context, id, userI
 func (m *MockLinkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID, userID string, auditLog repository.AuditLogRepository) error {
 	args := m.Called(ctx, linkedItemID, userID, auditLog)
 	return args.Error(0)
+}
+
+// RepairStatus atomically transitions a linked item to 'active' (Issue #1609 round 2).
+func (m *MockLinkedItemRepository) RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus, notNewerThan *time.Time) (bool, error) {
+	args := m.Called(ctx, id, userID, allowedStatuses)
+	return args.Bool(0), args.Error(1)
+}
+
+// TransitionErrorStatus atomically transitions a linked item to an error status (Issue #1609 P3-T2).
+// SetInvestmentsSkippedAtLink records whether the investment jobs were skipped at link time
+// (Issue #1613 P4-T3 item E).
+func (m *MockLinkedItemRepository) SetInvestmentsSkippedAtLink(ctx context.Context, id string, skipped bool) error {
+	args := m.Called(ctx, id, skipped)
+	return args.Error(0)
+}
+
+// MarkFailureAsserted stamps last_failure_asserted_at unconditionally (Issue #1623).
+func (m *MockLinkedItemRepository) MarkFailureAsserted(ctx context.Context, id string, terminalStatuses []domain.LinkedItemStatus) error {
+	args := m.Called(ctx, id, terminalStatuses)
+	return args.Error(0)
+}
+
+func (m *MockLinkedItemRepository) TransitionErrorStatus(ctx context.Context, id string, newStatus domain.LinkedItemStatus, errorCode, errorMessage string, terminalStatuses []domain.LinkedItemStatus) (bool, error) {
+	args := m.Called(ctx, id, newStatus, errorCode, errorMessage, terminalStatuses)
+	return args.Bool(0), args.Error(1)
 }
 
 func (m *MockLinkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id string) (*domain.LinkedItem, error) {
@@ -212,7 +237,6 @@ func (m *MockTransactionRepository) TombstoneByExternalID(ctx context.Context, s
 	}
 	return "", args.Error(1)
 }
-
 
 func (m *MockTransactionRepository) GetByUserID(ctx context.Context, userID string, limit, offset int) ([]domain.Transaction, error) {
 	args := m.Called(ctx, userID, limit, offset)

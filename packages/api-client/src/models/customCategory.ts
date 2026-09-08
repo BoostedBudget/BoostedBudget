@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { CustomCategoryParentPfcPrimary } from './customCategoryParentPfcPrimary';
 
 export interface CustomCategory {
   /** A URL to the JSON Schema for this object. */
@@ -41,7 +42,8 @@ export interface CustomCategory {
   name: string;
   parent_id?: string;
   parent_name?: string;
-  parent_pfc_primary?: string;
+  /** The PFCv2 primary this custom category nests under. This is NOT a cosmetic label: budget roll-up counts the category's transactions under this primary, and analytics classifies them through it -- a category nested under TRANSFER_IN or TRANSFER_OUT makes its transactions TRANSFERS, so they are excluded from cash flow when include_transfers is false (Issue #1609). Leave unset for a category with no PFC parent. */
+  parent_pfc_primary?: CustomCategoryParentPfcPrimary;
   parent_pfc_primary_display?: string;
   updated_at: string;
   usage_count: number;

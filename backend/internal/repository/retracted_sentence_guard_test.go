@@ -100,6 +100,15 @@ var retractedSentences = []retractedSentence{
 			"round, which is the failure this whole guard exists for",
 	},
 	{
+		column:      "custom_categories.parent_pfc_primary",
+		retractedBy: "000186",
+		sentence: "Optional PFCv2 primary hint for icon/color fallback resolution. Does not " +
+			"restrict usage.",
+		why: "it restricted usage from the day it shipped -- categoryMatchClause rolls a " +
+			"PFC-primary budget up through this column -- and #1609 made it decide transfer " +
+			"classification in analytics as well",
+	},
+	{
 		column:      "accounts.removed_at",
 		retractedBy: "000175",
 		sentence:    "Timestamp when the user deliberately disconnected this account",

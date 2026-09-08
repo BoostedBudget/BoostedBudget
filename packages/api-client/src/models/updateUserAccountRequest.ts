@@ -43,6 +43,8 @@ export interface UpdateUserAccountRequest {
   /** @nullable */
   display_order: number | null;
   /** @nullable */
+  exclude_investment_sync: boolean | null;
+  /** @nullable */
   is_hidden: boolean | null;
   /** @nullable */
   nickname: string | null;

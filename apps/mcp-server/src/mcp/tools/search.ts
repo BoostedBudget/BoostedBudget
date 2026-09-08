@@ -78,6 +78,31 @@ export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
       )
       parts.push(`  params:\n${paramLines.join('\n')}`)
     }
+    // Issue #1609 Task 6: render the request body shape so an MCP client can construct a
+    // valid write body instead of guessing (the createRule incident — three guessed body
+    // shapes, three bare 422s, no field detail available anywhere the client could reach).
+    if (e.requestBody?.length) {
+      // #1609 fix round 1: a field with no `type` in the index means the OpenAPI schema
+      // genuinely declared none (e.g. RuleCondition.value: `{}` — a Go `any` field). Render
+      // "any" (accepts any JSON value), not "unknown" — "unknown" reads identically whether
+      // the extractor failed or the API truly accepts anything, which is exactly the
+      // ambiguity this task exists to eliminate.
+      const bodyLines = e.requestBody.map(
+        (f) =>
+          `    ${f.name} (${f.type ?? 'any'}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
+      )
+      parts.push(`  body:\n${bodyLines.join('\n')}`)
+    }
+    // Issue #1610a: render the response shape so an MCP client can discover what an operation
+    // RETURNS without having to call it first. See the `f.type ?? 'any'` note above — the same
+    // ambiguity applies here.
+    if (e.responseBody?.length) {
+      const returnLines = e.responseBody.map(
+        (f) =>
+          `    ${f.name} (${f.type ?? 'any'}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
+      )
+      parts.push(`  returns:\n${returnLines.join('\n')}`)
+    }
     parts.push(`  tags: ${e.tags.join(', ')}`)
     return parts.join('\n')
   })

@@ -231,6 +231,27 @@ func AllPrimaries() []Primary {
 	return result
 }
 
+// PrimaryEnums returns every valid PFCv2 primary enum, sorted alphabetically by ENUM (not by
+// display name, unlike AllPrimaries) so the result is stable and directly usable as an OpenAPI
+// `enum:` tag value. Issue #1609: this set is the same one migration 000065's
+// valid_custom_category_parent_pfc CHECK constrains custom_categories.parent_pfc_primary to;
+// TestPFCPrimaryEnumsMatchTheCustomCategoryParentCheck pins the two together.
+func PrimaryEnums() []string {
+	out := make([]string, 0, len(pfcPrimaryDisplayNames))
+	for enum := range pfcPrimaryDisplayNames {
+		out = append(out, enum)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// IsValidPrimary reports whether s is one of the PFCv2 primary enums. The empty string is NOT
+// valid here — callers that treat "" as "unset" must normalise it away before asking.
+func IsValidPrimary(s string) bool {
+	_, ok := pfcPrimaryDisplayNames[s]
+	return ok
+}
+
 // AllDetailed returns all PFCv2 detailed categories sorted by primary display name then
 // detailed display name.
 func AllDetailed() []Detailed {

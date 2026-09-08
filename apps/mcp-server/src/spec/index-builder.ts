@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import $RefParser from '@apidevtools/json-schema-ref-parser'
 import { parse as parseYaml } from 'yaml'
 import { getCapability } from '../manifest/capability-manifest'
-import type { SpecEntry, SpecIndex, SpecParameter } from './search-runtime'
+import type { SpecBodyField, SpecEntry, SpecIndex, SpecParameter } from './search-runtime'
 
 // Paths relative to repo root
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -39,6 +39,33 @@ interface OpenAPIParameter {
   [key: string]: unknown
 }
 
+/**
+ * OpenAPI JSON Schema fragment, as it appears either inline or as the target of a `$ref`.
+ * Deliberately loose — we only read the handful of keywords the flattener understands.
+ */
+interface OpenAPISchema {
+  $ref?: string
+  type?: string | string[]
+  properties?: Record<string, OpenAPISchema>
+  items?: OpenAPISchema
+  required?: string[]
+  enum?: unknown[]
+  description?: string
+  [key: string]: unknown
+}
+
+interface OpenAPIRequestBody {
+  content?: Record<string, { schema?: OpenAPISchema } | undefined>
+  required?: boolean
+  [key: string]: unknown
+}
+
+interface OpenAPIResponse {
+  content?: Record<string, { schema?: OpenAPISchema } | undefined>
+  description?: string
+  [key: string]: unknown
+}
+
 interface OpenAPIOperation {
   operationId?: string
   summary?: string
@@ -46,6 +73,9 @@ interface OpenAPIOperation {
   tags?: string[]
   security?: unknown[]
   parameters?: OpenAPIParameter[]
+  requestBody?: OpenAPIRequestBody
+  /** Response objects keyed by status code (e.g. '200', '201', 'default'). */
+  responses?: Record<string, OpenAPIResponse | undefined>
 }
 
 interface OpenAPIPathItem {
@@ -59,7 +89,218 @@ interface OpenAPIPathItem {
 
 interface OpenAPISpec {
   paths?: Record<string, OpenAPIPathItem>
+  components?: { schemas?: Record<string, OpenAPISchema> }
   [key: string]: unknown
+}
+
+/**
+ * Resolve a `$ref` (and any chain of `$ref`s) against `components.schemas`, breaking on a
+ * self-referential cycle (a schema whose `$ref` chain points back at a name already visited).
+ * `buildSpecIndex` runs `$RefParser.dereference` first, so in production this is mostly a
+ * no-op passthrough — but `indexFromSpec` is also exercised directly with synthetic,
+ * UNDEREFERENCED fixtures in tests, so resolution must not depend on that prior pass.
+ */
+function resolveSchema(
+  schema: OpenAPISchema | undefined,
+  spec: OpenAPISpec,
+  seen: Set<string> = new Set(),
+): OpenAPISchema | undefined {
+  if (!schema) return undefined
+  if (!schema.$ref) return schema
+
+  const refName = schema.$ref.replace(/^#\/components\/schemas\//, '')
+  if (seen.has(refName)) return undefined // self-referential cycle — stop, don't recurse forever
+
+  const resolved = spec.components?.schemas?.[refName]
+  if (!resolved) return undefined
+
+  const nextSeen = new Set(seen)
+  nextSeen.add(refName)
+  return resolveSchema(resolved, spec, nextSeen)
+}
+
+/** First non-`null` entry of a (possibly nullable-union) OpenAPI `type`. */
+function primaryType(type: string | string[] | undefined): string | undefined {
+  return Array.isArray(type) ? type.find((t) => t !== 'null') : type
+}
+
+// Nested objects / array-of-object items flatten to this many levels deep (dotted names).
+// Depth 1 = the request body's own top-level fields; depth 2 = one level of nesting
+// (`action.custom_category_id`, `conditions[].field`). Beyond that we mark the field as
+// `object` / `array of object` without expanding it further — see the brief: "flatten... to
+// a reasonable depth (2 is enough)... or clearly mark a nested object rather than recursing
+// without bound."
+const MAX_BODY_DEPTH = 2
+
+// Response schemas get their OWN, shallower depth cap. Task #1610a measured the cost: depth 2
+// on the response side (mirroring the request side) would add 162% to spec-index.json's size
+// (2,650 fields vs 1,423 at depth 1) for 133 KB of the 162 — field COUNT drives the cost, not
+// descriptions. Depth 1 (a response's own top-level fields, `object`/`array of object` marked
+// but not expanded) plus allowed-only filtering (excluded ops can never be executed, so their
+// response shape is dead weight) is the implemented row: +56%, not +162%. Do NOT repoint
+// MAX_BODY_DEPTH here — that would silently shallow out every request body too.
+const MAX_RESPONSE_DEPTH = 1
+
+/**
+ * Per-property skip policy for flattenBodySchema — request and response bodies need OPPOSITE
+ * answers for `readOnly`, so this cannot be a single hardcoded rule (see the two exported
+ * extract functions below for how each side sets this).
+ *
+ *  - Request bodies: skip every `readOnly` property. It is server-set and "not yours to send" —
+ *    Huma stamps a `readOnly: true` `$schema` property onto every generated request-body schema
+ *    for tooling/editor use, and surfacing it would mislead a client into thinking it's part of
+ *    the write body.
+ *  - Response bodies: do NOT skip `readOnly` — a `readOnly` field is server-set but definitely
+ *    RETURNED, so hiding it would hide real response shape. Only `$schema` itself is skipped, by
+ *    name, because it is the one property that is never meaningful API output either way. This
+ *    only looks equivalent to "skip readOnly" today because `$schema` happens to be the sole
+ *    `readOnly` property in this spec — that coincidence must not be load-bearing.
+ */
+interface FlattenPolicy {
+  maxDepth: number
+  skipProperty: (key: string, prop: OpenAPISchema) => boolean
+}
+
+const REQUEST_BODY_POLICY: FlattenPolicy = {
+  maxDepth: MAX_BODY_DEPTH,
+  skipProperty: (_key, prop) => prop.readOnly === true,
+}
+
+const RESPONSE_BODY_POLICY: FlattenPolicy = {
+  maxDepth: MAX_RESPONSE_DEPTH,
+  skipProperty: (key) => key === '$schema',
+}
+
+/**
+ * Flatten an object schema's properties into token-frugal SpecBodyField entries, recursing
+ * into nested objects and array-of-object items up to `policy.maxDepth` using dotted names.
+ * `policy` also controls which properties are skipped — see FlattenPolicy above; request and
+ * response bodies need different (in fact opposite) answers for `readOnly`.
+ */
+function flattenBodySchema(
+  schema: OpenAPISchema | undefined,
+  spec: OpenAPISpec,
+  depth: number,
+  prefix: string,
+  out: SpecBodyField[],
+  policy: FlattenPolicy,
+): void {
+  const resolved = resolveSchema(schema, spec)
+  if (!resolved?.properties) return
+
+  const required = resolved.required ?? []
+
+  for (const [key, rawProp] of Object.entries(resolved.properties)) {
+    const prop = resolveSchema(rawProp, spec)
+    if (!prop) continue
+    if (policy.skipProperty(key, prop)) continue
+
+    const fieldName = prefix ? `${prefix}.${key}` : key
+    const isRequired = required.includes(key)
+    const schemaType = primaryType(prop.type)
+
+    if (schemaType === 'array') {
+      const itemSchema = resolveSchema(prop.items, spec)
+      const itemType = itemSchema ? primaryType(itemSchema.type) : undefined
+      const isItemObject = itemType === 'object' || (!itemType && !!itemSchema?.properties)
+
+      out.push({
+        name: fieldName,
+        type: isItemObject ? 'array of object' : itemType ? `array of ${itemType}` : 'array',
+        ...(isRequired && { required: true }),
+        ...(prop.description && { description: prop.description }),
+        ...(itemSchema?.enum && { enum: itemSchema.enum.map(String) }),
+      })
+
+      if (isItemObject && depth < policy.maxDepth) {
+        flattenBodySchema(itemSchema, spec, depth + 1, `${fieldName}[]`, out, policy)
+      }
+      continue
+    }
+
+    if (schemaType === 'object' || prop.properties) {
+      out.push({
+        name: fieldName,
+        type: 'object',
+        ...(isRequired && { required: true }),
+        ...(prop.description && { description: prop.description }),
+      })
+
+      if (depth < policy.maxDepth) {
+        flattenBodySchema(prop, spec, depth + 1, fieldName, out, policy)
+      }
+      continue
+    }
+
+    out.push({
+      name: fieldName,
+      ...(schemaType && { type: schemaType }),
+      ...(isRequired && { required: true }),
+      ...(prop.enum && { enum: prop.enum.map(String) }),
+      ...(prop.description && { description: prop.description }),
+    })
+  }
+}
+
+/**
+ * Extract and flatten an operation's `application/json` request body schema. Prefer
+ * `content['application/json'].schema`; a body defined only under some other content type is
+ * skipped (acceptable per the brief — Huma-generated specs use JSON bodies throughout).
+ */
+function extractRequestBodyFields(
+  requestBody: OpenAPIRequestBody | undefined,
+  spec: OpenAPISpec,
+): SpecBodyField[] {
+  const schema = requestBody?.content?.['application/json']?.schema
+  if (!schema) return []
+
+  const out: SpecBodyField[] = []
+  flattenBodySchema(schema, spec, 1, '', out, REQUEST_BODY_POLICY)
+  return out
+}
+
+/**
+ * Find the operation's JSON success response schema — prefer '200', then '201' (the only two
+ * status codes this spec ever documents a JSON body for on success). Never falls through to
+ * 'default' (the error schema).
+ */
+function findJsonSuccessResponseSchema(
+  responses: Record<string, OpenAPIResponse | undefined> | undefined,
+): OpenAPISchema | undefined {
+  if (!responses) return undefined
+  for (const code of ['200', '201']) {
+    const schema = responses[code]?.content?.['application/json']?.schema
+    if (schema) return schema
+  }
+  return undefined
+}
+
+/**
+ * Extract and flatten an operation's JSON success-response body schema (issue #1610a). Unlike
+ * request bodies, `readOnly` properties are KEPT (see RESPONSE_BODY_POLICY) and only the
+ * `$schema` tooling property is dropped by name.
+ *
+ * A response whose root schema is itself an array (many list endpoints return a bare array
+ * rather than `{ items: [...] }`) flattens the ITEM schema's fields directly, with no prefix —
+ * there is no meaningful top-level field name for "the array itself" to hang a dotted path off.
+ */
+function extractResponseBodyFields(
+  responses: Record<string, OpenAPIResponse | undefined> | undefined,
+  spec: OpenAPISpec,
+): SpecBodyField[] {
+  const schema = findJsonSuccessResponseSchema(responses)
+  if (!schema) return []
+
+  const resolved = resolveSchema(schema, spec)
+  if (!resolved) return []
+
+  const out: SpecBodyField[] = []
+  if (primaryType(resolved.type) === 'array') {
+    flattenBodySchema(resolved.items, spec, 1, '', out, RESPONSE_BODY_POLICY)
+  } else {
+    flattenBodySchema(schema, spec, 1, '', out, RESPONSE_BODY_POLICY)
+  }
+  return out
 }
 
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const
@@ -120,6 +361,17 @@ export function indexFromSpec(spec: OpenAPISpec): SpecIndex {
           }
         })
 
+      // Extract the request body schema (issue #1609 Task 6). Prefer application/json;
+      // resolves $ref against components.schemas locally (spec is already in scope).
+      const requestBody = extractRequestBodyFields(operation.requestBody, spec)
+
+      // Extract the response body schema (issue #1610a) — allowed operations ONLY. An
+      // excluded operation can never be executed through MCP, so a response schema for one
+      // is dead weight in the index (measured: −68 KB of the +56% budget row). Computing it
+      // unconditionally would silently regress the size budget the moment a new operation is
+      // excluded.
+      const responseBody = capability.excluded ? [] : extractResponseBodyFields(operation.responses, spec)
+
       const entry: SpecEntry = {
         operationId,
         method: method.toUpperCase(),
@@ -131,6 +383,8 @@ export function indexFromSpec(spec: OpenAPISpec): SpecIndex {
       }
       if (description) entry.description = description
       if (parameters.length > 0) entry.parameters = parameters
+      if (requestBody.length > 0) entry.requestBody = requestBody
+      if (responseBody.length > 0) entry.responseBody = responseBody
 
       entries.push(entry)
     }
