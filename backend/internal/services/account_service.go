@@ -750,7 +750,10 @@ func (s *accountService) LinkAccounts(
 
 	// Step 6c: Issue #658 — Enqueue initial sync job to fetch transactions
 	// This is non-blocking - if it fails, account linking still succeeds
-	s.enqueueInitialSync(ctx, linkedItem.ID, user.ID)
+	// Issue #1613 (P3-T4): only enqueue the investment jobs when Plaid actually granted
+	// investments for this item — see itemSupportsProduct's doc comment.
+	investmentsSupported := itemSupportsProduct(plaidItem, plaid.PRODUCTS_INVESTMENTS)
+	s.enqueueInitialSync(ctx, linkedItem.ID, user.ID, investmentsSupported)
 
 	return &LinkAccountsResult{
 		LinkedItem: linkedItem,
@@ -1567,7 +1570,17 @@ func (s *accountService) bumpCacheForDispossessedOwner(ctx context.Context, user
 // This method is non-blocking: if the job queue fails, we log a warning but don't
 // fail the account linking operation. The user will still have their accounts linked,
 // and transactions will be synced when webhooks arrive.
-func (s *accountService) enqueueInitialSync(ctx context.Context, linkedItemID, userID string) {
+//
+// Issue #1613 (P3-T4): investmentsSupported gates ONLY the two investment jobs, never the
+// plaid_sync job. plaid_sync/TRANSACTIONS is the required product for every Plaid Link in this
+// app (plaid_service.go's CreateLinkToken) and Plaid enforces PRODUCTS_NOT_SUPPORTED per
+// product requested, not per item (transaction_sync.go's PlaidErrorPermanent case) — an item
+// that genuinely can't do investments (e.g. a plain checking/savings bank like Rocket Mortgage)
+// still needs its transactions synced. Gating the whole helper, as a prior draft of this fix
+// did, would have silently stopped that customer's transactions from ever syncing — the same
+// false-negative shape this phase already withdrew once for account-type gating. See
+// itemSupportsProduct's doc comment for how the caller decides investmentsSupported.
+func (s *accountService) enqueueInitialSync(ctx context.Context, linkedItemID, userID string, investmentsSupported bool) {
 	if s.jobQueue == nil {
 		return
 	}
@@ -1579,8 +1592,62 @@ func (s *accountService) enqueueInitialSync(ctx context.Context, linkedItemID, u
 	}
 
 	s.enqueueJob(ctx, plaidSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
+
+	if !investmentsSupported {
+		s.logger.Info("skipping initial investment sync: Plaid did not grant investments for this item",
+			"linked_item_id", linkedItemID,
+			"user_id", userID,
+		)
+		return
+	}
+
 	s.enqueueJob(ctx, investmentHoldingsSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
 	s.enqueueJob(ctx, investmentTransactionsSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
+}
+
+// itemSupportsProduct reports whether Plaid actually granted the given product for this Item,
+// using only data already returned by the AccountsGet call LinkAccounts makes (Step 3) — no new
+// Plaid API call is needed.
+//
+// Issue #1613 (P3-T4), Codex finding 3: plaid-go v23's Item carries FOUR product arrays
+// (AvailableProducts, BilledProducts, Products, ConsentedProducts) and they are not
+// interchangeable. AvailableProducts ("available for the Item that have not yet been accessed")
+// and BilledProducts ("billed for the Item") are documented as mutually exclusive — together
+// they are Plaid's own record of what it added to the Item. Products "in almost all cases" only
+// mirrors BilledProducts, but model_item.go's own comment carves out exactly the optional-product
+// case this task cares about: a product "may appear in products but not in billed_products" when
+// it was added but not yet billed (INVESTMENTS is requested as an optional product in
+// CreateLinkToken). Checking all three — never ConsentedProducts, which tracks Data Transparency
+// consent collection, not product availability — is the closest read of "will this item serve
+// investments" obtainable from data already in hand. Plaid's own docs (plaid.com/docs/link/
+// initializing-products) say an optional product that the institution can't actually support is
+// simply never added to the Item, so its absence from all three arrays here is the same fact
+// that would otherwise surface later as PRODUCTS_NOT_SUPPORTED.
+//
+// This is deliberately conservative in the direction that protects the feature: HOLDINGS and
+// INVESTMENTS_TRANSACTIONS webhooks (webhook_processing.go's processInvestmentWebhook) are the
+// only OTHER path that syncs investments, and Plaid only sends those webhooks for items it has
+// actually granted investments to — so if this check is ever wrong in the false-negative
+// direction (skips an item that later turns out to support investments, e.g. after an update-mode
+// re-auth), the webhook path still recovers it. It does not silently and permanently strand the
+// feature the way the withdrawn account-type gate did.
+func itemSupportsProduct(item plaid.Item, product plaid.Products) bool {
+	for _, p := range item.GetAvailableProducts() {
+		if p == product {
+			return true
+		}
+	}
+	for _, p := range item.GetBilledProducts() {
+		if p == product {
+			return true
+		}
+	}
+	for _, p := range item.GetProducts() {
+		if p == product {
+			return true
+		}
+	}
+	return false
 }
 
 // enqueueJob enqueues a single job and logs success or failure.

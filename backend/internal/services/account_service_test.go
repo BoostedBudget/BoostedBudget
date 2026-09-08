@@ -3033,9 +3033,12 @@ func (m *MockJobQueue) EnqueueManyTx(ctx context.Context, tx pgx.Tx, jobs []queu
 
 // TestAccountService_LinkAccounts_EnqueuesSyncJob tests that all three sync jobs are
 // enqueued after successful account linking: plaid_sync, investment_holdings_sync, and
-// investment_transactions_sync.
+// investment_transactions_sync — for an item Plaid has granted investments to.
 // Issue #658: Auto-sync transactions after Plaid account linking
 // Issue #659: Investment sync after linking
+// Issue #1613 (P3-T4): pins the investment-capable case; see
+// TestAccountService_LinkAccounts_EnqueueInitialSync_SkipsInvestmentJobs_WhenNotSupported for the
+// case this task added (investments excluded for the item).
 func TestAccountService_LinkAccounts_EnqueuesSyncJob(t *testing.T) {
 	// This test verifies that:
 	// 1. plaid_sync job is enqueued (transaction sync)
@@ -3070,10 +3073,55 @@ func TestAccountService_LinkAccounts_EnqueuesSyncJob(t *testing.T) {
 		return job.Kind() == "investment_transactions_sync"
 	}), mock.Anything).Return(&queue.JobResult{ID: 125, Kind: "investment_transactions_sync"}, nil)
 
-	// Call enqueueInitialSync directly
-	service.enqueueInitialSync(ctx, linkedItemID, userID)
+	// Call enqueueInitialSync directly — investments supported for this item
+	service.enqueueInitialSync(ctx, linkedItemID, userID, true)
 
 	// Assert: All three Enqueue calls were made
+	mockJobQueue.AssertExpectations(t)
+}
+
+// TestAccountService_LinkAccounts_EnqueueInitialSync_SkipsInvestmentJobs_WhenNotSupported tests
+// that enqueueInitialSync enqueues ONLY plaid_sync (never the two investment jobs) when the
+// caller reports investments are not supported for this item.
+//
+// Issue #1613 (P3-T4): linking a plain bank (e.g. Rocket Mortgage) used to enqueue all three
+// jobs; the two investment ones always failed with PRODUCTS_NOT_SUPPORTED. plaid_sync/
+// TRANSACTIONS must still be enqueued unconditionally — it is the REQUIRED product and Plaid's
+// PRODUCTS_NOT_SUPPORTED applies per product requested, not per item (see enqueueInitialSync's
+// doc comment) — so this test also asserts plaid_sync IS still enqueued, not just that the
+// investment jobs are skipped.
+func TestAccountService_LinkAccounts_EnqueueInitialSync_SkipsInvestmentJobs_WhenNotSupported(t *testing.T) {
+	mockJobQueue := &MockJobQueue{}
+
+	service := &accountService{
+		jobQueue: mockJobQueue,
+		logger:   slog.Default(),
+	}
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	// Only plaid_sync should ever be enqueued. If the implementation regresses and tries to
+	// enqueue an investment job too, testify's mock has no matching expectation for it and the
+	// call panics — failing this test.
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "plaid_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 123, Kind: "plaid_sync"}, nil)
+
+	service.enqueueInitialSync(ctx, linkedItemID, userID, false)
+
+	// Belt-and-suspenders: explicitly confirm no investment job was ever enqueued.
+	for _, call := range mockJobQueue.Calls {
+		if call.Method != "Enqueue" {
+			continue
+		}
+		job, ok := call.Arguments.Get(1).(queue.Job)
+		require.True(t, ok, "Enqueue's second argument must be a queue.Job")
+		assert.NotContains(t, []string{"investment_holdings_sync", "investment_transactions_sync"}, job.Kind(),
+			"investment job %q must not be enqueued when investments are not supported", job.Kind())
+	}
+
 	mockJobQueue.AssertExpectations(t)
 }
 
@@ -3103,7 +3151,7 @@ func TestAccountService_LinkAccounts_SucceedsWhenQueueFails(t *testing.T) {
 
 	// Call enqueueInitialSync - should not panic or return error
 	// The method should handle the error gracefully (log and continue)
-	service.enqueueInitialSync(ctx, linkedItemID, userID)
+	service.enqueueInitialSync(ctx, linkedItemID, userID, true)
 
 	// Assert: Enqueue was called (even though it failed)
 	mockJobQueue.AssertExpectations(t)
@@ -3130,7 +3178,7 @@ func TestAccountService_LinkAccounts_NoQueueOK(t *testing.T) {
 
 	// Call enqueueInitialSync - should not panic
 	// The method should check for nil and return early
-	service.enqueueInitialSync(ctx, linkedItemID, userID)
+	service.enqueueInitialSync(ctx, linkedItemID, userID, true)
 
 	// If we get here without panic, the test passes
 	// No assertions needed - we're testing for no panic
@@ -3545,7 +3593,7 @@ func TestAccountService_LinkAccounts_Relink_EnqueuesSyncJob(t *testing.T) {
 	}), mock.Anything).Return(&queue.JobResult{ID: 125, Kind: "investment_transactions_sync"}, nil)
 
 	// Execute: Enqueue sync for new item
-	service.enqueueInitialSync(ctx, newLinkedItemID, userID)
+	service.enqueueInitialSync(ctx, newLinkedItemID, userID, true)
 
 	// Assert
 	mockJobQueue.AssertExpectations(t)
@@ -3990,6 +4038,22 @@ func TestLinkAccounts_DisconnectedRelink_ErrorCheckingDisconnected_Fails(t *test
 // accounts is the list of plaid account data to return from /accounts/get.
 func newTestPlaidServer(t *testing.T, accessToken, plaidItemID string, accounts []map[string]interface{}) (*httptest.Server, *plaid.APIClient) {
 	t.Helper()
+	return newTestPlaidServerWithProducts(t, accessToken, plaidItemID, accounts, nil, nil)
+}
+
+// newTestPlaidServerWithProducts is newTestPlaidServer plus control over the Item's
+// available_products/billed_products arrays — Issue #1613 (P3-T4), so a test can simulate an
+// institution that does (or does not) support investments the same way Plaid's real
+// /accounts/get response does, without a new Plaid API call.
+func newTestPlaidServerWithProducts(t *testing.T, accessToken, plaidItemID string, accounts []map[string]interface{}, availableProducts, billedProducts []string) (*httptest.Server, *plaid.APIClient) {
+	t.Helper()
+
+	if availableProducts == nil {
+		availableProducts = []string{}
+	}
+	if billedProducts == nil {
+		billedProducts = []string{}
+	}
 
 	mux := http.NewServeMux()
 
@@ -4014,8 +4078,8 @@ func newTestPlaidServer(t *testing.T, accessToken, plaidItemID string, accounts 
 				"item_id":            plaidItemID,
 				"institution_id":     "ins_test",
 				"webhook":            "",
-				"available_products": []string{},
-				"billed_products":    []string{},
+				"available_products": availableProducts,
+				"billed_products":    billedProducts,
 				"update_type":        "background",
 			},
 			"request_id": "req-accounts-test",
@@ -4366,6 +4430,198 @@ func TestLinkAccounts_Integration_FreshLink_NoExistingItem(t *testing.T) {
 	mockUserRepo.AssertExpectations(t)
 	mockPlaidSvc.AssertExpectations(t)
 	mockUserAccountSvc.AssertExpectations(t)
+}
+
+// TestLinkAccounts_Integration_FreshLink_NoInvestments_SkipsInvestmentSyncJobs is the end-to-end
+// regression test for Issue #1613 (P3-T4): linking a plain bank (e.g. Rocket Mortgage, which has
+// no investment accounts) used to enqueue investment_holdings_sync and
+// investment_transactions_sync jobs that always failed with PRODUCTS_NOT_SUPPORTED. This exercises
+// the full LinkAccounts path — real AccountsGet response with empty available_products/
+// billed_products, through itemSupportsProduct, into enqueueInitialSync — not just the unit-level
+// gate, so a wiring mistake at any of those seams would fail this test.
+func TestLinkAccounts_Integration_FreshLink_NoInvestments_SkipsInvestmentSyncJobs(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_rocket_mortgage"
+	institutionName := "Rocket Mortgage"
+	publicToken := "public-sandbox-no-investments-test"
+	accessToken := "access-sandbox-no-investments-test"
+	plaidItemID := "plaid-item-no-investments-test"
+	newItemID := uuid.New().String()
+	userAccountID := uuid.New().String()
+
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id": "plaid-acct-no-investments-1",
+			"balances":   map[string]interface{}{"available": 500.0, "current": 500.0, "iso_currency_code": "USD"},
+			"name":       "Checking Account",
+			"subtype":    "checking",
+			"type":       "depository",
+		},
+	}
+	// available_products/billed_products deliberately omit "investments": this institution
+	// was never granted the product.
+	_, plaidClient := newTestPlaidServerWithProducts(t, accessToken, plaidItemID, plaidAccounts,
+		[]string{"liabilities"}, []string{"transactions"})
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+	mockUserAccountSvc := &MockUserAccountService{}
+	mockJobQueue := &MockJobQueue{}
+
+	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, nil)
+
+	mockLinkedItemRepo.On("Create", ctx, mock.Anything).
+		Run(func(args mock.Arguments) {
+			item := args.Get(1).(*domain.LinkedItem)
+			item.ID = newItemID
+		}).Return(nil)
+
+	mockUserAccountSvc.On("MatchOrCreate", ctx, userID, institutionID, (*string)(nil), "Checking Account", "depository", "checking").
+		Return(&domain.UserAccount{ID: userAccountID}, nil)
+
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything, mock.Anything).Return(nil)
+
+	// Only plaid_sync may be enqueued. If LinkAccounts still tries to enqueue an investment
+	// job, testify's mock has no matching expectation and the call panics — failing this test.
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "plaid_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 1, Kind: "plaid_sync"}, nil)
+
+	svc := NewAccountService(
+		mockPlaidSvc,
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+		WithUserAccountService(mockUserAccountSvc),
+		WithAccountServiceLogger(slog.Default()),
+		WithJobQueue(mockJobQueue),
+	)
+
+	result, err := svc.LinkAccounts(ctx, userID, publicToken, institutionID, institutionName)
+
+	require.NoError(t, err, "LinkAccounts should succeed even for an institution without investments")
+	require.NotNil(t, result)
+	assert.Equal(t, newItemID, result.LinkedItem.ID)
+
+	for _, call := range mockJobQueue.Calls {
+		if call.Method != "Enqueue" {
+			continue
+		}
+		job, ok := call.Arguments.Get(1).(queue.Job)
+		require.True(t, ok, "Enqueue's second argument must be a queue.Job")
+		assert.NotContains(t, []string{"investment_holdings_sync", "investment_transactions_sync"}, job.Kind(),
+			"investment job %q must not be enqueued when the institution has no investments", job.Kind())
+	}
+
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
+	mockPlaidSvc.AssertExpectations(t)
+	mockUserAccountSvc.AssertExpectations(t)
+	mockJobQueue.AssertExpectations(t)
+}
+
+// TestLinkAccounts_Integration_FreshLink_WithInvestments_EnqueuesInvestmentSyncJobs is the
+// investment-capable counterpart to the regression test above: when Plaid's AccountsGet response
+// grants "investments" (here via the products-added-but-not-yet-billed case — Codex finding 3,
+// see itemSupportsProduct's doc comment), all three sync jobs must still be enqueued.
+func TestLinkAccounts_Integration_FreshLink_WithInvestments_EnqueuesInvestmentSyncJobs(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_brokerage_bank"
+	institutionName := "Brokerage Bank"
+	publicToken := "public-sandbox-with-investments-test"
+	accessToken := "access-sandbox-with-investments-test"
+	plaidItemID := "plaid-item-with-investments-test"
+	newItemID := uuid.New().String()
+	userAccountID := uuid.New().String()
+
+	plaidAccounts := []map[string]interface{}{
+		{
+			"account_id": "plaid-acct-with-investments-1",
+			"balances":   map[string]interface{}{"available": 5000.0, "current": 5000.0, "iso_currency_code": "USD"},
+			"name":       "Brokerage Account",
+			"subtype":    "brokerage",
+			"type":       "investment",
+		},
+	}
+	// "investments" granted via available_products (already accessible, not yet accessed).
+	_, plaidClient := newTestPlaidServerWithProducts(t, accessToken, plaidItemID, plaidAccounts,
+		[]string{"investments"}, []string{"transactions"})
+
+	mockPlaidSvc := &MockPlaidService{}
+	mockPlaidSvc.On("GetClient").Return(plaidClient)
+
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+	mockUserAccountSvc := &MockUserAccountService{}
+	mockJobQueue := &MockJobQueue{}
+
+	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
+		Return(nil, nil)
+	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
+		Return(nil, nil)
+
+	mockLinkedItemRepo.On("Create", ctx, mock.Anything).
+		Run(func(args mock.Arguments) {
+			item := args.Get(1).(*domain.LinkedItem)
+			item.ID = newItemID
+		}).Return(nil)
+
+	mockUserAccountSvc.On("MatchOrCreate", ctx, userID, institutionID, (*string)(nil), "Brokerage Account", "investment", "brokerage").
+		Return(&domain.UserAccount{ID: userAccountID}, nil)
+
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything, mock.Anything).Return(nil)
+
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "plaid_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 1, Kind: "plaid_sync"}, nil)
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "investment_holdings_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 2, Kind: "investment_holdings_sync"}, nil)
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "investment_transactions_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 3, Kind: "investment_transactions_sync"}, nil)
+
+	svc := NewAccountService(
+		mockPlaidSvc,
+		mockLinkedItemRepo,
+		mockAccountRepo,
+		mockUserRepo,
+		nil,
+		WithUserAccountService(mockUserAccountSvc),
+		WithAccountServiceLogger(slog.Default()),
+		WithJobQueue(mockJobQueue),
+	)
+
+	result, err := svc.LinkAccounts(ctx, userID, publicToken, institutionID, institutionName)
+
+	require.NoError(t, err, "LinkAccounts should succeed for an investment-capable institution")
+	require.NotNil(t, result)
+	assert.Equal(t, newItemID, result.LinkedItem.ID)
+
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
+	mockPlaidSvc.AssertExpectations(t)
+	mockUserAccountSvc.AssertExpectations(t)
+	mockJobQueue.AssertExpectations(t)
 }
 
 // TestLinkAccounts_Integration_DisconnectedRelink_ErrorPropagates verifies that when
