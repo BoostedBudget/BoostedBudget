@@ -46,13 +46,9 @@ func TestHandleLoginRequired_Success(t *testing.T) {
 	}
 
 	// Mock: Update LinkedItem status to "login_required"
-	mockLinkedItemRepo.On("Update", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
-		return item.ID == "linked-item-123" &&
-			item.Status == "login_required" &&
-			*item.ErrorCode == "ITEM_LOGIN_REQUIRED" &&
-			*item.ErrorMessage == "Credentials changed, please re-authenticate" &&
-			item.LastErrorAt != nil
-	})).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, "linked-item-123", domain.LinkedItemStatusLoginRequired,
+		"ITEM_LOGIN_REQUIRED", "Credentials changed, please re-authenticate", terminalLinkedItemStatuses).
+		Return(true, nil)
 
 	// Mock: Create notification with action URL
 	mockNotificationRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
@@ -114,8 +110,8 @@ func TestHandleLoginRequired_DatabaseUpdateFailure(t *testing.T) {
 	}
 
 	// Mock: Database update fails
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).
-		Return(errors.New("database error"))
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(false, errors.New("database error"))
 
 	// When: HandleLoginRequired is called
 	err := service.HandleLoginRequired(ctx, linkedItem, "ITEM_LOGIN_REQUIRED", "Test error")
@@ -158,7 +154,7 @@ func TestHandleLoginRequired_NotificationFailureNonBlocking(t *testing.T) {
 	}
 
 	// Mock: Database update succeeds
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 	// Mock: Notification creation FAILS (graceful degradation)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).
@@ -207,7 +203,7 @@ func TestHandleLoginRequired_EmailFailureNonBlocking(t *testing.T) {
 	}
 
 	// Mock: Database update succeeds
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 	// Mock: Notification creation succeeds
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
@@ -322,13 +318,9 @@ func TestHandleError_Success(t *testing.T) {
 	}
 
 	// Mock: Update LinkedItem status to "error"
-	mockLinkedItemRepo.On("Update", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
-		return item.ID == "linked-item-123" &&
-			item.Status == "error" &&
-			*item.ErrorCode == "ITEM_ERROR" &&
-			*item.ErrorMessage == "Connection error, please try again later" &&
-			item.LastErrorAt != nil
-	})).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, "linked-item-123", domain.LinkedItemStatusError,
+		"ITEM_ERROR", "Connection error, please try again later", terminalLinkedItemStatuses).
+		Return(true, nil)
 
 	// Mock: Create notification (no action URL for general errors)
 	mockNotificationRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
@@ -389,8 +381,8 @@ func TestHandleError_DatabaseUpdateFailure(t *testing.T) {
 	}
 
 	// Mock: Database update fails
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).
-		Return(errors.New("database error"))
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(false, errors.New("database error"))
 
 	// When: HandleError is called
 	err := service.HandleError(ctx, linkedItem, "ITEM_ERROR", "Test error")
@@ -431,7 +423,7 @@ func TestHandleError_NotificationFailureNonBlocking(t *testing.T) {
 	}
 
 	// Mock: Database update succeeds
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 	// Mock: Notification creation FAILS (graceful degradation)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).
@@ -474,7 +466,7 @@ func TestHandleError_EmailFailureNonBlocking(t *testing.T) {
 	}
 
 	// Mock: Database update succeeds
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 	// Mock: Notification creation succeeds
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
@@ -524,7 +516,7 @@ func TestHandleError_NotificationType_IsItemError(t *testing.T) {
 		Status:          "active",
 	}
 
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 	// Capture the notification to verify its Type field
 	var capturedNotification *domain.Notification
@@ -585,13 +577,9 @@ func TestHandlePendingExpiration_Success(t *testing.T) {
 	}
 
 	// Mock: Update LinkedItem status to "pending_expiration"
-	mockLinkedItemRepo.On("Update", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
-		return item.ID == "linked-item-123" &&
-			item.Status == "pending_expiration" &&
-			*item.ErrorCode == "ITEM_PENDING_EXPIRATION" &&
-			*item.ErrorMessage == "Access expiring soon, please re-authenticate" &&
-			item.LastErrorAt != nil
-	})).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, "linked-item-123", domain.LinkedItemStatusPendingExpiration,
+		"ITEM_PENDING_EXPIRATION", "Access expiring soon, please re-authenticate", terminalLinkedItemStatuses).
+		Return(true, nil)
 
 	// Mock: Create notification with action URL
 	mockNotificationRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
@@ -653,8 +641,8 @@ func TestHandlePendingExpiration_DatabaseUpdateFailure(t *testing.T) {
 	}
 
 	// Mock: Database update fails
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).
-		Return(errors.New("database error"))
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(false, errors.New("database error"))
 
 	// When: HandlePendingExpiration is called
 	err := service.HandlePendingExpiration(ctx, linkedItem, "ITEM_PENDING_EXPIRATION", "Test error")
@@ -697,7 +685,7 @@ func TestHandlePendingExpiration_NotificationFailureNonBlocking(t *testing.T) {
 	}
 
 	// Mock: Database update succeeds
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 	// Mock: Notification creation FAILS (graceful degradation)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).
@@ -742,7 +730,7 @@ func TestHandlePendingExpiration_EmailFailureNonBlocking(t *testing.T) {
 	}
 
 	// Mock: Database update succeeds
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 	// Mock: Notification creation succeeds
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
@@ -803,13 +791,9 @@ func TestHandlePermissionRevoked_Success(t *testing.T) {
 	}
 
 	// Mock: Update LinkedItem status to "revoked"
-	mockLinkedItemRepo.On("Update", ctx, mock.MatchedBy(func(item *domain.LinkedItem) bool {
-		return item.ID == "linked-item-123" &&
-			item.Status == "revoked" &&
-			*item.ErrorCode == "ITEM_PERMISSION_REVOKED" &&
-			*item.ErrorMessage == "User revoked access at bank" &&
-			item.LastErrorAt != nil
-	})).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, "linked-item-123", domain.LinkedItemStatusRevoked,
+		"ITEM_PERMISSION_REVOKED", "User revoked access at bank", terminalLinkedItemStatuses).
+		Return(true, nil)
 
 	// Mock: Create notification with action URL. Issue #1609 round 2, BLOCKING 1: routes to
 	// /accounts (the normal, non-update-mode Link flow), NOT /accounts/reconnect — a revoked
@@ -873,8 +857,8 @@ func TestHandlePermissionRevoked_DatabaseUpdateFailure(t *testing.T) {
 	}
 
 	// Mock: Database update fails
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).
-		Return(errors.New("database error"))
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(false, errors.New("database error"))
 
 	// When: HandlePermissionRevoked is called
 	err := service.HandlePermissionRevoked(ctx, linkedItem, "ITEM_PERMISSION_REVOKED", "Test error")
@@ -917,7 +901,7 @@ func TestHandlePermissionRevoked_NotificationFailureNonBlocking(t *testing.T) {
 	}
 
 	// Mock: Database update succeeds
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 	// Mock: Notification creation FAILS (graceful degradation)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).
@@ -962,7 +946,7 @@ func TestHandlePermissionRevoked_EmailFailureNonBlocking(t *testing.T) {
 	}
 
 	// Mock: Database update succeeds
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 
 	// Mock: Notification creation succeeds
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
@@ -1023,7 +1007,7 @@ func TestProcessWebhook_LoginRequired(t *testing.T) {
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 
 	// Mock: All operations for HandleLoginRequired
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
 	mockUserRepo.On("GetUserByID", ctx, "user-456").
 		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
@@ -1071,7 +1055,7 @@ func TestProcessWebhook_Error(t *testing.T) {
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 
 	// Mock: All operations for HandleError (no decryption/link token)
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
 	mockUserRepo.On("GetUserByID", ctx, "user-456").
 		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
@@ -1122,7 +1106,7 @@ func TestProcessWebhook_PendingExpiration(t *testing.T) {
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 
 	// Mock: All operations for HandlePendingExpiration
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
 	mockUserRepo.On("GetUserByID", ctx, "user-456").
 		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
@@ -1172,7 +1156,7 @@ func TestProcessWebhook_PermissionRevoked(t *testing.T) {
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 
 	// Mock: All operations for HandlePermissionRevoked
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
 	mockUserRepo.On("GetUserByID", ctx, "user-456").
 		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
@@ -1301,7 +1285,7 @@ func TestHandleLoginRequired_UserLookupFailureNonBlocking(t *testing.T) {
 		Status:          "active",
 	}
 
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
 
 	// Mock: User lookup FAILS (graceful degradation - email skipped)
@@ -1344,7 +1328,7 @@ func TestHandleError_UserLookupFailureNonBlocking(t *testing.T) {
 		Status:          "active",
 	}
 
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
 
 	// Mock: User lookup FAILS (graceful degradation - email skipped)
@@ -1387,7 +1371,7 @@ func TestHandlePendingExpiration_UserLookupFailureNonBlocking(t *testing.T) {
 		Status:          "active",
 	}
 
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
 
 	// Mock: User lookup FAILS (graceful degradation - email skipped)
@@ -1430,7 +1414,7 @@ func TestHandlePermissionRevoked_UserLookupFailureNonBlocking(t *testing.T) {
 		Status:          "active",
 	}
 
-	mockLinkedItemRepo.On("Update", ctx, mock.Anything).Return(nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
 
 	// Mock: User lookup FAILS (graceful degradation - email skipped)
@@ -1857,4 +1841,94 @@ func TestProcessWebhook_LoginRepaired_RoutesToHandleLoginRepaired(t *testing.T) 
 
 	require.NoError(t, err)
 	mockLinkedItemRepo.AssertExpectations(t)
+}
+
+// TestHandleLoginRequired_AlreadyInThatStatus_SkipsDuplicateNotification is the dedup hazard test
+// (Issue #1609 P3-T2, hazard 1): a webhook and a sync producer discovering the same failure for
+// the same item within seconds of each other must not each insert a notification. TransitionErrorStatus
+// reports false when the item's FRESH status already equals the target — this test asserts that a
+// false result short-circuits BEFORE any notification/email work happens, for exactly ONE call
+// (the second producer's), proving the dedup contract at the service layer rather than merely
+// trusting the repository's atomicity.
+func TestHandleLoginRequired_AlreadyInThatStatus_SkipsDuplicateNotification(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockUserRepo,
+		mockPlaidService,
+		mockEmailService,
+		nil,
+	)
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+		ItemID: "plaid-item-789",
+		Status: domain.LinkedItemStatusLoginRequired, // A first producer already transitioned this.
+	}
+
+	// The atomic transition reports false: the item's FRESH status already equals the target
+	// (login_required), so this is treated as a duplicate signal from a second producer.
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, "linked-item-123", domain.LinkedItemStatusLoginRequired,
+		"ITEM_LOGIN_REQUIRED", "Credentials changed, please re-authenticate", terminalLinkedItemStatuses).
+		Return(false, nil)
+
+	err := service.HandleLoginRequired(ctx, linkedItem, "ITEM_LOGIN_REQUIRED", "Credentials changed, please re-authenticate")
+
+	require.NoError(t, err, "a duplicate signal is a no-op, not an error")
+	mockLinkedItemRepo.AssertExpectations(t)
+	// The whole point of the dedup: neither the notification nor the email step ever runs.
+	mockassert.NoCallTo(t, &mockNotificationRepo.Mock, "Create")
+	mockassert.NoCallTo(t, &mockUserRepo.Mock, "GetUserByID")
+	mockassert.NoCallTo(t, &mockEmailService.Mock, "SendNotificationEmail")
+}
+
+// TestHandleError_TerminalStatus_SkipsNotification asserts the OTHER reason TransitionErrorStatus
+// can report false: the item's current status is one of terminalLinkedItemStatuses (disconnected,
+// replaced, revoked) — a background sync error must never resurrect/overwrite a state the user (or
+// another deliberate flow) already produced. Distinct from the dedup case above: here the target
+// status differs from the current one, but the transition is still refused because the source
+// status is terminal.
+func TestHandleError_TerminalStatus_SkipsNotification(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockUserRepo,
+		mockPlaidService,
+		mockEmailService,
+		nil,
+	)
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+		ItemID: "plaid-item-789",
+		Status: domain.LinkedItemStatusDisconnected, // User deliberately disconnected this item.
+	}
+
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, "linked-item-123", domain.LinkedItemStatusError,
+		"ITEM_ERROR", "Connection error, please try again later", terminalLinkedItemStatuses).
+		Return(false, nil)
+
+	err := service.HandleError(ctx, linkedItem, "ITEM_ERROR", "Connection error, please try again later")
+
+	require.NoError(t, err, "a stale error signal for a disconnected item is a no-op, not an error")
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockassert.NoCallTo(t, &mockNotificationRepo.Mock, "Create")
+	mockassert.NoCallTo(t, &mockUserRepo.Mock, "GetUserByID")
+	mockassert.NoCallTo(t, &mockEmailService.Mock, "SendNotificationEmail")
 }

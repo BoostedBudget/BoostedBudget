@@ -1587,30 +1587,41 @@ func main() {
 
 				// Issue #666: Create PlaidSyncWorker for auto-sync after account linking
 				// Issue #171: Add DB for row-level locking to prevent concurrent syncs
+				// Issue #1609 P3-T2: ItemErrorSvc routes permanent Plaid errors (INVALID_ACCESS_TOKEN,
+				// ITEM_LOGIN_REQUIRED) discovered by a SYNC — not just a webhook — into the same
+				// in-app notification. Wired for all three sync workers below (transaction and both
+				// investment kinds): all three are enqueued together for a given item and a broken
+				// access token fails all three identically.
 				plaidSyncWorker = jobs.NewPlaidSyncWorker(jobs.PlaidSyncWorkerDeps{
 					SyncService:    transactionSyncService,
 					LinkedItemRepo: linkedItemRepo,
 					JobQueue:       nil, // Set after River client created (circular dependency)
 					Logger:         appLogger,
 					DB:             db, // For row-level locking via FOR UPDATE
+					ItemErrorSvc:   itemErrorService,
 				})
 				appLogger.Info("Plaid sync worker created")
+				plaidSyncWorker.SetAnalytics(phClient)
 
 				// Issue #659: Create InvestmentHoldingsSyncWorker
+				// Issue #1609 P3-T2: ItemErrorSvc — see PlaidSyncWorker comment above.
 				investmentHoldingsSyncWorker = jobs.NewInvestmentHoldingsSyncWorker(jobs.InvestmentHoldingsSyncWorkerDeps{
 					InvestmentSyncSvc: investmentSyncService,
 					LinkedItemRepo:    linkedItemRepo,
 					Logger:            appLogger,
 					DB:                db,
+					ItemErrorSvc:      itemErrorService,
 				})
 				appLogger.Info("Investment holdings sync worker created")
 
 				// Issue #659: Create InvestmentTransactionsSyncWorker
+				// Issue #1609 P3-T2: ItemErrorSvc — see PlaidSyncWorker comment above.
 				investmentTransactionsSyncWorker = jobs.NewInvestmentTransactionsSyncWorker(jobs.InvestmentTransactionsSyncWorkerDeps{
 					InvestmentSyncSvc: investmentSyncService,
 					LinkedItemRepo:    linkedItemRepo,
 					Logger:            appLogger,
 					DB:                db,
+					ItemErrorSvc:      itemErrorService,
 				})
 				appLogger.Info("Investment transactions sync worker created")
 

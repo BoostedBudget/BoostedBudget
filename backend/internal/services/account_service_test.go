@@ -178,6 +178,12 @@ func (m *MockLinkedItemRepository) RepairStatus(ctx context.Context, id string, 
 	return args.Bool(0), args.Error(1)
 }
 
+// TransitionErrorStatus atomically transitions a linked item to an error status (Issue #1609 P3-T2).
+func (m *MockLinkedItemRepository) TransitionErrorStatus(ctx context.Context, id string, newStatus domain.LinkedItemStatus, errorCode, errorMessage string, terminalStatuses []domain.LinkedItemStatus) (bool, error) {
+	args := m.Called(ctx, id, newStatus, errorCode, errorMessage, terminalStatuses)
+	return args.Bool(0), args.Error(1)
+}
+
 // Issue #1569, Task 6: permanently destroy a linked item and every account under it.
 func (m *MockLinkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID, userID string, auditLog repository.AuditLogRepository) error {
 	args := m.Called(ctx, linkedItemID, userID, auditLog)
