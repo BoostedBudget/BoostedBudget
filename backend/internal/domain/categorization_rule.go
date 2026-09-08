@@ -100,12 +100,6 @@ type RuleCondition struct {
 
 	// ValueDisplay is populated by PopulatePFCDisplay for PFC-typed conditions.
 	ValueDisplay string `json:"value_display,omitempty"`
-
-	// LegacyOperator preserves an operator string that was persisted before #1625, when the
-	// field was never validated and could hold anything. It is never sent to a client and never
-	// consulted for matching; it exists so a read-modify-write cycle cannot silently discard a
-	// value the user never touched.
-	LegacyOperator string `json:"-"`
 }
 
 // CategorizationRule represents a user-defined rule for automatic transaction categorization.

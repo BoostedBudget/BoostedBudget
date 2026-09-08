@@ -174,24 +174,7 @@ func (s *ruleApplicationService) ApplyRulesToTransaction(ctx context.Context, tx
 
 	// Apply category override if matched (first-match-wins)
 	if result.TargetKind != nil {
-		switch *result.TargetKind {
-		case "pfc":
-			tx.CategoryOverrideKind = result.TargetKind
-			tx.PFCPrimaryOverride = result.TargetPFCPrimary
-			tx.PFCDetailedOverride = result.TargetPFCDetailed
-			tx.CustomCategoryOverrideID = nil
-		case "custom":
-			tx.CategoryOverrideKind = result.TargetKind
-			tx.CustomCategoryOverrideID = result.TargetCustomCategoryID
-			tx.PFCPrimaryOverride = nil
-			tx.PFCDetailedOverride = nil
-		case "clear":
-			tx.CategoryOverrideKind = nil
-			tx.PFCPrimaryOverride = nil
-			tx.PFCDetailedOverride = nil
-			tx.CustomCategoryOverrideID = nil
-		}
-		tx.CategorySourceField = domain.CategorySourceRule
+		applyCategoryOverride(tx, result)
 
 		// A rule applying a category action counts as an automated review
 		// (Issue #1203). Tag-only matches do NOT mark the transaction reviewed.
@@ -300,24 +283,7 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 
 		// Apply category override if matched.
 		if result.TargetKind != nil {
-			switch *result.TargetKind {
-			case "pfc":
-				tx.CategoryOverrideKind = result.TargetKind
-				tx.PFCPrimaryOverride = result.TargetPFCPrimary
-				tx.PFCDetailedOverride = result.TargetPFCDetailed
-				tx.CustomCategoryOverrideID = nil
-			case "custom":
-				tx.CategoryOverrideKind = result.TargetKind
-				tx.CustomCategoryOverrideID = result.TargetCustomCategoryID
-				tx.PFCPrimaryOverride = nil
-				tx.PFCDetailedOverride = nil
-			case "clear":
-				tx.CategoryOverrideKind = nil
-				tx.PFCPrimaryOverride = nil
-				tx.PFCDetailedOverride = nil
-				tx.CustomCategoryOverrideID = nil
-			}
-			tx.CategorySourceField = domain.CategorySourceRule
+			applyCategoryOverride(tx, result)
 
 			// A rule applying a category counts as an automated review (Issue #1203).
 			// Tag-only matches do not mark reviewed.
@@ -617,6 +583,29 @@ func (s *ruleApplicationService) applyTagsToTransaction(tx *domain.Transaction, 
 
 	tx.Tags = newTags
 	tx.TagsSource = newTagSources
+}
+
+// applyCategoryOverride applies a category result to a transaction based on the target kind.
+// Extracted to eliminate duplication between ApplyRulesToTransaction and ApplyRulesToBatch.
+func applyCategoryOverride(tx *domain.Transaction, result *rules.RuleResult) {
+	switch *result.TargetKind {
+	case "pfc":
+		tx.CategoryOverrideKind = result.TargetKind
+		tx.PFCPrimaryOverride = result.TargetPFCPrimary
+		tx.PFCDetailedOverride = result.TargetPFCDetailed
+		tx.CustomCategoryOverrideID = nil
+	case "custom":
+		tx.CategoryOverrideKind = result.TargetKind
+		tx.CustomCategoryOverrideID = result.TargetCustomCategoryID
+		tx.PFCPrimaryOverride = nil
+		tx.PFCDetailedOverride = nil
+	case "clear":
+		tx.CategoryOverrideKind = nil
+		tx.PFCPrimaryOverride = nil
+		tx.PFCDetailedOverride = nil
+		tx.CustomCategoryOverrideID = nil
+	}
+	tx.CategorySourceField = domain.CategorySourceRule
 }
 
 // EmitBatchSideEffects fires analytics and per-rule match-count increments for

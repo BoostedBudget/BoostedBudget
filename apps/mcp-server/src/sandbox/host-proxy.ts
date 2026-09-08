@@ -93,6 +93,23 @@ const pendingConfirmations = new Map<
 const CONFIRMATION_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
 /**
+ * Validates that a token entry exists and belongs to this user/grant within TTL.
+ * Extracted to eliminate duplication between validateBatchConfirmation and consumeConfirmationSlot.
+ */
+function isTokenEntryValid(
+  entry: ReturnType<typeof pendingConfirmations.get> | undefined,
+  userId: string,
+  grantId: string,
+  getNow: () => number,
+): boolean {
+  if (!entry) return false
+  if (entry.userId !== userId) return false
+  if (entry.grantId !== grantId) return false
+  if (getNow() - entry.issuedAt > CONFIRMATION_TTL_MS) return false
+  return true
+}
+
+/**
  * Recursively stable-stringify for use in crypto hash — handles nested objects
  * deterministically so nested field ordering cannot produce collisions.
  */
@@ -190,11 +207,8 @@ async function validateBatchConfirmation(
   getNow: () => number,
 ): Promise<boolean> {
   const entry = pendingConfirmations.get(token)
-  if (!entry) return false
-  if (entry.userId !== userId) return false
-  if (entry.grantId !== grantId) return false
-  if (getNow() - entry.issuedAt > CONFIRMATION_TTL_MS) return false
-  return entry.batchHash === (await hashBatch(gated))
+  if (!isTokenEntryValid(entry, userId, grantId, getNow)) return false
+  return entry!.batchHash === (await hashBatch(gated))
 }
 
 /**
@@ -214,18 +228,15 @@ async function consumeConfirmationSlot(
   getNow: () => number,
 ): Promise<{ idempotencyKey: string } | null> {
   const entry = pendingConfirmations.get(token)
-  if (!entry) return null
-  if (entry.userId !== userId) return null
-  if (entry.grantId !== grantId) return null
-  if (getNow() - entry.issuedAt > CONFIRMATION_TTL_MS) return null
+  if (!isTokenEntryValid(entry, userId, grantId, getNow)) return null
 
   const key = await slotKey(operationId, args)
-  const slot = entry.slots.get(key)
+  const slot = entry!.slots.get(key)
   if (!slot || slot.uses <= 0) return null
 
   slot.uses -= 1
-  if (slot.uses === 0) entry.slots.delete(key)
-  if (entry.slots.size === 0) pendingConfirmations.delete(token)
+  if (slot.uses === 0) entry!.slots.delete(key)
+  if (entry!.slots.size === 0) pendingConfirmations.delete(token)
 
   return { idempotencyKey: slot.idempotencyKey }
 }

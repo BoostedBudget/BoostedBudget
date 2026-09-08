@@ -219,14 +219,16 @@ var (
 //   - Both, disagreeing       → ErrConditionShapeConflict (never silently pick one).
 //   - Neither                 → ErrUnknownConditionField.
 //
-// A populated legacy Operator with no Field is IGNORED, not honoured: Operator was never
-// validated or read before #1625, so a persisted value there is not evidence of intent. It is
-// preserved verbatim in LegacyOperator so a read-modify-write cycle cannot silently drop it.
+// A populated legacy Operator with no Field is OVERWRITTEN by the one the fused type implies,
+// not honoured. Operator was never validated or read by any evaluator before #1625, so whatever
+// a persisted row holds there is not evidence of intent — it is residue. The fused type is what
+// actually drove matching, so deriving the operator from it preserves the rule's behaviour
+// exactly, and the next write repairs the residue rather than carrying it forward forever.
+//
+// ⚠ This means a junk operator IS replaced on the next update. That is deliberate and lossless:
+// the value never affected what the rule matched. Pinned by
+// TestNormalize_OverwritesUnvalidatedLegacyOperator.
 func (c *RuleCondition) Normalize() error {
-	if c.Operator != "" && c.Field == "" && c.LegacyOperator == "" {
-		c.LegacyOperator = c.Operator
-	}
-
 	if c.Field != "" {
 		spec, ok := FieldSpecs[c.Field]
 		if !ok {
