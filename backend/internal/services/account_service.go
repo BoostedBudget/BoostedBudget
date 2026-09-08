@@ -1597,10 +1597,13 @@ func (s *accountService) enqueueInitialSync(ctx context.Context, linkedItemID, u
 	// system that knew Plaid had granted no investments for an Item was this function, for the
 	// duration of one call — it logged the fact and dropped it.
 	//
-	// ⚠ Written in BOTH directions. enqueueInitialSync can run against a pre-existing
-	// linked_items row (LinkAccounts reuses one when the user re-links the same institution), so
-	// writing only TRUE would strand a stale TRUE on an item whose institution has since started
-	// serving investments.
+	// ⚠ Written in BOTH directions, and ⚠ CORRECTED: the first version of this comment said that
+	// was because "LinkAccounts reuses an existing linked_items row on re-link". It does NOT — it
+	// marks the old item `replaced` and Creates a new row, whose id is what reaches this call — so
+	// the FALSE write is a no-op against today's only caller. It stays a setter rather than a
+	// latch because this records a DECISION and a column default is not one, and because this
+	// helper takes an id rather than a freshly built row: nothing in its signature stops a future
+	// caller passing an existing item, where a latch would strand a stale TRUE.
 	//
 	// ⚠ Non-blocking, like every other write in this helper: a failed bookkeeping write must
 	// never cost the user their transaction sync.

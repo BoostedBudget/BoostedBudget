@@ -5314,11 +5314,13 @@ func TestAccountService_SetJobQueue_DoesNotPanic(t *testing.T) {
 // it away. linked_items.investments_skipped_at_link (created UNWIRED by migration 000189) makes
 // the fact durable and countable.
 //
-// ⚠ The value is written in BOTH directions, not just on the skip. enqueueInitialSync can run
-// against a PRE-EXISTING linked_items row: LinkAccounts reuses one when the user re-links the
-// same institution (account_service.go, the existingLinkedItem branch). Writing only TRUE would
-// leave a stale TRUE on an item whose institution has since started serving investments —
-// permanently misreporting the very population this column exists to measure.
+// ⚠ The value is written in BOTH directions, not just on the skip. ⚠ CORRECTED: this comment
+// first claimed that was because LinkAccounts reuses an existing linked_items row on re-link. It
+// does not — the existingLinkedItem branch marks the old row `replaced` and Creates a NEW one,
+// and that new id is what reaches enqueueInitialSync — so against today's only caller the FALSE
+// write is a no-op. The reason it is a setter and not a latch is that it records a DECISION (a
+// column default is not one) and that enqueueInitialSync takes an id rather than a freshly built
+// row, so a future caller passing an existing item would be stranded by a latch.
 
 // TestAccountService_EnqueueInitialSync_RecordsThatInvestmentsWereSkipped is the skip direction.
 func TestAccountService_EnqueueInitialSync_RecordsThatInvestmentsWereSkipped(t *testing.T) {

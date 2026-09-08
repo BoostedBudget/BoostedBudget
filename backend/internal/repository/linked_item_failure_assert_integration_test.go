@@ -211,10 +211,14 @@ func TestLinkedItemFailureAssert_Integration_RepairDoesNotResetTheAssertClock(t 
 // ── #1613 P4-T3 item E ───────────────────────────────────────────────────────────────────────
 
 // TestLinkedItem_SetInvestmentsSkippedAtLink_WritesBothDirections pins that the setter is a real
-// setter and not a one-way latch. The re-link path (LinkAccounts reusing an existing
-// linked_items row) can call it with FALSE on a row already carrying TRUE, and a latch would
-// leave that item permanently reported as "investments skipped" after its institution started
-// serving them.
+// setter and not a one-way latch.
+//
+// ⚠ CORRECTED: this first cited the re-link path as the caller that needs FALSE-over-TRUE.
+// LinkAccounts does NOT reuse an existing linked_items row — it marks the old one `replaced` and
+// Creates a new one — so no caller does that TODAY. The property is pinned anyway because
+// enqueueInitialSync takes an ITEM ID rather than a freshly built row, so nothing in its
+// signature stops a future caller passing an existing item; a latch would then leave that item
+// permanently reported as "investments skipped" after its institution started serving them.
 //
 // Integration rather than pgxmock because the column itself is new (migration 000189) and a mock
 // cannot tell a column that exists from one that does not.
