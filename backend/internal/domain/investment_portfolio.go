@@ -24,10 +24,18 @@ type PortfolioSnapshot struct {
 	// came from different account universes and DayChange was wrong by the whole value of any
 	// depository account carrying holdings.
 	//
-	// ⚠ NIL means UNAVAILABLE, not zero. Every row written before migration 000189 has it NULL
-	// and nothing can reconstruct it (holdings carry no as-of account type). Readers must render
-	// day-change as unavailable in that case — never fall back to TotalValue, which is precisely
-	// the wrong number this field exists to stop being shown.
+	// ⚠ NIL means UNAVAILABLE, not zero. Every row written before migration 000189 has it NULL.
+	// Readers must render day-change as unavailable in that case — never fall back to TotalValue,
+	// which is precisely the wrong number this field exists to stop being shown.
+	//
+	// ⚠ CORRECTED: this comment used to add "and nothing can reconstruct it (holdings carry no
+	// as-of account type)". The parenthetical is true and the conclusion drawn from it was wrong,
+	// which is why RepairUserFromHistory originally left this column alone and could leave a
+	// STALE value beside a corrected total_value (found by Codex adversarial review). No as-of
+	// type is NEEDED: the figure this must stay comparable with is the LIVE holdings read, which
+	// is itself gated on the account's CURRENT type — so reconstructing from current type is the
+	// same predicate the other operand uses, not an approximation. The repair now writes this
+	// column whenever it rewrites a row.
 	TotalValueInvestmentOnly *float64 `json:"total_value_investment_only,omitempty" db:"total_value_investment_only"`
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
