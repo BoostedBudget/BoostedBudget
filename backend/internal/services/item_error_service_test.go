@@ -28,12 +28,14 @@ func TestHandleLoginRequired_Success(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -94,12 +96,14 @@ func TestHandleLoginRequired_DatabaseUpdateFailure(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -138,12 +142,14 @@ func TestHandleLoginRequired_NotificationFailureNonBlocking(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -187,12 +193,14 @@ func TestHandleLoginRequired_EmailFailureNonBlocking(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -299,12 +307,14 @@ func TestHandleError_Success(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -372,12 +382,14 @@ func TestHandleError_EmptyMessage_NoDanglingSentence(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -423,12 +435,14 @@ func TestHandleError_DatabaseUpdateFailure(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -465,12 +479,14 @@ func TestHandleError_NotificationFailureNonBlocking(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -508,12 +524,14 @@ func TestHandleError_EmailFailureNonBlocking(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -559,12 +577,14 @@ func TestHandleError_NotificationType_IsItemError(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -618,12 +638,14 @@ func TestHandlePendingExpiration_Success(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -685,12 +707,14 @@ func TestHandlePendingExpiration_DatabaseUpdateFailure(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -729,12 +753,14 @@ func TestHandlePendingExpiration_NotificationFailureNonBlocking(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -774,12 +800,14 @@ func TestHandlePendingExpiration_EmailFailureNonBlocking(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -832,12 +860,14 @@ func TestHandlePermissionRevoked_Success(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -901,12 +931,14 @@ func TestHandlePermissionRevoked_DatabaseUpdateFailure(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -945,12 +977,14 @@ func TestHandlePermissionRevoked_NotificationFailureNonBlocking(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -990,12 +1024,14 @@ func TestHandlePermissionRevoked_EmailFailureNonBlocking(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -1050,12 +1086,14 @@ func TestProcessWebhook_LoginRequired(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -1107,12 +1145,14 @@ func TestProcessWebhook_InvalidAccessToken_RoutesToHandleLoginRequired(t *testin
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -1150,12 +1190,14 @@ func TestProcessWebhook_PendingDisconnect_RoutesToHandlePendingExpiration(t *tes
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -1191,12 +1233,14 @@ func TestProcessWebhook_Error(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -1228,6 +1272,7 @@ func TestProcessWebhook_Error(t *testing.T) {
 	// HandleError does NOT call encryption or plaid service
 
 	mockassert.NoCallTo(t, &mockPlaidService.Mock, "CreateUpdateModeLinkToken")
+	mockassert.NoCallTo(t, &mockRepairNonceRepo.Mock, "Mint")
 }
 
 // TestProcessWebhook_PendingExpiration tests routing to HandlePendingExpiration
@@ -1240,12 +1285,14 @@ func TestProcessWebhook_PendingExpiration(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -1290,12 +1337,14 @@ func TestProcessWebhook_PermissionRevoked(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -1340,12 +1389,14 @@ func TestProcessWebhook_ItemError_LinkedItemNotFound(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -1382,12 +1433,14 @@ func TestProcessWebhook_ItemError_UnknownErrorType(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -1434,12 +1487,14 @@ func TestProcessWebhook_KnownUnhandledCodes_LogAndReturnNilWithoutErroring(t *te
 			mockEmailService := new(MockEmailService)
 			mockUserRepo := new(MockUserRepository)
 
+			mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 			service := NewItemErrorService(
 				mockLinkedItemRepo,
 				mockNotificationRepo,
 				mockUserRepo,
 				mockPlaidService,
 				mockEmailService,
+				mockRepairNonceRepo,
 				nil,
 			)
 
@@ -1479,12 +1534,14 @@ func TestHandleLoginRequired_UserLookupFailureNonBlocking(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -1523,12 +1580,14 @@ func TestHandleError_UserLookupFailureNonBlocking(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -1565,12 +1624,14 @@ func TestHandlePendingExpiration_UserLookupFailureNonBlocking(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -1608,12 +1669,14 @@ func TestHandlePermissionRevoked_UserLookupFailureNonBlocking(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -1645,27 +1708,35 @@ func TestHandlePermissionRevoked_UserLookupFailureNonBlocking(t *testing.T) {
 // CreateReconnectLinkToken Tests (Issue #1609)
 // ============================================================================
 
-func newReconnectTestService() (ItemErrorService, *MockLinkedItemRepository, *MockPlaidService) {
+// testRepairNonce is a stand-in for the RAW nonce CreateReconnectLinkToken returns to the client
+// (Issue #1620). Every RepairItem test presents it, and the mocked Burn is matched on its sha256
+// digest — never on the raw value — so a service that "forgot" to hash before the burn would fail
+// rather than quietly comparing the wrong thing.
+const testRepairNonce = "raw-repair-nonce-for-tests"
+
+func newReconnectTestService() (ItemErrorService, *MockLinkedItemRepository, *MockPlaidService, *MockLinkedItemRepairNonceRepository) {
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
-	return service, mockLinkedItemRepo, mockPlaidService
+	return service, mockLinkedItemRepo, mockPlaidService, mockRepairNonceRepo
 }
 
 func TestCreateReconnectLinkToken_Success(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, mockPlaidService := newReconnectTestService()
+	service, mockLinkedItemRepo, mockPlaidService, mockRepairNonceRepo := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:          "linked-item-123",
@@ -1676,20 +1747,95 @@ func TestCreateReconnectLinkToken_Success(t *testing.T) {
 	}
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 
-	linkTokenResponse := &domain.LinkTokenResponse{LinkToken: "link-token-fresh"}
+	plaidExpiry := time.Now().Add(30 * time.Minute).UTC()
+	linkTokenResponse := &domain.LinkTokenResponse{LinkToken: "link-token-fresh", Expiration: plaidExpiry}
 	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").
 		Return(linkTokenResponse, nil)
+
+	var minted *domain.LinkedItemRepairNonce
+	mockRepairNonceRepo.On("Mint", ctx, mock.AnythingOfType("*domain.LinkedItemRepairNonce")).
+		Run(func(args mock.Arguments) {
+			minted = args.Get(1).(*domain.LinkedItemRepairNonce)
+		}).Return(nil)
 
 	resp, err := service.CreateReconnectLinkToken(ctx, "user-456", "plaid-item-789")
 
 	require.NoError(t, err)
 	assert.Equal(t, "link-token-fresh", resp.LinkToken)
 	mockPlaidService.AssertExpectations(t)
+	mockRepairNonceRepo.AssertExpectations(t)
+
+	// Issue #1620: the RAW nonce goes to the client and ONLY its sha256 digest is persisted.
+	require.NotEmpty(t, resp.RepairNonce, "the mint must return a raw nonce; without one no repair is possible")
+	require.NotNil(t, minted)
+	assert.Equal(t, hashRepairNonce(resp.RepairNonce), minted.TokenHash,
+		"the persisted token_hash must be the sha256 of the raw nonce handed to the client")
+	assert.NotEqual(t, resp.RepairNonce, minted.TokenHash, "the RAW nonce must never be what is persisted")
+	assert.Equal(t, "linked-item-123", minted.LinkedItemID)
+	assert.Equal(t, "user-456", minted.UserID)
+	// The nonce's TTL is Plaid's own, not an invented one — see LinkedItemRepairNonce.ExpiresAt.
+	assert.Equal(t, plaidExpiry, minted.ExpiresAt)
+}
+
+// TestCreateReconnectLinkToken_TwoMintsProduceDifferentNonces guards the single most damaging way
+// to get this wrong: a nonce derived from anything stable (the item id, the user id, a counter) is
+// not a nonce at all — every user could replay their own, forever. crypto/rand is what makes the
+// burn's single-use property mean anything.
+func TestCreateReconnectLinkToken_TwoMintsProduceDifferentNonces(t *testing.T) {
+	ctx := context.Background()
+	service, mockLinkedItemRepo, mockPlaidService, mockRepairNonceRepo := newReconnectTestService()
+
+	linkedItem := &domain.LinkedItem{
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
+		AccessToken: "decrypted-access-token",
+		Status:      domain.LinkedItemStatusLoginRequired,
+	}
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").
+		Return(&domain.LinkTokenResponse{LinkToken: "link-token-fresh"}, nil)
+	mockRepairNonceRepo.On("Mint", ctx, mock.AnythingOfType("*domain.LinkedItemRepairNonce")).Return(nil)
+
+	first, err := service.CreateReconnectLinkToken(ctx, "user-456", "plaid-item-789")
+	require.NoError(t, err)
+	second, err := service.CreateReconnectLinkToken(ctx, "user-456", "plaid-item-789")
+	require.NoError(t, err)
+
+	assert.NotEqual(t, first.RepairNonce, second.RepairNonce,
+		"two mints for the SAME item and user must produce different nonces")
+}
+
+// TestCreateReconnectLinkToken_MintFailure_ReturnsNoToken pins the fail-closed choice: a link
+// token the user cannot then redeem is worse than an error, because they would complete Plaid
+// Link and only then be refused, with nothing to tell them why.
+func TestCreateReconnectLinkToken_MintFailure_ReturnsNoToken(t *testing.T) {
+	ctx := context.Background()
+	service, mockLinkedItemRepo, mockPlaidService, mockRepairNonceRepo := newReconnectTestService()
+
+	linkedItem := &domain.LinkedItem{
+		ID:          "linked-item-123",
+		UserID:      "user-456",
+		ItemID:      "plaid-item-789",
+		AccessToken: "decrypted-access-token",
+		Status:      domain.LinkedItemStatusLoginRequired,
+	}
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+	mockPlaidService.On("CreateUpdateModeLinkToken", ctx, "user-456", "decrypted-access-token").
+		Return(&domain.LinkTokenResponse{LinkToken: "link-token-fresh"}, nil)
+	mintErr := errors.New("nonce table unavailable")
+	mockRepairNonceRepo.On("Mint", ctx, mock.AnythingOfType("*domain.LinkedItemRepairNonce")).Return(mintErr)
+
+	resp, err := service.CreateReconnectLinkToken(ctx, "user-456", "plaid-item-789")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, mintErr)
+	assert.Nil(t, resp, "no link token may be handed out when its nonce could not be minted")
 }
 
 func TestCreateReconnectLinkToken_WrongUser_ReturnsNotFound(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, mockPlaidService := newReconnectTestService()
+	service, mockLinkedItemRepo, mockPlaidService, mockRepairNonceRepo := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:          "linked-item-123",
@@ -1705,11 +1851,12 @@ func TestCreateReconnectLinkToken_WrongUser_ReturnsNotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, repository.ErrLinkedItemNotFound)
 	mockassert.NoCallTo(t, &mockPlaidService.Mock, "CreateUpdateModeLinkToken")
+	mockassert.NoCallTo(t, &mockRepairNonceRepo.Mock, "Mint")
 }
 
 func TestCreateReconnectLinkToken_ActiveItem_ReturnsNotRepairable(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, mockPlaidService := newReconnectTestService()
+	service, mockLinkedItemRepo, mockPlaidService, mockRepairNonceRepo := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:          "linked-item-123",
@@ -1725,11 +1872,12 @@ func TestCreateReconnectLinkToken_ActiveItem_ReturnsNotRepairable(t *testing.T) 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrLinkedItemNotRepairable)
 	mockassert.NoCallTo(t, &mockPlaidService.Mock, "CreateUpdateModeLinkToken")
+	mockassert.NoCallTo(t, &mockRepairNonceRepo.Mock, "Mint")
 }
 
 func TestCreateReconnectLinkToken_DisconnectedItem_ReturnsNotRepairable(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, mockPlaidService := newReconnectTestService()
+	service, mockLinkedItemRepo, mockPlaidService, mockRepairNonceRepo := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:          "linked-item-123",
@@ -1745,11 +1893,12 @@ func TestCreateReconnectLinkToken_DisconnectedItem_ReturnsNotRepairable(t *testi
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrLinkedItemNotRepairable)
 	mockassert.NoCallTo(t, &mockPlaidService.Mock, "CreateUpdateModeLinkToken")
+	mockassert.NoCallTo(t, &mockRepairNonceRepo.Mock, "Mint")
 }
 
 func TestCreateReconnectLinkToken_ReplacedItem_ReturnsNotRepairable(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, mockPlaidService := newReconnectTestService()
+	service, mockLinkedItemRepo, mockPlaidService, mockRepairNonceRepo := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:          "linked-item-123",
@@ -1765,6 +1914,7 @@ func TestCreateReconnectLinkToken_ReplacedItem_ReturnsNotRepairable(t *testing.T
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrLinkedItemNotRepairable)
 	mockassert.NoCallTo(t, &mockPlaidService.Mock, "CreateUpdateModeLinkToken")
+	mockassert.NoCallTo(t, &mockRepairNonceRepo.Mock, "Mint")
 }
 
 // TestCreateReconnectLinkToken_RevokedItem_ReturnsNotRepairable pins BLOCKING 1 (Issue #1609
@@ -1772,7 +1922,7 @@ func TestCreateReconnectLinkToken_ReplacedItem_ReturnsNotRepairable(t *testing.T
 // hand out an update-mode token for one at all — never mind what RepairItem would later do.
 func TestCreateReconnectLinkToken_RevokedItem_ReturnsNotRepairable(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, mockPlaidService := newReconnectTestService()
+	service, mockLinkedItemRepo, mockPlaidService, mockRepairNonceRepo := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:          "linked-item-123",
@@ -1788,11 +1938,12 @@ func TestCreateReconnectLinkToken_RevokedItem_ReturnsNotRepairable(t *testing.T)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrLinkedItemNotRepairable)
 	mockassert.NoCallTo(t, &mockPlaidService.Mock, "CreateUpdateModeLinkToken")
+	mockassert.NoCallTo(t, &mockRepairNonceRepo.Mock, "Mint")
 }
 
 func TestCreateReconnectLinkToken_ItemNotFound(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, mockPlaidService := newReconnectTestService()
+	service, mockLinkedItemRepo, mockPlaidService, mockRepairNonceRepo := newReconnectTestService()
 
 	mockLinkedItemRepo.On("GetByItemID", ctx, "unknown-item").Return(nil, repository.ErrLinkedItemNotFound)
 
@@ -1801,6 +1952,7 @@ func TestCreateReconnectLinkToken_ItemNotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, repository.ErrLinkedItemNotFound)
 	mockassert.NoCallTo(t, &mockPlaidService.Mock, "CreateUpdateModeLinkToken")
+	mockassert.NoCallTo(t, &mockRepairNonceRepo.Mock, "Mint")
 }
 
 // ============================================================================
@@ -1809,7 +1961,7 @@ func TestCreateReconnectLinkToken_ItemNotFound(t *testing.T) {
 
 func TestRepairItem_Success_ClearsErrorStateAndReactivates(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, _ := newReconnectTestService()
+	service, mockLinkedItemRepo, _, mockRepairNonceRepo := newReconnectTestService()
 
 	errCode := "ITEM_LOGIN_REQUIRED"
 	errMsg := "Credentials changed"
@@ -1824,18 +1976,50 @@ func TestRepairItem_Success_ClearsErrorStateAndReactivates(t *testing.T) {
 		LastErrorAt:  &lastErrorAt,
 	}
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+	mockRepairNonceRepo.On("Burn", ctx, hashRepairNonce(testRepairNonce), "user-456", "linked-item-123").
+		Return(true, nil)
 	mockLinkedItemRepo.On("RepairStatus", ctx, "linked-item-123", "user-456", repairableStatuses).
 		Return(true, nil)
 
-	err := service.RepairItem(ctx, "user-456", "plaid-item-789")
+	err := service.RepairItem(ctx, "user-456", "plaid-item-789", testRepairNonce)
 
 	require.NoError(t, err)
 	mockLinkedItemRepo.AssertExpectations(t)
+	mockRepairNonceRepo.AssertExpectations(t)
 }
 
-func TestRepairItem_WrongUser_ReturnsNotFound(t *testing.T) {
+// TestRepairItem_NonceRefused_DoesNotRepair is the whole point of Issue #1620: a repair that
+// cannot present a nonce this server minted must change nothing. A zero-row burn is a REFUSAL —
+// if RepairStatus is reached at all here, the endpoint is still marking items healthy on nothing
+// but an item_id, which is not a secret.
+func TestRepairItem_NonceRefused_DoesNotRepair(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, _ := newReconnectTestService()
+	service, mockLinkedItemRepo, _, mockRepairNonceRepo := newReconnectTestService()
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+		ItemID: "plaid-item-789",
+		Status: domain.LinkedItemStatusLoginRequired,
+	}
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+	mockRepairNonceRepo.On("Burn", ctx, hashRepairNonce(testRepairNonce), "user-456", "linked-item-123").
+		Return(false, nil)
+
+	err := service.RepairItem(ctx, "user-456", "plaid-item-789", testRepairNonce)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRepairNonceInvalid)
+	mockassert.NoCallTo(t, &mockLinkedItemRepo.Mock, "RepairStatus")
+}
+
+// TestRepairItem_EmptyNonce_IsRefusedWithoutTouchingTheDatabase pins that an ABSENT nonce is a
+// refusal and not a bypass. The most likely way to reintroduce this hole is a caller that stops
+// sending the field: if an empty nonce fell through to a burn that happened to match nothing, the
+// behaviour would be right by accident; if it fell through to RepairStatus, the gate would be gone.
+func TestRepairItem_EmptyNonce_IsRefusedWithoutTouchingTheDatabase(t *testing.T) {
+	ctx := context.Background()
+	service, mockLinkedItemRepo, _, mockRepairNonceRepo := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:     "linked-item-123",
@@ -1845,16 +2029,63 @@ func TestRepairItem_WrongUser_ReturnsNotFound(t *testing.T) {
 	}
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 
-	err := service.RepairItem(ctx, "attacker-999", "plaid-item-789")
+	err := service.RepairItem(ctx, "user-456", "plaid-item-789", "")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRepairNonceInvalid)
+	mockassert.NoCallTo(t, &mockRepairNonceRepo.Mock, "Burn")
+	mockassert.NoCallTo(t, &mockLinkedItemRepo.Mock, "RepairStatus")
+}
+
+// TestRepairItem_BurnError_IsWrappedAndDoesNotRepair: a database failure during the burn is NOT a
+// refusal (it is an error the caller must see), but it must still not repair.
+func TestRepairItem_BurnError_IsWrappedAndDoesNotRepair(t *testing.T) {
+	ctx := context.Background()
+	service, mockLinkedItemRepo, _, mockRepairNonceRepo := newReconnectTestService()
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+		ItemID: "plaid-item-789",
+		Status: domain.LinkedItemStatusLoginRequired,
+	}
+	burnErr := errors.New("connection reset")
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+	mockRepairNonceRepo.On("Burn", ctx, hashRepairNonce(testRepairNonce), "user-456", "linked-item-123").
+		Return(false, burnErr)
+
+	err := service.RepairItem(ctx, "user-456", "plaid-item-789", testRepairNonce)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, burnErr)
+	assert.NotErrorIs(t, err, ErrRepairNonceInvalid,
+		"a database failure must not masquerade as an authorization refusal")
+	mockassert.NoCallTo(t, &mockLinkedItemRepo.Mock, "RepairStatus")
+}
+
+func TestRepairItem_WrongUser_ReturnsNotFound(t *testing.T) {
+	ctx := context.Background()
+	service, mockLinkedItemRepo, _, mockRepairNonceRepo := newReconnectTestService()
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+		ItemID: "plaid-item-789",
+		Status: domain.LinkedItemStatusLoginRequired,
+	}
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+
+	err := service.RepairItem(ctx, "attacker-999", "plaid-item-789", testRepairNonce)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, repository.ErrLinkedItemNotFound)
 	mockassert.NoCallTo(t, &mockLinkedItemRepo.Mock, "RepairStatus")
+	mockassert.NoCallTo(t, &mockRepairNonceRepo.Mock, "Burn")
 }
 
 func TestRepairItem_ActiveItem_ReturnsNotRepairable(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, _ := newReconnectTestService()
+	service, mockLinkedItemRepo, _, mockRepairNonceRepo := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:     "linked-item-123",
@@ -1864,18 +2095,19 @@ func TestRepairItem_ActiveItem_ReturnsNotRepairable(t *testing.T) {
 	}
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 
-	err := service.RepairItem(ctx, "user-456", "plaid-item-789")
+	err := service.RepairItem(ctx, "user-456", "plaid-item-789", testRepairNonce)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrLinkedItemNotRepairable)
 	mockassert.NoCallTo(t, &mockLinkedItemRepo.Mock, "RepairStatus")
+	mockassert.NoCallTo(t, &mockRepairNonceRepo.Mock, "Burn")
 }
 
 // TestRepairItem_RevokedItem_ReturnsNotRepairable pins BLOCKING 1 (Issue #1609 round 2): Plaid
 // says a revoked Item cannot be restored — update-mode repair must never mark it 'active'.
 func TestRepairItem_RevokedItem_ReturnsNotRepairable(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, _ := newReconnectTestService()
+	service, mockLinkedItemRepo, _, mockRepairNonceRepo := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:     "linked-item-123",
@@ -1885,11 +2117,12 @@ func TestRepairItem_RevokedItem_ReturnsNotRepairable(t *testing.T) {
 	}
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 
-	err := service.RepairItem(ctx, "user-456", "plaid-item-789")
+	err := service.RepairItem(ctx, "user-456", "plaid-item-789", testRepairNonce)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrLinkedItemNotRepairable)
 	mockassert.NoCallTo(t, &mockLinkedItemRepo.Mock, "RepairStatus")
+	mockassert.NoCallTo(t, &mockRepairNonceRepo.Mock, "Burn")
 }
 
 // TestRepairItem_ConcurrentStateChange_ReturnsNotRepairable pins BLOCKING 2 (Issue #1609 round
@@ -1899,7 +2132,7 @@ func TestRepairItem_RevokedItem_ReturnsNotRepairable(t *testing.T) {
 // zero rows. RepairItem must treat that the same as "not repairable", not as success.
 func TestRepairItem_ConcurrentStateChange_ReturnsNotRepairable(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, _ := newReconnectTestService()
+	service, mockLinkedItemRepo, _, mockRepairNonceRepo := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:     "linked-item-123",
@@ -1908,10 +2141,12 @@ func TestRepairItem_ConcurrentStateChange_ReturnsNotRepairable(t *testing.T) {
 		Status: domain.LinkedItemStatusLoginRequired, // stale read
 	}
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+	mockRepairNonceRepo.On("Burn", ctx, hashRepairNonce(testRepairNonce), "user-456", "linked-item-123").
+		Return(true, nil)
 	mockLinkedItemRepo.On("RepairStatus", ctx, "linked-item-123", "user-456", repairableStatuses).
 		Return(false, nil) // concurrent disconnect/re-link won the race
 
-	err := service.RepairItem(ctx, "user-456", "plaid-item-789")
+	err := service.RepairItem(ctx, "user-456", "plaid-item-789", testRepairNonce)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrLinkedItemNotRepairable)
@@ -1919,7 +2154,7 @@ func TestRepairItem_ConcurrentStateChange_ReturnsNotRepairable(t *testing.T) {
 
 func TestRepairItem_RepairStatusError_IsWrapped(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, _ := newReconnectTestService()
+	service, mockLinkedItemRepo, _, mockRepairNonceRepo := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:     "linked-item-123",
@@ -1929,10 +2164,12 @@ func TestRepairItem_RepairStatusError_IsWrapped(t *testing.T) {
 	}
 	dbErr := errors.New("connection reset")
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+	mockRepairNonceRepo.On("Burn", ctx, hashRepairNonce(testRepairNonce), "user-456", "linked-item-123").
+		Return(true, nil)
 	mockLinkedItemRepo.On("RepairStatus", ctx, "linked-item-123", "user-456", repairableStatuses).
 		Return(false, dbErr)
 
-	err := service.RepairItem(ctx, "user-456", "plaid-item-789")
+	err := service.RepairItem(ctx, "user-456", "plaid-item-789", testRepairNonce)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, dbErr)
@@ -1944,7 +2181,7 @@ func TestRepairItem_RepairStatusError_IsWrapped(t *testing.T) {
 
 func TestHandleLoginRepaired_ClearsErrorState(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, _ := newReconnectTestService()
+	service, mockLinkedItemRepo, _, _ := newReconnectTestService()
 
 	errCode := "ITEM_LOGIN_REQUIRED"
 	linkedItem := &domain.LinkedItem{
@@ -1966,7 +2203,7 @@ func TestHandleLoginRepaired_ClearsErrorState(t *testing.T) {
 
 func TestHandleLoginRepaired_DisconnectedItem_IsNoOp(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, _ := newReconnectTestService()
+	service, mockLinkedItemRepo, _, _ := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:     "linked-item-123",
@@ -1995,7 +2232,7 @@ func TestHandleLoginRepaired_DisconnectedItem_IsNoOp(t *testing.T) {
 // login_required alone (not the wider repairableStatuses RepairItem uses).
 func TestHandleLoginRepaired_CurrentErrorStatus_IsNotClobbered(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, _ := newReconnectTestService()
+	service, mockLinkedItemRepo, _, _ := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:     "linked-item-123",
@@ -2015,7 +2252,7 @@ func TestHandleLoginRepaired_CurrentErrorStatus_IsNotClobbered(t *testing.T) {
 
 func TestHandleLoginRepaired_RepairStatusError_IsWrapped(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, _ := newReconnectTestService()
+	service, mockLinkedItemRepo, _, _ := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:     "linked-item-123",
@@ -2036,7 +2273,7 @@ func TestHandleLoginRepaired_RepairStatusError_IsWrapped(t *testing.T) {
 
 func TestProcessWebhook_LoginRepaired_RoutesToHandleLoginRepaired(t *testing.T) {
 	ctx := context.Background()
-	service, mockLinkedItemRepo, _ := newReconnectTestService()
+	service, mockLinkedItemRepo, _, _ := newReconnectTestService()
 
 	linkedItem := &domain.LinkedItem{
 		ID:     "linked-item-123",
@@ -2070,12 +2307,14 @@ func TestHandleLoginRequired_AlreadyInThatStatus_SkipsDuplicateNotification(t *t
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -2116,12 +2355,14 @@ func TestHandleError_TerminalStatus_SkipsNotification(t *testing.T) {
 	mockEmailService := new(MockEmailService)
 	mockUserRepo := new(MockUserRepository)
 
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
 	service := NewItemErrorService(
 		mockLinkedItemRepo,
 		mockNotificationRepo,
 		mockUserRepo,
 		mockPlaidService,
 		mockEmailService,
+		mockRepairNonceRepo,
 		nil,
 	)
 
@@ -2144,3 +2385,23 @@ func TestHandleError_TerminalStatus_SkipsNotification(t *testing.T) {
 	mockassert.NoCallTo(t, &mockUserRepo.Mock, "GetUserByID")
 	mockassert.NoCallTo(t, &mockEmailService.Mock, "SendNotificationEmail")
 }
+
+// MockLinkedItemRepairNonceRepository mocks repository.LinkedItemRepairNonceRepository
+// (Issue #1620). Deliberately a bare testify mock with no default behaviour: a test that reaches
+// Mint or Burn without saying so fails loudly rather than silently minting or burning nothing,
+// which is exactly the failure mode a nonce gate must never have.
+type MockLinkedItemRepairNonceRepository struct {
+	mock.Mock
+}
+
+func (m *MockLinkedItemRepairNonceRepository) Mint(ctx context.Context, nonce *domain.LinkedItemRepairNonce) error {
+	args := m.Called(ctx, nonce)
+	return args.Error(0)
+}
+
+func (m *MockLinkedItemRepairNonceRepository) Burn(ctx context.Context, tokenHash, userID, linkedItemID string) (bool, error) {
+	args := m.Called(ctx, tokenHash, userID, linkedItemID)
+	return args.Bool(0), args.Error(1)
+}
+
+var _ repository.LinkedItemRepairNonceRepository = (*MockLinkedItemRepairNonceRepository)(nil)

@@ -46,6 +46,7 @@ import type {
   ExchangePublicTokenInputBody,
   ExchangePublicTokenOutputBody,
   LinkTokenResponse,
+  ReconnectLinkTokenResponse,
   RepairLinkedItemInputBody,
   RepairLinkedItemOutputBody
 } from '../../models';
@@ -214,7 +215,7 @@ export const useCreateLinkToken = <TError = ErrorType<ErrorModel>,
       return useMutation(getCreateLinkTokenMutationOptions(options), queryClient);
     }
     /**
- * Marks the caller's own linked item active again and clears its error tracking fields. Call only after the update-mode Plaid Link flow (using the token from createReconnectLinkToken) has succeeded.
+ * Marks the caller's own linked item active again and clears its error tracking fields. Call only after the update-mode Plaid Link flow (using the token from createReconnectLinkToken) has succeeded, presenting the repair_nonce returned alongside that token. The nonce is single-use and item-scoped; it proves the caller went through this server's own reconnect mint, not that Plaid Link succeeded.
  * @summary Clear a linked item's error state after a successful reconnect
  */
 export const repairLinkedItem = (
@@ -279,7 +280,7 @@ export const useRepairLinkedItem = <TError = ErrorType<ErrorModel>,
       return useMutation(getRepairLinkedItemMutationOptions(options), queryClient);
     }
     /**
- * Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration). A 'revoked' item is deliberately excluded — Plaid documents revoked access as unrecoverable via update mode; see ErrLinkedItemNotRepairable in item_error_service.go.
+ * Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration). A 'revoked' item is deliberately excluded — Plaid documents revoked access as unrecoverable via update mode; see ErrLinkedItemNotRepairable in item_error_service.go. Also returns a single-use repair_nonce that the reconnect endpoint requires; it shares the link token's expiry and must be kept out of URLs and logs.
  * @summary Create a Plaid update-mode link token to repair a broken connection
  */
 export const createReconnectLinkToken = (
@@ -288,7 +289,7 @@ export const createReconnectLinkToken = (
 ) => {
 
 
-      return customInstance<LinkTokenResponse>(
+      return customInstance<ReconnectLinkTokenResponse>(
       {url: `/api/v1/plaid/reconnect-link-token`, method: 'POST',
       headers: {'Content-Type': 'application/json', },
       data: createReconnectLinkTokenInputBody, signal

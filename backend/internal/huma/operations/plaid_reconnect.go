@@ -52,8 +52,14 @@ type CreateReconnectLinkTokenInput struct {
 }
 
 // CreateReconnectLinkTokenOutput represents the response for minting a reconnect link token.
+//
+// Issue #1620: the body is domain.ReconnectLinkTokenResponse and deliberately NOT the shared
+// domain.LinkTokenResponse this used to return. The reconnect mint now also hands back a
+// single-use repair nonce, and LinkTokenResponse is ALSO the body of the normal link-token mint
+// (POST /api/v1/plaid/link-token) — putting the nonce there would hand a repair credential to
+// every ordinary Plaid Link call, which needs none.
 type CreateReconnectLinkTokenOutput struct {
-	Body *domain.LinkTokenResponse
+	Body *domain.ReconnectLinkTokenResponse
 }
 
 // RepairLinkedItemInput represents the input for clearing a linked item's error state after a
@@ -62,6 +68,13 @@ type RepairLinkedItemInput struct {
 	inputs.AuthenticatedInput
 	Body struct {
 		ItemID string `json:"item_id" required:"true" doc:"The Plaid item_id of the linked item that was just repaired via Plaid Link"`
+		// RepairNonce is the raw single-use nonce returned by createReconnectLinkToken for THIS
+		// item (Issue #1620). Required: without it the endpoint marked an item healthy on nothing
+		// but an item_id, which is not a secret.
+		//
+		// ⚠ Body-only, never a query/path parameter, and never logged: it is a credential with
+		// the same handling rules as the Plaid link token minted beside it.
+		RepairNonce string `json:"repair_nonce" required:"true" doc:"The single-use repair nonce returned by createReconnectLinkToken for this item"`
 	}
 }
 
@@ -89,7 +102,7 @@ func (h *PlaidReconnectHandler) CreateReconnectLinkToken(ctx context.Context, in
 // Clears a linked item's error state and marks it active again after the user has successfully
 // completed the update-mode Plaid Link flow.
 func (h *PlaidReconnectHandler) RepairLinkedItem(ctx context.Context, input *RepairLinkedItemInput) (*RepairLinkedItemOutput, error) {
-	if err := h.itemErrorService.RepairItem(ctx, input.UserID, input.Body.ItemID); err != nil {
+	if err := h.itemErrorService.RepairItem(ctx, input.UserID, input.Body.ItemID, input.Body.RepairNonce); err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
@@ -107,7 +120,7 @@ func RegisterPlaidReconnectRoutes(api huma.API, handler *PlaidReconnectHandler) 
 		Method:      http.MethodPost,
 		Path:        "/api/v1/plaid/reconnect-link-token",
 		Summary:     "Create a Plaid update-mode link token to repair a broken connection",
-		Description: "Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration). A 'revoked' item is deliberately excluded — Plaid documents revoked access as unrecoverable via update mode; see ErrLinkedItemNotRepairable in item_error_service.go.",
+		Description: "Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration). A 'revoked' item is deliberately excluded — Plaid documents revoked access as unrecoverable via update mode; see ErrLinkedItemNotRepairable in item_error_service.go. Also returns a single-use repair_nonce that the reconnect endpoint requires; it shares the link token's expiry and must be kept out of URLs and logs.",
 		Tags:        []string{"Plaid"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.CreateReconnectLinkToken)
@@ -118,7 +131,7 @@ func RegisterPlaidReconnectRoutes(api huma.API, handler *PlaidReconnectHandler) 
 		Method:      http.MethodPost,
 		Path:        "/api/v1/plaid/reconnect",
 		Summary:     "Clear a linked item's error state after a successful reconnect",
-		Description: "Marks the caller's own linked item active again and clears its error tracking fields. Call only after the update-mode Plaid Link flow (using the token from createReconnectLinkToken) has succeeded.",
+		Description: "Marks the caller's own linked item active again and clears its error tracking fields. Call only after the update-mode Plaid Link flow (using the token from createReconnectLinkToken) has succeeded, presenting the repair_nonce returned alongside that token. The nonce is single-use and item-scoped; it proves the caller went through this server's own reconnect mint, not that Plaid Link succeeded.",
 		Tags:        []string{"Plaid"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.RepairLinkedItem)

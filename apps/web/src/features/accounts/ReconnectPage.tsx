@@ -14,7 +14,14 @@
  *
  * This page mints its OWN update-mode Plaid Link token on demand (via
  * createReconnectLinkToken), opens Plaid Link in update mode, and on success calls the REPAIR
- * endpoint (repairLinkedItem) — never the normal exchange-token flow. Reusing PlaidLinkButton's
+ * endpoint (repairLinkedItem) — never the normal exchange-token flow.
+ *
+ * Issue #1620: that mint also returns a single-use `repair_nonce`, which the repair call must
+ * present. It is held in component state for the life of the Link session and nowhere else.
+ * ⚠ It is a CREDENTIAL with exactly the handling rules of the link token beside it: never put it
+ * in the URL (the item_id in the query string is not a secret; this is), never log it, and never
+ * send it as an analytics property. This branch removed a Plaid link token from a notification's
+ * `action_url` for precisely that reason — see migration 000188. Reusing PlaidLinkButton's
  * token/exchange wiring here would call ExchangePublicToken, which creates a BRAND NEW
  * linked_items row (AccountService.LinkAccounts) — the user would end up with the broken
  * connection PLUS a duplicate. Only the onExit error-mapping is intentionally shared with
@@ -49,6 +56,7 @@ export function ReconnectPage() {
   const queryClient = useQueryClient()
 
   const [linkToken, setLinkToken] = useState<string | null>(null)
+  const [repairNonce, setRepairNonce] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const createReconnectLinkTokenMutation = useCreateReconnectLinkToken()
@@ -67,7 +75,9 @@ export function ReconnectPage() {
     createReconnectLinkTokenMutation
       .mutateAsync({ data: { item_id: itemId } })
       .then(response => {
-        if (!cancelled) setLinkToken(response.link_token)
+        if (cancelled) return
+        setRepairNonce(response.repair_nonce)
+        setLinkToken(response.link_token)
       })
       .catch(err => {
         console.error('Failed to mint reconnect link token:', err)
@@ -84,8 +94,25 @@ export function ReconnectPage() {
   // Handle successful update-mode Plaid Link flow: repair, NOT exchange.
   const handleOnSuccess = async () => {
     if (!itemId) return
+    if (!repairNonce) {
+      // Unreachable in practice — Link cannot open without a token, and the token and the nonce
+      // arrive in the same response — but a repair call with no nonce is refused by the server
+      // anyway (403), so failing here gives the user the actionable message instead of a raw
+      // status code.
+      trackEvent(ANALYTICS_EVENTS.ACCOUNT_RECONNECT_FAILED, { stage: 'repair' })
+      setError(
+        'This reconnect session has expired. Please use the "Reconnect Bank" button from your notification again.'
+      )
+      return
+    }
     try {
-      await repairLinkedItemMutation.mutateAsync({ data: { item_id: itemId } })
+      await repairLinkedItemMutation.mutateAsync({
+        data: { item_id: itemId, repair_nonce: repairNonce },
+      })
+      // Issue #1620: the nonce is spent the moment the server burns it. Drop it so a second
+      // onSuccess from the same Link session cannot resend a value that is now guaranteed to be
+      // refused, and so it stops living in component state any longer than it must.
+      setRepairNonce(null)
       trackEvent(ANALYTICS_EVENTS.ACCOUNT_RECONNECT_SUCCEEDED)
       queryClient.invalidateQueries({ queryKey: getGetAccountsQueryKey() })
       toast.success('Bank connection reconnected.')

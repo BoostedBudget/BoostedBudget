@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -227,4 +229,29 @@ func TestMapError_TenancyMismatchSentinelsAreDistinguishable(t *testing.T) {
 				"errors.Is must see through wrapping — repositories return these wrapped by callers")
 		})
 	}
+}
+
+// TestMapError_RepairNonceInvalidIs403AndSaysNothingAboutWhy pins Issue #1620's mapping.
+//
+// Two properties, not one. The status must be 403 — the caller is authenticated and the item is
+// theirs and is repairable, so 404 ("not found") and 409 ("wrong state") both describe something
+// that is not true, and both would send the frontend down a different recovery path. And the
+// message must not leak WHICH of the burn's predicates failed: "already used", "expired" and
+// "never minted" are equally useless to a legitimate user (the recovery is identical) and
+// individually useful to someone probing item_ids.
+func TestMapError_RepairNonceInvalidIs403AndSaysNothingAboutWhy(t *testing.T) {
+	result := humaerrors.MapError(services.ErrRepairNonceInvalid)
+	require.NotNil(t, result)
+
+	statusErr, ok := result.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError")
+	assert.Equal(t, http.StatusForbidden, statusErr.GetStatus())
+
+	msg := strings.ToLower(result.Error())
+	for _, leak := range []string{"expired", "already used", "already spent", "not minted", "nonce"} {
+		assert.NotContains(t, msg, leak,
+			"the user-facing message must not disclose which burn predicate failed")
+	}
+	assert.Contains(t, msg, "reconnect bank",
+		"the message must name the one recovery a user can actually perform")
 }

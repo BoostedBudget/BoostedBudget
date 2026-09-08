@@ -5329,6 +5329,31 @@ components:
         - failed
         - completed_last_hour
       type: object
+    ReconnectLinkTokenResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ReconnectLinkTokenResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        expiration:
+          format: date-time
+          type: string
+        link_token:
+          type: string
+        repair_nonce:
+          type: string
+        request_id:
+          type: string
+      required:
+        - link_token
+        - expiration
+        - request_id
+        - repair_nonce
+      type: object
     RecordMCPAuditBody:
       additionalProperties: false
       properties:
@@ -5696,8 +5721,12 @@ components:
         item_id:
           description: The Plaid item_id of the linked item that was just repaired via Plaid Link
           type: string
+        repair_nonce:
+          description: The single-use repair nonce returned by createReconnectLinkToken for this item
+          type: string
       required:
         - item_id
+        - repair_nonce
       type: object
     RepairLinkedItemOutputBody:
       additionalProperties: false
@@ -13510,7 +13539,7 @@ paths:
         - Plaid
   /api/v1/plaid/reconnect:
     post:
-      description: Marks the caller's own linked item active again and clears its error tracking fields. Call only after the update-mode Plaid Link flow (using the token from createReconnectLinkToken) has succeeded.
+      description: Marks the caller's own linked item active again and clears its error tracking fields. Call only after the update-mode Plaid Link flow (using the token from createReconnectLinkToken) has succeeded, presenting the repair_nonce returned alongside that token. The nonce is single-use and item-scoped; it proves the caller went through this server's own reconnect mint, not that Plaid Link succeeded.
       operationId: repairLinkedItem
       requestBody:
         content:
@@ -13538,7 +13567,7 @@ paths:
         - Plaid
   /api/v1/plaid/reconnect-link-token:
     post:
-      description: Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration). A 'revoked' item is deliberately excluded — Plaid documents revoked access as unrecoverable via update mode; see ErrLinkedItemNotRepairable in item_error_service.go.
+      description: Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration). A 'revoked' item is deliberately excluded — Plaid documents revoked access as unrecoverable via update mode; see ErrLinkedItemNotRepairable in item_error_service.go. Also returns a single-use repair_nonce that the reconnect endpoint requires; it shares the link token's expiry and must be kept out of URLs and logs.
       operationId: createReconnectLinkToken
       requestBody:
         content:
@@ -13551,7 +13580,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/LinkTokenResponse"
+                $ref: "#/components/schemas/ReconnectLinkTokenResponse"
           description: OK
         default:
           content:

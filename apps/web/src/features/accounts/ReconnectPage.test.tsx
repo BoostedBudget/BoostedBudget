@@ -81,7 +81,10 @@ describe('ReconnectPage', () => {
     mockUseCreateReconnectLinkToken.mockClear()
     mockCreateReconnectLinkTokenMutateAsync.mockClear()
     mockCreateReconnectLinkTokenMutateAsync.mockImplementation(() =>
-      Promise.resolve({ link_token: 'test-reconnect-link-token' })
+      Promise.resolve({
+        link_token: 'test-reconnect-link-token',
+        repair_nonce: 'test-repair-nonce',
+      })
     )
     mockUseRepairLinkedItem.mockClear()
     mockRepairLinkedItemMutateAsync.mockClear()
@@ -139,7 +142,7 @@ describe('ReconnectPage', () => {
 
     await waitFor(() => {
       expect(mockRepairLinkedItemMutateAsync).toHaveBeenCalledWith({
-        data: { item_id: 'plaid-item-789' },
+        data: { item_id: 'plaid-item-789', repair_nonce: 'test-repair-nonce' },
       })
     })
     await waitFor(() => {
@@ -213,5 +216,54 @@ describe('ReconnectPage', () => {
       stage: 'mint',
     })
     expect(mockRepairLinkedItemMutateAsync).not.toHaveBeenCalled()
+  })
+  // ==========================================================================
+  // Issue #1620 — the repair nonce
+  // ==========================================================================
+
+  it('never puts the repair nonce in the URL, an analytics property or a toast', async () => {
+    renderPage('/accounts/reconnect?item_id=plaid-item-789')
+    await waitFor(() => expect(mockUsePlaidLink).toHaveBeenCalled())
+
+    const { onSuccess } = getCapturedPlaidLinkOptions()
+    await act(async () => {
+      onSuccess('public-token-should-be-ignored', {})
+    })
+    await waitFor(() => expect(mockRepairLinkedItemMutateAsync).toHaveBeenCalled())
+
+    // The nonce is a credential with the same handling rules as the link token this branch pulled
+    // out of the notification action_url (migration 000188). The request BODY is the only place
+    // it may appear.
+    expect(window.location.href).not.toContain('test-repair-nonce')
+    expect(document.body.textContent ?? '').not.toContain('test-repair-nonce')
+    for (const call of mockTrackEvent.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain('test-repair-nonce')
+    }
+    for (const call of mockToastSuccess.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain('test-repair-nonce')
+    }
+  })
+
+  it('refuses to call the repair endpoint at all when the mint returned no nonce', async () => {
+    // A server that hands out a link token with no nonce would leave the user completing Plaid
+    // Link and then meeting a raw 403. Fail here instead, with the one instruction that helps.
+    mockCreateReconnectLinkTokenMutateAsync.mockImplementation(() =>
+      Promise.resolve({ link_token: 'test-reconnect-link-token' })
+    )
+    renderPage('/accounts/reconnect?item_id=plaid-item-789')
+    await waitFor(() => expect(mockUsePlaidLink).toHaveBeenCalled())
+
+    const { onSuccess } = getCapturedPlaidLinkOptions()
+    await act(async () => {
+      onSuccess('public-token-should-be-ignored', {})
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText(/reconnect session has expired/i)).toBeTruthy()
+    })
+    expect(mockRepairLinkedItemMutateAsync).not.toHaveBeenCalled()
+    expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.ACCOUNT_RECONNECT_FAILED, {
+      stage: 'repair',
+    })
   })
 })
