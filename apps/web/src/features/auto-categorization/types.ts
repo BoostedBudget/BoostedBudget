@@ -278,3 +278,56 @@ export interface UseAutoCategorizationRulesResult {
   toggleRule: (ruleId: string, enabled: boolean) => Promise<CategorizationRule>
   refresh: () => Promise<void>
 }
+
+/**
+ * #1625: the flat list of choices the rule builder's condition dropdown offers.
+ *
+ * The pre-#1625 dropdown was keyed on `ConditionType` alone, which is why the new capabilities
+ * (matching the raw description, a merchant id, or the DIRECTION of money) were unreachable from
+ * the web UI even after the API gained them — there was no fused type name to select.
+ *
+ * A choice is EITHER a legacy fused type or a {field, operator} pair. `key` is what the <select>
+ * carries; pair choices use "field:operator" so the two namespaces cannot collide.
+ */
+export interface ConditionChoice {
+  key: string
+  label: string
+  type?: ConditionType
+  field?: ConditionField
+  operator?: ConditionOperator
+}
+
+/** The legacy fused choices, in their existing order. `expression` is response-only. */
+const FUSED_CHOICES: ConditionChoice[] = (
+  Object.keys(CONDITION_TYPE_LABELS) as ConditionType[]
+)
+  .filter((t) => t !== 'expression')
+  .map((t) => ({ key: t, label: CONDITION_TYPE_LABELS[t], type: t }))
+
+/** The pairs that have no fused ancestor — the capability gap #1625 closes. */
+const PAIR_CHOICES: ConditionChoice[] = [
+  { key: 'name:contains', label: 'Description contains', field: 'name', operator: 'contains' },
+  { key: 'name:eq', label: 'Description is', field: 'name', operator: 'eq' },
+  { key: 'name:starts_with', label: 'Description starts with', field: 'name', operator: 'starts_with' },
+  { key: 'name:ends_with', label: 'Description ends with', field: 'name', operator: 'ends_with' },
+  { key: 'merchant_id:eq', label: 'Merchant ID is', field: 'merchant_id', operator: 'eq' },
+  { key: 'direction:eq', label: 'Money in / out is', field: 'direction', operator: 'eq' },
+  { key: 'signed_amount:gt', label: 'Signed amount is greater than', field: 'signed_amount', operator: 'gt' },
+  { key: 'signed_amount:lt', label: 'Signed amount is less than', field: 'signed_amount', operator: 'lt' },
+  { key: 'signed_amount:eq', label: 'Signed amount is', field: 'signed_amount', operator: 'eq' },
+]
+
+export const CONDITION_CHOICES: ConditionChoice[] = [...FUSED_CHOICES, ...PAIR_CHOICES]
+
+/** The choice key for a condition, whichever shape it arrived in. */
+export function conditionChoiceKey(condition: Pick<RuleCondition, 'type' | 'field' | 'operator'>): string {
+  if (condition.field && condition.operator) {
+    const pair = `${condition.field}:${condition.operator}`
+    // A pair with a fused equivalent is shown as its fused choice, so a rule saved before the
+    // rework and one saved after it look identical in the builder.
+    if (CONDITION_CHOICES.some((c) => c.key === pair)) return pair
+    if (condition.type && condition.type !== 'expression') return condition.type
+    return pair
+  }
+  return condition.type ?? ''
+}

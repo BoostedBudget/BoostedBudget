@@ -18,7 +18,12 @@ import type {
   DateRangeValue,
   RuleTargetKind,
 } from '../types'
-import { CONDITION_TYPE_LABELS } from '../types'
+import {
+  CONDITION_CHOICES,
+  conditionChoiceKey,
+  type ConditionChoice,
+  type ConditionField,
+} from '../types'
 import { SearchableSelect } from '../../../shared/components/SearchableSelect'
 import type { Account } from '../../accounts/types'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
@@ -44,7 +49,10 @@ const PAYMENT_CHANNELS = [
 /**
  * Determines the input type for a given condition type
  */
-function getInputTypeForCondition(conditionType: ConditionType): string {
+function getInputTypeForCondition(conditionType: ConditionType, field?: ConditionField): string {
+  // #1625: fields with no fused ancestor decide the input on their own.
+  if (field === 'direction') return 'direction_select'
+  if (field === 'signed_amount') return 'number'
   switch (conditionType) {
     case 'amount_greater_than':
     case 'amount_less_than':
@@ -319,6 +327,15 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
     }
   }
 
+  // Default value for a {field, operator} choice — the fused choices delegate to the existing
+  // per-type defaults so their behaviour is untouched.
+  const getDefaultValueForChoice = (choice: ConditionChoice): RuleCondition['value'] => {
+    if (choice.type) return getDefaultValueForType(choice.type)
+    if (choice.field === 'direction') return 'outflow'
+    if (choice.field === 'signed_amount') return 0
+    return ''
+  }
+
   // Get default value for a condition type
   const getDefaultValueForType = (type: ConditionType): RuleCondition['value'] => {
     switch (type) {
@@ -355,6 +372,21 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
         }
       })
       return newErrors
+    })
+  }
+
+  // #1625: a choice is EITHER a legacy fused type or a {field, operator} pair. Whichever is
+  // chosen, the OTHER shape is cleared — sending a `type` that contradicts the pair is a 422
+  // (ErrConditionShapeConflict), deliberately, so the server never has to guess which one meant
+  // what.
+  const selectConditionChoice = (index: number, key: string) => {
+    const choice = CONDITION_CHOICES.find((c) => c.key === key)
+    if (!choice) return
+    updateCondition(index, {
+      type: choice.type,
+      field: choice.field,
+      operator: choice.operator,
+      value: getDefaultValueForChoice(choice),
     })
   }
 
@@ -462,13 +494,27 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
 
   // Render the appropriate input for a condition based on its type
   const renderConditionValueInput = (condition: RuleCondition, index: number) => {
-    const inputType = getInputTypeForCondition(condition.type)
+    const inputType = getInputTypeForCondition(condition.type, condition.field)
     const inputCls = 'flex-1 min-w-[100px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
     const numberInputCls = 'max-w-[120px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
     const dateInputCls = 'max-w-[150px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
     const selectCls = 'flex-shrink-0 px-3 py-2 text-sm border border-input rounded bg-background text-foreground cursor-pointer min-w-[150px] focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70 disabled:cursor-not-allowed'
 
     switch (inputType) {
+      case 'direction_select':
+        return (
+          <select
+            className={selectCls}
+            aria-label="Direction"
+            value={String(condition.value ?? 'outflow')}
+            onChange={(e) => updateCondition(index, { value: e.target.value })}
+            disabled={saving}
+          >
+            {/* Plaid PFCv2: a POSITIVE amount is money leaving the account. */}
+            <option value="outflow">Money out</option>
+            <option value="inflow">Money in</option>
+          </select>
+        )
       case 'number':
         return (
           <input
@@ -796,13 +842,13 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
                   id={`condition-type-${index}`}
                   aria-label="Condition type"
                   className={selectClass}
-                  value={condition.type}
-                  onChange={(e) => updateCondition(index, { type: e.target.value as ConditionType })}
+                  value={conditionChoiceKey(condition)}
+                  onChange={(e) => selectConditionChoice(index, e.target.value)}
                   disabled={saving}
                 >
-                  {Object.entries(CONDITION_TYPE_LABELS).map(([type, label]) => (
-                    <option key={type} value={type}>
-                      {label}
+                  {CONDITION_CHOICES.map((choice) => (
+                    <option key={choice.key} value={choice.key}>
+                      {choice.label}
                     </option>
                   ))}
                 </select>
