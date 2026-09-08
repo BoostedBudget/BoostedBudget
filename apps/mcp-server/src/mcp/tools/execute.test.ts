@@ -2,6 +2,11 @@ import { describe, expect, it, mock } from 'bun:test'
 import { buildWriteExecuteHandler, buildReadExecuteHandler, type ExecuteCall, type ExecuteSpecEntry } from './execute'
 import { HostProxyError } from '../../sandbox/host-proxy'
 import { ALL_OPERATION_IDS, getCapability } from '../../manifest/capability-manifest'
+import {
+  ACKNOWLEDGED_LAZY_INIT_OPERATIONS,
+  findUnacknowledgedLazyInitOperations,
+  readLazyInitOperationIds,
+} from '../../manifest/lazy-init-extension'
 import { readSpecIndex } from '../../../scripts/generate-mcp-capability-summary'
 
 // Minimal proxy stub for testing
@@ -469,13 +474,16 @@ describe("readExecute's REAL guarantee, checked against the real manifest + spec
 
   // The properties above are true of EVERY admitted operation, including these two — but they do
   // NOT prove "readExecute cannot write". These two are known, named exceptions: both lazily
-  // create the caller's own default row on first access. Pinned by name (not just by property) so
-  // that adding a THIRD such operation requires touching this exact list — the closest thing to a
-  // guard available here, since nothing in this package can see the Go implementation to detect a
-  // write on its own.
-  const ACKNOWLEDGED_LAZY_INIT_ON_READ = ['getPrivacySettings', 'getUserProfile']
-
-  it.each(ACKNOWLEDGED_LAZY_INIT_ON_READ)(
+  // create the caller's own default row on first access.
+  //
+  // #1610: this used to be a hardcoded array here — a tripwire that pinned the two known
+  // exceptions but couldn't see a THIRD one added later, since nothing in this package can see
+  // the Go implementation to detect a write on its own. It is now derived from
+  // ACKNOWLEDGED_LAZY_INIT_OPERATIONS (manifest/lazy-init-extension.ts), which is itself checked
+  // against api/openapi.yaml's `x-mcp-lazy-init` extension by
+  // scripts/check-manifest-completeness.ts (a real CI gate, not just this vitest suite) — see
+  // that module's doc comment for the full mechanism.
+  it.each(ACKNOWLEDGED_LAZY_INIT_OPERATIONS)(
     'acknowledges %s as an admitted GET that lazily creates a row on first access',
     async (operationId) => {
       const proxy = makeProxy({})
@@ -494,7 +502,16 @@ describe("readExecute's REAL guarantee, checked against the real manifest + spec
   it('the acknowledged list is exactly these two — a new admitted read-with-a-write needs a human to update this list', () => {
     // This does not (and cannot) detect a new lazy-init write on its own; it only pins the
     // count/names of the ones already acknowledged, so a PR adding a third stands out in review.
-    expect(ACKNOWLEDGED_LAZY_INIT_ON_READ).toEqual(['getPrivacySettings', 'getUserProfile'])
+    expect(ACKNOWLEDGED_LAZY_INIT_OPERATIONS).toEqual(['getPrivacySettings', 'getUserProfile'])
+  })
+
+  it('api/openapi.yaml tags exactly the acknowledged operations with x-mcp-lazy-init — no unreviewed drift', () => {
+    // The actual scanner: derive what the SPEC currently tags and diff it against what has been
+    // reviewed. A non-empty result here means a third lazy-init-tagged operation was added to the
+    // Go layer without anyone updating ACKNOWLEDGED_LAZY_INIT_OPERATIONS — the exact gap the
+    // by-name-only tripwire above could not close.
+    const specTagged = readLazyInitOperationIds()
+    expect(findUnacknowledgedLazyInitOperations(specTagged, ACKNOWLEDGED_LAZY_INIT_OPERATIONS)).toEqual([])
   })
 })
 

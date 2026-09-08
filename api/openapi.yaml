@@ -15582,6 +15582,7 @@ paths:
       summary: Get privacy settings
       tags:
         - Privacy
+      x-mcp-lazy-init: true
     put:
       description: Updates the authenticated user's privacy settings with GDPR validation.
       operationId: updatePrivacySettings
@@ -15631,6 +15632,7 @@ paths:
       summary: Get user profile
       tags:
         - Profile
+      x-mcp-lazy-init: true
     put:
       description: Updates the authenticated user's profile with validated data.
       operationId: updateUserProfile
