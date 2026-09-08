@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -70,6 +71,42 @@ func TestNotifyPermanentPlaidError_ItemLoginRequired_RoutesToHandleLoginRequired
 // TestNotifyPermanentPlaidError_ProductsNotSupported_DoesNotNotify is the brief's explicit
 // exclusion: the connection is fine, only one product is unavailable, and there is no matching
 // notification type. Must not call either handler.
+// TestNotifyPermanentPlaidError_DoesNotLeakInternalErrorDetailToTheUser is the gap-analysis
+// finding: `plaidErr.Error()` renders "plaid error <CODE>: <raw wrapped Go/Plaid error>", and
+// whatever is passed here becomes the BODY of an in-app notification AND an email
+// (item_error_service.go's template, then sendNotificationEmail). Shipping a raw error string to a
+// user is both unhelpful and an internal-detail leak.
+//
+// The error CODE is still recorded — it is passed separately and stored on linked_items.error_code
+// — so nothing diagnostic is lost by keeping it out of the human-facing sentence. P3-T3 already
+// made the template omit the ": <message>" clause entirely when the message is empty, so an empty
+// message renders the clean "We're experiencing a connection issue with <bank>." copy.
+func TestNotifyPermanentPlaidError_DoesNotLeakInternalErrorDetailToTheUser(t *testing.T) {
+	notifier := new(mockItemErrorNotifier)
+	// Permissive on the message so a violation surfaces as a readable assertion below rather than
+	// as a mock panic, which would say nothing about WHY it is wrong.
+	notifier.On("HandleError", mock.Anything, mock.Anything, "ITEM_LOCKED", mock.Anything).Return(nil)
+
+	plaidErr := &domain.PlaidSyncError{
+		ErrorType:     domain.PlaidErrorPermanent,
+		ErrorCode:     "ITEM_LOCKED",
+		OriginalError: errors.New("some internal transport detail the user must never see"),
+	}
+
+	notifyPermanentPlaidError(context.Background(), notifier, slog.Default(), testLinkedItemForNotify(), plaidErr)
+
+	if len(notifier.Calls) != 1 {
+		t.Fatalf("expected exactly one HandleError call, got %d", len(notifier.Calls))
+	}
+	sentMessage, _ := notifier.Calls[0].Arguments.Get(3).(string)
+	if strings.Contains(sentMessage, "internal transport detail") {
+		t.Errorf("the raw wrapped error reached a user-facing notification/email: %q", sentMessage)
+	}
+	if strings.Contains(sentMessage, "plaid error") {
+		t.Errorf("plaidErr.Error()'s internal prefix reached the user: %q", sentMessage)
+	}
+}
+
 func TestNotifyPermanentPlaidError_ProductsNotSupported_DoesNotNotify(t *testing.T) {
 	ctx := context.Background()
 	m := new(mockItemErrorNotifier)

@@ -51,7 +51,18 @@ func notifyPermanentPlaidError(
 		return
 	}
 
-	errorMessage := plaidErr.Error()
+	// ⚠ Deliberately NOT plaidErr.Error(). That renders "plaid error <CODE>: <raw wrapped Go/Plaid
+	// error>", and whatever is passed here becomes the BODY of an in-app notification AND an email
+	// (item_error_service.go's template → sendNotificationEmail). A raw transport error is both
+	// useless to a user and an internal-detail leak.
+	//
+	// Nothing diagnostic is lost: the error CODE is passed separately below and is persisted to
+	// linked_items.error_code, and the full error is already in the worker's structured log.
+	// P3-T3 made the template omit the ": <message>" clause entirely when the message is empty, so
+	// this renders the clean "We're experiencing a connection issue with <bank>." copy — the same
+	// sentence the webhook path produces when Plaid sends no message.
+	// Pinned by TestNotifyPermanentPlaidError_DoesNotLeakInternalErrorDetailToTheUser.
+	const errorMessage = ""
 
 	// INVALID_ACCESS_TOKEN and ITEM_LOGIN_REQUIRED are the only two permanent codes
 	// domain.ClassifyPlaidError currently produces besides PRODUCTS_NOT_SUPPORTED (excluded
