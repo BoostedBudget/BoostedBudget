@@ -8715,10 +8715,6 @@
           "required": true
         },
         {
-          "name": "notes",
-          "type": "string"
-        },
-        {
           "name": "occurred_on",
           "type": "string",
           "required": true

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 	"time"
@@ -871,5 +872,17 @@ func TestSavingsGoalContribution_Validate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// #1625: the request must not advertise a field it discards. `notes` had no column and was
+// never read; a schema that accepts it promises storage that does not exist.
+func TestLogContributionRequest_DoesNotAdvertiseNotes(t *testing.T) {
+	raw, err := json.Marshal(LogContributionRequest{Amount: 1, OccurredOn: "2026-09-08"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(raw, []byte("notes")) {
+		t.Errorf("LogContributionRequest still carries a notes field: %s", raw)
 	}
 }
