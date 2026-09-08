@@ -4,142 +4,24 @@ package domain
 type MCPOperationClass string
 
 const (
-	MCPClassRead     MCPOperationClass = "read"
-	MCPClassWrite    MCPOperationClass = "write"
-	MCPClassExcluded MCPOperationClass = "excluded"
+	MCPClassRead  MCPOperationClass = "read"
+	MCPClassWrite MCPOperationClass = "write"
+	// MCPClassDestructive marks an operation that permanently destroys stored rows
+	// (no tombstone, no restore path) — the same distinction the TypeScript capability
+	// manifest (apps/mcp-server/src/manifest/capability-manifest.ts) draws between
+	// 'write' (tombstoning) and 'destructive' (Issue #1569 Task 16). Still subject to
+	// the same v1 recipe rule as MCPClassWrite: MCPOperationIsRead is false for it, so
+	// recipe_service.go rejects it — the distinction exists for classification fidelity
+	// with the TS source of truth, not to grant it anything MCPClassWrite doesn't have.
+	MCPClassDestructive MCPOperationClass = "destructive"
+	MCPClassExcluded    MCPOperationClass = "excluded"
 )
 
-// MCPOperationManifest classifies a known operationId.
-// This mirrors the TypeScript capability manifest in apps/mcp-server.
-// The Go copy is used to validate recipe specs at the service layer —
-// recipes may only contain read-class operations in v1.
-var MCPOperationManifest = map[string]MCPOperationClass{
-	// Analytics — all read
-	"getCashFlowHistory":          MCPClassRead,
-	"getCashFlowSummary":          MCPClassRead,
-	"getSpendingByCategory":       MCPClassRead,
-	"getSpendingByMerchant":       MCPClassRead,
-	"getSpendingTrends":           MCPClassRead,
-	"getCategoryTotalForPeriod":   MCPClassRead,
-	"getTopExpense":               MCPClassRead,
-	"getAverageMonthlySpend":              MCPClassRead,
-	"getRecurringSubscriptions":           MCPClassRead,
-	"getSavingsRateForPeriod":             MCPClassRead,
-	"getMonthOverMonthSpendingChange":     MCPClassRead,
-	"getLargestTransactionsForPeriod":     MCPClassRead,
-	"getCategoryBreakdownForMerchant":     MCPClassRead,
-	"getIncomeSourceBreakdown":            MCPClassRead,
-	"getUnusualSpend":                     MCPClassRead,
-	"getNetWorthTrend":                    MCPClassRead,
-	"getBudgetVsActual":                   MCPClassRead,
-	"getFinancialSummary":                 MCPClassRead,
-	// Accounts
-	"getAccounts":      MCPClassRead,
-	"reorderAccounts":  MCPClassWrite,
-	"updateAccount":    MCPClassWrite,
-	"deleteAccount":    MCPClassExcluded,
-	"disconnectInstitution": MCPClassExcluded,
-	// Boosts — reads only (writes excluded)
-	"getBoosts":           MCPClassRead,
-	"getBoostByID":        MCPClassRead,
-	"getBoostExecutions":  MCPClassRead,
-	// Auto-Categorization — reads only
-	"getUserRules": MCPClassRead,
-	"getRuleByID":  MCPClassRead,
-	// Budgets
-	"getBudgets":           MCPClassRead,
-	"getAvailableCategories": MCPClassRead,
-	"getCurrentBudget":     MCPClassRead,
-	"getBudget":            MCPClassRead,
-	"getCategoryTransactions": MCPClassRead,
-	"createBudget":         MCPClassWrite,
-	"updateBudget":         MCPClassWrite,
-	"deleteBudget":         MCPClassWrite,
-	"addBudgetCategory":    MCPClassWrite,
-	"updateBudgetCategory": MCPClassWrite,
-	"deleteBudgetCategory": MCPClassWrite,
-	"syncBudget":           MCPClassWrite,
-	"previewCategoryMatches": MCPClassRead,
-	// Categories
-	"getUserCategories":       MCPClassRead,
-	"getPlaidCategories":      MCPClassRead,
-	"getPlaidDetailedCategories": MCPClassRead,
-	"getPlaidPrimaryCategories": MCPClassRead,
-	"getCategoryByID":         MCPClassRead,
-	"getCategoryUsage":        MCPClassRead,
-	"createCategory":          MCPClassWrite,
-	"updateCategory":          MCPClassWrite,
-	"deleteCategory":          MCPClassWrite,
-	// Dashboard — reads; layout writes excluded
-	"getAccountTypes":         MCPClassRead,
-	"getBalanceHistory":       MCPClassRead,
-	"getBalanceSummary":       MCPClassRead,
-	"getNetWorth":             MCPClassRead,
-	"getNetWorthHistory":      MCPClassRead,
-	"getDashboardPreferences": MCPClassRead,
-	"getDefaultLayout":        MCPClassRead,
-	"getWidgetTypes":          MCPClassRead,
-	// Notifications
-	"getNotifications":           MCPClassRead,
-	"getUnreadNotificationCount": MCPClassRead,
-	"markNotificationAsRead":     MCPClassWrite,
-	"markAllNotificationsAsRead": MCPClassWrite,
-	// Savings Goals
-	"getSavingsGoals":            MCPClassRead,
-	"getActiveSavingsGoals":      MCPClassRead,
-	"getSavingsGoal":             MCPClassRead,
-	"getSavingsProgressSummary":  MCPClassRead, // #1300: basis-aware analytics (Codex C11)
-	"createSavingsGoal":          MCPClassWrite,
-	"updateSavingsGoal":          MCPClassWrite,
-	"deleteSavingsGoal":          MCPClassWrite,
-	// Subscription — reads only; writes excluded
-	"get-current-subscription": MCPClassRead,
-	"getSubscriptionTiers":     MCPClassRead,
-	"get-billing-portal-url":   MCPClassRead,
-	// Tags
-	"getUserTags": MCPClassRead,
-	"getTagByID":  MCPClassRead,
-	"createTag":   MCPClassWrite,
-	"updateTag":   MCPClassWrite,
-	"deleteTag":   MCPClassWrite,
-	// Transactions
-	"getTransactions":              MCPClassRead,
-	"getTransactionByID":           MCPClassRead,
-	"getTransactionReviewSummary":  MCPClassRead,
-	"updateTransactionCategory":    MCPClassWrite,
-	"updateTransactionTags":        MCPClassWrite,
-	"setTransactionReviewed":       MCPClassWrite,
-	"bulkSetTransactionReviewed":   MCPClassWrite,
-	"bulkUpdateTransactionCategory": MCPClassWrite,
-	// Investments — Issue #138
-	"getHoldings":                        MCPClassRead,
-	"getPortfolioSummary":                MCPClassRead,
-	"getPortfolioHistory":                MCPClassRead,
-	"getInvestmentTransactions":          MCPClassRead,
-	"getPortfolioAllocationBreakdown":    MCPClassRead,
-	"getTopMovers":                       MCPClassRead,
-	"getInvestmentGainLossSummary":       MCPClassRead,
-	"getInvestmentIncomeSummary":         MCPClassRead,
-	// Transfer Suggestions
-	"getTransferSuggestions":            MCPClassRead,
-	"acceptTransferSuggestion":          MCPClassWrite,
-	"cancelTransferSuggestion":          MCPClassWrite, // #1267: cancel accepted suggestion → rejected
-	"rejectTransferSuggestion":          MCPClassWrite,
-	"confirmTransferSuggestionMatch":    MCPClassWrite, // #972: idempotent write
-	"declineTransferSuggestionMatch":    MCPClassWrite, // #972: user-driven reservation release
-	// Savings Impact — #972
-	"getSavingsImpactAggregate": MCPClassRead,
-	"getSavingsImpactMe":        MCPClassRead,
-	// User Accounts
-	"getUserAccounts":    MCPClassRead,
-	"getUserAccountById": MCPClassRead,
-	"updateUserAccount":  MCPClassWrite,
-	// Profile/Privacy — reads only; writes excluded
-	"getPrivacySettings": MCPClassRead,
-	"getUserProfile":     MCPClassRead,
-	// Regions
-	"getRegions": MCPClassRead,
-}
+// MCPOperationManifest classifies every known operationId and is defined in
+// mcp_manifest_generated.go — generated from the TypeScript capability manifest via
+// apps/mcp-server/src/spec/generated/spec-index.json. See that file's header for how
+// to regenerate it. Do not hand-edit the map; add/change entries in
+// apps/mcp-server/src/manifest/capability-manifest.ts instead and regenerate.
 
 // MCPOperationAllowed returns true if the operationId is allowed through MCP
 // (present in the manifest and not excluded).

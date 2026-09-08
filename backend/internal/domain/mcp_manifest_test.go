@@ -1,13 +1,21 @@
 package domain_test
 
-// Issue #1087 GAP-7: Go/TS manifest sync check
-// Verifies that every operation in MCPOperationManifest that is classified as
-// MCPClassRead is also classified as "read" in the TypeScript spec index
-// (apps/mcp-server/src/spec/generated/spec-index.json).
+// Issue #1087 GAP-7 / Issue #1610 P3-T6: Go/TS manifest sync check.
 //
-// This catches the critical drift scenario: an op accidentally marked as
-// MCPClassRead in the Go manifest but as "write" (or excluded) in the TS manifest,
-// which would allow write recipes to pass Go validation but be denied by the Worker.
+// mcp_manifest_generated.go (MCPOperationManifest) is GENERATED from
+// apps/mcp-server/src/spec/generated/spec-index.json by
+// backend/scripts/generate-mcp-manifest/main.go — it is no longer a hand-maintained
+// mirror. TestMCPManifest_MatchesGeneratedFromSpecIndex below regenerates the expected
+// map from spec-index.json in-memory and asserts full bidirectional equality against
+// the checked-in MCPOperationManifest: every entry, in both directions, for every
+// class (read/write/destructive/excluded) — not just the read subset a hand-maintained
+// mirror's drift test used to check. This is what let read-class operations
+// (getMerchants, listMCPRecipes, getMyHousehold, getAccountBalanceHistory, and others)
+// go missing from the old hand-maintained map for so long: the old cross-check only
+// checked "is every Go read op *also* read in TS" — an op TS has and Go lacks entirely
+// was invisible to it, and (separately) a path bug made its loadSpecIndex() always
+// t.Skip() in every environment, so it had literally never run. Both of the old test
+// functions are removed; the full-equality test below replaces them.
 //
 // The spec-index.json is generated from the TS capability manifest and is
 // CI-verified for drift. Using it as the source of truth for cross-language sync.
@@ -32,6 +40,30 @@ type specEntry struct {
 	Excluded      bool   `json:"excluded"`
 }
 
+// goClassFor mirrors backend/scripts/generate-mcp-manifest/main.go's goClassFor exactly
+// (kept as a small duplicate rather than an import — that generator is a `package main`
+// and cannot be imported). If the two diverge, TestMCPManifest_MatchesGeneratedFromSpecIndex
+// below will not catch that divergence directly, but a stale-manifest failure still
+// surfaces via `go run scripts/generate-mcp-manifest/main.go` producing a diff against the
+// committed file (see "make validate-mcp-artifacts").
+func goClassFor(t *testing.T, e specEntry) domain.MCPOperationClass {
+	t.Helper()
+	if e.Excluded {
+		return domain.MCPClassExcluded
+	}
+	switch e.ManifestClass {
+	case "read":
+		return domain.MCPClassRead
+	case "write":
+		return domain.MCPClassWrite
+	case "destructive":
+		return domain.MCPClassDestructive
+	default:
+		t.Fatalf("spec-index entry %q has unknown manifestClass %q", e.OperationID, e.ManifestClass)
+		return ""
+	}
+}
+
 type specIndex struct {
 	Entries []specEntry `json:"entries"`
 }
@@ -39,7 +71,12 @@ type specIndex struct {
 func loadSpecIndex(t *testing.T) map[string]specEntry {
 	t.Helper()
 	_, thisFile, _, _ := runtime.Caller(0)
-	repoRoot := filepath.Join(filepath.Dir(thisFile), "../../../../")
+	// backend/internal/domain/ → ../../../ = repo root. This was previously "../../../../"
+	// (one level too many, landing outside the repo entirely) which made this helper —
+	// and every test built on it — silently t.Skip() in every environment, always. That
+	// is the deeper reason the Go/TS manifest drift (Issue #1610 P3-T6) survived a
+	// "cross-check [that] ALREADY EXISTS": the check had never actually run.
+	repoRoot := filepath.Join(filepath.Dir(thisFile), "../../../")
 	specPath := filepath.Join(repoRoot, "apps/mcp-server/src/spec/generated/spec-index.json")
 
 	data, err := os.ReadFile(specPath)
@@ -59,64 +96,61 @@ func loadSpecIndex(t *testing.T) map[string]specEntry {
 	return byID
 }
 
-func TestMCPManifest_GoReadOpsAreReadInTSManifest(t *testing.T) {
+// TestMCPManifest_MatchesGeneratedFromSpecIndex is the bidirectional replacement for
+// the old one-directional (read-only, Go→TS) drift tests. It regenerates the expected
+// manifest from spec-index.json in-memory (mirroring
+// backend/scripts/generate-mcp-manifest/main.go's own logic) and requires the checked-in
+// MCPOperationManifest to match it EXACTLY: no TS op missing from Go, no Go op absent
+// from (or stale relative to) TS, and no op classified differently — across all four
+// classes, not just "read". A hand-maintained mirror could drift silently in either
+// direction; a generated map can only drift if someone edits the generated file by hand
+// without regenerating, or forgets to regenerate after a TS manifest change — which is
+// exactly what this test (and "make validate-mcp-artifacts") catches.
+func TestMCPManifest_MatchesGeneratedFromSpecIndex(t *testing.T) {
 	tsOps := loadSpecIndex(t)
 
-	failures := []string{}
+	want := make(map[string]domain.MCPOperationClass, len(tsOps))
+	for opID, e := range tsOps {
+		want[opID] = goClassFor(t, e)
+	}
 
-	for opID, class := range domain.MCPOperationManifest {
-		if class != domain.MCPClassRead {
-			continue // Only checking read ops — writes/excluded don't need TS sync
-		}
+	got := domain.MCPOperationManifest
 
-		tsEntry, found := tsOps[opID]
-		if !found {
-			failures = append(failures, opID+": Go marks as read, but NOT in TS spec index")
+	var missingInGo, staleInGo, misclassified []string
+	for opID, wantClass := range want {
+		gotClass, ok := got[opID]
+		if !ok {
+			missingInGo = append(missingInGo, opID)
 			continue
 		}
-
-		if tsEntry.Excluded {
-			failures = append(failures, opID+": Go marks as read, but TS marks as excluded")
-			continue
+		if gotClass != wantClass {
+			misclassified = append(misclassified, fmt.Sprintf("%s: Go=%q, want %q (from TS spec index)", opID, gotClass, wantClass))
 		}
-
-		if tsEntry.ManifestClass != "read" {
-			failures = append(failures, opID+": Go marks as read, but TS marks as "+tsEntry.ManifestClass)
+	}
+	for opID := range got {
+		if _, ok := want[opID]; !ok {
+			staleInGo = append(staleInGo, opID)
 		}
 	}
 
-	if len(failures) > 0 {
-		t.Errorf("Go/TS manifest drift detected — %d operations disagree:", len(failures))
-		for _, f := range failures {
-			t.Errorf("  %s", f)
-		}
-		t.Error("Fix: update MCPOperationManifest in backend/internal/domain/mcp_manifest.go")
+	sort.Strings(missingInGo)
+	sort.Strings(staleInGo)
+	sort.Strings(misclassified)
+
+	if len(missingInGo) > 0 {
+		t.Errorf("MCPOperationManifest is missing %d op(s) present in the TS spec index: %v", len(missingInGo), missingInGo)
 	}
-}
-
-func TestMCPManifest_MCPOperationIsReadMatchesTSManifest(t *testing.T) {
-	// Verify that MCPOperationIsRead() returns true only for ops that are
-	// also "read" in the TS spec index.
-	// The Go manifest intentionally includes write ops (classified MCPClassWrite);
-	// the recipe service rejects them via MCPOperationIsRead().
-	// This test catches the dangerous drift: an op marked read in Go but write/excluded in TS.
-	tsOps := loadSpecIndex(t)
-
-	for opID := range domain.MCPOperationManifest {
-		if !domain.MCPOperationIsRead(opID) {
-			continue // write/excluded ops in Go are correctly rejected by recipe service
+	if len(staleInGo) > 0 {
+		t.Errorf("MCPOperationManifest has %d stale op(s) no longer in the TS spec index: %v", len(staleInGo), staleInGo)
+	}
+	if len(misclassified) > 0 {
+		t.Errorf("MCPOperationManifest has %d misclassified op(s):", len(misclassified))
+		for _, m := range misclassified {
+			t.Errorf("  %s", m)
 		}
-
-		tsEntry, found := tsOps[opID]
-		if !found {
-			t.Errorf("%s: MCPOperationIsRead()==true in Go, but op not in TS spec index", opID)
-			continue
-		}
-
-		if tsEntry.Excluded || tsEntry.ManifestClass != "read" {
-			t.Errorf("%s: MCPOperationIsRead()==true in Go, but TS classifies as %q (excluded=%v)",
-				opID, tsEntry.ManifestClass, tsEntry.Excluded)
-		}
+	}
+	if len(missingInGo) > 0 || len(staleInGo) > 0 || len(misclassified) > 0 {
+		t.Error("Fix: run 'cd backend && go run scripts/generate-mcp-manifest/main.go' and commit the regenerated mcp_manifest_generated.go")
 	}
 }
 
