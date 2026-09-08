@@ -184,24 +184,30 @@ func TestAccountRepository_GetByUserID(t *testing.T) {
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "acc-1",
 		"Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&balance, &available, "USD",
 		"active", nil, nil, nil,
+		false,
 		now, now,
 	)
 
+	// #1618b: aliased `a` and given accountCustomizationJoin so this read (dashboard_service.go's
+	// net-worth/balance-summary path, account_chain_resolver.go, savings_goal_service.go) surfaces
+	// exclude_investment_sync instead of reading it back as an unconditional false.
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       created_at, updated_at
-		FROM accounts
-		WHERE user_id = $1 AND status = 'active'
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.user_id = $1 AND a.status = 'active'
+		ORDER BY a.created_at ASC
 	`)).WithArgs(userID).WillReturnRows(rows)
 
 	// Execute
@@ -1656,25 +1662,28 @@ func TestAccountRepository_GetByUserID_ExcludesReplaced(t *testing.T) {
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&balance, &balance, "USD",
 		"active", nil, nil, nil,
+		false,
 		now, now,
 	)
 	// Note: replaced account not in rows — DB filters it via WHERE status = 'active'
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       created_at, updated_at
-		FROM accounts
-		WHERE user_id = $1 AND status = 'active'
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.user_id = $1 AND a.status = 'active'
+		ORDER BY a.created_at ASC
 	`)).WithArgs(userID).WillReturnRows(rows)
 
 	accounts, err := repo.GetByUserID(ctx, userID)
@@ -1808,6 +1817,7 @@ func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuse
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at",
 		"removed_reason",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), linkedItemID, uuid.New().String(), "acc-active",
@@ -1815,6 +1825,7 @@ func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuse
 		&balance, &available, "USD",
 		"active", nil, nil, nil,
 		nil,
+		false,
 		now, now,
 	).AddRow(
 		uuid.New().String(), linkedItemID, uuid.New().String(), "acc-removed",
@@ -1822,19 +1833,25 @@ func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuse
 		nil, nil, "USD",
 		"removed", nil, nil, nil,
 		strPtr("provider_absent"),
+		true,
 		now, now,
 	)
 
+	// #1618b: aliased `a` and given accountCustomizationJoin so this read (used by
+	// investment_sync_service.SyncInvestmentTransactions — the very subsystem this flag governs)
+	// surfaces exclude_investment_sync instead of reading it back as an unconditional false. A LEFT
+	// JOIN adds a column, never removes a row: both statuses are still returned.
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       removed_reason,
-		       created_at, updated_at
-		FROM accounts
-		WHERE linked_item_id = $1
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       a.removed_reason,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.linked_item_id = $1
+		ORDER BY a.created_at ASC
 	`)).WithArgs(linkedItemID).WillReturnRows(rows)
 
 	accounts, err := repo.GetByLinkedItemIDIncludingRetained(ctx, linkedItemID)
@@ -1849,6 +1866,8 @@ func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuse
 	assert.Nil(t, accounts[0].RemovedReason)
 	require.NotNil(t, accounts[1].RemovedReason)
 	assert.Equal(t, "provider_absent", *accounts[1].RemovedReason)
+	assert.False(t, accounts[0].ExcludeInvestmentSync)
+	assert.True(t, accounts[1].ExcludeInvestmentSync)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -832,17 +832,23 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 // that enumerates them, and a second enumeration is how this exact drift happened (Issue
 // #1569 round 11 fix-round-2 found this copy silently missing createBalanceSnapshots after
 // round 11 task 1 added a caller to the interface comment but not here).
+//
+// #1618b: aliased `a` and given accountCustomizationJoin specifically to surface
+// exclude_investment_sync — this is the read investment_sync_service.SyncInvestmentTransactions
+// uses to build its account map, the very subsystem this flag governs. A LEFT JOIN adds a column,
+// never removes a row, so the retained-account universe this method exists to return is unchanged.
 func (r *accountRepository) GetByLinkedItemIDIncludingRetained(ctx context.Context, linkedItemID string) ([]domain.Account, error) {
 	query := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       removed_reason,
-		       created_at, updated_at
-		FROM accounts
-		WHERE linked_item_id = $1
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       a.removed_reason,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.linked_item_id = $1
+		ORDER BY a.created_at ASC
 	`
 
 	rows, err := r.db.Query(ctx, query, linkedItemID)
@@ -874,6 +880,7 @@ func (r *accountRepository) GetByLinkedItemIDIncludingRetained(ctx context.Conte
 			// Issue #1569 Task 5: this is the ONLY read that populates RemovedReason — see that
 			// field's doc comment for why, and why nil is the safe default everywhere else.
 			&account.RemovedReason,
+			&account.ExcludeInvestmentSync,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 		)
@@ -900,16 +907,23 @@ func (r *accountRepository) GetByLinkedItemIDIncludingRetained(ctx context.Conte
 // callers that need every status (the point-in-time universe) need AllStatuses=true. There is no
 // repository-level "StatusFilter" option — that name belongs to services.AccountFilterOptions,
 // where "all" maps to IncludeReplaced and therefore also stops short of 'expired'.
+//
+// #1618b: aliased `a` and given accountCustomizationJoin specifically to surface
+// exclude_investment_sync — this read has real production callers (dashboard_service.go's
+// net-worth/balance-summary path, account_chain_resolver.go, savings_goal_service.go's ownership
+// check), so a caller rendering Account.ExcludeInvestmentSync from any of them previously always
+// saw false regardless of the chain's actual setting.
 func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       created_at, updated_at
-		FROM accounts
-		WHERE user_id = $1 AND status = 'active'
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.user_id = $1 AND a.status = 'active'
+		ORDER BY a.created_at ASC
 	`
 
 	rows, err := r.db.Query(ctx, query, userID)
@@ -938,6 +952,7 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 			&account.UserAccountID,
 			&account.ReplacedByID,
 			&account.ReplacedAt,
+			&account.ExcludeInvestmentSync,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 		)
