@@ -46,6 +46,7 @@ import type {
 import type {
   ExchangePublicTokenOutputBody,
   LinkTokenResponse,
+  ReconnectLinkTokenResponse,
   RepairLinkedItemOutputBody
 } from '../../models';
 
@@ -56,7 +57,7 @@ export const getCreateLinkTokenResponseMock = (overrideResponse: Partial<Extract
 
 export const getRepairLinkedItemResponseMock = (overrideResponse: Partial<Extract<RepairLinkedItemOutputBody, object>> = {}): RepairLinkedItemOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), success: faker.datatype.boolean(), ...overrideResponse})
 
-export const getCreateReconnectLinkTokenResponseMock = (overrideResponse: Partial<Extract<LinkTokenResponse, object>> = {}): LinkTokenResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), expiration: faker.date.past().toISOString().slice(0, 19) + 'Z', link_token: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getCreateReconnectLinkTokenResponseMock = (overrideResponse: Partial<Extract<ReconnectLinkTokenResponse, object>> = {}): ReconnectLinkTokenResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), expiration: faker.date.past().toISOString().slice(0, 19) + 'Z', link_token: faker.string.alpha({length: {min: 10, max: 20}}), repair_nonce: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 
 export const getExchangePublicTokenMockHandler = (overrideResponse?: ExchangePublicTokenOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<ExchangePublicTokenOutputBody> | ExchangePublicTokenOutputBody), options?: RequestHandlerOptions) => {
@@ -95,7 +96,7 @@ export const getRepairLinkedItemMockHandler = (overrideResponse?: RepairLinkedIt
   }, options)
 }
 
-export const getCreateReconnectLinkTokenMockHandler = (overrideResponse?: LinkTokenResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<LinkTokenResponse> | LinkTokenResponse), options?: RequestHandlerOptions) => {
+export const getCreateReconnectLinkTokenMockHandler = (overrideResponse?: ReconnectLinkTokenResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<ReconnectLinkTokenResponse> | ReconnectLinkTokenResponse), options?: RequestHandlerOptions) => {
   return http.post('*/api/v1/plaid/reconnect-link-token', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
 
 

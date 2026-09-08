@@ -7686,13 +7686,19 @@
       ],
       "manifestClass": "write",
       "excluded": true,
-      "description": "Marks the caller's own linked item active again and clears its error tracking fields. Call only after the update-mode Plaid Link flow (using the token from createReconnectLinkToken) has succeeded.",
+      "description": "Marks the caller's own linked item active again and clears its error tracking fields. Call only after the update-mode Plaid Link flow (using the token from createReconnectLinkToken) has succeeded, presenting the repair_nonce returned alongside that token. The nonce is single-use and item-scoped; it proves the caller went through this server's own reconnect mint, not that Plaid Link succeeded.",
       "requestBody": [
         {
           "name": "item_id",
           "type": "string",
           "required": true,
           "description": "The Plaid item_id of the linked item that was just repaired via Plaid Link"
+        },
+        {
+          "name": "repair_nonce",
+          "type": "string",
+          "required": true,
+          "description": "The single-use repair nonce returned by createReconnectLinkToken for this item"
         }
       ]
     },
@@ -7706,7 +7712,7 @@
       ],
       "manifestClass": "write",
       "excluded": true,
-      "description": "Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration). A 'revoked' item is deliberately excluded — Plaid documents revoked access as unrecoverable via update mode; see ErrLinkedItemNotRepairable in item_error_service.go.",
+      "description": "Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration). A 'revoked' item is deliberately excluded — Plaid documents revoked access as unrecoverable via update mode; see ErrLinkedItemNotRepairable in item_error_service.go. Also returns a single-use repair_nonce that the reconnect endpoint requires; it shares the link token's expiry and must be kept out of URLs and logs.",
       "requestBody": [
         {
           "name": "item_id",

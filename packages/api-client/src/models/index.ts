@@ -312,6 +312,7 @@ export * from './privacySettings';
 export * from './qAAuthBypassRequestBody';
 export * from './qAAuthBypassResponseBody';
 export * from './queueMetrics';
+export * from './reconnectLinkTokenResponse';
 export * from './recordMCPAuditBody';
 export * from './recordMCPAuditBodyOperationClass';
 export * from './recordMCPAuditBodyResult';

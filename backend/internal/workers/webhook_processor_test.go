@@ -97,16 +97,16 @@ func (m *MockItemErrorServiceForWorker) HandleLoginRepaired(ctx context.Context,
 	return args.Error(0)
 }
 
-func (m *MockItemErrorServiceForWorker) CreateReconnectLinkToken(ctx context.Context, userID string, itemID string) (*domain.LinkTokenResponse, error) {
+func (m *MockItemErrorServiceForWorker) CreateReconnectLinkToken(ctx context.Context, userID string, itemID string) (*domain.ReconnectLinkTokenResponse, error) {
 	args := m.Called(ctx, userID, itemID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*domain.LinkTokenResponse), args.Error(1)
+	return args.Get(0).(*domain.ReconnectLinkTokenResponse), args.Error(1)
 }
 
-func (m *MockItemErrorServiceForWorker) RepairItem(ctx context.Context, userID string, itemID string) error {
-	args := m.Called(ctx, userID, itemID)
+func (m *MockItemErrorServiceForWorker) RepairItem(ctx context.Context, userID string, itemID string, repairNonce string) error {
+	args := m.Called(ctx, userID, itemID, repairNonce)
 	return args.Error(0)
 }
 

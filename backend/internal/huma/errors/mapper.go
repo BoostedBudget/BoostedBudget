@@ -85,6 +85,17 @@ func MapError(err error) error {
 		return huma.Error404NotFound("Linked item not found")
 	case errors.Is(err, repository.ErrLinkedItemNotDisconnected):
 		return huma.Error409Conflict("This institution must be disconnected before it can be purged")
+	case errors.Is(err, services.ErrRepairNonceInvalid):
+		// Issue #1620: the reconnect page presented a repair nonce this server will not accept —
+		// never minted, minted for a different user or item, already spent, or expired with the
+		// Plaid link token it was minted beside. 403 rather than 404/409: the caller IS
+		// authenticated and the item DOES exist and IS repairable; what is missing is proof they
+		// came through this server's own reconnect mint.
+		//
+		// ⚠ Deliberately one undifferentiated message. Which of those it was is useless to a
+		// legitimate user (the recovery is identical — start again from "Reconnect Bank") and
+		// useful to someone probing item_ids.
+		return huma.Error403Forbidden("This reconnect session is no longer valid. Start again from the Reconnect Bank button.")
 	case errors.Is(err, services.ErrLinkedItemNotRepairable):
 		// Issue #1609: the reconnect flow refuses to mint a token or clear error state for an
 		// item that is active (nothing broken) or was deliberately replaced/disconnected by the

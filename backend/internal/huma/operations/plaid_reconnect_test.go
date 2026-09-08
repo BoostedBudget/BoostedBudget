@@ -17,7 +17,7 @@ import (
 // scoped to the reconnect-flow tests (Issue #1609). The Handle*/ProcessWebhook methods are never
 // exercised by PlaidReconnectHandler and simply panic if called.
 type mockItemErrorServiceForReconnect struct {
-	reconnectLinkToken    *domain.LinkTokenResponse
+	reconnectLinkToken    *domain.ReconnectLinkTokenResponse
 	reconnectLinkTokenErr error
 	repairErr             error
 
@@ -25,6 +25,7 @@ type mockItemErrorServiceForReconnect struct {
 	lastReconnectItemID string
 	lastRepairUserID    string
 	lastRepairItemID    string
+	lastRepairNonce     string
 }
 
 func (m *mockItemErrorServiceForReconnect) HandleLoginRequired(ctx context.Context, linkedItem *domain.LinkedItem, errorCode string, errorMessage string) error {
@@ -51,7 +52,7 @@ func (m *mockItemErrorServiceForReconnect) HandleLoginRepaired(ctx context.Conte
 	panic("not used by PlaidReconnectHandler")
 }
 
-func (m *mockItemErrorServiceForReconnect) CreateReconnectLinkToken(ctx context.Context, userID string, itemID string) (*domain.LinkTokenResponse, error) {
+func (m *mockItemErrorServiceForReconnect) CreateReconnectLinkToken(ctx context.Context, userID string, itemID string) (*domain.ReconnectLinkTokenResponse, error) {
 	m.lastReconnectUserID = userID
 	m.lastReconnectItemID = itemID
 	if m.reconnectLinkTokenErr != nil {
@@ -60,9 +61,10 @@ func (m *mockItemErrorServiceForReconnect) CreateReconnectLinkToken(ctx context.
 	return m.reconnectLinkToken, nil
 }
 
-func (m *mockItemErrorServiceForReconnect) RepairItem(ctx context.Context, userID string, itemID string) error {
+func (m *mockItemErrorServiceForReconnect) RepairItem(ctx context.Context, userID string, itemID string, repairNonce string) error {
 	m.lastRepairUserID = userID
 	m.lastRepairItemID = itemID
+	m.lastRepairNonce = repairNonce
 	return m.repairErr
 }
 
@@ -70,7 +72,7 @@ var _ services.ItemErrorService = (*mockItemErrorServiceForReconnect)(nil)
 
 func TestCreateReconnectLinkToken_HandlerSuccess(t *testing.T) {
 	mockSvc := &mockItemErrorServiceForReconnect{
-		reconnectLinkToken: &domain.LinkTokenResponse{LinkToken: "link-token-fresh"},
+		reconnectLinkToken: &domain.ReconnectLinkTokenResponse{LinkToken: "link-token-fresh", RepairNonce: "raw-nonce-abc"},
 	}
 	handler := NewPlaidReconnectHandler(mockSvc)
 
@@ -84,6 +86,9 @@ func TestCreateReconnectLinkToken_HandlerSuccess(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	assert.Equal(t, "link-token-fresh", output.Body.LinkToken)
+	// Issue #1620: the raw repair nonce must reach the client — it is the only time it exists
+	// outside this response, and RepairItem refuses without it.
+	assert.Equal(t, "raw-nonce-abc", output.Body.RepairNonce)
 	assert.Equal(t, "user-123", mockSvc.lastReconnectUserID)
 	assert.Equal(t, "plaid-item-789", mockSvc.lastReconnectItemID)
 }
@@ -132,6 +137,7 @@ func TestRepairLinkedItem_HandlerSuccess(t *testing.T) {
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 	}
 	input.Body.ItemID = "plaid-item-789"
+	input.Body.RepairNonce = "raw-nonce-abc"
 
 	output, err := handler.RepairLinkedItem(context.Background(), input)
 
@@ -140,6 +146,10 @@ func TestRepairLinkedItem_HandlerSuccess(t *testing.T) {
 	assert.True(t, output.Body.Success)
 	assert.Equal(t, "user-123", mockSvc.lastRepairUserID)
 	assert.Equal(t, "plaid-item-789", mockSvc.lastRepairItemID)
+	// Issue #1620: the handler must forward the nonce verbatim. A handler that silently dropped
+	// it would leave every repair refused at the service layer, or — worse, if the service ever
+	// treated an empty nonce as "not provided, allow" — reopen the hole entirely.
+	assert.Equal(t, "raw-nonce-abc", mockSvc.lastRepairNonce)
 }
 
 func TestRepairLinkedItem_HandlerErrorMapsThroughLoggingMapError(t *testing.T) {

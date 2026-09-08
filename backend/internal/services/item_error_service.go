@@ -4,6 +4,10 @@ package services
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -29,6 +33,23 @@ import (
 //     normal Plaid Link (non-update-mode) flow, not a repair — see HandlePermissionRevoked's
 //     notification, which routes there instead of here.
 var ErrLinkedItemNotRepairable = errors.New("linked item is not in a repairable state")
+
+// ErrRepairNonceInvalid indicates POST /api/v1/plaid/reconnect presented a repair nonce this
+// server will not accept (Issue #1620): it was never minted, was minted for a different user or a
+// different item, has already been spent, or has expired along with the Plaid Link token it was
+// minted beside.
+//
+// ⚠ Deliberately ONE error for all of those. The caller cannot act differently on any of them —
+// the recovery is identical in every case (start again from the "Reconnect Bank" button, which
+// mints a fresh token and a fresh nonce) — and telling a caller WHICH of those it was tells an
+// attacker probing item_ids something a legitimate user has no use for.
+//
+// ⚠ This is not a substitute for the ownership and repairable-status checks; RepairItem still
+// performs both, and the burn is an ADDITIONAL gate on top of them. A nonce proves the caller
+// went through this server's own reconnect-link-token mint; it does NOT prove Plaid Link
+// succeeded (see domain.LinkedItemRepairNonce for exactly why that stronger proof is unavailable
+// here).
+var ErrRepairNonceInvalid = errors.New("repair nonce is not valid for this reconnect")
 
 // terminalLinkedItemStatuses are statuses a background/webhook error signal must never overwrite
 // (Issue #1609 P3-T2). Passed as the terminalStatuses argument to every
@@ -160,7 +181,13 @@ type ItemErrorService interface {
 	// different user (same non-disclosure shape as GetByIDAndUser elsewhere in this codebase —
 	// the caller cannot distinguish "doesn't exist" from "not yours").
 	// Returns ErrLinkedItemNotRepairable if the item is not in a repairable state.
-	CreateReconnectLinkToken(ctx context.Context, userID string, itemID string) (*domain.LinkTokenResponse, error)
+	//
+	// Issue #1620: this ALSO mints a single-use repair nonce, persisted as a sha256 digest in
+	// linked_item_repair_nonces and returned RAW, exactly once, in the response. RepairItem
+	// refuses without it. The nonce rides on domain.ReconnectLinkTokenResponse and deliberately
+	// NOT on the shared domain.LinkTokenResponse, which the normal (non-reconnect) link-token
+	// mint also returns — that flow must never hand out repair credentials.
+	CreateReconnectLinkToken(ctx context.Context, userID string, itemID string) (*domain.ReconnectLinkTokenResponse, error)
 
 	// RepairItem clears a linked item's error state after the user has successfully completed
 	// the update-mode Plaid Link flow from the /accounts/reconnect page (Issue #1609). This is
@@ -172,7 +199,17 @@ type ItemErrorService interface {
 	// Authorization and state preconditions mirror CreateReconnectLinkToken exactly — a caller
 	// must complete Link (which requires a token from CreateReconnectLinkToken) before repairing,
 	// so the two share the same ownership/state gate.
-	RepairItem(ctx context.Context, userID string, itemID string) error
+	//
+	// Issue #1620: repairNonce is the RAW nonce CreateReconnectLinkToken returned. It is burned
+	// (single-use, item-scoped, user-scoped, expiry-bounded) BEFORE the status transition, so a
+	// repair can never happen without one. Before this, the endpoint marked an item healthy on
+	// nothing but {item_id} from an authenticated owner — and a Plaid item_id is not a secret
+	// (ExchangePublicToken already returns it to the client), so any owner of a broken item could
+	// silence the "reconnect your bank" notification without ever opening Plaid Link.
+	//
+	// Returns ErrRepairNonceInvalid when the burn matches no row. A zero-row burn is a REFUSAL,
+	// never something to log and continue past.
+	RepairItem(ctx context.Context, userID string, itemID string, repairNonce string) error
 
 	// HandleLoginRepaired processes the Plaid LOGIN_REPAIRED webhook (Issue #1609). Plaid sends
 	// this when an Item's login issue is resolved through ANY path — not just our reconnect page
@@ -198,6 +235,7 @@ type itemErrorService struct {
 	userRepo         UserRepository
 	plaidService     PlaidService
 	emailService     EmailService
+	repairNonceRepo  repository.LinkedItemRepairNonceRepository
 }
 
 // NewItemErrorService creates a new ItemErrorService instance
@@ -207,6 +245,7 @@ func NewItemErrorService(
 	userRepo UserRepository,
 	plaidService PlaidService,
 	emailService EmailService,
+	repairNonceRepo repository.LinkedItemRepairNonceRepository,
 	logger *slog.Logger,
 ) ItemErrorService {
 	if logger == nil {
@@ -219,6 +258,7 @@ func NewItemErrorService(
 		userRepo:         userRepo,
 		plaidService:     plaidService,
 		emailService:     emailService,
+		repairNonceRepo:  repairNonceRepo,
 	}
 }
 
@@ -584,7 +624,7 @@ func isRepairableStatus(status domain.LinkedItemStatus) bool {
 
 // CreateReconnectLinkToken mints an update-mode Plaid Link token for the /accounts/reconnect page.
 // See the interface doc comment for the authorization and state reasoning.
-func (s *itemErrorService) CreateReconnectLinkToken(ctx context.Context, userID string, itemID string) (*domain.LinkTokenResponse, error) {
+func (s *itemErrorService) CreateReconnectLinkToken(ctx context.Context, userID string, itemID string) (*domain.ReconnectLinkTokenResponse, error) {
 	linkedItem, err := s.linkedItemRepo.GetByItemID(ctx, itemID)
 	if err != nil {
 		return nil, err
@@ -598,7 +638,63 @@ func (s *itemErrorService) CreateReconnectLinkToken(ctx context.Context, userID 
 		return nil, ErrLinkedItemNotRepairable
 	}
 
-	return s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, linkedItem.AccessToken)
+	token, err := s.plaidService.CreateUpdateModeLinkToken(ctx, linkedItem.UserID, linkedItem.AccessToken)
+	if err != nil {
+		return nil, err
+	}
+
+	// Issue #1620: mint the repair nonce AFTER Plaid, because the nonce's expiry is Plaid's own
+	// link-token expiry — there is nothing correct to write until Plaid has answered. Minting
+	// second also means a Plaid failure leaves no unusable nonce row behind.
+	rawNonce, tokenHash, err := generateRepairNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to mint repair nonce for item %s: %w", itemID, err)
+	}
+	nonce := &domain.LinkedItemRepairNonce{
+		LinkedItemID: linkedItem.ID,
+		UserID:       userID,
+		TokenHash:    tokenHash,
+		ExpiresAt:    token.Expiration,
+	}
+	if err := s.repairNonceRepo.Mint(ctx, nonce); err != nil {
+		// Deliberately fail the whole mint rather than returning a token with no nonce. A link
+		// token the user cannot then redeem is worse than an error: they would complete Plaid
+		// Link, be refused at repair, and have no idea why.
+		return nil, fmt.Errorf("failed to mint repair nonce for item %s: %w", itemID, err)
+	}
+
+	return &domain.ReconnectLinkTokenResponse{
+		LinkToken:   token.LinkToken,
+		Expiration:  token.Expiration,
+		RequestID:   token.RequestID,
+		RepairNonce: rawNonce,
+	}, nil
+}
+
+// generateRepairNonce returns a fresh 32-byte random nonce (returned to the client exactly once,
+// in the reconnect-link-token response) and its sha256 hex digest (the only thing persisted).
+//
+// Copied deliberately from household_service.go's generateInviteToken rather than invented: that
+// is this repository's established one-time-token shape, and it is already reviewed. crypto/rand,
+// not math/rand — this value is the whole authorization.
+func generateRepairNonce() (rawNonce, tokenHash string, err error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", "", err
+	}
+	rawNonce = base64.RawURLEncoding.EncodeToString(buf)
+	return rawNonce, hashRepairNonce(rawNonce), nil
+}
+
+// hashRepairNonce reproduces the sha256 hex digest stored as
+// linked_item_repair_nonces.token_hash, given a raw nonce.
+//
+// No constant-time comparison is needed and none would help: the digest is looked up by a UNIQUE
+// INDEX inside the burn's own UPDATE, so no secret is ever compared byte-by-byte in Go. Same
+// argument as household_service.go's hashToken.
+func hashRepairNonce(rawNonce string) string {
+	sum := sha256.Sum256([]byte(rawNonce))
+	return hex.EncodeToString(sum[:])
 }
 
 // RepairItem clears a linked item's error state after the user completes the reconnect page's
@@ -611,7 +707,7 @@ func (s *itemErrorService) CreateReconnectLinkToken(ctx context.Context, userID 
 // unsafe — a concurrent disconnect/re-link landing between the read and the write could be
 // silently overwritten by a stale full-row Update. RepairStatus returning false (item vanished,
 // or its FRESH status is no longer repairable) is treated identically to the pre-check failing.
-func (s *itemErrorService) RepairItem(ctx context.Context, userID string, itemID string) error {
+func (s *itemErrorService) RepairItem(ctx context.Context, userID string, itemID string, repairNonce string) error {
 	linkedItem, err := s.linkedItemRepo.GetByItemID(ctx, itemID)
 	if err != nil {
 		return err
@@ -621,6 +717,27 @@ func (s *itemErrorService) RepairItem(ctx context.Context, userID string, itemID
 	}
 	if !isRepairableStatus(linkedItem.Status) {
 		return ErrLinkedItemNotRepairable
+	}
+
+	// Issue #1620: burn the nonce BEFORE the status transition, and refuse outright if it does
+	// not burn. Ordering matters in one direction only — a repair must never happen without a
+	// spent nonce. The converse (a nonce spent on a repair that then fails to transition) is
+	// acceptable and deliberate: the user re-opens /accounts/reconnect, which mints a fresh
+	// token and a fresh nonce, exactly as an expired nonce already requires.
+	if repairNonce == "" {
+		return ErrRepairNonceInvalid
+	}
+	burned, err := s.repairNonceRepo.Burn(ctx, hashRepairNonce(repairNonce), userID, linkedItem.ID)
+	if err != nil {
+		return fmt.Errorf("failed to burn repair nonce for item %s: %w", itemID, err)
+	}
+	if !burned {
+		// A zero-row burn IS the authorization decision. Never treated as a soft failure.
+		s.logger.Warn("repair refused: the presented repair nonce did not burn",
+			"item_id", linkedItem.ItemID,
+			"user_id", userID,
+		)
+		return ErrRepairNonceInvalid
 	}
 
 	repaired, err := s.linkedItemRepo.RepairStatus(ctx, linkedItem.ID, userID, repairableStatuses)

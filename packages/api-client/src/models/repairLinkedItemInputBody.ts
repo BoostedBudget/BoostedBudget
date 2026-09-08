@@ -36,4 +36,6 @@ export interface RepairLinkedItemInputBody {
   readonly $schema?: string;
   /** The Plaid item_id of the linked item that was just repaired via Plaid Link */
   item_id: string;
+  /** The single-use repair nonce returned by createReconnectLinkToken for this item */
+  repair_nonce: string;
 }

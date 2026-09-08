@@ -1519,12 +1519,19 @@ func main() {
 
 				// Initialize Item Error Service for ITEM webhook processing
 				// Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
+				// Issue #1620: repairNonceRepo backs the single-use nonce that binds
+				// POST /api/v1/plaid/reconnect to a token this server minted. Deliberately the
+				// DATABASE and not the cache: this process boots with a NoopCache when Redis is
+				// absent or unreachable (see the cache wiring above), so a Redis-backed nonce
+				// would fail open or fail closed depending on deploy configuration, silently.
+				repairNonceRepo := repository.NewLinkedItemRepairNonceRepository(db)
 				itemErrorService = services.NewItemErrorService(
 					linkedItemRepo,
 					notificationRepo,
 					profileRepo,
 					plaidService,
 					emailService,
+					repairNonceRepo,
 					appLogger,
 				)
 
