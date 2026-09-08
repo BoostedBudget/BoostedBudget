@@ -153,6 +153,13 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 // investment transactions stay visible here too. Without it the investments page and the activity
 // feed disagree about the SAME rows — before Task 2 both said "empty" because a disconnect
 // CASCADE-deleted them, so the divergence is one this issue would otherwise have introduced.
+//
+// #1614: deliberately NOT given investmentSyncExclusionCondition. Verified zero production
+// callers (only tests/mocks reach this method — the live reads are GetByUserIDKeyset and
+// IncomeSummary, both of which do carry it). Left as-is rather than filtered so a future caller
+// does not inherit a false sense of completeness from an unreachable code path; if this method
+// ever gains a real caller, add investmentSyncExclusionCondition("investment_transactions") to
+// its WHERE clause at that time — it is currently a latent trap, not a fixed gap.
 func (r *investmentTransactionRepository) GetByUserID(ctx context.Context, userID string, limit, offset int) ([]domain.InvestmentTransaction, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("investments").Inc()
 
@@ -211,6 +218,9 @@ func (r *investmentTransactionRepository) GetByUserID(ctx context.Context, userI
 
 // GetByAccountID retrieves investment transactions for a specific account.
 // Issue #1109: Chain-expand via user_account_id to include pre-relink transactions.
+//
+// #1614: deliberately NOT given investmentSyncExclusionCondition — verified zero production
+// callers (tests/mocks only). See the identical note on GetByUserID above.
 func (r *investmentTransactionRepository) GetByAccountID(ctx context.Context, accountID string) ([]domain.InvestmentTransaction, error) {
 	query := `
 		SELECT id, user_id, account_id, security_id,
@@ -435,6 +445,10 @@ func renumberPlaceholders(clause string, start int) string {
 	})
 }
 
+// GetByUserAccountID retrieves investment transactions attributed to a single chain.
+//
+// #1614: deliberately NOT given investmentSyncExclusionCondition — verified zero production
+// callers (tests/mocks only). See the identical note on GetByUserID above.
 func (r *investmentTransactionRepository) GetByUserAccountID(ctx context.Context, userAccountID string, limit, offset int) ([]domain.InvestmentTransaction, error) {
 	query := `
 		SELECT id, user_id, account_id, user_account_id, security_id,

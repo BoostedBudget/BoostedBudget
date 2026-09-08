@@ -579,6 +579,23 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 // dividend while the income total silently dropped it. TotalIncome went 120.00 -> 0.00 on a
 // disconnection with no transaction deleted. Pinned by
 // TestRetentionUniverses_DisconnectedBrokerage_Integration.
+//
+// #1614: this was also the ONE live read of investment_transactions missing
+// investmentSyncExclusionCondition("it") — the per-chain exclude_investment_sync opt-out
+// (transaction_repository.go:2985) applied everywhere else that surface is read
+// (transaction_repository.go:3554, investment_transaction_repository.go:374). A double-reported
+// cash-management account's dividends/interest kept counting here after the user flipped the
+// flag, disagreeing with the activity feed the same way T12 describes above. Fixed by adding the
+// condition to this query's WHERE clause.
+//
+// STANDING DECISION (governs both #1614 and #1616, do not re-litigate): exclude_investment_sync
+// governs investment_transactions reads ONLY. Holdings-based surfaces (AllocationBreakdown,
+// UnrealizedGainLoss, TopMovers — all in this file) are governed by accounts.type instead, never
+// by this flag. Reason: the feed duplication this flag exists for is a per-account user
+// preference; the #1616 allocation double-count it does NOT touch was an arithmetic error — the
+// same dollars summed twice — wrong for every user regardless of preference. Consequence,
+// intended and not an oversight: an 'investment'-typed account whose owner HAS set the flag still
+// contributes its holdings to allocation and portfolio summary.
 func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userID string, start, end time.Time) (*domain.IncomeSummary, error) {
 	// Build IN clause for the income subtype set.
 	subtypes := domain.IncomeSubtypes
@@ -618,9 +635,10 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 		  AND it.date >= $2::date
 		  AND it.date <= $3::date
 		  AND it.subtype IN (%s)
+		%s
 		GROUP BY income_type
 		ORDER BY total_amount DESC
-	`, retainedAccountVisibilityLegs("it", "it.date"), inClause)
+	`, retainedAccountVisibilityLegs("it", "it.date"), inClause, investmentSyncExclusionCondition("it"))
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
