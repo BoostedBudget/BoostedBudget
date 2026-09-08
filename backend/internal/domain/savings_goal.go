@@ -198,8 +198,12 @@ type LogContributionRequest struct {
 	OccurredOn string `json:"occurred_on" required:"true" format:"date" example:"2026-09-08"`
 	// TransactionID optionally links to an existing transaction (must belong to the user).
 	TransactionID *string `json:"transaction_id,omitempty" format:"uuid"`
-	// Notes is an optional user note (stored in source field as "manual").
-	Notes *string `json:"notes,omitempty"`
+
+	// #1625: `notes` is GONE from this request. It was accepted by the schema, never read by the
+	// handler, and has no column on savings_goal_contributions — the API advertised storage that
+	// does not exist and silently discarded whatever was sent. Removing the field is the honest
+	// half of this ticket's theme; persisting notes properly needs a migration and a column, and
+	// is a feature, not this bugfix. No data is lost, because none was ever stored.
 }
 
 // Validate checks LogContributionRequest fields.

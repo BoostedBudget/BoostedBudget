@@ -6,6 +6,9 @@
  */
 
 import { useId, useState, useCallback, useMemo } from 'react'
+import { RulePreviewPanel } from './RulePreviewPanel'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import type {
   CategorizationRule,
   CreateRuleRequest,
@@ -191,6 +194,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
 
   // UI state
   const [saving, setSaving] = useState(false)
+  const trackEvent = useTrackEvent()
   const [errors, setErrors] = useState<FormErrors>({})
   const [conditionErrors, setConditionErrors] = useState<ConditionErrors>({})
   const [pfcDetailedPrimarySelections, setPfcDetailedPrimarySelections] = useState<Record<number, string>>({})
@@ -322,6 +326,14 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
         tag_behavior: tagBehavior,
       }
       await onSave(data)
+      // #1625: counts and the fixed field/operator vocabulary ONLY — never a condition value,
+      // a rule name, a merchant or an amount. Tells us which of the new fields people reach for.
+      trackEvent(ANALYTICS_EVENTS.RULE_SAVED, {
+        condition_count: conditions.length,
+        condition_logic: conditionLogic,
+        fields_used: conditions.map((c) => c.field ?? c.type).join(','),
+        target_kind: targetKind ?? 'tags_only',
+      })
     } finally {
       setSaving(false)
     }
@@ -830,6 +842,21 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
         {errors.conditions && (
           <span className={errorClass}>{errors.conditions}</span>
         )}
+
+        {/* #1625: try the rule before trusting it. */}
+        <div className="mb-3">
+          <RulePreviewPanel
+            name={name}
+            conditions={conditions}
+            conditionLogic={conditionLogic}
+            targetKind={targetKind ?? undefined}
+            targetPfcPrimary={targetPfcPrimary ?? undefined}
+            targetPfcDetailed={targetPfcDetailed ?? undefined}
+            targetCustomCategoryId={targetCustomCategoryId ?? undefined}
+            targetTags={targetTags.length > 0 ? targetTags : undefined}
+            disabled={saving}
+          />
+        </div>
 
         <div className="flex flex-col gap-3 mb-3">
           {conditions.map((condition, index) => (

@@ -4294,8 +4294,6 @@ components:
         amount:
           format: double
           type: number
-        notes:
-          type: string
         occurred_on:
           examples:
             - "2026-09-08"
