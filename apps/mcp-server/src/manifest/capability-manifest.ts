@@ -522,9 +522,12 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // false) yet each lazily `repo.Create`s the caller's OWN default row on first access
   // (privacy_service.go / user profile equivalent; see each op's OpenAPI description) — a
   // real, acknowledged write. Left admitted rather than excluded because it's scoped to the
-  // caller, idempotent after the first call, and destroys nothing. See execute.ts's module
-  // doc ("readExecute's REAL guarantee") and readExecuteRefusal's test file, which pin these
-  // two BY NAME — a third such operation should not join this list silently.
+  // caller, idempotent after the first call, and destroys nothing. The backend tags each
+  // huma.Operation literal `Extensions: {"x-mcp-lazy-init": true}` (privacy.go, profile.go),
+  // which flows into api/openapi.yaml; manifest/lazy-init-extension.ts's
+  // ACKNOWLEDGED_LAZY_INIT_OPERATIONS is the reviewed list, and
+  // scripts/check-manifest-completeness.ts fails the build if the spec ever tags a THIRD
+  // operation nobody has added to that list — see that module's doc comment.
   read('getPrivacySettings'),
   read('getUserProfile'),
   excludedWrite('updatePrivacySettings', REASON_PRIVACY_INAPP, 'household-sharing'),
