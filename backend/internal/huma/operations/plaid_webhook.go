@@ -86,7 +86,8 @@ type PlaidWebhookResponseBody struct {
 //
 // Webhook Types:
 //   - TRANSACTIONS: New transactions available, historical updates
-//   - ITEM: Connection status changes (LOGIN_REQUIRED, ERROR, etc.)
+//   - ITEM: Connection status changes (ERROR — which carries a login-required signal in its
+//     nested error_code, not a separate webhook_code — PENDING_EXPIRATION, etc.)
 //
 // Security: Verifies JWT signatures using ES256 (ECDSA P-256)
 //
@@ -300,13 +301,19 @@ func (h *PlaidWebhookHandler) handleInvestmentsTransactionsWebhook(payload *Plai
 	}
 }
 
-// handleItemWebhook processes ITEM webhook events.
+// handleItemWebhook processes ITEM webhook events. This only produces the human-readable
+// response message returned to Plaid; actual processing happens asynchronously via the
+// itemErrorService.ProcessWebhook routing in webhook_processing.go/item_error_service.go.
+//
+// Issue #1621: "LOGIN_REQUIRED" was removed from this switch — it is never a Plaid webhook_code
+// (the vendored spec's only hits are PAYMENT_PROFILE_LOGIN_REQUIRED, an unrelated Transfer enum).
+// A login failure arrives as webhook_code "ERROR" with error.error_code "ITEM_LOGIN_REQUIRED",
+// which the "ERROR" case below already covers with a generic message; the dead case was harmless
+// (response string only) but is removed rather than left to imply a routing that doesn't exist.
 func (h *PlaidWebhookHandler) handleItemWebhook(payload *PlaidWebhookPayload) string {
 	switch payload.WebhookCode {
 	case "ERROR":
 		return "Item error processed"
-	case "LOGIN_REQUIRED":
-		return "Login required processed"
 	case "PENDING_EXPIRATION":
 		return "Pending expiration processed"
 	case "USER_PERMISSION_REVOKED":

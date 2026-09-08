@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/mockassert"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1035,7 +1037,10 @@ func TestHandlePermissionRevoked_EmailFailureNonBlocking(t *testing.T) {
 // ProcessWebhook Tests
 // ============================================================================
 
-// TestProcessWebhook_LoginRequired tests routing to HandleLoginRequired
+// TestProcessWebhook_LoginRequired tests routing to HandleLoginRequired. Issue #1621: the
+// production shape is webhook_code "ERROR" carrying error_code "ITEM_LOGIN_REQUIRED" — there is
+// no Plaid webhook_code named "ITEM_LOGIN_REQUIRED" (that used to be this test's errorType, which
+// exercised a case that could never match a real webhook).
 func TestProcessWebhook_LoginRequired(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
@@ -1066,21 +1071,112 @@ func TestProcessWebhook_LoginRequired(t *testing.T) {
 	}
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 
-	// Mock: All operations for HandleLoginRequired
-	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+	// Mock: All operations for HandleLoginRequired. The status argument is pinned to
+	// LinkedItemStatusLoginRequired (not mock.Anything) specifically so this test fails if
+	// routing regresses to HandleError's LinkedItemStatusError instead (Issue #1621).
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, domain.LinkedItemStatusLoginRequired, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
 	mockUserRepo.On("GetUserByID", ctx, "user-456").
 		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
 	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
 
-	// When: ProcessWebhook is called with ITEM_LOGIN_REQUIRED
-	err := service.ProcessWebhook(ctx, "plaid-item-789", "ITEM_LOGIN_REQUIRED", "ITEM_LOGIN_REQUIRED", "Credentials changed")
+	// When: ProcessWebhook is called with the real production shape — webhook_code "ERROR",
+	// error_code "ITEM_LOGIN_REQUIRED"
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "ERROR", "ITEM_LOGIN_REQUIRED", "Credentials changed")
 
 	// Then: Routes to HandleLoginRequired and succeeds
 	require.NoError(t, err)
 	mockLinkedItemRepo.AssertExpectations(t)
 
 	mockassert.NoCallTo(t, &mockPlaidService.Mock, "CreateUpdateModeLinkToken")
+	mockNotificationRepo.AssertExpectations(t)
+	mockEmailService.AssertExpectations(t)
+}
+
+// TestProcessWebhook_InvalidAccessToken_RoutesToHandleLoginRequired tests routing parity with the
+// sync path (plaid_permanent_error_notify.go): INVALID_ACCESS_TOKEN and ITEM_LOGIN_REQUIRED mean
+// the same thing — only the user can fix this by re-authenticating — so the webhook path must
+// route both through HandleLoginRequired the same way the sync path does, or the two producers of
+// this signal diverge (Issue #1621).
+func TestProcessWebhook_InvalidAccessToken_RoutesToHandleLoginRequired(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+
+	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockUserRepo,
+		mockPlaidService,
+		mockEmailService,
+		nil,
+	)
+
+	linkedItem := &domain.LinkedItem{
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		InstitutionName: "Test Bank",
+		Status:          "active",
+	}
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, domain.LinkedItemStatusLoginRequired, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
+	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
+
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "ERROR", "INVALID_ACCESS_TOKEN", "Access token invalid")
+
+	require.NoError(t, err)
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockNotificationRepo.AssertExpectations(t)
+	mockEmailService.AssertExpectations(t)
+}
+
+// TestProcessWebhook_PendingDisconnect_RoutesToHandlePendingExpiration tests that PENDING_DISCONNECT
+// — live in production, absent from the vendored Plaid spec (Issue #1621) — gets the same
+// treatment as PENDING_EXPIRATION rather than falling into the unknown-code default.
+func TestProcessWebhook_PendingDisconnect_RoutesToHandlePendingExpiration(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+
+	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockUserRepo,
+		mockPlaidService,
+		mockEmailService,
+		nil,
+	)
+
+	linkedItem := &domain.LinkedItem{
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		InstitutionName: "Test Bank",
+		Status:          "active",
+	}
+	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, mock.Anything, domain.LinkedItemStatusPendingExpiration, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+	mockNotificationRepo.On("Create", ctx, mock.Anything).Return(nil)
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
+	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
+
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "PENDING_DISCONNECT", "", "")
+
+	require.NoError(t, err)
+	mockLinkedItemRepo.AssertExpectations(t)
 	mockNotificationRepo.AssertExpectations(t)
 	mockEmailService.AssertExpectations(t)
 }
@@ -1271,7 +1367,12 @@ func TestProcessWebhook_ItemError_LinkedItemNotFound(t *testing.T) {
 	mockassert.NoCallTo(t, &mockEmailService.Mock, "SendNotificationEmail")
 }
 
-// TestProcessWebhook_ItemError_UnknownErrorType tests handling of unknown/unsupported error types
+// TestProcessWebhook_ItemError_UnknownErrorType tests handling of an unrecognized ITEM
+// webhook_code. Issue #1621: this used to return an error, which sent the webhook to
+// retry/DLQ forever. It now logs and returns nil — mirroring webhook_processing.go:215-220's
+// handling of an unknown webhook TYPE one level up — and increments
+// observability.UnknownItemWebhookCodeTotal so a future unhandled code stays visible instead of
+// being silently swallowed by the safer default.
 func TestProcessWebhook_ItemError_UnknownErrorType(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
@@ -1299,18 +1400,69 @@ func TestProcessWebhook_ItemError_UnknownErrorType(t *testing.T) {
 	}
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 
-	// When: ProcessWebhook is called with unknown error type
-	err := service.ProcessWebhook(ctx, "plaid-item-789", "UNKNOWN_ERROR_TYPE", "UNKNOWN_CODE", "Test error")
+	const unknownCode = "SOME_FUTURE_WEBHOOK_CODE_1621_TEST"
+	before := testutil.ToFloat64(observability.UnknownItemWebhookCodeTotal.WithLabelValues(unknownCode))
 
-	// Then: Returns error (unsupported error type)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported error type")
+	// When: ProcessWebhook is called with an unrecognized webhook_code
+	err := service.ProcessWebhook(ctx, "plaid-item-789", unknownCode, "UNKNOWN_CODE", "Test error")
+
+	// Then: Logs and returns nil (does not error, does not retry/DLQ) but is counted
+	require.NoError(t, err)
 	mockLinkedItemRepo.AssertExpectations(t)
-	// No handlers should be called for unknown error type
+	assert.Equal(t, before+1, testutil.ToFloat64(observability.UnknownItemWebhookCodeTotal.WithLabelValues(unknownCode)))
+	// No handlers should be called for an unrecognized webhook_code
 
+	mockassert.NoCallTo(t, &mockLinkedItemRepo.Mock, "TransitionErrorStatus")
 	mockassert.NoCallTo(t, &mockPlaidService.Mock, "CreateUpdateModeLinkToken")
 	mockassert.NoCallTo(t, &mockNotificationRepo.Mock, "Create")
 	mockassert.NoCallTo(t, &mockEmailService.Mock, "SendNotificationEmail")
+}
+
+// TestProcessWebhook_KnownUnhandledCodes_LogAndReturnNilWithoutErroring covers the three ITEM
+// webhook_code values the vendored Plaid spec documents but this service does not yet act on
+// (Issue #1621): USER_ACCOUNT_REVOKED, NEW_ACCOUNTS_AVAILABLE (no notification type/handler
+// exists for either yet), and WEBHOOK_UPDATE_ACKNOWLEDGED (self-inflicted — plaid_service.go sets
+// a webhook URL, which the spec says triggers this webhook). All three must fall into the safe
+// default: logged, counted, and returned as nil rather than erroring into the DLQ.
+func TestProcessWebhook_KnownUnhandledCodes_LogAndReturnNilWithoutErroring(t *testing.T) {
+	for _, code := range []string{"USER_ACCOUNT_REVOKED", "NEW_ACCOUNTS_AVAILABLE", "WEBHOOK_UPDATE_ACKNOWLEDGED"} {
+		t.Run(code, func(t *testing.T) {
+			ctx := context.Background()
+			mockLinkedItemRepo := new(MockLinkedItemRepository)
+			mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+			mockPlaidService := new(MockPlaidService)
+			mockEmailService := new(MockEmailService)
+			mockUserRepo := new(MockUserRepository)
+
+			service := NewItemErrorService(
+				mockLinkedItemRepo,
+				mockNotificationRepo,
+				mockUserRepo,
+				mockPlaidService,
+				mockEmailService,
+				nil,
+			)
+
+			linkedItem := &domain.LinkedItem{
+				ID:     "linked-item-123",
+				UserID: "user-456",
+				ItemID: "plaid-item-789",
+				Status: "active",
+			}
+			mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
+
+			before := testutil.ToFloat64(observability.UnknownItemWebhookCodeTotal.WithLabelValues(code))
+
+			err := service.ProcessWebhook(ctx, "plaid-item-789", code, "", "")
+
+			require.NoError(t, err)
+			mockLinkedItemRepo.AssertExpectations(t)
+			assert.Equal(t, before+1, testutil.ToFloat64(observability.UnknownItemWebhookCodeTotal.WithLabelValues(code)))
+			mockassert.NoCallTo(t, &mockLinkedItemRepo.Mock, "TransitionErrorStatus")
+			mockassert.NoCallTo(t, &mockNotificationRepo.Mock, "Create")
+			mockassert.NoCallTo(t, &mockEmailService.Mock, "SendNotificationEmail")
+		})
+	}
 }
 
 // ============================================================================

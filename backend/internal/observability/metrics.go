@@ -134,6 +134,28 @@ var (
 		Help: "Total PaddleWebhookService.VerifyWebhook rejections by reason (invalid_format, timestamp_out_of_tolerance, signature_mismatch). A sustained rate of timestamp_out_of_tolerance with signature_mismatch flat suggests host clock skew silently dropping genuine Paddle deliveries, not an attack.",
 	}, []string{"reason"})
 
+	// UnknownItemWebhookCodeTotal counts ITEM webhook `webhook_code` values that
+	// itemErrorService.ProcessWebhook's switch does not recognize (Issue #1621). That switch's
+	// `default` case logs and returns nil rather than erroring — mirroring
+	// webhook_processing.go:215-220's handling of an unknown webhook TYPE one level up — so a
+	// never-before-seen code no longer retries forever into the DLQ. That safety net is only safe
+	// because THIS counter exists: a log line alone is easy to miss, and the vendored Plaid spec
+	// has already been caught missing a live code once (PENDING_DISCONNECT, handled explicitly
+	// below rather than falling into this default) — a NINTH code must be visible here, not
+	// silently swallowed.
+	//
+	// Expected label values: any ITEM `webhook_code` string Plaid sends that this switch does not
+	// have an explicit case for. Includes codes the vendored spec enumerates but this service does
+	// not yet act on (USER_ACCOUNT_REVOKED, NEW_ACCOUNTS_AVAILABLE, WEBHOOK_UPDATE_ACKNOWLEDGED —
+	// the last is self-inflicted: plaid_service.go sets a webhook URL, which the spec says
+	// triggers that webhook) as well as any code neither the spec nor this codebase knows about
+	// yet. Should be non-zero for the three known-unhandled codes above and near-zero otherwise;
+	// a sustained new label value is the signal to add explicit handling.
+	UnknownItemWebhookCodeTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "unknown_item_webhook_code_total",
+		Help: "Total ITEM webhook events with a webhook_code itemErrorService.ProcessWebhook does not have an explicit case for, by code. Non-zero for known-unhandled codes (USER_ACCOUNT_REVOKED, NEW_ACCOUNTS_AVAILABLE, WEBHOOK_UPDATE_ACKNOWLEDGED) is expected; any other/new label value should be investigated.",
+	}, []string{"code"})
+
 	// RateLimitIdentitySentinelFallbackTotal counts requests that reached the
 	// rate limiter with GateStatusPassed (i.e. CloudflareOnly already verified
 	// the immediate peer and the origin secret) but presented a missing,
