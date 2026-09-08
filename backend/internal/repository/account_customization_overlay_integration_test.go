@@ -452,3 +452,102 @@ func TestAccountRepository_CustomizationOverlay_RemainingChainReadsOverlay_Integ
 		assertOverlaid(t, rows[0])
 	})
 }
+
+// ── 9. #1618a — exclude_investment_sync surfaces on every read that carries the chain overlay
+// join, and defaults FALSE (not NULL/error) for an unchained account. ───────────────────────────
+//
+// exclude_investment_sync is NOT one of the six accountCustomizationColumns — it has no
+// accounts-side column to fall back to — so it is projected as
+// COALESCE(<alias>_ua.exclude_investment_sync, FALSE), not through accountCustomizationExpr's
+// CASE. This test covers all seven reads scoped to carry it: the five that already had the
+// customization join, plus GetByLinkedItemID and GetAccountsWithInstitution, whose join #1618a
+// adds specifically for this field.
+func TestAccountRepository_CustomizationOverlay_ExcludeInvestmentSync_Integration(t *testing.T) {
+	f, ctx := newOverlayFixture(t)
+
+	// (a) A chained account whose chain row has exclude_investment_sync = TRUE.
+	excludedUAID := f.newUserAccount(t, ctx)
+	_, err := f.pool.Exec(ctx,
+		`UPDATE user_accounts SET exclude_investment_sync = TRUE WHERE id = $1`, excludedUAID)
+	require.NoError(t, err, "flip the chain's exclude_investment_sync")
+	excludedAccountID := f.newAccount(t, ctx, "excluded", &excludedUAID)
+
+	// (b) A chained account whose chain row leaves exclude_investment_sync at its FALSE default.
+	includedUAID := f.newUserAccount(t, ctx)
+	includedAccountID := f.newAccount(t, ctx, "included", &includedUAID)
+
+	// (c) An UNCHAINED account — must read FALSE, never NULL/error, via COALESCE's default leg.
+	unchainedAccountID := f.newAccount(t, ctx, "unchained-eis", nil)
+
+	byID := func(rows []domain.Account) map[string]domain.Account {
+		m := make(map[string]domain.Account, len(rows))
+		for _, r := range rows {
+			m[r.ID] = r
+		}
+		return m
+	}
+
+	t.Run("GetAccountsWithInstitutionFiltered", func(t *testing.T) {
+		rows, err := f.repo.GetAccountsWithInstitutionFiltered(ctx, f.userID.String(), AccountFilterOptions{})
+		require.NoError(t, err)
+		require.Len(t, rows, 3)
+		m := byID(rows)
+		assert.True(t, m[excludedAccountID].ExcludeInvestmentSync)
+		assert.False(t, m[includedAccountID].ExcludeInvestmentSync)
+		assert.False(t, m[unchainedAccountID].ExcludeInvestmentSync)
+	})
+
+	t.Run("GetByIDAndUser", func(t *testing.T) {
+		got, err := f.repo.GetByIDAndUser(ctx, excludedAccountID, f.userID.String())
+		require.NoError(t, err)
+		assert.True(t, got.ExcludeInvestmentSync)
+
+		got, err = f.repo.GetByIDAndUser(ctx, unchainedAccountID, f.userID.String())
+		require.NoError(t, err)
+		assert.False(t, got.ExcludeInvestmentSync)
+	})
+
+	t.Run("GetByUserAccountIDAndUser", func(t *testing.T) {
+		got, err := f.repo.GetByUserAccountIDAndUser(ctx, excludedUAID, f.userID.String())
+		require.NoError(t, err)
+		assert.True(t, got.ExcludeInvestmentSync)
+	})
+
+	t.Run("GetByUserAccountAndStatus", func(t *testing.T) {
+		rows, err := f.repo.GetByUserAccountAndStatus(ctx, excludedUAID, string(domain.AccountStatusActive), f.userID.String())
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		assert.True(t, rows[0].ExcludeInvestmentSync)
+	})
+
+	t.Run("GetByUserAccountID", func(t *testing.T) {
+		rows, err := f.repo.GetByUserAccountID(ctx, excludedUAID)
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		assert.True(t, rows[0].ExcludeInvestmentSync)
+	})
+
+	t.Run("GetByLinkedItemID", func(t *testing.T) {
+		rows, err := f.repo.GetByLinkedItemID(ctx, f.linkedItemID.String())
+		require.NoError(t, err)
+		m := byID(rows)
+		require.Contains(t, m, excludedAccountID)
+		require.Contains(t, m, includedAccountID)
+		require.Contains(t, m, unchainedAccountID)
+		assert.True(t, m[excludedAccountID].ExcludeInvestmentSync)
+		assert.False(t, m[includedAccountID].ExcludeInvestmentSync)
+		assert.False(t, m[unchainedAccountID].ExcludeInvestmentSync)
+	})
+
+	t.Run("GetAccountsWithInstitution", func(t *testing.T) {
+		rows, err := f.repo.GetAccountsWithInstitution(ctx, f.userID.String())
+		require.NoError(t, err)
+		m := byID(rows)
+		require.Contains(t, m, excludedAccountID)
+		require.Contains(t, m, includedAccountID)
+		require.Contains(t, m, unchainedAccountID)
+		assert.True(t, m[excludedAccountID].ExcludeInvestmentSync)
+		assert.False(t, m[includedAccountID].ExcludeInvestmentSync)
+		assert.False(t, m[unchainedAccountID].ExcludeInvestmentSync)
+	})
+}

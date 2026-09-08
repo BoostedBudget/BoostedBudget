@@ -757,16 +757,23 @@ func supersedeStrandedChainSiblings(ctx context.Context, tx pgx.Tx, userID strin
 }
 
 // GetByLinkedItemID retrieves all accounts for a specific linked item
+//
+// #1618a: aliased `a` and given accountCustomizationJoin specifically to surface
+// exclude_investment_sync — this is investment_sync_service's own read of the accounts it is about
+// to sync holdings for. Every other column reference was requalified with `a.` at the same time:
+// user_accounts and accounts both have created_at/updated_at, so leaving those bare would have
+// made the query ambiguous the moment the join was added, not merely inconsistent.
 func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID string) ([]domain.Account, error) {
 	query := `
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       created_at, updated_at
-		FROM accounts
-		WHERE linked_item_id = $1 AND status = 'active'
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.linked_item_id = $1 AND a.status = 'active'
+		ORDER BY a.created_at ASC
 	`
 
 	rows, err := r.db.Query(ctx, query, linkedItemID)
@@ -795,6 +802,7 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 			&account.UserAccountID,
 			&account.ReplacedByID,
 			&account.ReplacedAt,
+			&account.ExcludeInvestmentSync,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 		)
@@ -1104,15 +1112,19 @@ func (r *accountRepository) getForHouseholdScope(ctx context.Context, requesting
 // byte-identical and the sort was completely tied with nothing left to decide it — the planner
 // picked. This is the GET /api/v1/accounts list, so the symptom was a user-visible reshuffle
 // between refreshes. Pinned by account_list_total_order_integration_test.go.
+// #1618a: given accountCustomizationJoin specifically to surface exclude_investment_sync on this
+// read too (account_service.go's other whole-list read, alongside
+// GetAccountsWithInstitutionFiltered).
 func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
 		WHERE a.user_id = $1 AND a.status = 'active'
 		ORDER BY a.created_at ASC, a.id ASC
 	`
@@ -1144,6 +1156,7 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 			&account.ReplacedByID,
 			&account.ReplacedAt,
 			&account.RemovedAt,
+			&account.ExcludeInvestmentSync,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 			&account.InstitutionName,
@@ -1375,6 +1388,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.user_account_id, a.status, a.removed_at, a.replaced_at, a.expired_at, a.replaced_by_id,
 		       a.created_at, a.updated_at
 		FROM accounts a` + accountCustomizationJoin("a") + `
@@ -1388,6 +1402,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
 		&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 		&account.DisplayOrder, &account.IsHidden,
+		&account.ExcludeInvestmentSync,
 		&account.UserAccountID, &account.Status, &account.RemovedAt,
 		&account.ReplacedAt, &account.ExpiredAt, &account.ReplacedByID,
 		&account.CreatedAt, &account.UpdatedAt,
@@ -1426,6 +1441,7 @@ func (r *accountRepository) GetByUserAccountIDAndUser(ctx context.Context, userA
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.user_account_id, a.status, a.removed_at,
 		       a.created_at, a.updated_at
 		FROM accounts a` + accountCustomizationJoin("a") + `
@@ -1441,6 +1457,7 @@ func (r *accountRepository) GetByUserAccountIDAndUser(ctx context.Context, userA
 		&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
 		&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 		&account.DisplayOrder, &account.IsHidden,
+		&account.ExcludeInvestmentSync,
 		&account.UserAccountID, &account.Status, &account.RemovedAt,
 		&account.CreatedAt, &account.UpdatedAt,
 	)
@@ -1812,6 +1829,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status` + lastKnownProjection + `
 		FROM accounts a
@@ -1843,6 +1861,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 			&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
 			&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 			&account.DisplayOrder, &account.IsHidden,
+			&account.ExcludeInvestmentSync,
 			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID, &account.RemovedAt, &account.ExpiredAt,
 			&account.CreatedAt, &account.UpdatedAt, &institutionNameRaw, &linkedItemStatusRaw,
 		}
@@ -1882,6 +1901,7 @@ func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userA
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
 		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.created_at, a.updated_at
 		FROM accounts a` + accountCustomizationJoin("a") + `
 		WHERE a.user_account_id = $1 AND a.status = $2 AND a.user_id = $3
@@ -1904,6 +1924,7 @@ func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userA
 			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID,
 			&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 			&account.DisplayOrder, &account.IsHidden,
+			&account.ExcludeInvestmentSync,
 			&account.CreatedAt, &account.UpdatedAt,
 		)
 		if err != nil {
@@ -1931,6 +1952,7 @@ func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountI
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
 		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.created_at, a.updated_at
 		FROM accounts a` + accountCustomizationJoin("a") + `
 		WHERE a.user_account_id = $1
@@ -1953,6 +1975,7 @@ func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountI
 			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID,
 			&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 			&account.DisplayOrder, &account.IsHidden,
+			&account.ExcludeInvestmentSync,
 			&account.CreatedAt, &account.UpdatedAt,
 		)
 		if err != nil {

@@ -119,6 +119,7 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).
 		AddRow(
@@ -126,6 +127,7 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 			"Checking", strPtr("Chase Total Checking"), "depository", strPtr("checking"), strPtr("1234"),
 			&balance1, &available1, "USD",
 			"active", nil, nil, nil,
+			false,
 			now, now,
 		).
 		AddRow(
@@ -133,6 +135,7 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 			"Savings", nil, "depository", strPtr("savings"), strPtr("5678"),
 			&balance2, &available2, "USD",
 			"active", nil, nil, nil,
+			false,
 			now, now,
 		)
 
@@ -141,14 +144,15 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 	// (item D) changed exactly these two columns in ten places at once. Calling the renderer means
 	// this expectation cannot disagree with what the method emits.
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       created_at, updated_at
-		FROM accounts
-		WHERE linked_item_id = $1 AND status = 'active'
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.linked_item_id = $1 AND a.status = 'active'
+		ORDER BY a.created_at ASC
 	`)).WithArgs(linkedItemID).WillReturnRows(rows)
 
 	// Execute
@@ -346,6 +350,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at", "institution_name",
 	}).
 		AddRow(
@@ -353,6 +358,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 			"Chase Checking", strPtr("Chase Total Checking®"), "depository", strPtr("checking"), strPtr("1234"),
 			&bal1, &avail1, "USD",
 			"active", nil, nil, nil, nil,
+			false,
 			time.Now(), time.Now(), "Chase",
 		).
 		AddRow(
@@ -360,6 +366,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 			"Chase Savings", strPtr("Chase Savings℠"), "depository", strPtr("savings"), strPtr("5678"),
 			&bal2, &avail2, "USD",
 			"active", nil, nil, nil, nil,
+			false,
 			time.Now(), time.Now(), "Chase",
 		).
 		AddRow(
@@ -367,6 +374,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 			"Wells Fargo Checking", nil, "depository", strPtr("checking"), strPtr("9012"),
 			&bal3, &avail3, "USD",
 			"active", nil, nil, nil, nil,
+			false,
 			time.Now(), time.Now(), "Wells Fargo",
 		)
 
@@ -375,9 +383,10 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
 		WHERE a.user_id = $1 AND a.status = 'active'
 		ORDER BY a.created_at ASC, a.id ASC
 	`
@@ -425,6 +434,7 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at", "institution_name",
 	})
 
@@ -433,9 +443,10 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
 		WHERE a.user_id = $1 AND a.status = 'active'
 		ORDER BY a.created_at ASC, a.id ASC
 	`
@@ -470,12 +481,14 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at", "institution_name",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "plaid-acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&bal, &bal, "USD",
 		"active", nil, nil, nil, nil,
+		false,
 		time.Now(), time.Now(), "Chase",
 	)
 	// Note: expired account not in rows — DB filters it via WHERE a.status != 'expired'
@@ -485,9 +498,10 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
 		WHERE a.user_id = $1 AND a.status = 'active'
 		ORDER BY a.created_at ASC, a.id ASC
 	`
@@ -535,6 +549,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
+		"exclude_investment_sync",
 		"user_account_id", "status", "removed_at", "replaced_at", "expired_at", "replaced_by_id",
 		"created_at", "updated_at",
 	}).AddRow(
@@ -543,6 +558,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		&balance, &available, "USD",
 		strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), strPtr("💰"),
 		&displayOrder, false,
+		false,
 		&userAccountID, domain.AccountStatusActive, nil, nil, nil, nil,
 		now, now,
 	)
@@ -552,6 +568,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.user_account_id, a.status, a.removed_at, a.replaced_at, a.expired_at, a.replaced_by_id,
 		       a.created_at, a.updated_at
 		FROM accounts a` + accountCustomizationJoin("a") + `
@@ -598,6 +615,7 @@ func TestAccountRepository_GetByIDAndUser_NotFound(t *testing.T) {
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.user_account_id, a.status, a.removed_at, a.replaced_at, a.expired_at, a.replaced_by_id,
 		       a.created_at, a.updated_at
 		FROM accounts a` + accountCustomizationJoin("a") + `
@@ -853,6 +871,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
+		"exclude_investment_sync",
 		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
@@ -862,6 +881,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 			&bal1, &avail1, "USD",
 			strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), nil,
 			&order0, false,
+			false,
 			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
@@ -871,6 +891,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 			&bal2, &avail2, "USD",
 			nil, nil, nil, nil,
 			&order1, false,
+			false,
 			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		)
@@ -882,6 +903,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
@@ -925,6 +947,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
+		"exclude_investment_sync",
 		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
@@ -934,6 +957,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 			&bal1, &avail1, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
+			false,
 			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
@@ -943,6 +967,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 			&bal2, &avail2, "USD",
 			strPtr("Closed Account"), nil, nil, nil,
 			nil, true, // This one is hidden
+			false,
 			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Bank of America"), strPtr("active"),
 		)
@@ -954,6 +979,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
@@ -1000,6 +1026,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_Active(t *testing.T) {
 		"current_balance", "available_balance", "currency_code",
 		"user_account_id", "status", "replaced_at", "replaced_by_id",
 		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).
 		AddRow(
@@ -1008,6 +1035,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_Active(t *testing.T) {
 			&bal1, &avail1, "USD",
 			&userAccountID, "active", nil, nil,
 			nil, nil, nil, nil, nil, false,
+			false,
 			now, now,
 		)
 
@@ -1048,6 +1076,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_Replaced(t *testing.T) {
 		"current_balance", "available_balance", "currency_code",
 		"user_account_id", "status", "replaced_at", "replaced_by_id",
 		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).
 		AddRow(
@@ -1056,6 +1085,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_Replaced(t *testing.T) {
 			&bal1, &avail1, "USD",
 			&userAccountID, "replaced", &replacedAt, &replacedByID,
 			nil, nil, nil, nil, nil, false,
+			false,
 			now, now,
 		)
 
@@ -1092,6 +1122,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_NotFound(t *testing.T) {
 		"current_balance", "available_balance", "currency_code",
 		"user_account_id", "status", "replaced_at", "replaced_by_id",
 		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	})
 
@@ -1129,6 +1160,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_ScopesToUserID(t *testing.T
 		"current_balance", "available_balance", "currency_code",
 		"user_account_id", "status", "replaced_at", "replaced_by_id",
 		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	})
 
@@ -1168,6 +1200,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_MultipleAccounts(t *testing
 		"current_balance", "available_balance", "currency_code",
 		"user_account_id", "status", "replaced_at", "replaced_by_id",
 		"nickname", "custom_color", "custom_icon", "custom_emoji", "display_order", "is_hidden",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).
 		AddRow(
@@ -1176,6 +1209,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_MultipleAccounts(t *testing
 			&bal1, &avail1, "USD",
 			&userAccountID, "replaced", &replacedAt, nil,
 			nil, nil, nil, nil, nil, false,
+			false,
 			now.Add(-2*time.Hour), now,
 		).
 		AddRow(
@@ -1184,6 +1218,7 @@ func TestAccountRepository_GetByUserAccountAndStatus_MultipleAccounts(t *testing
 			&bal2, &avail2, "USD",
 			&userAccountID, "active", nil, nil,
 			nil, nil, nil, nil, nil, false,
+			false,
 			now, now,
 		)
 
@@ -1667,12 +1702,14 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesReplaced(t *testin
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at", "institution_name",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "plaid-acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&bal, &bal, "USD",
 		"active", nil, nil, nil, nil,
+		false,
 		time.Now(), time.Now(), "Chase",
 	)
 
@@ -1681,9 +1718,10 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesReplaced(t *testin
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + accountCustomizationJoin("a") + `
 		WHERE a.user_id = $1 AND a.status = 'active'
 		ORDER BY a.created_at ASC, a.id ASC
 	`
@@ -1718,24 +1756,27 @@ func TestAccountRepository_GetByLinkedItemID_ExcludesReplaced(t *testing.T) {
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"exclude_investment_sync",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), linkedItemID, uuid.New().String(), "acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&balance, &available, "USD",
 		"active", nil, nil, nil,
+		false,
 		now, now,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, linked_item_id, user_id, plaid_account_id,
-		       name, official_name, type, subtype, mask,
-		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
-		       status, user_account_id, replaced_by_id, replaced_at,
-		       created_at, updated_at
-		FROM accounts
-		WHERE linked_item_id = $1 AND status = 'active'
-		ORDER BY created_at ASC
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
+		       a.created_at, a.updated_at
+		FROM accounts a` + accountCustomizationJoin("a") + `
+		WHERE a.linked_item_id = $1 AND a.status = 'active'
+		ORDER BY a.created_at ASC
 	`)).WithArgs(linkedItemID).WillReturnRows(rows)
 
 	accounts, err := repo.GetByLinkedItemID(ctx, linkedItemID)
@@ -1858,6 +1899,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
+		"exclude_investment_sync",
 		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
@@ -1867,6 +1909,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 			&bal1, &avail1, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
+			false,
 			nil, "active", nil, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
@@ -1876,6 +1919,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 			&bal2, &avail2, "USD",
 			nil, nil, nil, nil,
 			nil, false,
+			false,
 			nil, "replaced", &replacedAt, nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		)
@@ -1887,6 +1931,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
@@ -1935,6 +1980,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
+		"exclude_investment_sync",
 		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at", "expired_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
@@ -1944,6 +1990,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 			nil, nil, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
+			false,
 			nil, "active", nil, nil, nil, nil,
 			now, now, nil, nil, // l.institution_name = NULL, l.status = NULL
 		)
@@ -1953,6 +2000,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       ` + accountCustomizationProjection("a") + `,
+		       COALESCE(a_ua.exclude_investment_sync, FALSE) AS exclude_investment_sync,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at, a.expired_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a

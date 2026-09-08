@@ -95,6 +95,8 @@ components:
         display_order:
           format: int64
           type: integer
+        exclude_investment_sync:
+          type: boolean
         expired_at:
           format: date-time
           type: string
@@ -160,6 +162,7 @@ components:
         - currency_code
         - status
         - is_hidden
+        - exclude_investment_sync
         - created_at
         - updated_at
       type: object
