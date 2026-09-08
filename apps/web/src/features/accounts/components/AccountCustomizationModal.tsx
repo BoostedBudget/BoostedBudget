@@ -25,7 +25,7 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
-import { Eye, EyeOff, Loader2, Users, UserX, LineChart, RefreshCwOff } from 'lucide-react'
+import { Eye, EyeOff, Loader2, Users, UserX, LineChart, RefreshCwOff, ChevronDown } from 'lucide-react'
 import { ColorPicker } from './ColorPicker'
 import { IconSelector } from './IconSelector'
 import { EmojiInput } from './EmojiInput'
@@ -55,6 +55,15 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
   )
   const [showHideConfirm, setShowHideConfirm] = useState(false)
   const [activeTab, setActiveTab] = useState<'icon' | 'emoji'>(account.custom_emoji ? 'emoji' : 'icon')
+  // #1618 (dropped requirement, closed in #1609/P4-T5): the exclude-investment toggle only
+  // matters for an account that is double-reported (bank sync + investment sync), not for every
+  // chained account — showing it unconditionally for a plain checking account is noise the issue
+  // explicitly called out. The user chose "behind an advanced section" over gating by account
+  // shape, so it lives collapsed here rather than being conditionally rendered. Collapsed by
+  // default regardless of the account's own value, so a user who already excluded investment
+  // activity on this account still has to open Advanced to see or change it — the section hides
+  // *discoverability noise*, not the account's own state.
+  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   // Issue #1370 Task 8: household sharing is a separate domain/endpoint from
   // UpdateAccountRequest (see handleSave below). Hooks run unconditionally
@@ -339,41 +348,72 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
           />
         </div>
 
-        {/* Exclude investment activity toggle — Issue #1609 Item 5 / #1618b. Some accounts sync
-            through both banking sync and investment sync, so their activity can appear twice in
-            the feed (once from each source). This is the user-facing control for that: it maps
-            straight onto exclude_investment_sync. */}
-        <div className="flex items-center justify-between rounded-lg border p-3">
-          <div className="space-y-0.5">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              {excludeInvestmentSync ? (
-                <RefreshCwOff className="h-4 w-4" />
-              ) : (
-                <LineChart className="h-4 w-4" />
+        {/* Advanced disclosure — Issue #1618 (dropped requirement, closed by #1609/P4-T5). Houses
+            the exclude-investment toggle, currently the only control relevant to a minority of
+            accounts (ones double-reported via both bank sync and investment sync) rather than to
+            every account in the modal. Collapsed by default: this is a *discoverability* gate,
+            distinct from and orthogonal to the `disabled={!account.user_account_id}` gate on the
+            switch below, which is about storage availability, not relevance. Modeled on the
+            existing hand-rolled disclosure pattern (see DeletedGoalsPanel.tsx) rather than a new
+            dependency — no Collapsible/Accordion primitive exists in this design system yet. */}
+        <div>
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            aria-expanded={advancedOpen}
+            aria-controls="account-customization-advanced"
+            className="flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <span className="text-sm font-medium text-foreground">Advanced</span>
+            <ChevronDown
+              aria-hidden="true"
+              className={cn(
+                'h-4 w-4 text-muted-foreground transition-transform motion-reduce:transition-none',
+                advancedOpen && 'rotate-180'
               )}
-              Exclude Investment Activity
+            />
+          </button>
+
+          {advancedOpen && (
+            <div id="account-customization-advanced" className="mt-2">
+              {/* Exclude investment activity toggle — Issue #1609 Item 5 / #1618b. Some accounts
+                  sync through both banking sync and investment sync, so their activity can appear
+                  twice in the feed (once from each source). This is the user-facing control for
+                  that: it maps straight onto exclude_investment_sync. */}
+              <div className="flex items-center justify-between rounded-lg border p-3">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    {excludeInvestmentSync ? (
+                      <RefreshCwOff className="h-4 w-4" />
+                    ) : (
+                      <LineChart className="h-4 w-4" />
+                    )}
+                    Exclude Investment Activity
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {account.user_account_id
+                      ? "Stops this account's activity from showing up twice — once from bank sync, once from investment sync."
+                      : 'Not available for this account yet — it has no stable account record to store the setting on.'}
+                  </p>
+                </div>
+                <Switch
+                  checked={excludeInvestmentSync}
+                  onCheckedChange={setExcludeInvestmentSync}
+                  disabled={!account.user_account_id}
+                  aria-label={
+                    excludeInvestmentSync ? 'Include investment activity' : 'Exclude investment activity'
+                  }
+                  title={
+                    !account.user_account_id
+                      ? 'Unavailable until this account is linked to a stable account record'
+                      : excludeInvestmentSync
+                        ? 'Include investment activity'
+                        : 'Exclude investment activity'
+                  }
+                />
+              </div>
             </div>
-            <p className="text-xs text-muted-foreground">
-              {account.user_account_id
-                ? "Stops this account's activity from showing up twice — once from bank sync, once from investment sync."
-                : 'Not available for this account yet — it has no stable account record to store the setting on.'}
-            </p>
-          </div>
-          <Switch
-            checked={excludeInvestmentSync}
-            onCheckedChange={setExcludeInvestmentSync}
-            disabled={!account.user_account_id}
-            aria-label={
-              excludeInvestmentSync ? 'Include investment activity' : 'Exclude investment activity'
-            }
-            title={
-              !account.user_account_id
-                ? 'Unavailable until this account is linked to a stable account record'
-                : excludeInvestmentSync
-                  ? 'Include investment activity'
-                  : 'Exclude investment activity'
-            }
-          />
+          )}
         </div>
 
         {/* Share with household toggle — Issue #1370 Task 8. Distinct from

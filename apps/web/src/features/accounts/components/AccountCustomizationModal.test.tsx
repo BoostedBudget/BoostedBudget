@@ -56,6 +56,13 @@ function renderModal(ui: ReactElement) {
   return render(ui, { wrapper: createWrapper() })
 }
 
+// #1618/P4-T5: the exclude-investment switch now lives behind a collapsed "Advanced"
+// disclosure (see AccountCustomizationModal.tsx) and is not in the document at all until this
+// is clicked open. Every test that queries that switch must call this first.
+async function openAdvancedSection(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: 'Advanced' }))
+}
+
 const mockHouseholdResponse: GetMyHouseholdResponseBody = {
   household: {
     id: 'household-1',
@@ -875,7 +882,8 @@ describe('AccountCustomizationModal', () => {
   })
 
   describe('Exclude Investment Activity Toggle (Issue #1609 Item 5 / #1618b)', () => {
-    it('reflects the stored value when the account already excludes investment sync', () => {
+    it('reflects the stored value when the account already excludes investment sync', async () => {
+      const user = userEvent.setup()
       const excludedAccount: Account = {
         ...mockAccount,
         user_account_id: 'ua-chained-1618b',
@@ -891,11 +899,13 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
+      await openAdvancedSection(user)
       const toggle = screen.getByRole('switch', { name: /investment activity/i })
       expect(toggle).toHaveAttribute('aria-checked', 'true')
     })
 
-    it('reflects the stored value when the account does not exclude investment sync', () => {
+    it('reflects the stored value when the account does not exclude investment sync', async () => {
+      const user = userEvent.setup()
       renderModal(
         <AccountCustomizationModal
           account={mockAccount}
@@ -905,6 +915,7 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
+      await openAdvancedSection(user)
       const toggle = screen.getByRole('switch', { name: /investment activity/i })
       expect(toggle).toHaveAttribute('aria-checked', 'false')
     })
@@ -927,6 +938,7 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
+      await openAdvancedSection(user)
       await user.click(screen.getByRole('switch', { name: /investment activity/i }))
       await user.click(screen.getByRole('button', { name: 'Save Changes' }))
 
@@ -955,6 +967,7 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
+      await openAdvancedSection(user)
       await user.click(screen.getByRole('switch', { name: /investment activity/i }))
       await user.click(screen.getByRole('button', { name: 'Save Changes' }))
 
@@ -997,7 +1010,8 @@ describe('AccountCustomizationModal', () => {
       user_account_id: 'ua-123',
     }
 
-    it('does not show the household share switch when not in a household', () => {
+    it('does not show the household share switch when not in a household', async () => {
+      const user = userEvent.setup()
       mockNotInHousehold()
       mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
 
@@ -1011,13 +1025,16 @@ describe('AccountCustomizationModal', () => {
       )
 
       // Only the pre-existing "Hide Account" and "Exclude Investment Activity" switches
-      // should be present (household share switch absent).
+      // should be present (household share switch absent). The investment switch is behind
+      // the collapsed Advanced disclosure (#1618/P4-T5), so it must be opened first.
+      await openAdvancedSection(user)
       expect(screen.getAllByRole('switch')).toHaveLength(2)
       expect(screen.queryByText('Share with household')).not.toBeInTheDocument()
       expect(screen.queryByText('Hidden from household')).not.toBeInTheDocument()
     })
 
-    it('does not show the household share switch when the account has no user_account_id', () => {
+    it('does not show the household share switch when the account has no user_account_id', async () => {
+      const user = userEvent.setup()
       mockInHousehold()
       mockShares([])
 
@@ -1030,12 +1047,14 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
+      await openAdvancedSection(user)
       expect(screen.getAllByRole('switch')).toHaveLength(2)
       expect(screen.queryByText('Share with household')).not.toBeInTheDocument()
       expect(screen.queryByText('Hidden from household')).not.toBeInTheDocument()
     })
 
-    it('shows the household share switch when in a household with a usable user_account_id', () => {
+    it('shows the household share switch when in a household with a usable user_account_id', async () => {
+      const user = userEvent.setup()
       mockInHousehold()
       mockShares([{ user_account_id: 'ua-123', visibility: 'hidden' }])
 
@@ -1048,6 +1067,7 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
+      await openAdvancedSection(user)
       expect(screen.getAllByRole('switch')).toHaveLength(3)
     })
 
@@ -1651,7 +1671,8 @@ describe('AccountCustomizationModal', () => {
   // does not declare the field at all. A toggle the user can flip that cannot persist is worse than
   // no toggle — it closes as if it saved. So it must be visibly inert for those accounts.
   describe('exclude investment activity — unchained accounts (#1618b)', () => {
-    it('disables the toggle when the account has no user_account_id', () => {
+    it('disables the toggle when the account has no user_account_id', async () => {
+      const user = userEvent.setup()
       renderModal(
         <AccountCustomizationModal
           account={mockAccount}
@@ -1661,10 +1682,12 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
+      await openAdvancedSection(user)
       expect(screen.getByRole('switch', { name: /investment activity/i })).toBeDisabled()
     })
 
-    it('leaves the toggle enabled when the account IS chained', () => {
+    it('leaves the toggle enabled when the account IS chained', async () => {
+      const user = userEvent.setup()
       renderModal(
         <AccountCustomizationModal
           account={{ ...mockAccount, user_account_id: 'ua-chained-1618b' }}
@@ -1674,7 +1697,48 @@ describe('AccountCustomizationModal', () => {
         />
       )
 
+      await openAdvancedSection(user)
       expect(screen.getByRole('switch', { name: /investment activity/i })).not.toBeDisabled()
+    })
+  })
+
+  describe('Advanced disclosure (#1618/P4-T5)', () => {
+    it('starts collapsed, keeping the investment-activity switch out of the document', () => {
+      renderModal(
+        <AccountCustomizationModal
+          account={{ ...mockAccount, user_account_id: 'ua-chained-1618b' }}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      const advancedButton = screen.getByRole('button', { name: 'Advanced' })
+      expect(advancedButton).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByRole('switch', { name: /investment activity/i })).not.toBeInTheDocument()
+    })
+
+    it('reveals the investment-activity switch once opened, and hides it again on collapse', async () => {
+      const user = userEvent.setup()
+      renderModal(
+        <AccountCustomizationModal
+          account={{ ...mockAccount, user_account_id: 'ua-chained-1618b' }}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      const advancedButton = screen.getByRole('button', { name: 'Advanced' })
+      await user.click(advancedButton)
+
+      expect(advancedButton).toHaveAttribute('aria-expanded', 'true')
+      expect(screen.getByRole('switch', { name: /investment activity/i })).toBeInTheDocument()
+
+      await user.click(advancedButton)
+
+      expect(advancedButton).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByRole('switch', { name: /investment activity/i })).not.toBeInTheDocument()
     })
   })
 
