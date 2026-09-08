@@ -122,7 +122,16 @@ describe('LeaveHouseholdDialog', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /leave household/i }))
 
-    expect(await screen.findByText(/could not leave the household/i)).toBeInTheDocument()
+    // Issue #1609 T0: findByText's budget is Testing Library's 1000ms default (no
+    // asyncUtilTimeout is configured anywhere in src/test/), and this assertion needs a click, a
+    // rejected mutation, an error-state update and a re-render to all land inside it. On the
+    // self-hosted mac-mini — which runs frontend-test and backend-integration-test concurrently —
+    // that was not reliably enough: CI run 34169904379 failed here at 2623.95ms while the same
+    // test passes locally in 311ms. The signal being awaited is the right one, so the fix is to
+    // give it a realistic budget rather than to await something else.
+    expect(
+      await screen.findByText(/could not leave the household/i, undefined, { timeout: 5000 })
+    ).toBeInTheDocument()
   })
 
   describe('Analytics (#1370 Task 10)', () => {
@@ -143,7 +152,7 @@ describe('LeaveHouseholdDialog', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /leave household/i }))
 
-      await screen.findByText(/could not leave the household/i)
+      await screen.findByText(/could not leave the household/i, undefined, { timeout: 5000 })
       expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_LEFT)
     })
   })
