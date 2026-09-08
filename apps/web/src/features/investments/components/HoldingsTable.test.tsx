@@ -64,6 +64,7 @@ function makeAccount(overrides: Partial<Account> & { id: string; name: string })
     display_order: undefined,
     institution_name: 'Test Bank',
     is_hidden: false,
+    exclude_investment_sync: false,
     linked_item_id: 'item-1',
     linked_item_status: 'active',
     mask: undefined,

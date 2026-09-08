@@ -159,6 +159,31 @@ type Account struct {
 	DisplayOrder *int    `json:"display_order,omitempty" db:"display_order"` // Sort order
 	IsHidden     bool    `json:"is_hidden" db:"is_hidden"`                   // Hide from default views
 
+	// ExcludeInvestmentSync surfaces user_accounts.exclude_investment_sync (Issue #1618a) — see
+	// domain.UserAccount.ExcludeInvestmentSync for the full semantics (hides this chain's
+	// investment_transactions from both read surfaces; enforced today by
+	// transaction_repository.go's exclude_investment_sync JOIN, NOT by this field).
+	//
+	// ⚠ NOT one of the six accountCustomizationColumns (account_liveness_sql.go) — it has no
+	// `accounts`-side column to fall back to, so it is projected directly as
+	// COALESCE(<alias>_ua.exclude_investment_sync, FALSE) rather than through
+	// accountCustomizationProjection/accountCustomizationExpr's CASE. FALSE (not NULL) is the
+	// correct default for an unchained account: no chain means nothing has ever excluded it.
+	//
+	// ⚠ POPULATED ONLY BY READS THAT ALREADY CARRY accountCustomizationJoin: GetByIDAndUser,
+	// GetByUserAccountIDAndUser, GetAccountsWithInstitutionFiltered, GetByUserAccountAndStatus,
+	// GetByUserAccountID (pre-existing join sites), plus GetByLinkedItemID and
+	// GetAccountsWithInstitution (join added by #1618a specifically for this field). Every other
+	// account read — including every household-scoped read, which deliberately does not carry the
+	// personal-view customization overlay at all (see account_liveness_sql.go's
+	// "NOT applied to householdScopeQuery" note) — leaves this `false`, the safe default: a read
+	// that never asked for the join cannot report the field as excluded. Enforced mechanically by
+	// TestNoAccountCustomizationJoinReadOmitsExcludeInvestmentSync: any account-shaped SELECT that
+	// carries accountCustomizationJoin must also project exclude_investment_sync, so a future
+	// customization-joined read cannot silently omit it and read as "not excluded" for a chain that
+	// actually is.
+	ExcludeInvestmentSync bool `json:"exclude_investment_sync" db:"exclude_investment_sync"`
+
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
