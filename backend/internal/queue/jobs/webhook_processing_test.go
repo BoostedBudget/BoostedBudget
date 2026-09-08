@@ -11,6 +11,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/mockassert"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
@@ -181,6 +182,105 @@ func TestWebhookProcessingWorker_Work_ItemWebhook_Success(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 	mockItemErrorSvc.AssertExpectations(t)
 	mockSyncSvc.AssertNotCalled(t, "ProcessWebhook")
+}
+
+// TestWebhookProcessingWorker_Work_ItemWebhook_RecoversErrorMessageFromPayload is a regression
+// test for Issue #1609 P3-T3: domain.WebhookEvent has ErrorCode but no ErrorMessage column (the
+// webhook_events table never stored Plaid's error_message), so processItemWebhook used to always
+// pass "" — producing a dangling "with Chase: ." notification sentence. Plaid's ITEM error webhook
+// payload always nests error_message inside the "error" object
+// (https://plaid.com/docs/api/webhooks/ - ITEM/ERROR), so processItemWebhook recovers it by
+// parsing the already-stored, already-verified raw Payload for this ITEM-only code path.
+func TestWebhookProcessingWorker_Work_ItemWebhook_RecoversErrorMessageFromPayload(t *testing.T) {
+	ctx := context.Background()
+	webhookID := uuid.New().String()
+	itemID := "plaid-item-123"
+
+	webhook := &domain.WebhookEvent{
+		ID:             webhookID,
+		WebhookType:    "ITEM",
+		WebhookCode:    stringPtr("ERROR"),
+		ItemID:         &itemID,
+		ErrorCode:      stringPtr("ITEM_LOGIN_REQUIRED"),
+		Payload:        []byte(`{"webhook_type":"ITEM","webhook_code":"ERROR","item_id":"plaid-item-123","error":{"error_type":"ITEM_ERROR","error_code":"ITEM_LOGIN_REQUIRED","error_message":"the login details of this item have changed","display_message":null}}`),
+		SignatureValid: true,
+		Processed:      false,
+	}
+
+	mockRepo := new(MockWebhookRepository)
+	mockSyncSvc := new(MockWebhookTransactionSyncService)
+	mockItemErrorSvc := new(MockItemErrorService)
+
+	mockRepo.On("GetByID", ctx, webhookID).Return(webhook, nil)
+	mockItemErrorSvc.On("ProcessWebhook", ctx, itemID, "ERROR", "ITEM_LOGIN_REQUIRED",
+		"the login details of this item have changed").Return(nil)
+
+	worker := NewWebhookProcessingWorker(WebhookProcessingWorkerDeps{
+		WebhookRepo:        mockRepo,
+		TransactionSyncSvc: mockSyncSvc,
+		ItemErrorSvc:       mockItemErrorSvc,
+		Logger:             newTestWebhookLogger(),
+	})
+
+	job := newTestWebhookProcessingJob(WebhookProcessingArgs{
+		WebhookID:   webhookID,
+		WebhookType: "ITEM",
+		ItemID:      itemID,
+	})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockItemErrorSvc.AssertExpectations(t)
+	mockassert.NoCallTo(t, &mockSyncSvc.Mock, "ProcessWebhook")
+}
+
+// TestWebhookProcessingWorker_Work_ItemWebhook_MalformedPayload_FallsBackToEmptyMessage asserts
+// that an unparseable (or absent) Payload degrades to errorMessage="" rather than failing webhook
+// processing outright — recovering the message is a best-effort enrichment, not a requirement.
+func TestWebhookProcessingWorker_Work_ItemWebhook_MalformedPayload_FallsBackToEmptyMessage(t *testing.T) {
+	ctx := context.Background()
+	webhookID := uuid.New().String()
+	itemID := "plaid-item-123"
+
+	webhook := &domain.WebhookEvent{
+		ID:             webhookID,
+		WebhookType:    "ITEM",
+		WebhookCode:    stringPtr("ERROR"),
+		ItemID:         &itemID,
+		ErrorCode:      stringPtr("ITEM_LOGIN_REQUIRED"),
+		Payload:        []byte(`not-json`),
+		SignatureValid: true,
+		Processed:      false,
+	}
+
+	mockRepo := new(MockWebhookRepository)
+	mockSyncSvc := new(MockWebhookTransactionSyncService)
+	mockItemErrorSvc := new(MockItemErrorService)
+
+	mockRepo.On("GetByID", ctx, webhookID).Return(webhook, nil)
+	mockItemErrorSvc.On("ProcessWebhook", ctx, itemID, "ERROR", "ITEM_LOGIN_REQUIRED", "").Return(nil)
+
+	worker := NewWebhookProcessingWorker(WebhookProcessingWorkerDeps{
+		WebhookRepo:        mockRepo,
+		TransactionSyncSvc: mockSyncSvc,
+		ItemErrorSvc:       mockItemErrorSvc,
+		Logger:             newTestWebhookLogger(),
+	})
+
+	job := newTestWebhookProcessingJob(WebhookProcessingArgs{
+		WebhookID:   webhookID,
+		WebhookType: "ITEM",
+		ItemID:      itemID,
+	})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockItemErrorSvc.AssertExpectations(t)
+	mockassert.NoCallTo(t, &mockSyncSvc.Mock, "ProcessWebhook")
 }
 
 func TestWebhookProcessingWorker_Work_WebhookNotFound(t *testing.T) {

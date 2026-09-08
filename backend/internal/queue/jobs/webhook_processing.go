@@ -3,6 +3,7 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -273,7 +274,36 @@ func (w *WebhookProcessingWorker) processItemWebhook(ctx context.Context, webhoo
 		errorCode = *webhook.ErrorCode
 	}
 
-	return w.itemErrorSvc.ProcessWebhook(ctx, *webhook.ItemID, errorType, errorCode, "")
+	return w.itemErrorSvc.ProcessWebhook(ctx, *webhook.ItemID, errorType, errorCode, itemWebhookErrorMessage(webhook.Payload))
+}
+
+// itemWebhookErrorMessage recovers Plaid's human-readable error_message from a stored ITEM
+// webhook's raw payload. Issue #1609 P3-T3: domain.WebhookEvent/webhook_events only ever stored
+// error_code (migration 000011), never error_message, so there is no domain field to forward. But
+// Plaid's ITEM webhook schema always nests it the same way regardless of webhook_code
+// (LOGIN_REQUIRED, ERROR, PENDING_EXPIRATION, PERMISSION_REVOKED all share one "error" object
+// shape — see plaid-go's vendored openapi.yaml and https://plaid.com/docs/api/webhooks/), and this
+// helper is only ever reached from the ITEM branch of processWebhookByType, so there is no
+// cross-webhook-type shape variance to worry about here.
+//
+// Best-effort: an empty/malformed/absent payload (or one missing the field) yields "", which
+// item_error_service.go's notification template now tolerates instead of rendering a dangling
+// "with Chase: ." sentence. This must never fail webhook processing itself.
+func itemWebhookErrorMessage(payload json.RawMessage) string {
+	if len(payload) == 0 {
+		return ""
+	}
+
+	var parsed struct {
+		Error struct {
+			ErrorMessage string `json:"error_message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		return ""
+	}
+
+	return parsed.Error.ErrorMessage
 }
 
 // WebhookProcessingUniqueOpts returns the recommended uniqueness options.

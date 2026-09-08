@@ -321,11 +321,19 @@ func (s *itemErrorService) HandleError(
 
 	// 2. Create notification (non-blocking - log error but continue)
 	// Note: No action URL for general errors (unlike LOGIN_REQUIRED)
+	// Issue #1609 P3-T3: errorMessage may legitimately be empty — webhook_processing.go has no
+	// stable ErrorMessage field to forward for every webhook shape, so an absent message is an
+	// expected input, not a bug. Omit the ": <message>" clause entirely rather than rendering a
+	// dangling "with Test Bank: ." sentence.
+	message := fmt.Sprintf("We're experiencing a connection issue with %s.", linkedItem.InstitutionName)
+	if errorMessage != "" {
+		message = fmt.Sprintf("We're experiencing a connection issue with %s: %s.", linkedItem.InstitutionName, errorMessage)
+	}
 	notification := &domain.Notification{
 		UserID:             linkedItem.UserID,
 		Type:               "item_error",
 		Title:              "Connection Error",
-		Message:            fmt.Sprintf("We're experiencing a connection issue with %s: %s. We'll automatically retry, but you can also try reconnecting your account if the issue persists.", linkedItem.InstitutionName, errorMessage),
+		Message:            message + " We'll automatically retry, but you can also try reconnecting your account if the issue persists.",
 		InteractionPattern: "informational",
 		Read:               false,
 		SentEmail:          false,
