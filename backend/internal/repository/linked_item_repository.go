@@ -116,6 +116,34 @@ type LinkedItemRepository interface {
 	// concurrent write to THOSE fields too.
 	RepairStatus(ctx context.Context, id string, userID string, allowedStatuses []domain.LinkedItemStatus) (bool, error)
 
+	// TransitionErrorStatus atomically transitions a linked item to newStatus while setting its
+	// error tracking fields (error_code, error_message, last_error_at), but ONLY if — in the SAME
+	// statement — its current status is not already newStatus and is not one of terminalStatuses.
+	// Issue #1609 P3-T2.
+	//
+	// This exists for the same reason RepairStatus does: HandleLoginRequired/HandleError/
+	// HandlePendingExpiration/HandlePermissionRevoked used to read a LinkedItem, mutate it in Go,
+	// then call the 17-column full-row Update with no status predicate — the exact "last-write-
+	// wins" defect class that already shipped once this phase (commit 5d75eab0, fixed in
+	// b668e408). Adding a second producer of these transitions (PlaidSyncWorker, discovering the
+	// same failure a webhook already reported, or vice versa) makes that race reachable on a
+	// SHARED item: two producers racing on the same row must not clobber each other's write of
+	// unrelated columns, and must not each independently "win" with a stale in-memory copy.
+	//
+	// terminalStatuses is the caller's set of statuses a background/webhook error signal must
+	// never overwrite — e.g. 'disconnected' and 'replaced' (user-deliberate terminal states) and
+	// 'revoked' (Plaid-unrecoverable for this Item; see ErrLinkedItemNotRepairable). Passing an
+	// empty slice applies no exclusion (SQL `<> ALL(ARRAY[]::text[])` is vacuously true).
+	//
+	// Returns (true, nil) if the row transitioned — the caller should notify.
+	// Returns (false, nil) — NOT an error — if the UPDATE matched zero rows: the item doesn't
+	// exist, its FRESH status already equals newStatus (treated as a duplicate signal — this is
+	// the two-producer dedup mechanism: a webhook and a sync discovering the same failure within
+	// seconds of each other produce only ONE notification, whichever commits first), or its FRESH
+	// status is one of terminalStatuses. Callers must treat false as "no notification", not as an
+	// error.
+	TransitionErrorStatus(ctx context.Context, id string, newStatus domain.LinkedItemStatus, errorCode, errorMessage string, terminalStatuses []domain.LinkedItemStatus) (bool, error)
+
 	// PurgeLinkedItem permanently and transactionally destroys the linked item and every account
 	// under it: balance_snapshots for those accounts (explicit — SET NULL, migration 000150), then
 	// the linked_items row itself, which CASCADEs to its accounts (fk_accounts_linked_item_id,
@@ -833,6 +861,35 @@ func (r *linkedItemRepository) RepairStatus(ctx context.Context, id string, user
 	}
 
 	tag, err := r.db.Exec(ctx, query, args...)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// TransitionErrorStatus implements LinkedItemRepository.TransitionErrorStatus — see that method's
+// doc comment for the full contract (Issue #1609 P3-T2).
+func (r *linkedItemRepository) TransitionErrorStatus(ctx context.Context, id string, newStatus domain.LinkedItemStatus, errorCode, errorMessage string, terminalStatuses []domain.LinkedItemStatus) (bool, error) {
+	terminal := make([]string, len(terminalStatuses))
+	for i, s := range terminalStatuses {
+		terminal[i] = string(s)
+	}
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET status = $1,
+		    error_code = $2,
+		    error_message = $3,
+		    last_error_at = $4,
+		    status_changed_at = $4,
+		    updated_at = $4
+		WHERE id = $5
+		  AND status <> $1
+		  AND status <> ALL($6)
+	`
+
+	tag, err := r.db.Exec(ctx, query, string(newStatus), errorCode, errorMessage, now, id, terminal)
 	if err != nil {
 		return false, err
 	}

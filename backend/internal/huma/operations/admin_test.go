@@ -148,6 +148,13 @@ func (m *mockLinkedItemRepo) RepairStatus(ctx context.Context, id string, userID
 	return false, nil
 }
 
+// TransitionErrorStatus atomically transitions a linked item to an error status (Issue #1609
+// P3-T2). Unused by this package's tests; stubbed only to satisfy
+// repository.LinkedItemRepository.
+func (m *mockLinkedItemRepo) TransitionErrorStatus(ctx context.Context, id string, newStatus domain.LinkedItemStatus, errorCode, errorMessage string, terminalStatuses []domain.LinkedItemStatus) (bool, error) {
+	return false, nil
+}
+
 // GetByUserAndInstitution retrieves a linked item by user ID, institution ID, and status.
 // Issue #171 - Plaid Re-Link Handling
 func (m *mockLinkedItemRepo) GetByUserAndInstitution(ctx context.Context, userID, institutionID, status string) (*domain.LinkedItem, error) {

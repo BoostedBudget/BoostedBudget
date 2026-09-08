@@ -104,6 +104,12 @@ func (m *MockLinkedItemRepository) RepairStatus(ctx context.Context, id string, 
 	return args.Bool(0), args.Error(1)
 }
 
+// TransitionErrorStatus atomically transitions a linked item to an error status (Issue #1609 P3-T2).
+func (m *MockLinkedItemRepository) TransitionErrorStatus(ctx context.Context, id string, newStatus domain.LinkedItemStatus, errorCode, errorMessage string, terminalStatuses []domain.LinkedItemStatus) (bool, error) {
+	args := m.Called(ctx, id, newStatus, errorCode, errorMessage, terminalStatuses)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockLinkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id string) (*domain.LinkedItem, error) {
 	args := m.Called(ctx, tx, id)
 	if args.Get(0) == nil {

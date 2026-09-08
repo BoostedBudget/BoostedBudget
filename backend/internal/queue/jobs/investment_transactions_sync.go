@@ -42,6 +42,7 @@ type InvestmentTransactionsSyncWorker struct {
 	linkedItemRepo    repository.LinkedItemRepository
 	logger            *slog.Logger
 	db                TxBeginner
+	itemErrorSvc      ItemErrorNotifier // Issue #1609 P3-T2: nil-safe, notifies on permanent errors
 }
 
 // InvestmentTransactionsSyncWorkerDeps contains the dependencies for InvestmentTransactionsSyncWorker.
@@ -50,6 +51,9 @@ type InvestmentTransactionsSyncWorkerDeps struct {
 	LinkedItemRepo    repository.LinkedItemRepository
 	Logger            *slog.Logger
 	DB                TxBeginner
+	// ItemErrorSvc routes a permanent Plaid error into the same in-app notification the ITEM
+	// webhook path produces (Issue #1609 P3-T2). Optional — see plaid_permanent_error_notify.go.
+	ItemErrorSvc ItemErrorNotifier
 }
 
 // NewInvestmentTransactionsSyncWorker creates a new worker with the given dependencies.
@@ -63,6 +67,7 @@ func NewInvestmentTransactionsSyncWorker(deps InvestmentTransactionsSyncWorkerDe
 		linkedItemRepo:    deps.LinkedItemRepo,
 		logger:            logger,
 		db:                deps.DB,
+		itemErrorSvc:      deps.ItemErrorSvc,
 	}
 }
 
@@ -157,6 +162,9 @@ func (w *InvestmentTransactionsSyncWorker) Work(ctx context.Context, job *river.
 				"job_id", job.ID,
 				"error_code", plaidErr.ErrorCode,
 			)
+			// Issue #1609 P3-T2: see notifyPermanentPlaidError — same handlers the ITEM webhook
+			// path uses, non-blocking, excludes PRODUCTS_NOT_SUPPORTED.
+			notifyPermanentPlaidError(ctx, w.itemErrorSvc, w.logger, linkedItem, plaidErr)
 			return nil
 		}
 

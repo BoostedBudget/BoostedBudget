@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -29,6 +28,23 @@ import (
 //     normal Plaid Link (non-update-mode) flow, not a repair — see HandlePermissionRevoked's
 //     notification, which routes there instead of here.
 var ErrLinkedItemNotRepairable = errors.New("linked item is not in a repairable state")
+
+// terminalLinkedItemStatuses are statuses a background/webhook error signal must never overwrite
+// (Issue #1609 P3-T2). Passed as the terminalStatuses argument to every
+// LinkedItemRepository.TransitionErrorStatus call the Handle* methods below make:
+//   - 'disconnected' and 'replaced' are user-deliberate terminal states — the same exclusion
+//     repairableStatuses encodes for the reconnect flow; a stale error signal must not resurrect
+//     either one into an error status.
+//   - 'revoked' is deliberately included too, unlike repairableStatuses' list of source states this
+//     is a DESTINATION exclusion: Plaid says a revoked Item "cannot be restored" (see
+//     ErrLinkedItemNotRepairable), so a background signal must not downgrade it to 'login_required'/
+//     'error'/'pending_expiration' — that would make the item look repairable via update-mode Link
+//     when Plaid will reject it.
+var terminalLinkedItemStatuses = []domain.LinkedItemStatus{
+	domain.LinkedItemStatusDisconnected,
+	domain.LinkedItemStatusReplaced,
+	domain.LinkedItemStatusRevoked,
+}
 
 // ItemErrorService handles Plaid ITEM webhook error processing.
 // Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
@@ -231,17 +247,24 @@ func (s *itemErrorService) HandleLoginRequired(
 	// PlaidHandler's reconnect-link-token endpoint). Dropping the eager mint here also means a
 	// Plaid outage no longer stops the user being told their connection broke.
 
-	// 2. Update LinkedItem status to "login_required" (critical - return error if fails)
-	now := time.Now()
-	linkedItem.Status = "login_required"
-	linkedItem.StatusChangedAt = &now // Issue #1010: track status change time
-	linkedItem.ErrorCode = &errorCode
-	linkedItem.ErrorMessage = &errorMessage
-	linkedItem.LastErrorAt = &now
-
-	err := s.linkedItemRepo.Update(ctx, linkedItem)
+	// 2. Atomically transition LinkedItem status to "login_required" (critical - return error if
+	// the DB call itself fails). Issue #1609 P3-T2: see TransitionErrorStatus's doc comment — this
+	// replaces a full-row Update that was last-write-wins-unsafe once a second producer (the sync
+	// worker) can call this same method for the same item.
+	transitioned, err := s.linkedItemRepo.TransitionErrorStatus(
+		ctx, linkedItem.ID, domain.LinkedItemStatusLoginRequired, errorCode, errorMessage, terminalLinkedItemStatuses,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to update linked item status for item %s: %w", linkedItem.ItemID, err)
+	}
+	if !transitioned {
+		// Already login_required (duplicate signal from another producer), or in a terminal
+		// status a background signal must not overwrite — either way, no notification.
+		s.logger.Info("login_required signal for a linked item already in that status or a terminal state; skipping duplicate notification",
+			"item_id", linkedItem.ItemID,
+			"status", linkedItem.Status,
+		)
+		return nil
 	}
 
 	// 3. Create notification with action URL (non-blocking - log error but continue)
@@ -280,17 +303,20 @@ func (s *itemErrorService) HandleError(
 	errorCode string,
 	errorMessage string,
 ) error {
-	// 1. Update LinkedItem status to "error" (critical - return error if fails)
-	now := time.Now()
-	linkedItem.Status = "error"
-	linkedItem.StatusChangedAt = &now // Issue #1010: track status change time
-	linkedItem.ErrorCode = &errorCode
-	linkedItem.ErrorMessage = &errorMessage
-	linkedItem.LastErrorAt = &now
-
-	err := s.linkedItemRepo.Update(ctx, linkedItem)
+	// 1. Atomically transition LinkedItem status to "error" (critical - return error if the DB
+	// call itself fails). Issue #1609 P3-T2: see TransitionErrorStatus's doc comment.
+	transitioned, err := s.linkedItemRepo.TransitionErrorStatus(
+		ctx, linkedItem.ID, domain.LinkedItemStatusError, errorCode, errorMessage, terminalLinkedItemStatuses,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to update linked item status for item %s: %w", linkedItem.ItemID, err)
+	}
+	if !transitioned {
+		s.logger.Info("error signal for a linked item already in that status or a terminal state; skipping duplicate notification",
+			"item_id", linkedItem.ItemID,
+			"status", linkedItem.Status,
+		)
+		return nil
 	}
 
 	// 2. Create notification (non-blocking - log error but continue)
@@ -328,17 +354,20 @@ func (s *itemErrorService) HandlePendingExpiration(
 	// Issue #1609: see the doc comment in HandleLoginRequired — the update-mode link token is no
 	// longer minted eagerly here; the reconnect page mints one on demand instead.
 
-	// 2. Update LinkedItem status to "pending_expiration" (critical)
-	now := time.Now()
-	linkedItem.Status = "pending_expiration"
-	linkedItem.StatusChangedAt = &now // Issue #1010: track status change time
-	linkedItem.ErrorCode = &errorCode
-	linkedItem.ErrorMessage = &errorMessage
-	linkedItem.LastErrorAt = &now
-
-	err := s.linkedItemRepo.Update(ctx, linkedItem)
+	// 2. Atomically transition LinkedItem status to "pending_expiration" (critical). Issue #1609
+	// P3-T2: see TransitionErrorStatus's doc comment.
+	transitioned, err := s.linkedItemRepo.TransitionErrorStatus(
+		ctx, linkedItem.ID, domain.LinkedItemStatusPendingExpiration, errorCode, errorMessage, terminalLinkedItemStatuses,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to update linked item status for item %s: %w", linkedItem.ItemID, err)
+	}
+	if !transitioned {
+		s.logger.Info("pending_expiration signal for a linked item already in that status or a terminal state; skipping duplicate notification",
+			"item_id", linkedItem.ItemID,
+			"status", linkedItem.Status,
+		)
+		return nil
 	}
 
 	// 3. Create notification with action URL (non-blocking)
@@ -380,17 +409,22 @@ func (s *itemErrorService) HandlePermissionRevoked(
 	// Issue #1609: see the doc comment in HandleLoginRequired — the update-mode link token is no
 	// longer minted eagerly here; the reconnect page mints one on demand instead.
 
-	// 2. Update LinkedItem status to "revoked" (critical)
-	now := time.Now()
-	linkedItem.Status = "revoked"
-	linkedItem.StatusChangedAt = &now // Issue #1010: TTL clock for fingerprint release
-	linkedItem.ErrorCode = &errorCode
-	linkedItem.ErrorMessage = &errorMessage
-	linkedItem.LastErrorAt = &now
-
-	err := s.linkedItemRepo.Update(ctx, linkedItem)
+	// 2. Atomically transition LinkedItem status to "revoked" (critical). Issue #1609 P3-T2: see
+	// TransitionErrorStatus's doc comment. terminalLinkedItemStatuses includes 'revoked' itself as
+	// a DESTINATION exclusion for the OTHER three handlers; here it is a no-op restatement — an
+	// item already 'revoked' fails the newStatus == 'revoked' equality check regardless.
+	transitioned, err := s.linkedItemRepo.TransitionErrorStatus(
+		ctx, linkedItem.ID, domain.LinkedItemStatusRevoked, errorCode, errorMessage, terminalLinkedItemStatuses,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to update linked item status for item %s: %w", linkedItem.ItemID, err)
+	}
+	if !transitioned {
+		s.logger.Info("permission_revoked signal for a linked item already in that status or a terminal state; skipping duplicate notification",
+			"item_id", linkedItem.ItemID,
+			"status", linkedItem.Status,
+		)
+		return nil
 	}
 
 	// 3. Create notification with action URL (non-blocking).
