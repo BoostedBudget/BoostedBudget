@@ -571,22 +571,57 @@ serving them publicly leaked the full API surface. **If you add a public non-`/a
 rule is the first place to look.**
 
 ⚠️ Rule 2 matches User-Agent **substrings**, so a legitimate client whose UA ever contains `Nmap` or
-`Hydra` is silently blocked. Rule 4 blocks POST floods to no path — see below.
+`Hydra` is silently blocked. **No rule blocks POST floods to any path** — see *Cost exposure* below.
+(That sentence previously read "Rule 4 blocks POST floods to no path", which reads as though rule 4
+*provides* flood protection. It does not; nothing does.)
 
 ### Cost exposure (what these rules do and do not bound)
 
-Requests blocked at the edge are **free**. Requests reaching the origin cost Fly compute plus **at
-least one Redis command each**, because `IPRateLimiter` (`main.go`, immediately after
-`CloudflareOnly`) consults Redis on every request — *including the ones it rejects*. Rate limiting is
-therefore a per-request toll on hostile traffic, not free protection.
+Requests blocked at the edge are **free**. Requests reaching the origin cost Fly compute, and *used
+to* cost **at least one Redis command each**: `IPRateLimiter` (`main.go`, immediately after
+`CloudflareOnly`) consulted Redis on every request — *including the ones it rejected* — so rate
+limiting was a per-request toll on hostile traffic rather than free protection.
 
-**Remaining unbounded vector: a POST flood to `/webhooks/plaid` or `/webhooks/paddle`.** No edge rate
-limit applies there, so each request costs a Redis command before the signature check rejects it.
-Data is never at risk — Plaid webhooks are verified with ES256 + a `request_body_sha256` claim + a
-5-minute `iat` window (`internal/services/webhook_service.go`) — but the compute is billed.
+⚠️ **This section described that as unfixed, and prescribed the fix that does not work. Both are
+corrected below.** It said "the structural fix is to have `IPRateLimiter` consult its in-memory
+limiter before Redis". Following that literally reintroduces a real bug: the existing in-memory
+stores are built from a **fleet-divided** limit (see `RateLimitConfig.IPLimit`), so using them as a
+pre-check rejects traffic well inside the authoritative fleet-wide budget.
 
-The only true ceiling is a **spend cap** at the provider (Upstash monthly budget, Fly machine-count
-cap). The structural fix is to have `IPRateLimiter` consult its in-memory limiter *before* Redis.
+**What is implemented now.** `RateLimitConfig.PrecheckLimit` / `PrecheckAuthLimit` /
+`PrecheckSentinelLimit` add a **separate, undivided, per-tier** in-process token bucket consulted
+*before* Redis. Once one client identity exhausts its bucket, further requests are rejected without
+touching Redis at all, so the billable cost is bounded at `precheckHeadroomFactor × limit` commands
+per identity per tier per window instead of unbounded.
+
+Three properties are load-bearing and each closes a violation that two independent adversarial
+reviewers reproduced against the first draft:
+
+- **Per-tier**, because Redis budgets `regular` / `auth` / `sentinel` independently. One shared
+  bucket charged an identity's ordinary API traffic against its auth allowance and returned `429`
+  for a legitimate `POST /webhooks/plaid`.
+- **Keyed by the canonical identity** (`domain.AggregateIPv6Identity`, IPv6 → /64), the same
+  identity Redis buckets by. Keyed on the raw address, an attacker rotating `/128`s inside one
+  routed `/64` minted a fresh full bucket per address and the cost stayed unbounded.
+- **`RATE_LIMIT_SENTINEL_LIMIT` is honoured.** That knob exists to *raise* the sentinel budget
+  during a Cloudflare header anomaly; a ceiling derived from `RATE_LIMIT_IP` silently neutered it
+  during the exact incident it exists for.
+
+**What is still not bounded.** Fly compute is unbounded regardless — a flood still costs CPU, a
+WARN log line and a metric increment per request. `/webhooks/plaid` and `/webhooks/paddle` carry no
+edge rate limit **by design** (throttling them risks dropping real provider deliveries and losing
+financial data), so the origin is their only gate. Data is never at risk — Plaid webhooks are
+verified with ES256 + a `request_body_sha256` claim + a 5-minute `iat` window
+(`internal/services/webhook_service.go`). The Redis bound also degrades above
+`RateLimitConfig.MaxEntries` distinct identities, where LRU eviction hands a returning identity a
+fresh bucket.
+
+Watch `ratelimit_precheck_rejections_total` (a labelled **subset** of `ratelimit_rejections_total`,
+not disjoint from it) to see the pre-check working — and to distinguish a cost-breaker rejection
+from an authoritative one, which is otherwise impossible from metrics alone.
+
+The only true ceiling remains a **spend cap** at the provider (Upstash monthly budget, Fly
+machine-count cap).
 
 ### Webhook Pre-Deploy Check
 

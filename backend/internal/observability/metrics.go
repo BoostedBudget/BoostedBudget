@@ -229,6 +229,27 @@ var (
 		Help: "Total number of requests rejected by the rate limiter, by tier (regular, auth, sentinel).",
 	}, []string{"tier"})
 
+	// RateLimitPrecheckRejectionsTotal counts the SUBSET of rate-limit rejections that were
+	// decided by the in-process cost pre-check rather than by the authoritative backend, by tier.
+	//
+	// It exists because the pre-check reuses RateLimitRejectionsTotal and the same WARN line (so a
+	// rejection looks identical to an operator either way), and the pre-check's failure mode is
+	// "some customers get spurious 429s". Without a way to separate the two counts, that failure
+	// is undiagnosable from metrics — which is exactly how three invariant violations sat in the
+	// first draft of the mechanism. A sustained non-zero rate here means the pre-check is denying
+	// traffic, and if it ever exceeds what the authoritative limits would reject, it is acting as
+	// a second enforcement layer, which it must never do.
+	//
+	// ⚠ Every request counted here is ALSO counted in RateLimitRejectionsTotal. This is a
+	// breakdown, not a disjoint counter — do not add the two together.
+	//
+	// ⚠ LABEL HYGIENE, NON-NEGOTIABLE: "tier" is one of a small fixed set — regular | auth |
+	// sentinel — and must never become a cache key, IP address, Redis URL, or raw error string.
+	RateLimitPrecheckRejectionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ratelimit_precheck_rejections_total",
+		Help: "Rate-limit rejections decided by the in-process cost pre-check rather than the authoritative backend, by tier (regular, auth, sentinel). A SUBSET of ratelimit_rejections_total, not disjoint from it.",
+	}, []string{"tier"})
+
 	// RedisCommandErrorsTotal counts Redis command errors, by client and command.
 	//
 	// ⚠ LABEL HYGIENE, NON-NEGOTIABLE: "client" is one of {limiter, cache}; "op" must come from a
