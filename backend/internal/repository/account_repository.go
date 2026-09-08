@@ -2008,8 +2008,6 @@ func (r *accountRepository) MarkRemovedByProvider(ctx context.Context, accountID
 // transition writes NULL, which keeps migration 000154's accounts_removed_reason_valid CHECK
 // satisfied by construction rather than by each caller remembering.
 func (r *accountRepository) updateStatusWithRemovalReason(ctx context.Context, accountID, userID string, status domain.AccountStatus, replacedByID *string, removalReason domain.RemovalReason) error {
-	now := time.Now()
-
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -2039,34 +2037,46 @@ func (r *accountRepository) updateStatusWithRemovalReason(ctx context.Context, a
 		return ErrAccountAlreadyDisconnected
 	}
 
-	// Set replaced_at only when transitioning to replaced status
-	var replacedAt *time.Time
-	if status == domain.AccountStatusReplaced {
-		replacedAt = &now
-	}
-
-	// Set removed_at only when transitioning to removed status (Issue #1569). Required by
-	// migration 000149's accounts_removed_at_consistency CHECK: status='removed' demands
-	// removed_at IS NOT NULL, mirroring the replaced_at pairing above.
-	//
-	// removed_reason is stamped in the same breath, and NULLed for every other transition —
-	// migration 000154's accounts_removed_reason_valid CHECK requires the two to agree, and pairing
-	// them in one statement is what makes that impossible to violate. Issue #1569 Task 5.
-	var removedAt *time.Time
+	// removed_reason is stamped only when transitioning to removed status (Issue #1569), and
+	// NULLed for every other transition — migration 000154's accounts_removed_reason_valid CHECK
+	// requires it to agree with removed_at, and pairing them in one statement is what makes that
+	// impossible to violate. Issue #1569 Task 5.
 	var removedReason *string
 	if status == domain.AccountStatusRemoved {
-		removedAt = &now
 		reason := string(removalReason)
 		removedReason = &reason
 	}
 
+	// replaced_at and removed_at are stamped from the DATABASE clock (NOW()), not a Go-side
+	// time.Now(), and conditioned on $1 directly rather than bound as Go-computed *time.Time —
+	// only when transitioning to that status, NULL otherwise, exactly mirroring the old
+	// conditional-pointer logic. Required by migration 000149's accounts_removed_at_consistency
+	// CHECK (status='removed' demands removed_at IS NOT NULL).
+	//
+	// Postgres's NOW() is the TRANSACTION's start time, stable for the whole transaction, so this
+	// value and the migration-000007 BEFORE UPDATE trigger's own NOW() call (which stamps
+	// updated_at) are byte-identical within this statement's transaction. The old code bound a
+	// Go-side time.Now() to removed_at/replaced_at while the trigger independently stamped
+	// updated_at from the Postgres clock — two different clock sources on one row, which under
+	// host/DB clock skew could make updated_at read BEFORE removed_at
+	// (TestAccountRepository_Reads_Integration_ReturnRemovedAt). updated_at itself is no longer
+	// bound here at all: the trigger owns that column and overwrites any value bound here
+	// regardless, so binding it was always dead code.
+	// $1::text casts are required, not decorative: without them Postgres cannot deduce one
+	// consistent type for $1 across its three uses (assigned to the status column, and compared
+	// to a text literal twice in the CASE expressions) and errors with SQLSTATE 42P08
+	// ("indeterminate datatype") before the statement ever runs.
 	query := `
 		UPDATE accounts
-		SET status = $1, replaced_at = $2, replaced_by_id = $3, removed_at = $4, removed_reason = $5, updated_at = $6
-		WHERE id = $7 AND user_id = $8
+		SET status = $1::text,
+		    replaced_at = CASE WHEN $1::text = 'replaced' THEN NOW() ELSE NULL END,
+		    replaced_by_id = $2,
+		    removed_at = CASE WHEN $1::text = 'removed' THEN NOW() ELSE NULL END,
+		    removed_reason = $3
+		WHERE id = $4 AND user_id = $5
 	`
 
-	result, err := tx.Exec(ctx, query, status, replacedAt, replacedByID, removedAt, removedReason, now, accountID, userID)
+	result, err := tx.Exec(ctx, query, status, replacedByID, removedReason, accountID, userID)
 	if err != nil {
 		return err
 	}
@@ -2119,11 +2129,16 @@ func (r *accountRepository) RestoreProviderRemovedAccount(ctx context.Context, a
 	// live account whose removed_at still reads six months ago is a lie about current state, and
 	// the schema will not catch it. Any new path back to 'active' must clear it too.
 	// removed_reason is different — 000154's CHECK really does forbid it off a 'removed' row.
+	//
+	// updated_at is intentionally NOT bound here: migration 000007's BEFORE UPDATE trigger stamps
+	// it from the Postgres clock unconditionally, overwriting any value bound in this statement,
+	// so a Go-side time.Now() bind was dead code (same class of bug as
+	// updateStatusWithRemovalReason's removed_at/replaced_at, fixed alongside it).
 	result, err := tx.Exec(ctx, `
 		UPDATE accounts
-		SET status = 'active', removed_at = NULL, removed_reason = NULL, updated_at = $1
-		WHERE id = $2 AND user_id = $3
-	`, time.Now(), accountID, userID)
+		SET status = 'active', removed_at = NULL, removed_reason = NULL
+		WHERE id = $1 AND user_id = $2
+	`, accountID, userID)
 	if err != nil {
 		return err
 	}
