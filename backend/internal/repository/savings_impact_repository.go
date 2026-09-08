@@ -138,7 +138,10 @@ func (r *savingsImpactRepository) GetAggregateSavingsStats(ctx context.Context) 
 // not in per-user queries.
 //
 // Recent items include a resolved ToAccountName (GAP CA, #972):
-//   - Plaid-linked accounts: COALESCE(accounts.nickname, accounts.name) — both plaintext.
+//   - Plaid-linked accounts: COALESCE(<chain-overlaid nickname>, accounts.name) — both plaintext.
+//     ⚠ #1611: the nickname leg is accountCustomizationExpr(...), NOT a raw accounts.nickname.
+//     The raw column was UNREACHABLE for a Plaid account (accounts.name is always populated),
+//     which is precisely the bug #1611 fixed. Do not 'simplify' this back to accounts.nickname.
 //   - Manual accounts (user_accounts): COALESCE(ua.nickname, decrypted ua.account_name_hint).
 //     account_name_hint is encrypted at rest (migration 000053); decryption happens in-Go
 //     for the ≤5 bounded rows via FieldEncryptor.DecryptNullableString.
@@ -245,7 +248,7 @@ func (r *savingsImpactRepository) GetUserImpact(ctx context.Context, userID stri
 
 // resolveDestinationName returns the best available display name for a transfer destination.
 // Resolution order (first non-empty wins):
-//  1. plaidName  — COALESCE(accounts.nickname, accounts.name) for Plaid-linked destinations.
+//  1. plaidName  — COALESCE(<chain-overlaid nickname>, accounts.name); see the #1611 note above.
 //  2. uaNickname — user_accounts.nickname (plaintext) for manual destinations.
 //  3. Decrypted uaHintEncrypted — user_accounts.account_name_hint, encrypted at rest.
 //

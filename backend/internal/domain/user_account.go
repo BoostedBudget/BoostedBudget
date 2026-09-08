@@ -30,9 +30,11 @@ type UserAccount struct {
 	DisplayOrder *int    `json:"display_order,omitempty" db:"display_order"` // Sort order
 	IsHidden     bool    `json:"is_hidden" db:"is_hidden"`                   // Hide from default views
 
-	// ExcludeInvestmentSync hides this chain's investment_transactions from BOTH read surfaces —
-	// the unified activity feed and GET /api/v1/investments/investment-transactions (#1609 Item 5,
-	// migration 000187). It exists for a brokerage cash-management account that Plaid reports
+	// ExcludeInvestmentSync hides this chain's investment_transactions from all THREE read surfaces:
+	// the unified activity feed, GET /api/v1/investments/investment-transactions (both #1609 Item 5,
+	// migration 000187), and GET /api/v1/investments/portfolio/income (#1614 — added later; the
+	// count above said "both" until that surface was covered, so re-derive it rather than trusting
+	// it if a fourth appears). It exists for a brokerage cash-management account that Plaid reports
 	// through BOTH /transactions/sync and /investments/transactions/get, which otherwise shows
 	// every real movement twice.
 	//
