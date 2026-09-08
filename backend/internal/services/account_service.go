@@ -1593,6 +1593,19 @@ func (s *accountService) enqueueInitialSync(ctx context.Context, linkedItemID, u
 
 	s.enqueueJob(ctx, plaidSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
 
+	// #1613 P4-T3 item E: make the grant decision DURABLE. Until this, the only place in the
+	// system that knew Plaid had granted no investments for an Item was this function, for the
+	// duration of one call — it logged the fact and dropped it.
+	//
+	// ⚠ Written in BOTH directions. enqueueInitialSync can run against a pre-existing
+	// linked_items row (LinkAccounts reuses one when the user re-links the same institution), so
+	// writing only TRUE would strand a stale TRUE on an item whose institution has since started
+	// serving investments.
+	//
+	// ⚠ Non-blocking, like every other write in this helper: a failed bookkeeping write must
+	// never cost the user their transaction sync.
+	s.recordInvestmentsSkippedAtLink(ctx, linkedItemID, userID, !investmentsSupported)
+
 	if !investmentsSupported {
 		s.logger.Info("skipping initial investment sync: Plaid did not grant investments for this item",
 			"linked_item_id", linkedItemID,
@@ -1603,6 +1616,57 @@ func (s *accountService) enqueueInitialSync(ctx context.Context, linkedItemID, u
 
 	s.enqueueJob(ctx, investmentHoldingsSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
 	s.enqueueJob(ctx, investmentTransactionsSyncJobArgs{UserID: userID, ItemID: linkedItemID}, linkedItemID, userID, opts)
+}
+
+// recordInvestmentsSkippedAtLink persists linked_items.investments_skipped_at_link. It never
+// returns an error: enqueueInitialSync is documented non-blocking, and this is bookkeeping.
+//
+// ── RULING (#1613 P4-T3 item E): the per-sync product RE-CHECK was considered and DECLINED. ──
+//
+// The proposal was to re-read Plaid's product grants on later syncs, gated on this flag, so an
+// investments grant that materialises AFTER link (an OAuth or institution-side delay) still
+// enqueues the investment jobs. It is not done, for three reasons, and the reasoning is written
+// here rather than in a ticket because this is where the next person will look:
+//
+//  1. It is NOT free, and the obvious cheap version does not exist. plaid-go's
+//     TransactionsSyncResponse carries Accounts, NextCursor and the change arrays — there is no
+//     Item field on it — so a re-check cannot read product grants off a sync we already make. It
+//     costs one extra AccountsGet call.
+//  2. The cost falls almost entirely on the population it cannot help. The dominant flagged item
+//     is a plain bank that genuinely cannot serve investments; its flag NEVER clears, so an
+//     "every sync while flagged" re-check bills that item an extra Plaid call on every sync,
+//     forever. The population that benefits — a grant that appears later — is bounded by Plaid's
+//     own documented behaviour that an optional product the institution cannot support is simply
+//     never added to the Item.
+//  3. The failure being fixed is a FALSE NEGATIVE with an independent recovery path already in
+//     the tree: webhook_processing.go handles HOLDINGS and INVESTMENTS_TRANSACTIONS webhooks, so
+//     a grant that does materialise is picked up without a poll. Adding an outbound Plaid call to
+//     the transaction-sync path would add a new outage dependency to a path that must not break,
+//     in exchange for closing a gap that is already covered in the common case.
+//
+// ⚠ What is NOT claimed: that the webhook path is GUARANTEED. It is not, and that is precisely
+// why the flag is written even though nothing reads it. A future re-check needs exactly this
+// column, and — more usefully — the flag makes the affected population COUNTABLE before anyone
+// pays for a poll, which is the measurement this decision was made without. If it turns out to be
+// large, the right shape is a ONE-SHOT re-check on the first webhook-driven sync (bounded at one
+// extra AccountsGet per item, ever), not an every-sync poll. It must ride a LATER sync in any
+// case: the first transactions sync runs 5 seconds after link (queue.WithDelay above), and a
+// product grant re-read 5 seconds after the link-time read will essentially never see a change.
+func (s *accountService) recordInvestmentsSkippedAtLink(ctx context.Context, linkedItemID, userID string, skipped bool) {
+	// Mirrors the `s.jobQueue == nil` guard at the top of enqueueInitialSync. Unreachable in
+	// production — NewAccountService takes linkedItemRepo as a required positional parameter —
+	// and present only so a partially-constructed service in a unit test does not panic.
+	if s.linkedItemRepo == nil {
+		return
+	}
+	if err := s.linkedItemRepo.SetInvestmentsSkippedAtLink(ctx, linkedItemID, skipped); err != nil && s.logger != nil {
+		s.logger.Warn("could not record investments_skipped_at_link; the initial sync jobs are unaffected",
+			"linked_item_id", linkedItemID,
+			"user_id", userID,
+			"skipped", skipped,
+			"error", err,
+		)
+	}
 }
 
 // itemSupportsProduct reports whether Plaid actually granted the given product for this Item,

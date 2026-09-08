@@ -156,6 +156,13 @@ func (m *mockLinkedItemRepo) MarkFailureAsserted(ctx context.Context, id string,
 	return nil
 }
 
+// SetInvestmentsSkippedAtLink records whether the investment jobs were skipped at link time
+// (Issue #1613 P4-T3 item E). Unused by this package's tests; stubbed only to satisfy
+// repository.LinkedItemRepository.
+func (m *mockLinkedItemRepo) SetInvestmentsSkippedAtLink(ctx context.Context, id string, skipped bool) error {
+	return nil
+}
+
 func (m *mockLinkedItemRepo) TransitionErrorStatus(ctx context.Context, id string, newStatus domain.LinkedItemStatus, errorCode, errorMessage string, terminalStatuses []domain.LinkedItemStatus) (bool, error) {
 	return false, nil
 }
