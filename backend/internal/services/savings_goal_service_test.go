@@ -735,9 +735,14 @@ func TestSavingsGoalService_CreateGoal_SetsProgressBasis(t *testing.T) {
 			wantPct:           &pct,
 		},
 		{
-			name:      "empty basis defaults to manual",
+			// #1625: the domain doc (savings_goal.go) has always documented "contributions"
+			// as the default for NEW goals, while the code defaulted to "manual". The
+			// consequence was that POST /savings-goals/{id}/contributions returned a bare
+			// 422 "basis mismatch" on every brand-new goal, with no way to discover why.
+			// The doc describes the intent; the code was the bug.
+			name:      "empty basis defaults to contributions for a new goal",
 			basis:     "",
-			wantBasis: "manual",
+			wantBasis: "contributions",
 			wantPct:   nil,
 		},
 	}
@@ -981,9 +986,9 @@ type MockGoalProgressRecomputer struct {
 	mock.Mock
 }
 
-func (m *MockGoalProgressRecomputer) RecomputeGoal(ctx context.Context, goal *domain.SavingsGoal) error {
+func (m *MockGoalProgressRecomputer) RecomputeGoal(ctx context.Context, goal *domain.SavingsGoal) (float64, error) {
 	args := m.Called(ctx, goal)
-	return args.Error(0)
+	return args.Get(0).(float64), args.Error(1)
 }
 
 func TestSavingsGoalService_CreateGoal_TriggersRecomputeGoal(t *testing.T) {
@@ -1003,7 +1008,7 @@ func TestSavingsGoalService_CreateGoal_TriggersRecomputeGoal(t *testing.T) {
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{account}, nil)
 	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
 	// RecomputeGoal must be called with the created goal.
-	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(0.0, nil)
 
 	goal, err := service.CreateGoal(ctx, userID, req)
 
@@ -1031,7 +1036,7 @@ func TestSavingsGoalService_CreateGoal_RecomputeGoalErrorIsNonFatal(t *testing.T
 	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
 	// RecomputeGoal fails — CreateGoal must still succeed (non-fatal).
 	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).
-		Return(errors.New("recompute: db connection lost"))
+		Return(0.0, errors.New("recompute: db connection lost"))
 
 	goal, err := service.CreateGoal(ctx, userID, req)
 
@@ -1144,7 +1149,7 @@ func TestUpdateGoal_ManualToContributions_SeedsContribution(t *testing.T) {
 	// Analytics event fired for basis change.
 	mockAnalytics.On("Capture", userID, "savings_goal_progress_basis_changed", mock.Anything).Return()
 	// RecomputeGoal triggered after basis switch.
-	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(0.0, nil)
 
 	goal, err := service.UpdateGoal(ctx, userID, goalID, req)
 
@@ -1193,7 +1198,7 @@ func TestUpdateGoal_ContributionsToBalance_ArchivesContributions(t *testing.T) {
 	// Analytics event fired for basis change.
 	mockAnalytics.On("Capture", userID, "savings_goal_progress_basis_changed", mock.Anything).Return()
 	// RecomputeGoal triggered.
-	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(0.0, nil)
 
 	goal, err := service.UpdateGoal(ctx, userID, goalID, req)
 
@@ -1277,7 +1282,7 @@ func TestUpdateGoal_BasisSwitch_SeedErrorIsNonFatal(t *testing.T) {
 	mockContribRepo.On("Insert", ctx, userID, mock.AnythingOfType("*domain.SavingsGoalContribution")).
 		Return(errors.New("db: foreign key violation"))
 	mockAnalytics.On("Capture", userID, "savings_goal_progress_basis_changed", mock.Anything).Return()
-	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(0.0, nil)
 
 	goal, err := service.UpdateGoal(ctx, userID, goalID, req)
 
@@ -1337,4 +1342,69 @@ func TestSavingsGoalService_GetDeletedGoals_PropagatesRepositoryError(t *testing
 	require.Error(t, err)
 	assert.Nil(t, got)
 	mockGoalRepo.AssertExpectations(t)
+}
+
+// =============================================================================
+// #1625 — new goals default to the contributions basis, and CreateGoal reports the
+// amount that was actually persisted.
+// =============================================================================
+
+// TestCreateGoal_ReturnsRecomputedAmount pins the response-consistency half of the fix.
+// RecomputeGoal persists via UpdateCurrentAmount, which does NOT mutate the in-memory goal, so
+// CreateGoal used to return the caller-supplied current_amount while the database held the
+// recomputed one. Under a contributions basis with no contributions yet, that is a goal that
+// claims progress it does not have.
+func TestCreateGoal_ReturnsRecomputedAmount(t *testing.T) {
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	recomputer := new(MockGoalProgressRecomputer)
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+	service.SetProgressService(recomputer)
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	req := createTestCreateSavingsGoalRequest()
+	req.ProgressBasis = domain.ProgressBasisContributions
+
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(
+		[]domain.Account{createTestAccountForGoal(userID)}, nil)
+	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	recomputer.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(0.0, nil)
+
+	goal, err := service.CreateGoal(ctx, userID, req)
+
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, goal.CurrentAmount,
+		"CreateGoal must report the recomputed amount, not the caller-supplied one")
+	recomputer.AssertExpectations(t)
+}
+
+// TestCreateGoal_RecomputeFailureStaysNonFatal keeps the documented best-effort contract:
+// RecomputeGoal errors are logged, never surfaced. Widening its signature must not change that.
+func TestCreateGoal_RecomputeFailureStaysNonFatal(t *testing.T) {
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	recomputer := new(MockGoalProgressRecomputer)
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+	service.SetProgressService(recomputer)
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(
+		[]domain.Account{createTestAccountForGoal(userID)}, nil)
+	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	recomputer.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).
+		Return(0.0, assert.AnError)
+
+	goal, err := service.CreateGoal(ctx, userID, req0(t))
+
+	require.NoError(t, err, "a recompute failure must not fail goal creation")
+	assert.NotNil(t, goal)
+}
+
+func req0(t *testing.T) *domain.CreateSavingsGoalRequest {
+	t.Helper()
+	return createTestCreateSavingsGoalRequest()
 }

@@ -32,8 +32,14 @@ type GoalAutoCreateBudgetRepo interface {
 // GoalProgressRecomputer is a narrow interface for triggering goal progress recomputation.
 // Used by SavingsGoalService after CreateGoal to initialize current_amount per progress_basis
 // (Issue #1300 M13 / G3). Implementations must be non-blocking-safe; errors are logged only.
+//
+// #1625: returns the recomputed amount. Recomputation persists through UpdateCurrentAmount, which
+// does NOT mutate the in-memory goal — so CreateGoal used to hand back the caller-supplied
+// current_amount while the database held the recomputed one. Under the contributions basis that
+// is a brand-new goal reporting progress it does not have. The error contract is unchanged:
+// still best-effort, still logged only.
 type GoalProgressRecomputer interface {
-	RecomputeGoal(ctx context.Context, goal *domain.SavingsGoal) error
+	RecomputeGoal(ctx context.Context, goal *domain.SavingsGoal) (float64, error)
 }
 
 // GoalBasisSwitchContribRepo is a narrow interface for contribution operations needed during
@@ -154,9 +160,15 @@ func (s *savingsGoalService) CreateGoal(ctx context.Context, userID string, req 
 	)
 
 	// Create goal from request
+	// #1625: default NEW goals to the contributions basis. domain/savings_goal.go has documented
+	// "contributions" as the default for new goals since #1300, but the code defaulted to
+	// "manual" — so POST /savings-goals/{id}/contributions rejected every brand-new goal with a
+	// bare 422 "basis mismatch" and no way to discover the precondition. Existing goals are
+	// untouched: this is the create path only, and the repository still defaults a blank basis to
+	// manual for rows written by any other route.
 	progressBasis := req.ProgressBasis
 	if progressBasis == "" {
-		progressBasis = domain.ProgressBasisManual
+		progressBasis = domain.ProgressBasisContributions
 	}
 	goal := &domain.SavingsGoal{
 		ID:                uuid.New().String(),
@@ -217,12 +229,16 @@ func (s *savingsGoalService) CreateGoal(ctx context.Context, userID string, req 
 	// progress_basis from creation time (Issue #1300 M13 / G3). Best-effort:
 	// an error here must not fail goal creation.
 	if s.progressService != nil {
-		if err := s.progressService.RecomputeGoal(ctx, goal); err != nil {
+		recomputed, err := s.progressService.RecomputeGoal(ctx, goal)
+		if err != nil {
 			s.logger.Warn("savings goal created but RecomputeGoal failed (non-fatal)",
 				slog.String("user_id", userID),
 				slog.String("goal_id", goal.ID),
 				slog.String("error", err.Error()),
 			)
+		} else {
+			// Report what was actually persisted, not what the caller asked for.
+			goal.CurrentAmount = recomputed
 		}
 	}
 
@@ -447,11 +463,15 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 
 	// Re-run recompute so current_amount reflects the new basis immediately.
 	if basisChanged && s.progressService != nil {
-		if err := s.progressService.RecomputeGoal(ctx, goal); err != nil {
+		recomputed, err := s.progressService.RecomputeGoal(ctx, goal)
+		if err != nil {
 			s.logger.Warn("basis-changed RecomputeGoal failed (non-fatal)",
 				slog.String("goal_id", goalID),
 				slog.String("error", err.Error()),
 			)
+		} else {
+			// Same reason as CreateGoal: report the persisted amount, not the pre-recompute one.
+			goal.CurrentAmount = recomputed
 		}
 	}
 

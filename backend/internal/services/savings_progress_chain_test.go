@@ -147,7 +147,8 @@ func TestSavingsProgress_Balance_Relink_FollowsChainToLiveAccount(t *testing.T) 
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(terminal, nil).Maybe()
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
+	require.NoError(t, recomputeErr)
 
 	args, called := callArgsTo(&goalRepo.Mock, "UpdateCurrentAmount")
 	require.True(t, called, "a re-linked goal must resume recomputation, not stay frozen")
@@ -196,7 +197,8 @@ func TestSavingsProgress_AccountPercentage_Relink_FollowsChainToLiveAccount(t *t
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(terminal, nil).Maybe()
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
+	require.NoError(t, recomputeErr)
 
 	args, called := callArgsTo(&goalRepo.Mock, "UpdateCurrentAmount")
 	require.True(t, called, "a re-linked account_percentage goal must resume recomputation")
@@ -235,7 +237,8 @@ func TestSavingsProgress_Balance_ChainHasNoLiveMember_StillFreezes(t *testing.T)
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
+	require.NoError(t, recomputeErr)
 
 	assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
 	assertNoCallTo(t, &goalRepo.Mock, "MarkCompleted")
@@ -280,7 +283,8 @@ func TestSavingsProgress_Balance_ChainHasTwoLiveMembers_StillFreezes(t *testing.
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
+	require.NoError(t, recomputeErr)
 
 	assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
 	assertNoCallTo(t, &goalRepo.Mock, "MarkCompleted")
@@ -385,7 +389,8 @@ func TestSavingsProgress_Balance_NilUserAccountID_DegradesToPhysicalRow_AndFreez
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
+	require.NoError(t, recomputeErr)
 
 	assert.Empty(t, resolver.calls(), "no chain reference to resolve — resolver must not be called")
 	assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
@@ -413,7 +418,8 @@ func TestSavingsProgress_Balance_NilUserAccountID_ActiveAccount_StillRecomputes(
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(live, nil)
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 1234.56, mock.Anything, mock.Anything).Return(nil)
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
+	require.NoError(t, recomputeErr)
 
 	assert.Empty(t, resolver.calls())
 	goalRepo.AssertExpectations(t)
@@ -440,7 +446,8 @@ func TestSavingsProgress_Balance_EmptyUserAccountID_DegradesToPhysicalRow(t *tes
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(live, nil)
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 500.00, mock.Anything, mock.Anything).Return(nil)
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
+	require.NoError(t, recomputeErr)
 
 	assert.Empty(t, resolver.calls(), "an empty user_account_id is not a chain reference")
 	goalRepo.AssertExpectations(t)
@@ -473,7 +480,7 @@ func TestSavingsProgress_Balance_ResolverTransportError_IsReported(t *testing.T)
 		ID: "acc-old", UserID: "u1", Status: domain.AccountStatusActive, CurrentBalance: &frozenForTransportTest,
 	}, nil).Maybe()
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connection refused")
@@ -612,7 +619,8 @@ func TestSavingsProgress_AccountPercentage_ChainHasNoLiveMember_StillFreezes(t *
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
+	require.NoError(t, recomputeErr)
 
 	assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
 	assertNoCallTo(t, &goalRepo.Mock, "MarkCompleted")
@@ -642,7 +650,8 @@ func TestSavingsProgress_AccountPercentage_NilUserAccountID_DegradesToPhysicalRo
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
+	require.NoError(t, recomputeErr)
 
 	assert.Empty(t, resolver.calls(), "no chain reference to resolve — resolver must not be called")
 	assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
