@@ -375,8 +375,9 @@ export function McpPage() {
                   <code>readExecute</code>/<code>writeExecute</code> each accept at most 25 calls per invocation.
                 </li>
                 <li>
-                  Each call&apos;s result is truncated to about 500 characters — ask for a small <code>limit</code> and
-                  page through results rather than requesting everything at once.
+                  Each call&apos;s result is capped at about 100,000 characters, and a whole batch at about 300,000 —
+                  ask for a small <code>limit</code> and page through results rather than requesting everything at
+                  once. A truncated result says so, and tells you how much was left out.
                 </li>
               </ul>
             </Section>
