@@ -148,6 +148,7 @@ func (w *InvestmentHoldingsSyncWorker) Work(ctx context.Context, job *river.Job[
 			"item_id", args.ItemID,
 			"error", err,
 			"error_type", plaidErr.ErrorType,
+			"error_code", plaidErr.ErrorCode,
 			"duration_ms", time.Since(startTime).Milliseconds(),
 		)
 
