@@ -129,6 +129,10 @@ export function createApiClient(mutator: FetchMutator) {
       createRule(data?: unknown, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/auto-categorization', method: 'POST', data, signal })
       },
+      /** POST /api/v1/auto-categorization/preview */
+      previewRule(data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/auto-categorization/preview', method: 'POST', data, signal })
+      },
       /** GET /api/v1/auto-categorization/{id} */
       getRuleByID(id: string, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: `/api/v1/auto-categorization/${id}`, method: 'GET', signal })

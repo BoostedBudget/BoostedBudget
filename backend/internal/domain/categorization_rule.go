@@ -311,3 +311,26 @@ var (
 	ErrRuleAlreadyExists = errors.New("categorization rule with this name already exists")
 	ErrRuleLimitExceeded = errors.New("categorization rule limit exceeded for subscription tier")
 )
+
+// RulePreviewResult is the outcome of a dry run (#1625).
+type RulePreviewResult struct {
+	// ScannedCount is how many recent transactions were examined — needed to read MatchCount
+	// honestly, since a preview is bounded rather than scanning all history.
+	ScannedCount int `json:"scanned_count"`
+	MatchCount   int `json:"match_count"`
+	Matches      []RulePreviewMatch `json:"matches"`
+}
+
+// RulePreviewMatch is one transaction a candidate rule would match.
+//
+// ⚠ Every field except TransactionID is user financial data — merchant, raw description, amount.
+// Any UI rendering these must mask them for session replay (data-ph-mask).
+type RulePreviewMatch struct {
+	TransactionID   string    `json:"transaction_id"`
+	Date            time.Time `json:"date"`
+	Name            string    `json:"name"`
+	MerchantName    *string   `json:"merchant_name,omitempty"`
+	Amount          float64   `json:"amount"`
+	CurrentCategory string    `json:"current_category"`
+	WouldAddTags    []string  `json:"would_add_tags,omitempty"`
+}

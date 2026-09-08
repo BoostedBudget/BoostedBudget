@@ -73,6 +73,27 @@ type DeleteRuleInput struct {
 	ID string `path:"id" doc:"Rule UUID"`
 }
 
+// PreviewRuleInput is the input for a rule dry run (#1625). The body is the same shape as a
+// create request, so the rule builder can preview exactly what it is about to save.
+type PreviewRuleInput struct {
+	inputs.AuthenticatedInput
+	Body PreviewRuleBody
+}
+
+// PreviewRuleBody is a create request plus a scan limit.
+type PreviewRuleBody struct {
+	domain.CreateCategorizationRuleRequest
+	// Limit caps how many recent transactions are examined. Defaults to
+	// services.PreviewScanDefault, capped at services.PreviewScanMax — a preview is a synchronous
+	// read on a form's hot path, not a history scan.
+	Limit int `json:"limit,omitempty" minimum:"1" maximum:"500"`
+}
+
+// PreviewRuleOutput is the response for a rule dry run.
+type PreviewRuleOutput struct {
+	Body *domain.RulePreviewResult
+}
+
 // ToggleRuleInput represents the input for toggling a rule.
 type ToggleRuleInput struct {
 	inputs.AuthenticatedInput
@@ -165,6 +186,38 @@ func (h *CategorizationRuleHandler) ToggleRule(ctx context.Context, input *Toggl
 	return &ToggleRuleOutput{Body: rule}, nil
 }
 
+// PreviewRule handles POST /api/v1/auto-categorization/preview.
+// Reports which recent transactions a candidate rule WOULD match, without saving anything.
+func (h *CategorizationRuleHandler) PreviewRule(ctx context.Context, input *PreviewRuleInput) (*PreviewRuleOutput, error) {
+	rule := ruleFromCreateRequest(input.UserID, &input.Body.CreateCategorizationRuleRequest)
+
+	result, err := h.service.PreviewRule(ctx, input.UserID, rule, input.Body.Limit)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	return &PreviewRuleOutput{Body: result}, nil
+}
+
+// ruleFromCreateRequest builds an in-memory candidate rule. It is deliberately NOT the service's
+// create path: nothing here is persisted, and no ID is assigned.
+func ruleFromCreateRequest(userID string, req *domain.CreateCategorizationRuleRequest) *domain.CategorizationRule {
+	return &domain.CategorizationRule{
+		UserID:                 userID,
+		Name:                   req.Name,
+		Description:            req.Description,
+		Priority:               req.Priority,
+		Conditions:             req.Conditions,
+		ConditionLogic:         req.ConditionLogic,
+		TargetKind:             req.TargetKind,
+		TargetPFCPrimary:       req.TargetPFCPrimary,
+		TargetPFCDetailed:      req.TargetPFCDetailed,
+		TargetCustomCategoryID: req.TargetCustomCategoryID,
+		TargetTags:             req.TargetTags,
+		TagBehavior:            req.TagBehavior,
+	}
+}
+
 // RegisterCategorizationRuleRoutes registers categorization rule routes with the Huma API.
 // Note: These routes require the Clerk middleware to be applied.
 func RegisterCategorizationRuleRoutes(api huma.API, handler *CategorizationRuleHandler) {
@@ -224,6 +277,23 @@ func RegisterCategorizationRuleRoutes(api huma.API, handler *CategorizationRuleH
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteRule)
+
+	// POST /api/v1/auto-categorization/preview - Dry-run a candidate rule
+	//
+	// Registered BEFORE the {id} routes: humatest is registration-order sensitive, so a literal
+	// path that shares a prefix with a parameterised one must come first there. Production's
+	// Echo router always prefers the literal, but a route can look dead in tests otherwise.
+	huma.Register(api, huma.Operation{
+		OperationID: "previewRule",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/auto-categorization/preview",
+		Summary:     "Preview a categorization rule",
+		Description: "Reports which of your recent transactions a candidate rule would match, " +
+			"WITHOUT saving the rule. Validation is identical to createRule, so a rule that " +
+			"previews cleanly will also save cleanly.",
+		Tags:     []string{"Auto-Categorization"},
+		Security: []map[string][]string{{"clerk": {}}},
+	}, handler.PreviewRule)
 
 	// POST /api/v1/auto-categorization/{id}/toggle - Toggle a rule
 	huma.Register(api, huma.Operation{

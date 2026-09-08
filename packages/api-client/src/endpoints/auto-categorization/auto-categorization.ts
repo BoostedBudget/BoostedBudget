@@ -54,7 +54,9 @@ import type {
   CreateCategorizationRuleRequest,
   ErrorModel,
   GetUserRuleExecutionsParams,
+  PreviewRuleBody,
   RuleExecutionsResponse,
+  RulePreviewResult,
   ToggleCategorizationRuleRequest,
   UpdateCategorizationRuleRequest
 } from '../../models';
@@ -266,6 +268,71 @@ export const useCreateRule = <TError = ErrorType<ErrorModel>,
         TContext
       > => {
       return useMutation(getCreateRuleMutationOptions(options), queryClient);
+    }
+    /**
+ * Reports which of your recent transactions a candidate rule would match, WITHOUT saving the rule. Validation is identical to createRule, so a rule that previews cleanly will also save cleanly.
+ * @summary Preview a categorization rule
+ */
+export const previewRule = (
+    previewRuleBody: BodyType<NonReadonly<PreviewRuleBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RulePreviewResult>(
+      {url: `/api/v1/auto-categorization/preview`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: previewRuleBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getPreviewRuleMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof previewRule>>, TError,{data: BodyType<NonReadonly<PreviewRuleBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof previewRule>>, TError,{data: BodyType<NonReadonly<PreviewRuleBody>>}, TContext> => {
+
+const mutationKey = ['previewRule'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof previewRule>>, {data: BodyType<NonReadonly<PreviewRuleBody>>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  previewRule(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PreviewRuleMutationResult = NonNullable<Awaited<ReturnType<typeof previewRule>>>
+    export type PreviewRuleMutationBody = BodyType<NonReadonly<PreviewRuleBody>>
+    export type PreviewRuleMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Preview a categorization rule
+ */
+export const usePreviewRule = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof previewRule>>, TError,{data: BodyType<NonReadonly<PreviewRuleBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof previewRule>>,
+        TError,
+        {data: BodyType<NonReadonly<PreviewRuleBody>>},
+        TContext
+      > => {
+      return useMutation(getPreviewRuleMutationOptions(options), queryClient);
     }
     /**
  * Removes a categorization rule.

@@ -29,12 +29,19 @@ type CategorizationRuleService interface {
 
 	// GetEnabledRules retrieves all enabled rules for a user.
 	GetEnabledRules(ctx context.Context, userID string) ([]*domain.CategorizationRule, error)
+
+	// PreviewRule reports which recent transactions a candidate rule would match, without
+	// persisting anything (#1625).
+	PreviewRule(ctx context.Context, userID string, rule *domain.CategorizationRule, limit int) (*domain.RulePreviewResult, error)
 }
 
 // categorizationRuleService implements CategorizationRuleService.
 type categorizationRuleService struct {
 	ruleRepo           repository.CategorizationRuleRepository
 	customCategoryRepo repository.CustomCategoryRepository
+	// transactionReader backs PreviewRule (#1625). Optional: injected via SetTransactionReader
+	// so every existing constructor call site keeps compiling.
+	transactionReader PreviewTransactionReader
 }
 
 // NewCategorizationRuleService creates a new CategorizationRuleService instance.
