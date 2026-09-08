@@ -89,6 +89,27 @@ func (m *MockItemErrorServiceForWorker) HandlePermissionRevoked(ctx context.Cont
 	return args.Error(0)
 }
 
+// HandleLoginRepaired, CreateReconnectLinkToken, and RepairItem (Issue #1609) are not exercised
+// by WebhookProcessor's own tests — ProcessWebhook is mocked wholesale above — but must exist to
+// satisfy services.ItemErrorService.
+func (m *MockItemErrorServiceForWorker) HandleLoginRepaired(ctx context.Context, linkedItem *domain.LinkedItem) error {
+	args := m.Called(ctx, linkedItem)
+	return args.Error(0)
+}
+
+func (m *MockItemErrorServiceForWorker) CreateReconnectLinkToken(ctx context.Context, userID string, itemID string) (*domain.LinkTokenResponse, error) {
+	args := m.Called(ctx, userID, itemID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.LinkTokenResponse), args.Error(1)
+}
+
+func (m *MockItemErrorServiceForWorker) RepairItem(ctx context.Context, userID string, itemID string) error {
+	args := m.Called(ctx, userID, itemID)
+	return args.Error(0)
+}
+
 // MockWebhookRepoForWorker for testing
 type MockWebhookRepoForWorker struct {
 	mock.Mock

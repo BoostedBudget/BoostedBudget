@@ -52,7 +52,7 @@ CREATE INDEX idx_notifications_email ON notifications(sent_email, created_at)
 -- Add table and column comments
 COMMENT ON TABLE notifications IS 'User notifications for item errors, authentication requirements, and other events';
 COMMENT ON COLUMN notifications.type IS 'Notification type for categorization and filtering';
-COMMENT ON COLUMN notifications.action_url IS 'URL for user to take action (e.g., /accounts/reconnect?link_token=TOKEN&item_id=ITEM_ID)';
+COMMENT ON COLUMN notifications.action_url IS 'URL for user to take action (e.g., /accounts/reconnect?item_id=ITEM_ID). Issue #1609: deliberately does NOT carry a link_token. A Plaid Link token expires in ~4h while this row is retained indefinitely, so a token embedded here could be stale by the time the user acts on the notification, would be persisted in this row, and would be logged verbatim by the email step (email_service.go). The reconnect page mints a fresh update-mode token on demand instead (POST /api/v1/plaid/reconnect-link-token).';
 COMMENT ON COLUMN notifications.action_label IS 'Label for action button (e.g., "Reconnect Bank", "Reconnect Now")';
 COMMENT ON COLUMN notifications.read IS 'Whether user has read this notification in-app';
 COMMENT ON COLUMN notifications.sent_email IS 'Whether email notification was sent (stub for MVP)';

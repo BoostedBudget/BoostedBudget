@@ -44,6 +44,8 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	budgetHandler := &BudgetHandler{}
 	savingsGoalHandler := &SavingsGoalHandler{}
 	plaidHandler := &PlaidHandler{}
+	// Issue #1609: the reconnect-flow handler (separate from PlaidHandler — see plaid_reconnect.go).
+	plaidReconnectHandler := &PlaidReconnectHandler{}
 	profileHandler := &ProfileHandler{}
 	privacyHandler := &PrivacyHandler{}
 	// Issue #1587: GDPR data export
@@ -128,6 +130,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	RegisterBudgetRoutes(api, budgetHandler)
 	RegisterSavingsGoalRoutes(api, savingsGoalHandler)
 	RegisterPlaidRoutes(api, plaidHandler)
+	RegisterPlaidReconnectRoutes(api, plaidReconnectHandler)
 	RegisterProfileRoutes(api, profileHandler)
 	RegisterPrivacyRoutes(api, privacyHandler)
 	RegisterDataExportRoutes(api, dataExportHandler)

@@ -447,6 +447,11 @@ func main() {
 	var plaidService services.PlaidService
 	// Declare accountService at package scope for Huma handler registration
 	var accountService services.AccountService
+	// Declare itemErrorService at outer scope: it's constructed inside the "if cfg.PlaidClientID
+	// != ..." block (Issue #257) but registered as a Huma handler dependency inside a later,
+	// separate "if plaidService != nil && accountService != nil" block (Issue #1609). Both blocks
+	// close before the other opens, so this can't be a := inside either one.
+	var itemErrorService services.ItemErrorService
 	// Issue #1569: userAccountService must be constructed BEFORE accountService, not alongside the
 	// user-account routes further down. LinkAccounts now REFUSES to create an account without a
 	// stable user_accounts identity (ErrStableAccountIdentityUnavailable), because an identity-less
@@ -1514,7 +1519,7 @@ func main() {
 
 				// Initialize Item Error Service for ITEM webhook processing
 				// Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
-				itemErrorService := services.NewItemErrorService(
+				itemErrorService = services.NewItemErrorService(
 					linkedItemRepo,
 					notificationRepo,
 					profileRepo,
@@ -2341,6 +2346,15 @@ func main() {
 			humaPlaidHandler := operations.NewPlaidHandler(plaidService, accountService)
 			operations.RegisterPlaidRoutes(humaAPI, humaPlaidHandler)
 			appLogger.Info("Huma plaid routes registered")
+		}
+
+		// Register the reconnect-flow routes (Issue #1609): mint an update-mode link token for a
+		// broken linked item, and clear its error state once Plaid Link succeeds. Separate from
+		// RegisterPlaidRoutes above because it depends on itemErrorService, not accountService.
+		if itemErrorService != nil {
+			humaPlaidReconnectHandler := operations.NewPlaidReconnectHandler(itemErrorService)
+			operations.RegisterPlaidReconnectRoutes(humaAPI, humaPlaidReconnectHandler)
+			appLogger.Info("Huma plaid reconnect routes registered")
 		}
 
 		// Register Huma profile routes (Issue #559: Huma migration)

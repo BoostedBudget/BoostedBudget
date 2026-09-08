@@ -46,6 +46,14 @@ export const ANALYTICS_EVENTS = {
   // people who already got there. Carries account_type — a fixed discriminator, never free text
   // and never an amount — so the rate can be read per kind of closed account.
   ACCOUNT_BALANCE_HISTORY_VIEWED: 'account_balance_history_viewed',
+  // Issue #1609: the reconnect flow (/accounts/reconnect) for a broken bank connection. Mirrors
+  // PLAID_LINK_STARTED/SUCCEEDED/FAILED's shape but is tracked separately — this is a repair of an
+  // EXISTING linked item (update-mode Link, no new linked_items row), not a first-time link, and
+  // that distinction matters for the funnel: a failure here means a user's connection STAYS broken,
+  // whereas a failure in the normal flow just means they didn't add a bank yet.
+  ACCOUNT_RECONNECT_LINK_STARTED: 'account_reconnect_link_started',
+  ACCOUNT_RECONNECT_SUCCEEDED: 'account_reconnect_succeeded',
+  ACCOUNT_RECONNECT_FAILED: 'account_reconnect_failed',
 
   // Transactions
   TRANSACTIONS_VIEWED: 'transactions_viewed',
