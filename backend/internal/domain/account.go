@@ -161,8 +161,9 @@ type Account struct {
 
 	// ExcludeInvestmentSync surfaces user_accounts.exclude_investment_sync (Issue #1618a) — see
 	// domain.UserAccount.ExcludeInvestmentSync for the full semantics (hides this chain's
-	// investment_transactions from both read surfaces; enforced today by
-	// transaction_repository.go's exclude_investment_sync JOIN, NOT by this field).
+	// investment_transactions from all three read surfaces — feed, investment-transactions, and
+	// portfolio income (#1614); enforced by investmentSyncExclusionCondition at each of those
+	// reads, NOT by this field).
 	//
 	// ⚠ NOT one of the six accountCustomizationColumns (account_liveness_sql.go) — it has no
 	// `accounts`-side column to fall back to, so it is projected directly as

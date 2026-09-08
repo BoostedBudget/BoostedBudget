@@ -81,7 +81,7 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 	// a.current_balance was summed again below in the cash branch — the same dollars counted
 	// twice into grandTotal. This is an arithmetic error, not a preference, so it is fixed for
 	// every account type uniformly via accounts.type rather than via exclude_investment_sync
-	// (see the standing decision on IncomeSummary above). Do not "fix" this by touching
+	// (see the standing decision on IncomeSummary below). Do not "fix" this by touching
 	// SyncHoldings/GetByLinkedItemID — that path is already correct (active-only, by design);
 	// the defect was always the missing predicate in this READ.
 	query := `
@@ -601,7 +601,7 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 // #1614: this was also the ONE live read of investment_transactions missing
 // investmentSyncExclusionCondition("it") — the per-chain exclude_investment_sync opt-out
 // (transaction_repository.go:2985) applied everywhere else that surface is read
-// (transaction_repository.go:3554, investment_transaction_repository.go:374). A double-reported
+// (transaction_repository.go:3554, investment_transaction_repository.go's GetByUserIDKeyset). A double-reported
 // cash-management account's dividends/interest kept counting here after the user flipped the
 // flag, disagreeing with the activity feed the same way T12 describes above. Fixed by adding the
 // condition to this query's WHERE clause.
