@@ -76,6 +76,22 @@ func foldSQLExpr(expr ast.Expr) (string, bool) {
 	case *ast.CallExpr:
 		// This package's SQL-fragment renderers, evaluated for real rather than approximated.
 		// Anything else is unknown text.
+		//
+		// ⚠ KNOWN GAP, pre-existing and NOT fixed here (#1618b): this branch only ever matches a
+		// 1-ARG call (`len(e.Args) == 1` below). accountCustomizationExpr(alias, field) takes TWO,
+		// so a query built directly from it -- rather than through the 6-column
+		// accountCustomizationProjection(alias) this file DOES fold -- never reaches the switch
+		// below and falls straight through to the unfoldableSQLFragment placeholder. Real, not
+		// hypothetical: savings_impact_repository.go and transfer_suggestion_repository.go (#1611)
+		// both call accountCustomizationExpr directly for a single-column nickname resolution, so
+		// their SELECTs fold OPAQUE and TestNoAccountCustomizationReadWithoutTheOverlay sees an
+		// unknown fragment rather than a compliant or offending query. #1611 removed the two
+		// customizationOverlayExceptions entries that used to excuse these queries EXPLICITLY, on
+		// the reasoning that the walker "now finds them compliant" -- it does not; it does not find
+		// them AT ALL. An explicit exception is a visible, auditable statement; folding-to-opaque is
+		// invisible non-coverage wearing the same green checkmark. Both queries are pinned ONLY by
+		// their own integration tests (savings_impact_repository_integration_test.go,
+		// transfer_suggestion_repository_integration_test.go) -- do not assume this guard covers them.
 		if fn, ok := e.Fun.(*ast.Ident); ok && len(e.Args) == 1 {
 			arg, aok := foldSQLExpr(e.Args[0])
 			if aok {
