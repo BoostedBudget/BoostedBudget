@@ -83,11 +83,16 @@ func seedActiveAccountFor(t *testing.T, ctx context.Context, tx pgx.Tx, itemID s
 	require.NoError(t, err)
 }
 
-// repairItem puts the row in the state a successful Plaid Link update-mode reconnect leaves behind:
-// healthy status, a fresh sync, and at least one active account — i.e. no leg of
-// cleanupCandidateReasonPredicate matches any more. cleanup_scheduled_at is deliberately LEFT SET,
-// because nothing in production clears it on reconnect; that is the whole reason the recheck has to
-// re-evaluate eligibility rather than merely re-read the schedule.
+// repairItem is a SYNTHETIC fixture, not a simulation of RepairStatus: it directly writes a row
+// where no leg of cleanupCandidateReasonPredicate matches (healthy status, a fresh sync, at least
+// one active account) while deliberately LEAVING cleanup_scheduled_at SET. Since Issue #1609 P3-T8,
+// the real RepairStatus clears cleanup_scheduled_at itself, which would make every test below moot —
+// this helper exists precisely to hold the schedule constant so each test can isolate ONE
+// predicate leg at a time (PerLeg, ZeroActiveAccountsLeg) independent of the schedule-clearing fix.
+// Also unlike RepairStatus, this refreshes last_synced_at — real production code never does that;
+// see TestClaimItemForCleanup_Integration_RealisticReconnectSequence_SurvivesStaleSyncCleanup
+// (linked_item_repository_claim_cleanup_integration_test.go) for the test that drives the ACTUAL
+// RepairStatus call and deliberately does NOT refresh last_synced_at.
 func repairItem(t *testing.T, ctx context.Context, tx pgx.Tx, itemID string) {
 	t.Helper()
 	seedActiveAccountFor(t, ctx, tx, itemID)
@@ -101,7 +106,9 @@ func repairItem(t *testing.T, ctx context.Context, tx pgx.Tx, itemID string) {
 
 // TestClaimItemForCleanup_Integration_RepairedItemIsNotClaimable is the core Issue #1486 assertion:
 // an item that WAS a cleanup candidate, was scheduled, and has since been reconnected must NOT be
-// claimable — even though its cleanup_scheduled_at is still set, because nothing clears it.
+// claimable, even in the (synthetic, see repairItem above) case where its cleanup_scheduled_at is
+// still set — i.e. even without relying on the Issue #1609 P3-T8 schedule-clearing fix at all, the
+// eligibility legs alone must already deny the claim.
 func TestClaimItemForCleanup_Integration_RepairedItemIsNotClaimable(t *testing.T) {
 	ctx := context.Background()
 	tx, repo, profileRepo := newCleanupPageTestTx(t, ctx)
@@ -115,13 +122,14 @@ func TestClaimItemForCleanup_Integration_RepairedItemIsNotClaimable(t *testing.T
 
 	repairItem(t, ctx, tx, itemID)
 
-	// The schedule is still set — proving the negative result below comes from the eligibility legs
-	// and not from a schedule check.
+	// The schedule is still set — repairItem is the synthetic fixture (see its doc comment), not a
+	// call to the real RepairStatus, so this proves the negative result below comes from the
+	// eligibility legs alone and not from ClaimItemForCleanup's own schedule check.
 	var stillScheduled bool
 	require.NoError(t, tx.QueryRow(ctx,
 		`SELECT cleanup_scheduled_at IS NOT NULL FROM linked_items WHERE id = $1`, itemID).Scan(&stillScheduled))
-	require.True(t, stillScheduled, "reconnect must NOT clear cleanup_scheduled_at — if this ever "+
-		"becomes false, the premise of this whole recheck has changed and it must be re-derived")
+	require.True(t, stillScheduled, "precondition: this test's fixture must leave the schedule set, or "+
+		"the negative claim result below would prove nothing about the eligibility legs specifically")
 
 	claimed, err = repo.ClaimItemForCleanup(ctx, itemID, cleanupPageErrorDays, cleanupPageStaleDays)
 	require.NoError(t, err)
@@ -487,4 +495,74 @@ func TestGetItemsPendingCleanup_Integration_NullStatusItemIsSelected(t *testing.
 	assert.Contains(t, ids, controlID,
 		"control: an ordinary stamped, overdue row must still be selected, so the assertion above "+
 			"cannot pass or fail for reasons unrelated to the NULL arm")
+}
+
+// TestClaimItemForCleanup_Integration_RealisticReconnectSequence_SurvivesStaleSyncCleanup is the
+// P3-T8 (Issue #1609) regression for a HIGH finding: `repairItem` above simulates a repair with raw
+// SQL that ALSO refreshes `last_synced_at`, which no production code path does — RepairStatus
+// (linked_item_repository.go) never touched last_synced_at — so every other test in this file was
+// blind to the stale-sync leg of cleanupCandidateReasonPredicate surviving a real repair.
+//
+// This test drives the ACTUAL production sequence instead of a hand-rolled row state:
+//  1. the connection breaks (status = login_required) and sits broken long enough to go stale on
+//     BOTH the error leg and the unconditional last_synced_at leg;
+//  2. the sweep schedules it (MarkForCleanup, mirroring ItemCleanupCheckWorker.Work);
+//  3. the user repairs it through the real reconnect flow — repo.RepairStatus, the exact call
+//     RepairItem/HandleLoginRepaired make — WITHOUT touching last_synced_at;
+//  4. ClaimItemForCleanup, the recheck ItemCleanupWorker.Work performs immediately before the
+//     irreversible Plaid /item/remove, must decline.
+//
+// Before Issue #1609 P3-T8, RepairStatus cleared only status/error_code/error_message/last_error_at
+// and left cleanup_scheduled_at set — so this test failed (claimed == true) even though the item was
+// freshly repaired, because the stale-sync leg never stopped matching. The fix clears
+// cleanup_notified_at/cleanup_scheduled_at in the same atomic UPDATE, which denies the claim via
+// ClaimItemForCleanup's own `cleanup_scheduled_at IS NOT NULL` precondition regardless of which leg
+// of cleanupCandidateReasonPredicate would otherwise still match.
+func TestClaimItemForCleanup_Integration_RealisticReconnectSequence_SurvivesStaleSyncCleanup(t *testing.T) {
+	ctx := context.Background()
+	tx, repo, profileRepo := newCleanupPageTestTx(t, ctx)
+
+	itemID := seedClaimCleanupItem(t, ctx, tx, repo, profileRepo)
+	var userID string
+	require.NoError(t, tx.QueryRow(ctx, `SELECT user_id FROM linked_items WHERE id = $1`, itemID).Scan(&userID))
+
+	// Step 1: the connection breaks and goes stale past BOTH thresholds. Deliberately past the
+	// error-leg threshold too, so a fix that only patched the status-scoped legs (rather than the
+	// unconditional stale-sync leg) would still show this test red.
+	_, err := tx.Exec(ctx, `
+		UPDATE linked_items
+		SET status = 'login_required', error_code = 'ITEM_LOGIN_REQUIRED', error_message = 'boom',
+		    last_error_at = NOW() - INTERVAL '31 days',
+		    last_synced_at = NOW() - INTERVAL '61 days',
+		    cleanup_scheduled_at = NULL, cleanup_notified_at = NULL
+		WHERE id = $1`, itemID)
+	require.NoError(t, err)
+
+	// Step 2: the sweep schedules it — exactly what MarkForCleanup does, and nothing else.
+	require.NoError(t, repo.MarkForCleanup(ctx, itemID, time.Now()))
+
+	// Step 3: the user repairs it through the real reconnect flow.
+	repaired, err := repo.RepairStatus(ctx, itemID, userID, []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired})
+	require.NoError(t, err)
+	require.True(t, repaired, "precondition: the repair itself must succeed, or the decline below would "+
+		"prove nothing about cleanup eligibility")
+
+	var status string
+	var lastSyncedAt *time.Time
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT status, last_synced_at FROM linked_items WHERE id = $1`, itemID).Scan(&status, &lastSyncedAt))
+	assert.Equal(t, "active", status)
+	require.NotNil(t, lastSyncedAt)
+	assert.True(t, lastSyncedAt.Before(time.Now().Add(-59*24*time.Hour)),
+		"RepairStatus must NOT refresh last_synced_at — asserting a sync that never happened would "+
+			"corrupt the column's meaning for every other reader. This test's whole point is that the "+
+			"item survives cleanup DESPITE last_synced_at staying stale.")
+
+	// Step 4: the realistic sequence's payoff — the recheck immediately before the irreversible
+	// Plaid /item/remove must decline, even though last_synced_at is still 61 days stale.
+	claimed, err := repo.ClaimItemForCleanup(ctx, itemID, cleanupPageErrorDays, cleanupPageStaleDays)
+	require.NoError(t, err)
+	assert.False(t, claimed, "a just-repaired item must survive the cleanup sweep even though its "+
+		"last_synced_at is still stale — RepairStatus never refreshes that column, so ClaimItemForCleanup "+
+		"must not be relying on it having moved")
 }

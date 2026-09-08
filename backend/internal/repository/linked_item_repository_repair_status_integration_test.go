@@ -101,6 +101,45 @@ func TestLinkedItemRepository_RepairStatus_Integration_Success(t *testing.T) {
 	require.NotNil(t, got.StatusChangedAt)
 }
 
+// TestLinkedItemRepository_RepairStatus_Integration_ClearsCleanupSchedule is the P3-T8 (Issue
+// #1609 Phase 3 review H2) regression: a repaired item used to keep its cleanup_scheduled_at set,
+// because nothing cleared it on reconnection — and ClaimItemForCleanup's recheck has an
+// unconditional stale-last-synced-at leg RepairStatus does not touch, so a connection that broke,
+// went stale, and was then repaired could still be claimed and removed via Plaid /item/remove right
+// after the user fixed it. See linked_item_repository_claim_cleanup_integration_test.go's
+// TestClaimItemForCleanup_Integration_RealisticReconnectSequence_SurvivesStaleSyncCleanup for the
+// end-to-end sequence; this test pins RepairStatus's own write in isolation.
+func TestLinkedItemRepository_RepairStatus_Integration_ClearsCleanupSchedule(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	ctx := context.Background()
+	profileRepo := NewProfileRepository(pool, enc)
+	repo := NewLinkedItemRepository(pool, enc)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := createRepairStatusFixtureUser(t, ctx, pool, profileRepo, suffix)
+	item := createRepairStatusFixtureItem(t, ctx, pool, repo, userID, suffix, domain.LinkedItemStatusLoginRequired)
+
+	_, err := pool.Exec(ctx, `
+		UPDATE linked_items
+		SET cleanup_notified_at = NOW() - INTERVAL '1 day', cleanup_scheduled_at = NOW() - INTERVAL '1 hour'
+		WHERE id = $1`, item.ID)
+	require.NoError(t, err)
+
+	repaired, err := repo.RepairStatus(ctx, item.ID, userID, []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired})
+	require.NoError(t, err)
+	require.True(t, repaired)
+
+	var cleanupNotifiedAt, cleanupScheduledAt *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT cleanup_notified_at, cleanup_scheduled_at FROM linked_items WHERE id = $1`, item.ID,
+	).Scan(&cleanupNotifiedAt, &cleanupScheduledAt))
+	assert.Nil(t, cleanupNotifiedAt, "a repaired item must not still carry a cleanup notification stamp")
+	assert.Nil(t, cleanupScheduledAt, "a repaired item must not still carry a cleanup schedule — leaving "+
+		"it set is exactly the Issue #1609 P3-T8 defect: ClaimItemForCleanup's unconditional stale-sync "+
+		"leg could still claim and remove this item immediately after the user fixed it")
+}
+
 func TestLinkedItemRepository_RepairStatus_Integration_WrongUserRefused(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)

@@ -359,12 +359,19 @@ func (s *plaidService) CreateUpdateModeLinkToken(ctx context.Context, userID str
 	// Common mistake: Using item_id instead of access_token (SetAccessToken needs access_token!)
 	request.SetAccessToken(accessToken)
 
-	// Required product: TRANSACTIONS only (same as CreateLinkToken)
-	request.SetProducts([]plaid.Products{
-		plaid.PRODUCTS_TRANSACTIONS,
-	})
-
-	// Optional products: LIABILITIES + INVESTMENTS (same as CreateLinkToken)
+	// Issue #1609 P3-T8 (Phase 3 review H1): `products` is DELIBERATELY OMITTED here, unlike
+	// CreateLinkToken. Plaid's vendored spec (plaid-go/v23 api/openapi.yaml, LinkTokenCreateRequest
+	// `products` field) says verbatim: "List of Plaid product(s) you wish to use. If launching Link
+	// in update mode, should be omitted (unless you are using update mode to add Income or Assets
+	// to an Item); required otherwise." We add neither Income nor Assets through update mode, so
+	// SetProducts must not be called at all — calling it (even with the same TRANSACTIONS value
+	// CreateLinkToken uses) violates that instruction for every update-mode call, which Phase 3 made
+	// reachable from a real user-facing reconnect flow rather than only the LOGIN_REPAIRED webhook
+	// path. See TestCreateUpdateModeLinkToken_OmitsProducts.
+	//
+	// Optional products: LIABILITIES + INVESTMENTS (same as CreateLinkToken). `optional_products`
+	// carries NO such update-mode restriction in the spec — its description never mentions update
+	// mode — so it is kept, unlike `products` above; the two fields are NOT symmetric.
 	// Issue #976: moved from required to optional to avoid NO_LIABILITY_ACCOUNTS errors
 	request.SetOptionalProducts([]plaid.Products{
 		plaid.PRODUCTS_LIABILITIES,

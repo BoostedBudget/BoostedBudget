@@ -72,9 +72,14 @@ const (
 //     this count; see the enumeration in ItemCleanupWorker.Work's #1486 comment, and
 //     TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet, which fails if it drifts
 //     again). What matters for THIS cap is unchanged and still true: **none of the four is a
-//     cancellation hook** — each releases a stamp on a path that has just decided not to act, and in
-//     particular **nothing clears cleanup_scheduled_at on reconnection**, which is precisely why
-//     #1486's recheck had to re-evaluate ELIGIBILITY rather than re-read the schedule.
+//     cancellation hook** — each releases a stamp on a path that has just decided not to act. Issue
+//     #1609 P3-T8 added a FIFTH release path outside this enumeration — RepairStatus now clears
+//     cleanup_notified_at/cleanup_scheduled_at directly on a user-initiated or webhook-driven repair
+//     — but that is a reconnection hook specifically, and it does nothing for the zero-accounts leg:
+//     there is no "repair" for an item with zero active accounts, only account deletion/re-link, so
+//     this leg still has no cancellation path of any kind. #1486's recheck still has to re-evaluate
+//     ELIGIBILITY rather than re-read the schedule, because "was it repaired" and "was it never a
+//     candidate" both now present as unscheduled and must be told apart from "is still a candidate".
 //
 // So for the zero-accounts leg there is still no grace window and no external cancellation path — a
 // misclassification (account replacement in flight, a concurrent account create, an accounts row
@@ -185,11 +190,15 @@ type LinkedItemCleanupRepository interface {
 	// for the same reason, as GetItemsForCleanupPage above. See
 	// repository.linkedItemRepository.ClaimItemForCleanup and the
 	// cleanupCandidateReasonPredicate constant it splices for why the recheck re-evaluates
-	// ELIGIBILITY rather than merely re-reading cleanup_scheduled_at (nothing clears that on
-	// reconnect), and for the two sweep-only conditions it deliberately does not reuse.
+	// ELIGIBILITY rather than merely re-reading cleanup_scheduled_at — since Issue #1609 P3-T8,
+	// RepairStatus DOES clear that column on reconnect, but an item that was never scheduled in the
+	// first place is equally unscheduled, and re-reading the schedule alone cannot tell "repaired"
+	// apart from "never a candidate" — and for the two sweep-only conditions it deliberately does
+	// not reuse.
 	ClaimItemForCleanup(ctx context.Context, itemID string, errorDays, staleDays int) (bool, error)
-	// ClearCleanupSchedule clears the cleanup schedule. NOT called on reconnection — see the note on
-	// ClaimItemForCleanup above.
+	// ClearCleanupSchedule clears the cleanup schedule. This METHOD is not itself called on
+	// reconnection — RepairStatus clears the same two columns directly instead (Issue #1609 P3-T8).
+	// See the note on ClaimItemForCleanup above.
 	ClearCleanupSchedule(ctx context.Context, itemID string) error
 	// Delete hard-deletes the linked_items row after Plaid billing is stopped.
 	// Safe no-op: skips deletion if accounts (any status) still reference the item,
