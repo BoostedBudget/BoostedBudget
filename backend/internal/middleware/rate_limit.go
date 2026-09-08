@@ -533,6 +533,22 @@ func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 // is recovered HERE — scoped to this function only, never to next(ec) — logged, and treated as
 // "allow" (fail open on an internal bug, the same availability bias used everywhere else in this
 // file). See IPRateLimiter's doc comment for why the recover must not extend to next(ec).
+// logRateLimitRejection emits the WARN log line for a 429 rejection, modelled on CloudflareOnly's
+// slog.WarnContext branches (cloudflare.go:144-217) so the two gates read alike: same level, same
+// "path" field name. It additionally carries "tier" (the same value already used for
+// observability.RateLimitRejectionsTotal's label, so logs and metrics join up on the same key) and
+// "client_identity" (the clientIdentity() bucket key — an IP address or identitySentinelFallback,
+// never a header value that could carry a secret). Unlike CloudflareOnly, this gate has no secret
+// to compare in the first place, so there is nothing here for a future edit to accidentally leak —
+// keep it that way; never add a raw header value to this call.
+func logRateLimitRejection(ec echo.Context, logger *slog.Logger, path string, tier domain.RateLimitTier, identity string, retryAfterSecs int) {
+	logger.WarnContext(ec.Request().Context(), "rate-limit: blocked — request over limit",
+		"path", path,
+		"tier", tier.String(),
+		"client_identity", identity,
+		"retry_after_secs", retryAfterSecs)
+}
+
 func ipRateLimiterDecide(ec echo.Context, effective *fallbackLimiter, memBackend *memoryBackend, logger *slog.Logger) (allowed bool, retryAfterSecs int) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -554,11 +570,13 @@ func ipRateLimiterDecide(ec echo.Context, effective *fallbackLimiter, memBackend
 		// and giving it its own store makes that structural rather than incidental.
 		decision := memBackend.AllowExempt(key)
 		if !decision.Allowed {
-			observability.RateLimitRejectionsTotal.WithLabelValues(domain.RateLimitTierRegular.String()).Inc()
+			exemptTier := domain.RateLimitTierRegular
+			observability.RateLimitRejectionsTotal.WithLabelValues(exemptTier.String()).Inc()
 			secs := int(decision.RetryAfter.Seconds())
 			if secs < 1 {
 				secs = 1
 			}
+			logRateLimitRejection(ec, logger, path, exemptTier, key, secs)
 			return false, secs
 		}
 		return true, 0
@@ -579,6 +597,7 @@ func ipRateLimiterDecide(ec echo.Context, effective *fallbackLimiter, memBackend
 		if secs < 1 {
 			secs = 1
 		}
+		logRateLimitRejection(ec, logger, path, tier, key, secs)
 		return false, secs
 	}
 
