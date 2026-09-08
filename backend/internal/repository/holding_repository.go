@@ -360,6 +360,14 @@ func (r *holdingRepository) GetByUserAccountID(ctx context.Context, userAccountI
 // Optionally filters to a single account (chain-expanded via user_account_id).
 // Populates Holding.Security for name/ticker/type/close_price; institution_price comes from the holding row.
 // Note: securities.institution_price is a dead column (always NULL from Plaid) — do not use it.
+//
+// Gated to a.type = 'investment' (Issue #1616 / #1569 T8), alongside currentStateAccountLeg, never
+// replacing it. This is the live read behind ListHoldings and GetPortfolioSummary; T2/T2c gated
+// the four holdings-analytics surfaces (AllocationBreakdown x2, UnrealizedGainLoss, TopMovers) to
+// the same predicate but left this method ungated, so a depository cash-management account
+// carrying holdings was excluded from allocation/gain-loss/top-movers while still showing up in
+// the holdings list and portfolio summary — two live endpoints disagreeing about the same
+// account. This predicate closes that split.
 func (r *holdingRepository) GetByUserIDWithSecurities(ctx context.Context, userID string, accountID *string) ([]domain.Holding, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("investments_with_securities").Inc()
 
@@ -384,7 +392,12 @@ func (r *holdingRepository) GetByUserIDWithSecurities(ctx context.Context, userI
 			sec.close_price, sec.close_price_as_of
 		FROM holdings h
 		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
-		JOIN accounts a ON a.id = h.account_id AND `+currentStateAccountLeg("a")+`
+		-- a.type = 'investment' (#1569 T8 / Issue #1616): matches the gate already applied to
+		-- AllocationBreakdown/UnrealizedGainLoss/TopMovers in investment_analytics_repository.go
+		-- (#1612 T2/T2c). Never remove this without removing it there too, or the two live
+		-- holdings endpoints (ListHoldings, GetPortfolioSummary) will again disagree with the
+		-- four gated analytics surfaces about a depository account carrying holdings.
+		JOIN accounts a ON a.id = h.account_id AND `+currentStateAccountLeg("a")+` AND a.type = 'investment'
 		LEFT JOIN securities sec ON sec.id = h.security_id
 		WHERE h.user_id = $1
 		%s

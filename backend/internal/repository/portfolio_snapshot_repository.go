@@ -113,6 +113,17 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 			END,
 			NOW(),
 			NOW()
+		-- Deliberately UNGATED by account type (#1569 T8 / Issue #1616) — do not add
+		-- AND a.type = 'investment' here to match GetByUserIDWithSecurities and the four
+		-- analytics surfaces in investment_analytics_repository.go. This is a WRITE path that
+		-- builds a historical series (portfolio_snapshots, one row per user per UTC day); gating
+		-- it mid-stream would make tomorrow's snapshot incomparable with every one already
+		-- recorded — the series would step down on the day the gate ships, with no backfill and
+		-- no marker, and to the user that reads as losing money. A small live-read-vs-history gap
+		-- (a depository account carrying holdings shows up in this snapshot's total but not in
+		-- ListHoldings/GetPortfolioSummary/allocation/gain-loss/top-movers) is the accepted lesser
+		-- evil. If this is ever revisited, it needs a backfill or an explicit marker on the
+		-- series, not a silent predicate change.
 		FROM holdings h
 		JOIN live lv ON lv.account_id = h.account_id
 		WHERE h.user_id = $1::uuid
