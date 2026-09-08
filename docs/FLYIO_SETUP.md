@@ -564,7 +564,8 @@ Free allows **5**. All five slots are in use; adding one means consolidating ano
 
 ⚠️ **Rule 4 is an allowlist and is a standing maintenance hazard.** Any future endpoint outside those
 three prefixes gets a silent edge `403` that looks exactly like the outages above. It deliberately
-blocks `/openapi.json`, `/openapi.yaml`, `/docs` and `/schemas/` — verified that nothing fetches
+blocks the OpenAPI spec (both the JSON and YAML forms), the docs UI and the JSON-schema
+directory on the production API host — verified that nothing fetches
 these at runtime (every reference in the tree is to the local build-time `api/openapi.yaml`), and
 serving them publicly leaked the full API surface. **If you add a public non-`/api/` route, this
 rule is the first place to look.**
