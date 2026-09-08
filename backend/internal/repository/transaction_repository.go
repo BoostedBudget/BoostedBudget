@@ -1382,49 +1382,13 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		argIndex++
 	}
 
-	// pfc_primaries and pfc_detaileds use OR logic between them
-	// (a transaction matches if its primary is in primaries OR its detailed is in detaileds)
-	if len(filters.PFCPrimaries) > 0 || len(filters.PFCDetaileds) > 0 {
-		var orParts []string
-		if len(filters.PFCPrimaries) > 0 {
-			placeholders := make([]string, len(filters.PFCPrimaries))
-			for i, p := range filters.PFCPrimaries {
-				placeholders[i] = fmt.Sprintf("$%d", argIndex)
-				args = append(args, p)
-				argIndex++
-			}
-			orParts = append(orParts, "t.effective_pfc_primary IN ("+strings.Join(placeholders, ", ")+")")
-		}
-		if len(filters.PFCDetaileds) > 0 {
-			placeholders := make([]string, len(filters.PFCDetaileds))
-			for i, d := range filters.PFCDetaileds {
-				placeholders[i] = fmt.Sprintf("$%d", argIndex)
-				args = append(args, d)
-				argIndex++
-			}
-			orParts = append(orParts, "t.effective_pfc_detailed IN ("+strings.Join(placeholders, ", ")+")")
-		}
-		conditions = append(conditions, "("+strings.Join(orParts, " OR ")+")")
-	}
-
-	if len(filters.CustomCategoryIDs) > 0 {
-		placeholders := make([]string, len(filters.CustomCategoryIDs))
-		for i, id := range filters.CustomCategoryIDs {
-			placeholders[i] = fmt.Sprintf("$%d", argIndex)
-			args = append(args, id)
-			argIndex++
-		}
-		idList := strings.Join(placeholders, ", ")
-		conditions = append(conditions, fmt.Sprintf(
-			"(t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-				"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s))))"+
-				" /* tombstone-exempt(custom_categories): HISTORY FILTER (#1569 Task 9). This expands a requested"+
-				" category id to itself plus its children so the filter matches the transactions"+
-				" already filed under it. Excluding tombstones would make a user's own past"+
-				" transactions vanish from their own filtered view. The PICKER that supplies these"+
-				" ids is CustomCategoryRepository.GetByUserID, which IS tombstone-filtered. */",
-			idList, idList,
-		))
+	// #1626: the PFC and custom predicates are ONE OR-joined group. They used to be separate
+	// top-level conditions, and because a row is either pfc-kind or custom-kind (never both), the
+	// conjunction of the two matched nothing.
+	if catClause, catArgs, nextIdx := categoryFilterGroup(filters, argIndex, args); catClause != "" {
+		conditions = append(conditions, strings.TrimPrefix(catClause, " AND "))
+		args = catArgs
+		argIndex = nextIdx
 	}
 
 	if filters.Search != nil {
@@ -3224,30 +3188,13 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		investBankingOnlyFilter = " AND FALSE"
 	}
 
-	// PFC / custom-category filters (banking only).
-	if len(filters.PFCPrimaries) > 0 || len(filters.PFCDetaileds) > 0 {
-		var orParts []string
-		var primPHs, detPHs []string
-		for _, p := range filters.PFCPrimaries {
-			primPHs = append(primPHs, fmt.Sprintf("$%d", argIdx))
-			args = append(args, p)
-			argIdx++
-		}
-		for _, d := range filters.PFCDetaileds {
-			detPHs = append(detPHs, fmt.Sprintf("$%d", argIdx))
-			args = append(args, d)
-			argIdx++
-		}
-		if len(primPHs) > 0 {
-			orParts = append(orParts, "t.effective_pfc_primary IN ("+strings.Join(primPHs, ", ")+")")
-		}
-		if len(detPHs) > 0 {
-			orParts = append(orParts, "t.effective_pfc_detailed IN ("+strings.Join(detPHs, ", ")+")")
-		}
-		if len(orParts) > 0 {
-			bankingExtraFilter += " AND (" + strings.Join(orParts, " OR ") + ")"
-			investBankingOnlyFilter = " AND FALSE"
-		}
+	// PFC / custom-category filters (banking only) — ONE OR-joined group (#1626). Investment rows
+	// carry no category at all, so any category filter zeroes that branch.
+	if catClause, catArgs, nextIdx := categoryFilterGroup(filters, argIdx, args); catClause != "" {
+		bankingExtraFilter += catClause
+		args = catArgs
+		argIdx = nextIdx
+		investBankingOnlyFilter = " AND FALSE"
 	}
 
 	// AccountIDs (multi-value) — chain-expanded via user_account_id on both branches.
@@ -3301,26 +3248,6 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			argIdx++
 		}
 		bankingExtraFilter += " AND t.category_source IN (" + strings.Join(phs, ", ") + ")"
-		investBankingOnlyFilter = " AND FALSE"
-	}
-
-	// CustomCategoryIDs — rolls up children (parent_id), banking rows only → zero out investment.
-	if len(filters.CustomCategoryIDs) > 0 {
-		phs := make([]string, len(filters.CustomCategoryIDs))
-		for i, id := range filters.CustomCategoryIDs {
-			phs[i] = fmt.Sprintf("$%d", argIdx)
-			args = append(args, id)
-			argIdx++
-		}
-		idList := strings.Join(phs, ", ")
-		bankingExtraFilter += fmt.Sprintf(
-			" AND (t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-				"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s))))"+
-				" /* tombstone-exempt(custom_categories): HISTORY FILTER (#1569 Task 9) — same rollup as the"+
-				" transaction-list filter above, and the same reason: the ids come from a"+
-				" tombstone-filtered picker, and the rows they select are history. */",
-			idList, idList,
-		)
 		investBankingOnlyFilter = " AND FALSE"
 	}
 
