@@ -354,18 +354,24 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
               Exclude Investment Activity
             </div>
             <p className="text-xs text-muted-foreground">
-              Stops this account's activity from showing up twice — once from bank sync, once
-              from investment sync.
+              {account.user_account_id
+                ? "Stops this account's activity from showing up twice — once from bank sync, once from investment sync."
+                : 'Not available for this account yet — it has no stable account record to store the setting on.'}
             </p>
           </div>
           <Switch
             checked={excludeInvestmentSync}
             onCheckedChange={setExcludeInvestmentSync}
+            disabled={!account.user_account_id}
             aria-label={
               excludeInvestmentSync ? 'Include investment activity' : 'Exclude investment activity'
             }
             title={
-              excludeInvestmentSync ? 'Include investment activity' : 'Exclude investment activity'
+              !account.user_account_id
+                ? 'Unavailable until this account is linked to a stable account record'
+                : excludeInvestmentSync
+                  ? 'Include investment activity'
+                  : 'Exclude investment activity'
             }
           />
         </div>

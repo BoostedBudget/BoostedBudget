@@ -145,6 +145,31 @@ describe('useAccountCustomization', () => {
       expect(result.current.updateError).toBeNull()
     })
 
+    // #1618b review finding: exclude_investment_sync lives on user_accounts. An account with no
+    // user_account_id has no chain row to store it in, AND the legacy PATCH /accounts/{id} schema
+    // (UpdateAccountRequest) does not define the field at all — only UpdateUserAccountRequest does.
+    // Sending it down this branch is therefore either a 422 or a silent drop. Neither is acceptable,
+    // so the field must not be in the legacy payload.
+    it('must NOT send exclude_investment_sync down the legacy Account endpoint', async () => {
+      const { result } = renderHook(() => useAccountCustomization(), {
+        wrapper: createWrapper(),
+      })
+
+      await act(async () => {
+        await result.current.updateAccount(mockAccountLegacy, {
+          nickname: 'Updated Name',
+          exclude_investment_sync: true,
+        })
+      })
+
+      expect(mockUpdateAccountMutateAsync).toHaveBeenCalled()
+      const calls = mockUpdateAccountMutateAsync.mock.calls as unknown as Array<
+        [{ data: Record<string, unknown> }]
+      >
+      expect(calls.length).toBeGreaterThan(0)
+      expect(Object.keys(calls[0][0].data)).not.toContain('exclude_investment_sync')
+    })
+
     it('should update account via UserAccount endpoint when user_account_id exists', async () => {
       const { result } = renderHook(() => useAccountCustomization(), {
         wrapper: createWrapper(),

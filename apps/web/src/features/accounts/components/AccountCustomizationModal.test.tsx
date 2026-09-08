@@ -876,7 +876,11 @@ describe('AccountCustomizationModal', () => {
 
   describe('Exclude Investment Activity Toggle (Issue #1609 Item 5 / #1618b)', () => {
     it('reflects the stored value when the account already excludes investment sync', () => {
-      const excludedAccount: Account = { ...mockAccount, exclude_investment_sync: true }
+      const excludedAccount: Account = {
+        ...mockAccount,
+        user_account_id: 'ua-chained-1618b',
+        exclude_investment_sync: true,
+      }
 
       renderModal(
         <AccountCustomizationModal
@@ -905,12 +909,18 @@ describe('AccountCustomizationModal', () => {
       expect(toggle).toHaveAttribute('aria-checked', 'false')
     })
 
+    // ⚠ #1618b review finding: these two MUST use a CHAINED account. exclude_investment_sync is a
+    // column on `user_accounts`, so an account with no user_account_id has nowhere to store it and
+    // the toggle is deliberately disabled for it. Running these against the unchained `mockAccount`
+    // proved the value reached onSave for precisely the account class where the flow is invalid.
+    const chainedAccount: Account = { ...mockAccount, user_account_id: 'ua-chained-1618b' }
+
     it('sends exclude_investment_sync: true in the PATCH body when flipped on', async () => {
       const user = userEvent.setup()
 
       renderModal(
         <AccountCustomizationModal
-          account={mockAccount}
+          account={chainedAccount}
           open={true}
           onOpenChange={mockOnOpenChange}
           onSave={mockOnSave}
@@ -922,7 +932,7 @@ describe('AccountCustomizationModal', () => {
 
       await waitFor(() => {
         expect(mockOnSave).toHaveBeenCalledWith(
-          mockAccount,
+          chainedAccount,
           expect.objectContaining({ exclude_investment_sync: true }),
         )
       })
@@ -930,7 +940,11 @@ describe('AccountCustomizationModal', () => {
 
     it('sends exclude_investment_sync: false in the PATCH body when flipped off', async () => {
       const user = userEvent.setup()
-      const excludedAccount: Account = { ...mockAccount, exclude_investment_sync: true }
+      const excludedAccount: Account = {
+        ...mockAccount,
+        user_account_id: 'ua-chained-1618b',
+        exclude_investment_sync: true,
+      }
 
       renderModal(
         <AccountCustomizationModal
@@ -1631,4 +1645,37 @@ describe('AccountCustomizationModal', () => {
       expect(mockTrackEvent).not.toHaveBeenCalled()
     })
   })
+
+  // #1618b review finding: exclude_investment_sync is a column on `user_accounts`. An account with
+  // no user_account_id has no chain row to store it on, and the legacy PATCH /accounts/{id} schema
+  // does not declare the field at all. A toggle the user can flip that cannot persist is worse than
+  // no toggle — it closes as if it saved. So it must be visibly inert for those accounts.
+  describe('exclude investment activity — unchained accounts (#1618b)', () => {
+    it('disables the toggle when the account has no user_account_id', () => {
+      renderModal(
+        <AccountCustomizationModal
+          account={mockAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      expect(screen.getByRole('switch', { name: /investment activity/i })).toBeDisabled()
+    })
+
+    it('leaves the toggle enabled when the account IS chained', () => {
+      renderModal(
+        <AccountCustomizationModal
+          account={{ ...mockAccount, user_account_id: 'ua-chained-1618b' }}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      expect(screen.getByRole('switch', { name: /investment activity/i })).not.toBeDisabled()
+    })
+  })
+
 })
