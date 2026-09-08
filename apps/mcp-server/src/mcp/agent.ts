@@ -166,12 +166,19 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
     // and MCP clients re-enumerate tools on connect, so a retained alias would leave the agent
     // three overlapping choices instead of two clear ones.
     //
-    // readExecute admits a call only when it is read-only BY CONSTRUCTION: class === 'read' AND
-    // its HTTP method is read-only AND confirmationRequired === false — see the SECURITY POINT
+    // readExecute admits a call only when all three of class === 'read', a conventionally
+    // non-mutating HTTP method, and confirmationRequired === false hold — see the SECURITY POINT
     // in tools/execute.ts for why `class` alone is not a safe gate (excluded() hard-codes
     // class:'read' onto a genuinely state-changing GET; runMCPRecipe is honestly class:'read'
     // and confirmationRequired:false yet its method is POST). It therefore has NO
     // confirmationToken input — under that gate, one is unreachable by construction.
+    //
+    // NOT "read-only by construction": that claim was corrected in tools/execute.ts and survived
+    // here until #1609 Phase 4. Passing the gate proves an admitted call is non-destructive, not
+    // confirmation-gated, and scoped to the authenticated user — it does NOT prove the call has
+    // no server-side side effect. `getPrivacySettings` and `getUserProfile` are admitted GETs
+    // that lazily create the caller's OWN default row on first access. See execute.ts's module
+    // doc for the full statement of the real guarantee.
     const readExecuteHandler = buildReadExecuteHandler(proxy, specIndex.entries)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see search tool comment above
     ;(this.server as any).registerTool(
@@ -180,8 +187,9 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
         description:
           'Execute one or more READ-ONLY BoostedBudget API operations. ' +
           'Use search() first to find the right operationId, then call readExecute() ' +
-          'with a list of operation calls to chain. Only operations that are read-only ' +
-          '(cannot change your data) are admitted here — use writeExecute() for anything else.',
+          'with a list of operation calls to chain. Only operations that are non-destructive ' +
+          'and scoped to your own data are admitted here — a couple of them create your own ' +
+          'default settings row on first read. Use writeExecute() for anything else.',
         inputSchema: {
           calls: z.array(
             z.object({
