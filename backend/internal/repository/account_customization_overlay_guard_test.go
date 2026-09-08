@@ -123,22 +123,6 @@ var customizationOverlayExceptions = []customizationOverlayException{
 			"checks a reason is true; this one is corrected rather than left as the third.",
 	},
 	{
-		File:   "repository/savings_impact_repository.go",
-		Marker: "AS plaid_account_name",
-		Reason: "Recent-items destination naming has its OWN documented precedence — " +
-			"COALESCE(NULLIF(a.nickname,''), a.name) for a Plaid-linked destination, falling back to " +
-			"the user_accounts row's nickname/hint through a SEPARATE join it already carries. It is " +
-			"resolving a display name across two tables, not projecting an account row, and the " +
-			"overlay's CASE would silently change which of the two branches wins.",
-	},
-	{
-		File:   "repository/transfer_suggestion_repository.go",
-		Marker: "AS to_plaid_name",
-		Reason: "Same shape as savings_impact, doubled: resolution order is documented at the query " +
-			"as Plaid nickname > Plaid name > UA nickname > UA hint, for BOTH the from- and to-side, " +
-			"each with its own user_accounts join already present. Not an account projection.",
-	},
-	{
 		File:   "repository/user_account_repository.go",
 		Marker: "FROM user_accounts",
 		Reason: "user_accounts IS the source of truth these reads overlay FROM; overlaying it onto " +
@@ -424,9 +408,8 @@ func TestAccountCustomizationOverlayGuard_Recognises(t *testing.T) {
 		assertOverlayOffences(t, sql, 1)
 	})
 	t.Run("the allowlist excuses a raw column, and ONLY for its own file", func(t *testing.T) {
-		sql := "SELECT ts.id, COALESCE(NULLIF(a.nickname, ''), a.name) AS plaid_account_name " +
-			"FROM transfer_suggestions ts LEFT JOIN accounts a ON a.id = ts.to_account_id"
-		assertOverlayOffencesIn(t, "repository/savings_impact_repository.go", sql, 0)
+		sql := "SELECT a.id, a.is_hidden FROM accounts a WHERE a.user_account_id IS NULL"
+		assertOverlayOffencesIn(t, "database/backfill.go", sql, 0)
 		assertOverlayOffencesIn(t, "repository/some_other_file.go", sql, 1)
 	})
 	// ── The WHERE / ORDER BY half (fix round 1, F2). ────────────────────────────────────────

@@ -638,8 +638,17 @@ func (r *transferSuggestionRepository) GetActiveByUserID(ctx context.Context, us
 // populated via LEFT JOINs to accounts, user_accounts, boosts, and transactions.
 func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, userID string, statuses []domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, int, error) {
 	// selectClause includes LEFT JOINs for enriched display fields and uses event-time ordering.
-	// resolveDestinationName resolution order: Plaid nickname > Plaid name > UA nickname > UA hint.
-	const selectClause = `
+	// #1611: the declared order below — "Plaid nickname > Plaid name > UA nickname > UA hint" — was
+	// the bug, written down: accounts.name is always populated for a Plaid account, so the UA-
+	// nickname legs of resolveDestinationName were dead code for every Plaid-linked destination.
+	// The fix routes the CHAIN-authoritative customization overlay (accountCustomizationExpr —
+	// account_liveness_sql.go) INSIDE to_plaid_name / from_plaid_name so the chain nickname wins
+	// there, via CASE (not COALESCE) so a cleared override falls back to accounts.name instead of
+	// resurrecting a stale accounts.nickname. resolveDestinationName's precedence is otherwise
+	// untouched and stays correct for genuinely manual accounts (to_ua/from_ua below, joined on
+	// to_user_account_id/from_user_account_id — a different join for a different purpose than the
+	// chain overlay's to_acc_ua/from_acc_ua).
+	var selectClause = `
 		SELECT
 			ts.id, ts.user_id, ts.boost_id, ts.boost_execution_id,
 			ts.from_account_id, ts.to_account_id, ts.from_user_account_id, ts.to_user_account_id,
@@ -648,18 +657,20 @@ func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, 
 			ts.user_action_at, ts.user_notes, ts.created_at, ts.updated_at,
 			ts.completed_at, ts.matched_transaction_id, ts.actual_amount, ts.completion_source,
 			COUNT(*) OVER() AS total_count,
-			COALESCE(NULLIF(to_acc.nickname, ''), to_acc.name)      AS to_plaid_name,
+			COALESCE(NULLIF(` + accountCustomizationExpr("to_acc", "nickname") + `, ''), to_acc.name)      AS to_plaid_name,
 			NULLIF(to_ua.nickname, '')                               AS to_ua_nickname,
 			to_ua.account_name_hint                                  AS to_ua_hint_enc,
-			COALESCE(NULLIF(from_acc.nickname, ''), from_acc.name)  AS from_plaid_name,
+			COALESCE(NULLIF(` + accountCustomizationExpr("from_acc", "nickname") + `, ''), from_acc.name)  AS from_plaid_name,
 			NULLIF(from_ua.nickname, '')                             AS from_ua_nickname,
 			from_ua.account_name_hint                                AS from_ua_hint_enc,
 			r.name                                                   AS boost_name,
 			txn.created_at                                           AS matched_transaction_at
 		FROM transfer_suggestions ts
-		LEFT JOIN accounts     to_acc   ON to_acc.id   = ts.to_account_id       AND to_acc.user_id   = ts.user_id
+		LEFT JOIN accounts     to_acc   ON to_acc.id   = ts.to_account_id       AND to_acc.user_id   = ts.user_id` +
+		accountCustomizationJoin("to_acc") + `
 		LEFT JOIN user_accounts to_ua   ON to_ua.id    = ts.to_user_account_id  AND to_ua.user_id    = ts.user_id
-		LEFT JOIN accounts     from_acc ON from_acc.id = ts.from_account_id     AND from_acc.user_id = ts.user_id
+		LEFT JOIN accounts     from_acc ON from_acc.id = ts.from_account_id     AND from_acc.user_id = ts.user_id` +
+		accountCustomizationJoin("from_acc") + `
 		LEFT JOIN user_accounts from_ua ON from_ua.id  = ts.from_user_account_id AND from_ua.user_id = ts.user_id
 		-- tombstone-exempt(boosts r): boosts r is DELIBERATELY unfiltered, and this is a decision, not an
 		-- omission. r contributes exactly one thing to this query -- r.name AS boost_name, the

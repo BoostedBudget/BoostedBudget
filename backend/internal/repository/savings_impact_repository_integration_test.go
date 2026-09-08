@@ -493,3 +493,114 @@ func TestGetUserImpact_CrossUserAccountName_Integration(t *testing.T) {
 			"cross-user account reference must NOT leak the other user's account name (GAP CF)")
 	}
 }
+
+// TestGetUserImpact_ChainNicknameWinsOverPlaidName_Integration pins #1611: for a CHAINED
+// Plaid-linked destination account (accounts.user_account_id set), the chain's
+// user_accounts.nickname must win over accounts.name — the declared precedence
+// ("Plaid nickname > Plaid name > UA nickname > UA hint") is unreachable in production because
+// accounts.name is always populated for a Plaid account, so the plaidName leg of
+// resolveDestinationName never falls through. The fix routes the chain overlay INSIDE
+// plaid_account_name via accountCustomizationExpr, so this must resolve to the chain nickname
+// without touching the Go resolver's precedence order.
+//
+// The second half is the actual reason CLAUDE.md mandates CASE over COALESCE: once chained, a
+// CLEARED override (a_ua.nickname = NULL) must fall back to accounts.name, and must NOT resurrect
+// a stale accounts.nickname value that predates the chain. COALESCE(NULLIF(a.nickname,''), a.name)
+// gets this wrong because it never even looks at the chain.
+func TestGetUserImpact_ChainNicknameWinsOverPlaidName_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	enc := newTestFieldEncryptor(t)
+	repo := NewSavingsImpactRepositoryWithEncryptor(tx, enc)
+
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "test|"+userID.String(), "int-chain-"+userID.String()+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	linkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-test-token-chain')
+	`, linkedItemID, userID, "test-item-chain-"+linkedItemID.String())
+	require.NoError(t, err, "seed linked_item")
+
+	// The chain row (user_accounts) carries the customization nickname.
+	uaID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id, nickname)
+		VALUES ($1, $2, 'inst-chain-a', 'Chain Nickname')
+	`, uaID, userID)
+	require.NoError(t, err, "seed chain row with nickname")
+
+	// Plaid account #1: chained to uaID, legacy accounts.nickname deliberately set to a DIFFERENT
+	// stale value, proving the chain — not the legacy column — wins.
+	chainedAccountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, nickname, user_account_id)
+		VALUES ($1, $2, $3, 'plaid-chain-1', 'Plaid Checking', 'depository', 'Stale Legacy Nickname', $4)
+	`, chainedAccountID, linkedItemID, userID, uaID)
+	require.NoError(t, err, "seed chained Plaid account with stale legacy nickname")
+
+	// Plaid account #2: chained to a SECOND chain row whose nickname is NULL (cleared override).
+	// accounts.nickname on THIS row is also set to a stale legacy value — it must NOT resurrect.
+	clearedUAID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id)
+		VALUES ($1, $2, 'inst-chain-b')
+	`, clearedUAID, userID)
+	require.NoError(t, err, "seed chain row with cleared (NULL) nickname")
+
+	clearedAccountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, nickname, user_account_id)
+		VALUES ($1, $2, $3, 'plaid-chain-2', 'Plaid Savings', 'depository', 'Another Stale Nickname', $4)
+	`, clearedAccountID, linkedItemID, userID, clearedUAID)
+	require.NoError(t, err, "seed chained Plaid account with cleared chain override")
+
+	now := time.Now().UTC()
+	chainedIDStr := chainedAccountID.String()
+	clearedIDStr := clearedAccountID.String()
+
+	insertCompleted := func(toAccountID *string, amount float64) {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO transfer_suggestions
+				(id, user_id, amount, source, status, completed_at, actual_amount, completion_source,
+				 to_account_id, created_at, updated_at)
+			VALUES ($1, $2, $3, 'boost', 'completed', $4, $3, 'exact_match', $5, $4, $4)
+		`, uuid.New(), userID, amount, now, toAccountID)
+		require.NoError(t, err, "seed completed suggestion")
+	}
+
+	insertCompleted(&chainedIDStr, 500.00)
+	insertCompleted(&clearedIDStr, 600.00)
+
+	impact, err := repo.GetUserImpact(ctx, userID.String())
+	require.NoError(t, err, "GetUserImpact must not error")
+	require.Len(t, impact.RecentItems, 2)
+
+	byAmount := make(map[float64]*domain.CompletedSuggestionSummary)
+	for _, item := range impact.RecentItems {
+		byAmount[item.ActualAmount] = item
+	}
+
+	chained := byAmount[500.00]
+	require.NotNil(t, chained, "chained account suggestion must appear")
+	require.NotNil(t, chained.ToAccountName, "chained account must resolve a name")
+	assert.Equal(t, "Chain Nickname", *chained.ToAccountName,
+		"the chain nickname must win over the Plaid name AND the stale legacy accounts.nickname")
+
+	cleared := byAmount[600.00]
+	require.NotNil(t, cleared, "cleared-override account suggestion must appear")
+	require.NotNil(t, cleared.ToAccountName, "cleared-override account must fall back to accounts.name")
+	assert.Equal(t, "Plaid Savings", *cleared.ToAccountName,
+		"a cleared chain override must fall back to accounts.name and must NOT resurrect the stale "+
+			"accounts.nickname (this is the COALESCE-vs-CASE distinction CLAUDE.md mandates)")
+}
