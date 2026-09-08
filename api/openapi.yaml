@@ -2523,6 +2523,22 @@ components:
         - name
         - spec
       type: object
+    CreateReconnectLinkTokenInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CreateReconnectLinkTokenInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        item_id:
+          description: The Plaid item_id of the linked item to reconnect (from the notification's action_url)
+          type: string
+      required:
+        - item_id
+      type: object
     CreateSavingsGoalRequest:
       additionalProperties: false
       properties:
@@ -5666,6 +5682,37 @@ components:
             - "null"
       required:
         - account_orders
+      type: object
+    RepairLinkedItemInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RepairLinkedItemInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        item_id:
+          description: The Plaid item_id of the linked item that was just repaired via Plaid Link
+          type: string
+      required:
+        - item_id
+      type: object
+    RepairLinkedItemOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RepairLinkedItemOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        success:
+          type: boolean
+      required:
+        - success
       type: object
     RequestDeletionResponseBody:
       additionalProperties: false
@@ -13459,6 +13506,62 @@ paths:
       security:
         - clerk: []
       summary: Create Plaid link token
+      tags:
+        - Plaid
+  /api/v1/plaid/reconnect:
+    post:
+      description: Marks the caller's own linked item active again and clears its error tracking fields. Call only after the update-mode Plaid Link flow (using the token from createReconnectLinkToken) has succeeded.
+      operationId: repairLinkedItem
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepairLinkedItemInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepairLinkedItemOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Clear a linked item's error state after a successful reconnect
+      tags:
+        - Plaid
+  /api/v1/plaid/reconnect-link-token:
+    post:
+      description: Mints a fresh update-mode Plaid Link token for the caller's own linked item, scoped to items in a repairable error state (login_required, error, pending_expiration, revoked).
+      operationId: createReconnectLinkToken
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReconnectLinkTokenInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LinkTokenResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Create a Plaid update-mode link token to repair a broken connection
       tags:
         - Plaid
   /api/v1/qa/auth/bypass:

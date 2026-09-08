@@ -26,11 +26,35 @@ export const mockUseExchangePublicToken = mock(() => ({
   error: null,
 }))
 
+// === useCreateReconnectLinkToken (Issue #1609) ===
+export const mockCreateReconnectLinkTokenMutateAsync = mock(() =>
+  Promise.resolve({ link_token: 'test-reconnect-link-token' })
+)
+export const mockUseCreateReconnectLinkToken = mock(() => ({
+  mutateAsync: mockCreateReconnectLinkTokenMutateAsync,
+  isPending: false,
+  isError: false,
+  error: null,
+}))
+
+// === useRepairLinkedItem (Issue #1609) ===
+export const mockRepairLinkedItemMutateAsync = mock(() =>
+  Promise.resolve({ success: true })
+)
+export const mockUseRepairLinkedItem = mock(() => ({
+  mutateAsync: mockRepairLinkedItemMutateAsync,
+  isPending: false,
+  isError: false,
+  error: null,
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/plaid/plaid', () => ({
   ...RealPlaidModule,
   useCreateLinkToken: mockUseCreateLinkToken,
   useExchangePublicToken: mockUseExchangePublicToken,
+  useCreateReconnectLinkToken: mockUseCreateReconnectLinkToken,
+  useRepairLinkedItem: mockUseRepairLinkedItem,
 }))
 
 // Mock react-plaid-link (browser API - not available in happy-dom)

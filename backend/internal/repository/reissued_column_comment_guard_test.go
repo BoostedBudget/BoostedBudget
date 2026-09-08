@@ -98,6 +98,11 @@ var reissuedColumnComments = map[string]int{
 	// resolved through it) and became more so when the analytics transfer filter started doing
 	// the same. See 000186's banner.
 	"custom_categories.parent_pfc_primary": 2,
+	// 000014 (origin, corrected in place) and 000188 (the catch-up for databases that already
+	// applied 000014). #1609: the original text described action_url as carrying a link_token
+	// query parameter; item_error_service.go's Handle* methods no longer embed one (see 000188's
+	// banner), and the /accounts/reconnect page never accepts one.
+	"notifications.action_url": 2,
 }
 
 // columnCommentHeadRegexp matches the `COMMENT ON COLUMN <qualified column> IS` prefix; the body

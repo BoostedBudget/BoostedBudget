@@ -85,6 +85,11 @@ func MapError(err error) error {
 		return huma.Error404NotFound("Linked item not found")
 	case errors.Is(err, repository.ErrLinkedItemNotDisconnected):
 		return huma.Error409Conflict("This institution must be disconnected before it can be purged")
+	case errors.Is(err, services.ErrLinkedItemNotRepairable):
+		// Issue #1609: the reconnect flow refuses to mint a token or clear error state for an
+		// item that is active (nothing broken) or was deliberately replaced/disconnected by the
+		// user — a stale notification link must not resurrect either.
+		return huma.Error409Conflict("This connection is not in a state that can be reconnected")
 	case errors.Is(err, repository.ErrNotificationNotFound):
 		return huma.Error404NotFound("Notification not found")
 	case errors.Is(err, repository.ErrPrivacySettingsNotFound):
