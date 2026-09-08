@@ -167,11 +167,19 @@ type LinkedItemRepository interface {
 	// SetInvestmentsSkippedAtLink records whether the two investment sync jobs were skipped for
 	// this item at link time because Plaid granted no investments product (#1613 P4-T3 item E).
 	//
-	// ⚠ It takes the value rather than only setting TRUE, and that is load-bearing.
-	// accountService.enqueueInitialSync can run against a PRE-EXISTING linked_items row —
-	// LinkAccounts reuses one when the user re-links the same institution — so a write-only-TRUE
-	// setter would leave a stale TRUE on an item whose institution has since started serving
-	// investments, permanently misreporting the population this column exists to measure.
+	// ⚠ It takes the value rather than only setting TRUE. ⚠ CORRECTED — the first version of this
+	// comment justified that with "LinkAccounts reuses an existing linked_items row on re-link",
+	// which is FALSE and was not checked before it was written: LinkAccounts marks the old item
+	// `replaced` and always Creates a NEW row, then passes that new id to enqueueInitialSync. So
+	// today every call lands on a freshly created row whose column already defaults to FALSE, and
+	// the FALSE write is a no-op in practice.
+	//
+	// It is still a setter and not a latch, for a reason that IS true: this method's contract is
+	// "record the decision enqueueInitialSync just made", and a column default is not a decision.
+	// Nothing in enqueueInitialSync's signature — it takes an id, not a freshly built object —
+	// prevents a future caller from running it against an existing row, and a one-way latch would
+	// then strand a stale TRUE on an item whose institution had started serving investments.
+	// A latch is a hazard bought for nothing; the setter costs the same UPDATE.
 	//
 	// ⚠ Nothing READS this column yet, deliberately: see enqueueInitialSync's own comment for the
 	// ruling that declined the per-sync product re-check, and for what a future reader would need.
