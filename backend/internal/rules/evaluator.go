@@ -21,44 +21,42 @@ type ConditionRegistry struct {
 	evaluators map[domain.ConditionType]ConditionEvaluator
 }
 
-// NewConditionRegistry creates a registry with all built-in evaluators.
+// NewConditionRegistry creates a registry.
+//
+// #1625: the fourteen per-fused-type evaluator structs are NO LONGER pre-registered. Every
+// built-in condition — legacy fused or new triple — now resolves through the single field-based
+// implementation in field_evaluator.go, so "merchant contains" has exactly one meaning rather
+// than two implementations that can drift apart. The structs themselves are retained (they are
+// still directly unit-tested, and Register() can inject them or any replacement).
 func NewConditionRegistry() *ConditionRegistry {
-	r := &ConditionRegistry{
+	return &ConditionRegistry{
 		evaluators: make(map[domain.ConditionType]ConditionEvaluator),
 	}
-
-	// Register merchant evaluators
-	r.evaluators[domain.ConditionMerchantContains] = &MerchantContainsEvaluator{}
-	r.evaluators[domain.ConditionMerchantEquals] = &MerchantEqualsEvaluator{}
-	r.evaluators[domain.ConditionMerchantStartsWith] = &MerchantStartsWithEvaluator{}
-	r.evaluators[domain.ConditionMerchantEndsWith] = &MerchantEndsWithEvaluator{}
-
-	// Register amount evaluators
-	r.evaluators[domain.ConditionAmountGreaterThan] = &AmountGreaterThanEvaluator{}
-	r.evaluators[domain.ConditionAmountLessThan] = &AmountLessThanEvaluator{}
-	r.evaluators[domain.ConditionAmountEquals] = &AmountEqualsEvaluator{}
-	r.evaluators[domain.ConditionAmountRange] = &AmountRangeEvaluator{}
-
-	// Register other evaluators
-	r.evaluators[domain.ConditionPaymentChannel] = &PaymentChannelEvaluator{}
-	r.evaluators[domain.ConditionAccountID] = &AccountIDEvaluator{}
-	r.evaluators[domain.ConditionAccountType] = &AccountTypeEvaluator{}
-	r.evaluators[domain.ConditionDateRange] = &DateRangeEvaluator{}
-	r.evaluators[domain.ConditionExistingPFCPrimary] = &ExistingPFCPrimaryEvaluator{}
-	r.evaluators[domain.ConditionExistingPFCDetailed] = &ExistingPFCDetailedEvaluator{}
-
-	return r
 }
 
-// Evaluate evaluates a condition using the appropriate evaluator.
-// Returns false (no error) for unknown condition types (graceful fallback).
+// Evaluate evaluates a condition.
+//
+// #1625: dispatch is on the normalized (Field, Operator) pair. The fourteen legacy fused types
+// normalize into the same pairs, so a persisted rule and a new triple share one implementation
+// rather than two that can drift. A condition arriving un-normalized (a hand-built struct in a
+// test, say) is normalized here first — normalization is idempotent and never touches the row.
+//
+// A registered per-type evaluator still wins when one exists, so anything injected through
+// Register() for a custom type keeps working.
+//
+// Returns (false, nil) for an unknown field: EvaluateRules aborts a transaction's ENTIRE rule
+// set on an error, so one junk condition must not silently disable a user's other rules. Making
+// junk visible is shadow-mode quarantine's job, not this function's.
 func (r *ConditionRegistry) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	evaluator, ok := r.evaluators[condition.Type]
-	if !ok {
-		// Unknown condition type - gracefully return false (no match)
-		return false, nil
+	if condition.Field == "" {
+		if err := condition.Normalize(); err != nil {
+			return false, nil
+		}
 	}
-	return evaluator.Evaluate(tx, condition)
+	if evaluator, ok := r.evaluators[condition.Type]; ok && condition.Type != domain.ConditionTypeExpression {
+		return evaluator.Evaluate(tx, condition)
+	}
+	return evaluateField(tx, condition)
 }
 
 // Register adds or replaces an evaluator for a condition type.

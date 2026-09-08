@@ -30,10 +30,14 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { RuleConditionField } from './ruleConditionField';
+import type { RuleConditionOperator } from './ruleConditionOperator';
+import type { RuleConditionType } from './ruleConditionType';
 
 export interface RuleCondition {
-  operator?: string;
-  type: string;
+  field?: RuleConditionField;
+  operator?: RuleConditionOperator;
+  type?: RuleConditionType;
   value: unknown;
   value_display?: string;
 }

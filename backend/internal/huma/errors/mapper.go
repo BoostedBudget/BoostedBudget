@@ -229,6 +229,16 @@ func MapError(err error) error {
 	// 400 Bad Request - Validation errors
 	// ================================
 
+	// #1625 — categorization-rule validation. ORDER MATTERS: ErrInvalidCondition wraps
+	// ErrInvalidRule, so the condition case must come first or every condition error would be
+	// reported as a generic 400. Both carry the full message: an agent that cannot see WHICH
+	// field or operator was rejected has no way to correct itself, which is the whole reason
+	// these used to loop.
+	case errors.Is(err, domain.ErrInvalidCondition):
+		return huma.Error422UnprocessableEntity(err.Error())
+	case errors.Is(err, domain.ErrInvalidRule):
+		return huma.Error400BadRequest(err.Error())
+
 	case errors.Is(err, domain.ErrInvalidTagName):
 		return huma.Error400BadRequest("Invalid tag name")
 	case errors.Is(err, domain.ErrInvalidTagColor):
