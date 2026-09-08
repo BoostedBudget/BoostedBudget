@@ -17,6 +17,26 @@ export type {
   GetAccountsOutputBody as GetAccountsResponse,
 } from '@boostedbudget/api-client/models'
 
+// Local (non-re-exported) import of the same type, needed below: `export type { X } from 'y'`
+// forwards X without introducing a usable local binding for this file's own type expressions.
+import type { UpdateAccountRequest } from '@boostedbudget/api-client/models'
+
+/**
+ * Local widening of the generated `UpdateAccountRequest` PATCH payload type.
+ *
+ * `exclude_investment_sync` (#1618b) lives on `UpdateUserAccountRequest` — the wire type
+ * `useAccountCustomization`'s `updateAccount` actually sends when an account has a
+ * `user_account_id` (the common case) — but NOT on `UpdateAccountRequest`, the fallback
+ * account-endpoint PATCH body used when it doesn't. `AccountCustomizationModal`'s local
+ * `changes` state has to carry the field regardless of which endpoint eventually handles the
+ * write, so this widens `UpdateAccountRequest` rather than importing either generated type
+ * directly. See `useAccountCustomization.ts`'s own `PartialUpdateAccountRequest` for the
+ * sibling type on the consuming side — keep the two in sync if either gains a field.
+ */
+export type AccountCustomizationChanges = Partial<UpdateAccountRequest> & {
+  exclude_investment_sync?: boolean | null
+}
+
 // Local types for Plaid Link (not in OpenAPI spec)
 export interface LinkTokenResponse {
   link_token: string

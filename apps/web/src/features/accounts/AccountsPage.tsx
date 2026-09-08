@@ -27,7 +27,7 @@ import {
 import { useProfile } from '../profile/hooks/useProfile'
 import { useAccountCustomization } from './hooks/useAccountCustomization'
 import { useAccountFilters } from './hooks/useAccountFilters'
-import type { Account, ExchangePublicTokenResponse, UpdateAccountRequest } from './types'
+import type { Account, AccountCustomizationChanges, ExchangePublicTokenResponse } from './types'
 import { isInactive } from './hooks/useActiveAccounts'
 import { useHousehold, ShareNewAccountsDialog } from '@/features/household'
 
@@ -334,7 +334,7 @@ export function AccountsPage() {
       }))
   }, [accountsData?.accounts])
 
-  const handleSaveAccount = useCallback(async (account: Account, changes: Partial<UpdateAccountRequest>) => {
+  const handleSaveAccount = useCallback(async (account: Account, changes: AccountCustomizationChanges) => {
     // #1609: updateAccount now REJECTS on failure instead of resolving with null, so the
     // `if (!updatedAccount) return` guard that used to sit here is gone. It was not merely dead —
     // it was the second half of a swallowed error: the modal decides whether to close from

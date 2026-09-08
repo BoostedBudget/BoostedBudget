@@ -25,7 +25,7 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
-import { Eye, EyeOff, Loader2, Users, UserX } from 'lucide-react'
+import { Eye, EyeOff, Loader2, Users, UserX, LineChart, RefreshCwOff } from 'lucide-react'
 import { ColorPicker } from './ColorPicker'
 import { IconSelector } from './IconSelector'
 import { EmojiInput } from './EmojiInput'
@@ -33,12 +33,12 @@ import { AccountIconDisplay } from './AccountIconDisplay'
 import { useHousehold, useHouseholdVisibility } from '@/features/household'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
-import type { Account, AccountIcon, UpdateAccountRequest } from '../types'
+import type { Account, AccountCustomizationChanges, AccountIcon } from '../types'
 
 // Internal component to handle modal content with its own state
 interface ModalContentProps {
   account: Account
-  onSave: (account: Account, changes: Partial<UpdateAccountRequest>) => Promise<void>
+  onSave: (account: Account, changes: AccountCustomizationChanges) => Promise<void>
   onCancel: () => void
   isSaving: boolean
 }
@@ -50,6 +50,9 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
   const [customIcon, setCustomIcon] = useState<AccountIcon | null>((account.custom_icon as AccountIcon) || null)
   const [customEmoji, setCustomEmoji] = useState<string | null>(account.custom_emoji || null)
   const [isHidden, setIsHidden] = useState(account.is_hidden || false)
+  const [excludeInvestmentSync, setExcludeInvestmentSync] = useState(
+    account.exclude_investment_sync || false
+  )
   const [showHideConfirm, setShowHideConfirm] = useState(false)
   const [activeTab, setActiveTab] = useState<'icon' | 'emoji'>(account.custom_emoji ? 'emoji' : 'icon')
 
@@ -103,7 +106,7 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
 
   // Handle save
   const handleSave = useCallback(async () => {
-    const changes: Partial<UpdateAccountRequest> = {}
+    const changes: AccountCustomizationChanges = {}
 
     // Only include changed fields
     if (nickname !== (account.nickname || '')) {
@@ -131,6 +134,9 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
     }
     if (isHidden !== (account.is_hidden || false)) {
       changes.is_hidden = isHidden
+    }
+    if (excludeInvestmentSync !== (account.exclude_investment_sync || false)) {
+      changes.exclude_investment_sync = excludeInvestmentSync
     }
 
     const hasAppearanceChanges = Object.keys(changes).length > 0
@@ -200,7 +206,7 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
     } finally {
       setIsSubmitting(false)
     }
-  }, [account, nickname, customColor, customIcon, customEmoji, isHidden, activeTab, onSave, onCancel, userAccountId, wantsShared, initialShareVisibility, setVisibility, trackEvent])
+  }, [account, nickname, customColor, customIcon, customEmoji, isHidden, excludeInvestmentSync, activeTab, onSave, onCancel, userAccountId, wantsShared, initialShareVisibility, setVisibility, trackEvent])
 
   return (
     <>
@@ -333,6 +339,37 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
           />
         </div>
 
+        {/* Exclude investment activity toggle — Issue #1609 Item 5 / #1618b. Some accounts sync
+            through both banking sync and investment sync, so their activity can appear twice in
+            the feed (once from each source). This is the user-facing control for that: it maps
+            straight onto exclude_investment_sync. */}
+        <div className="flex items-center justify-between rounded-lg border p-3">
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              {excludeInvestmentSync ? (
+                <RefreshCwOff className="h-4 w-4" />
+              ) : (
+                <LineChart className="h-4 w-4" />
+              )}
+              Exclude Investment Activity
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Stops this account's activity from showing up twice — once from bank sync, once
+              from investment sync.
+            </p>
+          </div>
+          <Switch
+            checked={excludeInvestmentSync}
+            onCheckedChange={setExcludeInvestmentSync}
+            aria-label={
+              excludeInvestmentSync ? 'Include investment activity' : 'Exclude investment activity'
+            }
+            title={
+              excludeInvestmentSync ? 'Include investment activity' : 'Exclude investment activity'
+            }
+          />
+        </div>
+
         {/* Share with household toggle — Issue #1370 Task 8. Distinct from
             "Hide Account" above: that controls the OWNER's own default view;
             this controls whether OTHER household members can see the account
@@ -415,7 +452,7 @@ export interface AccountCustomizationModalProps {
   /** Callback when modal should close */
   onOpenChange: (open: boolean) => void
   /** Callback when save is clicked - passes full account for user_account_id resolution (Issue #171) */
-  onSave: (account: Account, changes: Partial<UpdateAccountRequest>) => Promise<void>
+  onSave: (account: Account, changes: AccountCustomizationChanges) => Promise<void>
   /** Whether save is in progress */
   isSaving?: boolean
 }
