@@ -88,7 +88,7 @@ func TestLinkedItemRepository_RepairStatus_Integration_Success(t *testing.T) {
 	_, err := pool.Exec(ctx, `UPDATE linked_items SET error_code = $2, error_message = 'boom', last_error_at = NOW() WHERE id = $1`, item.ID, errCode)
 	require.NoError(t, err)
 
-	repaired, err := repo.RepairStatus(ctx, item.ID, userID, []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired})
+	repaired, err := repo.RepairStatus(ctx, item.ID, userID, []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired}, nil)
 	require.NoError(t, err)
 	assert.True(t, repaired)
 
@@ -126,7 +126,7 @@ func TestLinkedItemRepository_RepairStatus_Integration_ClearsCleanupSchedule(t *
 		WHERE id = $1`, item.ID)
 	require.NoError(t, err)
 
-	repaired, err := repo.RepairStatus(ctx, item.ID, userID, []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired})
+	repaired, err := repo.RepairStatus(ctx, item.ID, userID, []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired}, nil)
 	require.NoError(t, err)
 	require.True(t, repaired)
 
@@ -151,7 +151,7 @@ func TestLinkedItemRepository_RepairStatus_Integration_WrongUserRefused(t *testi
 	userID := createRepairStatusFixtureUser(t, ctx, pool, profileRepo, suffix)
 	item := createRepairStatusFixtureItem(t, ctx, pool, repo, userID, suffix, domain.LinkedItemStatusLoginRequired)
 
-	repaired, err := repo.RepairStatus(ctx, item.ID, uuid.NewString(), []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired})
+	repaired, err := repo.RepairStatus(ctx, item.ID, uuid.NewString(), []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired}, nil)
 	require.NoError(t, err)
 	assert.False(t, repaired, "a user_id mismatch must refuse the transition, not silently repair someone else's item")
 
@@ -176,7 +176,7 @@ func TestLinkedItemRepository_RepairStatus_Integration_StatusNotAllowedRefused(t
 		domain.LinkedItemStatusLoginRequired,
 		domain.LinkedItemStatusError,
 		domain.LinkedItemStatusPendingExpiration,
-	})
+	}, nil)
 	require.NoError(t, err)
 	assert.False(t, repaired)
 
@@ -198,7 +198,7 @@ func TestLinkedItemRepository_RepairStatus_Integration_EmptyUserIDSkipsOwnership
 
 	// Mirrors HandleLoginRepaired's call: the LOGIN_REPAIRED webhook is system-triggered with no
 	// authenticated caller, so it passes userID="" to skip the ownership filter entirely.
-	repaired, err := repo.RepairStatus(ctx, item.ID, "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired})
+	repaired, err := repo.RepairStatus(ctx, item.ID, "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired}, nil)
 	require.NoError(t, err)
 	assert.True(t, repaired)
 
@@ -244,7 +244,7 @@ func TestLinkedItemRepository_RepairStatus_Integration_ConcurrentDisconnectWinsR
 	}
 	repairDone := make(chan repairResult, 1)
 	go func() {
-		repaired, err := repo.RepairStatus(ctx, item.ID, userID, []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired})
+		repaired, err := repo.RepairStatus(ctx, item.ID, userID, []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired}, nil)
 		repairDone <- repairResult{repaired, err}
 	}()
 

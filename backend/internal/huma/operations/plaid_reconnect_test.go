@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
@@ -44,11 +45,11 @@ func (m *mockItemErrorServiceForReconnect) HandlePermissionRevoked(ctx context.C
 	panic("not used by PlaidReconnectHandler")
 }
 
-func (m *mockItemErrorServiceForReconnect) ProcessWebhook(ctx context.Context, itemID string, errorType string, errorCode string, errorMessage string) error {
+func (m *mockItemErrorServiceForReconnect) ProcessWebhook(ctx context.Context, itemID string, errorType string, errorCode string, errorMessage string, receivedAt time.Time) error {
 	panic("not used by PlaidReconnectHandler")
 }
 
-func (m *mockItemErrorServiceForReconnect) HandleLoginRepaired(ctx context.Context, linkedItem *domain.LinkedItem) error {
+func (m *mockItemErrorServiceForReconnect) HandleLoginRepaired(ctx context.Context, linkedItem *domain.LinkedItem, webhookReceivedAt time.Time) error {
 	panic("not used by PlaidReconnectHandler")
 }
 

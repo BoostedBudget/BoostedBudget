@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
@@ -159,9 +160,15 @@ type ItemErrorService interface {
 	//   - errorType: Webhook error type (e.g., "ITEM_LOGIN_REQUIRED", "ERROR")
 	//   - errorCode: Plaid error code
 	//   - errorMessage: Human-readable error message
+	//   - receivedAt: when THIS webhook was received (webhook_events.created_at, a Postgres
+	//     DEFAULT — never a Go time.Now()). Issue #1623: the LOGIN_REPAIRED path refuses to clear
+	//     a failure asserted after this instant. The LOGIN_REPAIRED payload itself carries no
+	//     ordering token whatsoever (per the vendored spec, ItemLoginRepairedWebhook is
+	//     webhook_type / webhook_code / item_id / environment), so the receipt timestamp and the
+	//     stored row's own clock are the ONLY ordering signals that exist.
 	//
 	// Returns error only for critical failures. Graceful degradation for notifications.
-	ProcessWebhook(ctx context.Context, itemID string, errorType string, errorCode string, errorMessage string) error
+	ProcessWebhook(ctx context.Context, itemID string, errorType string, errorCode string, errorMessage string, receivedAt time.Time) error
 
 	// CreateReconnectLinkToken mints an update-mode Plaid Link token for a user repairing a
 	// broken bank connection from the /accounts/reconnect page (Issue #1609). Replaces the old
@@ -224,7 +231,12 @@ type ItemErrorService interface {
 	// webhook must never resurrect an item the user deliberately superseded or disconnected, and
 	// re-repairing an already-active item is meaningless. Returns nil in both the repaired and
 	// no-op cases — this is not a webhook failure, so it must not go to retry/DLQ.
-	HandleLoginRepaired(ctx context.Context, linkedItem *domain.LinkedItem) error
+	// Issue #1623: webhookReceivedAt bounds the clear. A LOGIN_REPAIRED that was delayed past a
+	// LATER failure must not clear that later failure. The already-shipped half of this is the
+	// cross-status case (this method passes only 'login_required' to RepairStatus); the half this
+	// closes is login_required → fixed → login_required AGAIN, where the first failure's webhook
+	// would otherwise clear the second, because both failures wear the same status.
+	HandleLoginRepaired(ctx context.Context, linkedItem *domain.LinkedItem, webhookReceivedAt time.Time) error
 }
 
 // itemErrorService implements ItemErrorService
@@ -298,6 +310,20 @@ func (s *itemErrorService) HandleLoginRequired(
 	// the DB call itself fails). Issue #1609 P3-T2: see TransitionErrorStatus's doc comment — this
 	// replaces a full-row Update that was last-write-wins-unsafe once a second producer (the sync
 	// worker) can call this same method for the same item.
+	// Issue #1623: record that a failure was asserted, BEFORE the transition and independently of
+	// whether it changes anything. TransitionErrorStatus below writes NOTHING when the status is
+	// already 'login_required' (its dedup predicate), so without this separate, unconditional write a
+	// SECOND failure of the same kind would be indistinguishable in age from the first — and a
+	// delayed LOGIN_REPAIRED for the first would clear the second. Before, so the assert is on
+	// record no matter how the transition goes; a failure to stamp is logged, not fatal, because
+	// the user must still be told their connection broke.
+	if err := s.linkedItemRepo.MarkFailureAsserted(ctx, linkedItem.ID, terminalLinkedItemStatuses); err != nil {
+		s.logger.Warn("failed to stamp last_failure_asserted_at; a delayed repair signal could now clear this failure",
+			"item_id", linkedItem.ItemID,
+			"error", err,
+		)
+	}
+
 	transitioned, err := s.linkedItemRepo.TransitionErrorStatus(
 		ctx, linkedItem.ID, domain.LinkedItemStatusLoginRequired, errorCode, errorMessage, terminalLinkedItemStatuses,
 	)
@@ -352,6 +378,20 @@ func (s *itemErrorService) HandleError(
 ) error {
 	// 1. Atomically transition LinkedItem status to "error" (critical - return error if the DB
 	// call itself fails). Issue #1609 P3-T2: see TransitionErrorStatus's doc comment.
+	// Issue #1623: record that a failure was asserted, BEFORE the transition and independently of
+	// whether it changes anything. TransitionErrorStatus below writes NOTHING when the status is
+	// already 'error' (its dedup predicate), so without this separate, unconditional write a
+	// SECOND failure of the same kind would be indistinguishable in age from the first — and a
+	// delayed LOGIN_REPAIRED for the first would clear the second. Before, so the assert is on
+	// record no matter how the transition goes; a failure to stamp is logged, not fatal, because
+	// the user must still be told their connection broke.
+	if err := s.linkedItemRepo.MarkFailureAsserted(ctx, linkedItem.ID, terminalLinkedItemStatuses); err != nil {
+		s.logger.Warn("failed to stamp last_failure_asserted_at; a delayed repair signal could now clear this failure",
+			"item_id", linkedItem.ItemID,
+			"error", err,
+		)
+	}
+
 	transitioned, err := s.linkedItemRepo.TransitionErrorStatus(
 		ctx, linkedItem.ID, domain.LinkedItemStatusError, errorCode, errorMessage, terminalLinkedItemStatuses,
 	)
@@ -418,6 +458,20 @@ func (s *itemErrorService) HandlePendingExpiration(
 
 	// 2. Atomically transition LinkedItem status to "pending_expiration" (critical). Issue #1609
 	// P3-T2: see TransitionErrorStatus's doc comment.
+	// Issue #1623: record that a failure was asserted, BEFORE the transition and independently of
+	// whether it changes anything. TransitionErrorStatus below writes NOTHING when the status is
+	// already 'pending_expiration' (its dedup predicate), so without this separate, unconditional write a
+	// SECOND failure of the same kind would be indistinguishable in age from the first — and a
+	// delayed LOGIN_REPAIRED for the first would clear the second. Before, so the assert is on
+	// record no matter how the transition goes; a failure to stamp is logged, not fatal, because
+	// the user must still be told their connection broke.
+	if err := s.linkedItemRepo.MarkFailureAsserted(ctx, linkedItem.ID, terminalLinkedItemStatuses); err != nil {
+		s.logger.Warn("failed to stamp last_failure_asserted_at; a delayed repair signal could now clear this failure",
+			"item_id", linkedItem.ItemID,
+			"error", err,
+		)
+	}
+
 	transitioned, err := s.linkedItemRepo.TransitionErrorStatus(
 		ctx, linkedItem.ID, domain.LinkedItemStatusPendingExpiration, errorCode, errorMessage, terminalLinkedItemStatuses,
 	)
@@ -475,6 +529,20 @@ func (s *itemErrorService) HandlePermissionRevoked(
 	// TransitionErrorStatus's doc comment. terminalLinkedItemStatuses includes 'revoked' itself as
 	// a DESTINATION exclusion for the OTHER three handlers; here it is a no-op restatement — an
 	// item already 'revoked' fails the newStatus == 'revoked' equality check regardless.
+	// Issue #1623: record that a failure was asserted, BEFORE the transition and independently of
+	// whether it changes anything. TransitionErrorStatus below writes NOTHING when the status is
+	// already 'revoked' (its dedup predicate), so without this separate, unconditional write a
+	// SECOND failure of the same kind would be indistinguishable in age from the first — and a
+	// delayed LOGIN_REPAIRED for the first would clear the second. Before, so the assert is on
+	// record no matter how the transition goes; a failure to stamp is logged, not fatal, because
+	// the user must still be told their connection broke.
+	if err := s.linkedItemRepo.MarkFailureAsserted(ctx, linkedItem.ID, terminalLinkedItemStatuses); err != nil {
+		s.logger.Warn("failed to stamp last_failure_asserted_at; a delayed repair signal could now clear this failure",
+			"item_id", linkedItem.ItemID,
+			"error", err,
+		)
+	}
+
 	transitioned, err := s.linkedItemRepo.TransitionErrorStatus(
 		ctx, linkedItem.ID, domain.LinkedItemStatusRevoked, errorCode, errorMessage, terminalLinkedItemStatuses,
 	)
@@ -534,6 +602,7 @@ func (s *itemErrorService) ProcessWebhook(
 	errorType string,
 	errorCode string,
 	errorMessage string,
+	receivedAt time.Time,
 ) error {
 	// 1. Look up LinkedItem by Plaid item ID (critical - return error if fails)
 	linkedItem, err := s.linkedItemRepo.GetByItemID(ctx, itemID)
@@ -572,7 +641,7 @@ func (s *itemErrorService) ProcessWebhook(
 		// Issue #1609: previously unhandled — fell into the default case below and errored,
 		// which sent the webhook to retry/DLQ forever, and left the item marked broken even
 		// after the user fixed it (through any path, not just our reconnect page).
-		return s.HandleLoginRepaired(ctx, linkedItem)
+		return s.HandleLoginRepaired(ctx, linkedItem, receivedAt)
 	default:
 		// Unhandled/unknown ITEM webhook_code (Issue #1621). Known-unhandled codes that land
 		// here today: USER_ACCOUNT_REVOKED, NEW_ACCOUNTS_AVAILABLE, and
@@ -740,7 +809,11 @@ func (s *itemErrorService) RepairItem(ctx context.Context, userID string, itemID
 		return ErrRepairNonceInvalid
 	}
 
-	repaired, err := s.linkedItemRepo.RepairStatus(ctx, linkedItem.ID, userID, repairableStatuses)
+	// nil bound, deliberately: the user-initiated path's protection against clearing a NEWER
+	// failure is the nonce's own last_failure_asserted_at snapshot, compared inside the burn
+	// above (Issue #1623). A receipt-instant bound has no meaning here — there is no webhook, and
+	// the only instant available would be "now", which is newer than every assert by definition.
+	repaired, err := s.linkedItemRepo.RepairStatus(ctx, linkedItem.ID, userID, repairableStatuses, nil)
 	if err != nil {
 		return fmt.Errorf("failed to clear error state for item %s: %w", itemID, err)
 	}
@@ -768,17 +841,25 @@ func (s *itemErrorService) RepairItem(ctx context.Context, userID string, itemID
 // Update. RepairStatus makes the transition atomic; RepairStatus returning false means the
 // item's FRESH status was not login_required (already active, or superseded/disconnected/
 // revoked concurrently), which is exactly the no-op case this method has always documented.
-func (s *itemErrorService) HandleLoginRepaired(ctx context.Context, linkedItem *domain.LinkedItem) error {
+func (s *itemErrorService) HandleLoginRepaired(ctx context.Context, linkedItem *domain.LinkedItem, webhookReceivedAt time.Time) error {
+	// Issue #1623: bound the clear by when this webhook was RECEIVED. A zero time means the
+	// caller had no receipt instant to give (only reachable from a synthesised event); pass nil
+	// rather than the zero value, which as a bound would refuse every clear outright.
+	var notNewerThan *time.Time
+	if !webhookReceivedAt.IsZero() {
+		notNewerThan = &webhookReceivedAt
+	}
 	repaired, err := s.linkedItemRepo.RepairStatus(
-		ctx, linkedItem.ID, "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired},
+		ctx, linkedItem.ID, "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired}, notNewerThan,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to clear error state for item %s: %w", linkedItem.ItemID, err)
 	}
 	if !repaired {
-		s.logger.Info("LOGIN_REPAIRED webhook received for a linked item not in a repairable state; ignoring",
+		s.logger.Info("LOGIN_REPAIRED webhook did not clear the item: it is not login_required, or a failure was asserted after this webhook was received; ignoring",
 			"item_id", linkedItem.ItemID,
 			"status", linkedItem.Status,
+			"webhook_received_at", webhookReceivedAt,
 		)
 	}
 	return nil

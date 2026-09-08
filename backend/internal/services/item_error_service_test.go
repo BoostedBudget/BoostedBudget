@@ -22,6 +22,11 @@ func TestHandleLoginRequired_Success(t *testing.T) {
 	// Given: Mocked dependencies
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -90,6 +95,11 @@ func TestHandleLoginRequired_Success(t *testing.T) {
 func TestHandleLoginRequired_DatabaseUpdateFailure(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -136,6 +146,11 @@ func TestHandleLoginRequired_DatabaseUpdateFailure(t *testing.T) {
 func TestHandleLoginRequired_NotificationFailureNonBlocking(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -187,6 +202,11 @@ func TestHandleLoginRequired_NotificationFailureNonBlocking(t *testing.T) {
 func TestHandleLoginRequired_EmailFailureNonBlocking(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -301,6 +321,11 @@ func TestHandleError_Success(t *testing.T) {
 	// Given: Mocked dependencies
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -377,6 +402,11 @@ func TestHandleError_Success(t *testing.T) {
 func TestHandleError_EmptyMessage_NoDanglingSentence(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 	mockEmailService := new(MockEmailService)
@@ -429,6 +459,11 @@ func TestHandleError_EmptyMessage_NoDanglingSentence(t *testing.T) {
 func TestHandleError_DatabaseUpdateFailure(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -473,6 +508,11 @@ func TestHandleError_DatabaseUpdateFailure(t *testing.T) {
 func TestHandleError_NotificationFailureNonBlocking(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -518,6 +558,11 @@ func TestHandleError_NotificationFailureNonBlocking(t *testing.T) {
 func TestHandleError_EmailFailureNonBlocking(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -572,6 +617,11 @@ func TestHandleError_EmailFailureNonBlocking(t *testing.T) {
 func TestHandleError_NotificationType_IsItemError(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 	mockEmailService := new(MockEmailService)
@@ -632,6 +682,11 @@ func TestHandlePendingExpiration_Success(t *testing.T) {
 	// Given: Mocked dependencies
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -701,6 +756,11 @@ func TestHandlePendingExpiration_Success(t *testing.T) {
 func TestHandlePendingExpiration_DatabaseUpdateFailure(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -747,6 +807,11 @@ func TestHandlePendingExpiration_DatabaseUpdateFailure(t *testing.T) {
 func TestHandlePendingExpiration_NotificationFailureNonBlocking(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -794,6 +859,11 @@ func TestHandlePendingExpiration_NotificationFailureNonBlocking(t *testing.T) {
 func TestHandlePendingExpiration_EmailFailureNonBlocking(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -854,6 +924,11 @@ func TestHandlePermissionRevoked_Success(t *testing.T) {
 	// Given: Mocked dependencies
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -925,6 +1000,11 @@ func TestHandlePermissionRevoked_Success(t *testing.T) {
 func TestHandlePermissionRevoked_DatabaseUpdateFailure(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -971,6 +1051,11 @@ func TestHandlePermissionRevoked_DatabaseUpdateFailure(t *testing.T) {
 func TestHandlePermissionRevoked_NotificationFailureNonBlocking(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -1018,6 +1103,11 @@ func TestHandlePermissionRevoked_NotificationFailureNonBlocking(t *testing.T) {
 func TestHandlePermissionRevoked_EmailFailureNonBlocking(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -1080,6 +1170,11 @@ func TestHandlePermissionRevoked_EmailFailureNonBlocking(t *testing.T) {
 func TestProcessWebhook_LoginRequired(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -1120,7 +1215,7 @@ func TestProcessWebhook_LoginRequired(t *testing.T) {
 
 	// When: ProcessWebhook is called with the real production shape — webhook_code "ERROR",
 	// error_code "ITEM_LOGIN_REQUIRED"
-	err := service.ProcessWebhook(ctx, "plaid-item-789", "ERROR", "ITEM_LOGIN_REQUIRED", "Credentials changed")
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "ERROR", "ITEM_LOGIN_REQUIRED", "Credentials changed", testWebhookReceivedAt)
 
 	// Then: Routes to HandleLoginRequired and succeeds
 	require.NoError(t, err)
@@ -1139,6 +1234,11 @@ func TestProcessWebhook_LoginRequired(t *testing.T) {
 func TestProcessWebhook_InvalidAccessToken_RoutesToHandleLoginRequired(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -1170,7 +1270,7 @@ func TestProcessWebhook_InvalidAccessToken_RoutesToHandleLoginRequired(t *testin
 		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
 	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
 
-	err := service.ProcessWebhook(ctx, "plaid-item-789", "ERROR", "INVALID_ACCESS_TOKEN", "Access token invalid")
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "ERROR", "INVALID_ACCESS_TOKEN", "Access token invalid", testWebhookReceivedAt)
 
 	require.NoError(t, err)
 	mockLinkedItemRepo.AssertExpectations(t)
@@ -1184,6 +1284,11 @@ func TestProcessWebhook_InvalidAccessToken_RoutesToHandleLoginRequired(t *testin
 func TestProcessWebhook_PendingDisconnect_RoutesToHandlePendingExpiration(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -1215,7 +1320,7 @@ func TestProcessWebhook_PendingDisconnect_RoutesToHandlePendingExpiration(t *tes
 		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
 	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
 
-	err := service.ProcessWebhook(ctx, "plaid-item-789", "PENDING_DISCONNECT", "", "")
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "PENDING_DISCONNECT", "", "", testWebhookReceivedAt)
 
 	require.NoError(t, err)
 	mockLinkedItemRepo.AssertExpectations(t)
@@ -1227,6 +1332,11 @@ func TestProcessWebhook_PendingDisconnect_RoutesToHandlePendingExpiration(t *tes
 func TestProcessWebhook_Error(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -1262,7 +1372,7 @@ func TestProcessWebhook_Error(t *testing.T) {
 	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// When: ProcessWebhook is called with ERROR
-	err := service.ProcessWebhook(ctx, "plaid-item-789", "ERROR", "ITEM_ERROR", "Connection error")
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "ERROR", "ITEM_ERROR", "Connection error", testWebhookReceivedAt)
 
 	// Then: Routes to HandleError and succeeds
 	require.NoError(t, err)
@@ -1279,6 +1389,11 @@ func TestProcessWebhook_Error(t *testing.T) {
 func TestProcessWebhook_PendingExpiration(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -1316,7 +1431,7 @@ func TestProcessWebhook_PendingExpiration(t *testing.T) {
 	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// When: ProcessWebhook is called with PENDING_EXPIRATION
-	err := service.ProcessWebhook(ctx, "plaid-item-789", "PENDING_EXPIRATION", "ITEM_PENDING_EXPIRATION", "Access expiring soon")
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "PENDING_EXPIRATION", "ITEM_PENDING_EXPIRATION", "Access expiring soon", testWebhookReceivedAt)
 
 	// Then: Routes to HandlePendingExpiration and succeeds
 	require.NoError(t, err)
@@ -1331,6 +1446,11 @@ func TestProcessWebhook_PendingExpiration(t *testing.T) {
 func TestProcessWebhook_PermissionRevoked(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -1368,7 +1488,7 @@ func TestProcessWebhook_PermissionRevoked(t *testing.T) {
 	mockEmailService.On("SendNotificationEmail", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	// When: ProcessWebhook is called with USER_PERMISSION_REVOKED
-	err := service.ProcessWebhook(ctx, "plaid-item-789", "USER_PERMISSION_REVOKED", "ITEM_PERMISSION_REVOKED", "User revoked access")
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "USER_PERMISSION_REVOKED", "ITEM_PERMISSION_REVOKED", "User revoked access", testWebhookReceivedAt)
 
 	// Then: Routes to HandlePermissionRevoked and succeeds
 	require.NoError(t, err)
@@ -1383,6 +1503,11 @@ func TestProcessWebhook_PermissionRevoked(t *testing.T) {
 func TestProcessWebhook_ItemError_LinkedItemNotFound(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -1405,7 +1530,7 @@ func TestProcessWebhook_ItemError_LinkedItemNotFound(t *testing.T) {
 		Return(nil, repository.ErrLinkedItemNotFound)
 
 	// When: ProcessWebhook is called with unknown itemID
-	err := service.ProcessWebhook(ctx, "unknown-item-id", "ITEM_LOGIN_REQUIRED", "ITEM_LOGIN_REQUIRED", "Test error")
+	err := service.ProcessWebhook(ctx, "unknown-item-id", "ITEM_LOGIN_REQUIRED", "ITEM_LOGIN_REQUIRED", "Test error", testWebhookReceivedAt)
 
 	// Then: Returns error (critical failure - cannot process webhook without LinkedItem)
 	require.Error(t, err)
@@ -1427,6 +1552,11 @@ func TestProcessWebhook_ItemError_LinkedItemNotFound(t *testing.T) {
 func TestProcessWebhook_ItemError_UnknownErrorType(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -1457,7 +1587,7 @@ func TestProcessWebhook_ItemError_UnknownErrorType(t *testing.T) {
 	before := testutil.ToFloat64(observability.UnknownItemWebhookCodeTotal.WithLabelValues(unknownCode))
 
 	// When: ProcessWebhook is called with an unrecognized webhook_code
-	err := service.ProcessWebhook(ctx, "plaid-item-789", unknownCode, "UNKNOWN_CODE", "Test error")
+	err := service.ProcessWebhook(ctx, "plaid-item-789", unknownCode, "UNKNOWN_CODE", "Test error", testWebhookReceivedAt)
 
 	// Then: Logs and returns nil (does not error, does not retry/DLQ) but is counted
 	require.NoError(t, err)
@@ -1482,6 +1612,11 @@ func TestProcessWebhook_KnownUnhandledCodes_LogAndReturnNilWithoutErroring(t *te
 		t.Run(code, func(t *testing.T) {
 			ctx := context.Background()
 			mockLinkedItemRepo := new(MockLinkedItemRepository)
+			// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+			// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+			// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+			// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+			mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 			mockPlaidService := new(MockPlaidService)
 			mockEmailService := new(MockEmailService)
@@ -1508,7 +1643,7 @@ func TestProcessWebhook_KnownUnhandledCodes_LogAndReturnNilWithoutErroring(t *te
 
 			before := testutil.ToFloat64(observability.UnknownItemWebhookCodeTotal.WithLabelValues(code))
 
-			err := service.ProcessWebhook(ctx, "plaid-item-789", code, "", "")
+			err := service.ProcessWebhook(ctx, "plaid-item-789", code, "", "", testWebhookReceivedAt)
 
 			require.NoError(t, err)
 			mockLinkedItemRepo.AssertExpectations(t)
@@ -1528,6 +1663,11 @@ func TestProcessWebhook_KnownUnhandledCodes_LogAndReturnNilWithoutErroring(t *te
 func TestHandleLoginRequired_UserLookupFailureNonBlocking(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -1574,6 +1714,11 @@ func TestHandleLoginRequired_UserLookupFailureNonBlocking(t *testing.T) {
 func TestHandleError_UserLookupFailureNonBlocking(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -1618,6 +1763,11 @@ func TestHandleError_UserLookupFailureNonBlocking(t *testing.T) {
 func TestHandlePendingExpiration_UserLookupFailureNonBlocking(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -1663,6 +1813,11 @@ func TestHandlePendingExpiration_UserLookupFailureNonBlocking(t *testing.T) {
 func TestHandlePermissionRevoked_UserLookupFailureNonBlocking(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 
@@ -1714,8 +1869,20 @@ func TestHandlePermissionRevoked_UserLookupFailureNonBlocking(t *testing.T) {
 // rather than quietly comparing the wrong thing.
 const testRepairNonce = "raw-repair-nonce-for-tests"
 
+// testWebhookReceivedAt stands in for webhook_events.created_at (Issue #1623) — the
+// Postgres-stamped instant a webhook was received, which bounds how far back a LOGIN_REPAIRED may
+// reach when clearing a failure. Deliberately a fixed value, not time.Now(): the assertions below
+// check that this EXACT instant reaches RepairStatus, and a moving one would let a service that
+// substituted its own clock pass.
+var testWebhookReceivedAt = time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
+
 func newReconnectTestService() (ItemErrorService, *MockLinkedItemRepository, *MockPlaidService, *MockLinkedItemRepairNonceRepository) {
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 	mockEmailService := new(MockEmailService)
@@ -1978,7 +2145,7 @@ func TestRepairItem_Success_ClearsErrorStateAndReactivates(t *testing.T) {
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 	mockRepairNonceRepo.On("Burn", ctx, hashRepairNonce(testRepairNonce), "user-456", "linked-item-123").
 		Return(true, nil)
-	mockLinkedItemRepo.On("RepairStatus", ctx, "linked-item-123", "user-456", repairableStatuses).
+	mockLinkedItemRepo.On("RepairStatus", ctx, "linked-item-123", "user-456", repairableStatuses, (*time.Time)(nil)).
 		Return(true, nil)
 
 	err := service.RepairItem(ctx, "user-456", "plaid-item-789", testRepairNonce)
@@ -2143,7 +2310,7 @@ func TestRepairItem_ConcurrentStateChange_ReturnsNotRepairable(t *testing.T) {
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 	mockRepairNonceRepo.On("Burn", ctx, hashRepairNonce(testRepairNonce), "user-456", "linked-item-123").
 		Return(true, nil)
-	mockLinkedItemRepo.On("RepairStatus", ctx, "linked-item-123", "user-456", repairableStatuses).
+	mockLinkedItemRepo.On("RepairStatus", ctx, "linked-item-123", "user-456", repairableStatuses, (*time.Time)(nil)).
 		Return(false, nil) // concurrent disconnect/re-link won the race
 
 	err := service.RepairItem(ctx, "user-456", "plaid-item-789", testRepairNonce)
@@ -2166,7 +2333,7 @@ func TestRepairItem_RepairStatusError_IsWrapped(t *testing.T) {
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 	mockRepairNonceRepo.On("Burn", ctx, hashRepairNonce(testRepairNonce), "user-456", "linked-item-123").
 		Return(true, nil)
-	mockLinkedItemRepo.On("RepairStatus", ctx, "linked-item-123", "user-456", repairableStatuses).
+	mockLinkedItemRepo.On("RepairStatus", ctx, "linked-item-123", "user-456", repairableStatuses, (*time.Time)(nil)).
 		Return(false, dbErr)
 
 	err := service.RepairItem(ctx, "user-456", "plaid-item-789", testRepairNonce)
@@ -2193,9 +2360,10 @@ func TestHandleLoginRepaired_ClearsErrorState(t *testing.T) {
 	}
 	mockLinkedItemRepo.On(
 		"RepairStatus", ctx, "linked-item-123", "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired},
+		&testWebhookReceivedAt,
 	).Return(true, nil)
 
-	err := service.HandleLoginRepaired(ctx, linkedItem)
+	err := service.HandleLoginRepaired(ctx, linkedItem, testWebhookReceivedAt)
 
 	require.NoError(t, err)
 	mockLinkedItemRepo.AssertExpectations(t)
@@ -2215,11 +2383,12 @@ func TestHandleLoginRepaired_DisconnectedItem_IsNoOp(t *testing.T) {
 	// pre-check — so RepairStatus is still called, and reports no rows affected.
 	mockLinkedItemRepo.On(
 		"RepairStatus", ctx, "linked-item-123", "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired},
+		&testWebhookReceivedAt,
 	).Return(false, nil)
 
 	// Then: no-op, NOT an error — a webhook the user did not act on must not resurrect a
 	// deliberately disconnected item, and must not be retried/DLQ'd either.
-	err := service.HandleLoginRepaired(ctx, linkedItem)
+	err := service.HandleLoginRepaired(ctx, linkedItem, testWebhookReceivedAt)
 
 	require.NoError(t, err)
 	mockLinkedItemRepo.AssertExpectations(t)
@@ -2242,9 +2411,10 @@ func TestHandleLoginRepaired_CurrentErrorStatus_IsNotClobbered(t *testing.T) {
 	}
 	mockLinkedItemRepo.On(
 		"RepairStatus", ctx, "linked-item-123", "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired},
+		&testWebhookReceivedAt,
 	).Return(false, nil)
 
-	err := service.HandleLoginRepaired(ctx, linkedItem)
+	err := service.HandleLoginRepaired(ctx, linkedItem, testWebhookReceivedAt)
 
 	require.NoError(t, err)
 	mockLinkedItemRepo.AssertExpectations(t)
@@ -2263,9 +2433,10 @@ func TestHandleLoginRepaired_RepairStatusError_IsWrapped(t *testing.T) {
 	dbErr := errors.New("connection reset")
 	mockLinkedItemRepo.On(
 		"RepairStatus", ctx, "linked-item-123", "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired},
+		&testWebhookReceivedAt,
 	).Return(false, dbErr)
 
-	err := service.HandleLoginRepaired(ctx, linkedItem)
+	err := service.HandleLoginRepaired(ctx, linkedItem, testWebhookReceivedAt)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, dbErr)
@@ -2284,9 +2455,10 @@ func TestProcessWebhook_LoginRepaired_RoutesToHandleLoginRepaired(t *testing.T) 
 	mockLinkedItemRepo.On("GetByItemID", ctx, "plaid-item-789").Return(linkedItem, nil)
 	mockLinkedItemRepo.On(
 		"RepairStatus", ctx, "linked-item-123", "", []domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired},
+		&testWebhookReceivedAt,
 	).Return(true, nil)
 
-	err := service.ProcessWebhook(ctx, "plaid-item-789", "LOGIN_REPAIRED", "", "")
+	err := service.ProcessWebhook(ctx, "plaid-item-789", "LOGIN_REPAIRED", "", "", testWebhookReceivedAt)
 
 	require.NoError(t, err)
 	mockLinkedItemRepo.AssertExpectations(t)
@@ -2302,6 +2474,11 @@ func TestProcessWebhook_LoginRepaired_RoutesToHandleLoginRepaired(t *testing.T) 
 func TestHandleLoginRequired_AlreadyInThatStatus_SkipsDuplicateNotification(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 	mockEmailService := new(MockEmailService)
@@ -2350,6 +2527,11 @@ func TestHandleLoginRequired_AlreadyInThatStatus_SkipsDuplicateNotification(t *t
 func TestHandleError_TerminalStatus_SkipsNotification(t *testing.T) {
 	ctx := context.Background()
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	// Issue #1623: every failure assert ALSO stamps last_failure_asserted_at, via a second,
+	// unconditional statement (see MarkFailureAsserted). Declared Maybe() here so tests that
+	// never reach a Handle* method need not opt in; the stamp itself is asserted exactly, with
+	// its real arguments, by TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal.
+	mockLinkedItemRepo.On("MarkFailureAsserted", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
 	mockPlaidService := new(MockPlaidService)
 	mockEmailService := new(MockEmailService)
@@ -2405,3 +2587,182 @@ func (m *MockLinkedItemRepairNonceRepository) Burn(ctx context.Context, tokenHas
 }
 
 var _ repository.LinkedItemRepairNonceRepository = (*MockLinkedItemRepairNonceRepository)(nil)
+
+// ============================================================================
+// Issue #1623 — a delayed clear must not erase a NEWER failure
+// ============================================================================
+
+// TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal is the whole reason
+// MarkFailureAsserted exists as a SEPARATE statement.
+//
+// TransitionErrorStatus returns false here — the item is ALREADY login_required, so its
+// `AND status <> $1` predicate matches zero rows and writes nothing, which is correct for its own
+// dedup purpose. But that is exactly the case #1623 is about: the SECOND failure of the same kind.
+// If the failure-assert clock were folded into that statement's SET list it would not advance, the
+// second failure would look as old as the first, and the first failure's delayed LOGIN_REPAIRED
+// would clear it. The stamp must land anyway.
+func TestHandleLoginRequired_StampsFailureAssertedEvenOnADuplicateSignal(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
+	service := NewItemErrorService(
+		mockLinkedItemRepo, mockNotificationRepo, mockUserRepo,
+		mockPlaidService, mockEmailService, mockRepairNonceRepo, nil,
+	)
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "linked-item-123",
+		UserID: "user-456",
+		ItemID: "plaid-item-789",
+		Status: domain.LinkedItemStatusLoginRequired, // already in this status
+	}
+
+	// Exact arguments, not mock.Anything: the terminal-status exclusion is part of the contract —
+	// a stale signal must not advance the clock on an item the user deliberately disconnected.
+	mockLinkedItemRepo.On("MarkFailureAsserted", ctx, "linked-item-123", terminalLinkedItemStatuses).Return(nil)
+	mockLinkedItemRepo.On(
+		"TransitionErrorStatus", ctx, "linked-item-123", domain.LinkedItemStatusLoginRequired,
+		"ITEM_LOGIN_REQUIRED", "creds changed", terminalLinkedItemStatuses,
+	).Return(false, nil) // duplicate signal: writes NOTHING
+
+	err := service.HandleLoginRequired(ctx, linkedItem, "ITEM_LOGIN_REQUIRED", "creds changed")
+
+	require.NoError(t, err)
+	mockLinkedItemRepo.AssertExpectations(t)
+	// Still a duplicate for notification purposes — the stamp must not resurrect the notification.
+	mockassert.NoCallTo(t, &mockNotificationRepo.Mock, "Create")
+}
+
+// TestHandleFailure_StampsFailureAssertedOnEveryProducerPath: all four Handle* methods are failure
+// asserts, and a clock that advances on only some of them orders nothing. Enumerated deliberately
+// rather than testing one and assuming the rest.
+func TestHandleFailure_StampsFailureAssertedOnEveryProducerPath(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status domain.LinkedItemStatus
+		call   func(ItemErrorService, context.Context, *domain.LinkedItem) error
+	}{
+		{"login_required", domain.LinkedItemStatusLoginRequired, func(s ItemErrorService, ctx context.Context, li *domain.LinkedItem) error {
+			return s.HandleLoginRequired(ctx, li, "ITEM_LOGIN_REQUIRED", "")
+		}},
+		{"error", domain.LinkedItemStatusError, func(s ItemErrorService, ctx context.Context, li *domain.LinkedItem) error {
+			return s.HandleError(ctx, li, "ITEM_ERROR", "")
+		}},
+		{"pending_expiration", domain.LinkedItemStatusPendingExpiration, func(s ItemErrorService, ctx context.Context, li *domain.LinkedItem) error {
+			return s.HandlePendingExpiration(ctx, li, "ITEM_PENDING_EXPIRATION", "")
+		}},
+		{"revoked", domain.LinkedItemStatusRevoked, func(s ItemErrorService, ctx context.Context, li *domain.LinkedItem) error {
+			return s.HandlePermissionRevoked(ctx, li, "ITEM_PERMISSION_REVOKED", "")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mockLinkedItemRepo := new(MockLinkedItemRepository)
+			mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+			mockPlaidService := new(MockPlaidService)
+			mockEmailService := new(MockEmailService)
+			mockUserRepo := new(MockUserRepository)
+			mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
+			service := NewItemErrorService(
+				mockLinkedItemRepo, mockNotificationRepo, mockUserRepo,
+				mockPlaidService, mockEmailService, mockRepairNonceRepo, nil,
+			)
+
+			linkedItem := &domain.LinkedItem{
+				ID: "linked-item-123", UserID: "user-456", ItemID: "plaid-item-789",
+				Status: domain.LinkedItemStatusActive,
+			}
+			mockLinkedItemRepo.On("MarkFailureAsserted", ctx, "linked-item-123", terminalLinkedItemStatuses).Return(nil)
+			mockLinkedItemRepo.On(
+				"TransitionErrorStatus", ctx, "linked-item-123", tc.status,
+				mock.Anything, mock.Anything, terminalLinkedItemStatuses,
+			).Return(false, nil)
+
+			require.NoError(t, tc.call(service, ctx, linkedItem))
+			mockLinkedItemRepo.AssertExpectations(t)
+		})
+	}
+}
+
+// TestHandleLoginRequired_StampFailureIsLoggedNotFatal: the user must still be told their
+// connection broke even if the ordering clock could not be written. Failing the whole webhook
+// would send it to retry/DLQ and lose the notification entirely — a worse outcome than a
+// theoretically-clearable failure.
+func TestHandleLoginRequired_StampFailureIsLoggedNotFatal(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
+	mockRepairNonceRepo := new(MockLinkedItemRepairNonceRepository)
+	service := NewItemErrorService(
+		mockLinkedItemRepo, mockNotificationRepo, mockUserRepo,
+		mockPlaidService, mockEmailService, mockRepairNonceRepo, nil,
+	)
+
+	linkedItem := &domain.LinkedItem{
+		ID: "linked-item-123", UserID: "user-456", ItemID: "plaid-item-789",
+		Status: domain.LinkedItemStatusActive,
+	}
+	mockLinkedItemRepo.On("MarkFailureAsserted", ctx, "linked-item-123", terminalLinkedItemStatuses).
+		Return(errors.New("connection reset"))
+	mockLinkedItemRepo.On(
+		"TransitionErrorStatus", ctx, "linked-item-123", domain.LinkedItemStatusLoginRequired,
+		"ITEM_LOGIN_REQUIRED", "", terminalLinkedItemStatuses,
+	).Return(false, nil)
+
+	err := service.HandleLoginRequired(ctx, linkedItem, "ITEM_LOGIN_REQUIRED", "")
+
+	require.NoError(t, err, "a failed stamp must not fail webhook processing")
+	mockLinkedItemRepo.AssertExpectations(t)
+}
+
+// TestHandleLoginRepaired_BoundsTheClearByTheWebhookReceiptInstant pins the plumbing #1623 needs:
+// the receipt instant must reach RepairStatus's predicate, verbatim and by pointer. The mock
+// records notNewerThan deliberately (see MockLinkedItemRepository.RepairStatus) — without that, a
+// service that passed nil would pass this test while clearing failures asserted an hour later.
+func TestHandleLoginRepaired_BoundsTheClearByTheWebhookReceiptInstant(t *testing.T) {
+	ctx := context.Background()
+	service, mockLinkedItemRepo, _, _ := newReconnectTestService()
+
+	linkedItem := &domain.LinkedItem{
+		ID: "linked-item-123", UserID: "user-456", ItemID: "plaid-item-789",
+		Status: domain.LinkedItemStatusLoginRequired,
+	}
+	mockLinkedItemRepo.On(
+		"RepairStatus", ctx, "linked-item-123", "",
+		[]domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired},
+		mock.MatchedBy(func(bound *time.Time) bool {
+			return bound != nil && bound.Equal(testWebhookReceivedAt)
+		}),
+	).Return(true, nil)
+
+	require.NoError(t, service.HandleLoginRepaired(ctx, linkedItem, testWebhookReceivedAt))
+	mockLinkedItemRepo.AssertExpectations(t)
+}
+
+// TestHandleLoginRepaired_ZeroReceiptInstantAppliesNoBound: the zero time is not an instant, and
+// using it as an upper bound would refuse EVERY clear (every stamp is after year 1). A caller with
+// no receipt instant must get the pre-#1623 behaviour, not a silently dead handler.
+func TestHandleLoginRepaired_ZeroReceiptInstantAppliesNoBound(t *testing.T) {
+	ctx := context.Background()
+	service, mockLinkedItemRepo, _, _ := newReconnectTestService()
+
+	linkedItem := &domain.LinkedItem{
+		ID: "linked-item-123", UserID: "user-456", ItemID: "plaid-item-789",
+		Status: domain.LinkedItemStatusLoginRequired,
+	}
+	mockLinkedItemRepo.On(
+		"RepairStatus", ctx, "linked-item-123", "",
+		[]domain.LinkedItemStatus{domain.LinkedItemStatusLoginRequired},
+		(*time.Time)(nil),
+	).Return(true, nil)
+
+	require.NoError(t, service.HandleLoginRepaired(ctx, linkedItem, time.Time{}))
+	mockLinkedItemRepo.AssertExpectations(t)
+}

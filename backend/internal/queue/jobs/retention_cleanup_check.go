@@ -812,8 +812,15 @@ type retentionDeletionItem struct {
 // §8.4 legal retention), which an unqualified "everything" silently dropped.
 var retentionDeletionItems = []retentionDeletionItem{
 	{
-		phrase:      "your bank connections and every account on them, including accounts you have already closed or disconnected, and the record of when each one was connected, disconnected or closed",
-		tables:      []string{"linked_items", "accounts", "user_accounts", "account_status_history"},
+		// #1620: linked_item_repair_nonces belongs here rather than under the internal-records
+		// item. It is not a job or an activity record — it is the short-lived artifact of a
+		// reconnection the user themselves started from the "Reconnect Bank" button, so "any
+		// reconnection you had started" is a thing they can actually recognise. It is destroyed
+		// outright (ON DELETE CASCADE from both users and linked_items), with nothing retained,
+		// so plain destruction is the honest claim; none of audit_logs' SET NULL qualification
+		// applies.
+		phrase:      "your bank connections and every account on them, including accounts you have already closed or disconnected, the record of when each one was connected, disconnected or closed, and any reconnection you had started",
+		tables:      []string{"linked_items", "accounts", "user_accounts", "account_status_history", "linked_item_repair_nonces"},
 		mustMention: []string{"bank connections", "accounts"},
 	},
 	{
