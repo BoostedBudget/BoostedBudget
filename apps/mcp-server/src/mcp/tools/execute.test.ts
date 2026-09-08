@@ -416,3 +416,69 @@ describe('buildReadExecuteHandler — the three-way admission gate (#1610b)', ()
     )
   })
 })
+
+// ── Issue #1612: the batch aggregate is unbounded ────────────────────────────
+//
+// MAX_RESULT_CHARS (100_000) bounds a SINGLE call's result, but `calls` is capped at 25 →
+// 25 * 100_000 = a 2.5 MB aggregate with no bound at all across the whole batch. These tests
+// pin a running total tracked across the batch that stops rendering (and stops invoking further
+// calls) once exhausted — using the same self-describing marker style as the per-result
+// truncation marker (shown/full-equivalent sizes, an actionable hint).
+describe('batch aggregate result bound (#1612)', () => {
+  // A single result whose rendered length sits comfortably under MAX_RESULT_CHARS (so no
+  // per-call truncation marker fires) but where several of them together blow the aggregate cap.
+  function makeBigResult(sizeChars: number): { id: string; note: string } {
+    return { id: 'x', note: 'a'.repeat(Math.max(0, sizeChars - 20)) }
+  }
+
+  it('stops invoking further calls once the running total exceeds the aggregate budget', async () => {
+    const bigResult = makeBigResult(90_000) // under the 100k per-call cap
+    const proxy = { invoke: mock(() => Promise.resolve(bigResult)) }
+    const handler = buildWriteExecuteHandler(proxy)
+
+    // 300_000 / ~90_000-ish rendered chars each → budget exhausted partway through 5 calls.
+    const calls: ExecuteCall[] = Array.from({ length: 5 }, () => ({ operationId: 'getTransactions' }))
+
+    const { toolResult, auditEvents } = await handler({ calls })
+
+    // Fewer than all 5 calls were actually invoked.
+    expect(proxy.invoke.mock.calls.length).toBeLessThan(5)
+    expect(auditEvents.length).toBeLessThan(5)
+    expect(auditEvents.every((e) => e.result === 'success')).toBe(true)
+
+    const text = toolResult.content[0]?.text ?? ''
+    expect(text).toContain('Batch result budget exhausted')
+    expect(text).toContain('300000')
+  })
+
+  it('does not fire the batch marker when the aggregate stays under budget', async () => {
+    const small = { id: 'x' }
+    const proxy = makeProxy(small)
+    const handler = buildWriteExecuteHandler(proxy)
+
+    const calls: ExecuteCall[] = [
+      { operationId: 'getTransactions' },
+      { operationId: 'getAccounts' },
+      { operationId: 'getCashFlowSummary' },
+    ]
+
+    const { toolResult, auditEvents } = await handler({ calls })
+
+    expect(proxy.invoke).toHaveBeenCalledTimes(3)
+    expect(auditEvents).toHaveLength(3)
+    expect(toolResult.content[0]?.text ?? '').not.toContain('Batch result budget exhausted')
+  })
+
+  it('the manifest-denial break behaviour is untouched by the new budget check (denial still aborts the rest of the batch)', async () => {
+    const proxy = makeFailingProxy('excluded', "Operation 'checkRole' is not available via MCP")
+    const handler = buildWriteExecuteHandler(proxy)
+
+    const { auditEvents } = await handler({
+      calls: [{ operationId: 'checkRole' }, { operationId: 'getTransactions' }],
+    })
+
+    // Only the first (denied) call produces an audit event — the second was never reached.
+    expect(auditEvents).toHaveLength(1)
+    expect(auditEvents[0]?.result).toBe('denied')
+  })
+})
