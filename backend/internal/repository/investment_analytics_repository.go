@@ -74,6 +74,16 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 
 	// Default: group by security_type (or asset_class, which post-processes security_type).
 	// Base branch: investment holdings only (always present).
+	//
+	// #1616: a.type = 'investment' is required here, not optional decoration. Plaid types a
+	// cash-management account 'depository' even though it also reports holdings rows for it;
+	// without this predicate that account's h.institution_value was summed here AND its
+	// a.current_balance was summed again below in the cash branch — the same dollars counted
+	// twice into grandTotal. This is an arithmetic error, not a preference, so it is fixed for
+	// every account type uniformly via accounts.type rather than via exclude_investment_sync
+	// (see the standing decision on IncomeSummary above). Do not "fix" this by touching
+	// SyncHoldings/GetByLinkedItemID — that path is already correct (active-only, by design);
+	// the defect was always the missing predicate in this READ.
 	query := `
 		SELECT
 			COALESCE(sec.type, 'unknown')          AS security_type,
@@ -84,6 +94,7 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 		JOIN accounts a ON a.id = h.account_id AND ` + currentStateAccountLeg("a") + `
 		LEFT JOIN securities sec ON sec.id = h.security_id
 		WHERE h.user_id = $1
+		  AND a.type = 'investment'
 		GROUP BY COALESCE(sec.type, 'unknown')`
 
 	// Optional cash branch: aggregate depository account current_balance as "cash".
@@ -180,6 +191,12 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 // Scoped to user_id on every branch (IDOR-safe). Single round-trip via UNION CTE.
 func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context.Context, userID string, opts domain.AllocationOptions) (*domain.AllocationBreakdown, error) {
 	// Investment holdings: one bucket per brokerage/investment account.
+	//
+	// #1616: a.type = 'investment' is required — same defect and same fix as the security_type
+	// shape above. Without it, a depository account that also carries holdings rows produced TWO
+	// buckets bearing the SAME account name (one here with asset_class hardcoded 'investment',
+	// one from the cash branch below with asset_class='depository'), each holding half of the
+	// same double-counted dollars.
 	query := `
 		SELECT
 			a.name                                AS security_type,
@@ -190,6 +207,7 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
 		JOIN accounts a ON a.id = h.account_id AND ` + currentStateAccountLeg("a") + `
 		WHERE h.user_id = $1
+		  AND a.type = 'investment'
 		GROUP BY a.id, a.name`
 
 	// Optional cash: one row per depository account, labeled by account name.
