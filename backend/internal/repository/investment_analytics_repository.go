@@ -374,6 +374,14 @@ func collapseToAssetClasses(buckets []domain.AllocationItem) []domain.Allocation
 // Holdings with NULL institution_price or securities with NULL close_price are excluded.
 // Uses a single CTE query that computes both gainers and losers in one round-trip.
 //
+// #1616 T2c: a.type = 'investment' is required here, same as AllocationBreakdown /
+// allocationBreakdownByAccount above. A Plaid cash-management account is typed 'depository' even
+// though it also reports holdings rows for it; without this predicate such an account's holdings
+// still ranked in the gainers/losers list — a checking account appearing in a portfolio view. This
+// gap was found by an adversarial review of the AllocationBreakdown fix and explicitly authorised
+// for extension by the user; see the standing-decision comment on IncomeSummary below, which this
+// updates.
+//
 // The UNION ALL is wrapped in a `combined` CTE to allow ORDER BY with a CASE expression.
 // PostgreSQL forbids expressions in set-operation ORDER BY, so the UNION is lifted into
 // a CTE and the outer SELECT applies the final ORDER BY.
@@ -401,6 +409,7 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 			JOIN accounts a ON a.id = h.account_id AND ` + currentStateAccountLeg("a") + `
 			JOIN securities sec ON sec.id = h.security_id
 			WHERE h.user_id = $1
+			  AND a.type = 'investment' -- #1616 T2c: holdings-based surfaces are governed by accounts.type
 			  AND h.institution_price IS NOT NULL
 			  AND sec.close_price IS NOT NULL
 		),
@@ -479,6 +488,14 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 //     (all-non-null anchor). A holding with cost_basis set but institution_value NULL
 //     still has a known basis that belongs in the total. — R9-1 fix.
 //
+// #1616 T2c: a.type = 'investment' is required in the join below, same as AllocationBreakdown /
+// allocationBreakdownByAccount and TopMovers. A Plaid cash-management account is typed
+// 'depository' even though it also reports holdings rows for it; without this predicate such an
+// account's holdings still contributed to portfolio gain/loss — a checking account appearing in a
+// portfolio view. This gap was found by an adversarial review of the AllocationBreakdown fix and
+// explicitly authorised for extension by the user; see the standing-decision comment on
+// IncomeSummary below, which this updates.
+//
 // Single round-trip aggregate.
 func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, userID string) (*domain.GainLossSummary, error) {
 	query := `
@@ -506,6 +523,7 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
 		JOIN accounts a ON a.id = h.account_id AND ` + currentStateAccountLeg("a") + `
 		WHERE h.user_id = $1
+		  AND a.type = 'investment' -- #1616 T2c: holdings-based surfaces are governed by accounts.type
 		GROUP BY h.account_id
 	`
 
@@ -590,23 +608,25 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 //
 // STANDING DECISION (governs both #1614 and #1616, do not re-litigate): exclude_investment_sync
 // governs investment_transactions reads ONLY. Holdings-based surfaces are never governed by this
-// flag; the intent is that they be governed by accounts.type instead.
+// flag — they are governed by accounts.type instead.
 //
-// ⚠ BE PRECISE ABOUT WHAT IS ACTUALLY GATED TODAY — an earlier draft of this comment named
-// AllocationBreakdown, UnrealizedGainLoss and TopMovers together, which was FALSE for two of the
-// three and would have led a reader to believe coverage that does not exist:
-//   - AllocationBreakdown / allocationBreakdownByAccount: type-gated (a.type = 'investment', #1616).
-//   - UnrealizedGainLoss (~:483) and TopMovers (~:380): NOT type-gated. They join accounts through
-//     currentStateAccountLeg only, with no type predicate, so a depository cash-management account
-//     carrying holdings still contributes to both. That is a PRE-EXISTING gap, not a #1616
-//     regression — #1616 was an arithmetic double-count (the same dollars summed twice in one
-//     total), which those two do not have, since neither adds a cash branch. Whether they SHOULD
-//     be type-gated is a product question about what belongs in a portfolio view, tracked
-//     separately. Reason: the feed duplication this flag exists for is a per-account user
-// preference; the #1616 allocation double-count it does NOT touch was an arithmetic error — the
-// same dollars summed twice — wrong for every user regardless of preference. Consequence,
-// intended and not an oversight: an 'investment'-typed account whose owner HAS set the flag still
-// contributes its holdings to allocation and portfolio summary.
+// ⚠ BE PRECISE ABOUT WHAT IS ACTUALLY GATED TODAY — an earlier draft of this comment (T2) named
+// AllocationBreakdown, UnrealizedGainLoss and TopMovers together as all type-gated, which was
+// FALSE for the latter two at the time (they had no type predicate at all) and would have led a
+// reader to believe coverage that did not exist. A T2c adversarial review caught that and, after
+// asking the user, was given explicit authorisation to extend the gate for real rather than just
+// fix the comment. All four holdings surfaces are now type-gated:
+//   - AllocationBreakdown / allocationBreakdownByAccount: a.type = 'investment' (#1616 T2).
+//   - UnrealizedGainLoss (~:483) and TopMovers (~:380): a.type = 'investment' (#1616 T2c).
+//
+// Do not re-add this predicate's absence as a "separate product question" — that framing was
+// itself the defect this comment now corrects, twice. Reason exclude_investment_sync still does
+// not apply here: the feed duplication that flag exists for is a per-account user preference,
+// whereas the type predicate is an arithmetic/classification fact about what belongs in a
+// portfolio view — wrong for every user regardless of preference, not opt-in/opt-out.
+// Consequence, intended and not an oversight: an 'investment'-typed account whose owner HAS set
+// exclude_investment_sync still contributes its holdings to allocation and portfolio summary; only
+// accounts.type controls holdings-surface membership.
 func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userID string, start, end time.Time) (*domain.IncomeSummary, error) {
 	// Build IN clause for the income subtype set.
 	subtypes := domain.IncomeSubtypes
