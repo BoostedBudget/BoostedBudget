@@ -153,6 +153,21 @@ const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 const MAX_RESULT_CHARS = 100_000
 
 /**
+ * Max characters of the WHOLE BATCH's rendered output, across every call in one
+ * readExecute()/writeExecute() invocation (issue #1612).
+ *
+ * MAX_RESULT_CHARS bounds a single call's result, but `calls` is capped at 25
+ * (agent.ts) — 25 * 100_000 = a 2.5 MB aggregate a client could still receive in
+ * one tool response, entirely unbounded by the per-call cap. This bounds the
+ * TOTAL rendered text across the batch independent of how many individual
+ * calls stayed under MAX_RESULT_CHARS. 300_000 chars (~75k tokens) is 3x a
+ * single result's cap — generous enough that a handful of large-but-legitimate
+ * list responses still fit in one batch, while still bounding the worst case
+ * far below the uncapped 2.5 MB.
+ */
+const MAX_BATCH_RESULT_CHARS = 300_000
+
+/**
  * Render a call's JSON result, truncating to MAX_RESULT_CHARS and appending an
  * explicit marker when truncation occurs. The marker states the fact of
  * truncation, the shown size, the full size, and an actionable hint — it MUST
@@ -253,8 +268,24 @@ function buildHandlerCore(
 
     const results: string[] = []
     const auditEvents: ExecuteAuditEvent[] = []
+    let batchCharsUsed = 0
 
     for (const call of calls) {
+      // Issue #1612: the batch aggregate is unbounded per-call but was unbounded in total.
+      // Once the running total across this batch already exceeds the budget, stop — same
+      // self-describing marker style as renderResult (shown/full-equivalent sizes, actionable
+      // hint), and the same "break, not continue" idiom the manifest-denial path below uses:
+      // once the batch can no longer usefully surface more output, the rest is not run.
+      if (batchCharsUsed >= MAX_BATCH_RESULT_CHARS) {
+        results.push(
+          `⚠️ Batch result budget exhausted after ${auditEvents.length} of ${calls.length} call(s) ` +
+            `(${batchCharsUsed} of ${MAX_BATCH_RESULT_CHARS} character budget used). Remaining calls ` +
+            `were not executed. Split this batch into smaller invocations, or narrow filters/limits ` +
+            `to reduce individual result sizes.`,
+        )
+        break
+      }
+
       const capability = getCapability(call.operationId)
 
       if (!capability || capability.excluded) {
@@ -292,6 +323,7 @@ function buildHandlerCore(
           confirmationToken: capability.confirmationRequired ? confirmationToken : undefined,
         })
         const rendered = renderResult(result)
+        batchCharsUsed += rendered.length
         results.push(`✅ ${call.operationId}: ${rendered}`)
         auditEvents.push({ operationId: call.operationId, operationClass, result: 'success' })
       } catch (err) {
