@@ -1,6 +1,8 @@
 import { describe, expect, it, mock } from 'bun:test'
-import { buildWriteExecuteHandler, buildReadExecuteHandler, type ExecuteCall } from './execute'
+import { buildWriteExecuteHandler, buildReadExecuteHandler, type ExecuteCall, type ExecuteSpecEntry } from './execute'
 import { HostProxyError } from '../../sandbox/host-proxy'
+import { ALL_OPERATION_IDS, getCapability } from '../../manifest/capability-manifest'
+import { readSpecIndex } from '../../../scripts/generate-mcp-capability-summary'
 
 // Minimal proxy stub for testing
 function makeProxy(invokeResult: unknown = {}) {
@@ -414,6 +416,85 @@ describe('buildReadExecuteHandler — the three-way admission gate (#1610b)', ()
       expect.any(Object),
       expect.objectContaining({ confirmationToken: undefined }),
     )
+  })
+})
+
+// ── Issue #1610: readExecute's REAL guarantee (not "read-only by construction") ─────────────
+//
+// Codex adversarial review of d8567c2e found the module doc's old claim false: `getPrivacySettings`
+// and `getUserProfile` pass all three admission legs yet lazily `repo.Create` the caller's own
+// default row on first access (privacy_service.go / user profile equivalent — see each operation's
+// OpenAPI description). The fix keeps both operations admitted (the user's explicit choice) and
+// replaces the false claim with the properties that ARE true of every admitted call. These tests
+// pin those properties against the REAL manifest + spec index, not a fabricated one, so a future
+// widening of the gate (e.g. dropping the method check, or admitting confirmationRequired: true)
+// is caught here even if no other test happens to exercise the specific operation that regresses.
+describe("readExecute's REAL guarantee, checked against the real manifest + spec index (#1610)", () => {
+  const specIndex = readSpecIndex()
+  const specEntries: ExecuteSpecEntry[] = specIndex.entries.map((e) => ({
+    operationId: e.operationId,
+    method: e.method,
+    path: e.path,
+  }))
+  const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+
+  it('every operation readExecute actually admits is non-destructive, non-confirmation-gated, and uses a conventionally read-only verb', async () => {
+    const admittedOperationIds: string[] = []
+
+    for (const operationId of ALL_OPERATION_IDS) {
+      const proxy = makeProxy({})
+      const handler = buildReadExecuteHandler(proxy, specEntries)
+      await handler({ calls: [{ operationId }] })
+      if ((proxy.invoke as unknown as { mock: { calls: unknown[] } }).mock.calls.length > 0) {
+        admittedOperationIds.push(operationId)
+      }
+    }
+
+    // Sanity: the probe actually admitted a non-trivial slice of the manifest (if this drops to
+    // 0, the loop above is broken, not the manifest).
+    expect(admittedOperationIds.length).toBeGreaterThan(10)
+
+    for (const operationId of admittedOperationIds) {
+      const capability = getCapability(operationId)
+      const spec = specEntries.find((e) => e.operationId === operationId)
+      expect(capability, `admitted operation ${operationId} has no manifest entry`).toBeTruthy()
+      expect(capability!.destructive, `${operationId} is admitted but destructive`).toBe(false)
+      expect(capability!.confirmationRequired, `${operationId} is admitted but confirmation-gated`).toBe(false)
+      expect(
+        !!spec && READ_ONLY_METHODS.has(spec.method.toUpperCase()),
+        `${operationId} is admitted but its method (${spec?.method}) is not conventionally read-only`,
+      ).toBe(true)
+    }
+  })
+
+  // The properties above are true of EVERY admitted operation, including these two — but they do
+  // NOT prove "readExecute cannot write". These two are known, named exceptions: both lazily
+  // create the caller's own default row on first access. Pinned by name (not just by property) so
+  // that adding a THIRD such operation requires touching this exact list — the closest thing to a
+  // guard available here, since nothing in this package can see the Go implementation to detect a
+  // write on its own.
+  const ACKNOWLEDGED_LAZY_INIT_ON_READ = ['getPrivacySettings', 'getUserProfile']
+
+  it.each(ACKNOWLEDGED_LAZY_INIT_ON_READ)(
+    'acknowledges %s as an admitted GET that lazily creates a row on first access',
+    async (operationId) => {
+      const proxy = makeProxy({})
+      const handler = buildReadExecuteHandler(proxy, specEntries)
+
+      await handler({ calls: [{ operationId }] })
+
+      // Admitted: the proxy was actually invoked, not refused.
+      expect(proxy.invoke).toHaveBeenCalledTimes(1)
+      const capability = getCapability(operationId)
+      expect(capability?.class).toBe('read')
+      expect(capability?.confirmationRequired).toBe(false)
+    },
+  )
+
+  it('the acknowledged list is exactly these two — a new admitted read-with-a-write needs a human to update this list', () => {
+    // This does not (and cannot) detect a new lazy-init write on its own; it only pins the
+    // count/names of the ones already acknowledged, so a PR adding a third stands out in review.
+    expect(ACKNOWLEDGED_LAZY_INIT_ON_READ).toEqual(['getPrivacySettings', 'getUserProfile'])
   })
 })
 

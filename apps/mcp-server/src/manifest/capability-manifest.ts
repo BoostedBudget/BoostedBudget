@@ -518,6 +518,13 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excludedWrite('createLinkToken', REASON_PLAID_LINKING, 'bank-connections'),
 
   // ── Privacy / Profile ────────────────────────────────────────────────────
+  // ⚠ #1610: both admitted by readExecute (class 'read', method GET, confirmationRequired
+  // false) yet each lazily `repo.Create`s the caller's OWN default row on first access
+  // (privacy_service.go / user profile equivalent; see each op's OpenAPI description) — a
+  // real, acknowledged write. Left admitted rather than excluded because it's scoped to the
+  // caller, idempotent after the first call, and destroys nothing. See execute.ts's module
+  // doc ("readExecute's REAL guarantee") and readExecuteRefusal's test file, which pin these
+  // two BY NAME — a third such operation should not join this list silently.
   read('getPrivacySettings'),
   read('getUserProfile'),
   excludedWrite('updatePrivacySettings', REASON_PRIVACY_INAPP, 'household-sharing'),

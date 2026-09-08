@@ -5,7 +5,8 @@
  * production has zero users, and MCP clients re-enumerate tools on connect, so a retained
  * alias would leave the agent three overlapping choices instead of two clear ones):
  *
- *   readExecute()  — only calls that are read-only BY CONSTRUCTION (see the security note below).
+ *   readExecute()  — only calls admitted by the three-part gate below (see the security note and
+ *                    "readExecute's REAL guarantee" below — it is NOT a proof of no side effects).
  *                    Takes no `confirmationToken` — under that gate, one is unreachable.
  *   writeExecute() — every class, confirmation-gated writes included. Reads stay legal inside a
  *                    write batch (a read-then-write chain must keep working); the property that
@@ -42,6 +43,19 @@
  * Any one of the three alone is bypassable — see the two real counter-examples above (the first
  * defeats class-alone, the second defeats class+confirmationRequired without also checking the
  * verb). A call that fails the gate is refused, naming writeExecute as the alternative.
+ *
+ * ── readExecute's REAL guarantee (not "read-only by construction") ─────────────────────────
+ * Passing all three checks proves an admitted call is non-destructive, not confirmation-gated,
+ * scoped to the authenticated caller's own data, and made with a conventionally non-mutating
+ * HTTP verb. It does NOT prove the call has no server-side side effect: `getPrivacySettings`
+ * and `getUserProfile` (capability-manifest.ts, "Privacy / Profile" section) pass the gate —
+ * class 'read', method GET, confirmationRequired false — yet their backend handlers
+ * (privacy_service.go / user profile equivalent) lazily `repo.Create` the caller's own default
+ * settings/profile row on first access, per their own OpenAPI descriptions. That write is
+ * scoped to the caller, idempotent after the first call, and not destructive of anything — which
+ * is why it was left admitted rather than excluded — but it is a write, and "readExecute cannot
+ * write" is false. Do not build anything on a stronger claim than the one above; see
+ * `readExecuteRefusal`'s test file for the two operations pinned by name.
  */
 
 import { getCapability } from '../../manifest/capability-manifest'
@@ -128,7 +142,14 @@ function buildRequestArgs(
   return args
 }
 
-/** HTTP methods that cannot change server state. Everything else is a write. */
+/**
+ * HTTP methods this gate treats as conventionally non-mutating — required by leg 2 of
+ * readExecute's three-part admission check, and by deniedOperationClass's method-based
+ * fallback. This is NOT a proof that no method in this set can produce a server-side write:
+ * `getPrivacySettings` / `getUserProfile` are GET and lazily create a row on first access (see
+ * the module doc's "readExecute's REAL guarantee"). Membership here is a convention this gate
+ * requires, not evidence the gate verifies.
+ */
 const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 /**
