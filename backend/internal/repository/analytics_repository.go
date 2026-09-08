@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -1787,11 +1788,12 @@ func (r *analyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, user
 	}
 
 	catExpr := effectiveCategoryExpr(false)
+	displayExpr := effectiveCategoryDisplayExpr()
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	filterClause, args, _ := buildSpendingFilter(filters, args)
 
 	query := fmt.Sprintf(`
-		SELECT (%s) AS category, ABS(SUM(t.amount)) AS total, COUNT(*) AS count
+		SELECT (%s) AS category, %s AS category_display, ABS(SUM(t.amount)) AS total, COUNT(*) AS count
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
@@ -1801,9 +1803,9 @@ func (r *analyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, user
 		  AND t.amount < 0
 		  AND t.pending = false
 		  %s
-		GROUP BY (%s)
-		ORDER BY ABS(SUM(t.amount)) DESC
-	`, catExpr, filterClause, catExpr)
+		GROUP BY (%s), category_display
+		ORDER BY total DESC, category_display ASC
+	`, catExpr, displayExpr, filterClause, catExpr)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1814,9 +1816,13 @@ func (r *analyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, user
 	results := make([]domain.IncomeSourceRow, 0)
 	for rows.Next() {
 		var row domain.IncomeSourceRow
-		if err := rows.Scan(&row.Category, &row.Total, &row.Count); err != nil {
+		// effective_category_name is nullable and app-maintained asynchronously, so it is scanned
+		// through a nullable type rather than straight into a string (#1626).
+		var display sql.NullString
+		if err := rows.Scan(&row.Category, &display, &row.Total, &row.Count); err != nil {
 			return nil, fmt.Errorf("failed to scan income source row: %w", err)
 		}
+		row.CategoryDisplay = display.String
 		results = append(results, row)
 	}
 
@@ -1837,7 +1843,7 @@ func (r *analyticsRepository) getIncomeSourceBreakdownHousehold(ctx context.Cont
 
 	query := fmt.Sprintf(`
 		WITH %s
-		SELECT (%s) AS category, ABS(SUM(t.amount)) AS total, COUNT(*) AS count
+		SELECT (%s) AS category, %s AS category_display, ABS(SUM(t.amount)) AS total, COUNT(*) AS count
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
 		WHERE %s
@@ -1847,9 +1853,9 @@ func (r *analyticsRepository) getIncomeSourceBreakdownHousehold(ctx context.Cont
 		  AND t.amount < 0
 		  AND t.pending = false
 		  %s
-		GROUP BY (%s)
-		ORDER BY ABS(SUM(t.amount)) DESC
-	`, householdGrantsCTE(), catExpr, householdSharedTransactionPredicate("t", "a"), filterClause, catExpr)
+		GROUP BY (%s), category_display
+		ORDER BY total DESC, category_display ASC
+	`, householdGrantsCTE(), catExpr, effectiveCategoryDisplayExpr(), householdSharedTransactionPredicate("t", "a"), filterClause, catExpr)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1860,9 +1866,12 @@ func (r *analyticsRepository) getIncomeSourceBreakdownHousehold(ctx context.Cont
 	var results []domain.IncomeSourceRow
 	for rows.Next() {
 		var row domain.IncomeSourceRow
-		if err := rows.Scan(&row.Category, &row.Total, &row.Count); err != nil {
+		// See the personal read: nullable, asynchronously maintained column (#1626).
+		var display sql.NullString
+		if err := rows.Scan(&row.Category, &display, &row.Total, &row.Count); err != nil {
 			return nil, fmt.Errorf("failed to scan household income source row: %w", err)
 		}
+		row.CategoryDisplay = display.String
 		results = append(results, row)
 	}
 
