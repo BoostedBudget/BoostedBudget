@@ -182,6 +182,13 @@ func (m *MockLinkedItemRepository) RepairStatus(ctx context.Context, id string, 
 	return args.Bool(0), args.Error(1)
 }
 
+// SetInvestmentsSkippedAtLink records whether the investment jobs were skipped at link time
+// (Issue #1613 P4-T3 item E).
+func (m *MockLinkedItemRepository) SetInvestmentsSkippedAtLink(ctx context.Context, id string, skipped bool) error {
+	args := m.Called(ctx, id, skipped)
+	return args.Error(0)
+}
+
 // MarkFailureAsserted stamps last_failure_asserted_at unconditionally (Issue #1623).
 func (m *MockLinkedItemRepository) MarkFailureAsserted(ctx context.Context, id string, terminalStatuses []domain.LinkedItemStatus) error {
 	args := m.Called(ctx, id, terminalStatuses)
@@ -4496,6 +4503,8 @@ func TestLinkAccounts_Integration_FreshLink_NoInvestments_SkipsInvestmentSyncJob
 			item := args.Get(1).(*domain.LinkedItem)
 			item.ID = newItemID
 		}).Return(nil)
+	// #1613 P4-T3 item E: the skip is now also RECORDED on the item, not only logged.
+	mockLinkedItemRepo.On("SetInvestmentsSkippedAtLink", ctx, mock.Anything, true).Return(nil)
 
 	mockUserAccountSvc.On("MatchOrCreate", ctx, userID, institutionID, (*string)(nil), "Checking Account", "depository", "checking").
 		Return(&domain.UserAccount{ID: userAccountID}, nil)
@@ -4593,6 +4602,8 @@ func TestLinkAccounts_Integration_FreshLink_WithInvestments_EnqueuesInvestmentSy
 			item := args.Get(1).(*domain.LinkedItem)
 			item.ID = newItemID
 		}).Return(nil)
+	// #1613 P4-T3 item E: the grant is recorded in BOTH directions — FALSE here.
+	mockLinkedItemRepo.On("SetInvestmentsSkippedAtLink", ctx, mock.Anything, false).Return(nil)
 
 	mockUserAccountSvc.On("MatchOrCreate", ctx, userID, institutionID, (*string)(nil), "Brokerage Account", "investment", "brokerage").
 		Return(&domain.UserAccount{ID: userAccountID}, nil)
@@ -5294,4 +5305,106 @@ func TestAccountService_SetJobQueue_DoesNotPanic(t *testing.T) {
 		svc.SetJobQueue(nil)
 	}, "SetJobQueue with nil must not panic")
 	assert.Nil(t, svc.jobQueue, "jobQueue field should be nil after SetJobQueue(nil)")
+}
+
+// ── #1613 P4-T3 item E: record at link time that the investment jobs were skipped ────────────
+//
+// enqueueInitialSync is the ONLY place that knows Plaid granted no investments for an Item, and
+// until this it knew it only for the duration of one function call — it logged the fact and threw
+// it away. linked_items.investments_skipped_at_link (created UNWIRED by migration 000189) makes
+// the fact durable and countable.
+//
+// ⚠ The value is written in BOTH directions, not just on the skip. enqueueInitialSync can run
+// against a PRE-EXISTING linked_items row: LinkAccounts reuses one when the user re-links the
+// same institution (account_service.go, the existingLinkedItem branch). Writing only TRUE would
+// leave a stale TRUE on an item whose institution has since started serving investments —
+// permanently misreporting the very population this column exists to measure.
+
+// TestAccountService_EnqueueInitialSync_RecordsThatInvestmentsWereSkipped is the skip direction.
+func TestAccountService_EnqueueInitialSync_RecordsThatInvestmentsWereSkipped(t *testing.T) {
+	mockJobQueue := &MockJobQueue{}
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+
+	service := &accountService{
+		jobQueue:       mockJobQueue,
+		linkedItemRepo: mockLinkedItemRepo,
+		logger:         slog.Default(),
+	}
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "plaid_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 123, Kind: "plaid_sync"}, nil)
+
+	mockLinkedItemRepo.On("SetInvestmentsSkippedAtLink", ctx, linkedItemID, true).Return(nil)
+
+	service.enqueueInitialSync(ctx, linkedItemID, userID, false)
+
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockJobQueue.AssertExpectations(t)
+}
+
+// TestAccountService_EnqueueInitialSync_ClearsTheSkippedFlagWhenInvestmentsAreGranted is the
+// other direction, and it is not symmetry for its own sake — see the block comment above for the
+// re-link path that makes a stale TRUE reachable.
+func TestAccountService_EnqueueInitialSync_ClearsTheSkippedFlagWhenInvestmentsAreGranted(t *testing.T) {
+	mockJobQueue := &MockJobQueue{}
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+
+	service := &accountService{
+		jobQueue:       mockJobQueue,
+		linkedItemRepo: mockLinkedItemRepo,
+		logger:         slog.Default(),
+	}
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	for _, kind := range []string{"plaid_sync", "investment_holdings_sync", "investment_transactions_sync"} {
+		k := kind
+		mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+			return job.Kind() == k
+		}), mock.Anything).Return(&queue.JobResult{ID: 1, Kind: k}, nil)
+	}
+
+	mockLinkedItemRepo.On("SetInvestmentsSkippedAtLink", ctx, linkedItemID, false).Return(nil)
+
+	service.enqueueInitialSync(ctx, linkedItemID, userID, true)
+
+	mockLinkedItemRepo.AssertExpectations(t)
+}
+
+// TestAccountService_EnqueueInitialSync_FlagWriteFailureDoesNotStopTheSyncJobs pins that the new
+// write inherits this helper's existing non-blocking contract: a failed enqueue never fails
+// account linking, and neither may a failed bookkeeping write. The flag is diagnostic — losing it
+// must not cost the user their transactions.
+func TestAccountService_EnqueueInitialSync_FlagWriteFailureDoesNotStopTheSyncJobs(t *testing.T) {
+	mockJobQueue := &MockJobQueue{}
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+
+	service := &accountService{
+		jobQueue:       mockJobQueue,
+		linkedItemRepo: mockLinkedItemRepo,
+		logger:         slog.Default(),
+	}
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "plaid_sync"
+	}), mock.Anything).Return(&queue.JobResult{ID: 123, Kind: "plaid_sync"}, nil)
+
+	mockLinkedItemRepo.On("SetInvestmentsSkippedAtLink", ctx, linkedItemID, true).
+		Return(errors.New("database unavailable"))
+
+	service.enqueueInitialSync(ctx, linkedItemID, userID, false)
+
+	// plaid_sync must still have been enqueued despite the failed write.
+	mockJobQueue.AssertExpectations(t)
 }

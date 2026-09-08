@@ -139,6 +139,13 @@ func (m *MockLinkedItemRepository) RepairStatus(ctx context.Context, id string, 
 }
 
 // TransitionErrorStatus atomically transitions a linked item to an error status (Issue #1609 P3-T2).
+// SetInvestmentsSkippedAtLink records whether the investment jobs were skipped at link time
+// (Issue #1613 P4-T3 item E).
+func (m *MockLinkedItemRepository) SetInvestmentsSkippedAtLink(ctx context.Context, id string, skipped bool) error {
+	args := m.Called(ctx, id, skipped)
+	return args.Error(0)
+}
+
 // MarkFailureAsserted stamps last_failure_asserted_at unconditionally (Issue #1623).
 func (m *MockLinkedItemRepository) MarkFailureAsserted(ctx context.Context, id string, terminalStatuses []domain.LinkedItemStatus) error {
 	args := m.Called(ctx, id, terminalStatuses)

@@ -164,6 +164,20 @@ type LinkedItemRepository interface {
 	// treats a NULL / unchanged value as "not newer".
 	MarkFailureAsserted(ctx context.Context, id string, terminalStatuses []domain.LinkedItemStatus) error
 
+	// SetInvestmentsSkippedAtLink records whether the two investment sync jobs were skipped for
+	// this item at link time because Plaid granted no investments product (#1613 P4-T3 item E).
+	//
+	// ⚠ It takes the value rather than only setting TRUE, and that is load-bearing.
+	// accountService.enqueueInitialSync can run against a PRE-EXISTING linked_items row —
+	// LinkAccounts reuses one when the user re-links the same institution — so a write-only-TRUE
+	// setter would leave a stale TRUE on an item whose institution has since started serving
+	// investments, permanently misreporting the population this column exists to measure.
+	//
+	// ⚠ Nothing READS this column yet, deliberately: see enqueueInitialSync's own comment for the
+	// ruling that declined the per-sync product re-check, and for what a future reader would need.
+	// It is written so the fact is durable and countable, not because a consumer exists.
+	SetInvestmentsSkippedAtLink(ctx context.Context, id string, skipped bool) error
+
 	// TransitionErrorStatus atomically transitions a linked item to newStatus while setting its
 	// error tracking fields (error_code, error_message, last_error_at), but ONLY if — in the SAME
 	// statement — its current status is not already newStatus and is not one of terminalStatuses.
@@ -959,6 +973,24 @@ func (r *linkedItemRepository) MarkFailureAsserted(ctx context.Context, id strin
 	`
 
 	_, err := r.db.Exec(ctx, query, id, terminal)
+	return err
+}
+
+// SetInvestmentsSkippedAtLink implements LinkedItemRepository.SetInvestmentsSkippedAtLink — see
+// that method's doc comment for why it takes the value instead of only setting TRUE.
+//
+// Unconditional on status: this records what Plaid granted at link time, which is a fact about the
+// Item and not about its health, so none of the error/terminal predicates that guard the status
+// columns apply here.
+func (r *linkedItemRepository) SetInvestmentsSkippedAtLink(ctx context.Context, id string, skipped bool) error {
+	const query = `
+		UPDATE linked_items
+		SET investments_skipped_at_link = $2,
+		    updated_at = now()
+		WHERE id = $1
+	`
+
+	_, err := r.db.Exec(ctx, query, id, skipped)
 	return err
 }
 

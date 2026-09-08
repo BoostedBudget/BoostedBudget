@@ -207,3 +207,54 @@ func TestLinkedItemFailureAssert_Integration_RepairDoesNotResetTheAssertClock(t 
 	require.NotNil(t, after, "repair must not clear last_failure_asserted_at")
 	assert.True(t, after.Equal(*before))
 }
+
+// ── #1613 P4-T3 item E ───────────────────────────────────────────────────────────────────────
+
+// TestLinkedItem_SetInvestmentsSkippedAtLink_WritesBothDirections pins that the setter is a real
+// setter and not a one-way latch. The re-link path (LinkAccounts reusing an existing
+// linked_items row) can call it with FALSE on a row already carrying TRUE, and a latch would
+// leave that item permanently reported as "investments skipped" after its institution started
+// serving them.
+//
+// Integration rather than pgxmock because the column itself is new (migration 000189) and a mock
+// cannot tell a column that exists from one that does not.
+func TestLinkedItem_SetInvestmentsSkippedAtLink_WritesBothDirections(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, linkedItemID, _, _ := seedInvestmentFixture(ctx, t, tx, "li-skipflag")
+	repo := NewLinkedItemRepository(tx, newTestFieldEncryptor(t))
+
+	read := func() bool {
+		var v bool
+		require.NoError(t, tx.QueryRow(ctx,
+			`SELECT investments_skipped_at_link FROM linked_items WHERE id = $1`, linkedItemID).Scan(&v))
+		return v
+	}
+
+	require.False(t, read(), "migration 000189's default is FALSE for a freshly created row")
+
+	require.NoError(t, repo.SetInvestmentsSkippedAtLink(ctx, linkedItemID.String(), true))
+	require.True(t, read(), "the skip must be recorded")
+
+	require.NoError(t, repo.SetInvestmentsSkippedAtLink(ctx, linkedItemID.String(), false))
+	require.False(t, read(),
+		"FALSE must overwrite a stored TRUE — a write-only-TRUE setter strands a re-linked item "+
+			"as permanently 'investments skipped' after its institution starts serving them")
+
+	// It must not disturb the item's health columns: this records what Plaid granted, not how the
+	// connection is doing.
+	var status string
+	var lastFailure *time.Time
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT status, last_failure_asserted_at FROM linked_items WHERE id = $1`, linkedItemID).
+		Scan(&status, &lastFailure))
+	require.Equal(t, "active", status)
+	require.Nil(t, lastFailure)
+
+	_ = userID
+}
