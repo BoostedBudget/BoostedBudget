@@ -94,18 +94,21 @@ func TestNormalize_ConflictingTypeAndFieldIsRejected(t *testing.T) {
 	}
 }
 
-// A legacy operator that was persisted when the field was never validated must be preserved,
-// not silently dropped by a read-modify-write cycle — and never treated as authoritative.
-func TestNormalize_PreservesUnvalidatedLegacyOperator(t *testing.T) {
+// An operator persisted before #1625 is residue: the field was never validated and no evaluator
+// ever read it, so the fused type is what actually drove matching. Normalize overwrites it with
+// the operator that type implies — which preserves behaviour exactly and lets the next write
+// repair the row, rather than carrying meaningless data forward forever.
+func TestNormalize_OverwritesUnvalidatedLegacyOperator(t *testing.T) {
 	c := RuleCondition{Type: ConditionMerchantContains, Operator: "gibberish", Value: "amazon"}
 	if err := c.Normalize(); err != nil {
 		t.Fatalf("Normalize() = %v", err)
 	}
-	if c.LegacyOperator != "gibberish" {
-		t.Errorf("LegacyOperator = %q, want the original value preserved", c.LegacyOperator)
-	}
 	if c.Operator != "contains" {
 		t.Errorf("Operator = %q — the fused type must win over an unvalidated legacy operator", c.Operator)
+	}
+	// And the rule still matches what it always matched.
+	if c.Field != FieldMerchant {
+		t.Errorf("Field = %q, want merchant", c.Field)
 	}
 }
 
