@@ -16,7 +16,7 @@ const (
 // SavingsGoal represents a user-defined savings goal linked to an account.
 // Savings goals are FREE for all subscription tiers (Issue #27).
 // current_amount is computed per progress_basis (Issue #1300):
-//   - "manual":             user sets current_amount directly (default for existing goals)
+//   - "manual":             user sets current_amount directly (default for pre-#1625 goals)
 //   - "contributions":      SUM of confirmed savings_goal_contributions (default for new goals)
 //   - "balance":            mirrors Account.CurrentBalance (dedicated 1:1 account)
 //   - "account_percentage": Account.CurrentBalance × account_percentage (shared account, multi-bucket)
@@ -192,9 +192,12 @@ type LogContributionRequest struct {
 	// Amount is the contribution amount (must be positive).
 	Amount float64 `json:"amount" required:"true"`
 	// OccurredOn is the date the contribution occurred (YYYY-MM-DD).
-	OccurredOn string `json:"occurred_on" required:"true"`
+	// #1625: `format:"date"` is enforced by Huma at parse time. Without it a malformed date
+	// (e.g. "09/08/2026") passed both Huma AND Validate() and only failed at the Postgres DATE
+	// column, surfacing as a bare 500 instead of a 422 naming the field.
+	OccurredOn string `json:"occurred_on" required:"true" format:"date" example:"2026-09-08"`
 	// TransactionID optionally links to an existing transaction (must belong to the user).
-	TransactionID *string `json:"transaction_id,omitempty"`
+	TransactionID *string `json:"transaction_id,omitempty" format:"uuid"`
 	// Notes is an optional user note (stored in source field as "manual").
 	Notes *string `json:"notes,omitempty"`
 }
@@ -206,6 +209,11 @@ func (r *LogContributionRequest) Validate() error {
 	}
 	if r.OccurredOn == "" {
 		return errors.New("occurred_on is required")
+	}
+	// Belt-and-braces alongside the Huma `format:"date"` tag: any non-HTTP caller (a worker, a
+	// test, a future internal path) still gets a 422-shaped error rather than a Postgres 500.
+	if _, err := time.Parse("2006-01-02", r.OccurredOn); err != nil {
+		return errors.New("occurred_on must be a YYYY-MM-DD date")
 	}
 	return nil
 }
@@ -356,12 +364,18 @@ type CreateSavingsGoalRequest struct {
 	Name          string     `json:"name" validate:"required,max=100"`
 	Description   *string    `json:"description,omitempty"`
 	TargetAmount  float64    `json:"target_amount" validate:"required,gt=0"`
+	// CurrentAmount seeds the goal's progress. It is only honoured under the "manual" basis:
+	// every other basis DERIVES current_amount, so a supplied value is recomputed away
+	// immediately. #1625: this is no longer misleading, because CreateGoal now returns the
+	// recomputed figure rather than echoing what was sent — the response shows the real value.
 	CurrentAmount float64    `json:"current_amount,omitempty" validate:"gte=0"`
 	CurrencyCode  string     `json:"currency_code,omitempty"`
 	AccountID     string     `json:"account_id" validate:"required,uuid"`
 	Deadline      *time.Time `json:"deadline,omitempty"`
 	// ProgressBasis controls how current_amount is derived (Issue #1300).
-	// Defaults to "manual" if empty. Valid: manual|contributions|balance|account_percentage.
+	// Defaults to "contributions" for NEW goals when empty (#1625 — the documented #1300 intent,
+	// which the code had never implemented; it defaulted to "manual", so contributions could not
+	// be logged against a brand-new goal). Valid: manual|contributions|balance|account_percentage.
 	ProgressBasis string `json:"progress_basis,omitempty"`
 	// AccountPercentage is required (0 < x ≤ 1) when ProgressBasis is "account_percentage".
 	AccountPercentage *float64 `json:"account_percentage,omitempty"`

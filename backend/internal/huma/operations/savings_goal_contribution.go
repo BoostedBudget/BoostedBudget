@@ -12,6 +12,7 @@ package operations
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -191,7 +192,17 @@ func (h *ContributionHandler) LogContribution(ctx context.Context, input *LogCon
 			return nil, humaerrors.LoggingMapError(ctx, err)
 		}
 		if goal.ProgressBasis != domain.ProgressBasisContributions {
-			return nil, huma.Error422UnprocessableEntity("basis mismatch",
+			// #1625: the old message was the bare string "basis mismatch", which named neither
+			// the offending value nor the remedy — so an agent hitting it on a brand-new goal
+			// had no way to proceed. Say what is wrong and exactly how to fix it.
+			return nil, huma.Error422UnprocessableEntity(
+				fmt.Sprintf(
+					"this goal's progress_basis is %q, so its current_amount is not tracked through the "+
+						"contribution ledger and contributions cannot be logged against it. "+
+						"Set progress_basis to %q (PUT /api/v1/savings-goals/%s) first, or update "+
+						"current_amount directly instead.",
+					goal.ProgressBasis, domain.ProgressBasisContributions, input.GoalID,
+				),
 				domain.ErrContributionBasisMismatch)
 		}
 	}

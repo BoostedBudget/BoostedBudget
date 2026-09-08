@@ -103,7 +103,7 @@ func TestSavingsProgress_Manual_NoOp(t *testing.T) {
 	svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
 
 	goal := makeGoal("g1", "u1", "acc1", domain.ProgressBasisManual, 1000, 500)
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertNotCalled(t, "UpdateCurrentAmount")
@@ -119,7 +119,7 @@ func TestSavingsProgress_Manual_EmptyBasis(t *testing.T) {
 	svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
 
 	goal := makeGoal("g1", "u1", "acc1", "", 1000, 500) // empty basis → manual
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertNotCalled(t, "UpdateCurrentAmount")
@@ -140,7 +140,7 @@ func TestSavingsProgress_Contributions_UpdatesAmount(t *testing.T) {
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(750.00, nil)
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 750.00, mock.Anything, (*time.Time)(nil)).Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	contribRepo.AssertExpectations(t)
@@ -163,7 +163,7 @@ func TestSavingsProgress_Contributions_MarksCompleted(t *testing.T) {
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 1000.00, mock.Anything, (*time.Time)(nil)).Return(nil)
 	goalRepo.On("MarkCompleted", mock.Anything, "g1").Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertCalled(t, "MarkCompleted", mock.Anything, "g1")
@@ -183,7 +183,7 @@ func TestSavingsProgress_Contributions_ExceedsTarget_StillMarksCompleted(t *test
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 1200.00, mock.Anything, (*time.Time)(nil)).Return(nil)
 	goalRepo.On("MarkCompleted", mock.Anything, "g1").Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertCalled(t, "MarkCompleted", mock.Anything, "g1")
@@ -202,7 +202,7 @@ func TestSavingsProgress_Contributions_RoundsToCents(t *testing.T) {
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(333.3333333, nil)
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 333.33, mock.Anything, (*time.Time)(nil)).Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertExpectations(t)
@@ -229,7 +229,7 @@ func TestSavingsProgress_Balance_MirrorsAccountBalance(t *testing.T) {
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 3500.00, mock.Anything, mock.Anything).Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	accountRepo.AssertExpectations(t)
@@ -251,7 +251,7 @@ func TestSavingsProgress_Balance_ClampsNegative(t *testing.T) {
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 0.00, mock.Anything, mock.Anything).Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertExpectations(t)
@@ -270,7 +270,7 @@ func TestSavingsProgress_Balance_NilBalance_SkipsRecompute(t *testing.T) {
 
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	// Neither UpdateCurrentAmount nor MarkCompleted should be called.
@@ -298,7 +298,7 @@ func TestSavingsProgress_Balance_SetsBalanceAsOf(t *testing.T) {
 		}),
 	).Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertExpectations(t)
@@ -329,7 +329,7 @@ func TestSavingsProgress_Balance_DisconnectedAccount_SkipsRecompute(t *testing.T
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	// Neither UpdateCurrentAmount nor MarkCompleted should be called — same freeze semantics
@@ -357,7 +357,7 @@ func TestSavingsProgress_AccountPercentage_ComputesCorrectly(t *testing.T) {
 	// 3000 * 0.4 = 1200.00
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 1200.00, mock.Anything, mock.Anything).Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertExpectations(t)
@@ -378,7 +378,7 @@ func TestSavingsProgress_AccountPercentage_NilBalance_SkipsRecompute(t *testing.
 
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertNotCalled(t, "UpdateCurrentAmount")
@@ -395,7 +395,7 @@ func TestSavingsProgress_AccountPercentage_NilPercentage_ReturnsError(t *testing
 	goal := makeGoal("g1", "u1", "acc1", domain.ProgressBasisAccountPercentage, 2000, 0)
 	goal.AccountPercentage = nil // should not happen after validation, but guard it
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "nil percentage")
@@ -421,14 +421,16 @@ func TestSavingsProgress_StickyCompletion_DoesNotCallMarkCompletedTwice(t *testi
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 1000.00, mock.Anything, (*time.Time)(nil)).Return(nil).Once()
 	goalRepo.On("MarkCompleted", mock.Anything, "g1").Return(nil).Once()
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
+	require.NoError(t, recomputeErr)
 	goalRepo.AssertCalled(t, "MarkCompleted", mock.Anything, "g1")
 
 	// Second call: drops below target (balance_regression simulation).
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(400.00, nil).Once()
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 400.00, mock.Anything, (*time.Time)(nil)).Return(nil).Once()
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+	_, recomputeErr = svc.RecomputeGoal(context.Background(), goal)
+	require.NoError(t, recomputeErr)
 	// MarkCompleted should NOT be called again (400 < 1000).
 	goalRepo.AssertNumberOfCalls(t, "MarkCompleted", 1)
 }
@@ -844,7 +846,7 @@ func TestSavingsProgress_TerminalAccountWithNoBalance_FreezesOnBothBases(t *test
 			goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-			err := svc.RecomputeGoal(context.Background(), tc.goal())
+			_, err := svc.RecomputeGoal(context.Background(), tc.goal())
 
 			require.NoError(t, err)
 			assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
@@ -878,8 +880,9 @@ func TestSavingsProgress_TerminalAccountWithNoBalance_LogsTheDisconnection(t *te
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(),
-		makeGoal("g1", "u1", "acc1", domain.ProgressBasisBalance, 5000, 1000)))
+	_, recomputeErr := svc.RecomputeGoal(context.Background(),
+		makeGoal("g1", "u1", "acc1", domain.ProgressBasisBalance, 5000, 1000))
+	require.NoError(t, recomputeErr)
 
 	out := logs.String()
 	assert.Contains(t, out, "basis account is no longer active",

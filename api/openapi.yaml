@@ -4297,8 +4297,12 @@ components:
         notes:
           type: string
         occurred_on:
+          examples:
+            - "2026-09-08"
+          format: date
           type: string
         transaction_id:
+          format: uuid
           type: string
       required:
         - amount

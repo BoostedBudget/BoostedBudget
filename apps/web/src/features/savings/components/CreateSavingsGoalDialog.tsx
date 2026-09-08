@@ -57,7 +57,7 @@ const initialFormData: FormData = {
   target_amount: '',
   account_id: '',
   deadline: '',
-  progress_basis: 'manual',
+  progress_basis: 'contributions',
   account_percentage: '',
 };
 
@@ -160,7 +160,11 @@ export function CreateSavingsGoalDialog({
           account_id: formData.account_id,
           user_account_id: selectedAccount?.user_account_id ?? undefined,
           deadline: formData.deadline ? new Date(formData.deadline).toISOString() : undefined,
-          progress_basis: formData.progress_basis !== 'manual' ? formData.progress_basis : undefined,
+          // #1625: always send the basis. This used to omit 'manual' and lean on the API
+          // defaulting to manual — but a NEW goal now defaults to 'contributions', so omitting
+          // it would silently turn an explicit "manual" choice into a contributions goal whose
+          // current_amount the user can no longer set by hand.
+          progress_basis: formData.progress_basis,
           account_percentage:
             formData.progress_basis === 'account_percentage' && formData.account_percentage
               ? parseFloat(formData.account_percentage) / 100

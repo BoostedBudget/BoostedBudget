@@ -107,8 +107,8 @@ type mockSavingsProgressService struct {
 	summaryErr error
 }
 
-func (m *mockSavingsProgressService) RecomputeGoal(_ context.Context, _ *domain.SavingsGoal) error {
-	return nil
+func (m *mockSavingsProgressService) RecomputeGoal(_ context.Context, goal *domain.SavingsGoal) (float64, error) {
+	return goal.CurrentAmount, nil
 }
 
 func (m *mockSavingsProgressService) RecomputeGoalByID(_ context.Context, _, _ string) error {

@@ -340,6 +340,10 @@ describe('CreateSavingsGoalDialog', () => {
             account_id: 'acc-1',
             description: undefined,
             deadline: undefined,
+            // #1625: the basis is always sent explicitly now.
+            progress_basis: 'contributions',
+            account_percentage: undefined,
+            user_account_id: undefined,
           },
         })
       })
@@ -640,7 +644,8 @@ describe('CreateSavingsGoalDialog', () => {
 
       const select = screen.getByLabelText('Progress Tracking') as HTMLSelectElement
       expect(select).toBeInTheDocument()
-      expect(select.value).toBe('manual')
+      // #1625: a new goal now defaults to the contributions basis, matching the API.
+      expect(select.value).toBe('contributions')
     })
 
     it('does not show account_percentage input when basis is manual', () => {
@@ -763,7 +768,11 @@ describe('CreateSavingsGoalDialog', () => {
       })
     })
 
-    it('omits progress_basis from request when basis is manual (default)', async () => {
+    // #1625: the basis is now ALWAYS sent explicitly. It used to be omitted when 'manual',
+    // relying on the API defaulting to manual — but the API now defaults a NEW goal to
+    // 'contributions', so omitting it would silently convert a user's explicit "manual" choice
+    // into a contributions goal whose current_amount they can no longer set by hand.
+    it('sends progress_basis explicitly when the user chooses manual', async () => {
       const newGoal = { id: 'goal-manual', name: 'Manual Goal', target_amount: 500 }
       mockCreateSavingsGoalMutateAsync.mockResolvedValueOnce(newGoal)
 
@@ -778,15 +787,48 @@ describe('CreateSavingsGoalDialog', () => {
       fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Manual Goal' } })
       fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '500' } })
       fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-1' } })
+      fireEvent.change(screen.getByLabelText('Progress Tracking'), {
+        target: { value: 'manual' },
+      })
 
       const form = document.querySelector('form')
       fireEvent.submit(form!)
 
       await waitFor(() => {
         const callArg = mockCreateSavingsGoalMutateAsync.mock.calls[0][0]
-        // manual basis is omitted (API defaults to manual)
-        expect(callArg.data.progress_basis).toBeUndefined()
+        expect(callArg.data.progress_basis).toBe('manual')
         expect(callArg.data.account_percentage).toBeUndefined()
+      })
+    })
+
+    it('defaults a new goal to the contributions basis', async () => {
+      const newGoal = { id: 'goal-c', name: 'Contrib Goal', target_amount: 500 }
+      mockCreateSavingsGoalMutateAsync.mockResolvedValueOnce(newGoal)
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Contrib Goal' } })
+      fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '500' } })
+      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-1' } })
+
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      await waitFor(() => {
+        // objectContaining rather than indexing mock.calls[0][0]: the indexed form is the
+        // file's prevailing style but it is unsound under tsconfig.test.json (the tuple is
+        // typed empty), and the typecheck gate refuses NEW errors.
+        expect(mockCreateSavingsGoalMutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ progress_basis: 'contributions' }),
+          }),
+        )
       })
     })
   })
@@ -821,6 +863,9 @@ describe('CreateSavingsGoalDialog', () => {
             target_amount: 2000,
             account_id: 'acc-2',
             deadline: '2030-12-31T00:00:00.000Z',
+            progress_basis: 'contributions',
+            account_percentage: undefined,
+            user_account_id: undefined,
           },
         })
       })
