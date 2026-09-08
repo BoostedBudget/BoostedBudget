@@ -28,6 +28,22 @@ func TestClassifyPlaidError_ProductsNotSupported_IsPermanent(t *testing.T) {
 	assert.Equal(t, "PRODUCTS_NOT_SUPPORTED", result.ErrorCode)
 }
 
+// TestClassifyPlaidError_NoInvestmentAccounts_IsPermanent covers the audit-flagged missing case
+// (Issue #1621, #1613's remaining edge): a supported-product / no-investment-account item — the
+// investments product IS granted for this item, but it simply has zero investment accounts at
+// this institution. Existing coverage above only exercises PRODUCTS_NOT_SUPPORTED (no product
+// support at all) and INVALID_ACCESS_TOKEN (product-granted, but auth-broken); this is the
+// distinct "product granted, nothing to sync" case, which previously fell through to Temporary
+// and burned five River attempts into the DLQ for no benefit.
+func TestClassifyPlaidError_NoInvestmentAccounts_IsPermanent(t *testing.T) {
+	err := plaidAPIError(t, "NO_INVESTMENT_ACCOUNTS")
+
+	result := ClassifyPlaidError(err)
+
+	assert.Equal(t, PlaidErrorPermanent, result.ErrorType)
+	assert.Equal(t, "NO_INVESTMENT_ACCOUNTS", result.ErrorCode)
+}
+
 func TestClassifyPlaidError_InvalidAccessToken_IsPermanent(t *testing.T) {
 	err := plaidAPIError(t, "INVALID_ACCESS_TOKEN")
 
