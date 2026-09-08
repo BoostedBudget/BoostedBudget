@@ -567,6 +567,55 @@ describe('batch aggregate result bound (#1612)', () => {
     expect(toolResult.content[0]?.text ?? '').not.toContain('Batch result budget exhausted')
   })
 
+  it('charges the per-call prefix and separator, not just the rendered payload', async () => {
+    // #1612 round 2 regression. Each success line is `✅ <operationId>: <rendered>` joined by
+    // '\n\n', but only `rendered.length` used to be charged against the budget. With many small
+    // results the UNCHARGED text (prefix + separator, ~22 chars) dominates the charged text
+    // (~10 chars), so the returned string ran roughly 3x past the cap while the counter still
+    // read as under it. Against the old accounting all 20_000 calls execute and the marker never
+    // fires; against the corrected accounting the batch stops partway.
+    const small = { id: 'x' }
+    const proxy = makeProxy(small)
+    const handler = buildWriteExecuteHandler(proxy)
+
+    const calls: ExecuteCall[] = Array.from({ length: 20_000 }, () => ({ operationId: 'getTransactions' }))
+
+    const { toolResult } = await handler({ calls })
+
+    const text = toolResult.content[0]?.text ?? ''
+    expect(text).toContain('Batch result budget exhausted')
+    expect(proxy.invoke.mock.calls.length).toBeLessThan(20_000)
+  })
+
+  it('bounds the returned text at the budget plus one call plus the marker', async () => {
+    // The honest bound, pinned. The budget check is a PRE-check, so the text may exceed
+    // MAX_BATCH_RESULT_CHARS by at most one call's rendered output (itself capped at
+    // MAX_RESULT_CHARS) plus the exhaustion marker. This asserts that bound rather than the
+    // tighter "never exceeds 300_000", which is not what the implementation provides.
+    const MAX_BATCH = 300_000
+    const MAX_RESULT = 100_000
+    const MARKER_SLACK = 1_000
+
+    // Deliberately the many-small-results shape, NOT a few large ones: with large payloads the
+    // payload-only accounting trips the cap at nearly the right place anyway, so the assertion
+    // would pass against the old code and pin nothing. Here the uncharged prefixes dominate, so
+    // the old accounting overshoots this bound by ~240_000 characters.
+    const small = { id: 'x' }
+    const proxy = makeProxy(small)
+    const handler = buildWriteExecuteHandler(proxy)
+
+    const calls: ExecuteCall[] = Array.from({ length: 20_000 }, () => ({ operationId: 'getTransactions' }))
+
+    const { toolResult } = await handler({ calls })
+
+    // Length first, deliberately: this test exists to pin the BOUND, so the bound must be the
+    // assertion that fires when the accounting regresses -- not the marker check, which would
+    // otherwise mask it and duplicate the test above.
+    const text = toolResult.content[0]?.text ?? ''
+    expect(text.length).toBeLessThanOrEqual(MAX_BATCH + MAX_RESULT + MARKER_SLACK)
+    expect(text).toContain('Batch result budget exhausted')
+  })
+
   it('the manifest-denial break behaviour is untouched by the new budget check (denial still aborts the rest of the batch)', async () => {
     const proxy = makeFailingProxy('excluded', "Operation 'checkRole' is not available via MCP")
     const handler = buildWriteExecuteHandler(proxy)
