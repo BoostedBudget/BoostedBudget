@@ -193,3 +193,28 @@ func TestValidateShape_RejectsGenuinelyBadValues(t *testing.T) {
 		}
 	}
 }
+
+// Codex review: a persisted mixed array such as ["uber", 42] still MATCHES at evaluation time —
+// matching.ExtractStringValues simply ignores the non-string member. Rejecting it at write time
+// left such a rule matchable but permanently un-updatable: the user could not save an unrelated
+// edit. That is the quarantine-a-working-rule failure this validator exists to avoid.
+func TestValidateShape_ToleratesLegacyMixedArrays(t *testing.T) {
+	c := RuleCondition{Type: ConditionMerchantContains, Value: []interface{}{"uber", 42}}
+	if err := c.Normalize(); err != nil {
+		t.Fatalf("Normalize() = %v", err)
+	}
+	if err := c.ValidateShape(); err != nil {
+		t.Errorf("a mixed array that still matches at runtime must remain saveable: %v", err)
+	}
+}
+
+// ...but an array with no usable string member can never match, so it is still rejected.
+func TestValidateShape_RejectsAnArrayWithNoUsableString(t *testing.T) {
+	c := RuleCondition{Type: ConditionMerchantContains, Value: []interface{}{42, true}}
+	if err := c.Normalize(); err != nil {
+		t.Fatalf("Normalize() = %v", err)
+	}
+	if err := c.ValidateShape(); err == nil {
+		t.Error("an array with no string member can never match and must be rejected")
+	}
+}

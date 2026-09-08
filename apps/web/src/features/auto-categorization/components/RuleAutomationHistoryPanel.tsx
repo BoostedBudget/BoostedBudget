@@ -64,7 +64,8 @@ import { DataTable, TablePagination, useTablePreferences } from '@/shared/compon
 import type { ColumnDef } from '@/shared/components/DataTable'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
-import { CONDITION_TYPE_LABELS, type ConditionType } from '../types'
+import type { ConditionType, ConditionField, ConditionOperator } from '../types'
+import { conditionLabel } from '../utils/conditionLabel'
 import { formatConditionValue } from '../utils/formatConditionValue'
 
 const PAGE_SIZE = 20
@@ -99,7 +100,12 @@ const RESULT_BADGE_VARIANT: Record<string, BadgeProps['variant']> = {
 interface SnapshotCondition {
   type: ConditionType
   value: unknown
-  operator?: string
+  // #1625: a snapshot frozen BEFORE the rework carries only `type` and possibly a junk
+  // `operator` (that field was never validated then). One frozen after it also carries the
+  // {field, operator} pair. conditionLabel() renders both shapes, which is why these are
+  // optional rather than required.
+  field?: ConditionField
+  operator?: ConditionOperator
   value_display?: string
 }
 
@@ -266,7 +272,7 @@ export function RuleAutomationHistoryPanel() {
             {shown.map((condition, index) => (
               <span key={index} className="flex flex-wrap items-baseline gap-1">
                 <span className="text-muted-foreground">
-                  {CONDITION_TYPE_LABELS[condition.type] ?? condition.type}
+                  {conditionLabel(condition)}
                 </span>
                 {/* User-typed text: a merchant substring, an amount, a date. */}
                 <span className="font-medium text-foreground" data-ph-mask>

@@ -176,3 +176,23 @@ func sampleValue(shape domain.ValueShape, field domain.RuleConditionField) inter
 		return "x"
 	}
 }
+
+// Codex review: `account_id neq X` used to return true for a transaction with NO account
+// identity at all, because "not found among the values" is trivially true when there is nothing
+// to compare. That is both surprising and inconsistent with every other matcher — matchText and
+// matchExactCaseSensitive reject an empty subject outright.
+func TestAccountIDEvaluator_NoIdentityMatchesNothingIncludingNeq(t *testing.T) {
+	noIdentity := &domain.Transaction{ID: "t", AccountID: "", UserAccountID: nil}
+
+	for _, op := range []string{"eq", "neq", "in"} {
+		c := domain.RuleCondition{Field: domain.FieldAccountID, Operator: op, Value: "acc-1"}
+		assert.False(t, evalCond(t, noIdentity, c),
+			"a transaction with no account identity must not match account_id %s", op)
+	}
+
+	// A transaction that DOES have an identity still negates normally.
+	withIdentity := &domain.Transaction{ID: "t", AccountID: "acc-2"}
+	assert.True(t, evalCond(t, withIdentity, domain.RuleCondition{
+		Field: domain.FieldAccountID, Operator: "neq", Value: "acc-1",
+	}))
+}

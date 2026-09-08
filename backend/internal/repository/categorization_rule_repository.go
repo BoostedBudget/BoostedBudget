@@ -480,6 +480,13 @@ func (r *categorizationRuleRepository) queryRules(ctx context.Context, query str
 // whole rule list. Shadow-mode quarantine is what makes such rows visible.
 func normalizeLoadedConditions(rule *domain.CategorizationRule) {
 	for i := range rule.Conditions {
-		_ = rule.Conditions[i].Normalize()
+		if err := rule.Conditions[i].Normalize(); err != nil && rule.Conditions[i].Type == "" {
+			// Codex review: `type` is documented as always present on a response, but a row that
+			// cannot be normalized would otherwise emit no `type` at all (the field is
+			// `omitempty`, because INPUT may legitimately send field+operator instead). Stamping
+			// the reserved sentinel keeps that promise true for every response, and is honest:
+			// the condition genuinely has no classifiable fused type.
+			rule.Conditions[i].Type = domain.ConditionTypeExpression
+		}
 	}
 }
