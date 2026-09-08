@@ -438,8 +438,8 @@ validate-api-client: generate-api-client
 		exit 1; \
 	fi
 
-# Generate all (OpenAPI spec + TypeScript client)
-generate-all: generate-openapi generate-api-client
+# Generate all (OpenAPI spec + TypeScript client + Go MCP manifest)
+generate-all: generate-openapi generate-api-client generate-mcp-manifest
 	@echo "✅ All code generation complete!"
 
 # Validate all generated code
@@ -459,7 +459,21 @@ validate-mcp-artifacts:
 	@cd apps/mcp-server && bun run scripts/generate-mcp-capability-summary.ts
 	@git diff --exit-code apps/web/src/features/mcp/data/capabilitySummary.json || \
 		(echo "❌ MCP capabilitySummary.json is outdated. Run: cd apps/mcp-server && bun run scripts/generate-mcp-capability-summary.ts" && exit 1)
+	@$(MAKE) --no-print-directory generate-mcp-manifest
+	@git diff --exit-code backend/internal/domain/mcp_manifest_generated.go || \
+		(echo "❌ Go MCP manifest is outdated. Run: cd backend && go run scripts/generate-mcp-manifest/main.go" && exit 1)
 	@echo "✅ MCP Worker artifacts are up to date"
+
+# Generate backend/internal/domain/mcp_manifest_generated.go (the Go mirror of the MCP
+# operation manifest) from apps/mcp-server/src/spec/generated/spec-index.json. Depends
+# on that file already being fresh (see the index-builder.ts step above) — this target
+# does not regenerate spec-index.json itself, only reads it.
+.PHONY: generate-mcp-manifest
+generate-mcp-manifest:
+	@echo "Generating Go MCP operation manifest from spec-index.json..."
+	@cd backend && go run scripts/generate-mcp-manifest/main.go
+	@cd backend && gofmt -w internal/domain/mcp_manifest_generated.go
+	@echo "✅ Generated backend/internal/domain/mcp_manifest_generated.go"
 
 # Code generation (deprecated - use generate-openapi)
 generate:
