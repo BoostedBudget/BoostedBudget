@@ -353,6 +353,61 @@ func TestHandleError_Success(t *testing.T) {
 
 }
 
+// TestHandleError_EmptyMessage_NoDanglingSentence is a regression test for Issue #1609 P3-T3:
+// webhook_processing.go's processItemWebhook has no ErrorMessage field to forward (only ErrorCode
+// exists on domain.WebhookEvent/webhook_events), so it passes errorMessage="" whenever the stored
+// webhook payload doesn't yield one. HandleError's notification template must tolerate that and
+// NOT render a colon followed immediately by a period (the "with Test Bank: ." dangling sentence),
+// since an absent message is a legitimate, expected input here — not a bug to paper over.
+func TestHandleError_EmptyMessage_NoDanglingSentence(t *testing.T) {
+	ctx := context.Background()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockNotificationRepo := new(MockNotificationRepositoryForItemError)
+	mockPlaidService := new(MockPlaidService)
+	mockEmailService := new(MockEmailService)
+	mockUserRepo := new(MockUserRepository)
+
+	service := NewItemErrorService(
+		mockLinkedItemRepo,
+		mockNotificationRepo,
+		mockUserRepo,
+		mockPlaidService,
+		mockEmailService,
+		nil,
+	)
+
+	linkedItem := &domain.LinkedItem{
+		ID:              "linked-item-123",
+		UserID:          "user-456",
+		ItemID:          "plaid-item-789",
+		InstitutionName: "Test Bank",
+		Status:          "active",
+	}
+
+	mockLinkedItemRepo.On("TransitionErrorStatus", ctx, "linked-item-123", domain.LinkedItemStatusError,
+		"ITEM_ERROR", "", terminalLinkedItemStatuses).
+		Return(true, nil)
+
+	var capturedNotification *domain.Notification
+	mockNotificationRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		capturedNotification = n
+		return true
+	})).Return(nil)
+
+	mockUserRepo.On("GetUserByID", ctx, "user-456").
+		Return(&domain.User{ID: "user-456", Email: "real@user.com"}, nil)
+	mockEmailService.On("SendNotificationEmail", ctx, "real@user.com", mock.Anything).
+		Return(nil)
+
+	err := service.HandleError(ctx, linkedItem, "ITEM_ERROR", "")
+
+	require.NoError(t, err)
+	require.NotNil(t, capturedNotification)
+	assert.NotContains(t, capturedNotification.Message, ": .",
+		"an empty error message must not leave a dangling colon-period in the notification text")
+	assert.Contains(t, capturedNotification.Message, "Test Bank")
+}
+
 // TestHandleError_DatabaseUpdateFailure tests handling of LinkedItem update failure
 func TestHandleError_DatabaseUpdateFailure(t *testing.T) {
 	ctx := context.Background()
