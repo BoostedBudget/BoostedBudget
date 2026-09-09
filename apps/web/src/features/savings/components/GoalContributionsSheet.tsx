@@ -10,6 +10,12 @@
  *   savings_goal_contributions`, no tombstone), and #1569 R18 T1 found it was the only
  *   explicit-destruction path on this branch reachable in a single click with no confirmation.
  * Rejected contributions are not shown (tombstone is server-side only).
+ * #1625 Task 6: a contribution can also be ARCHIVED (`archived_at` set) when the goal's
+ *   progress_basis round-trips between manual/contributions — it is retained and still shown
+ *   here, but excluded from the goal's current_amount. Such rows are marked "Closed period"
+ *   instead of Proposed/Confirmed, never offer Confirm/Reject (both 404 an archived row
+ *   server-side), and still offer Delete — retained history a user chooses to destroy is
+ *   destroyed whatever period it belongs to.
  * All amounts are masked with data-ph-mask (PII policy).
  */
 
@@ -63,6 +69,17 @@ function formatDate(dateStr: string): string {
   })
 }
 
+// `archived_at` is a full ISO timestamp (unlike `occurred_on`, a plain `YYYY-MM-DD`), so it needs
+// its own formatter rather than reusing `formatDate`'s date-only parsing — `formatDate` splits on
+// `-` and would choke on the trailing `THH:MM:SSZ`.
+function formatArchivedDate(isoTimestamp: string): string {
+  return new Date(isoTimestamp).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
 function sourceLabel(source: string): string {
   switch (source) {
     case 'manual': return 'Manual'
@@ -96,7 +113,17 @@ function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDele
   const { mutateAsync: rejectMutate, isPending: rejecting } = useRejectSavingsGoalContribution()
   const { mutateAsync: deleteMutate, isPending: deleting } = useDeleteSavingsGoalContribution()
 
-  const isProposed = contribution.status === 'proposed'
+  // #1625 Task 6: `archived_at` is set when a goal's progress_basis round-trips and the prior
+  // period's contributions are retained but excluded from `current_amount`
+  // (savings_contribution_repository.go ~1265). An archived row is never actionable via
+  // Confirm/Reject regardless of its underlying `status` — both endpoints now 404 an archived
+  // contribution (see ConfirmContribution's `archived_at IS NULL` leg above in this file's
+  // backend counterpart) — so an archived *proposed* row falls through to the Delete-only
+  // action area below, same as a confirmed one. Delete stays reachable: destroying your own
+  // retained data is meaningful whatever period it belongs to (#1569 R18 T1's reasoning), and
+  // nothing about being archived changes that.
+  const isArchived = !!contribution.archived_at
+  const isProposed = contribution.status === 'proposed' && !isArchived
   const busy = confirming || rejecting || deleting || disarmed === true
 
   const handleConfirm = useCallback(async () => {
@@ -125,14 +152,31 @@ function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDele
           <span className="text-sm font-medium text-foreground" data-ph-mask>
             {formatCurrency(contribution.amount)}
           </span>
-          {isProposed && <Badge variant="secondary">Proposed</Badge>}
-          {!isProposed && <Badge variant="success">Confirmed</Badge>}
+          {/* Archived wins over Proposed/Confirmed: a closed-period row is never "live",
+              whatever status it was left in when its period closed. */}
+          {isArchived && <Badge variant="outline">Closed period</Badge>}
+          {!isArchived && isProposed && <Badge variant="secondary">Proposed</Badge>}
+          {!isArchived && !isProposed && <Badge variant="success">Confirmed</Badge>}
         </div>
         <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
           <span>{formatDate(contribution.occurred_on)}</span>
           <span>·</span>
           <span>{sourceLabel(contribution.source)}</span>
         </div>
+        {/*
+          Same visual language as the auto-categorization rule card's quarantine explanation:
+          a distinct badge plus a plain-language sentence, not colour alone. The date is the one
+          piece of `archived_at` worth surfacing -- it says WHEN the period closed, which is the
+          fact a user needs to reconcile this row against a progress figure that no longer
+          includes it. It is fixed vocabulary plus a formatted date, never user content, so it
+          stays OUTSIDE data-ph-mask.
+        */}
+        {isArchived && (
+          <p className="mt-1 text-xs text-muted-foreground" role="status">
+            Closed on {formatArchivedDate(contribution.archived_at as string)} when this goal's
+            tracking basis changed. It does not count toward the current progress total.
+          </p>
+        )}
       </div>
 
       <div className="flex items-center gap-1 shrink-0">
@@ -195,12 +239,28 @@ function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDele
         onConfirm={() => void handleDelete()}
         title="Delete this contribution?"
         description={
-          <span>
-            This permanently deletes the{' '}
-            <strong data-ph-mask>{formatCurrency(contribution.amount)}</strong> contribution
-            recorded on {formatDate(contribution.occurred_on)}. The amount is not kept anywhere
-            afterwards, and there is no way to bring it back.
-          </span>
+          // #1625 Task 6: an archived row already counts toward nothing, so the plain "this
+          // permanently deletes the contribution" copy below reads as if deleting it changes the
+          // goal's progress -- it does not, and the correction has to say so without implying
+          // deletion is somehow less permanent for this row. It still is: Delete stays reachable
+          // and irrevocable for an archived contribution (#1569 R18 T1's reasoning covers it too).
+          isArchived ? (
+            <span>
+              This permanently deletes the{' '}
+              <strong data-ph-mask>{formatCurrency(contribution.amount)}</strong> contribution
+              recorded on {formatDate(contribution.occurred_on)}. It already belongs to a closed
+              tracking period and does not count toward this goal's current progress — but
+              deleting it is still permanent. The amount is not kept anywhere afterwards, and
+              there is no way to bring it back.
+            </span>
+          ) : (
+            <span>
+              This permanently deletes the{' '}
+              <strong data-ph-mask>{formatCurrency(contribution.amount)}</strong> contribution
+              recorded on {formatDate(contribution.occurred_on)}. The amount is not kept anywhere
+              afterwards, and there is no way to bring it back.
+            </span>
+          )
         }
         variant="destructive"
         confirmButtonText="Delete forever"
