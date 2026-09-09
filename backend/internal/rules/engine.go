@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"os"
 	"sort"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -165,6 +166,14 @@ func (e *RuleEngine) EvaluateRules(tx *domain.Transaction, rules []*domain.Categ
 	return result, nil
 }
 
+// enforceZeroConditionQuarantine gates Task 8's only enforced quarantine reason.
+//
+// Default ON. Set RULE_QUARANTINE_ENFORCE_ZERO_CONDITIONS=false to restore the pre-#1625
+// match-everything behaviour without a deploy of new code — the same kill-switch convention as
+// CACHE_ENABLED. Package-level rather than threaded through config because the engine is
+// constructed in several places and a flag nobody can find is not a usable switch.
+var enforceZeroConditionQuarantine = os.Getenv("RULE_QUARANTINE_ENFORCE_ZERO_CONDITIONS") != "false"
+
 // RuleMatches checks if a single rule matches a transaction.
 func (e *RuleEngine) RuleMatches(tx *domain.Transaction, rule *domain.CategorizationRule) (bool, error) {
 	if !rule.Enabled {
@@ -172,7 +181,27 @@ func (e *RuleEngine) RuleMatches(tx *domain.Transaction, rule *domain.Categoriza
 	}
 
 	if len(rule.Conditions) == 0 {
-		// No conditions means always match (edge case)
+		// #1625 Task 8: a rule with no conditions matches NOTHING.
+		//
+		// This returned true, commented "No conditions means always match (edge case)". It is not
+		// an edge case: such a rule applies its target to every transaction the user has, which is
+		// a ledger-wide recategorisation nobody asked for. It is the one quarantine reason where
+		// leaving the rule alone is the RISKY choice, so it is the one that is enforced.
+		//
+		// Safe without a production inventory because the row is unreachable from the product:
+		// CategorizationRule.Validate has rejected empty conditions since dedac0aa (#346), the
+		// same commit that created the file, and no migration inserts rules. Reaching this branch
+		// requires a direct database edit — or the table's own `conditions` DEFAULT '[]' via a
+		// non-service insert, which is precisely what this guards.
+		//
+		// The rule is NOT hidden from reads: it still lists, and the read model marks it
+		// quarantined with a reason (Task 7). Filtering it out of GetEnabledByUserID instead would
+		// make it vanish from the UI, which is the silent failure this ticket exists to remove.
+		//
+		// Enforcement is reason-scoped: the other three quarantine reasons are surfaced only.
+		if enforceZeroConditionQuarantine {
+			return false, nil
+		}
 		return true, nil
 	}
 
