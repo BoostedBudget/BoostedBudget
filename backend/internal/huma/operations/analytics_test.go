@@ -1937,6 +1937,60 @@ func TestGetCategoryHierarchy_PassesDirectionAndScoping(t *testing.T) {
 			"roll-up defaults to true — only the literal \"false\" disables it")
 	})
 
+	// #1626 Phase 2, item 7. The subtests above cover direction and custom-category scoping and
+	// stop there, so three parameters this endpoint declares reached the service untested:
+	// account_types, include_transfers and scope. An unparsed param is not a cosmetic gap — the
+	// reports page sends all three, and an endpoint that silently ignores one returns a correct
+	// answer to a question the user did not ask.
+	t.Run("account_types is parsed into a list, not passed through raw", func(t *testing.T) {
+		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+			AccountTypes:       " depository , credit ,, ",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, mockService.lastSpendingFilters)
+		// Asserting the PARSED value, not merely that something arrived: no test in this package
+		// pins AccountTypes' splitting, so a handler that forwarded the raw string — or dropped the
+		// param — would look identical from the outside.
+		assert.Equal(t, []string{"depository", "credit"}, mockService.lastSpendingFilters.AccountTypes,
+			"blank entries must be dropped and values trimmed, as custom_category_ids are")
+	})
+
+	t.Run("include_transfers defaults to false and only true opts in", func(t *testing.T) {
+		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+		})
+		require.NoError(t, err)
+		assert.False(t, mockService.lastSpendingFilters.IncludeTransfers,
+			"absent must mean false — counting transfers as spend double-counts money moving between "+
+				"the user's own accounts")
+
+		_, err = handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+			IncludeTransfers:   "true",
+		})
+		require.NoError(t, err)
+		assert.True(t, mockService.lastSpendingFilters.IncludeTransfers)
+	})
+
+	t.Run("a malformed include_transfers is rejected, not silently treated as false", func(t *testing.T) {
+		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+			IncludeTransfers:   "yes-please",
+		})
+		// Falling back to the default would answer a different question than the one asked and give
+		// the caller no way to notice.
+		require.Error(t, err)
+	})
+
 	t.Run("roll_up=false disables roll-up", func(t *testing.T) {
 		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
 			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1947,4 +2001,58 @@ func TestGetCategoryHierarchy_PassesDirectionAndScoping(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, mockService.lastSpendingFilters.RollUpChildren)
 	})
+}
+
+// The #1369 pair, mirrored for the hierarchy endpoint (#1626 Phase 2, item 7). Household scope was
+// declared by this endpoint from the day it shipped and asserted nowhere, and the two halves are
+// separate tests on purpose: the first proves the resolved scope is ATTACHED, the second proves the
+// personal path never even asks. A single test cannot fail for both reasons.
+//
+// The handler needs a real &mockHouseholdService{} rather than nil for either to be meaningful.
+func TestGetCategoryHierarchy_HouseholdScope_ResolvesAndAttachesToFilters(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		categoryHierarchyResponse: &domain.CategoryHierarchyResponse{Direction: "expense"},
+	}
+	mockHousehold := &mockHouseholdService{}
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"user-123", "member-2"}}
+	mockHousehold.On("ResolveScope", mock.Anything, "user-123", "household").Return(scope, nil)
+
+	handler := NewAnalyticsHandler(mockService, mockHousehold)
+	output, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2026-01-01",
+		EndDate:            "2026-03-31",
+		Scope:              "household",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.lastSpendingFilters)
+	// assert.Same, not assert.Equal: the resolved scope must be the very object the household
+	// service returned. An Equal would pass against a handler that rebuilt an identical-looking
+	// scope from the request, which is the bug — it would trust caller-supplied membership.
+	assert.Same(t, scope, mockService.lastSpendingFilters.HouseholdScope)
+	mockHousehold.AssertExpectations(t)
+}
+
+func TestGetCategoryHierarchy_PersonalScope_NeverCallsHouseholdServiceGolden(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		categoryHierarchyResponse: &domain.CategoryHierarchyResponse{Direction: "expense"},
+	}
+	// Deliberately NO .On(...): an unexpected call to this mock fails the test by itself, so the
+	// AssertNotCalled below is belt as well as braces.
+	mockHousehold := &mockHouseholdService{}
+
+	handler := NewAnalyticsHandler(mockService, mockHousehold)
+	output, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2026-01-01",
+		EndDate:            "2026-03-31",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.lastSpendingFilters)
+	assert.Nil(t, mockService.lastSpendingFilters.HouseholdScope)
+	mockHousehold.AssertNotCalled(t, "ResolveScope", mock.Anything, mock.Anything, mock.Anything)
 }
