@@ -24,20 +24,43 @@ import (
 // the registry's SchemaVersion is N, so the old entry is not merely decoded-and-rejected — it is
 // never looked up at all, and GetOrLoad must fall through to the loader.
 //
-// It is parameterized over every namespace this branch's history/analytics changes actually
-// reached: NamespaceAnalytics (GetNetWorthTrend's grain fix) and NamespaceAnalyticsRows (the
-// deleted_at tombstone filters + household-grants rewrite added to analytics_repository.go, whose
-// GetTopExpense/GetLargestTransactionsForPeriod/GetCategoryBreakdownForMerchant/GetUnusualSpend
-// results are cached under this namespace). Both namespaces must carry a SchemaVersion of at least
-// 2 as of this branch — see the doc comments at their namespaceRegistry entries for why.
+// It is parameterized over every namespace whose query semantics a shipped change has altered, and
+// each carries its OWN required floor.
+//
+// ⚠ This used to assert `SchemaVersion > 1` for both, which could not fail in the way it claimed
+// to (#1626 Phase 2). NamespaceAnalytics was at 3 by then, so reverting it to 2 — undoing the bump
+// that #1626's grouping-key and hierarchy changes require to take effect through Redis — left this
+// test green, and the doc comment above it still said "at least 2". A test that passes while the
+// thing it names is broken is worse than no test: it is a green light over a hole.
+//
+// The floors are a TABLE, so each namespace's requirement is stated once and independently:
+//
+//   - NamespaceAnalytics 3 — #1531/#1569 took it to 2 (GetNetWorthTrend's grain fix); #1626 took
+//     it to 3, because the analytics grouping keys and display resolution changed shape and a
+//     pre-#1626 envelope decodes cleanly into the new struct while carrying UUIDs where names
+//     belong. Decoding cleanly is exactly what makes the bump necessary rather than optional.
+//   - NamespaceAnalyticsRows 2 — the deleted_at tombstone filters and household-grants rewrite in
+//     analytics_repository.go, whose GetTopExpense / GetLargestTransactionsForPeriod /
+//     GetCategoryBreakdownForMerchant / GetUnusualSpend results are cached here.
+//
+// Raising a floor here is the deliberate act; lowering one should require deleting a row and
+// saying why in the same commit.
 func TestSchemaVersionBump_OrphansEntriesWrittenUnderThePriorVersion(t *testing.T) {
+	requiredFloor := map[Namespace]int{
+		NamespaceAnalytics:     3,
+		NamespaceAnalyticsRows: 2,
+	}
+
 	for _, ns := range []Namespace{NamespaceAnalytics, NamespaceAnalyticsRows} {
 		t.Run(string(ns), func(t *testing.T) {
 			cfg, ok := lookupNamespace(ns)
 			require.True(t, ok)
-			require.Greater(t, cfg.SchemaVersion, 1,
-				"namespace %s must have bumped SchemaVersion past 1 for this branch's query "+
-					"semantics changes to actually take effect through Redis", ns)
+			floor, hasFloor := requiredFloor[ns]
+			require.True(t, hasFloor, "namespace %s has no recorded SchemaVersion floor", ns)
+			require.GreaterOrEqual(t, cfg.SchemaVersion, floor,
+				"namespace %s must be at SchemaVersion >= %d for the shipped query-semantics "+
+					"changes to take effect through Redis; see the floor table above for which "+
+					"change put it there", ns, floor)
 
 			fake := redisclient.NewFake("cache")
 			c := NewCache(Options{Client: fake})
