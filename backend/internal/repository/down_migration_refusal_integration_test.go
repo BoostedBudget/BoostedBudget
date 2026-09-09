@@ -457,6 +457,28 @@ var downGuardCases = []downGuardCase{
 		wantMsgContains: []string{"refusing to roll back 000164", "definition_snapshot"},
 	},
 	{
+		// #1625 final review B3. 000190's down dropped archived_at unconditionally and its own
+		// comment claimed the resulting double-count was "the pre-#1625 behaviour this reverts to,
+		// not new damage". That was FALSE: archived_at is the only surviving record that a
+		// contribution belongs to a CLOSED contributions period (000190 added a column precisely
+		// because no other signal survives), so dropping it resurrects the 100 + 100 = 200
+		// double-count for every goal that round-tripped its basis while 000190 was applied — a
+		// derived FINANCIAL figure silently becoming wrong, which is the failure class this ticket
+		// exists to remove. 000180 already refuses on this same table while deleted_at is set;
+		// this mirrors it.
+		label:  "000190_archived_contribution",
+		file:   "000190_add_contribution_archived_at.down.sql",
+		tables: []string{"savings_goal_contributions"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				INSERT INTO savings_goal_contributions (id, savings_goal_id, amount, source, occurred_on, archived_at)
+				VALUES ($1, $2, 100.00, 'manual', CURRENT_DATE, now())`, uuid.New().String(), f.savingsGoalID)
+			require.NoError(t, err, "seed an ARCHIVED savings_goal_contribution")
+		},
+		wantMsgContains: []string{"refusing to roll back 000190", "archived_at", "double-counting"},
+	},
+	{
 		label:  "000169_transaction_annotation_history",
 		file:   "000169_record_the_prior_annotation.down.sql",
 		tables: []string{"transaction_annotation_history"},

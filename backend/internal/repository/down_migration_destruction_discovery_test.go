@@ -37,6 +37,15 @@ import (
 //  2. An `ALTER TABLE <history-bearing table> ... ON DELETE CASCADE` — re-arming a cascade that a
 //     forward migration disarmed, so the NEXT ordinary delete of the parent silently destroys this
 //     table's rows, not the rollback itself.
+//  3. `ALTER TABLE <history-bearing table> DROP COLUMN <a LIFECYCLE column>` — #1625 final review
+//     B3. NOT "any DROP COLUMN": most dropped columns are recomputable, or are the thing the
+//     rollback exists to remove. The narrow set in lifecycleStateColumns is different in kind —
+//     each is the ONLY surviving record of which universe a retained row belongs to (live,
+//     tombstoned, removed, or a closed accounting period), so dropping it does not restore a prior
+//     behaviour, it silently promotes retained rows back into a live universe that then
+//     miscounts. 000180 (deleted_at) and 000190 (archived_at) are both exactly this shape, on the
+//     same table, and 000190 shipped unguarded WITH a comment asserting the opposite — found by
+//     adversarial review, because nothing scanned for it.
 //
 // A THIRD shape — an unconditional or unqualified `DELETE FROM`/`TRUNCATE` of a history-bearing
 // table — is NOT re-derived here. It already has its own EXHAUSTIVE, checked guard:
@@ -73,6 +82,17 @@ import (
 // reason, but the reason is NOT an engineering endorsement that leaving them unguarded is correct —
 // see the doc comment on deliberatelyUnguardedDestructiveDownMigrations for why a judgment call
 // was made NOT to silently add a runtime refusal to them in this round.
+//
+// WHAT THE THIRD SHAPE FOUND, 2026-09-09 (#1625 final review B3). Adding the lifecycle-column
+// DROP COLUMN scan surfaced FIVE more files on its first run against the real tree —
+// 000149, 000154, 000156, 000158 and 000159 — none of which was on any roster, and two of which
+// (000158/000159) #1569 round 12 task 4 had explicitly considered and left DOCUMENTED rather than
+// enforced, asking in their own headers for exactly this detector to be built first. They are
+// recorded as checked exceptions below, with derived reasons. The same scan confirms 000180 and
+// (only after B3 fixed it) 000190 as GUARDED: those two are the same hazard on the same table and
+// they do refuse, so the tree is currently inconsistent about this class. That inconsistency is
+// stated in the exception entries rather than resolved unilaterally here — building the detector
+// and reversing five shipped migrations' rollback behaviour are separate decisions.
 
 // dropTableRefRegexp matches `DROP TABLE [IF EXISTS] [schema.]<table>`, tolerating the same
 // schema-qualification and quoting shapes historyDeleteRefRegexp already tolerates (#1569 T7-FIX
@@ -88,6 +108,29 @@ var alterTableTargetRegexp = regexp.MustCompile(`(?is)\bALTER\s+TABLE\s+(?:ONLY\
 
 // onDeleteCascadeRegexp matches the delete-action clause this guard's second shape is watching for.
 var onDeleteCascadeRegexp = regexp.MustCompile(`(?is)\bON\s+DELETE\s+CASCADE\b`)
+
+// dropColumnRegexp captures every column an ALTER TABLE statement drops. A single ALTER may drop
+// several (`DROP COLUMN a, DROP COLUMN b`), hence FindAllStringSubmatch per statement rather than
+// one match.
+var dropColumnRegexp = regexp.MustCompile(`(?is)\bDROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?"?([a-z_][a-z0-9_]*)"?`)
+
+// lifecycleStateColumns is the CLOSED set of columns whose loss silently changes which universe a
+// retained row belongs to (#1625 final review B3). Each one is the only surviving record of a
+// row's lifecycle state; nothing else in the schema can reconstruct it, which is why the migration
+// that introduced it had to ADD a column rather than reuse an existing signal.
+//
+// ⚠ Keep this narrow. Widening it to "any DROP COLUMN" would flag the down migration of every
+// ADD COLUMN in the tree, most of which drop a column that is recomputable or that the rollback
+// exists to remove — and a guard that fires on everything is one people learn to allowlist past.
+var lifecycleStateColumns = map[string]struct{}{
+	"deleted_at":     {}, // the seven tombstones; retained-and-permanently-invisible
+	"deleted_reason": {}, // WHY it was tombstoned — a restore must be scoped to a cause it can prove
+	"removed_at":     {}, // accounts' tombstone
+	"removed_reason": {}, // accounts' cause; RestoreProviderRemovedAccount reads exactly this
+	"archived_at":    {}, // savings_goal_contributions: belongs to a CLOSED contributions period
+	"purged_at":      {}, // reserved: same shape, so a future purge marker cannot ship unguarded
+	"anonymized_at":  {}, // reserved: same shape
+}
 
 // migrationNumberRegexp pulls the zero-padded numeric prefix off a migration filename, e.g.
 // "000164" from "000164_audit_trail_survives_definition_purge.down.sql".
@@ -178,6 +221,55 @@ var deliberatelyUnguardedDestructiveDownMigrations = map[string]deliberatelyUngu
 			"one file. Flagged 2026-08-29 (#1569 round 14 finding 3) for an explicit human decision " +
 			"— NOT endorsed as safe by this entry's existence.",
 	},
+	// ── The five the DROP COLUMN shape (#1625 final review B3) discovered on its first run. ──
+	//
+	// ⚠ These are RESURRECTION, not destruction: every row survives the rollback physically, but
+	// the column that says which universe it belongs to does not, so retained rows silently become
+	// live again and start counting. #1569 round 12 task 4 looked at 000158/000159 under exactly
+	// this lens, decided to DOCUMENT rather than enforce, and wrote down why — see the header of
+	// 000158_soft_delete_config_parents.down.sql, which asks a future round for "its own mechanism
+	// (e.g. detecting whether any row has deleted_at IS NOT NULL and refusing on THAT basis)".
+	// This scan is that mechanism. Reversing the enforce/document call for five SHIPPED migrations
+	// is a separate decision from building the detector, so they are recorded, not silently
+	// changed.
+	//
+	// ⚠ The tree is INCONSISTENT about this today and the inconsistency is real, not a
+	// misclassification: 000180 (savings_goal_contributions.deleted_at) and, as of #1625 final
+	// review B3, 000190 (savings_goal_contributions.archived_at) DO refuse, on the same hazard and
+	// the same table. Whoever settles this should settle it in one direction for all seven.
+	"000149_add_accounts_removed_status.down.sql": {
+		reason: "drops accounts.removed_at with no runtime refusal. removed_at is half of the " +
+			"account tombstone; without it a removed account is indistinguishable from a live one " +
+			"and its balance re-enters every current-state total. Recorded 2026-09-09 (#1625 final " +
+			"review B3) by the DROP COLUMN scan's first run — NOT endorsed as safe.",
+	},
+	"000154_add_accounts_removed_reason.down.sql": {
+		reason: "drops accounts.removed_reason with no runtime refusal. The file's own header " +
+			"already reasons about the loss and argues it fails SAFE (an account stays removed " +
+			"rather than being wrongly resurrected), which is why this is recorded rather than " +
+			"changed. It is still the only queryable record of WHY an account was removed, which " +
+			"RestoreProviderRemovedAccount reads. Recorded 2026-09-09 (#1625 final review B3).",
+	},
+	"000156_add_transactions_tombstone.down.sql": {
+		reason: "drops transactions.deleted_at/deleted_reason/deleted_by with no runtime refusal. " +
+			"The file's own header states the consequence precisely — settled pendings and " +
+			"retained reversals become indistinguishable from live rows and every total that spans " +
+			"them DOUBLE-COUNTS — and states it is lossy by design. Comment-only, no refusal. " +
+			"Recorded 2026-09-09 (#1625 final review B3) — NOT endorsed as safe.",
+	},
+	"000158_soft_delete_config_parents.down.sql": {
+		reason: "drops deleted_at from savings_goals/boosts/budgets/budget_categories with no " +
+			"runtime refusal. #1569 round 12 task 4 DELIBERATELY left this uninstrumented and wrote " +
+			"the reasoning into the file's header, asking a future round for a mechanism that " +
+			"refuses on `deleted_at IS NOT NULL` rather than on a row count. This scan is that " +
+			"mechanism; flipping the documented decision for a shipped migration is a separate " +
+			"call. Recorded 2026-09-09 (#1625 final review B3).",
+	},
+	"000159_soft_delete_custom_categories.down.sql": {
+		reason: "drops custom_categories.deleted_at with no runtime refusal. Same class, same " +
+			"deliberate #1569 round 12 task 4 decision, same header reasoning as 000158. Recorded " +
+			"2026-09-09 (#1625 final review B3).",
+	},
 	"000018_add_transaction_categories_and_tags.down.sql": {
 		reason: "unconditional `DROP TABLE custom_categories CASCADE`, no runtime refusal, no " +
 			"warning comment at all. Same foundational-migration reasoning as 000007/000010/000022: " +
@@ -242,16 +334,23 @@ func destructiveHistoryTables(text string) []string {
 	}
 
 	for _, stmt := range splitSQLStatements(blanked) {
-		if !onDeleteCascadeRegexp.MatchString(stmt) {
-			continue
-		}
 		m := alterTableTargetRegexp.FindStringSubmatch(stmt)
 		if m == nil {
 			continue
 		}
 		tbl := strings.ToLower(m[1])
-		if _, ok := historyBearingTables[tbl]; ok {
+		if _, ok := historyBearingTables[tbl]; !ok {
+			continue
+		}
+		if onDeleteCascadeRegexp.MatchString(stmt) {
 			found[tbl] = true
+			continue
+		}
+		for _, dc := range dropColumnRegexp.FindAllStringSubmatch(stmt, -1) {
+			if _, ok := lifecycleStateColumns[strings.ToLower(dc[1])]; ok {
+				found[tbl] = true
+				break
+			}
 		}
 	}
 
@@ -397,6 +496,33 @@ func TestDownMigrationDestructionDiscovery_SeesTheShapesThatMatter(t *testing.T)
 			wantTables: nil,
 		},
 		{
+			name:       "dropping a LIFECYCLE column from a history table is seen (#1625 B3)",
+			sql:        "ALTER TABLE savings_goal_contributions DROP COLUMN IF EXISTS archived_at;",
+			wantTables: []string{"savings_goal_contributions"},
+		},
+		{
+			name: "dropping an ORDINARY column from a history table is NOT this guard's business — " +
+				"widening to any DROP COLUMN would flag every ADD COLUMN's rollback in the tree",
+			sql:        "ALTER TABLE transactions DROP COLUMN IF EXISTS pending_transaction_id;",
+			wantTables: nil,
+		},
+		{
+			name:       "dropping a lifecycle column from a NON-history table is not this guard's business",
+			sql:        "ALTER TABLE notifications DROP COLUMN IF EXISTS deleted_at;",
+			wantTables: nil,
+		},
+		{
+			name: "a multi-column DROP is seen when ANY of the dropped columns is a lifecycle one",
+			sql: "ALTER TABLE transactions DROP COLUMN IF EXISTS deleted_by, " +
+				"DROP COLUMN IF EXISTS deleted_at;",
+			wantTables: []string{"transactions"},
+		},
+		{
+			name:       "a DROP COLUMN spelled only in a comment is not a DROP COLUMN",
+			sql:        "-- we used to ALTER TABLE transactions DROP COLUMN deleted_at here\nSELECT 1;",
+			wantTables: nil,
+		},
+		{
 			name:       "a DROP TABLE mentioned only in a comment is not a DROP TABLE",
 			sql:        "-- old note: we used to DROP TABLE transactions here\nSELECT 1;",
 			wantTables: nil,
@@ -485,6 +611,11 @@ func TestDownMigrationDestructionDiscovery_RealTreeSample(t *testing.T) {
 		"000163_portfolio_snapshot_repair_ledger.down.sql",
 		"000164_audit_trail_survives_definition_purge.down.sql",
 		"000169_record_the_prior_annotation.down.sql",
+		// #1625 final review B3: both are the DROP COLUMN shape on savings_goal_contributions, and
+		// both refuse. 000190 did NOT until B3 — it dropped archived_at unconditionally while
+		// asserting in a comment that the resulting double-count was "not new damage".
+		"000180_tombstone_savings_goal_contributions.down.sql",
+		"000190_add_contribution_archived_at.down.sql",
 	}
 	for _, f := range guarded {
 		d, ok := byFile[f]
@@ -504,6 +635,11 @@ func TestDownMigrationDestructionDiscovery_RealTreeSample(t *testing.T) {
 		"000010_create_transactions_table.down.sql",
 		"000018_add_transaction_categories_and_tags.down.sql",
 		"000022_create_budgets_and_savings_goals.down.sql",
+		"000149_add_accounts_removed_status.down.sql",
+		"000154_add_accounts_removed_reason.down.sql",
+		"000156_add_transactions_tombstone.down.sql",
+		"000158_soft_delete_config_parents.down.sql",
+		"000159_soft_delete_custom_categories.down.sql",
 	}
 	for _, f := range unguarded {
 		d, ok := byFile[f]
