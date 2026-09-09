@@ -144,6 +144,41 @@ func TestConditionSchema_EveryClosedSetIsPublishedOrExempt(t *testing.T) {
 	}
 }
 
+// #1625 Task 20: closedSetExemptFields above reasons about the PFC exemption, but that reasoning
+// lived ONLY in this test file. GetConditionSchema's operation Description promises "closed value
+// sets" unconditionally, and an MCP agent reading the published schema saw Values: nil for
+// pfc_primary/pfc_detailed with no explanation anywhere it could reach — the promise was false as
+// written, exactly as documented for both fields in the PFC exemption above. Fixed by saying
+// where the values come from, in the one place a caller of the endpoint (not the Go source) can
+// read it: the field's own published Notes.
+func TestConditionSchema_PFCFieldsPointToWhereTheirClosedSetIsPublished(t *testing.T) {
+	published := map[string]ConditionFieldSchema{}
+	for _, f := range ConditionSchema().Fields {
+		published[f.Field] = f
+	}
+
+	cases := []struct {
+		field           RuleConditionField
+		expectSubstring string
+	}{
+		{FieldPFCPrimary, "/api/v1/categories/plaid-primaries"},
+		{FieldPFCDetailed, "/api/v1/categories/plaid-detailed"},
+	}
+	for _, c := range cases {
+		notes := published[string(c.field)].Notes
+		if notes == "" {
+			t.Errorf("field %q has no Notes at all — a caller cannot learn where its closed set "+
+				"comes from without reading Go source", c.field)
+			continue
+		}
+		if !strings.Contains(notes, c.expectSubstring) {
+			t.Errorf("field %q Notes %q does not name the endpoint (%q) where its closed set is "+
+				"actually published — an agent reading only the published schema has no way to "+
+				"find the ~120 PFC values it was told exist", c.field, notes, c.expectSubstring)
+		}
+	}
+}
+
 // #1625 Task 11: the OpenAPI `enum:` struct tag is a FOURTH hand-maintained copy of the field
 // list, and nothing checked it.
 //

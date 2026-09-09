@@ -612,6 +612,53 @@ describe('AutoCategorizationRuleCard', () => {
       expect(screen.getByText(/cannot be evaluated as written/i)).toBeDefined()
     })
 
+    // #1625 Task 10: RuleMatches returns false immediately for !rule.Enabled, so a disabled
+    // rule is not running no matter what quarantine_reason or quarantined says. The badge must
+    // read "Disabled" -- not "Not running" or "Needs attention" -- for a disabled rule, in
+    // every quarantine combination.
+    it('reads "Disabled" regardless of quarantine reason, and never says Not running/Needs attention', () => {
+      render(
+        <AutoCategorizationRuleCard
+          rule={{
+            ...mockRule,
+            enabled: false,
+            quarantined: true,
+            quarantine_reason: 'no_conditions_matches_everything',
+          }}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Disabled')).toBeDefined()
+      expect(screen.queryByText('Not running')).toBeNull()
+      expect(screen.queryByText('Needs attention')).toBeNull()
+      expect(screen.queryByText('Active')).toBeNull()
+    })
+
+    // A disabled rule with a repaired (still-would-run-if-enabled) reason must not claim it is
+    // "STILL RUNNING" -- that claim is only true while the rule is enabled.
+    it('does not claim a disabled+repaired rule is still running', () => {
+      render(
+        <AutoCategorizationRuleCard
+          rule={{
+            ...mockRule,
+            enabled: false,
+            quarantined: false,
+            quarantine_reason: 'invalid_condition_value_shape',
+          }}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Disabled')).toBeDefined()
+      expect(screen.queryByText(/still running/i)).toBeNull()
+      expect(screen.getByText(/is disabled, so it is not running/i)).toBeDefined()
+    })
+
     it('leaves a healthy rule exactly as it was', () => {
       render(
         <AutoCategorizationRuleCard

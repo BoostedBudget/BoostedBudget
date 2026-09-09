@@ -172,8 +172,9 @@ func TestARejectedConditionIsStillRepairedBeforeEvaluation(t *testing.T) {
 	}
 }
 
-// TestMixedArrayMemberIsCoercedRatherThanSilentlyDropped, INVERTED. The first version of Task 2
-// asserted that coercion rescued the dropped member; that was a semantics change to rules the
+// This test's own earlier revision asserted the opposite of what it asserts now, and has been
+// INVERTED. The first version of Task 2 asserted that coercion rescued the dropped member; that
+// was a semantics change to rules the
 // product sanctions today, made outside the quarantine set. The behaviour being preserved — and
 // therefore the behaviour under test — is the silent drop.
 //
