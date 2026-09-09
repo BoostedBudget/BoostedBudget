@@ -74,6 +74,10 @@ type AnalyticsService interface {
 	// AI-tool-callable (Issue #1215 PR2).
 	GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) (*domain.CategoryBreakdownForMerchantResponse, error)
 
+	// GetCategoryHierarchy returns the category tree (up to three levels) for one flow
+	// direction, with roll-up totals and each node's own direct spend (#1626).
+	GetCategoryHierarchy(ctx context.Context, userID string, filters domain.SpendingFilters, direction domain.CategoryDirection) (*domain.CategoryHierarchyResponse, error)
+
 	// GetIncomeSourceBreakdown returns income (inflow) totals grouped by category.
 	// AI-tool-callable (Issue #1215 PR2).
 	GetIncomeSourceBreakdown(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.IncomeSourceBreakdownResponse, error)

@@ -19,40 +19,43 @@ import (
 
 // mockAnalyticsService is a mock implementation of services.AnalyticsService
 type mockAnalyticsService struct {
-	summaryResponse                         *domain.CashFlowSummaryResponse
-	historyResponse                         *domain.CashFlowHistoryResponse
-	spendingByCategoryResponse              *domain.SpendingByCategoryResponse
-	spendingByMerchantResponse              *domain.SpendingByMerchantResponse
-	spendingTrendsResponse                  *domain.SpendingTrendsResponse
-	averageMonthlySpendResponse             *domain.AverageMonthlySpendResponse
-	recurringSubscriptionsResponse          *domain.RecurringSubscriptionsResponse
-	savingsRateResponse                     *domain.SavingsRateResponse
-	monthOverMonthResponse                  *domain.MonthOverMonthResponse
-	largestTransactionsResponse             *domain.LargestTransactionsResponse
-	categoryBreakdownForMerchantResponse    *domain.CategoryBreakdownForMerchantResponse
-	incomeSourceBreakdownResponse           *domain.IncomeSourceBreakdownResponse
-	unusualSpendResponse                    *domain.UnusualSpendResponse
-	netWorthTrendResponse                   *domain.NetWorthTrendResponse
-	budgetVsActualResponse                  *domain.BudgetVsActualResponse
-	summaryErr                              error
-	historyErr                              error
-	spendingByCategoryErr                   error
-	spendingByMerchantErr                   error
-	spendingTrendsErr                       error
-	averageMonthlySpendErr                  error
-	recurringSubscriptionsErr               error
-	savingsRateErr                          error
-	monthOverMonthErr                       error
-	largestTransactionsErr                  error
-	categoryBreakdownForMerchantErr         error
-	incomeSourceBreakdownErr                error
-	unusualSpendErr                         error
-	netWorthTrendErr                        error
-	budgetVsActualErr                       error
-	categoryTotalResponse                   *domain.CategoryTotalResponse
-	categoryTotalErr                        error
-	topExpenseResponse                      *domain.TopExpenseResponse
-	topExpenseErr                           error
+	summaryResponse                      *domain.CashFlowSummaryResponse
+	historyResponse                      *domain.CashFlowHistoryResponse
+	spendingByCategoryResponse           *domain.SpendingByCategoryResponse
+	spendingByMerchantResponse           *domain.SpendingByMerchantResponse
+	spendingTrendsResponse               *domain.SpendingTrendsResponse
+	averageMonthlySpendResponse          *domain.AverageMonthlySpendResponse
+	recurringSubscriptionsResponse       *domain.RecurringSubscriptionsResponse
+	savingsRateResponse                  *domain.SavingsRateResponse
+	monthOverMonthResponse               *domain.MonthOverMonthResponse
+	largestTransactionsResponse          *domain.LargestTransactionsResponse
+	categoryBreakdownForMerchantResponse *domain.CategoryBreakdownForMerchantResponse
+	categoryHierarchyResponse            *domain.CategoryHierarchyResponse
+	categoryHierarchyErr                 error
+	lastCategoryDirection                domain.CategoryDirection
+	incomeSourceBreakdownResponse        *domain.IncomeSourceBreakdownResponse
+	unusualSpendResponse                 *domain.UnusualSpendResponse
+	netWorthTrendResponse                *domain.NetWorthTrendResponse
+	budgetVsActualResponse               *domain.BudgetVsActualResponse
+	summaryErr                           error
+	historyErr                           error
+	spendingByCategoryErr                error
+	spendingByMerchantErr                error
+	spendingTrendsErr                    error
+	averageMonthlySpendErr               error
+	recurringSubscriptionsErr            error
+	savingsRateErr                       error
+	monthOverMonthErr                    error
+	largestTransactionsErr               error
+	categoryBreakdownForMerchantErr      error
+	incomeSourceBreakdownErr             error
+	unusualSpendErr                      error
+	netWorthTrendErr                     error
+	budgetVsActualErr                    error
+	categoryTotalResponse                *domain.CategoryTotalResponse
+	categoryTotalErr                     error
+	topExpenseResponse                   *domain.TopExpenseResponse
+	topExpenseErr                        error
 	// lastCashFlowFilters/lastSpendingFilters capture the most recent call's filters, so
 	// tests can assert HouseholdScope was (or wasn't) threaded through. #1369 — Phase 5.
 	lastCashFlowFilters *domain.CashFlowFilters
@@ -127,6 +130,12 @@ func (m *mockAnalyticsService) GetCategoryBreakdownForMerchant(_ context.Context
 func (m *mockAnalyticsService) GetIncomeSourceBreakdown(_ context.Context, _ string, filters domain.SpendingFilters) (*domain.IncomeSourceBreakdownResponse, error) {
 	m.lastSpendingFilters = &filters
 	return m.incomeSourceBreakdownResponse, m.incomeSourceBreakdownErr
+}
+
+func (m *mockAnalyticsService) GetCategoryHierarchy(_ context.Context, _ string, filters domain.SpendingFilters, direction domain.CategoryDirection) (*domain.CategoryHierarchyResponse, error) {
+	m.lastSpendingFilters = &filters
+	m.lastCategoryDirection = direction
+	return m.categoryHierarchyResponse, m.categoryHierarchyErr
 }
 
 func (m *mockAnalyticsService) GetUnusualSpend(_ context.Context, _ string, _ time.Time, _ time.Time) (*domain.UnusualSpendResponse, error) {

@@ -24,6 +24,7 @@ type mockAnalyticsRepository struct {
 	getMonthOverMonthSpendingFn       func(ctx context.Context, userID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error)
 	getLargestTransactionsForPeriodFn func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.LargestTransactionRow, error)
 	getCategoryBreakdownForMerchantFn func(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
+	getCategoryHierarchyFn            func(ctx context.Context, userID string, filters domain.SpendingFilters, direction domain.CategoryDirection) ([]domain.CategoryHierarchyRow, error)
 	getIncomeSourceBreakdownFn        func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.IncomeSourceRow, error)
 	getUnusualSpendFn                 func(ctx context.Context, userID string, baselineStart, startDate, endDate time.Time, sigmaThreshold float64) ([]domain.UnusualSpendRow, error)
 	getBudgetVsActualFn               func(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error)
@@ -116,6 +117,13 @@ func (m *mockAnalyticsRepository) GetLargestTransactionsForPeriod(ctx context.Co
 func (m *mockAnalyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
 	if m.getCategoryBreakdownForMerchantFn != nil {
 		return m.getCategoryBreakdownForMerchantFn(ctx, userID, merchantID, filters)
+	}
+	return nil, nil
+}
+
+func (m *mockAnalyticsRepository) GetCategoryHierarchy(ctx context.Context, userID string, filters domain.SpendingFilters, direction domain.CategoryDirection) ([]domain.CategoryHierarchyRow, error) {
+	if m.getCategoryHierarchyFn != nil {
+		return m.getCategoryHierarchyFn(ctx, userID, filters, direction)
 	}
 	return nil, nil
 }

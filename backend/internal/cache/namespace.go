@@ -84,8 +84,16 @@ var namespaceRegistry = map[Namespace]namespaceConfig{
 	//     GetSpendingByCategory/Merchant/Trends, GetAverageMonthlySpend, GetSavingsRateForPeriod,
 	//     GetMonthOverMonthSpendingChange, and GetIncomeSourceBreakdown.
 	// See TestSchemaVersionBump_OrphansEntriesWrittenUnderThePriorVersion.
+	// SchemaVersion 3 (#1626): the PAYLOAD of two already-cached methods changed.
+	// GetSpendingByCategory and GetIncomeSourceBreakdown now resolve their display names in the
+	// service — a custom category renders as its own name (never a title-cased UUID) and a PFC
+	// category as its registry label rather than the raw enum. A deploy never touches the
+	// per-scope generation token (it is minted once and only Bump()'d by explicit invalidation),
+	// so a pre-fix Redis entry would remain a valid hit under post-fix code and keep serving raw
+	// enums and UUIDs until its own TTL expired. The 120s TTL makes that window short, not absent,
+	// and "short" is not a correctness argument. Same reasoning as version 2 above.
 	NamespaceAnalytics: {
-		TTL: 120 * time.Second, SchemaVersion: 2, ScopeKind: ScopeUser, DefaultEnabled: true,
+		TTL: 120 * time.Second, SchemaVersion: 3, ScopeKind: ScopeUser, DefaultEnabled: true,
 	},
 	// SchemaVersion 2 (#1569, round 11): analytics_repository.go added `t.deleted_at IS NULL` to
 	// the queries backing GetTopExpense, GetLargestTransactionsForPeriod,
