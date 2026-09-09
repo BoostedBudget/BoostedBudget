@@ -90,6 +90,15 @@ func (s *categorizationRuleService) PreviewRule(
 		scan = PreviewScanMax
 	}
 
+	// This read enriches EffectiveMerchantName, so preview DOES evaluate effective_merchant
+	// conditions against the same name sync uses (#1625 Task 11).
+	//
+	// ⚠ The two differ on FAILURE, deliberately. The repository's enrichment fails CLOSED — a
+	// resolution error aborts this read and preview returns an error — while ApplyRulesToBatch
+	// fails OPEN, logging and falling back to the raw provider name. That asymmetry is the right
+	// one: a background sync must never drop categorisation over a merchant lookup, and a
+	// synchronous preview must never quietly show matches computed from different data than the
+	// sync would use. They never silently disagree; on failure preview declines to answer.
 	txns, err := s.transactionReader.GetByUserIDWithFilters(ctx, userID, domain.TransactionFilters{}, scan, 0)
 	if err != nil {
 		return nil, err

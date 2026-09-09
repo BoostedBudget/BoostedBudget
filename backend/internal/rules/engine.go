@@ -198,6 +198,12 @@ func (e *RuleEngine) RuleMatches(tx *domain.Transaction, rule *domain.Categoriza
 		// quarantined with a reason (Task 7). Filtering it out of GetEnabledByUserID instead would
 		// make it vanish from the UI, which is the silent failure this ticket exists to remove.
 		//
+		// ⚠ An earlier commit message claimed enforcing here rather than in the two Apply methods
+		// "also covers preview". That overstated it: PreviewRule validates the candidate rule
+		// first, so an empty condition list is already rejected before it reaches this branch.
+		// Enforcing here is still the right single place — it is one site instead of two — but
+		// preview was never the reason.
+		//
 		// Enforcement is reason-scoped: the other three quarantine reasons are surfaced only.
 		if enforceZeroConditionQuarantine {
 			return false, nil

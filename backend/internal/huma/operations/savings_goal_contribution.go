@@ -176,10 +176,12 @@ type DeleteContributionInput struct {
 // changed status, the goal did not move, and the caller was told it worked. One helper rather than
 // three copies, so the three endpoints cannot come to disagree about what the precondition is.
 //
-// ⚠ DeleteContribution deliberately does NOT call this. handleBasisSwitch's ArchiveByGoal is
-// exactly the path that strands rows on a now-manual goal, so refusing there would make those rows
-// permanently undeletable — strictly worse than the no-op it would be fixing, and inescapable for
-// the user. Destroying a row you own is meaningful regardless of the goal's basis.
+// ⚠ DeleteContribution deliberately does NOT call this, and the original justification for that
+// was overstated. "Permanently undeletable" is wrong: a user could switch the goal back to the
+// contributions basis and delete the row then. The accurate reason is narrower and still holds —
+// gating Delete would make deleting your own row require an unrelated, side-effecting change to
+// the goal's configuration first, to remove data the basis has no bearing on. Confirm and Reject
+// genuinely cannot take effect on a manual goal; a delete always does exactly what it says.
 //
 // `verb` completes the sentence, so each endpoint's message describes what IT could not do.
 func (h *ContributionHandler) assertLedgerIsLive(ctx context.Context, goalID, userID, verb string) error {
