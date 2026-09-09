@@ -150,6 +150,16 @@ type SavingsGoalContribution struct {
 	OccurredOn      string    `json:"occurred_on" db:"occurred_on"` // date string YYYY-MM-DD
 	CreatedAt       time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at" db:"updated_at"`
+	// ArchivedAt marks a row as belonging to a CLOSED contributions period — set when the goal
+	// left, or re-entered, the contributions progress_basis (#1625, migration 000190).
+	//
+	// The row is retained and still listed, but SumConfirmedByGoal and SumConfirmedByGoalInPeriod
+	// exclude it, so a basis round-trip cannot count it alongside the synthetic seed that replaced
+	// it. This field is what keeps the LEDGER and the TOTAL honest with each other: ListByGoal
+	// deliberately still returns archived rows (retention: they are history, not rubbish), so
+	// without an explicit marker the listed contributions would visibly fail to add up to the
+	// goal's progress, with nothing on screen explaining why.
+	ArchivedAt *time.Time `json:"archived_at,omitempty" db:"archived_at" doc:"Set when this contribution belongs to a closed contributions period. Such rows are retained and listed but do NOT count toward the goal's current_amount."`
 }
 
 // Validate checks SavingsGoalContribution required fields and invariants.

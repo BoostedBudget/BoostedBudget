@@ -6207,6 +6207,10 @@ components:
         amount:
           format: double
           type: number
+        archived_at:
+          description: Set when this contribution belongs to a closed contributions period. Such rows are retained and listed but do NOT count toward the goal's current_amount.
+          format: date-time
+          type: string
         confirmed_by_user:
           type: boolean
         created_at:
