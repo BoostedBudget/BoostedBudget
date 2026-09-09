@@ -1313,14 +1313,58 @@ func (r *analyticsRepository) getSpendingTrendsHousehold(ctx context.Context, re
 // GetCategoryTotalForPeriod returns the total expense amount for a specific effective category.
 // Matches both PFC primary categories (e.g. "FOOD_AND_DRINK") and custom categories ("custom:<uuid>").
 // Expenses are amount > 0 (PFCv2 convention). Returns zero row when no matching transactions exist.
-func (r *analyticsRepository) GetCategoryTotalForPeriod(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalRow, error) {
-	catExpr := effectiveCategoryExpr(false)
+// customCategoryIDFromToken splits a `custom:<uuid>` grouping key. Kept beside its only caller
+// rather than shared: effectiveCategoryExpr's token format is an implementation detail of these
+// reads, and a widely-imported helper would invite parsing the token in places that should be
+// handling display through resolveCategoryDisplay instead (#1626).
+func customCategoryIDFromToken(category string) (string, bool) {
+	const tok = "custom:"
+	if !strings.HasPrefix(category, tok) {
+		return "", false
+	}
+	id := strings.TrimPrefix(category, tok)
+	if id == "" {
+		return "", false
+	}
+	return id, true
+}
 
-	query := fmt.Sprintf(`
+// categoryTotalQuery builds GetCategoryTotalForPeriod's statement.
+//
+// ⚠ WHY THE DISPLAY IS A SCALAR SUBQUERY AND NOT MAX(). This read used
+// MAX(t.effective_category_name), defended by "the WHERE pins one category, so MAX picks that
+// category's name rather than choosing between rivals". That is true of the CATEGORY and false of
+// the NAME: effective_category_name is denormalised per transaction and refreshed ASYNCHRONOUSLY
+// after a rename, so mid-refresh one category's rows legitimately carry BOTH names — and MAX is
+// lexicographic. It returns neither the stale nor the fresh name but whichever sorts higher, which
+// is an arbitrary answer wearing the costume of a deterministic one.
+//
+// A scalar subquery keeps this a one-row QueryRow aggregate. Selecting cc.name directly would be
+// invalid without grouping, and grouping risks multiple rows in ghost states.
+//
+// ⚠ The subquery is emitted ONLY for a custom token, and the uuid arrives as $5 rather than as a
+// substring of $4. An unconditional `substring($4 from 8)::uuid` is a cast Postgres may evaluate
+// before the guarding LIKE, turning every PFC-token call into invalid-input-syntax.
+func categoryTotalQuery(isCustomToken bool) string {
+	display := "NULL::text"
+	if isCustomToken {
+		// The exemption comment lives INSIDE the literal because the guard scans SQL strings, not
+		// the Go comments around them — a note up here excuses nothing.
+		display = `(
+				-- tombstone-exempt(custom_categories cc): HISTORY FILTER. A report for a category the
+				-- user has since deleted must still NAME it: the spend is retained history (#1569),
+				-- and a tombstoned category reverting to a raw UUID in the report is the #1626 bug
+				-- coming back through the door this very method was fixed to close.
+				SELECT cc.name FROM custom_categories cc
+				WHERE cc.id = $5::uuid AND cc.user_id = $1::uuid
+			)`
+	}
+
+	return fmt.Sprintf(`
 		SELECT
 			COALESCE(SUM(t.amount), 0)                    as total,
 			COUNT(*)                                      as transaction_count,
-			MAX(t.effective_category_name)                as category_display
+			%s                                            as category_display
 		FROM transactions t
 		WHERE t.user_id = $1
 		  AND t.deleted_at IS NULL
@@ -1329,14 +1373,25 @@ func (r *analyticsRepository) GetCategoryTotalForPeriod(ctx context.Context, use
 		  AND t.amount > 0
 		  AND t.pending = false
 		  AND (%s) = $4
-	`, catExpr)
+	`, display, effectiveCategoryExpr(false))
+}
+
+func (r *analyticsRepository) GetCategoryTotalForPeriod(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalRow, error) {
+	// #1626 Phase 2: a custom token resolves its name from custom_categories; a PFC token has no
+	// row there and selects NULL, which resolveCategoryDisplay turns into the registry label.
+	customID, isCustomToken := customCategoryIDFromToken(category)
+	query := categoryTotalQuery(isCustomToken)
+
+	args := []interface{}{userID, startDate, endDate, category}
+	if isCustomToken {
+		args = append(args, customID)
+	}
 
 	var row domain.CategoryTotalRow
-	// #1626: every row in this aggregate shares one category by construction (the WHERE pins it),
-	// so MAX() picks that category's name rather than choosing between rivals. Nullable: the
-	// column is app-maintained asynchronously, and an empty period returns no rows at all.
+	// Nullable: NULL for every PFC token by construction, and for a custom token whose category
+	// row is gone. An empty period returns no rows at all.
 	var display sql.NullString
-	err := r.db.QueryRow(ctx, query, userID, startDate, endDate, category).Scan(
+	err := r.db.QueryRow(ctx, query, args...).Scan(
 		&row.Total,
 		&row.TransactionCount,
 		&display,

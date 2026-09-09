@@ -97,3 +97,41 @@ func sortIncomeSources(rows []domain.IncomeSourceItem) {
 		)
 	})
 }
+
+func sortCategoryBreakdownItems(rows []domain.CategoryBreakdownItem) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		return lessCategoryDisplay(
+			categoryDisplayRow{Key: rows[i].Category, Display: rows[i].PFCPrimaryDisplay, Total: rows[i].Total},
+			categoryDisplayRow{Key: rows[j].Category, Display: rows[j].PFCPrimaryDisplay, Total: rows[j].Total},
+		)
+	})
+}
+
+// mergeCategoryRows folds rows sharing a stable KEY into one, preserving first-seen order.
+//
+// WHY EVERY CATEGORY-SHAPED READ NEEDS THIS. The SQL groups by key AND display so a custom
+// category can be named rather than showing a UUID, but `effective_category_name` is denormalised
+// per transaction and refreshed ASYNCHRONOUSLY after a rename. Mid-refresh, one category yields
+// TWO rows — one per name — so a read that emits them verbatim shows the category twice with its
+// spend split and both percentages halved. Fixing a cosmetic bug that way creates a correctness one.
+//
+// ⚠ Merging is only two thirds of the fix. The caller must ALSO compute percentages from the
+// merged total and RE-SORT afterwards: two merged 60s outrank an unmerged 100, and the rows arrive
+// in the SQL's pre-merge order. A fixture with only one key cannot catch either omission.
+//
+// addTo accumulates row i's numbers into the survivor and is where the display tie-break lives, so
+// each response shape keeps its own field names without duplicating the merge.
+func mergeCategoryRows(n int, keyAt func(int) string, addTo func(dst, src int)) []int {
+	survivor := make(map[string]int, n)
+	order := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		k := keyAt(i)
+		if j, ok := survivor[k]; ok {
+			addTo(j, i)
+			continue
+		}
+		survivor[k] = i
+		order = append(order, i)
+	}
+	return order
+}
