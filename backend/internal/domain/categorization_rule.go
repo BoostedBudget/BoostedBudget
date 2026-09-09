@@ -154,6 +154,21 @@ type CategorizationRule struct {
 	LastMatchedAt               *time.Time `json:"last_matched_at,omitempty" db:"last_matched_at"`
 	CreatedAt                   time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt                   time.Time  `json:"updated_at" db:"updated_at"`
+
+	// Version is the optimistic-concurrency token for USER-facing updates (#1625 final review B2,
+	// migration 000192).
+	//
+	// ⚠ It is NOT "how many times this row was written". Task 19 originally keyed the lock on
+	// UpdatedAt, and that was wrong for exactly that reason: a BEFORE UPDATE trigger stamps
+	// updated_at on every write, and IncrementMatchCount is a write — engine bookkeeping during an
+	// ordinary sync, no user involved. Racing one produced "This rule was changed by another
+	// request" for a change nobody made, and the more transactions a rule matched the likelier it
+	// got. Version moves only when Update runs, so a competing EDIT still conflicts and a match
+	// count does not.
+	//
+	// Response-visible so a client can round-trip it, but the server never trusts a client-supplied
+	// value: Update reads the version off the copy the service itself loaded via GetByID.
+	Version int64 `json:"version" db:"version" doc:"Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."`
 }
 
 // pfcValidationSets holds the valid PFC enum sets built once from the curated registry.
@@ -362,8 +377,12 @@ var (
 	ErrRuleLimitExceeded = errors.New("categorization rule limit exceeded for subscription tier")
 
 	// ErrRuleConcurrentlyModified is returned when a read-modify-write (UpdateRule or ToggleRule)
-	// loses an optimistic-concurrency race: the row's updated_at no longer matches the value this
-	// write observed when it read the rule, because another request wrote the row in between.
+	// loses an optimistic-concurrency race: the row's `version` no longer matches the value this
+	// write observed when it read the rule, because another USER-FACING write moved it in between.
+	//
+	// ⚠ It is keyed on Version, NOT UpdatedAt — see that field's comment. Keying on updated_at
+	// (as Task 19 originally did) reported this to users for changes they did not make, because a
+	// BEFORE UPDATE trigger stamps updated_at on background bookkeeping too.
 	// #1625 Task 19: without this, ToggleRule and UpdateRule both read-modify-write the WHOLE row,
 	// so a toggle racing a repair could write the repair's own PRIOR (malformed) definition back
 	// over it — last-writer-wins across every column, not just the one either caller meant to

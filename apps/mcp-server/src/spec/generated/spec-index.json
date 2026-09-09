@@ -2271,6 +2271,12 @@
           "name": "user_id",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "required": true,
+          "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
         }
       ]
     },
@@ -2516,6 +2522,12 @@
           "name": "user_id",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "required": true,
+          "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
         }
       ]
     },
@@ -2822,6 +2834,12 @@
           "name": "user_id",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "required": true,
+          "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
         }
       ]
     },
@@ -3078,6 +3096,12 @@
           "name": "user_id",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "required": true,
+          "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
         }
       ]
     },
@@ -3244,6 +3268,12 @@
           "name": "user_id",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "required": true,
+          "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
         }
       ]
     },
