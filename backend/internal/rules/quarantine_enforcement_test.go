@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -124,22 +125,80 @@ func TestEnumShapeIsNeverRepairedOnlyStopped(t *testing.T) {
 	}
 }
 
-// An array MIXING a number and a string is a different animal: textValues DROPS the number, so
-// the condition already validates and is never quarantined — it just silently matches on fewer
-// values than it names. Coercion repairs that too, which is why it is tested here rather than in
-// the quarantine table.
-func TestMixedArrayMemberIsCoercedRatherThanSilentlyDropped(t *testing.T) {
-	c := domain.RuleCondition{Field: domain.FieldMerchant, Operator: "in", Value: []interface{}{"acme", 42}}
+// ⚠ THE INVARIANT THE GATE EXISTS FOR, asserted on the VALUE the evaluator receives rather than
+// on the match result. A match-only assertion would pass while the value was still being
+// rewritten underneath it — the rewrite only shows up on transactions nobody thought to put in
+// the fixture.
+//
+// Coercion runs ONLY on a condition ValidateShape REJECTS. The first version of Task 2 ran it on
+// every condition, which changed the meaning of rules that were never broken and that the live
+// write path still accepts.
+func TestAValidatingConditionReachesTheEvaluatorUntouched(t *testing.T) {
+	untouched := []domain.RuleCondition{
+		{Field: domain.FieldMerchant, Operator: "contains", Value: "starbucks"},
+		// ⚠ The one that motivated the gate: textValues DROPS the 42 and still reports ok, so
+		// this PASSES ValidateShape and is classified healthy. Coercing it to ["uber","42"] would
+		// make the rule match transactions it did not match yesterday.
+		{Field: domain.FieldMerchant, Operator: "in", Value: []interface{}{"uber", 42}},
+		{Field: domain.FieldAccountID, Operator: "in", Value: []interface{}{"acc-1", "acc-2"}},
+		{Field: domain.FieldAmount, Operator: "gt", Value: 50.0},
+		{Field: domain.FieldAmount, Operator: "between", Value: map[string]interface{}{"min": 1.0, "max": 2.0}},
+		{Field: domain.FieldDate, Operator: "eq", Value: "2026-01-31"},
+		{Field: domain.FieldDate, Operator: "between", Value: map[string]interface{}{"start": "2026-01-01"}},
+		{Field: domain.FieldDirection, Operator: "eq", Value: "outflow"},
+	}
+
+	for _, c := range untouched {
+		if err := c.ValidateShape(); err != nil {
+			t.Fatalf("fixture %+v is meant to be one the validator ACCEPTS: %v", c, err)
+		}
+		got := repairedForEvaluation(c)
+		if !reflect.DeepEqual(got.Value, c.Value) {
+			t.Errorf("a condition the validator accepts was rewritten before evaluation: %#v -> %#v",
+				c.Value, got.Value)
+		}
+	}
+}
+
+// The other side of the gate: a condition the validator REJECTS is still repaired.
+func TestARejectedConditionIsStillRepairedBeforeEvaluation(t *testing.T) {
+	c := domain.RuleCondition{Field: domain.FieldAmount, Operator: "gt", Value: "1000"}
+	if err := c.ValidateShape(); err == nil {
+		t.Fatal("fixture is meant to be one the validator rejects")
+	}
+	if got := repairedForEvaluation(c).Value; got != 1000.0 {
+		t.Errorf("a broken value reached the evaluator as %#v — the gate has closed on the rows "+
+			"coercion exists for", got)
+	}
+}
+
+// TestMixedArrayMemberIsCoercedRatherThanSilentlyDropped, INVERTED. The first version of Task 2
+// asserted that coercion rescued the dropped member; that was a semantics change to rules the
+// product sanctions today, made outside the quarantine set. The behaviour being preserved — and
+// therefore the behaviour under test — is the silent drop.
+//
+// This is NOT an endorsement of it. `["uber", 42]` says one thing and matches another, which is
+// a real defect. It belongs in its own change, at the WRITE path, rejecting new mixed arrays —
+// not riding in on a quarantine commit that promises not to change what existing rules match.
+func TestMixedArrayMemberIsStillSilentlyDropped(t *testing.T) {
+	c := domain.RuleCondition{Field: domain.FieldMerchant, Operator: "contains", Value: []interface{}{"uber", 42}}
 	if err := c.ValidateShape(); err != nil {
-		t.Fatalf("fixture is meant to already validate: %v", err)
+		t.Fatalf("a mixed array is accepted by the validator today: %v", err)
 	}
-	got, ok := c.CoercedValue()
-	if !ok {
-		t.Fatal("a mixed array is coercible")
+
+	registry := NewConditionRegistry()
+	matched, err := registry.Evaluate(quarantineTx(), c) // merchant is "STARBUCKS COFFEE 42"
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	values, isSlice := got.([]string)
-	if !isSlice || len(values) != 2 || values[1] != "42" {
-		t.Errorf("coerced to %#v — the numeric member must survive as \"42\", not be dropped", got)
+	if matched {
+		t.Error("the dropped numeric member was resurrected by coercion: this rule matched a " +
+			"transaction on \"42\", which it did not match before #1625 Task 2")
+	}
+
+	// And the value itself, not merely the outcome.
+	if got := repairedForEvaluation(c).Value; !reflect.DeepEqual(got, c.Value) {
+		t.Errorf("the stored array was rewritten to %#v before evaluation", got)
 	}
 }
 

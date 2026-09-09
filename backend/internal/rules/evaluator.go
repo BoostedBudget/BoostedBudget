@@ -56,15 +56,37 @@ func (r *ConditionRegistry) Evaluate(tx *domain.Transaction, condition domain.Ru
 	if evaluator, ok := r.evaluators[condition.Type]; ok && condition.Type != domain.ConditionTypeExpression {
 		return evaluator.Evaluate(tx, condition)
 	}
-	// #1625 Task 2: repair a wrong-typed value before reading it. `condition` is a COPY (the
-	// parameter is by value and Value is replaced, not mutated in place), so the stored row and
-	// rule_execution_history.definition_snapshot are untouched — coercion is read-path only.
-	// An uncoercible value is left exactly as it was: it is quarantined and enforced in
-	// RuleMatches, and rewriting it here would only change which error the evaluator reports.
+	return evaluateField(tx, repairedForEvaluation(condition))
+}
+
+// repairedForEvaluation returns the condition the evaluator should actually read.
+//
+// #1625 Task 2: a wrong-typed value with one honest reading is repaired here rather than left to
+// match nothing. Two properties, both of which have cost this branch a defect already:
+//
+//  1. ⚠ GATED ON ValidateShape. Coercion runs ONLY on a condition the strict validator REJECTS.
+//     The first version ran it unconditionally, which silently changed rules that were never
+//     broken: textValues DROPS a non-string array member and still reports ok, so
+//     ["uber", 42] PASSES ValidateShape, is classified healthy, and is accepted by the live write
+//     path today — and coercing it to ["uber","42"] made such a rule match transactions it did
+//     not match yesterday. That is the same mistake #1625 refused to make when it added
+//     effective_merchant as a NEW field instead of repointing merchant. Every value the validator
+//     accepts now reaches the evaluator byte-identical to the stored row. (The silent drop may
+//     well be a bug; fixing it belongs at the WRITE path, in its own change.)
+//  2. READ-PATH ONLY. `condition` is a COPY — the parameter is by value and Value is replaced,
+//     not mutated in place — so the stored row and rule_execution_history.definition_snapshot are
+//     untouched.
+//
+// An uncoercible value is left exactly as it was: it is quarantined and enforced in RuleMatches,
+// and rewriting it here would only change which error the evaluator reports.
+func repairedForEvaluation(condition domain.RuleCondition) domain.RuleCondition {
+	if err := condition.ValidateShape(); err == nil {
+		return condition
+	}
 	if coerced, ok := condition.CoercedValue(); ok {
 		condition.Value = coerced
 	}
-	return evaluateField(tx, condition)
+	return condition
 }
 
 // Register adds or replaces an evaluator for a condition type.
