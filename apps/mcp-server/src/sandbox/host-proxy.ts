@@ -132,10 +132,17 @@ async function slotKey(operationId: string, args: Record<string, unknown>): Prom
   return `${operationId}:${await hashArgs(args)}`
 }
 
-/** Hash of the whole gated batch, order-sensitive — binds a token to one exact batch. */
-async function hashBatch(gated: Array<{ operationId: string; args: Record<string, unknown> }>): Promise<string> {
+/**
+ * Hash of the WHOLE batch, order-sensitive — binds a token to one exact calls array.
+ *
+ * #1625: this hashed only the confirmation-GATED subset while both the challenge message and the
+ * invalid-token message told the agent to replay "the IDENTICAL calls array". An ungated read
+ * could therefore be swapped, added or removed and the token still validated. The promise was
+ * wider than the guarantee; now the guarantee matches the promise.
+ */
+async function hashBatch(calls: Array<{ operationId: string; args: Record<string, unknown> }>): Promise<string> {
   const keys: string[] = []
-  for (const g of gated) keys.push(await slotKey(g.operationId, g.args))
+  for (const c of calls) keys.push(await slotKey(c.operationId, c.args))
   const bytes = new TextEncoder().encode(keys.join('|'))
   const digest = await crypto.subtle.digest('SHA-256', bytes)
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
@@ -144,6 +151,7 @@ async function hashBatch(gated: Array<{ operationId: string; args: Record<string
 async function issueBatchConfirmationToken(
   userId: string,
   grantId: string,
+  calls: Array<{ operationId: string; args: Record<string, unknown> }>,
   gated: Array<{ operationId: string; args: Record<string, unknown> }>,
   getNow: () => number,
 ): Promise<string> {
@@ -174,7 +182,9 @@ async function issueBatchConfirmationToken(
     userId,
     grantId,
     issuedAt: now,
-    batchHash: await hashBatch(gated),
+    // Hash covers the whole batch; SLOTS stay gated-only. Widening slots would make an ungated
+    // read consume a use and fail the second time it appeared.
+    batchHash: await hashBatch(calls),
     slots,
   })
   return token
@@ -203,12 +213,12 @@ async function validateBatchConfirmation(
   token: string,
   userId: string,
   grantId: string,
-  gated: Array<{ operationId: string; args: Record<string, unknown> }>,
+  calls: Array<{ operationId: string; args: Record<string, unknown> }>,
   getNow: () => number,
 ): Promise<boolean> {
   const entry = pendingConfirmations.get(token)
   if (!isTokenEntryValid(entry, userId, grantId, getNow)) return false
-  return entry!.batchHash === (await hashBatch(gated))
+  return entry!.batchHash === (await hashBatch(calls))
 }
 
 /**
@@ -262,15 +272,22 @@ export function createHostProxy(config: HostProxyConfig) {
      * Returns `needsConfirmation: false` when the batch contains no gated call at all.
      */
     async confirmBatch(
-      gated: Array<{ operationId: string; args: Record<string, unknown> }>,
+      calls: Array<{ operationId: string; args: Record<string, unknown> }>,
       token?: string,
     ): Promise<{ needsConfirmation: boolean; token?: string; count: number }> {
+      // `calls` is the WHOLE batch. Which of them are gated is decided HERE, from the capability
+      // manifest, rather than by the caller — one place makes that judgement, so the set that is
+      // hashed and the set that gets slots cannot drift apart the way they did in #1625.
+      const gated = calls.filter((c) => {
+        const cap = getCapability(c.operationId)
+        return Boolean(cap && !cap.excluded && cap.confirmationRequired)
+      })
       if (gated.length === 0) return { needsConfirmation: false, count: 0 }
       if (!token) {
-        const issued = await issueBatchConfirmationToken(userId, grantId, gated, getNow)
+        const issued = await issueBatchConfirmationToken(userId, grantId, calls, gated, getNow)
         return { needsConfirmation: true, token: issued, count: gated.length }
       }
-      const ok = await validateBatchConfirmation(token, userId, grantId, gated, getNow)
+      const ok = await validateBatchConfirmation(token, userId, grantId, calls, getNow)
       if (!ok) {
         throw new HostProxyError('invalid_confirmation', INVALID_CONFIRMATION_MESSAGE)
       }
@@ -301,7 +318,12 @@ export function createHostProxy(config: HostProxyConfig) {
         if (!opts.confirmationToken) {
           // A single-call challenge is just the batch-of-one case, so it goes through the same
           // path — that keeps one code path for both and stops the two drifting apart.
-          const token = await issueBatchConfirmationToken(userId, grantId, [{ operationId, args }], getNow)
+          // Batch-of-one: the full batch and the gated set are the same single call, so the two
+          // hash spaces coincide and a self-issued token stays redeemable through confirmBatch
+          // for that exact one-call array (and, correctly, not as part of a larger one).
+          const token = await issueBatchConfirmationToken(
+            userId, grantId, [{ operationId, args }], [{ operationId, args }], getNow,
+          )
           throw new HostProxyError(
             'confirmation_required',
             `Write operation '${operationId}' requires confirmation. ` +

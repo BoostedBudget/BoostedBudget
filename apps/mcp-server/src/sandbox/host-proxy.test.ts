@@ -310,6 +310,46 @@ describe('confirmBatch (#1625)', () => {
     expect((err as HostProxyError).code).toBe('invalid_confirmation')
   })
 
+  // #1625 Task 4: the token must cover the WHOLE batch, not just its gated subset.
+  //
+  // hashBatch hashed only the gated calls, while the challenge message and the invalid-token
+  // message both told the agent to replay "the IDENTICAL calls array". So a confirmed batch could
+  // swap, add or drop any ungated read and the token still validated -- the enforced invariant was
+  // narrower than the stated one. Low practical risk (reads are class `read` and non-destructive)
+  // but it is the same defect shape as everything else in this ticket: a promise wider than the
+  // guarantee.
+  const READ = { operationId: ALLOWED_READ_OP, args: { url: '/txns', method: 'GET' } }
+  const OTHER_READ = { operationId: ALLOWED_READ_OP, args: { url: '/other', method: 'GET' } }
+
+  it('refuses a confirmed batch whose UNGATED read was swapped', async () => {
+    const proxy = createHostProxy({ mutator: makeMutator(), userId: 'u1', grantId: 'g1' })
+    const { token } = await proxy.confirmBatch([READ, A])
+
+    const err = await proxy.confirmBatch([OTHER_READ, A], token).catch((e) => e)
+    expect((err as HostProxyError).code).toBe('invalid_confirmation')
+  })
+
+  it('refuses a confirmed batch that gained an ungated read', async () => {
+    const proxy = createHostProxy({ mutator: makeMutator(), userId: 'u1', grantId: 'g1' })
+    const { token } = await proxy.confirmBatch([A])
+
+    const err = await proxy.confirmBatch([READ, A], token).catch((e) => e)
+    expect((err as HostProxyError).code).toBe('invalid_confirmation')
+  })
+
+  it('still admits the unchanged batch, reads included', async () => {
+    const proxy = createHostProxy({ mutator: makeMutator(), userId: 'u1', grantId: 'g1' })
+    const { token } = await proxy.confirmBatch([READ, A])
+
+    await expect(proxy.confirmBatch([READ, A], token)).resolves.toMatchObject({ needsConfirmation: false })
+  })
+
+  it('counts only the GATED calls, so the agent is not told a read needs confirming', async () => {
+    const proxy = createHostProxy({ mutator: makeMutator(), userId: 'u1', grantId: 'g1' })
+    const decision = await proxy.confirmBatch([READ, A, B])
+    expect(decision.count).toBe(2)
+  })
+
   it('refuses a token issued for a DIFFERENT batch', async () => {
     const proxy = createHostProxy({ mutator: makeMutator(), userId: 'u1', grantId: 'g1' })
     const { token } = await proxy.confirmBatch([A, B])

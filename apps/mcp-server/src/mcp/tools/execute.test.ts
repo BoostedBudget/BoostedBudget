@@ -758,3 +758,43 @@ describe('#1625 E: a batch of multiple confirmation-gated writes must be complet
     expect(r1.toolResult.content[0]!.text.toLowerCase()).toContain('identical')
   })
 })
+
+// #1625 Task 4: writeExecute must hand confirmBatch the WHOLE batch, not its gated subset.
+//
+// The challenge text and the invalid-token message both instruct the agent to replay "the
+// IDENTICAL calls array", but execute.ts filtered to gated calls before handing them over and
+// hashBatch hashed only those. An ungated read could therefore be swapped, added or dropped
+// between challenge and confirmation while the token still validated -- the enforced invariant
+// was narrower than the promised one. Reads are non-destructive so the practical risk is low;
+// the mismatch between promise and guarantee is the defect.
+describe('batch confirmation covers the whole batch (#1625)', () => {
+  const GATED = 'createMCPRecipe'
+  const READ = 'listMCPRecipes'
+
+  function proxyCapturingConfirmBatch() {
+    const seen: Array<Array<{ operationId: string }>> = []
+    return {
+      seen,
+      invoke: mock(() => Promise.resolve({})),
+      confirmBatch: mock((calls: Array<{ operationId: string }>) => {
+        seen.push(calls)
+        return Promise.resolve({ needsConfirmation: true, token: 'tok', count: 1 })
+      }),
+    }
+  }
+
+  it('passes ungated reads to confirmBatch, so they are inside the hashed batch', async () => {
+    const proxy = proxyCapturingConfirmBatch()
+    const handler = buildWriteExecuteHandler(proxy)
+
+    await handler({
+      calls: [
+        { operationId: READ, params: {} },
+        { operationId: GATED, params: {} },
+      ] as ExecuteCall[],
+    })
+
+    expect(proxy.seen).toHaveLength(1)
+    expect(proxy.seen[0]!.map((c) => c.operationId)).toEqual([READ, GATED])
+  })
+})
