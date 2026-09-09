@@ -506,6 +506,83 @@ func TestSavingsContributionRepository_Integration_RejectTombstone_SurvivesResyn
 		"tombstone status must remain 'rejected' after re-sync (R3-7 sticky guarantee)")
 }
 
+// TestSavingsContributionRepository_Integration_RejectTombstone_SurvivesArchiveThenResync closes
+// the gap Task 8's brief identified: the canonical sticky test above (reject → immediate resync)
+// never exercised ArchiveByGoal, and migration 000191's own test used an archived CONFIRMED row,
+// not a rejected one.
+//
+// Before this fix, ArchiveByGoal archived every live row regardless of status. Once the rejected
+// row got archived_at stamped, it left unique_contribution_per_goal_per_transaction (scoped to
+// `archived_at IS NULL` by 000191) — so a later sync's INSERT no longer collided with the
+// tombstone at all and inserted a brand-new status='proposed' row for the same transaction,
+// resurrecting a transfer the user explicitly turned down.
+//
+// RED (pre-fix): rowCount == 2, one 'rejected' (archived) and one freshly re-proposed.
+// GREEN (post-fix): the rejected row stays live (archived_at IS NULL) through the archive, so it
+// keeps the uniqueness slot and the resync is still a no-op.
+func TestSavingsContributionRepository_Integration_RejectTombstone_SurvivesArchiveThenResync(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -100.0)
+
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	// Step 1: Simulate sync detecting a proposed contribution, then the user rejects it.
+	err := repo.UpsertProposedFromTransaction(ctx, userID, goalID, txnID, 100.0)
+	require.NoError(t, err, "initial UpsertProposedFromTransaction must succeed")
+
+	var contribID string
+	err = pool.QueryRow(ctx,
+		`SELECT id FROM savings_goal_contributions WHERE transaction_id = $1 AND savings_goal_id = $2`,
+		txnID, goalID,
+	).Scan(&contribID)
+	require.NoError(t, err, "proposed contribution must exist after upsert")
+
+	_, err = repo.RejectContribution(ctx, userID, goalID, contribID)
+	require.NoError(t, err, "RejectContribution must succeed")
+
+	// Step 2: The goal's basis leaves and re-enters "contributions", closing the period.
+	require.NoError(t, repo.ArchiveByGoal(ctx, goalID))
+
+	var archivedAt *time.Time
+	var statusAfterArchive string
+	err = pool.QueryRow(ctx,
+		`SELECT status, archived_at FROM savings_goal_contributions WHERE id = $1`, contribID,
+	).Scan(&statusAfterArchive, &archivedAt)
+	require.NoError(t, err)
+	assert.Equal(t, "rejected", statusAfterArchive, "archiving must not change the tombstone's status")
+	assert.Nil(t, archivedAt,
+		"a rejected row must NOT be archived — archiving it would release its uniqueness slot "+
+			"and let a later sync re-propose the rejected transfer")
+
+	// Step 3: A later Plaid sync re-detects the same transfer-in.
+	err = repo.UpsertProposedFromTransaction(ctx, userID, goalID, txnID, 100.0)
+	require.NoError(t, err, "re-upsert after archive must not error")
+
+	// Step 4: Assert exactly one row remains and it is still 'rejected' — the transfer must NOT
+	// be re-proposed.
+	var rowCount int
+	var statusAfterResync string
+	err = pool.QueryRow(ctx,
+		`SELECT COUNT(*), COALESCE(MAX(status), '')
+		   FROM savings_goal_contributions
+		  WHERE transaction_id = $1 AND savings_goal_id = $2`,
+		txnID, goalID,
+	).Scan(&rowCount, &statusAfterResync)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, rowCount,
+		"archiving the period and re-syncing must not create a duplicate row; the tombstone "+
+			"remains the only record")
+	assert.Equal(t, "rejected", statusAfterResync,
+		"tombstone status must remain 'rejected' after archive-then-resync (R3-7 sticky guarantee "+
+			"must survive a basis period boundary)")
+}
+
 // TestSessionDateCast_Integration_UsesUTCCalendarDay proves the Issue #1461 decision documented on
 // UpsertFromTransaction's own doc comment: CURRENT_DATE (used there and by
 // UpsertProposedFromTransaction for occurred_on) now resolves to the UTC calendar day, because

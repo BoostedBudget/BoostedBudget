@@ -1088,6 +1088,18 @@ func (r *savingsContributionRepository) DeleteManagedForTransaction(ctx context.
 // Note the WHERE no longer filters on managed_by_reconciliation: a closed period contains the
 // user's own manual contributions too, and leaving those live is exactly what double-counted.
 // Archiving is idempotent — an already-archived row keeps its original timestamp.
+//
+// #1625 Task 8: `status != 'rejected'` excludes R3-7's sticky tombstones. A rejected row is never
+// a ledger entry — every progress sum filters `status = 'confirmed'` (see SumConfirmedByGoal and
+// its siblings), so archiving a rejected row buys nothing for the double-count fix above. Worse,
+// migration 000191 scoped unique_contribution_per_goal_per_transaction to `archived_at IS NULL`
+// precisely so an archived row releases its uniqueness slot on basis re-entry — but a rejected row
+// must NEVER release that slot, because the slot is the only thing stopping
+// UpsertProposedFromTransaction from re-proposing a transfer the user already turned down on the
+// next Plaid sync. Keeping rejected rows live (archived_at NULL) keeps them in the index, so a
+// resync's INSERT still collides with the tombstone and its `WHERE status = 'proposed'` ON
+// CONFLICT clause still refuses to touch it. A rejection is a decision about a transaction, not an
+// entry in a period — it must outlive periods, which is exactly what "sticky" means.
 func (r *savingsContributionRepository) ArchiveByGoal(ctx context.Context, goalID string) error {
 	query := `
 		UPDATE savings_goal_contributions
@@ -1096,6 +1108,7 @@ func (r *savingsContributionRepository) ArchiveByGoal(ctx context.Context, goalI
 		    updated_at = NOW()
 		WHERE savings_goal_id = $1
 		  AND deleted_at IS NULL
+		  AND status != 'rejected'
 		  AND (archived_at IS NULL OR managed_by_reconciliation = true)
 	`
 	_, err := r.db.Exec(ctx, query, goalID)
