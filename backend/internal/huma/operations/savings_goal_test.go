@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -740,4 +742,73 @@ func TestSavingsGoalDeletedRoute_IsItsOwnOperation(t *testing.T) {
 		"the live listing answered — its goals carry no deleted_at")
 	assert.Equal(t, []string{"user-123"}, mockService.deletedGoalsCalls,
 		"GetDeletedGoals was never reached, so some other handler served /deleted")
+}
+
+// TestSavingsGoalValidationNeverReturns5xx is the anti-Sentry-noise proof at the HTTP boundary for
+// the savings-goal path — issue #1625's headline defect ("a validation failure surfaced as a 500
+// with a Sentry event instead of a 4xx"), which was fixed for categorization rules but not here.
+//
+// Before this fix, SavingsGoal.Validate() returned bare errors.New(...) with no sentinel, so
+// mapper.go's switch never matched them and every one fell through to the default 500 branch
+// (which also fires sentry.CaptureException — see LoggingMapError). Asserting only require.Error
+// would NOT catch that regression, since a 500 is still "an error" — this asserts the actual
+// mapped HTTP status via huma.StatusError.GetStatus(), the same shape as
+// TestRuleValidationNeverReturns5xx in categorization_rules_test.go.
+//
+// Uses the REAL service (services.NewSavingsGoalService) and REAL domain.SavingsGoal.Validate() —
+// a mock would only prove the mock's shape. CreateGoal's Validate() call happens before any
+// repository access, so nil goalRepo/accountGetter are safe for every case below.
+func TestSavingsGoalValidationNeverReturns5xx(t *testing.T) {
+	invalidBodies := []struct {
+		name string
+		body domain.CreateSavingsGoalRequest
+	}{
+		{"negative target_amount", domain.CreateSavingsGoalRequest{
+			Name:         "vacation fund",
+			TargetAmount: -5,
+			AccountID:    "acc-1",
+		}},
+		{"over-long name", domain.CreateSavingsGoalRequest{
+			Name:         strings.Repeat("a", 101),
+			TargetAmount: 100,
+			AccountID:    "acc-1",
+		}},
+		{"invalid basis/account combination: balance basis with no account_id", domain.CreateSavingsGoalRequest{
+			Name:          "car fund",
+			TargetAmount:  100,
+			AccountID:     "",
+			ProgressBasis: domain.ProgressBasisBalance,
+		}},
+	}
+
+	for _, tt := range invalidBodies {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := services.NewSavingsGoalService(nil, nil, slog.Default())
+			handler := NewSavingsGoalHandler(svc)
+
+			_, err := handler.CreateGoal(context.Background(), &CreateSavingsGoalInput{
+				AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+				Body:               tt.body,
+			})
+
+			require.Error(t, err)
+			assertSavingsGoalClientError(t, err)
+		})
+	}
+}
+
+// assertSavingsGoalClientError fails when the mapped HTTP status is >= 500. A 5xx here means the
+// error reached the mapper's default branch, which also fires sentry.CaptureException — a client
+// input mistake logged and billed as a server error.
+func assertSavingsGoalClientError(t *testing.T, err error) {
+	t.Helper()
+	var statusErr interface{ GetStatus() int }
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("error carries no HTTP status: %v", err)
+	}
+	status := statusErr.GetStatus()
+	assert.Less(t, status, 500,
+		"validation failure mapped to %d — it must be a 4xx, or client input pollutes Sentry as a server error: %v",
+		status, err)
+	assert.GreaterOrEqual(t, status, 400, "expected a client error, got %d", status)
 }

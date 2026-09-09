@@ -248,6 +248,13 @@ func MapError(err error) error {
 	// these used to loop.
 	case errors.Is(err, domain.ErrInvalidGoalUpdate):
 		return huma.Error400BadRequest(err.Error())
+	// #1625 — savings-goal validation, the same ticket's headline defect in a second domain.
+	// SavingsGoal.Validate() / SavingsGoalContribution.Validate() previously returned bare
+	// errors.New with no sentinel, so every field failure (negative target_amount, an over-long
+	// name, a bad progress_basis/account_percentage combination) fell through to the default
+	// case below and became a 500 + Sentry event. Mirrors ErrInvalidRule's shape.
+	case errors.Is(err, domain.ErrInvalidSavingsGoal):
+		return huma.Error400BadRequest(err.Error())
 	case errors.Is(err, domain.ErrInvalidCondition):
 		return huma.Error422UnprocessableEntity(err.Error())
 	case errors.Is(err, domain.ErrInvalidRule):
