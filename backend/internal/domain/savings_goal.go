@@ -376,9 +376,14 @@ func (sg *SavingsGoal) IsAchieved() bool {
 
 // CreateSavingsGoalRequest represents the request to create a new savings goal.
 type CreateSavingsGoalRequest struct {
-	Name         string  `json:"name" validate:"required,max=100"`
+	// Name and TargetAmount carry Huma-native tags (not go-playground `validate:` syntax, which
+	// Huma never reads — see the package-level note above CreateSavingsGoalRequest's sibling
+	// domain.SavingsGoal.Validate() sentinel doc). This makes both constraints visible in the
+	// published OpenAPI schema, so an MCP agent can learn "positive, <=100 chars" without first
+	// submitting a bad value and reading the 4xx (#1625, second half).
+	Name         string  `json:"name" required:"true" maxLength:"100" doc:"Goal name (1-100 characters)."`
 	Description  *string `json:"description,omitempty"`
-	TargetAmount float64 `json:"target_amount" validate:"required,gt=0"`
+	TargetAmount float64 `json:"target_amount" required:"true" exclusiveMinimum:"0" doc:"Target amount to save. Must be positive."`
 	// CurrentAmount seeds the goal's progress. Under "manual" it is the value, and stays so.
 	//
 	// Under "contributions" it is IGNORED: a goal created this instant has no contributions, so
@@ -402,23 +407,12 @@ type CreateSavingsGoalRequest struct {
 	AccountPercentage *float64 `json:"account_percentage,omitempty"`
 }
 
-// Validate checks progress-basis discriminator rules for the create request.
-// Basic field validation (required, max-length, gt=0) is still enforced via struct tags
-// on the domain.SavingsGoal constructed from this request; this method only covers
-// the cross-field basis rules that tags cannot express.
-func (r *CreateSavingsGoalRequest) Validate() error {
-	basis := r.ProgressBasis
-	if basis == "" {
-		basis = ProgressBasisManual
-	}
-	return validateProgressBasisRequest(basis, r.AccountPercentage, r.AccountID)
-}
-
 // UpdateSavingsGoalRequest represents the request to update a savings goal.
 type UpdateSavingsGoalRequest struct {
-	Name         *string  `json:"name,omitempty" validate:"omitempty,max=100"`
+	// Name and TargetAmount carry Huma-native tags (see CreateSavingsGoalRequest above for why).
+	Name         *string  `json:"name,omitempty" maxLength:"100" doc:"Goal name (1-100 characters)."`
 	Description  *string  `json:"description,omitempty"`
-	TargetAmount *float64 `json:"target_amount,omitempty" validate:"omitempty,gt=0"`
+	TargetAmount *float64 `json:"target_amount,omitempty" exclusiveMinimum:"0" doc:"Target amount to save. Must be positive."`
 	// CurrentAmount may ONLY be set when the goal's progress_basis is "manual" — every other
 	// basis derives this value, and writing it by hand puts the row out of step with the source
 	// it claims to track. Sending it on a derived-basis goal is a 400 (#1625).
@@ -435,49 +429,6 @@ type UpdateSavingsGoalRequest struct {
 	ProgressBasis *string `json:"progress_basis,omitempty"`
 	// AccountPercentage is required (0 < x ≤ 1) when ProgressBasis is "account_percentage".
 	AccountPercentage *float64 `json:"account_percentage,omitempty"`
-}
-
-// Validate checks progress-basis discriminator rules for the update request.
-// Only applies cross-field checks when ProgressBasis is explicitly set.
-func (r *UpdateSavingsGoalRequest) Validate() error {
-	if r.ProgressBasis == nil {
-		// No basis change — nothing cross-field to validate at DTO level.
-		return nil
-	}
-	basis := *r.ProgressBasis
-	accountID := ""
-	if r.AccountID != nil {
-		accountID = *r.AccountID
-	}
-	// accountID may still be "" here (not changing account) — the full discriminator
-	// check happens in SavingsGoal.Validate() after the service applies all field updates.
-	// Here we only reject obviously invalid basis values and the pct discriminator.
-	return validateProgressBasisRequest(basis, r.AccountPercentage, accountID)
-}
-
-// validateProgressBasisRequest is the shared cross-field validator for progress_basis
-// used by both create and update request DTOs.
-func validateProgressBasisRequest(basis string, accountPercentage *float64, accountID string) error {
-	switch basis {
-	case ProgressBasisManual, ProgressBasisContributions:
-		if accountPercentage != nil {
-			return fmt.Errorf("%w: account_percentage must only be set when progress_basis is account_percentage", ErrInvalidSavingsGoal)
-		}
-	case ProgressBasisBalance:
-		if accountPercentage != nil {
-			return fmt.Errorf("%w: account_percentage must only be set when progress_basis is account_percentage", ErrInvalidSavingsGoal)
-		}
-	case ProgressBasisAccountPercentage:
-		if accountPercentage == nil {
-			return fmt.Errorf("%w: account_percentage is required when progress_basis is account_percentage", ErrInvalidSavingsGoal)
-		}
-		if *accountPercentage <= 0 || *accountPercentage > 1 {
-			return fmt.Errorf("%w: account_percentage must be between 0 and 1 (exclusive 0, inclusive 1)", ErrInvalidSavingsGoal)
-		}
-	default:
-		return fmt.Errorf("%w: progress_basis must be one of: manual, contributions, balance, account_percentage", ErrInvalidSavingsGoal)
-	}
-	return nil
 }
 
 // SavingsInflowTransaction is a lightweight projection returned by

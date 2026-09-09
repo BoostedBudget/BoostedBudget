@@ -812,3 +812,45 @@ func assertSavingsGoalClientError(t *testing.T, err error) {
 		status, err)
 	assert.GreaterOrEqual(t, status, 400, "expected a client error, got %d", status)
 }
+
+// TestCreateGoalSchema_RejectsAtTheFrameworkForSingleFieldConstraints is the "generated artifact"
+// half of #1625's second fix round. The sentinel/mapper tests above prove domain.Validate() never
+// falls through to a 500; this test proves the OPENAPI SCHEMA ITSELF now carries the constraint
+// for the two single-field cases (target_amount, name), so Huma rejects the request BEFORE the
+// handler — and BEFORE domain.Validate() — ever runs, and an MCP agent reading the schema (or the
+// spec-index built from it) can learn the constraint without a failed round trip.
+//
+// Goes through the real router (humatest + RegisterSavingsGoalRoutes), not a direct handler call,
+// because the constraint under test lives in the Huma schema's request-body validation, which only
+// runs on the actual HTTP path.
+func TestCreateGoalSchema_RejectsAtTheFrameworkForSingleFieldConstraints(t *testing.T) {
+	authed := func(ctx huma.Context, next func(huma.Context)) {
+		next(huma.WithValue(ctx, inputs.UserIDKey, "user-123"))
+	}
+	_, api := humatest.New(t)
+	api.UseMiddleware(authed)
+	RegisterSavingsGoalRoutes(api, NewSavingsGoalHandler(&mockSavingsGoalService{goal: createTestSavingsGoal()}))
+
+	t.Run("negative target_amount", func(t *testing.T) {
+		resp := api.Post("/api/v1/savings-goals", map[string]interface{}{
+			"name":          "vacation fund",
+			"target_amount": -5,
+			"account_id":    "acc-1",
+		})
+		assert.Equal(t, http.StatusUnprocessableEntity, resp.Code, resp.Body.String())
+		assert.Contains(t, resp.Body.String(), "target_amount",
+			"a schema rejection must still name the offending field — a framework 422 that says "+
+				"nothing useful is a regression against #1625's theme even though the status is right")
+	})
+
+	t.Run("over-long name", func(t *testing.T) {
+		resp := api.Post("/api/v1/savings-goals", map[string]interface{}{
+			"name":          strings.Repeat("a", 101),
+			"target_amount": 100,
+			"account_id":    "acc-1",
+		})
+		assert.Equal(t, http.StatusUnprocessableEntity, resp.Code, resp.Body.String())
+		assert.Contains(t, resp.Body.String(), "name",
+			"a schema rejection must still name the offending field")
+	})
+}
