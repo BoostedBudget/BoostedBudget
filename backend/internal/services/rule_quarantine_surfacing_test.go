@@ -99,12 +99,35 @@ func TestGetRuleByID_SurfacesQuarantineStatusToo(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "invalid_condition_logic_defaults_to_and", got.QuarantineReason)
 
-	// ⚠ Reason present, Quarantined FALSE. Measured, not assumed: an unrecognised condition_logic
-	// falls back to AND, so this rule IS still matching transactions. An earlier revision reported
-	// it as quarantined and the card rendered "Not running" — telling the user their rule was off
-	// while it quietly recategorised their ledger.
+	// ⚠ Quarantined TRUE since #1625 Task 2, and the reversal is the point of that task. This
+	// reason cannot be produced through the API — Validate has rejected a non-AND/OR logic since
+	// dedac0aa (#346) — so enforcing it cannot switch off a rule anybody was able to create,
+	// while NOT enforcing it left the rule silently running as AND, which is not what the user
+	// wrote. Reporting it as running was accurate about the old engine and wrong about the
+	// product.
+	assert.True(t, got.Quarantined,
+		"a rule whose condition_logic is neither AND nor OR is refused outright by RuleMatches")
+}
+
+// The still-running state has not disappeared — it moved to the one reason real user rules can
+// be in. A wrong-typed value that has a single honest reading is REPAIRED at read time, so the
+// rule keeps matching and the card says "Needs attention", not "Not running".
+func TestGetRuleByID_ARepairableValueIsReportedButStillRuns(t *testing.T) {
+	repairable := &domain.CategorizationRule{
+		ID: "r-repairable", UserID: "u1", Enabled: true, ConditionLogic: "AND",
+		Conditions: []domain.RuleCondition{
+			{Type: domain.ConditionAmountGreaterThan, Value: "1000"},
+		},
+	}
+	repo := new(mockRuleRepository)
+	repo.On("GetByID", mock.Anything, "r-repairable").Return(repairable, nil)
+	svc := NewCategorizationRuleService(repo, new(MockCustomCategoryRepository))
+
+	got, err := svc.GetRuleByID(context.Background(), "u1", "r-repairable")
+	require.NoError(t, err)
+	assert.Equal(t, "invalid_condition_value_shape", got.QuarantineReason)
 	assert.False(t, got.Quarantined,
-		"this rule still runs; only a reason that genuinely stops matching may set Quarantined")
+		"this value coerces to 1000 and the rule still matches; saying \"Not running\" would be false")
 }
 
 // The other half: a reason that genuinely stops the rule DOES set Quarantined.

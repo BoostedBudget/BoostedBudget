@@ -16,7 +16,7 @@ func TestRecordRuleQuarantineCandidate_UsesTheReasonLabel(t *testing.T) {
 	RecordRuleQuarantineCandidate(QuarantineNoConditions)
 
 	const want = `
-# HELP categorization_rule_quarantine_candidates_total Categorization rules that an enforcing quarantine pass would refuse, by reason. Shadow mode only — these rules still execute.
+# HELP categorization_rule_quarantine_candidates_total Categorization rules found broken by the quarantine classifier, by reason. Reasons that stop matching are enforced in RuleMatches; invalid_condition_value_shape is repaired by read-path coercion and still executes.
 # TYPE categorization_rule_quarantine_candidates_total counter
 categorization_rule_quarantine_candidates_total{reason="no_conditions_matches_everything"} 1
 `
@@ -34,7 +34,7 @@ func TestRecordRuleQuarantineCandidate_FoldsAnUnknownReasonIntoOther(t *testing.
 	RecordRuleQuarantineCandidate("Coffee at Blue Bottle")
 
 	const want = `
-# HELP categorization_rule_quarantine_candidates_total Categorization rules that an enforcing quarantine pass would refuse, by reason. Shadow mode only — these rules still execute.
+# HELP categorization_rule_quarantine_candidates_total Categorization rules found broken by the quarantine classifier, by reason. Reasons that stop matching are enforced in RuleMatches; invalid_condition_value_shape is repaired by read-path coercion and still executes.
 # TYPE categorization_rule_quarantine_candidates_total counter
 categorization_rule_quarantine_candidates_total{reason="other"} 1
 `

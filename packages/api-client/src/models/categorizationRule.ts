@@ -47,9 +47,9 @@ export interface CategorizationRule {
   name: string;
   override_count: number;
   priority: number;
-  /** Why the rule cannot be evaluated. Fixed vocabulary: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, invalid_condition_value_shape. */
+  /** Why the rule is broken. Fixed vocabulary. Four values are ENFORCED (quarantined=true, the rule matches nothing): no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. One is REPAIRED (quarantined=false, the rule still runs): invalid_condition_value_shape — a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only. The stored rule is never rewritten; edit it to make the repair permanent. */
   quarantine_reason?: string;
-  /** True only when this rule is actually PREVENTED from matching. A rule with a quarantine_reason but quarantined=false still runs — the problem is reported, not enforced. Computed per request. */
+  /** True only when this rule is actually PREVENTED from matching — it is refused before any condition is evaluated and applies to nothing. False WITH a quarantine_reason means the opposite: the rule has a problem the server repaired well enough to keep running it (a wrong-typed condition value with one honest reading is coerced at read time), so it IS still matching and the problem is reported rather than enforced. Computed per request; never persisted. */
   quarantined?: boolean;
   source: string;
   tag_behavior: string;

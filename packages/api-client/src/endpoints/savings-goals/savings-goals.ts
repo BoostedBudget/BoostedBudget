@@ -641,7 +641,7 @@ export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof g
 
 
 /**
- * Returns all confirmed and proposed contributions for a savings goal, newest first. Returns an empty list for a goal the user has DELETED — the contributions still logged against it are retained and are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).
+ * Returns all confirmed and proposed contributions for a savings goal, newest first. Includes archived contributions (closed periods) which do not count toward the goal's progress. Returns an empty list for a goal the user has DELETED — the contributions still logged against it are retained and are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).
  * @summary List savings goal contributions
  */
 export const listSavingsGoalContributions = (

@@ -695,8 +695,31 @@ func TestRuleEngine_EvaluateRules_OneBrokenRuleDoesNotSuppressTheRest(t *testing
 			result.CategoryRuleID)
 	}
 
-	// The failure must be reported, not swallowed — quarantine and the operator both need to see
-	// which rule could not be evaluated.
+	// ⚠ #1625 Task 2 moved WHERE this rule is reported. "not-a-number" for an amount is an
+	// uncoercible value, so RuleMatches now refuses the rule before any evaluator sees it: it
+	// returns (false, nil) rather than an error, and the reporting channel is quarantine — the
+	// metric, the log line, and `quarantined` on the read model, all of which name the rule.
+	// FailedRuleIDs is therefore empty here, and that is the enforcement working.
+	if len(result.FailedRuleIDs) != 0 {
+		t.Errorf("an ENFORCED quarantine reason must stop the rule quietly and be reported through "+
+			"quarantine, not as an evaluation failure: %v", result.FailedRuleIDs)
+	}
+
+	// The original property — an un-evaluatable rule must not suppress the rules after it, and
+	// must be REPORTED rather than swallowed — still holds on the path that can still produce an
+	// evaluator error: enforcement disabled.
+	original := enforceQuarantine
+	enforceQuarantine = false
+	t.Cleanup(func() { enforceQuarantine = original })
+
+	result, err = engine.EvaluateRules(tx, rules)
+	if err != nil {
+		t.Fatalf("a single broken rule aborted the whole evaluation: %v", err)
+	}
+	if result.CategoryRuleID != "rule-good" {
+		t.Errorf("with enforcement off, the rule AFTER the broken one never ran: CategoryRuleID = %q",
+			result.CategoryRuleID)
+	}
 	if len(result.FailedRuleIDs) != 1 || result.FailedRuleIDs[0] != "rule-broken" {
 		t.Errorf("the broken rule was not reported as failed: %v", result.FailedRuleIDs)
 	}

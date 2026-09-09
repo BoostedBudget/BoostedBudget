@@ -780,12 +780,12 @@ func (s *ruleApplicationService) writeExecutionHistory(ctx context.Context, user
 // transaction (engine.go), an invalid condition_logic silently degrades to AND, and one
 // evaluator error aborts every other rule for that transaction.
 //
-// This is SHADOW MODE. It counts and logs what a future enforcement pass WOULD quarantine and
-// changes no matching behaviour whatsoever — deliberately, because the blast radius is unknown
-// until the inventory has been run against real data, and silently disabling a rule a user
-// depends on is a worse failure than the one being fixed. Enforcement is a follow-up, after the
-// counts are known and the FieldSpecs matrix has been widened to accept every legitimate legacy
-// shape the inventory turns up.
+// ⚠ This is no longer shadow mode. #1625 Task 2 enforces the three reasons that CANNOT be
+// produced through the API (no_conditions, invalid_condition_logic, unnormalizable_condition)
+// plus uncoercible values: those rules match nothing, and the read model tells the user so. The
+// fourth, invalid_condition_value_shape, IS reachable through the ordinary API — #346 never
+// validated value shapes — so it is REPAIRED by read-path coercion and keeps running. This
+// reporter still counts and logs both kinds; the log line says which.
 // logFailedRules records rules that could not be EVALUATED, one line each.
 //
 // #1625 A8: an evaluator error used to abort EvaluateRules, so one broken rule silently
@@ -812,32 +812,25 @@ func (s *ruleApplicationService) reportQuarantineCandidates(ctx context.Context,
 		// alone is not aggregatable, and "counts and logs" was only half true without it.
 		// Only the fixed reason vocabulary is labelled; ids and user content stay in the log.
 		observability.RecordRuleQuarantineCandidate(reason)
-		s.logger.WarnContext(ctx, "categorization rule would be quarantined (shadow mode — still executing)",
+		s.logger.WarnContext(ctx, "categorization rule is quarantined",
 			slog.String("user_id", userID),
 			slog.String("rule_id", rule.ID),
 			slog.String("reason", string(reason)),
+			// The operator cannot infer this from the reason without knowing the enforcement
+			// set, and the whole failure class here is a rule being described as one thing
+			// while it does another.
+			slog.Bool("stopped_matching", observability.QuarantineReasonStopsMatching(reason)),
 		)
 	}
 }
 
-// quarantineReason returns a non-empty reason when a rule would be refused at write time today.
-// It never inspects user CONTENT — only structure — so it is safe to log.
+// quarantineReason is a thin alias for the ONE classifier, rules.QuarantineReasonFor.
+//
+// #1625 Task 2 moved the implementation into package rules because the engine has to enforce the
+// same classification it reports, and the engine cannot import services. Keeping the local name
+// keeps every service call site unchanged; what it must never become again is a SECOND
+// implementation, because a rule the user is told is quarantined and a rule the engine refuses to
+// run would then be two different sets.
 func quarantineReason(rule *domain.CategorizationRule) observability.QuarantineReason {
-	if len(rule.Conditions) == 0 {
-		// engine.go treats this as "match everything", which would recategorise a whole ledger.
-		return observability.QuarantineNoConditions
-	}
-	if rule.ConditionLogic != "AND" && rule.ConditionLogic != "OR" {
-		return observability.QuarantineInvalidLogic
-	}
-	for i := range rule.Conditions {
-		c := rule.Conditions[i] // copy: Normalize mutates, and this must not touch the live rule
-		if err := c.Normalize(); err != nil {
-			return observability.QuarantineUnnormalizable
-		}
-		if err := c.ValidateShape(); err != nil {
-			return observability.QuarantineInvalidValue
-		}
-	}
-	return ""
+	return rules.QuarantineReasonFor(rule)
 }

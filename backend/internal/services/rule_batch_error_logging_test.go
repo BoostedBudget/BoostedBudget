@@ -23,6 +23,13 @@ import (
 // Errors are rule-local now, so the log is per-RULE rather than per-transaction, and the fixture
 // below carries a second, working rule that must still apply. That is the property the old header
 // promised.
+//
+// Task 2 changed it again: this rule's value is uncoercible, so it is now refused by enforcement
+// rather than failing in the evaluator, and the record is the quarantine line. The property under
+// test — one broken rule must not suppress the rules after it, and must not vanish silently —
+// is unchanged. The evaluator-error path itself is still exercised, in
+// internal/rules TestRuleEngine_EvaluateRules_OneBrokenRuleDoesNotSuppressTheRest with the
+// enforcement kill switch off, which is the only way it can still be reached.
 func TestApplyRulesToBatch_SkipsOnlyTheBrokenRuleAndLogsIt(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -72,14 +79,26 @@ func TestApplyRulesToBatch_SkipsOnlyTheBrokenRuleAndLogsIt(t *testing.T) {
 	require.NoError(t, err, "a broken rule must not fail the whole batch")
 
 	out := logBuf.String()
-	assert.Contains(t, out, "rule evaluation failed",
-		"the evaluator error must be recorded, not swallowed")
-	assert.Equal(t, 2, strings.Count(out, "rule evaluation failed"),
-		"one line per transaction that hit the broken rule")
+
+	// ⚠ #1625 Task 2 moved WHERE this is reported, and the move is deliberate. "not-a-number"
+	// for an amount is an UNCOERCIBLE value, so RuleMatches refuses the rule before any
+	// evaluator runs: there is no longer an evaluation error to log. The report is now the
+	// quarantine line — which is strictly better, because it names the reason and says whether
+	// the rule stopped, and it is emitted once per batch rather than once per transaction.
+	assert.Contains(t, out, "categorization rule is quarantined",
+		"a rule refused by enforcement must still be recorded, not silently skipped")
+	assert.Equal(t, 1, strings.Count(out, "categorization rule is quarantined"),
+		"quarantine is a property of the RULE, so it is reported once per batch, not once per transaction")
+	assert.Contains(t, out, "reason=uncoercible_condition_value")
+	assert.Contains(t, out, "stopped_matching=true",
+		"the operator cannot tell an enforced reason from a repaired one without this")
+	assert.NotContains(t, out, "rule evaluation failed",
+		"enforcement returns (false, nil); reporting it ALSO as an evaluation failure would "+
+			"double-count one rule under two mechanisms")
 	assert.Contains(t, out, "rule-broken",
-		"the log must name WHICH rule failed — the pre-A8 transaction-level line could not")
+		"the log must name WHICH rule was refused — the pre-A8 transaction-level line could not")
 	assert.NotContains(t, out, "rule-good",
-		"the working rule did not fail and must not be reported as if it had")
+		"the working rule is healthy and must not be reported as if it had a problem")
 
 	// The property the old header claimed and the old fixture could not test.
 	require.Len(t, updated, 2)

@@ -22,11 +22,13 @@ const QUARANTINE_EXPLANATIONS: Record<string, string> = {
   no_conditions_matches_everything:
     'This rule has no conditions, so it would match every transaction. It is not being run.',
   invalid_condition_logic_defaults_to_and:
-    'This rule\'s condition logic is not AND or OR. It is STILL RUNNING, treating every condition as AND — edit it to confirm that is what you meant.',
+    'This rule\'s condition logic is not AND or OR, so it is not being run. Edit it to choose AND or OR.',
   unnormalizable_condition:
-    'One of this rule\'s conditions uses a field or operator that no longer exists. That condition never matches, and with OR logic the rule can still fire on its other conditions alone.',
+    'One of this rule\'s conditions uses a field or operator that no longer exists, so the rule is not being run. Edit that condition to fix it.',
+  uncoercible_condition_value:
+    'One of this rule\'s conditions has a value that cannot be read as the kind of value that condition needs, so the rule is not being run. Edit the rule to fix it.',
   invalid_condition_value_shape:
-    'One of this rule\'s conditions has a value of the wrong type. Edit the rule to fix it.',
+    'One of this rule\'s conditions has a value of the wrong type. It is STILL RUNNING — the value has one obvious reading and is being interpreted that way — but edit the rule to confirm that is what you meant.',
 }
 
 export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }: AutoCategorizationRuleCardProps) {
@@ -88,10 +90,12 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
           // would hide the diagnostic without protecting anything.
           //
           // ⚠ TWO DIFFERENT STATES, and conflating them was itself a bug. `quarantined` means the
-          // rule genuinely matches nothing. A reason WITHOUT it means the rule has a problem and
-          // is STILL RUNNING -- an unrecognised condition_logic falls back to AND, and an
-          // unnormalizable condition under OR lets its valid sibling carry the rule. Rendering
-          // "Not running" there stated something false about the user's own data.
+          // rule genuinely matches nothing: the backend refuses it before any condition is
+          // evaluated. A reason WITHOUT it means the rule has a problem the server repaired well
+          // enough to keep running it -- a wrong-typed condition value with one obvious reading
+          // is coerced at read time -- so the rule IS still matching transactions. Rendering
+          // "Not running" there would state something false about the user's own data, and
+          // rendering "Needs attention" for a rule that matches nothing would too.
           <p
             className={
               rule.quarantined

@@ -529,17 +529,18 @@ describe('AutoCategorizationRuleCard', () => {
       expect(screen.getByText(/no conditions, so it would match every transaction/i)).toBeDefined()
     })
 
-    // ⚠ The distinction Codex caught. A rule with a reason but quarantined=false is STILL
-    // MATCHING transactions — invalid condition_logic falls back to AND, and an unnormalizable
-    // condition under OR lets a valid sibling carry the rule. Rendering "Not running" for those
-    // told the user their rule was off while it quietly recategorised their ledger.
+    // ⚠ The distinction Codex caught, with #1625 Task 2's membership. A rule with a reason but
+    // quarantined=false is STILL MATCHING transactions. Only one reason is in that state now:
+    // a wrong-typed condition value whose intended reading is unambiguous, which the backend
+    // coerces at read time. Rendering "Not running" for it would tell the user their rule was
+    // off while it quietly recategorised their ledger.
     it('says "Needs attention", NOT "Not running", for a rule that still runs', () => {
       render(
         <AutoCategorizationRuleCard
           rule={{
             ...mockRule,
             quarantined: false,
-            quarantine_reason: 'invalid_condition_logic_defaults_to_and',
+            quarantine_reason: 'invalid_condition_value_shape',
           }}
           onToggle={mockOnToggle}
           onEdit={mockOnEdit}
@@ -550,6 +551,50 @@ describe('AutoCategorizationRuleCard', () => {
       expect(screen.getByText('Needs attention')).toBeDefined()
       expect(screen.queryByText('Not running')).toBeNull()
       expect(screen.getByText(/STILL RUNNING/i)).toBeDefined()
+    })
+
+    // The other half of Task 2: a value with no honest reading is not guessed at, so the rule is
+    // refused and the card must say so rather than "Needs attention".
+    it('renders "Not running" for a value the backend could not repair', () => {
+      render(
+        <AutoCategorizationRuleCard
+          rule={{
+            ...mockRule,
+            quarantined: true,
+            quarantine_reason: 'uncoercible_condition_value',
+          }}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Not running')).toBeDefined()
+      expect(screen.queryByText('Needs attention')).toBeNull()
+      expect(screen.getByText(/cannot be read as the kind of value/i)).toBeDefined()
+    })
+
+    // Copy drift guard. Every enforced reason renders with quarantined=true, and its sentence
+    // must not claim the rule is still running — the sentence and the badge disagreeing is the
+    // exact failure this feature exists to remove, and the two are written in different places.
+    it.each([
+      'no_conditions_matches_everything',
+      'invalid_condition_logic_defaults_to_and',
+      'unnormalizable_condition',
+      'uncoercible_condition_value',
+    ])('the copy for enforced reason %s never claims the rule still runs', (reason) => {
+      render(
+        <AutoCategorizationRuleCard
+          rule={{ ...mockRule, quarantined: true, quarantine_reason: reason }}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Not running')).toBeDefined()
+      expect(screen.queryByText(/still running/i)).toBeNull()
+      expect(screen.getByText(/not being run|not matching any transactions/i)).toBeDefined()
     })
 
     it('falls back to a generic sentence for a reason it does not recognise', () => {
