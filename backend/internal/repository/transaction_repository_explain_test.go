@@ -251,6 +251,12 @@ func TestTransactionKeyset_EXPLAIN(t *testing.T) {
 type recordingDB struct {
 	sql  string
 	args []any
+	// aggSQL/aggArgs capture the QueryRow the whole-set totals aggregate issues ahead of the page
+	// query (#1626 Phase 2). It is recorded separately rather than overwriting sql because BOTH
+	// statements need planning: the aggregate's first version was syntactically invalid, and no
+	// pgxmock shape test could have told us — this is the test that would have.
+	aggSQL  string
+	aggArgs []any
 }
 
 func (d *recordingDB) Begin(context.Context) (pgx.Tx, error) { return nil, errRecordingDB }
@@ -261,8 +267,29 @@ func (d *recordingDB) Query(_ context.Context, sql string, args ...interface{}) 
 	d.sql, d.args = sql, args
 	return nil, errRecordingDB
 }
-func (d *recordingDB) QueryRow(context.Context, string, ...interface{}) pgx.Row { return nil }
-func (d *recordingDB) SendBatch(context.Context, *pgx.Batch) pgx.BatchResults   { return nil }
+func (d *recordingDB) QueryRow(_ context.Context, sql string, args ...interface{}) pgx.Row {
+	d.aggSQL, d.aggArgs = sql, args
+	return zeroRow{}
+}
+
+// zeroRow lets the totals aggregate SUCCEED with zeroes, so recording continues on to the page
+// query. Failing here would stop the method before it emits the statement this test primarily
+// exists to plan — and both statements need capturing.
+type zeroRow struct{}
+
+func (zeroRow) Scan(dest ...interface{}) error {
+	for _, d := range dest {
+		switch v := d.(type) {
+		case *int:
+			*v = 0
+		case *float64:
+			*v = 0
+		}
+	}
+	return nil
+}
+
+func (d *recordingDB) SendBatch(context.Context, *pgx.Batch) pgx.BatchResults { return nil }
 
 var errRecordingDB = errors.New("recordingDB: no results, by design")
 
@@ -315,4 +342,27 @@ func TestUnifiedFeed_EmittedQuery_EXPLAIN(t *testing.T) {
 			"migration 000151); a Seq Scan here is a full-table scan per candidate transaction.\nPlan:\n%s", plan)
 	assert.Contains(t, plan, "account_status_history",
 		"the plan must actually include the retained-visibility leg.\nPlan:\n%s", plan)
+
+	// And the whole-set totals aggregate, which is a SECOND statement this method emits (#1626
+	// Phase 2). Planning it is not optional bonus coverage: its first version failed to parse, and
+	// only executing it against Postgres could say so. Because it WRAPS the page query rather than
+	// restating its predicates, a plan for it also re-proves the page query still type-checks.
+	require.NotEmpty(t, rec.aggSQL,
+		"no aggregate captured — GetByUserIDKeysetUnified stopped computing first-page totals")
+	// The page query differs from the aggregate's inner query by exactly the LIMIT clause, so strip
+	// it before comparing. Asserted as a bool rather than require.Contains because both strings are
+	// ~7 KB and a Contains failure prints them twice, which buries the message that matters.
+	limitAt := strings.LastIndex(rec.sql, "LIMIT $")
+	require.Positive(t, limitAt, "the page query must carry a LIMIT")
+	pageBody := strings.TrimSpace(rec.sql[:limitAt])
+	require.True(t, strings.Contains(rec.aggSQL, pageBody),
+		"the aggregate must WRAP the page query verbatim, not restate it — a restatement is free to "+
+			"drift, and a total that disagrees with its rows is worse than no total (#1626)")
+	require.Len(t, rec.aggArgs, len(rec.args)-1,
+		"the aggregate must bind every page arg EXCEPT the LIMIT: it has no LIMIT clause, and the "+
+			"extended protocol rejects a parameter the statement does not reference")
+
+	aggPlan := runExplain(ctx, t, conn, rec.aggSQL, rec.aggArgs...)
+	assert.NotContains(t, aggPlan, "Seq Scan on account_status_history",
+		"the aggregate inherits the page query's access paths and must not lose them.\nPlan:\n%s", aggPlan)
 }
