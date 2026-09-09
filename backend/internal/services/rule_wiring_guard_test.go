@@ -54,7 +54,7 @@ var _ interface {
 // reportQuarantineCandidates through its callers: both existing tests call it directly, so
 // deleting either call site left CI green and the inventory silently never ran.
 func TestApplyRulesToTransaction_ReachesTheQuarantineInventory(t *testing.T) {
-	before := quarantineCandidateCount(t, observability.QuarantineInvalidValue)
+	before := quarantineCandidateCount(t, observability.QuarantineUncoercibleValue)
 
 	broken := &domain.CategorizationRule{
 		ID: "r-broken", UserID: "u1", Enabled: true, ConditionLogic: "AND",
@@ -71,7 +71,7 @@ func TestApplyRulesToTransaction_ReachesTheQuarantineInventory(t *testing.T) {
 	tx := &domain.Transaction{ID: "t1", UserID: "u1", Name: "x", Amount: 10}
 	require.NoError(t, svc.ApplyRulesToTransaction(context.Background(), tx))
 
-	after := quarantineCandidateCount(t, observability.QuarantineInvalidValue)
+	after := quarantineCandidateCount(t, observability.QuarantineUncoercibleValue)
 	assert.Greater(t, after, before,
 		"the quarantine inventory was not reached through ApplyRulesToTransaction — deleting the "+
 			"call site would leave CI green while the inventory silently never ran")

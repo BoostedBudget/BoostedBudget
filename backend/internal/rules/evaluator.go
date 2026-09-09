@@ -56,6 +56,14 @@ func (r *ConditionRegistry) Evaluate(tx *domain.Transaction, condition domain.Ru
 	if evaluator, ok := r.evaluators[condition.Type]; ok && condition.Type != domain.ConditionTypeExpression {
 		return evaluator.Evaluate(tx, condition)
 	}
+	// #1625 Task 2: repair a wrong-typed value before reading it. `condition` is a COPY (the
+	// parameter is by value and Value is replaced, not mutated in place), so the stored row and
+	// rule_execution_history.definition_snapshot are untouched — coercion is read-path only.
+	// An uncoercible value is left exactly as it was: it is quarantined and enforced in
+	// RuleMatches, and rewriting it here would only change which error the evaluator reports.
+	if coerced, ok := condition.CoercedValue(); ok {
+		condition.Value = coerced
+	}
 	return evaluateField(tx, condition)
 }
 

@@ -2,170 +2,389 @@ package rules
 
 import (
 	"testing"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
-// #1625 Task 8: a rule with NO conditions must match NOTHING.
-//
-// RuleMatches returned true for an empty condition list, commented "No conditions means always
-// match (edge case)". That is not an edge case, it is a ledger-wide recategorisation: such a rule
-// applies its target to every transaction the user has.
-//
-// This is the one quarantine reason it is safe to enforce without a production inventory, and the
-// one where leaving it alone is the RISKY choice. The check is provably unreachable from the
-// product: CategorizationRule.Validate has rejected empty conditions since dedac0aa (#346) -- the
-// same commit that created the file -- and no migration inserts rules. Such a row therefore
-// requires a direct database edit. The table does default `conditions` to '[]', which is exactly
-// the non-service insert this guard exists to catch.
-//
-// The other three quarantine reasons stay SURFACED but not enforced: each is "this might disable
-// a rule that is currently working", where doing nothing is the conservative choice.
-func TestRuleMatches_ZeroConditionRuleMatchesNothing(t *testing.T) {
-	engine := NewRuleEngine()
-
-	rule := &domain.CategorizationRule{
-		ID:             "r-empty",
-		Enabled:        true,
-		ConditionLogic: "AND",
-		Conditions:     []domain.RuleCondition{},
-	}
-
-	tx := newTestTransaction("ANYTHING AT ALL", -12.34, "in store", nil)
-
-	matched, err := engine.RuleMatches(tx, rule)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if matched {
-		t.Error("a rule with no conditions matched a transaction — it would recategorise the " +
-			"user's entire ledger")
+// quarantineTx is deliberately rich enough to exercise EVERY evaluator shape: text, number,
+// date, range and enum. The merchant name ends in "42" so that a numeric text value coerces into
+// something that genuinely MATCHES — a coercion test whose repaired value cannot match would
+// pass just as well against no coercion at all.
+func quarantineTx() *domain.Transaction {
+	merchant := "STARBUCKS COFFEE 42"
+	channel := "in store"
+	return &domain.Transaction{
+		ID:             "t1",
+		Name:           merchant,
+		MerchantName:   &merchant,
+		Amount:         -5.50,
+		PaymentChannel: &channel,
+		AccountID:      "acc-1",
+		Date:           time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+		Account:        &domain.Account{Type: "depository"},
 	}
 }
 
-// Enforcement is reason-SCOPED. A rule with a broken condition value is quarantine-worthy for a
-// different reason, and that reason is deliberately NOT enforced yet: refusing to run it could
-// disable a rule that is currently doing useful work. It must still be evaluated normally.
-func TestRuleMatches_OtherQuarantineReasonsAreStillEvaluated(t *testing.T) {
-	engine := NewRuleEngine()
+// validSibling MATCHES quarantineTx on its own. Under OR it is what carries a rule whose other
+// condition is broken — which is exactly how the bug this test exists to catch presented:
+// OR(merchant_contains(42), merchant_contains("starbucks")) classified
+// invalid_condition_value_shape, matchText returned a bare false with no error, evaluateOR
+// reached the sibling, and the rule FIRED while the card said "Not running".
+func validSibling() domain.RuleCondition {
+	return domain.RuleCondition{Type: domain.ConditionMerchantContains, Value: "starbucks"}
+}
 
-	// invalid_condition_logic_defaults_to_and — surfaced by the read model, still runs.
-	rule := &domain.CategorizationRule{
-		ID:             "r-odd-logic",
-		Enabled:        true,
-		ConditionLogic: "SOMETHING_ELSE",
-		Conditions: []domain.RuleCondition{
-			{Type: domain.ConditionMerchantContains, Value: "starbucks"},
-		},
-	}
+type shapeCase struct {
+	shape string
+	cond  domain.RuleCondition
+}
 
-	tx := newTestTransaction("STARBUCKS COFFEE #123", -5.50, "in store", nil)
+// Every reason below is listed per EVALUATOR SHAPE, not once per reason. Round 2 of #1625
+// measured one representative shape and generalised, and the generalisation was false: matchText
+// returns a bare bool where matchNumber returns (bool, error), so two conditions with the same
+// quarantine reason behaved oppositely at runtime. A single-shape table cannot see that.
 
-	matched, err := engine.RuleMatches(tx, rule)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !matched {
-		t.Error("enforcement leaked beyond no_conditions — this rule still works and must run")
+func unnormalizableShapes() []shapeCase {
+	return []shapeCase{
+		{"unknown fused type", domain.RuleCondition{Type: "a_type_that_does_not_exist", Value: "x"}},
+		{"unknown field", domain.RuleCondition{Field: "not_a_field", Operator: "eq", Value: "x"}},
+		{"text operator on a number field", domain.RuleCondition{Field: domain.FieldAmount, Operator: "contains", Value: "5"}},
+		{"range operator on a text field", domain.RuleCondition{Field: domain.FieldMerchant, Operator: "between", Value: "x"}},
+		{"date operator on an enum field", domain.RuleCondition{Field: domain.FieldDirection, Operator: "between", Value: "x"}},
+		{"field with no operator at all", domain.RuleCondition{Field: domain.FieldMerchant, Value: "starbucks"}},
 	}
 }
 
-// The kill switch must actually restore the previous behaviour, or it is not a kill switch.
-func TestRuleMatches_ZeroConditionEnforcementCanBeDisabled(t *testing.T) {
-	original := enforceZeroConditionQuarantine
-	enforceZeroConditionQuarantine = false
-	t.Cleanup(func() { enforceZeroConditionQuarantine = original })
-
-	engine := NewRuleEngine()
-	rule := &domain.CategorizationRule{
-		ID: "r-empty", Enabled: true, ConditionLogic: "AND",
-		Conditions: []domain.RuleCondition{},
-	}
-
-	matched, err := engine.RuleMatches(newTestTransaction("X", -1, "in store", nil), rule)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !matched {
-		t.Error("with enforcement disabled the pre-#1625 match-everything behaviour must return")
+func uncoercibleShapes() []shapeCase {
+	return []shapeCase{
+		{"text: an object where a string is required",
+			domain.RuleCondition{Field: domain.FieldMerchant, Operator: "contains", Value: map[string]interface{}{"a": 1}}},
+		{"text: an empty array names nothing",
+			domain.RuleCondition{Field: domain.FieldMerchant, Operator: "in", Value: []interface{}{}}},
+		{"number: a non-numeric string",
+			domain.RuleCondition{Field: domain.FieldAmount, Operator: "gt", Value: "not-a-number"}},
+		{"number: an array where a scalar is required",
+			domain.RuleCondition{Field: domain.FieldSignedAmount, Operator: "lt", Value: []interface{}{1, 2}}},
+		{"number_range: a scalar where an object is required",
+			domain.RuleCondition{Field: domain.FieldAmount, Operator: "between", Value: "not-an-object"}},
+		{"number_range: an inverted range",
+			domain.RuleCondition{Field: domain.FieldAmount, Operator: "between", Value: map[string]interface{}{"min": 500.0, "max": 1.0}}},
+		{"date: a number where a calendar day is required",
+			domain.RuleCondition{Field: domain.FieldDate, Operator: "eq", Value: 20260115}},
+		{"date_range: an unreadable bound",
+			domain.RuleCondition{Field: domain.FieldDate, Operator: "between", Value: map[string]interface{}{"start": "yesterday"}}},
+		{"enum: a value outside the closed set",
+			domain.RuleCondition{Field: domain.FieldDirection, Operator: "eq", Value: "inflows"}},
+		{"enum: an unknown PFC primary",
+			domain.RuleCondition{Field: domain.FieldPFCPrimary, Operator: "eq", Value: "FOOD"}},
 	}
 }
 
-// TestQuarantineEnforcementMatchesTheAdvertisedSet ties observability.IsEnforcedQuarantineReason
-// to what RuleMatches ACTUALLY does, for every reason in the vocabulary.
+// coercibleShapes are the REPAIRED half. Each is a value ValidateShape rejects, whose one honest
+// reading MATCHES quarantineTx — so a rule containing it must still fire, under AND as well as
+// under OR.
+func coercibleShapes() []shapeCase {
+	return []shapeCase{
+		{"text: a number for a text field",
+			domain.RuleCondition{Field: domain.FieldMerchant, Operator: "contains", Value: 42.0}},
+		{"text: an integer for a text field",
+			domain.RuleCondition{Field: domain.FieldMerchant, Operator: "ends_with", Value: 42}},
+		{"number: a quoted number",
+			domain.RuleCondition{Field: domain.FieldAmount, Operator: "gt", Value: "1"}},
+		{"number: a quoted negative number for the signed field",
+			domain.RuleCondition{Field: domain.FieldSignedAmount, Operator: "lt", Value: "-1"}},
+		{"number_range: quoted bounds",
+			domain.RuleCondition{Field: domain.FieldAmount, Operator: "between", Value: map[string]interface{}{"min": "1", "max": "10"}}},
+		{"date: an unpadded day",
+			domain.RuleCondition{Field: domain.FieldDate, Operator: "gte", Value: "2026-1-1"}},
+		{"date: an RFC3339 timestamp",
+			domain.RuleCondition{Field: domain.FieldDate, Operator: "lte", Value: "2026-12-31T00:00:00Z"}},
+		{"date_range: unpadded bounds",
+			domain.RuleCondition{Field: domain.FieldDate, Operator: "between",
+				Value: map[string]interface{}{"start": "2026-1-1", "end": "2026-12-31"}}},
+	}
+}
+
+// ⚠ The enum shape has NO coercible member, on purpose. Coercion fixes a value's TYPE; a value
+// outside a closed set is a typo, and coercing `1` into "1" for `direction` would hand the
+// evaluator something the write path still refuses. Asserted rather than left implicit so that
+// loosening the enum check later fails here.
+func TestEnumShapeIsNeverRepairedOnlyStopped(t *testing.T) {
+	for _, c := range []domain.RuleCondition{
+		domain.RuleCondition{Field: domain.FieldDirection, Operator: "eq", Value: 1},
+		domain.RuleCondition{Field: domain.FieldDirection, Operator: "in", Value: []interface{}{"outflows"}},
+		domain.RuleCondition{Field: domain.FieldPFCDetailed, Operator: "eq", Value: "FOOD_AND_DRINK"},
+	} {
+		if _, ok := c.CoercedValue(); ok {
+			t.Errorf("%+v was repaired — a value outside a closed enum is a typo, and inventing a "+
+				"member of the set is guessing at what the user meant", c)
+		}
+	}
+}
+
+// An array MIXING a number and a string is a different animal: textValues DROPS the number, so
+// the condition already validates and is never quarantined — it just silently matches on fewer
+// values than it names. Coercion repairs that too, which is why it is tested here rather than in
+// the quarantine table.
+func TestMixedArrayMemberIsCoercedRatherThanSilentlyDropped(t *testing.T) {
+	c := domain.RuleCondition{Field: domain.FieldMerchant, Operator: "in", Value: []interface{}{"acme", 42}}
+	if err := c.ValidateShape(); err != nil {
+		t.Fatalf("fixture is meant to already validate: %v", err)
+	}
+	got, ok := c.CoercedValue()
+	if !ok {
+		t.Fatal("a mixed array is coercible")
+	}
+	values, isSlice := got.([]string)
+	if !isSlice || len(values) != 2 || values[1] != "42" {
+		t.Errorf("coerced to %#v — the numeric member must survive as \"42\", not be dropped", got)
+	}
+}
+
+func ruleWith(logic string, conds ...domain.RuleCondition) *domain.CategorizationRule {
+	return &domain.CategorizationRule{ID: "r", Enabled: true, ConditionLogic: logic, Conditions: conds}
+}
+
+// TestQuarantineEnforcementMatchesTheAdvertisedSet drives RuleMatches for every reason × every
+// evaluator shape × both AND and OR, and compares the OBSERVED outcome with what
+// QuarantineReasonStopsMatching advertises and the card renders. It is the guard that the read
+// model and the engine cannot describe the same rule differently.
 //
-// #1625, found by adversarial review: the read model marked all four reasons "quarantined" and the
-// card rendered "Not running", but only no_conditions is enforced. The other three still match
-// transactions — so the UI asserted something the system knew to be false, which is the defect
-// class this ticket exists to close.
-//
-// A hand-maintained list of "which reasons are enforced" would drift from the engine the first
-// time someone enforced another one. This drives the engine instead: for each reason it builds a
-// rule that a transaction WOULD otherwise match, and requires match == !enforced.
+// OR always carries a valid sibling that matches on its own, so for an enforced reason the OR row
+// is the falsifiable one: without enforcement the sibling fires the rule.
 func TestQuarantineEnforcementMatchesTheAdvertisedSet(t *testing.T) {
+	tx := quarantineTx()
 	engine := NewRuleEngine()
-	tx := newTestTransaction("STARBUCKS COFFEE #123", -5.50, "in store", nil)
 
-	// Each fixture is a rule that classifies as exactly one reason AND would match `tx` if the
-	// engine let it. A rule that could not match anyway would make "did not match" meaningless.
+	type reasonGroup struct {
+		reason observability.QuarantineReason
+		shapes []shapeCase
+	}
+
+	groups := []reasonGroup{
+		{observability.QuarantineNoConditions, []shapeCase{{"no conditions at all", domain.RuleCondition{}}}},
+		{observability.QuarantineUnnormalizable, unnormalizableShapes()},
+		{observability.QuarantineUncoercibleValue, uncoercibleShapes()},
+		{observability.QuarantineInvalidValue, coercibleShapes()},
+	}
+
+	for _, g := range groups {
+		for _, sc := range g.shapes {
+			for _, logic := range []string{"AND", "OR"} {
+				t.Run(string(g.reason)+"/"+sc.shape+"/"+logic, func(t *testing.T) {
+					var rule *domain.CategorizationRule
+					if g.reason == observability.QuarantineNoConditions {
+						rule = ruleWith(logic)
+					} else if logic == "OR" {
+						rule = ruleWith(logic, sc.cond, validSibling())
+					} else {
+						rule = ruleWith(logic, sc.cond)
+					}
+
+					if got := QuarantineReasonFor(rule); got != g.reason {
+						t.Fatalf("classified %q, want %q — the table no longer tests what it claims",
+							got, g.reason)
+					}
+
+					matched, err := engine.RuleMatches(tx, rule)
+					if err != nil {
+						// An evaluator error skips the rule in EvaluateRules, which the user
+						// sees as "did not match".
+						matched = false
+					}
+
+					stops := observability.QuarantineReasonStopsMatching(g.reason)
+					if stops && matched {
+						t.Errorf("%s is advertised as stopping the rule, but it MATCHED — the read "+
+							"model reports quarantined and the card says \"Not running\", which is false",
+							g.reason)
+					}
+					if !stops && !matched {
+						t.Errorf("%s is advertised as still running, but the rule did NOT match — "+
+							"either coercion failed to repair a value with one honest reading, or "+
+							"QuarantineReasonStopsMatching no longer describes reality", g.reason)
+					}
+				})
+			}
+		}
+	}
+}
+
+// invalid_condition_logic is shape-independent — it is the LOGIC that is broken, not a value — so
+// it gets its own table. It is the reason with the largest behavioural change: an unrecognised
+// logic silently fell back to AND and the rule kept running and kept recategorising.
+func TestInvalidConditionLogicStopsEveryShape(t *testing.T) {
+	tx := quarantineTx()
+	engine := NewRuleEngine()
+
+	healthy := []shapeCase{
+		{"text", validSibling()},
+		{"number", domain.RuleCondition{Type: domain.ConditionAmountGreaterThan, Value: 1.0}},
+		{"number_range", domain.RuleCondition{Type: domain.ConditionAmountRange, Value: map[string]interface{}{"min": 1.0, "max": 10.0}}},
+		{"date_range", domain.RuleCondition{Type: domain.ConditionDateRange, Value: map[string]interface{}{"start": "2026-01-01"}}},
+		{"enum", domain.RuleCondition{Field: domain.FieldDirection, Operator: "eq", Value: "inflow"}},
+	}
+
+	for _, sc := range healthy {
+		t.Run(sc.shape, func(t *testing.T) {
+			rule := ruleWith("XOR", sc.cond)
+			if got := QuarantineReasonFor(rule); got != observability.QuarantineInvalidLogic {
+				t.Fatalf("classified %q, want invalid_condition_logic", got)
+			}
+			// Falsifiability: every condition here MATCHES, so without enforcement the AND
+			// fallback fires the rule.
+			if matched, err := engine.RuleMatches(tx, ruleWith("AND", sc.cond)); err != nil || !matched {
+				t.Fatalf("fixture is not falsifiable: the same condition under AND did not match (%v, %v)",
+					matched, err)
+			}
+			matched, err := engine.RuleMatches(tx, rule)
+			if err != nil {
+				matched = false
+			}
+			if matched {
+				t.Error("a rule whose condition_logic is neither AND nor OR still matched — it is " +
+					"running as something the user never wrote")
+			}
+		})
+	}
+}
+
+// Enforcement must not leak. A healthy rule keeps matching, and a healthy rule that does not
+// match keeps not matching.
+func TestEnforcementDoesNotLeakIntoHealthyRules(t *testing.T) {
+	tx := quarantineTx()
+	engine := NewRuleEngine()
+
+	for _, tc := range []struct {
+		name string
+		rule *domain.CategorizationRule
+		want bool
+	}{
+		{"AND of two matching conditions", ruleWith("AND", validSibling(),
+			domain.RuleCondition{Type: domain.ConditionAmountGreaterThan, Value: 1.0}), true},
+		{"OR with one matching condition", ruleWith("OR",
+			domain.RuleCondition{Type: domain.ConditionMerchantContains, Value: "wholefoods"},
+			validSibling()), true},
+		{"AND that genuinely does not match", ruleWith("AND",
+			domain.RuleCondition{Type: domain.ConditionMerchantContains, Value: "wholefoods"}), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if r := QuarantineReasonFor(tc.rule); r != "" {
+				t.Fatalf("healthy fixture was classified %q", r)
+			}
+			matched, err := engine.RuleMatches(tx, tc.rule)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if matched != tc.want {
+				t.Errorf("matched=%v, want %v", matched, tc.want)
+			}
+		})
+	}
+}
+
+// TestQuarantineEnforcementKillSwitchCoversEveryEnforcedReason. An untested kill switch is not a
+// kill switch. Each case is a rule that MATCHES once enforcement is off, so the switch is
+// observed doing something rather than merely being read.
+func TestQuarantineEnforcementKillSwitchCoversEveryEnforcedReason(t *testing.T) {
+	tx := quarantineTx()
+	engine := NewRuleEngine()
+
 	cases := []struct {
 		reason observability.QuarantineReason
 		rule   *domain.CategorizationRule
 	}{
-		{
-			observability.QuarantineNoConditions,
-			&domain.CategorizationRule{ID: "r1", Enabled: true, ConditionLogic: "AND",
-				Conditions: []domain.RuleCondition{}},
-		},
-		{
-			observability.QuarantineInvalidLogic,
-			&domain.CategorizationRule{ID: "r2", Enabled: true, ConditionLogic: "XOR",
-				Conditions: []domain.RuleCondition{
-					{Type: domain.ConditionMerchantContains, Value: "starbucks"},
-				}},
-		},
-		{
-			// Stops matching, but by a DIFFERENT mechanism than no_conditions: the evaluator
-			// returns an error, so A8 skips the whole rule. Same observable outcome, so the same
-			// answer is owed to the user.
-			observability.QuarantineInvalidValue,
-			&domain.CategorizationRule{ID: "r3", Enabled: true, ConditionLogic: "OR",
-				Conditions: []domain.RuleCondition{
-					{Type: domain.ConditionAmountGreaterThan, Value: "not-a-number"},
-					{Type: domain.ConditionMerchantContains, Value: "starbucks"},
-				}},
-		},
-		{
-			// The case that makes this test necessary. Normalization failure returns (false, nil)
-			// rather than an error, so under OR the valid sibling still matches and the rule
-			// applies its action in full — while the read model would happily have called it
-			// "Not running".
-			observability.QuarantineUnnormalizable,
-			&domain.CategorizationRule{ID: "r4", Enabled: true, ConditionLogic: "OR",
-				Conditions: []domain.RuleCondition{
-					{Type: "a_type_that_does_not_exist", Value: "x"},
-					{Type: domain.ConditionMerchantContains, Value: "starbucks"},
-				}},
-		},
+		{observability.QuarantineNoConditions, ruleWith("AND")},
+		{observability.QuarantineInvalidLogic, ruleWith("XOR", validSibling())},
+		{observability.QuarantineUnnormalizable,
+			ruleWith("OR", domain.RuleCondition{Type: "a_type_that_does_not_exist", Value: "x"}, validSibling())},
+		// The sibling comes FIRST here on purpose: with enforcement off, an uncoercible number
+		// makes matchNumber return an error, and OR is evaluated in order.
+		{observability.QuarantineUncoercibleValue,
+			ruleWith("OR", validSibling(), domain.RuleCondition{Field: domain.FieldAmount, Operator: "gt", Value: "not-a-number"})},
+	}
+
+	// Every reason that stops matching must appear above, or the switch has grown a hole.
+	covered := map[observability.QuarantineReason]bool{}
+	for _, c := range cases {
+		covered[c.reason] = true
+	}
+	for _, r := range observability.AllQuarantineReasons() {
+		if observability.QuarantineReasonStopsMatching(r) && !covered[r] {
+			t.Errorf("%q is enforced but the kill switch is not tested against it", r)
+		}
 	}
 
 	for _, c := range cases {
-		matched, err := engine.RuleMatches(tx, c.rule)
+		t.Run(string(c.reason), func(t *testing.T) {
+			if got := QuarantineReasonFor(c.rule); got != c.reason {
+				t.Fatalf("classified %q, want %q", got, c.reason)
+			}
+			if matched, _ := engine.RuleMatches(tx, c.rule); matched {
+				t.Fatal("the rule matched WITH enforcement on — the fixture cannot show the switch doing anything")
+			}
+
+			original := enforceQuarantine
+			enforceQuarantine = false
+			t.Cleanup(func() { enforceQuarantine = original })
+
+			matched, err := engine.RuleMatches(tx, c.rule)
+			if err != nil {
+				t.Fatalf("unexpected error with enforcement disabled: %v", err)
+			}
+			if !matched {
+				t.Errorf("with RULE_QUARANTINE_ENFORCE=false the pre-#1625 behaviour must return for %q",
+					c.reason)
+			}
+		})
+	}
+}
+
+// The kill switch gates ENFORCEMENT, never COERCION. Turning off a repair would restore a defect,
+// not a behaviour, so a coercible rule matches identically in both positions.
+func TestKillSwitchDoesNotDisableCoercion(t *testing.T) {
+	tx := quarantineTx()
+	engine := NewRuleEngine()
+	rule := ruleWith("AND", domain.RuleCondition{Field: domain.FieldAmount, Operator: "gt", Value: "1"})
+
+	for _, enforcing := range []bool{true, false} {
+		original := enforceQuarantine
+		enforceQuarantine = enforcing
+		matched, err := engine.RuleMatches(tx, rule)
+		enforceQuarantine = original
 		if err != nil {
-			// An error is not a match either way; the point is whether the rule can still act.
-			matched = false
+			t.Fatalf("enforcement=%v: unexpected error: %v", enforcing, err)
 		}
-		enforced := observability.QuarantineReasonStopsMatching(c.reason)
-		if enforced && matched {
-			t.Errorf("%s is advertised as stopping the rule, but it still matched — the read "+
-				"model reports quarantined and the card says \"Not running\", which is false",
-				c.reason)
+		if !matched {
+			t.Errorf("enforcement=%v: a coercible value stopped matching — coercion must not be "+
+				"gated by the enforcement switch", enforcing)
 		}
-		if !enforced && !matched {
-			t.Errorf("%s is advertised as still-running but the rule did NOT match — behaviour "+
-				"has changed and QuarantineReasonStopsMatching no longer describes reality",
-				c.reason)
-		}
+	}
+}
+
+// Coercion is READ-PATH ONLY. rule_execution_history.definition_snapshot rows are immutable audit
+// records, and the live rule is shared across every transaction in a batch — a repair written
+// back would change what the next transaction is matched against.
+func TestEvaluationNeverRewritesTheStoredCondition(t *testing.T) {
+	engine := NewRuleEngine()
+	rule := ruleWith("OR",
+		domain.RuleCondition{Field: domain.FieldAmount, Operator: "gt", Value: "1"},
+		domain.RuleCondition{Type: domain.ConditionMerchantContains, Value: 42.0},
+	)
+
+	if _, err := engine.RuleMatches(quarantineTx(), rule); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := rule.Conditions[0].Value; got != "1" {
+		t.Errorf("the stored numeric value was rewritten to %#v", got)
+	}
+	if got := rule.Conditions[1].Value; got != 42.0 {
+		t.Errorf("the stored text value was rewritten to %#v", got)
+	}
+	if rule.Conditions[1].Field != "" {
+		t.Error("evaluation normalized the live rule in place")
 	}
 }

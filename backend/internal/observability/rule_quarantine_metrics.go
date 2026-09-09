@@ -7,21 +7,21 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// ruleQuarantineCandidates counts categorization rules that a future ENFORCING quarantine pass
-// would refuse, broken down by reason (Issue #1625).
+// ruleQuarantineCandidates counts categorization rules a quarantine pass finds broken, by reason
+// (Issue #1625).
 //
-// Shadow mode changes no matching behaviour on purpose: the blast radius of enforcement is
-// unknown until this counter has run against real data, and silently disabling a rule someone
-// depends on is a worse failure than the ones #1625 set out to fix. This metric IS the
-// inventory — enforcement ships only once the counts are known and the FieldSpecs matrix has
-// been widened to accept every legitimate legacy shape it turns up.
+// ⚠ It is NO LONGER a shadow-mode-only counter. Since Task 2 the reasons for which
+// QuarantineReasonStopsMatching is true are ENFORCED in RuleMatches, so a sample under one of
+// those labels is a rule that did not run. The remaining reason,
+// invalid_condition_value_shape, is repaired by read-path coercion and its rules DO still
+// execute. Read the label, not the metric name, before concluding a rule ran.
 //
 // ⚠ The `reason` label is a fixed, closed vocabulary from quarantineReason(). It must never
 // carry a rule id, a rule name, a user id or a condition value: Prometheus labels are
 // high-cardinality poison and, worse here, user financial content.
 var ruleQuarantineCandidates = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "categorization_rule_quarantine_candidates_total",
-	Help: "Categorization rules that an enforcing quarantine pass would refuse, by reason. Shadow mode only — these rules still execute.",
+	Help: "Categorization rules found broken by the quarantine classifier, by reason. Reasons that stop matching are enforced in RuleMatches; invalid_condition_value_shape is repaired by read-path coercion and still executes.",
 }, []string{"reason"})
 
 // QuarantineReason is a CLOSED set. The recorder previously took a bare string and handed it
@@ -41,30 +41,58 @@ const (
 	QuarantineInvalidLogic   QuarantineReason = "invalid_condition_logic_defaults_to_and"
 	QuarantineUnnormalizable QuarantineReason = "unnormalizable_condition"
 	QuarantineInvalidValue   QuarantineReason = "invalid_condition_value_shape"
+	// QuarantineUncoercibleValue is the half of invalid_condition_value_shape that read-path
+	// coercion cannot repair — an object where a scalar is required, an empty array, a
+	// non-numeric string for a number. It is a SEPARATE reason rather than a flag on the old one
+	// because QuarantineReasonStopsMatching is a function of the reason alone: one reason that
+	// sometimes stops a rule and sometimes does not cannot be answered by it, and the card would
+	// have to guess.
+	QuarantineUncoercibleValue QuarantineReason = "uncoercible_condition_value"
 )
 
 // QuarantineReasonStopsMatching reports whether a rule with this reason is genuinely incapable of
 // matching anything — which is the ONLY condition under which a UI may say it is not running.
 //
-// #1625, corrected after measuring the engine rather than reasoning about it. The four reasons do
-// NOT behave alike, and an earlier revision of this code reported all of them as "Not running",
-// which was false for half:
+// #1625, membership corrected twice. The first revision reported all four reasons as "Not
+// running", which was false for half. The second measured the engine — and generalised from ONE
+// evaluator shape per reason, which was also wrong: `OR(merchant_contains(value=42),
+// merchant_contains(value="starbucks"))` classifies invalid_condition_value_shape, but matchText
+// returns a bare bool rather than an error, so the valid sibling carried the rule and it FIRED
+// while the card said "Not running". matchNumber errors on the same class of value; matchText
+// does not. Same reason, opposite behaviour.
 //
-//	no_conditions            never matches — enforced outright in RuleMatches.
-//	invalid_condition_value  never matches — the evaluator ERRORS, so the whole rule is skipped.
-//	                         Not enforcement, but the same observable outcome.
-//	invalid_condition_logic  STILL MATCHES. An unrecognised logic value falls back to AND.
-//	unnormalizable_condition STILL MATCHES under OR: the junk condition returns (false, nil) and a
-//	                         valid sibling can carry the rule on its own. Under AND it does not.
+// The membership below is therefore no longer a description of what the evaluators happen to do.
+// RuleMatches ENFORCES it: a reason listed here stops the rule outright, at one site, before any
+// evaluator runs. Three of the four are safe to enforce because they cannot be produced through
+// the API — CategorizationRule.Validate has rejected them since dedac0aa (#346):
 //
-// So the last two are reported as "has a problem", never as "not running". Telling a user their
-// rule is off while it is quietly recategorising their transactions is the exact failure this
-// ticket exists to remove.
+//	no_conditions             enforced. Unreachable via the API; matches every transaction if run.
+//	invalid_condition_logic   enforced. Unreachable via the API; silently degrades to AND if run.
+//	unnormalizable_condition  enforced. Largely unreachable; the junk condition can never match,
+//	                          and under OR a valid sibling was carrying a rule that is not the
+//	                          rule the user wrote.
+//	uncoercible_condition_value  enforced. The condition value cannot be repaired into the shape
+//	                          its field requires, so there is no honest reading of it.
 //
-// Pinned to real behaviour by TestQuarantineEnforcementMatchesTheAdvertisedSet in internal/rules,
-// which drives RuleMatches for every reason instead of trusting this list.
+//	invalid_condition_value_shape  NOT enforced — REPAIRED. #346 validated only the condition
+//	                          TYPE and never the value shape, so a wrong-typed value persisted
+//	                          through the ordinary public API for the entire life of the feature.
+//	                          Real user rules live here. Where the intent is unambiguous ("1000"
+//	                          for a number, 42 for text) the value is coerced at READ time and the
+//	                          rule keeps running, reported as a problem rather than switched off.
+//
+// So both states survive, with corrected membership. Pinned to real behaviour by
+// TestQuarantineEnforcementMatchesTheAdvertisedSet in internal/rules, which drives RuleMatches
+// for EVERY evaluator shape (text, number, date, range, enum) under BOTH AND and OR rather than
+// one representative shape — generalising from one shape is what produced the defect above.
 func QuarantineReasonStopsMatching(r QuarantineReason) bool {
-	return r == QuarantineNoConditions || r == QuarantineInvalidValue
+	switch r {
+	case QuarantineNoConditions, QuarantineInvalidLogic, QuarantineUnnormalizable,
+		QuarantineUncoercibleValue:
+		return true
+	default:
+		return false
+	}
 }
 
 // AllQuarantineReasons is the SINGLE source of the vocabulary. The allowlist below is derived
@@ -78,6 +106,7 @@ func AllQuarantineReasons() []QuarantineReason {
 		QuarantineInvalidLogic,
 		QuarantineUnnormalizable,
 		QuarantineInvalidValue,
+		QuarantineUncoercibleValue,
 	}
 }
 

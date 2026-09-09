@@ -49,13 +49,39 @@ func TestQuarantineReason_FlagsTheStructurallyBrokenRules(t *testing.T) {
 			observability.QuarantineUnnormalizable,
 		},
 		{
-			"a value shape the evaluator can never use",
+			// #1625 Task 2 split this reason in two. A scalar where a range OBJECT is required
+			// has no honest reading, so it is the ENFORCED half.
+			"a value shape no coercion can repair",
 			func(r *domain.CategorizationRule) {
 				r.Conditions = []domain.RuleCondition{
 					{Type: domain.ConditionAmountRange, Value: "not-an-object"},
 				}
 			},
+			observability.QuarantineUncoercibleValue,
+		},
+		{
+			// The REPAIRED half: a quoted number has exactly one reading, so the rule keeps
+			// running and is reported as a problem rather than switched off. This is the only
+			// reason reachable through the ordinary API — #346 never validated value shapes.
+			"a wrong-typed value with one honest reading",
+			func(r *domain.CategorizationRule) {
+				r.Conditions = []domain.RuleCondition{
+					{Type: domain.ConditionAmountGreaterThan, Value: "1000"},
+				}
+			},
 			observability.QuarantineInvalidValue,
+		},
+		{
+			// An uncoercible condition wins over a merely repairable one: reporting the softer
+			// reason would advertise the rule as running while the engine refuses it.
+			"an uncoercible condition outranks a repairable one",
+			func(r *domain.CategorizationRule) {
+				r.Conditions = []domain.RuleCondition{
+					{Type: domain.ConditionAmountGreaterThan, Value: "1000"},
+					{Type: domain.ConditionAmountRange, Value: "not-an-object"},
+				}
+			},
+			observability.QuarantineUncoercibleValue,
 		},
 	}
 

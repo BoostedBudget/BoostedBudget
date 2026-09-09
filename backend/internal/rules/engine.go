@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // RuleResult contains the outcome of evaluating rules against a transaction.
@@ -166,48 +167,52 @@ func (e *RuleEngine) EvaluateRules(tx *domain.Transaction, rules []*domain.Categ
 	return result, nil
 }
 
-// enforceZeroConditionQuarantine gates Task 8's only enforced quarantine reason.
+// enforceQuarantine gates every ENFORCED quarantine reason (#1625 Task 2).
 //
-// Default ON. Set RULE_QUARANTINE_ENFORCE_ZERO_CONDITIONS=false to restore the pre-#1625
-// match-everything behaviour without a deploy of new code — the same kill-switch convention as
-// CACHE_ENABLED. Package-level rather than threaded through config because the engine is
-// constructed in several places and a flag nobody can find is not a usable switch.
-var enforceZeroConditionQuarantine = os.Getenv("RULE_QUARANTINE_ENFORCE_ZERO_CONDITIONS") != "false"
+// Default ON. Set RULE_QUARANTINE_ENFORCE=false to restore the pre-#1625 behaviour of running
+// every rule regardless of how broken it is — the same kill-switch convention as CACHE_ENABLED.
+// Package-level rather than threaded through config because the engine is constructed in several
+// places and a flag nobody can find is not a usable switch.
+//
+// ⚠ It was RULE_QUARANTINE_ENFORCE_ZERO_CONDITIONS when zero-conditions was the only enforced
+// reason. Renamed rather than kept as an alias because the old name would now be a lie about its
+// own scope, and it has never shipped outside this branch. Pinned by
+// TestQuarantineEnforcementKillSwitchCoversEveryEnforcedReason, which drives every reason with
+// the switch off — an untested kill switch is not one.
+//
+// It gates ENFORCEMENT only, never COERCION. Coercion repairs a value the engine would otherwise
+// read wrongly; turning it off would restore a defect rather than a behaviour.
+var enforceQuarantine = os.Getenv("RULE_QUARANTINE_ENFORCE") != "false"
 
 // RuleMatches checks if a single rule matches a transaction.
+//
+// #1625 Task 2: enforcement lives HERE and nowhere else — one site, which also covers the two
+// Apply paths and the preview path that share it. Which reasons stop a rule is not decided here
+// either: it is read from observability.QuarantineReasonStopsMatching, the same predicate the
+// read model uses to set `quarantined` and the card uses to say "Not running". Deriving the two
+// from one source is what makes "the card says Not running" and "the rule matches nothing"
+// impossible to disagree — an earlier revision had them diverge, and the user was told a rule was
+// off while it quietly recategorised their ledger.
+//
+// The unenforced reason, invalid_condition_value_shape, is REPAIRED instead: see
+// domain.CoercedValue. It is the only reason reachable through the ordinary API, so switching
+// those rules off would switch off rules people actually wrote.
+//
+// A quarantined rule is NOT hidden from reads: it still lists, with its reason. Filtering it out
+// of GetEnabledByUserID instead would make it vanish from the UI, which is the silent failure
+// this ticket exists to remove.
 func (e *RuleEngine) RuleMatches(tx *domain.Transaction, rule *domain.CategorizationRule) (bool, error) {
 	if !rule.Enabled {
 		return false, nil
 	}
 
+	if enforceQuarantine && observability.QuarantineReasonStopsMatching(QuarantineReasonFor(rule)) {
+		return false, nil
+	}
+
 	if len(rule.Conditions) == 0 {
-		// #1625 Task 8: a rule with no conditions matches NOTHING.
-		//
-		// This returned true, commented "No conditions means always match (edge case)". It is not
-		// an edge case: such a rule applies its target to every transaction the user has, which is
-		// a ledger-wide recategorisation nobody asked for. It is the one quarantine reason where
-		// leaving the rule alone is the RISKY choice, so it is the one that is enforced.
-		//
-		// Safe without a production inventory because the row is unreachable from the product:
-		// CategorizationRule.Validate has rejected empty conditions since dedac0aa (#346), the
-		// same commit that created the file, and no migration inserts rules. Reaching this branch
-		// requires a direct database edit — or the table's own `conditions` DEFAULT '[]' via a
-		// non-service insert, which is precisely what this guards.
-		//
-		// The rule is NOT hidden from reads: it still lists, and the read model marks it
-		// quarantined with a reason (Task 7). Filtering it out of GetEnabledByUserID instead would
-		// make it vanish from the UI, which is the silent failure this ticket exists to remove.
-		//
-		// ⚠ An earlier commit message claimed enforcing here rather than in the two Apply methods
-		// "also covers preview". That overstated it: PreviewRule validates the candidate rule
-		// first, so an empty condition list is already rejected before it reaches this branch.
-		// Enforcing here is still the right single place — it is one site instead of two — but
-		// preview was never the reason.
-		//
-		// Enforcement is reason-scoped: the other three quarantine reasons are surfaced only.
-		if enforceZeroConditionQuarantine {
-			return false, nil
-		}
+		// Only reachable with the kill switch off: a rule with no conditions matched EVERY
+		// transaction before #1625, commented "No conditions means always match (edge case)".
 		return true, nil
 	}
 
