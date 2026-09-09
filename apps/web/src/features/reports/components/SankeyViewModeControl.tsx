@@ -19,12 +19,16 @@ export function resolveViewModeSelection(value: string): SankeyViewModeSelection
 interface SankeyViewModeControlProps {
   value: SankeyViewModeSelection
   onChange: (value: SankeyViewModeSelection) => void
-  /** Rendered when a category is focused, so the user can get back to the whole picture. */
-  focusedLabel?: string
+  /**
+   * The focused category's KEY, used purely as a truthiness flag to swap the toggle for a way out.
+   * Named `focusedKey`, not `focusedLabel`, because it is NOT display text — a custom category's
+   * key is `custom:<uuid>`, so rendering it would put a UUID on screen: the very bug #1626 fixes.
+   */
+  focusedKey?: string
   onClearFocus?: () => void
 }
 
-export function SankeyViewModeControl({ value, onChange, focusedLabel, onClearFocus }: SankeyViewModeControlProps) {
+export function SankeyViewModeControl({ value, onChange, focusedKey, onClearFocus }: SankeyViewModeControlProps) {
   const trackEvent = useTrackEvent()
 
   const handleValueChange = (raw: string) => {
@@ -37,7 +41,7 @@ export function SankeyViewModeControl({ value, onChange, focusedLabel, onClearFo
 
   return (
     <div className="flex items-center gap-2" data-testid="sankey-view-mode-control">
-      {focusedLabel ? (
+      {focusedKey ? (
         <button
           type="button"
           onClick={onClearFocus}

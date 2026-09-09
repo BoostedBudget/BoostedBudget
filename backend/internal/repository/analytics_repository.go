@@ -494,9 +494,15 @@ func effectiveCategoryDisplayExpr() string {
 //
 // The ruling is ALPHABETICAL BY NAME, applied identically to both members of every pair. NULL
 // ordering is left at the ASC default (NULLS LAST) deliberately: a NULL name sorts last, which is
-// itself deterministic. It is also unreachable today — `effective_category_name` is scanned into a
-// non-pointer string (a NULL already fails the scan), and the merchant name COALESCEs to the
-// literal 'Unknown'.
+// itself deterministic.
+//
+// ⚠ #1626 falsified this paragraph's second half, which used to claim a NULL name was
+// "unreachable today — `effective_category_name` is scanned into a non-pointer string (a NULL
+// already fails the scan)". That is no longer true: the income pair and five other reads now scan
+// that column through `sql.NullString`, so a NULL is reachable and TOLERATED rather than fatal.
+// The ordering is still deterministic (NULLS LAST), and it no longer decides what the user sees:
+// the service re-sorts on the RESOLVED display, where a NULL custom name has already become the
+// neutral placeholder. The merchant name still COALESCEs to the literal 'Unknown'.
 //
 // ⚠ Alphabetical alone does NOT determinise the MERCHANT reads. Their name is an aggregate
 // (`MAX(COALESCE(...))`) whose chain bottoms out in the literal 'Unknown', while the GROUP BY is on

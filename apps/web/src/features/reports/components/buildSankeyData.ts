@@ -303,7 +303,6 @@ function incomeLeaves(nodes: CategoryHierarchyNode[], parentKey?: string): Array
 }
 
 /** Income is capped in its own right: it is not restricted to a single primary and can fan wide. */
-/** Income is capped in its own right: it is not restricted to a single primary and can fan wide. */
 function renderIncomeFan(sources: CategoryHierarchyNode[]) {
   const nodes: SankeyNode[] = []
   const links: SankeyLink[] = []
