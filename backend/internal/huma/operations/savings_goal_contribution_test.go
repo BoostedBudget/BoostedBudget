@@ -994,3 +994,86 @@ func TestLogContribution_BasisMismatchMessageNamesTheRemedy(t *testing.T) {
 	assert.Contains(t, msg, domain.ProgressBasisContributions, "and the basis it needs")
 	assert.Contains(t, msg, goalID, "and the goal to change, so the fix is a copyable call")
 }
+
+// #1625 Task 10: Confirm and Reject need the basis gate that LogContribution has.
+//
+// On a goal switched off the contributions basis they returned 200 while RecomputeGoalByID
+// early-returned (savings_progress_service.go) — the row changed status, the goal's
+// current_amount did not, and the caller was told it worked. A silent no-op reported as success
+// is the exact defect shape #1625 opened with.
+//
+// ⚠ DeleteContribution deliberately does NOT get this guard. ArchiveByGoal is precisely the
+// basis-switch path that leaves rows behind on a now-manual goal, so refusing there would make
+// those rows PERMANENTLY undeletable — a worse outcome than the no-op, and one the user could not
+// escape. Destroying a row you own is meaningful whatever the goal's basis is.
+// TestDeleteContribution_IsNotBlockedByBasis pins that.
+func TestConfirmContribution_RefusesOnANonContributionsBasis(t *testing.T) {
+	goalID, userID := "goal-manual", "user-1"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, nil, goalReader)
+
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(&domain.SavingsGoal{
+		ID: goalID, UserID: userID, ProgressBasis: domain.ProgressBasisManual,
+	}, nil)
+
+	_, err := handler.ConfirmContribution(context.Background(), &ConfirmContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		ID:                 "contrib-1",
+	})
+
+	require.Error(t, err, "a confirm that cannot change the goal must not report success")
+	assert.Contains(t, err.Error(), domain.ProgressBasisContributions,
+		"the message must name the remedy, as LogContribution's does")
+	contribRepo.AssertNotCalled(t, "ConfirmContribution", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestRejectContribution_RefusesOnANonContributionsBasis(t *testing.T) {
+	goalID, userID := "goal-manual", "user-1"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, nil, goalReader)
+
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(&domain.SavingsGoal{
+		ID: goalID, UserID: userID, ProgressBasis: domain.ProgressBasisManual,
+	}, nil)
+
+	_, err := handler.RejectContribution(context.Background(), &RejectContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		ID:                 "contrib-1",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), domain.ProgressBasisContributions)
+	contribRepo.AssertNotCalled(t, "RejectContribution", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// The deliberate asymmetry. A contribution on a goal that has since moved to the manual basis must
+// still be destroyable, or the basis switch becomes a one-way trap for the rows it leaves behind.
+func TestDeleteContribution_IsNotBlockedByBasis(t *testing.T) {
+	goalID, userID := "goal-manual", "user-1"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, nil, goalReader)
+	handler.SetAuditLogRepository(&stubAuditLogRepository{})
+
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(&domain.SavingsGoal{
+		ID: goalID, UserID: userID, ProgressBasis: domain.ProgressBasisManual,
+	}, nil)
+	contribRepo.On("DeleteContribution", mock.Anything, userID, "contrib-1", mock.Anything).Return(nil)
+
+	_, err := handler.DeleteContribution(context.Background(), &DeleteContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		ID:                 "contrib-1",
+	})
+
+	require.NoError(t, err,
+		"a row left behind by a basis switch must stay deletable, or the switch traps it forever")
+	contribRepo.AssertCalled(t, "DeleteContribution", mock.Anything, userID, "contrib-1", mock.Anything)
+}
