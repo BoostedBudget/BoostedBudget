@@ -26,6 +26,16 @@ type RuleResult struct {
 
 	// MatchedRuleIDs are all rules that matched the transaction.
 	MatchedRuleIDs []string
+
+	// FailedRuleIDs are rules that could not be evaluated at all. #1625 A8: an evaluator error is
+	// LOCAL to its rule — it skips that rule and no other. Before this, EvaluateRules returned on
+	// the first error, so one un-evaluatable condition silently suppressed every other rule the
+	// user had for that transaction.
+	//
+	// Reported rather than swallowed: quarantine classification and the operator both need to know
+	// which rule failed, and "it just stopped matching" is the failure mode this ticket exists to
+	// eliminate.
+	FailedRuleIDs []string
 }
 
 // RuleEngine evaluates categorization rules against transactions.
@@ -62,6 +72,7 @@ func (e *RuleEngine) EvaluateRules(tx *domain.Transaction, rules []*domain.Categ
 		TagRuleIDs:     make([]string, 0),
 		TagSources:     make([]domain.TagSource, 0),
 		MatchedRuleIDs: make([]string, 0),
+		FailedRuleIDs:  make([]string, 0),
 	}
 
 	if len(rules) == 0 {
@@ -94,10 +105,13 @@ func (e *RuleEngine) EvaluateRules(tx *domain.Transaction, rules []*domain.Categ
 			continue
 		}
 
-		// Check if rule matches
+		// Check if rule matches. An error is local to THIS rule (#1625 A8): skip it, record it,
+		// and carry on with the rest. Returning here made one broken condition disable every other
+		// rule for the transaction, with nothing anywhere saying so.
 		matches, err := e.RuleMatches(tx, rule)
 		if err != nil {
-			return nil, err
+			result.FailedRuleIDs = append(result.FailedRuleIDs, rule.ID)
+			continue
 		}
 
 		if !matches {

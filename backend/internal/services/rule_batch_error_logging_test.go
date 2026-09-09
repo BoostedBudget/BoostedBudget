@@ -12,14 +12,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Codex gap analysis A7. ApplyRulesToBatch's comment claimed "log and continue" while the code
-// only continued — the evaluator error was discarded with no record anywhere. Because
-// EvaluateRules returns on the FIRST rule's error, one bad condition silently stopped every
-// other rule from applying to that transaction, and nothing said so.
+// Codex gap analysis A7, then #1625 A8.
 //
-// This asserts the log line exists AND that processing carries on, which is the pair that makes
-// the behaviour defensible rather than merely quiet.
-func TestApplyRulesToBatch_LogsEvaluatorErrorAndKeepsGoing(t *testing.T) {
+// A7: ApplyRulesToBatch's comment claimed "log and continue" while the code only continued — the
+// evaluator error was discarded with no record anywhere.
+//
+// A8 changed what there is to say. EvaluateRules used to return on the FIRST rule's error, so one
+// bad condition stopped every other rule for that transaction; the header here claimed "other
+// rules still evaluated" while the one-rule fixture could not test it and the code did not do it.
+// Errors are rule-local now, so the log is per-RULE rather than per-transaction, and the fixture
+// below carries a second, working rule that must still apply. That is the property the old header
+// promised.
+func TestApplyRulesToBatch_SkipsOnlyTheBrokenRuleAndLogsIt(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
@@ -37,7 +41,24 @@ func TestApplyRulesToBatch_LogsEvaluatorErrorAndKeepsGoing(t *testing.T) {
 		Source:         "manual",
 	}
 
-	repo := &stubRuleApplicationRepo{rules: []*domain.CategorizationRule{brokenRule}}
+	// The rule that must still run. Without a second rule the "others still applied" property is
+	// untestable, which is exactly why the original version of this test could not see A8.
+	workingRule := &domain.CategorizationRule{
+		ID:             "rule-good",
+		UserID:         "u1",
+		Enabled:        true,
+		ConditionLogic: "AND",
+		// Matches both fixture transactions (amounts 10 and 20). NOT merchant_contains: these
+		// fixtures have no merchant name, so such a rule would match nothing and the assertion
+		// below would pass vacuously for the wrong reason.
+		Conditions:     []domain.RuleCondition{{Type: domain.ConditionAmountGreaterThan, Value: 5}},
+		TargetKind:     strPtrSvc("pfc"),
+		TargetPFCPrimary: strPtrSvc("FOOD_AND_DRINK"),
+		TagBehavior:    "add",
+		Source:         "manual",
+	}
+
+	repo := &stubRuleApplicationRepo{rules: []*domain.CategorizationRule{brokenRule, workingRule}}
 	svc := NewRuleApplicationService(repo)
 	svc.SetLogger(logger)
 
@@ -46,14 +67,29 @@ func TestApplyRulesToBatch_LogsEvaluatorErrorAndKeepsGoing(t *testing.T) {
 		{ID: "t2", UserID: "u1", Name: "two", Amount: 20},
 	}
 
-	_, err := svc.ApplyRulesToBatch(context.Background(), txns, "u1")
+	updated, err := svc.ApplyRulesToBatch(context.Background(), txns, "u1")
 
 	require.NoError(t, err, "a broken rule must not fail the whole batch")
+
 	out := logBuf.String()
 	assert.Contains(t, out, "rule evaluation failed",
-		"the swallowed evaluator error must actually be logged — the comment claimed it was, the code did not")
+		"the evaluator error must be recorded, not swallowed")
 	assert.Equal(t, 2, strings.Count(out, "rule evaluation failed"),
-		"processing must CONTINUE to the next transaction, logging each one")
+		"one line per transaction that hit the broken rule")
+	assert.Contains(t, out, "rule-broken",
+		"the log must name WHICH rule failed — the pre-A8 transaction-level line could not")
+	assert.NotContains(t, out, "rule-good",
+		"the working rule did not fail and must not be reported as if it had")
+
+	// The property the old header claimed and the old fixture could not test.
+	require.Len(t, updated, 2)
+	for _, applied := range updated {
+		assert.True(t, applied.CategoryApplied,
+			"tx %s got no category: the broken rule suppressed the working one",
+			applied.TransactionID)
+		assert.Equal(t, "rule-good", applied.CategoryRuleID,
+			"the surviving rule must be the one credited")
+	}
 }
 
 // stubRuleApplicationRepo is the narrow RuleApplicationRepository the service needs.
