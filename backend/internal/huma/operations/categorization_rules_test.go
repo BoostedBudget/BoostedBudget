@@ -542,10 +542,12 @@ func TestRuleValidationNeverReturns5xx(t *testing.T) {
 	// exercised CreateRule while the commit message claimed both, so the handler that was
 	// strictly worse had no coverage at all.
 	for _, tt := range invalidBodies {
-		// "no action at all" is unreachable through UPDATE: the request merges into the loaded
-		// rule, which already carries a target, and a nil TargetKind means "leave it alone"
-		// rather than "remove it". Skipping it here is a statement about the update contract,
-		// not a gap — the create path still covers that case.
+		// "no action at all" cannot be produced by THIS fixture through update: the request
+		// merges into a loaded rule that already carries a target, and a nil TargetKind means
+		// "leave it alone" rather than "remove it". It IS reachable by a different route —
+		// emptying the tags of a tag-only rule — which TestUpdateRule_EmptyingTagsOnATagOnlyRule
+		// covers below. Codex review: the earlier version of this comment claimed the case was
+		// unreachable through update at all, which was wrong.
 		if tt.name == "no action at all" {
 			continue
 		}
@@ -650,3 +652,59 @@ func (s *stubRuleRepoForValidation) CountByUserID(context.Context, string) (int,
 }
 func (s *stubRuleRepoForValidation) IncrementMatchCount(context.Context, string) error    { return nil }
 func (s *stubRuleRepoForValidation) IncrementOverrideCount(context.Context, string) error { return nil }
+
+// TestUpdateRule_EmptyingTagsOnATagOnlyRule covers the update-specific way to end up with a rule
+// that does nothing: a tag-only rule (no target_kind) whose tags are replaced with an empty
+// list. Both HasCategoryAction and HasTagAction are then false, so Validate must reject it — and
+// as a 4xx, not the 500 every update validation failure used to be.
+func TestUpdateRule_EmptyingTagsOnATagOnlyRule(t *testing.T) {
+	svc := services.NewCategorizationRuleService(
+		&stubTagOnlyRuleRepo{owner: "user-123"}, nil)
+	handler := NewCategorizationRuleHandler(svc)
+
+	emptyTags := []string{}
+	_, err := handler.UpdateRule(context.Background(), &UpdateRuleInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "rule-1",
+		Body:               domain.UpdateCategorizationRuleRequest{TargetTags: &emptyTags},
+	})
+
+	require.Error(t, err, "a rule with neither a category action nor tags must be rejected")
+	assertClientError(t, err)
+}
+
+// stubTagOnlyRuleRepo returns a rule whose ONLY action is its tags.
+type stubTagOnlyRuleRepo struct{ owner string }
+
+func (s *stubTagOnlyRuleRepo) GetByID(_ context.Context, id string) (*domain.CategorizationRule, error) {
+	return &domain.CategorizationRule{
+		ID:             id,
+		UserID:         s.owner,
+		Name:           "tag only",
+		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "x"}},
+		ConditionLogic: "AND",
+		TargetTags:     []string{"coffee"},
+		TagBehavior:    "add",
+		Source:         "manual",
+	}, nil
+}
+
+func (s *stubTagOnlyRuleRepo) Create(context.Context, *domain.CategorizationRule) error {
+	panic("Create must not be reached")
+}
+func (s *stubTagOnlyRuleRepo) Update(context.Context, *domain.CategorizationRule) error {
+	panic("Update must not be reached: the merged rule is invalid")
+}
+func (s *stubTagOnlyRuleRepo) GetByUserID(context.Context, string) ([]*domain.CategorizationRule, error) {
+	return nil, nil
+}
+func (s *stubTagOnlyRuleRepo) GetEnabledByUserID(context.Context, string) ([]*domain.CategorizationRule, error) {
+	return nil, nil
+}
+func (s *stubTagOnlyRuleRepo) GetByName(context.Context, string, string) (*domain.CategorizationRule, error) {
+	return nil, nil
+}
+func (s *stubTagOnlyRuleRepo) Delete(context.Context, string) error                  { return nil }
+func (s *stubTagOnlyRuleRepo) CountByUserID(context.Context, string) (int, error)    { return 0, nil }
+func (s *stubTagOnlyRuleRepo) IncrementMatchCount(context.Context, string) error     { return nil }
+func (s *stubTagOnlyRuleRepo) IncrementOverrideCount(context.Context, string) error  { return nil }

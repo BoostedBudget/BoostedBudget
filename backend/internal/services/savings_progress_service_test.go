@@ -891,3 +891,51 @@ func TestSavingsProgress_TerminalAccountWithNoBalance_LogsTheDisconnection(t *te
 		"the nil check must not claim this one — since item D every closed account satisfies it too, "+
 			"so a nil-first ordering silently relabels every disconnection as 'stale'")
 }
+
+// TestRecomputeGoal_ReportsThePersistedAmountEvenWhenMarkCompletedFails pins the two-write
+// hazard. RecomputeGoal commits UpdateCurrentAmount and THEN calls MarkCompleted; when the
+// second fails it used to return (0, err), so CreateGoal/UpdateGoal kept the pre-recompute
+// figure while the row already held the new one. "Returned an error" and "changed nothing" are
+// different states, and conflating them is what made the response disagree with the database.
+//
+// Reachable for the balance and account_percentage bases, whose computed value comes straight
+// off an account balance and can meet the target immediately.
+func TestRecomputeGoal_ReportsThePersistedAmountEvenWhenMarkCompletedFails(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+
+	goal := makeGoal("g1", "u1", "acc1", domain.ProgressBasisContributions, 100, 0)
+
+	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(250.00, nil).Once()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 250.00, mock.Anything, mock.Anything).
+		Return(nil).Once()
+	// The amount is already committed at this point; only the completion flag fails.
+	goalRepo.On("MarkCompleted", mock.Anything, "g1").
+		Return(errors.New("boom")).Once()
+
+	svc := NewSavingsProgressService(goalRepo, contribRepo, nil, nil, testLogger())
+	amount, err := svc.RecomputeGoal(context.Background(), goal)
+
+	require.Error(t, err, "the MarkCompleted failure must still surface")
+	assert.Equal(t, 250.00, amount,
+		"the reported amount must be what the ROW holds (250), not 0 — the UpdateCurrentAmount write already committed")
+}
+
+// ...and when the FIRST write fails, nothing was persisted, so the prior amount is what the row
+// still holds. Returning the new figure there would be the same bug pointing the other way.
+func TestRecomputeGoal_ReportsThePriorAmountWhenNothingWasWritten(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+
+	goal := makeGoal("g1", "u1", "acc1", domain.ProgressBasisContributions, 1000, 42)
+
+	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(250.00, nil).Once()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 250.00, mock.Anything, mock.Anything).
+		Return(errors.New("boom")).Once()
+
+	svc := NewSavingsProgressService(goalRepo, contribRepo, nil, nil, testLogger())
+	amount, err := svc.RecomputeGoal(context.Background(), goal)
+
+	require.Error(t, err)
+	assert.Equal(t, 42.00, amount, "nothing was written, so the row still holds the prior amount")
+}

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -230,15 +231,16 @@ func (s *savingsGoalService) CreateGoal(ctx context.Context, userID string, req 
 	// an error here must not fail goal creation.
 	if s.progressService != nil {
 		recomputed, err := s.progressService.RecomputeGoal(ctx, goal)
+		// Assigned even on error: RecomputeGoal reports the amount the ROW now holds, and its
+		// two writes mean a failure does not imply nothing changed. Reporting the caller's seed
+		// after a partial write is how the response and the database came to disagree.
+		goal.CurrentAmount = recomputed
 		if err != nil {
 			s.logger.Warn("savings goal created but RecomputeGoal failed (non-fatal)",
 				slog.String("user_id", userID),
 				slog.String("goal_id", goal.ID),
 				slog.String("error", err.Error()),
 			)
-		} else {
-			// Report what was actually persisted, not what the caller asked for.
-			goal.CurrentAmount = recomputed
 		}
 	}
 
@@ -410,6 +412,27 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 		goal.TargetAmount = *req.TargetAmount
 	}
 	if req.CurrentAmount != nil {
+		// ⚠ #1625: a DERIVED basis owns this number, so a caller-supplied one is refused rather
+		// than written. Without this check, PUT {"current_amount": 5000} on a contributions goal
+		// persists 5000 against an empty ledger — the ORIGINAL bug of this ticket, restored
+		// through the update endpoint. The create path was fixed and this one was not; found by
+		// adversarial review, not by me.
+		//
+		// Refused, not silently ignored: the caller asked for something the basis cannot honour,
+		// and a 4xx that says so beats a 200 that pretends. Switching basis and setting the
+		// amount in one request is refused for the same reason — the recompute that follows a
+		// basis change would overwrite the value anyway.
+		targetBasis := goal.ProgressBasis
+		if req.ProgressBasis != nil {
+			targetBasis = *req.ProgressBasis
+		}
+		if targetBasis != domain.ProgressBasisManual {
+			return nil, fmt.Errorf(
+				"%w: current_amount cannot be set on a goal whose progress_basis is %q — that value is "+
+					"derived (contributions are logged via POST /savings-goals/{id}/contributions; "+
+					"balance-based goals track their account). Switch progress_basis to %q to set it by hand",
+				domain.ErrInvalidGoalUpdate, targetBasis, domain.ProgressBasisManual)
+		}
 		goal.CurrentAmount = *req.CurrentAmount
 	}
 	if req.AccountID != nil {
@@ -464,14 +487,13 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 	// Re-run recompute so current_amount reflects the new basis immediately.
 	if basisChanged && s.progressService != nil {
 		recomputed, err := s.progressService.RecomputeGoal(ctx, goal)
+		// Same reasoning as CreateGoal: this is the amount the row holds, error or not.
+		goal.CurrentAmount = recomputed
 		if err != nil {
 			s.logger.Warn("basis-changed RecomputeGoal failed (non-fatal)",
 				slog.String("goal_id", goalID),
 				slog.String("error", err.Error()),
 			)
-		} else {
-			// Same reason as CreateGoal: report the persisted amount, not the pre-recompute one.
-			goal.CurrentAmount = recomputed
 		}
 	}
 
