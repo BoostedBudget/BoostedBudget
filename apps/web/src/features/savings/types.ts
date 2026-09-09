@@ -30,7 +30,9 @@ export interface SavingsGoal {
   completed_at?: string;
   created_at: string;
   updated_at: string;
-  /** How current_amount is derived (Issue #1300). Defaults to "manual". */
+  /** How current_amount is derived (Issue #1300). Defaults to "contributions" (#1625 changed
+   * this from "manual"): a goal created without an explicit basis derives its progress from the
+   * contribution ledger, and PUTting current_amount on it is refused with a 400. */
   progress_basis?: ProgressBasis;
   /** Required when progress_basis is "account_percentage" (0 < x ≤ 1). */
   account_percentage?: number;
@@ -51,7 +53,8 @@ export interface CreateSavingsGoalRequest {
   /** Stable logical account ID — survives Plaid re-links (Issue #1109). */
   user_account_id?: string;
   deadline?: string;
-  /** How current_amount is derived (Issue #1300). Omit for default "manual". */
+  /** How current_amount is derived (Issue #1300). Omitting it now means "contributions", NOT
+   * "manual" (#1625). Pass "manual" explicitly if you intend to set current_amount directly. */
   progress_basis?: ProgressBasis;
   /** Required when progress_basis is "account_percentage". Range (0, 1]. */
   account_percentage?: number;

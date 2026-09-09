@@ -450,7 +450,11 @@ func RegisterContributionRoutes(api huma.API, handler *ContributionHandler) {
 		Path:        "/api/v1/savings-goals/{goalID}/contributions",
 		Summary:     "Log a savings goal contribution",
 		Description: "Manually records a confirmed contribution for a savings goal (D6 source-a). " +
-			"Optionally links to an existing transaction. Triggers goal progress recomputation.",
+			"Optionally links to an existing transaction. Triggers goal progress recomputation. " +
+			"Requires the goal's progress_basis to be \"contributions\". " +
+			"⚠ BREAKING (#1625): the request body rejects unknown fields, and the phantom \"notes\" " +
+			"field was removed — a client that previously sent it was silently ignored and now gets " +
+			"a 422. Drop the field; contribution notes were never stored.",
 		Tags:     []string{"Savings Goals", "Contributions"},
 		Security: []map[string][]string{{"clerk": {}}},
 	}, handler.LogContribution)

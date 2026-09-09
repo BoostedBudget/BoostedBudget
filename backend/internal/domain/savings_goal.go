@@ -386,7 +386,7 @@ type CreateSavingsGoalRequest struct {
 	// Defaults to "contributions" for NEW goals when empty (#1625 — the documented #1300 intent,
 	// which the code had never implemented; it defaulted to "manual", so contributions could not
 	// be logged against a brand-new goal). Valid: manual|contributions|balance|account_percentage.
-	ProgressBasis string `json:"progress_basis,omitempty"`
+	ProgressBasis string `json:"progress_basis,omitempty" enum:"manual,contributions,balance,account_percentage" doc:"How current_amount is derived. ⚠ BREAKING (#1625): omitting this now means \"contributions\", NOT \"manual\". A goal created without it derives progress from its contribution ledger, and a later PUT setting current_amount directly is refused with a 400. Pass \"manual\" explicitly if you intend to manage current_amount yourself."`
 	// AccountPercentage is required (0 < x ≤ 1) when ProgressBasis is "account_percentage".
 	AccountPercentage *float64 `json:"account_percentage,omitempty"`
 }

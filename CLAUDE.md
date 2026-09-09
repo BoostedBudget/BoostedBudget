@@ -185,7 +185,17 @@ config/
 - No money movement—suggestions only
 - DataTable (`shared/components/DataTable/`) — TanStack Table v8 facade; `BBColumnDef<T>` (`ColumnDef<T>`) is the only column type used in consumers
 - ⚠ **DataTable does NOT mask by default.** `data-ph-mask` is applied to a `<td>` **only when that column's `id` appears in the consumer's `maskedColumnIds` prop** (`DataTable.tsx` ~:530, ~:564); a column left off the list gets no attribute at all, and `DataTable.test.tsx` pins that behaviour deliberately. "It's a DataTable, so it's masked" is false — check the consumer's `maskedColumnIds`. What DataTable *does* guarantee is that the `<td>` is rendered by its own markup, never `flexRender`, so the attribute placement stays in DataTable's control. Two consequences: (1) **PII outside a listed column — a detail modal, a card view, an `aria-label` — is masked by nothing**; (2) masking is per-column, so adding a column id to the list masks the *whole cell*, which is why free text inside a mixed cell is masked at the element instead (see `PlaidOrphanedItemsPage.tsx` ~:351, which keeps the attester id legible). Attributes are recorded verbatim by session replay and **cannot** be covered by any mask — they need a structural (de-PII'd) label.
-- All 11 tabular UIs use shared `<DataTable>`; no raw `<table>` in `src/features/`
+- The 11 sortable/filterable tabular UIs use shared `<DataTable>`. ⚠ "**no raw `<table>` in
+  `src/features/`**" — which this line claimed until #1625 — is FALSE, and was already false before
+  that PR. Re-derive with `grep -rln "<table" apps/web/src/features/`; today it returns four files,
+  three of them production, each a deliberate exception for a different reason:
+  - `RulePreviewPanel.tsx` — a fixed 3-column read-only preview. Raw so each `<td>` can carry its
+    own `data-ph-mask`; DataTable masks per-column only via `maskedColumnIds`.
+  - `PortfolioHoldingsWidget.tsx` — a compact dashboard widget, pre-existing, not a data grid.
+  - `CashFlowSankeyChart.tsx` — an `sr-only` table giving the chart a screen-reader and keyboard
+    equivalent. Intentionally not a DataTable; it is an accessibility affordance, not a UI.
+  Reach for DataTable when a table needs sorting, filtering, column preferences or row selection —
+  not as a blanket ban on the element.
 - `useTablePreferences(tableId, knownColumnIds)` — localStorage persistence namespaced by Clerk userId + tableId; version-gated by `knownColumnIds.join(',')`
 
 ## Critical Rules
