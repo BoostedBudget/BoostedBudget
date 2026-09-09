@@ -59,6 +59,64 @@ func TestGetCategoryTotalForPeriod_CustomCategory_ResolvesTheCurrentName(t *test
 			"parameter, not a substring cast inside the SQL")
 }
 
+// TestGetCategoryTotalForPeriod_CustomCategory_NullDisplayScansToEmptyString covers the other
+// reachable custom-token state: the category still exists (or the row is a tombstoned/gone
+// custom_categories id) but the scalar subquery has nothing to return, so category_display comes
+// back NULL. The repository must not error on that — it is scanned through sql.NullString and
+// normalised to "", leaving the placeholder decision to resolveCategoryDisplay in the service.
+func TestGetCategoryTotalForPeriod_CustomCategory_NullDisplayScansToEmptyString(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewAnalyticsRepository(mock)
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC)
+	const catID = "9f1c2b3a-0000-4000-8000-000000000002"
+
+	mock.ExpectQuery(`(?is)FROM transactions t`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"total", "transaction_count", "category_display"}).
+			AddRow(250.0, 1, nil))
+
+	row, err := repo.GetCategoryTotalForPeriod(ctx, "user-1", "custom:"+catID, start, end)
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	assert.Empty(t, row.CategoryDisplay)
+}
+
+// TestGetCategoryTotalForPeriod_PFCToken_TakesFourArgsAndNullDisplay is the PFC-token counterpart
+// to the custom-token test above: it exercises the actual repository call (not just the query
+// builder, which TestGetCategoryTotalForPeriodQuery_NeverUsesMaxOnADenormalizedName below already
+// pins), confirming a PFC token binds exactly 4 args — no fifth uuid arg, because there is no
+// custom_categories row to look up — and that its display column comes back NULL by construction.
+func TestGetCategoryTotalForPeriod_PFCToken_TakesFourArgsAndNullDisplay(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewAnalyticsRepository(mock)
+	ctx := context.Background()
+	start := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery(`(?is)FROM transactions t`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"total", "transaction_count", "category_display"}).
+			AddRow(450.0, 18, nil))
+
+	row, err := repo.GetCategoryTotalForPeriod(ctx, "user-1", "FOOD_AND_DRINK", start, end)
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	assert.InDelta(t, 450.0, row.Total, 0.001)
+	assert.Equal(t, 18, row.TransactionCount)
+	assert.Empty(t, row.CategoryDisplay)
+	require.NoError(t, mock.ExpectationsWereMet(),
+		"a PFC token must bind exactly 4 args — a fifth would mean a uuid arg leaked in for a "+
+			"token with no custom_categories row to bind it to")
+}
+
 // TestGetCategoryTotalForPeriodQuery_NeverUsesMaxOnADenormalizedName is the shape half, and it is
 // the one that pins the FIX rather than the plumbing: it inspects the emitted SQL directly, so a
 // revert to MAX() fails here even if every behavioural test still passes on a single-name fixture.

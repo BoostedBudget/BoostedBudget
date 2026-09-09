@@ -975,7 +975,9 @@ func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"category", "total", "count"})
+		// #1626: the read now also selects effective_category_name — normalised to the 4-column
+		// list the code actually produces, matching the "returns category breakdown rows" case above.
+		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "count"})
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, merchantID).
 			WillReturnRows(rows)
@@ -1001,7 +1003,7 @@ func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"category", "total", "count"})
+		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "count"})
 		mock.ExpectQuery(`(?i)COALESCE\(mno\.merged_into_merchant_id.*::uuid`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, merchantID).
 			WillReturnRows(rows)
@@ -1015,7 +1017,7 @@ func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"category", "total", "count"})
+		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "count"})
 		mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, merchantID).
 			WillReturnRows(rows)
