@@ -275,3 +275,60 @@ func TestMapError_InvalidGoalUpdateIsA400(t *testing.T) {
 		t.Errorf("the message must survive mapping so the caller learns which field: %v", err)
 	}
 }
+
+// TestMapError_BasisSwitchPreconditionsAreNot500 pins the property Issue #1625 EXISTS FOR, at the
+// only layer that decides it.
+//
+// The ticket was opened because a precondition failure surfaced as a 500 with a Sentry event. Task
+// 17 then added two more sentinels to that same path — one for a basis-switch race, one for a
+// ledger mutation on a goal that has left the contributions basis — and both are refusals of a
+// request, not faults. Nothing pinned their status codes: the mapper's switch has a 500 default,
+// so deleting either case would silently reinstate the original defect with every other test still
+// green. That is exactly how this bug shipped the first time.
+//
+// Wrapped, not bare, on purpose: both sentinels reach the mapper through fmt.Errorf("%w: …") from
+// the repository and service layers, so a mapping written with `==` instead of errors.Is would
+// pass a bare-sentinel test and fail in production. The message assertions pin that the wrapped
+// detail survives, since it is the only thing telling the caller which goal moved.
+func TestMapError_BasisSwitchPreconditionsAreNot500(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantInMsg  string
+		why        string
+	}{
+		{
+			name: "basis conflict is 409",
+			err: fmt.Errorf("%w: goal g-1 is now on %q, not the %q this switch was planned from",
+				domain.ErrSavingsGoalBasisConflict, "contributions", "manual"),
+			wantStatus: http.StatusConflict,
+			wantInMsg:  "progress basis",
+			why: "the loser of a basis-switch race, or a recompute computed for a basis the row " +
+				"has left, did nothing wrong — it must be told to re-read, not handed a 500",
+		},
+		{
+			name: "ledger basis mismatch is 422",
+			err: fmt.Errorf("%w: goal g-1 is on progress_basis %q",
+				domain.ErrContributionBasisMismatch, "manual"),
+			wantStatus: http.StatusUnprocessableEntity,
+			wantInMsg:  "contribution ledger",
+			why: "the repository's locked basis assertion is the TOCTOU-free half of the handler's " +
+				"gate; the handler's own copy returns 422, and the race-losing case must agree",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mapped := humaerrors.LoggingMapError(context.Background(), tt.err)
+			require.NotNil(t, mapped)
+
+			var statusErr interface{ GetStatus() int }
+			require.True(t, errors.As(mapped, &statusErr), "mapped error carries no HTTP status")
+			assert.Equal(t, tt.wantStatus, statusErr.GetStatus(), tt.why)
+			assert.NotEqual(t, http.StatusInternalServerError, statusErr.GetStatus(),
+				"a precondition must never be a server error — this IS issue #1625")
+			assert.Contains(t, strings.ToLower(mapped.Error()), tt.wantInMsg)
+		})
+	}
+}
