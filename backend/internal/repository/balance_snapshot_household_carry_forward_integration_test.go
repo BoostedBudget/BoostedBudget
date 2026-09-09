@@ -42,6 +42,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
 // householdCarryClock fixes the calendar the whole file reasons about: day 0 is midnight UTC thirty
@@ -473,6 +474,40 @@ func TestHouseholdAggregatedHistoryCarry_TerminalOnlyHistory_DoesNotCarryPastIts
 			"to be counted in net worth on every later day")
 }
 
+// mintUserAccountIdentity sets a user_accounts row's FROZEN identity, which the fixture helper
+// insertTestUserAccount deliberately leaves NULL.
+//
+// The UPDATE is legitimate here for two independently-checked reasons. Migration 000179 relaxed
+// trg_user_accounts_identity_immutable to permit exactly one transition — NULL -> value, the
+// first-time claim — and rejects value -> different value; and the AST guard
+// TestNoUpdateOfUserAccountsIdentityColumns skips `_test.go` files (its walk returns early on the
+// `_test.go` suffix), so it governs application code rather than a fixture.
+func mintUserAccountIdentity(t *testing.T, pool *pgxpool.Pool, userAccountID, identityType, identitySubtype string) {
+	t.Helper()
+	tag, err := pool.Exec(context.Background(), `
+		UPDATE user_accounts SET identity_type = $2, identity_subtype = $3 WHERE id = $1`,
+		userAccountID, identityType, identitySubtype)
+	require.NoError(t, err, "mint user_accounts identity")
+	require.Equal(t, int64(1), tag.RowsAffected(),
+		"expected to mint exactly one user_accounts row — a fixture that silently minted nothing "+
+			"would leave the orphan untyped and this test would assert the pre-fix answer")
+}
+
+// pointOnDay returns the chart point for a UTC calendar day, failing the test when the day is
+// absent — the assertions below are about a point's TYPE BREAKDOWN, so "no such day" and "a day
+// whose breakdown is empty" must not be conflated.
+func pointOnDay(t *testing.T, points []domain.BalanceHistoryPoint, day time.Time) *domain.BalanceHistoryPoint {
+	t.Helper()
+	want := day.UTC().Format("2006-01-02")
+	for i := range points {
+		if points[i].Date.UTC().Format("2006-01-02") == want {
+			return &points[i]
+		}
+	}
+	t.Fatalf("no chart point for %s", want)
+	return nil
+}
+
 // TestHouseholdAggregatedHistoryCarry_OrphanedSnapshot_KeepsItsOwnDay is why carry_key is a rendered
 // text key rather than the (user_account_id, account_id) pair.
 //
@@ -484,6 +519,21 @@ func TestHouseholdAggregatedHistoryCarry_TerminalOnlyHistory_DoesNotCarryPastIts
 //
 // It must also not be CARRIED: an orphan has no accounts row for either liveness leg to find, so
 // nobody is confirming it exists, which is the same ruling the personal statement records.
+//
+// ⚠ RE-AIMED BY THE FINAL WHOLE-BRANCH REVIEW (finding F1). This test used to assert that the
+// orphan's balance lands in UntypedBalance — and that assertion was PINNING A LIVE WRONG NUMBER.
+// The personal read recovers an orphan's type from its own chain row
+// (COALESCE(a.type, ua.identity_type)) precisely so a credit card is not reconstructed as an asset;
+// its test says so in as many words. The household read did not, `identity_type` appeared exactly
+// once in balance_snapshot_repository.go, and GetNetWorthHistory routes a POSITIVE UntypedBalance
+// straight into totalAssets — while Plaid reports a credit card's current_balance as a POSITIVE
+// debt. So a household's orphaned credit card ADDED its balance to assets instead of subtracting
+// it: net worth overstated by twice the debt. Phase 3 item 5 was half-applied in household scope,
+// and this test defended the missing half.
+//
+// It therefore asserts the ARITHMETIC, through the real reconstruction in
+// services.GetNetWorthHistory, not merely that a field is populated: 42.42 of debt must land in
+// TotalLiabilities and must be absent from TotalAssets.
 func TestHouseholdAggregatedHistoryCarry_OrphanedSnapshot_KeepsItsOwnDay(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
@@ -497,12 +547,19 @@ func TestHouseholdAggregatedHistoryCarry_OrphanedSnapshot_KeepsItsOwnDay(t *test
 	memberAcct := setupHouseholdMemberAccount(t, pool, member)
 	backdateHouseholdAccountActive(t, pool, ownerAcct.AccountID, c.day(-20))
 
+	// The orphan's logical account is a CREDIT CARD, recorded on its chain row. That is the whole
+	// point of the fixture: an untyped bucket routes a positive balance to assets, so the wrong
+	// answer and the right one differ by 2 x 42.42 in net worth.
+	mintUserAccountIdentity(t, pool, memberAcct.UserAccountID, "credit", "credit card")
+	_, err := pool.Exec(ctx, `UPDATE accounts SET type = 'credit' WHERE id = $1`, memberAcct.AccountID)
+	require.NoError(t, err, "keep the fixture coherent: the chain row's identity is its account's type")
+
 	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, nil, domain.ShareVisibilityShared, c.at(-5, 8, 0))
 	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, nil, domain.ShareVisibilityShared, c.at(-5, 8, 0))
 
 	// The orphan: account_id IS NULL, user_account_id intact — which is exactly what the chain
 	// pointer is for, and it is what keeps the row inside the household's universe.
-	_, err := pool.Exec(ctx, `
+	_, err = pool.Exec(ctx, `
 		INSERT INTO balance_snapshots (account_id, user_account_id, user_id, current_balance,
 		                               currency_code, snapshot_at, source)
 		VALUES (NULL, $1, $2, 42.42, 'USD', $3, 'manual')`,
@@ -521,16 +578,114 @@ func TestHouseholdAggregatedHistoryCarry_OrphanedSnapshot_KeepsItsOwnDay(t *test
 	requireTotalOn(t, points, c.day(2), 1100.22,
 		"but it must not be carried: an orphan has no accounts row, so nobody is confirming it exists")
 
-	day0, ok := totalOn(points, c.day(0))
-	require.True(t, ok)
-	assert.InDelta(t, 1042.53, day0, 0.001)
-	for i := range points {
-		if points[i].Date.UTC().Format("2006-01-02") == c.day(0).UTC().Format("2006-01-02") {
-			assert.InDelta(t, 42.42, points[i].UntypedBalance, 0.001,
-				"and it lands in the UNTYPED bucket, not silently in a typed one — net-worth "+
-					"history is reconstructed from ByType plus UntypedBalance")
+	day0 := pointOnDay(t, points, c.day(0))
+	assert.InDelta(t, 42.42, day0.ByType["credit"], 0.001,
+		"an orphan's type is recoverable from its own chain row (user_accounts.identity_type), and "+
+			"a credit card must not be reconstructed as an ASSET, which is what an untyped bucket "+
+			"would do — the personal read has said so since Phase 3 item 5")
+	assert.InDelta(t, 0.0, day0.UntypedBalance, 0.001,
+		"nothing is left untyped while the chain row survives")
+	assert.InDelta(t, 1000.11, day0.ByType["depository"], 0.001,
+		"and the owner's asset is still its own type, not merged into the recovered one")
+
+	// THE ARITHMETIC, through the real reconstruction rather than a restatement of it. A field
+	// being populated is not the defect; the defect is which side of the balance sheet the money
+	// reaches. Pre-fix this read TotalAssets 1042.53 / TotalLiabilities 0 / NetWorth 1042.53.
+	start, end := c.day(-1), c.day(10)
+	nw, err := services.NewDashboardService(repo, nil).GetNetWorthHistory(ctx, owner,
+		&domain.DashboardFilters{StartDate: &start, EndDate: &end, HouseholdScope: scope})
+	require.NoError(t, err)
+
+	var day0NW *domain.NetWorthHistorySnapshot
+	for i := range nw.Snapshots {
+		if nw.Snapshots[i].Date.UTC().Format("2006-01-02") == c.day(0).UTC().Format("2006-01-02") {
+			day0NW = &nw.Snapshots[i]
 		}
 	}
+	require.NotNil(t, day0NW, "expected a net-worth snapshot for the orphan's own day")
+	assert.InDelta(t, 42.42, day0NW.TotalLiabilities, 0.001,
+		"the orphaned credit card's balance is a DEBT and must reach liabilities")
+	assert.InDelta(t, 1000.11, day0NW.TotalAssets, 0.001,
+		"and it must NOT be added to assets: an untyped positive balance is routed to assets, "+
+			"which overstated household net worth by twice the debt")
+	assert.InDelta(t, 957.69, day0NW.NetWorth, 0.001,
+		"net worth is assets minus the debt, not assets plus it")
+
+	// FINDING F5, the same expression seen from the filter's side. The type predicate and the
+	// projection have to agree about what an orphan's type IS, or the same account gets two answers
+	// — present in ByType["credit"] for an unfiltered request and absent for accountTypes=['credit'].
+	filtered, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, c.day(-1), c.day(10),
+		[]string{"credit"})
+	require.NoError(t, err)
+	filteredDay0 := pointOnDay(t, filtered, c.day(0))
+	assert.InDelta(t, 42.42, filteredDay0.ByType["credit"], 0.001,
+		"the recovered type must be the one the accountTypes filter tests, so an orphaned credit "+
+			"card cannot appear for an unfiltered request and vanish for accountTypes=['credit']")
+	assert.InDelta(t, 42.42, filteredDay0.TotalBalance, 0.001,
+		"and the filtered total is the credit card alone")
+}
+
+// TestHouseholdAggregatedHistoryCarry_UnmintedChainRow_IsReportedAsUntypedRatherThanDiscarded is the
+// household twin of TestAggregatedHistoryCarry_FullyDetachedOrphan_IsReportedAsUntypedRatherThanDiscarded.
+//
+// ⚠ IT IS NOT THE SAME FIXTURE, and it cannot be. The personal residue is a snapshot with NEITHER
+// pointer — account_id and user_account_id both NULL. Such a row can never reach household scope at
+// all: the household `observed` CTE reaches it through `JOIN household_accounts ha ON
+// ha.user_account_id = bs.user_account_id`, so a NULL chain pointer means no grant matches and the
+// row is outside the household's universe by construction, not merely untyped in it.
+//
+// The reachable household residue is therefore an orphan whose chain row SURVIVES but was never
+// minted: user_accounts.identity_type IS NULL, which migration 000177's header calls an orphan
+// user_accounts row and migration 000179 documents as a shape no application code claims. The
+// balance must still be REPORTED — the total is provider truth — and reported as UNTYPED, because
+// nothing anywhere records what kind of account it was and none may be invented.
+func TestHouseholdAggregatedHistoryCarry_UnmintedChainRow_IsReportedAsUntypedRatherThanDiscarded(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+	c := newHouseholdCarryClock()
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ownerAcct := setupHouseholdMemberAccount(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+	backdateHouseholdAccountActive(t, pool, ownerAcct.AccountID, c.day(-20))
+
+	// Deliberately NOT minted: insertTestUserAccount leaves identity_type NULL, and that is the
+	// shape this test exists for. Asserted rather than assumed, because the whole test turns on it.
+	var identityType *string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT identity_type FROM user_accounts WHERE id = $1`, memberAcct.UserAccountID).Scan(&identityType))
+	require.Nil(t, identityType,
+		"the fixture must really leave the chain row unminted — otherwise this test asserts the "+
+			"RECOVERY path and says nothing about the residue")
+
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, nil, domain.ShareVisibilityShared, c.at(-5, 8, 0))
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, nil, domain.ShareVisibilityShared, c.at(-5, 8, 0))
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO balance_snapshots (account_id, user_account_id, user_id, current_balance,
+		                               currency_code, snapshot_at, source)
+		VALUES (NULL, $1, $2, 63.37, 'USD', $3, 'manual')`,
+		memberAcct.UserAccountID, member, c.at(0, 10, 33))
+	require.NoError(t, err, "seed orphaned snapshot with an unminted chain row")
+
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 1000.11, c.at(0, 9, 17))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, c.day(-1), c.day(10), nil)
+	require.NoError(t, err)
+
+	requireTotalOn(t, points, c.day(0), 1063.48, "the balance still reaches the total")
+	day0 := pointOnDay(t, points, c.day(0))
+	assert.InDelta(t, 63.37, day0.UntypedBalance, 0.001,
+		"it must be RECORDED as untyped, not discarded: the net-worth reconstruction is driven by "+
+			"ByType plus UntypedBalance and would otherwise lose it entirely")
+	assert.Equal(t, map[string]float64{"depository": 1000.11}, day0.ByType,
+		"the owner's asset is the ONLY typed entry: the empty type must never become a ByType key, "+
+			"because domain.AccountTypeCategory(\"\") defaults to assets and that is the sign guess "+
+			"UntypedBalance exists to avoid")
 }
 
 // TestHouseholdAggregatedHistoryCarry_RefingerprintedJointAccount_CarriedRowUsesTheDaysFingerprint

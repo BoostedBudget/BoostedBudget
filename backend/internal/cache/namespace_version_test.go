@@ -35,7 +35,7 @@ import (
 //
 // The floors are a TABLE, so each namespace's requirement is stated once and independently:
 //
-//   - NamespaceAnalytics 6 — #1531/#1569 took it to 2 (GetNetWorthTrend's grain fix); #1626 Phase 2
+//   - NamespaceAnalytics 8 — #1531/#1569 took it to 2 (GetNetWorthTrend's grain fix); #1626 Phase 2
 //     took it to 3, because the analytics grouping keys and display resolution changed shape and a
 //     pre-#1626 envelope decodes cleanly into the new struct while carrying UUIDs where names
 //     belong. Decoding cleanly is exactly what makes the bump necessary rather than optional.
@@ -60,7 +60,15 @@ import (
 //     and a pre-fix entry, decoding cleanly as ever, would keep serving that collapsed day. E2's
 //     Part 2 (four analytics reads now tolerating a NULL effective_category_name) deliberately did
 //     NOT contribute: the requests it fixes used to ERROR, so they cached nothing, and the requests
-//     that succeeded return byte-identical results.
+//     that succeeded return byte-identical results. The final whole-branch review took it to 8:
+//     finding F1 is another WRONG NUMBER in GetAggregatedHistoryForHousehold — its `observed`
+//     projection read `a.type` alone where the personal statement recovers an orphan's type from
+//     its chain row, so an orphaned CREDIT CARD reached UntypedBalance, which GetNetWorthHistory
+//     adds to totalAssets by its positive sign, overstating household net worth by twice the debt.
+//     A pre-fix entry decodes cleanly, as ever, and would keep serving that overstated figure. The
+//     same bump covers finding F5 — the personal read's accountTypes filter now tests the recovered
+//     type, so a filtered request returns an orphan it used to omit: two changes in one undeployed
+//     branch, one bump, exactly as version 6 covered two.
 //   - NamespaceAnalyticsRows 2 — the deleted_at tombstone filters and household-grants rewrite in
 //     analytics_repository.go, whose GetTopExpense / GetLargestTransactionsForPeriod /
 //     GetCategoryBreakdownForMerchant / GetUnusualSpend results are cached here.
@@ -69,7 +77,7 @@ import (
 // saying why in the same commit.
 func TestSchemaVersionBump_OrphansEntriesWrittenUnderThePriorVersion(t *testing.T) {
 	requiredFloor := map[Namespace]int{
-		NamespaceAnalytics:     7,
+		NamespaceAnalytics:     8,
 		NamespaceAnalyticsRows: 2,
 	}
 

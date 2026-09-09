@@ -459,6 +459,28 @@ func TestAggregatedHistoryCarry_OrphanDay_KeepsATypeSoNetWorthIsNotZero(t *testi
 			"be reconstructed as an ASSET, which is what an untyped bucket would do")
 	assert.InDelta(t, 0.0, p1.UntypedBalance, 0.01,
 		"nothing is left untyped while the chain row survives")
+
+	// FINDING F5: the account-type PREDICATE must test the same expression the projection emits.
+	// It used to be rendered against the raw `a.type`, which is NULL for an orphan — so this same
+	// account appeared in ByType["credit"] for the unfiltered request above and VANISHED for
+	// accountTypes=['credit']. One account, two answers, depending on a filter that is supposed to
+	// select rather than to redefine.
+	filtered, err := repo.GetAggregatedHistory(ctx, f.userID.String(), d1, d1, []string{"credit"})
+	require.NoError(t, err)
+	fp1 := pointOn(filtered, d1)
+	require.NotNil(t, fp1,
+		"the orphaned credit card must still be selected by a filter naming its recovered type")
+	assert.InDelta(t, 1200.0, fp1.ByType["credit"], 0.01,
+		"the filter and the projection must agree about what an orphan's type is")
+	assert.InDelta(t, 1200.0, fp1.TotalBalance, 0.01, "and it is the whole of the filtered total")
+
+	// The other direction, so the filter is still doing its job rather than admitting everything:
+	// a filter naming a DIFFERENT type must not select it.
+	other, err := repo.GetAggregatedHistory(ctx, f.userID.String(), d1, d1, []string{"depository"})
+	require.NoError(t, err)
+	assert.Nil(t, pointOn(other, d1),
+		"a recovered type must be tested, not ignored — accountTypes=['depository'] selects no "+
+			"credit card")
 }
 
 // TestAggregatedHistoryCarry_FullyDetachedOrphan_IsReportedAsUntypedRatherThanDiscarded covers the
