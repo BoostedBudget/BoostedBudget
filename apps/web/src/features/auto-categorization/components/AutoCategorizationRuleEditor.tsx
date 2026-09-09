@@ -51,6 +51,10 @@ const PAYMENT_CHANNELS = [
   { value: 'other', label: 'Other' },
 ]
 
+// account_type/payment_channel are closed enums; only these operators pick ONE known value —
+// see the comment inside getInputTypeForCondition for why contains/starts_with/ends_with are excluded.
+const ENUM_PICKER_OPERATORS: ConditionOperator[] = ['eq', 'neq']
+
 /**
  * Determines the input type for a given condition type
  */
@@ -70,6 +74,14 @@ function getInputTypeForCondition(
   if (field === 'pfc_primary') return 'pfc_primary_select'
   if (field === 'pfc_detailed') return 'pfc_detailed_select'
   if (field === 'date' && operator !== 'between') return 'date_single'
+  // account_type/payment_channel are closed enums — `eq`/`neq` pick one of the known values, so
+  // they get the curated picker regardless of which shape (fused `eq`, or a generated `neq`
+  // pair) produced them. `contains`/`starts_with`/`ends_with` are deliberately EXCLUDED: those
+  // operators mean "match a SUBSTRING", which is a legitimate query a closed-set picker cannot
+  // express (e.g. payment_channel contains "line" should match "online") — forcing a picker
+  // there would make a real capability unreachable, the same mistake Task 4 exists to fix.
+  if (field === 'account_type' && operator && ENUM_PICKER_OPERATORS.includes(operator)) return 'account_type_select'
+  if (field === 'payment_channel' && operator && ENUM_PICKER_OPERATORS.includes(operator)) return 'payment_channel_select'
   switch (conditionType) {
     case 'amount_greater_than':
     case 'amount_less_than':
@@ -151,8 +163,11 @@ function validateCondition(condition: RuleCondition): string | null {
     }
   }
 
-  // Account type validation (must be array)
-  if (type === 'account_type') {
+  // Account type validation (must be array) — covers both the fused `eq` choice and the
+  // generated `neq` pair, since both route to the same checkbox (account_type_select) widget.
+  const usesAccountTypeArrayWidget =
+    type === 'account_type' || (field === 'account_type' && operator && ENUM_PICKER_OPERATORS.includes(operator))
+  if (usesAccountTypeArrayWidget) {
     if (!Array.isArray(value) || value.length === 0) {
       return 'At least one account type must be selected'
     }
@@ -365,6 +380,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
     if (choice.operator === 'between') return { min: 0, max: 100 } as AmountRangeValue
     if (choice.field === 'direction') return 'outflow'
     if (choice.field === 'amount' || choice.field === 'signed_amount') return 0
+    if (choice.field === 'account_type' && choice.operator && ENUM_PICKER_OPERATORS.includes(choice.operator)) return [] as string[]
     return ''
   }
 
