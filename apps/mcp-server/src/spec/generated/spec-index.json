@@ -8293,7 +8293,8 @@
         {
           "name": "name",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "Goal name (1-100 characters)."
         },
         {
           "name": "progress_basis",
@@ -8309,7 +8310,8 @@
         {
           "name": "target_amount",
           "type": "number",
-          "required": true
+          "required": true,
+          "description": "Target amount to save. Must be positive."
         }
       ],
       "responseBody": [
@@ -9246,7 +9248,8 @@
         },
         {
           "name": "name",
-          "type": "string"
+          "type": "string",
+          "description": "Goal name (1-100 characters)."
         },
         {
           "name": "progress_basis",
@@ -9254,7 +9257,8 @@
         },
         {
           "name": "target_amount",
-          "type": "number"
+          "type": "number",
+          "description": "Target amount to save. Must be positive."
         }
       ],
       "responseBody": [

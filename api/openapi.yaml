@@ -2625,6 +2625,8 @@ components:
         description:
           type: string
         name:
+          description: Goal name (1-100 characters).
+          maxLength: 100
           type: string
         progress_basis:
           description: "How current_amount is derived. ⚠ BREAKING (#1625): omitting this now means \"contributions\", NOT \"manual\". A goal created without it derives progress from its contribution ledger, and a later PUT setting current_amount directly is refused with a 400. Pass \"manual\" explicitly if you intend to manage current_amount yourself."
@@ -2635,6 +2637,8 @@ components:
             - account_percentage
           type: string
         target_amount:
+          description: Target amount to save. Must be positive.
+          exclusiveMinimum: 0
           format: double
           type: number
       required:
@@ -7785,10 +7789,14 @@ components:
         description:
           type: string
         name:
+          description: Goal name (1-100 characters).
+          maxLength: 100
           type: string
         progress_basis:
           type: string
         target_amount:
+          description: Target amount to save. Must be positive.
+          exclusiveMinimum: 0
           format: double
           type: number
       type: object

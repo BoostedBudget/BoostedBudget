@@ -40,7 +40,15 @@ export interface UpdateSavingsGoalRequest {
   current_amount?: number;
   deadline?: string;
   description?: string;
+  /**
+     * Goal name (1-100 characters).
+     * @maxLength 100
+     */
   name?: string;
   progress_basis?: string;
+  /**
+     * Target amount to save. Must be positive.
+     * @exclusiveMinimum 0
+     */
   target_amount?: number;
 }
