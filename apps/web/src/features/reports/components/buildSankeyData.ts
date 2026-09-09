@@ -1,16 +1,45 @@
-import type { IncomeSourceItem, SpendingByCategory } from '@boostedbudget/api-client/models'
+import type { CategoryHierarchyNode } from '@boostedbudget/api-client/models'
 import { CASH_FLOW_COLORS, CATEGORY_COLORS } from '@/shared/charts'
 
-const MAX_EXPENSE_NODES = 10
+/**
+ * ─── Node budget (#1626) ────────────────────────────────────────────────────────────────────────
+ *
+ * Allocated explicitly rather than enforced by a single global cap, so the floor is PROVABLE.
+ * A cap alone is not enough: with 32 income leaves plus an overflow node, 10 expense parents plus
+ * an overflow, a hub and a savings node you are already at 46 before a single direct bucket, so
+ * "cap the parents at 10" does not converge.
+ */
+export const INCOME_NODE_BUDGET = 12 // <= 11 leaves + 1 overflow
+export const EXPENSE_NODE_BUDGET = 31 // everything under the hub
+export const RESERVED_NODE_BUDGET = 2 // hub + exactly one of savings/deficit (mutually exclusive)
+export const TOTAL_NODE_BUDGET = INCOME_NODE_BUDGET + EXPENSE_NODE_BUDGET + RESERVED_NODE_BUDGET
+
+const MAX_INCOME_LEAVES = INCOME_NODE_BUDGET - 1
+const CUSTOM_TOKEN = 'custom:'
+
+export type SankeyViewMode =
+  | { kind: 'parents' }
+  | { kind: 'expanded' }
+  | { kind: 'focus'; key: string }
+
+/**
+ * What clicking a node does. A single `navigable` boolean cannot express three destinations, and
+ * the third one — "nothing" — is not a degenerate case: a direct bucket or an overflow node has no
+ * expressible transactions filter at all, so it must never claim to navigate.
+ */
+export type NodeAction =
+  | { kind: 'focus'; key: string }
+  | { kind: 'navigate'; pfcPrimaries?: string[]; pfcDetaileds?: string[]; customCategoryIds?: string[] }
+  | { kind: 'none' }
+
+export type SankeyNodeKind = 'income' | 'expense' | 'hub' | 'savings' | 'deficit' | 'other' | 'direct'
 
 export interface SankeyNode {
   id: string
   name: string
   itemStyle: { color: string }
-  navigable: boolean
-  nodeKind: 'income' | 'expense' | 'hub' | 'savings' | 'deficit' | 'other'
-  category?: string
-  isCustom?: true
+  nodeKind: SankeyNodeKind
+  action: NodeAction
 }
 
 export interface SankeyLink {
@@ -22,108 +51,311 @@ export interface SankeyLink {
 export interface SankeyData {
   nodes: SankeyNode[]
   links: SankeyLink[]
-  /** Max of filtered income sum and filtered expense sum — the true hub throughput. */
+  /** Max of the FULL income and expense sums — the true hub throughput, before any truncation. */
   hubTotal: number
 }
 
-export function buildSankeyData(
-  income: IncomeSourceItem[],
-  expenses: SpendingByCategory[],
-  totalIncome: number,
-  totalExpenses: number,
-): SankeyData {
-  if (totalIncome <= 0 && totalExpenses <= 0) {
-    return { nodes: [], links: [], hubTotal: 0 }
+const isCustom = (key: string) => key.startsWith(CUSTOM_TOKEN)
+const stripToken = (key: string) => key.slice(CUSTOM_TOKEN.length)
+const isPFCDetailed = (key: string, parentKey: string) => key.startsWith(`${parentKey}_`)
+
+/**
+ * A real category leaf's filter. A PFC detailed sends `pfc_detaileds` ONLY — adding its primary
+ * would widen the result to the whole primary, so the list would not match the node just clicked.
+ */
+function navigateAction(key: string, parentKey: string | undefined): NodeAction {
+  if (isCustom(key)) return { kind: 'navigate', customCategoryIds: [stripToken(key)] }
+  if (parentKey && !isCustom(parentKey) && isPFCDetailed(key, parentKey)) {
+    return { kind: 'navigate', pfcDetaileds: [key] }
+  }
+  return { kind: 'navigate', pfcPrimaries: [key] }
+}
+
+/** Rendered tree: a pruned copy carrying whatever a degradation rung left visible. */
+interface Rendered {
+  key: string
+  display: string
+  total: number
+  /** Own spend PLUS anything collapsed into this node — what keeps flow conserving. */
+  direct: number
+  children: Rendered[]
+  /** True when this node had children before a rung hid them: it still FOCUSES rather than navigates. */
+  hadChildren: boolean
+}
+
+/**
+ * prune renders a subtree to at most `depth` further levels, keeping at most `maxChildren` children
+ * per node. Anything not rendered is COLLAPSED into an ancestor rather than dropped — truncation
+ * must never lose money, or the hub stops balancing.
+ */
+function prune(n: CategoryHierarchyNode, depth: number, maxChildren: number): Rendered {
+  const kids = n.children ?? []
+  const base: Rendered = {
+    key: n.category,
+    display: n.display,
+    total: n.total,
+    direct: n.direct_total,
+    children: [],
+    hadChildren: kids.length > 0,
+  }
+  if (depth <= 0 || kids.length === 0) {
+    // Everything beneath collapses into this node's own direct total.
+    base.direct = n.total
+    return base
   }
 
+  const sorted = [...kids].sort((a, b) => b.total - a.total)
+  const kept = sorted.slice(0, maxChildren)
+  const dropped = sorted.slice(maxChildren)
+
+  base.children = kept.map(k => prune(k, depth - 1, maxChildren))
+  if (dropped.length > 0) {
+    const overflow = dropped.reduce((s, d) => s + d.total, 0)
+    base.children.push({
+      key: `__other__:${n.category}`,
+      display: `Other (${dropped.length})`,
+      total: overflow,
+      direct: overflow,
+      children: [],
+      hadChildren: false,
+    })
+  }
+  return base
+}
+
+/** Renders the focus view: the focused node's ancestor path, its subtree, siblings collapsed. */
+function pruneForFocus(roots: CategoryHierarchyNode[], focusKey: string, depth: number, maxChildren: number): Rendered[] | null {
+  const path = findPath(roots, focusKey)
+  if (!path) return null
+
+  const build = (siblings: CategoryHierarchyNode[], level: number): Rendered[] => {
+    const onPath = path[level]
+    const out: Rendered[] = []
+    let collapsed = 0
+    let collapsedCount = 0
+
+    for (const s of siblings) {
+      if (s.category !== onPath.category) {
+        // COLLAPSE IS TERMINAL: one replacement node per collapsed subtree, and traversal stops.
+        // Descending into it as well would let the same subtree contribute twice.
+        collapsed += s.total
+        collapsedCount++
+        continue
+      }
+      if (level === path.length - 1) {
+        out.push(prune(s, depth, maxChildren)) // the focused node: fan out its subtree
+      } else {
+        const kids = s.children ?? []
+        const node: Rendered = {
+          key: s.category, display: s.display, total: s.total,
+          direct: s.direct_total, children: build(kids, level + 1), hadChildren: kids.length > 0,
+        }
+        out.push(node)
+      }
+    }
+    if (collapsedCount > 0) {
+      out.push({
+        key: `__other__:level${level}`,
+        display: `Other (${collapsedCount})`,
+        total: collapsed, direct: collapsed, children: [], hadChildren: false,
+      })
+    }
+    return out
+  }
+
+  return build(roots, 0)
+}
+
+function findPath(roots: CategoryHierarchyNode[], key: string): CategoryHierarchyNode[] | null {
+  for (const r of roots) {
+    if (r.category === key) return [r]
+    const sub = findPath(r.children ?? [], key)
+    if (sub) return [r, ...sub]
+  }
+  return null
+}
+
+/** Emits nodes and links for a rendered expense forest, and reports how many nodes it used. */
+function emitExpenses(forest: Rendered[]): { nodes: SankeyNode[]; links: SankeyLink[] } {
+  const nodes: SankeyNode[] = []
+  const links: SankeyLink[] = []
+  let colorIdx = 0
+
+  const walk = (n: Rendered, parentId: string, ancestry: string[], parentKey?: string) => {
+    const isOverflow = n.key.startsWith('__other__:')
+    const id = isOverflow
+      ? `out:other:${ancestry.join('|') || 'l1'}`
+      : `out:l${ancestry.length + 1}:${[...ancestry, n.key].join('|')}`
+
+    const action: NodeAction = isOverflow
+      ? { kind: 'none' }
+      : n.hadChildren
+        // Focus-ness survives degradation: a parent whose children a rung hid must not flip to
+        // navigate just because it currently renders as a leaf.
+        ? { kind: 'focus', key: n.key }
+        : navigateAction(n.key, parentKey)
+
+    nodes.push({
+      id,
+      name: n.display,
+      itemStyle: { color: CATEGORY_COLORS[colorIdx++ % CATEGORY_COLORS.length] },
+      nodeKind: isOverflow ? 'other' : 'expense',
+      action,
+    })
+    links.push({ source: parentId, target: id, value: n.total })
+
+    if (n.children.length === 0) return
+
+    const nextAncestry = [...ancestry, n.key]
+    for (const c of n.children) walk(c, id, nextAncestry, n.key)
+
+    // A node with rendered children AND own spend needs somewhere to put that spend, or its
+    // inflow exceeds the sum of its outflows.
+    if (n.direct > 0) {
+      const directId = `out:direct:${nextAncestry.join('|')}`
+      nodes.push({
+        id: directId,
+        name: `${n.display} (direct)`,
+        itemStyle: { color: CATEGORY_COLORS[colorIdx++ % CATEGORY_COLORS.length] },
+        nodeKind: 'direct',
+        action: { kind: 'none' },
+      })
+      links.push({ source: id, target: directId, value: n.direct })
+    }
+  }
+
+  for (const root of forest) walk(root, 'hub', [])
+  return { nodes, links }
+}
+
+/**
+ * The degradation ladder. Each rung is re-counted; the first that fits wins. The floor is the
+ * consolidated view, which renders one node per parent and therefore always fits.
+ */
+function renderExpenseFan(roots: CategoryHierarchyNode[], mode: SankeyViewMode) {
+  if (mode.kind === 'focus') {
+    for (const [depth, maxChildren] of [[2, 6], [1, 6], [1, 3], [0, 0]] as const) {
+      const forest = pruneForFocus(roots, mode.key, depth, maxChildren)
+      if (!forest) break // focused key no longer exists — fall through to the consolidated view
+      const emitted = emitExpenses(forest)
+      if (emitted.nodes.length <= EXPENSE_NODE_BUDGET) return emitted
+    }
+  }
+
+  const rungs: Array<[depth: number, maxChildren: number, maxRoots: number]> =
+    mode.kind === 'parents'
+      ? [[0, 0, 10]]
+      : [[2, 6, 30], [1, 6, 30], [1, 6, 10], [0, 0, 30], [0, 0, 10]]
+
+  let last = emitExpenses([])
+  for (const [depth, maxChildren, maxRoots] of rungs) {
+    const sorted = [...roots].sort((a, b) => b.total - a.total)
+    const kept = sorted.slice(0, maxRoots).map(r => prune(r, depth, maxChildren))
+    const dropped = sorted.slice(maxRoots)
+    if (dropped.length > 0) {
+      const overflow = dropped.reduce((s, d) => s + d.total, 0)
+      kept.push({
+        key: '__other__:roots', display: `Other (${dropped.length})`,
+        total: overflow, direct: overflow, children: [], hadChildren: false,
+      })
+    }
+    last = emitExpenses(kept)
+    if (last.nodes.length <= EXPENSE_NODE_BUDGET) return last
+  }
+  return last
+}
+
+/** Income is capped in its own right: it is not restricted to a single primary and can fan wide. */
+function renderIncomeFan(sources: CategoryHierarchyNode[]) {
+  const nodes: SankeyNode[] = []
+  const links: SankeyLink[] = []
+  const valid = sources.filter(s => s.total > 0)
+  const sorted = [...valid].sort((a, b) => b.total - a.total)
+  const kept = sorted.slice(0, MAX_INCOME_LEAVES)
+  const dropped = sorted.slice(MAX_INCOME_LEAVES)
+
+  for (const s of kept) {
+    const id = `in:l1:${s.category}`
+    nodes.push({
+      id,
+      name: s.display,
+      itemStyle: { color: CASH_FLOW_COLORS.income },
+      nodeKind: 'income',
+      action: navigateAction(s.category, undefined),
+    })
+    links.push({ source: id, target: 'hub', value: s.total })
+  }
+
+  if (dropped.length > 0) {
+    const overflow = dropped.reduce((s, d) => s + d.total, 0)
+    nodes.push({
+      id: 'in:other',
+      name: `Other income (${dropped.length})`,
+      itemStyle: { color: CASH_FLOW_COLORS.income },
+      nodeKind: 'other',
+      action: { kind: 'none' },
+    })
+    links.push({ source: 'in:other', target: 'hub', value: overflow })
+  }
+  return { nodes, links }
+}
+
+export function buildSankeyData(
+  income: CategoryHierarchyNode[],
+  expenses: CategoryHierarchyNode[],
+  mode: SankeyViewMode,
+): SankeyData {
   const validIncome = income.filter(i => i.total > 0)
   const validExpenses = expenses.filter(e => e.total > 0)
-
   if (validIncome.length === 0 && validExpenses.length === 0) {
     return { nodes: [], links: [], hubTotal: 0 }
   }
 
-  const nodes: SankeyNode[] = []
-  const links: SankeyLink[] = []
-
-  nodes.push({
-    id: 'hub',
-    name: 'Total Income',
-    itemStyle: { color: CASH_FLOW_COLORS.income },
-    navigable: false,
-    nodeKind: 'hub',
-  })
-
-  for (const src of validIncome) {
-    const id = `in:${src.category}`
-    nodes.push({
-      id,
-      name: src.pfc_primary_display ?? src.category,
-      itemStyle: { color: CASH_FLOW_COLORS.income },
-      navigable: true,
-      nodeKind: 'income',
-      category: src.category,
-    })
-    links.push({ source: id, target: 'hub', value: src.total })
-  }
-
+  // Derived from the FULL row set, never the rendered subset: truncation collapses rather than
+  // drops, so these stay equal, and computing them here keeps the two fans internally consistent
+  // even if their two endpoints were fetched a moment apart.
   const incomeSum = validIncome.reduce((s, i) => s + i.total, 0)
   const expenseSum = validExpenses.reduce((s, e) => s + e.total, 0)
   const surplus = incomeSum - expenseSum
-  const hubTotal = Math.max(incomeSum, expenseSum)
+
+  const nodes: SankeyNode[] = [{
+    id: 'hub',
+    name: 'Total Income',
+    itemStyle: { color: CASH_FLOW_COLORS.income },
+    nodeKind: 'hub',
+    action: { kind: 'none' },
+  }]
+  const links: SankeyLink[] = []
+
+  const inFan = renderIncomeFan(validIncome)
+  nodes.push(...inFan.nodes)
+  links.push(...inFan.links)
+
   if (surplus < 0) {
     nodes.push({
       id: 'deficit',
       name: 'Drawn from Savings / Credit',
       itemStyle: { color: CASH_FLOW_COLORS.netNegative },
-      navigable: false,
       nodeKind: 'deficit',
+      action: { kind: 'none' },
     })
     links.push({ source: 'deficit', target: 'hub', value: -surplus })
   }
 
-  const sortedExpenses = [...validExpenses].sort((a, b) => b.total - a.total)
-  const topExpenses = sortedExpenses.slice(0, MAX_EXPENSE_NODES)
-  const otherExpenses = validExpenses.length > MAX_EXPENSE_NODES
-    ? sortedExpenses.slice(MAX_EXPENSE_NODES)
-    : []
-
-  topExpenses.forEach((exp, i) => {
-    const id = `out:${exp.category}`
-    nodes.push({
-      id,
-      name: exp.pfc_primary_display ?? exp.category,
-      itemStyle: { color: CATEGORY_COLORS[i % CATEGORY_COLORS.length] },
-      navigable: true,
-      nodeKind: 'expense',
-      category: exp.category,
-      ...(exp.category.startsWith('custom:') && { isCustom: true as const }),
-    })
-    links.push({ source: 'hub', target: id, value: exp.total })
-  })
-
-  if (otherExpenses.length > 0) {
-    const otherTotal = otherExpenses.reduce((s, e) => s + e.total, 0)
-    nodes.push({
-      id: 'other',
-      name: `Other Expenses (${otherExpenses.length} categories)`,
-      itemStyle: { color: CATEGORY_COLORS[topExpenses.length % CATEGORY_COLORS.length] },
-      navigable: false,
-      nodeKind: 'other',
-    })
-    links.push({ source: 'hub', target: 'other', value: otherTotal })
-  }
+  const outFan = renderExpenseFan(validExpenses, mode)
+  nodes.push(...outFan.nodes)
+  links.push(...outFan.links)
 
   if (surplus > 0) {
     nodes.push({
       id: 'savings',
       name: 'Savings',
       itemStyle: { color: CASH_FLOW_COLORS.netPositive },
-      navigable: false,
       nodeKind: 'savings',
+      action: { kind: 'none' },
     })
     links.push({ source: 'hub', target: 'savings', value: surplus })
   }
 
-  return { nodes, links, hubTotal }
+  return { nodes, links, hubTotal: Math.max(incomeSum, expenseSum) }
 }

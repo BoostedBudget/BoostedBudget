@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router'
 import type { EChartsOption } from 'echarts'
-import type { IncomeSourceBreakdownResponse, SpendingByCategoryResponse } from '@boostedbudget/api-client/models'
+import type { CategoryHierarchyResponse } from '@boostedbudget/api-client/models'
 import {
   EChartsChart,
   useDarkMode,
@@ -10,39 +10,79 @@ import {
   escapeHtml,
 } from '@/shared/charts'
 import { buildSankeyData } from './buildSankeyData'
-import type { SankeyNode } from './buildSankeyData'
+import type { NodeAction, SankeyNode, SankeyViewMode } from './buildSankeyData'
+
+/**
+ * A mixed subtree emits one filter value per descendant custom category. Capped so a user with
+ * hundreds of them cannot produce a multi-KB query string — which session replay records verbatim.
+ * Past the cap the node focuses instead, which is lossless: the same categories are still reachable
+ * one level down.
+ */
+const MAX_NAV_FILTER_VALUES = 25
 
 interface CashFlowSankeyChartProps {
-  incomeData: IncomeSourceBreakdownResponse | null
-  categoryData: SpendingByCategoryResponse | null
+  incomeData: CategoryHierarchyResponse | null
+  expenseData: CategoryHierarchyResponse | null
   loading: boolean
   privacyMode: boolean
   startDate: string
   endDate: string
+  viewMode: SankeyViewMode
+  onFocus: (key: string) => void
   className?: string
+}
+
+/** Builds the /transactions query string for a navigate action. */
+function navParams(action: Extract<NodeAction, { kind: 'navigate' }>, direction: 'income' | 'expense', startDate: string, endDate: string) {
+  const params = new URLSearchParams()
+  if (action.pfcPrimaries?.length) params.set('pfc_primaries', action.pfcPrimaries.join(','))
+  if (action.pfcDetaileds?.length) params.set('pfc_detaileds', action.pfcDetaileds.join(','))
+  if (action.customCategoryIds?.length) params.set('custom_category_ids', action.customCategoryIds.join(','))
+  params.set('amount_type', direction)
+  if (startDate) params.set('start_date', startDate)
+  if (endDate) params.set('end_date', endDate)
+  return params
+}
+
+function totalFilterValues(action: Extract<NodeAction, { kind: 'navigate' }>) {
+  return (action.pfcPrimaries?.length ?? 0) + (action.pfcDetaileds?.length ?? 0) + (action.customCategoryIds?.length ?? 0)
 }
 
 export function CashFlowSankeyChart({
   incomeData,
-  categoryData,
+  expenseData,
   loading,
   privacyMode,
   startDate,
   endDate,
+  viewMode,
+  onFocus,
   className,
 }: CashFlowSankeyChartProps) {
   const navigate = useNavigate()
   const isDark = useDarkMode()
 
   const sankeyData = useMemo(
-    () => buildSankeyData(
-      incomeData?.sources ?? [],
-      categoryData?.categories ?? [],
-      incomeData?.total_income ?? 0,
-      categoryData?.total_spent ?? 0,
-    ),
-    [incomeData, categoryData],
+    () => buildSankeyData(incomeData?.levels ?? [], expenseData?.levels ?? [], viewMode),
+    [incomeData, expenseData, viewMode],
   )
+
+  const activate = (node: SankeyNode | undefined) => {
+    if (!node) return
+    const { action } = node
+    if (action.kind === 'none') return
+    if (action.kind === 'focus') {
+      onFocus(action.key)
+      return
+    }
+    // A subtree wide enough to blow up the URL focuses instead — the categories stay reachable.
+    if (totalFilterValues(action) > MAX_NAV_FILTER_VALUES) {
+      onFocus(node.id)
+      return
+    }
+    const direction = node.nodeKind === 'income' ? 'income' : 'expense'
+    navigate(`/transactions?${navParams(action, direction, startDate, endDate).toString()}`)
+  }
 
   const handleClick = (params: unknown) => {
     const p = params as { dataType?: string; data?: unknown; dataIndex?: number }
@@ -51,24 +91,7 @@ export function CashFlowSankeyChart({
       : !p.dataType && typeof p.dataIndex === 'number'
       ? sankeyData.nodes[p.dataIndex] // dataIndex-only: test mock path; real ECharts always sets dataType
       : undefined
-
-    if (!node?.navigable) return
-
-    const urlParams = new URLSearchParams()
-    if (node.nodeKind === 'expense') {
-      if (node.isCustom && node.category) {
-        urlParams.set('custom_category_ids', node.category.slice('custom:'.length))
-      } else if (node.category) {
-        urlParams.set('pfc_primaries', node.category)
-      }
-      urlParams.set('amount_type', 'expense')
-    } else if (node.nodeKind === 'income' && node.category) {
-      urlParams.set('pfc_primaries', node.category)
-      urlParams.set('amount_type', 'income')
-    }
-    if (startDate) urlParams.set('start_date', startDate)
-    if (endDate) urlParams.set('end_date', endDate)
-    navigate(`/transactions?${urlParams.toString()}`)
+    activate(node)
   }
 
   const option = useMemo((): EChartsOption => {
@@ -123,11 +146,13 @@ export function CashFlowSankeyChart({
       <EChartsChart
         option={option}
         isDark={isDark}
-        style={{ width: '100%', height: '400px' }}
+        style={{ width: '100%', height: '460px' }}
         ariaLabel="Cash flow diagram showing income sources and expense categories"
         onEvents={{ click: handleClick }}
       />
-      {/* sr-only table: screen reader access + keyboard fallback. data-ph-mask covers amounts. */}
+      {/* sr-only table: screen reader access + keyboard fallback. data-ph-mask covers amounts.
+          Node names are rendered as TEXT, never interpolated into an aria-label or title — session
+          replay records attribute values verbatim and data-ph-mask cannot cover them. */}
       <table className="sr-only" aria-label="Cash flow data table" data-ph-mask>
         <caption>Cash flow breakdown for the selected period</caption>
         <thead>
@@ -142,16 +167,25 @@ export function CashFlowSankeyChart({
             const sourceNode = sankeyData.nodes.find(n => n.id === link.source)
             const targetNode = sankeyData.nodes.find(n => n.id === link.target)
             const pct = sankeyData.hubTotal > 0 ? (link.value / sankeyData.hubTotal) * 100 : 0
-            const navigableNode = targetNode?.navigable ? targetNode : sourceNode?.navigable ? sourceNode : undefined
+            // Prefer the TARGET, which is the category the row is about. The source is used only
+            // for links flowing INTO the hub — the income rows, where the source is the category
+            // and the hub is not actionable. Falling back to the source generally would make an
+            // inert row (a "(direct)" bucket, an overflow node) act on its PARENT instead, which
+            // duplicates a row that already exists and acts on something the label does not name.
+            const actionable = targetNode && targetNode.action.kind !== 'none'
+              ? targetNode
+              : link.target === 'hub' && sourceNode && sourceNode.action.kind !== 'none'
+              ? sourceNode
+              : undefined
             const label = `${sourceNode?.name ?? link.source} → ${targetNode?.name ?? link.target}`
             return (
               <tr key={i}>
                 <td>
-                  {navigableNode ? (
+                  {actionable ? (
                     <button
                       type="button"
                       className="focus-visible:not-sr-only focus-visible:absolute focus-visible:z-50 focus-visible:rounded focus-visible:bg-background focus-visible:px-2 focus-visible:py-1 focus-visible:text-sm focus-visible:shadow-md focus-visible:ring-2 focus-visible:ring-ring"
-                      onClick={() => handleClick({ dataType: 'node', data: navigableNode })}
+                      onClick={() => activate(actionable)}
                     >
                       {label}
                     </button>

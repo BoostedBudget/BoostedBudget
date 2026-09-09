@@ -150,6 +150,10 @@ export const ANALYTICS_EVENTS = {
   REPORT_CATEGORY_CLICKED: 'report_category_clicked',
   REPORT_MERCHANT_CLICKED: 'report_merchant_clicked',
   REPORT_SANKEY_PRIVACY_TOGGLED: 'report_sankey_privacy_toggled',
+  // #1626: carries the view MODE only. Never a category name, id or amount — event
+  // properties are stored verbatim and are not covered by data-ph-mask.
+  REPORT_SANKEY_VIEW_MODE_CHANGED: 'report_sankey_view_mode_changed',
+  REPORT_SANKEY_CATEGORY_FOCUSED: 'report_sankey_category_focused',
 
   // Admin
   ADMIN_PAGE_VIEWED: 'admin_page_viewed',
