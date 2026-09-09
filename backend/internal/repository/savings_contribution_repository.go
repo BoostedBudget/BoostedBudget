@@ -94,14 +94,14 @@ type SavingsContributionRepository interface {
 	// Returns ErrContributionNotFound if id is not found or does not belong to userID.
 	// Returns ErrContributionOverAllocated if confirming would exceed the txn's capacity.
 	// Returns ErrContributionAlreadyConfirmed if the row is already confirmed.
-	ConfirmContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error)
+	ConfirmContribution(ctx context.Context, userID, goalID, id string) (*domain.SavingsGoalContribution, error)
 
 	// RejectContribution sets a proposed contribution's status to 'rejected' (sticky tombstone).
 	// A rejected row persists in the table so that UpsertProposedFromTransaction's ON CONFLICT
 	// clause skips re-proposing the same (transaction_id, savings_goal_id) pair on future syncs
 	// (R3-7). Returns ErrContributionNotFound if id is not found or does not belong to userID.
 	// Returns ErrContributionNotProposed if the row is not in 'proposed' status.
-	RejectContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error)
+	RejectContribution(ctx context.Context, userID, goalID, id string) (*domain.SavingsGoalContribution, error)
 
 	// DeleteContribution PERMANENTLY DESTROYS one contribution the user named. It is the single
 	// deliberate, user-facing hard delete of financial history on this branch — see the
@@ -371,7 +371,7 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 			id, savings_goal_id, transaction_id, amount, source, status,
 			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
 		) VALUES (gen_random_uuid(), $1, $2, $3, $4, 'confirmed', true, false, CURRENT_DATE, $5, $5)
-		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL
+		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL AND archived_at IS NULL
 		DO UPDATE SET
 			amount     = EXCLUDED.amount,
 			source     = EXCLUDED.source,
@@ -480,7 +480,7 @@ func (r *savingsContributionRepository) InsertManualFromTransaction(
 			id, savings_goal_id, transaction_id, amount, source, status,
 			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
 		) VALUES (gen_random_uuid(), $1, $2, $3, 'manual', 'confirmed', false, true, $4, $5, $5)
-		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL
+		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL AND archived_at IS NULL
 		DO UPDATE SET
 			amount                    = EXCLUDED.amount,
 			source                    = 'manual',
@@ -559,7 +559,7 @@ func (r *savingsContributionRepository) UpsertProposedFromTransaction(
 			id, savings_goal_id, transaction_id, amount, source, status,
 			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
 		) VALUES (gen_random_uuid(), $1, $2, $3, 'confirmed_transfer', 'proposed', true, false, CURRENT_DATE, $4, $4)
-		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL
+		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL AND archived_at IS NULL
 		DO UPDATE SET
 			amount     = EXCLUDED.amount,
 			updated_at = EXCLUDED.updated_at
@@ -750,7 +750,7 @@ func (r *savingsContributionRepository) SumConfirmedByDeletedGoal(ctx context.Co
 // ConfirmContribution promotes a proposed contribution to confirmed status.
 // Acquires a row-level lock on the contribution, then (if txn-linked) re-checks
 // allocation capacity before flipping to 'confirmed' (Codex C2 / M20).
-func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error) {
+func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context, userID, goalID, id string) (*domain.SavingsGoalContribution, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -761,16 +761,27 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 		}
 	}()
 
-	// Step 0: Load + lock the contribution row; verify it belongs to userID via goal ownership.
+	// Step 0: Load + lock the contribution row; verify it belongs to userID via goal ownership,
+	// AND that it belongs to the goal the caller named.
+	//
+	// #1625: the goal binding is not cosmetic. Without it the handler's contributions-basis gate
+	// could be bypassed — it validates the goal in the URL while this looked the contribution up
+	// by its own id alone, so a same-user request naming a contributions-basis goal could mutate a
+	// MANUAL goal's contribution and then recompute the wrong goal. Bound here rather than in the
+	// handler because a handler-side check would be a TOCTOU race against this very FOR UPDATE.
+	//
+	// archived_at IS NULL: a row from a closed period cannot be confirmed. Confirming it would
+	// change a status that no sum reads, reporting success for a no-op.
 	fetchQuery := `
 		SELECT ` + contributionSelectColsJoined + `
 		FROM savings_goal_contributions c
 		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
-		WHERE c.id = $1 AND g.user_id = $2 AND c.deleted_at IS NULL
+		WHERE c.id = $1 AND g.user_id = $2 AND c.savings_goal_id = $3
+		  AND c.deleted_at IS NULL AND c.archived_at IS NULL
 		FOR UPDATE OF c
 	`
 	contrib := &domain.SavingsGoalContribution{}
-	var row = tx.QueryRow(ctx, fetchQuery, id, userID)
+	var row = tx.QueryRow(ctx, fetchQuery, id, userID, goalID)
 	if scanErr := row.Scan(
 		&contrib.ID, &contrib.SavingsGoalID, &contrib.TransactionID,
 		&contrib.Amount, &contrib.Source, &contrib.Status,
@@ -937,7 +948,7 @@ func (r *savingsContributionRepository) DeleteContribution(ctx context.Context, 
 // RejectContribution sets a proposed contribution to 'rejected' status (sticky tombstone).
 // The row is retained so the partial-unique-index key (transaction_id, savings_goal_id)
 // blocks UpsertProposedFromTransaction from re-proposing the same transfer-in (R3-7).
-func (r *savingsContributionRepository) RejectContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error) {
+func (r *savingsContributionRepository) RejectContribution(ctx context.Context, userID, goalID, id string) (*domain.SavingsGoalContribution, error) {
 	// UPDATE … RETURNING so we can return the updated row and verify it was 'proposed'.
 	// Join through savings_goals to enforce ownership (Codex C1).
 	query := `
@@ -947,14 +958,19 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 		WHERE c.id = $1
 		  AND c.savings_goal_id = g.id
 		  AND g.user_id = $2
+		  -- #1625: bind the contribution to the goal the caller named. See ConfirmContribution's
+		  -- comment — without this the handler's basis gate is bypassable.
+		  AND c.savings_goal_id = $3
 		  AND g.deleted_at IS NULL
 		  AND c.status = 'proposed'
 		  AND c.deleted_at IS NULL
+		  -- A closed period's proposal cannot be rejected; nothing reads its status.
+		  AND c.archived_at IS NULL
 		RETURNING c.id, c.savings_goal_id, c.transaction_id, c.amount, c.source, c.status,
 			c.managed_by_reconciliation, c.confirmed_by_user,
 			to_char(c.occurred_on, 'YYYY-MM-DD'), c.created_at, c.updated_at, c.archived_at`
 	contrib := &domain.SavingsGoalContribution{}
-	err := r.db.QueryRow(ctx, query, id, userID).Scan(
+	err := r.db.QueryRow(ctx, query, id, userID, goalID).Scan(
 		&contrib.ID, &contrib.SavingsGoalID, &contrib.TransactionID,
 		&contrib.Amount, &contrib.Source, &contrib.Status,
 		&contrib.ManagedByReconciliation, &contrib.ConfirmedByUser,
@@ -964,12 +980,17 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 		if err == pgx.ErrNoRows {
 			// Distinguish between not-found and non-proposed by checking existence.
 			var exists int
+			// Scoped the SAME way as the UPDATE above, or the two disagree about what "exists"
+			// means: a contribution belonging to a DIFFERENT goal would be reported as
+			// ErrContributionNotProposed ("it exists but isn't proposed") when the honest answer
+			// for this goal is not-found. That distinction is what the bypass fix turns on.
 			checkQuery := `
 				SELECT 1 FROM savings_goal_contributions c
 				JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
-				WHERE c.id = $1 AND g.user_id = $2 AND c.deleted_at IS NULL
+				WHERE c.id = $1 AND g.user_id = $2 AND c.savings_goal_id = $3
+				  AND c.deleted_at IS NULL AND c.archived_at IS NULL
 			`
-			if chkErr := r.db.QueryRow(ctx, checkQuery, id, userID).Scan(&exists); chkErr != nil {
+			if chkErr := r.db.QueryRow(ctx, checkQuery, id, userID, goalID).Scan(&exists); chkErr != nil {
 				// Row not found or wrong user.
 				return nil, domain.ErrContributionNotFound
 			}

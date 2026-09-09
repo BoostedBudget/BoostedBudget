@@ -537,12 +537,19 @@ func (s *savingsGoalService) handleBasisSwitch(
 		// live and confirmed; the seed below then adds a synthetic row for the same money and the
 		// sums report both (100 + 100 = 200). Archiving first is what makes the round-trip
 		// idempotent. It is a no-op for a goal that has never been on the contributions basis.
+		// ⚠ A FAILED ARCHIVE MUST STOP THE SEED. Logging and continuing (which this did until an
+		// adversarial review caught it) reinstates the exact defect #1625 Task 12 exists to fix:
+		// the previous period's rows stay live, the synthetic seed goes in beside them, and the
+		// goal reports both. Skipping the seed instead leaves current_amount UNDERSTATED until the
+		// next recompute, which is recoverable and visible; double-counting is neither.
 		if err := s.basisSwitchRepo.ArchiveByGoal(ctx, goalID); err != nil {
-			s.logger.Warn("basis-switch archive before seed failed (non-fatal)",
+			s.logger.Error("basis-switch archive failed — SKIPPING the seed contribution to avoid "+
+				"double-counting the prior period",
 				slog.String("goal_id", goalID),
 				slog.String("user_id", userID),
 				slog.String("error", err.Error()),
 			)
+			return
 		}
 
 		// Seed: carry the existing manual balance as a confirmed contribution.

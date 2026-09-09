@@ -43,6 +43,30 @@ const (
 	QuarantineInvalidValue   QuarantineReason = "invalid_condition_value_shape"
 )
 
+// QuarantineReasonStopsMatching reports whether a rule with this reason is genuinely incapable of
+// matching anything — which is the ONLY condition under which a UI may say it is not running.
+//
+// #1625, corrected after measuring the engine rather than reasoning about it. The four reasons do
+// NOT behave alike, and an earlier revision of this code reported all of them as "Not running",
+// which was false for half:
+//
+//	no_conditions            never matches — enforced outright in RuleMatches.
+//	invalid_condition_value  never matches — the evaluator ERRORS, so the whole rule is skipped.
+//	                         Not enforcement, but the same observable outcome.
+//	invalid_condition_logic  STILL MATCHES. An unrecognised logic value falls back to AND.
+//	unnormalizable_condition STILL MATCHES under OR: the junk condition returns (false, nil) and a
+//	                         valid sibling can carry the rule on its own. Under AND it does not.
+//
+// So the last two are reported as "has a problem", never as "not running". Telling a user their
+// rule is off while it is quietly recategorising their transactions is the exact failure this
+// ticket exists to remove.
+//
+// Pinned to real behaviour by TestQuarantineEnforcementMatchesTheAdvertisedSet in internal/rules,
+// which drives RuleMatches for every reason instead of trusting this list.
+func QuarantineReasonStopsMatching(r QuarantineReason) bool {
+	return r == QuarantineNoConditions || r == QuarantineInvalidValue
+}
+
 // AllQuarantineReasons is the SINGLE source of the vocabulary. The allowlist below is derived
 // from it, so the two cannot drift — an earlier version maintained a hand-written map AND a
 // hand-written list in the test, which meant adding a fifth constant and forgetting both left

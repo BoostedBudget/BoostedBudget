@@ -678,14 +678,15 @@ func TestSavingsContributionRepository_RejectContribution_Success(t *testing.T) 
 	contribID := uuid.New().String()
 	goalID := uuid.New().String()
 
-	// The UPDATE … FROM savings_goals … RETURNING query.
+	// The UPDATE … FROM savings_goals … RETURNING query. Three args since #1625: the goal is
+	// bound into the statement so a contribution from another goal cannot be rejected here.
 	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE savings_goal_contributions c`)).
-		WithArgs(contribID, userID).
+		WithArgs(contribID, userID, goalID).
 		WillReturnRows(pgxmock.NewRows(contributionColumns).
 			AddRow(contribID, goalID, nil, 100.0, "confirmed_transfer", "rejected",
 				true, false, "2026-06-14", time.Now(), time.Now(), nil))
 
-	result, err := repo.RejectContribution(ctx, userID, contribID)
+	result, err := repo.RejectContribution(ctx, userID, goalID, contribID)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, "rejected", result.Status)
@@ -700,19 +701,20 @@ func TestSavingsContributionRepository_RejectContribution_NotFound(t *testing.T)
 
 	ctx := context.Background()
 	userID := uuid.New().String()
+	goalID := uuid.New().String()
 	contribID := uuid.New().String()
 
-	// The UPDATE returns no rows (not found or wrong user).
+	// The UPDATE returns no rows (not found, wrong user, or a different goal).
 	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE savings_goal_contributions c`)).
-		WithArgs(contribID, userID).
+		WithArgs(contribID, userID, goalID).
 		WillReturnError(pgx.ErrNoRows)
 
 	// The existence check also returns no rows.
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goal_contributions c`)).
-		WithArgs(contribID, userID).
+		WithArgs(contribID, userID, goalID).
 		WillReturnError(pgx.ErrNoRows)
 
-	_, err := repo.RejectContribution(ctx, userID, contribID)
+	_, err := repo.RejectContribution(ctx, userID, goalID, contribID)
 	assert.ErrorIs(t, err, domain.ErrContributionNotFound)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -725,19 +727,21 @@ func TestSavingsContributionRepository_RejectContribution_NotProposed(t *testing
 
 	ctx := context.Background()
 	userID := uuid.New().String()
+	goalID := uuid.New().String()
 	contribID := uuid.New().String()
 
 	// The UPDATE returns no rows (status != 'proposed') but the row exists.
 	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE savings_goal_contributions c`)).
-		WithArgs(contribID, userID).
+		WithArgs(contribID, userID, goalID).
 		WillReturnError(pgx.ErrNoRows)
 
-	// Existence check finds the row (wrong status, but row exists for this user).
+	// Existence check finds the row (wrong status, but row exists for THIS goal — the check is
+	// scoped the same way as the UPDATE, so it cannot report a different goal's row as existing).
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goal_contributions c`)).
-		WithArgs(contribID, userID).
+		WithArgs(contribID, userID, goalID).
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
-	_, err := repo.RejectContribution(ctx, userID, contribID)
+	_, err := repo.RejectContribution(ctx, userID, goalID, contribID)
 	assert.ErrorIs(t, err, domain.ErrContributionNotProposed)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

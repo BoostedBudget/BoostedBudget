@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -186,10 +187,17 @@ func annotateQuarantineStatus(r *domain.CategorizationRule) {
 	if r == nil {
 		return
 	}
-	if reason := quarantineReason(r); reason != "" {
-		r.Quarantined = true
-		r.QuarantineReason = string(reason)
+	reason := quarantineReason(r)
+	if reason == "" {
+		return
 	}
+	r.QuarantineReason = string(reason)
+	// Quarantined means "cannot match anything", NOT "has a problem". Measured, not assumed:
+	// invalid_condition_logic falls back to AND and keeps matching, and unnormalizable_condition
+	// keeps matching under OR because its junk condition returns (false, nil) and a valid sibling
+	// carries the rule. Reporting those as not-running would tell the user their rule is off while
+	// it quietly recategorises their transactions.
+	r.Quarantined = observability.QuarantineReasonStopsMatching(reason)
 }
 
 // GetRuleByID retrieves a specific rule by ID.

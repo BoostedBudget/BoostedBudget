@@ -97,6 +97,28 @@ func TestGetRuleByID_SurfacesQuarantineStatusToo(t *testing.T) {
 
 	got, err := svc.GetRuleByID(context.Background(), "u1", "r-broken")
 	require.NoError(t, err)
-	assert.True(t, got.Quarantined)
 	assert.Equal(t, "invalid_condition_logic_defaults_to_and", got.QuarantineReason)
+
+	// ⚠ Reason present, Quarantined FALSE. Measured, not assumed: an unrecognised condition_logic
+	// falls back to AND, so this rule IS still matching transactions. An earlier revision reported
+	// it as quarantined and the card rendered "Not running" — telling the user their rule was off
+	// while it quietly recategorised their ledger.
+	assert.False(t, got.Quarantined,
+		"this rule still runs; only a reason that genuinely stops matching may set Quarantined")
+}
+
+// The other half: a reason that genuinely stops the rule DOES set Quarantined.
+func TestGetRuleByID_QuarantinedOnlyWhenTheRuleTrulyCannotMatch(t *testing.T) {
+	empty := &domain.CategorizationRule{
+		ID: "r-empty", UserID: "u1", Enabled: true, ConditionLogic: "AND",
+		Conditions: []domain.RuleCondition{},
+	}
+	repo := new(mockRuleRepository)
+	repo.On("GetByID", mock.Anything, "r-empty").Return(empty, nil)
+	svc := NewCategorizationRuleService(repo, new(MockCustomCategoryRepository))
+
+	got, err := svc.GetRuleByID(context.Background(), "u1", "r-empty")
+	require.NoError(t, err)
+	assert.True(t, got.Quarantined, "a zero-condition rule is refused outright and matches nothing")
+	assert.Equal(t, "no_conditions_matches_everything", got.QuarantineReason)
 }

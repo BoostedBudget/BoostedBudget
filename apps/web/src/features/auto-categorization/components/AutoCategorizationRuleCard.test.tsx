@@ -529,6 +529,29 @@ describe('AutoCategorizationRuleCard', () => {
       expect(screen.getByText(/no conditions, so it would match every transaction/i)).toBeDefined()
     })
 
+    // ⚠ The distinction Codex caught. A rule with a reason but quarantined=false is STILL
+    // MATCHING transactions — invalid condition_logic falls back to AND, and an unnormalizable
+    // condition under OR lets a valid sibling carry the rule. Rendering "Not running" for those
+    // told the user their rule was off while it quietly recategorised their ledger.
+    it('says "Needs attention", NOT "Not running", for a rule that still runs', () => {
+      render(
+        <AutoCategorizationRuleCard
+          rule={{
+            ...mockRule,
+            quarantined: false,
+            quarantine_reason: 'invalid_condition_logic_defaults_to_and',
+          }}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Needs attention')).toBeDefined()
+      expect(screen.queryByText('Not running')).toBeNull()
+      expect(screen.getByText(/STILL RUNNING/i)).toBeDefined()
+    })
+
     it('falls back to a generic sentence for a reason it does not recognise', () => {
       render(
         <AutoCategorizationRuleCard

@@ -85,16 +85,16 @@ func (m *mockSavingsContributionRepo) SumConfirmedByDeletedGoal(ctx context.Cont
 	return args.Get(0).(float64), args.Error(1)
 }
 
-func (m *mockSavingsContributionRepo) ConfirmContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error) {
-	args := m.Called(ctx, userID, id)
+func (m *mockSavingsContributionRepo) ConfirmContribution(ctx context.Context, userID, goalID, id string) (*domain.SavingsGoalContribution, error) {
+	args := m.Called(ctx, userID, goalID, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.SavingsGoalContribution), args.Error(1)
 }
 
-func (m *mockSavingsContributionRepo) RejectContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error) {
-	args := m.Called(ctx, userID, id)
+func (m *mockSavingsContributionRepo) RejectContribution(ctx context.Context, userID, goalID, id string) (*domain.SavingsGoalContribution, error) {
+	args := m.Called(ctx, userID, goalID, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -360,7 +360,7 @@ func TestConfirmContribution_Success(t *testing.T) {
 	confirmed.Status = "confirmed"
 	confirmed.ConfirmedByUser = true
 
-	contribRepo.On("ConfirmContribution", mock.Anything, userID, contribID).
+	contribRepo.On("ConfirmContribution", mock.Anything, userID, goalID, contribID).
 		Return(confirmed, nil)
 	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
 
@@ -389,7 +389,7 @@ func TestConfirmContribution_NotFound_Returns404(t *testing.T) {
 	contribRepo := new(mockSavingsContributionRepo)
 	handler := NewContributionHandler(contribRepo, nil, nil)
 
-	contribRepo.On("ConfirmContribution", mock.Anything, userID, contribID).
+	contribRepo.On("ConfirmContribution", mock.Anything, userID, goalID, contribID).
 		Return(nil, domain.ErrContributionNotFound)
 
 	ctx := context.Background()
@@ -412,7 +412,7 @@ func TestConfirmContribution_AlreadyConfirmed_Returns409(t *testing.T) {
 	contribRepo := new(mockSavingsContributionRepo)
 	handler := NewContributionHandler(contribRepo, nil, nil)
 
-	contribRepo.On("ConfirmContribution", mock.Anything, userID, contribID).
+	contribRepo.On("ConfirmContribution", mock.Anything, userID, goalID, contribID).
 		Return(nil, domain.ErrContributionAlreadyConfirmed)
 
 	ctx := context.Background()
@@ -435,7 +435,7 @@ func TestConfirmContribution_OverAllocated_Returns422(t *testing.T) {
 	contribRepo := new(mockSavingsContributionRepo)
 	handler := NewContributionHandler(contribRepo, nil, nil)
 
-	contribRepo.On("ConfirmContribution", mock.Anything, userID, contribID).
+	contribRepo.On("ConfirmContribution", mock.Anything, userID, goalID, contribID).
 		Return(nil, domain.ErrContributionOverAllocated)
 
 	ctx := context.Background()
@@ -855,7 +855,7 @@ func TestRejectContribution_Success(t *testing.T) {
 	rejected.ID = contribID
 	rejected.Status = "rejected"
 
-	contribRepo.On("RejectContribution", mock.Anything, userID, contribID).
+	contribRepo.On("RejectContribution", mock.Anything, userID, goalID, contribID).
 		Return(rejected, nil)
 	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
 
@@ -883,7 +883,7 @@ func TestRejectContribution_NotFound_Returns404(t *testing.T) {
 	contribRepo := new(mockSavingsContributionRepo)
 	handler := NewContributionHandler(contribRepo, nil, nil)
 
-	contribRepo.On("RejectContribution", mock.Anything, userID, contribID).
+	contribRepo.On("RejectContribution", mock.Anything, userID, goalID, contribID).
 		Return(nil, domain.ErrContributionNotFound)
 
 	ctx := context.Background()
@@ -909,7 +909,7 @@ func TestRejectContribution_NotProposed_Returns409(t *testing.T) {
 	contribRepo := new(mockSavingsContributionRepo)
 	handler := NewContributionHandler(contribRepo, nil, nil)
 
-	contribRepo.On("RejectContribution", mock.Anything, userID, contribID).
+	contribRepo.On("RejectContribution", mock.Anything, userID, goalID, contribID).
 		Return(nil, domain.ErrContributionNotProposed)
 
 	ctx := context.Background()

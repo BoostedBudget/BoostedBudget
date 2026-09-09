@@ -208,6 +208,36 @@ for f in .well-known2/leak .config/credentials; do
   fi
 done
 
+# Case 6: the exemption must not become a hole THROUGH the secret rules.
+#
+# `^~` makes nginx skip every regex location once the prefix matches, so a naive exemption serves
+# anything beneath it -- /.well-known/.env, /.well-known/id_rsa. Case 5 only checked the
+# NEIGHBOURS of the prefix and would have passed while the inside was wide open. Found by
+# adversarial review of the first version of this guard.
+echo "Case 6: secret-shaped files INSIDE .well-known are still refused"
+printf 'FIXTURE\n' > "$ROOT/.well-known/.env"
+printf 'FIXTURE\n' > "$ROOT/.well-known/id_rsa"
+printf 'FIXTURE\n' > "$ROOT/.well-known/credentials.json"
+for f in .well-known/.env .well-known/id_rsa .well-known/credentials.json; do
+  code="$(status_of "$f")"
+  if [ "$code" = "404" ]; then
+    ok "/$f -> 404 (exemption is not a hole)"
+  else
+    bad "/$f -> $code -- the exemption is a prefix again and skipped the secret rules"
+  fi
+done
+
+# ...while the thing the exemption EXISTS for still works.
+echo "Case 7: the ACME challenge path the exemption exists for still resolves"
+mkdir -p "$ROOT/.well-known/acme-challenge"
+printf 'TOKEN\n' > "$ROOT/.well-known/acme-challenge/test-token"
+code="$(status_of ".well-known/acme-challenge/test-token")"
+if [ "$code" = "200" ]; then
+  ok "/.well-known/acme-challenge/test-token -> 200"
+else
+  bad "/.well-known/acme-challenge/test-token -> $code -- certificate renewal would fail"
+fi
+
 echo
 echo "check-nginx-secret-paths: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1

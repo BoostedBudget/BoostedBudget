@@ -348,7 +348,7 @@ func (h *ContributionHandler) ConfirmContribution(ctx context.Context, input *Co
 		return nil, err
 	}
 
-	confirmed, err := h.contribRepo.ConfirmContribution(ctx, input.UserID, input.ID)
+	confirmed, err := h.contribRepo.ConfirmContribution(ctx, input.UserID, input.GoalID, input.ID)
 	if err != nil {
 		switch err {
 		case domain.ErrContributionNotFound:
@@ -383,7 +383,7 @@ func (h *ContributionHandler) RejectContribution(ctx context.Context, input *Rej
 		return nil, err
 	}
 
-	rejected, err := h.contribRepo.RejectContribution(ctx, input.UserID, input.ID)
+	rejected, err := h.contribRepo.RejectContribution(ctx, input.UserID, input.GoalID, input.ID)
 	if err != nil {
 		switch err {
 		case domain.ErrContributionNotFound:

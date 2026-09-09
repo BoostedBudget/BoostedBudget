@@ -22,9 +22,9 @@ const QUARANTINE_EXPLANATIONS: Record<string, string> = {
   no_conditions_matches_everything:
     'This rule has no conditions, so it would match every transaction. It is not being run.',
   invalid_condition_logic_defaults_to_and:
-    'This rule\'s condition logic is not AND or OR, so it cannot be evaluated reliably.',
+    'This rule\'s condition logic is not AND or OR. It is STILL RUNNING, treating every condition as AND — edit it to confirm that is what you meant.',
   unnormalizable_condition:
-    'One of this rule\'s conditions uses a field or operator that no longer exists. Edit the rule to fix it.',
+    'One of this rule\'s conditions uses a field or operator that no longer exists. That condition never matches, and with OR logic the rule can still fire on its other conditions alone.',
   invalid_condition_value_shape:
     'One of this rule\'s conditions has a value of the wrong type. Edit the rule to fix it.',
 }
@@ -61,20 +61,49 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
             <span data-ph-mask>{rule.name}</span>
           </h3>
           <Badge
-            variant={rule.quarantined ? 'destructive' : rule.enabled ? 'success' : 'secondary'}
+            variant={
+              rule.quarantined
+                ? 'destructive'
+                : rule.quarantine_reason
+                  ? 'warning'
+                  : rule.enabled
+                    ? 'success'
+                    : 'secondary'
+            }
             className="uppercase"
           >
-            {rule.quarantined ? 'Not running' : rule.enabled ? 'Active' : 'Disabled'}
+            {rule.quarantined
+              ? 'Not running'
+              : rule.quarantine_reason
+                ? 'Needs attention'
+                : rule.enabled
+                  ? 'Active'
+                  : 'Disabled'}
           </Badge>
         </div>
-        {rule.quarantined && (
+        {rule.quarantine_reason && (
           // #1625: a rule that cannot be evaluated used to just stop matching, with the reason
           // visible only in a metric the user cannot see. The reason is a fixed backend
           // vocabulary and never user content, so it stays OUTSIDE data-ph-mask -- masking it
           // would hide the diagnostic without protecting anything.
-          <p className="mt-2 text-sm text-destructive" role="status">
-            {QUARANTINE_EXPLANATIONS[rule.quarantine_reason ?? ''] ??
-              'This rule cannot be evaluated as written, so it is not matching any transactions.'}
+          //
+          // ⚠ TWO DIFFERENT STATES, and conflating them was itself a bug. `quarantined` means the
+          // rule genuinely matches nothing. A reason WITHOUT it means the rule has a problem and
+          // is STILL RUNNING -- an unrecognised condition_logic falls back to AND, and an
+          // unnormalizable condition under OR lets its valid sibling carry the rule. Rendering
+          // "Not running" there stated something false about the user's own data.
+          <p
+            className={
+              rule.quarantined
+                ? 'mt-2 text-sm text-destructive'
+                : 'mt-2 text-sm text-warning-foreground'
+            }
+            role="status"
+          >
+            {QUARANTINE_EXPLANATIONS[rule.quarantine_reason] ??
+              (rule.quarantined
+                ? 'This rule cannot be evaluated as written, so it is not matching any transactions.'
+                : 'This rule has a problem and may not be matching what you intended.')}
           </p>
         )}
         {rule.description && (

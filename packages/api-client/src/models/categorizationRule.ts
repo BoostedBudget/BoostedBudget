@@ -49,7 +49,7 @@ export interface CategorizationRule {
   priority: number;
   /** Why the rule cannot be evaluated. Fixed vocabulary: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, invalid_condition_value_shape. */
   quarantine_reason?: string;
-  /** True when this rule cannot be evaluated as written and will not match anything. Computed per request. */
+  /** True only when this rule is actually PREVENTED from matching. A rule with a quarantine_reason but quarantined=false still runs — the problem is reported, not enforced. Computed per request. */
   quarantined?: boolean;
   source: string;
   tag_behavior: string;

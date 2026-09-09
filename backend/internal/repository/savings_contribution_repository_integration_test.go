@@ -473,7 +473,7 @@ func TestSavingsContributionRepository_Integration_RejectTombstone_SurvivesResyn
 	require.NoError(t, err, "proposed contribution must exist after upsert")
 
 	// Step 3: User rejects the proposed row.
-	_, err = repo.RejectContribution(ctx, userID, contribID)
+	_, err = repo.RejectContribution(ctx, userID, goalID, contribID)
 	require.NoError(t, err, "RejectContribution must succeed")
 
 	// Verify tombstone is in place.
@@ -633,7 +633,7 @@ func TestSavingsContributionRepository_Integration_ConfirmContribution_RejectsTo
 	}
 	require.NoError(t, repo.Insert(ctx, userID, proposed))
 
-	confirmed, err := repo.ConfirmContribution(ctx, userID, proposed.ID)
+	confirmed, err := repo.ConfirmContribution(ctx, userID, goalID, proposed.ID)
 	require.NoError(t, err, "baseline: ConfirmContribution's FOR UPDATE probe must parse")
 	require.NotNil(t, confirmed)
 	assert.Equal(t, "confirmed", confirmed.Status)
@@ -654,7 +654,7 @@ func TestSavingsContributionRepository_Integration_ConfirmContribution_RejectsTo
 
 	tombstoneTransaction(t, pool, txnID)
 
-	_, err = repo.ConfirmContribution(ctx, userID, second.ID)
+	_, err = repo.ConfirmContribution(ctx, userID, goalID, second.ID)
 	assert.ErrorIs(t, err, domain.ErrContributionNotFound,
 		"confirming a contribution whose transaction the provider removed must fail rather than "+
 			"silently counting reversed money toward a goal")
@@ -934,7 +934,7 @@ func TestUpsertFromTransaction_Integration_DoesNotResurrectARejectedRow(t *testi
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT id FROM savings_goal_contributions WHERE transaction_id = $1 AND savings_goal_id = $2`,
 		txnID, goalID).Scan(&proposedID))
-	rejected, err := repo.RejectContribution(ctx, userID, proposedID)
+	rejected, err := repo.RejectContribution(ctx, userID, goalID, proposedID)
 	require.NoError(t, err)
 	require.Equal(t, "rejected", rejected.Status)
 	require.False(t, rejected.ConfirmedByUser, "rejection does not flip confirmed_by_user — this is exactly why status alone must also be checked")
@@ -1058,4 +1058,122 @@ func TestSavingsContributionRepository_Integration_BasisRoundTripDoesNotDoubleCo
 	total, err = repo.SumConfirmedByGoal(ctx, userID, goalID)
 	require.NoError(t, err)
 	assert.Equal(t, 0.0, total, "a second archive closes the new period too, and does not error")
+}
+
+// TestSavingsContributionRepository_Integration_ArchivedRowReleasesTheUniquenessSlot is the
+// regression test for the defect migration 000190 CREATED and 000191 fixes (found by adversarial
+// review, not by the original change).
+//
+// 000190 made archived_at a period boundary but left
+// unique_contribution_per_goal_per_transaction conditional only on transaction_id/deleted_at, so
+// an archived row still owned its (transaction, goal) slot. A goal returning to the contributions
+// basis then could not re-record a transaction from a previous period: the upsert collided with
+// the archived row and its DO UPDATE predicate (status='proposed') failed against an archived
+// CONFIRMED row, so the caller was told the contribution already existed and the new period's
+// contribution was never recorded. That is the opposite of what 000190 set out to fix.
+func TestSavingsContributionRepository_Integration_ArchivedRowReleasesTheUniquenessSlot(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -250.0)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE savings_goal_id = $1`, goalID)
+	})
+
+	// Period 1: the transaction is recorded against the goal.
+	first, err := repo.InsertManualFromTransaction(ctx, userID, goalID, txnID, 250.0, "2026-01-15")
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	total, err := repo.SumConfirmedByGoal(ctx, userID, goalID)
+	require.NoError(t, err)
+	require.Equal(t, 250.0, total)
+
+	// The goal leaves the contributions basis: period 1 closes.
+	require.NoError(t, repo.ArchiveByGoal(ctx, goalID))
+
+	// Period 2: the SAME transaction must be recordable again. Before 000191 this returned
+	// ErrContributionAlreadyConfirmed, because the archived row still held the unique slot.
+	second, err := repo.InsertManualFromTransaction(ctx, userID, goalID, txnID, 250.0, "2026-06-15")
+	require.NoError(t, err,
+		"the archived row still owns the (transaction, goal) uniqueness slot, so the new period "+
+			"cannot record this transaction at all")
+	require.NotNil(t, second)
+	assert.NotEqual(t, first.ID, second.ID, "a new period must get its OWN row, not reuse the archived one")
+
+	// Only the live period counts.
+	total, err = repo.SumConfirmedByGoal(ctx, userID, goalID)
+	require.NoError(t, err)
+	assert.Equal(t, 250.0, total, "the archived period must not be added to the live one")
+
+	// And both rows are retained — the closed period is still history.
+	var rows int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM savings_goal_contributions
+		  WHERE savings_goal_id = $1 AND deleted_at IS NULL`, goalID).Scan(&rows))
+	assert.Equal(t, 2, rows, "both periods' rows must be retained")
+}
+
+// TestSavingsContributionRepository_Integration_ConfirmRejectAreBoundToTheirGoal closes the
+// bypass an adversarial review found in the Task 10 basis gate.
+//
+// The handler validates the goal in the URL, but the repository looked the contribution up by its
+// OWN id and the user id alone. A same-user request of the shape
+//
+//	/goals/{a-contributions-goal}/contributions/{a-manual-goal's-contribution}/confirm
+//
+// therefore passed goal A's basis gate and then mutated goal B's contribution — defeating exactly
+// the protection the gate was added for, and leaving B's derived balance stale because the handler
+// recomputes the goal from the URL.
+//
+// Bound in the SQL rather than in the handler: a handler-side check would be a TOCTOU race against
+// the same FOR UPDATE this query already takes.
+func TestSavingsContributionRepository_Integration_ConfirmRejectAreBoundToTheirGoal(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalA := seedIntegrationGoal(t, pool, userID, accountID)
+	goalB := seedIntegrationGoal(t, pool, userID, accountID)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	// A proposed contribution belonging to goal B.
+	contribID := uuid.New().String()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO savings_goal_contributions
+			(id, savings_goal_id, transaction_id, amount, source, status,
+			 managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at)
+		VALUES ($1, $2, NULL, 75.0, 'manual', 'proposed', true, false, CURRENT_DATE, now(), now())
+	`, contribID, goalB)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE id = $1`, contribID)
+	})
+
+	// Same user, but the contribution is not goal A's. Both must refuse.
+	_, err = repo.ConfirmContribution(ctx, userID, goalA, contribID)
+	require.ErrorIs(t, err, domain.ErrContributionNotFound,
+		"confirming another goal's contribution under goal A's id must not succeed — that is the "+
+			"basis-gate bypass")
+
+	_, err = repo.RejectContribution(ctx, userID, goalA, contribID)
+	require.ErrorIs(t, err, domain.ErrContributionNotFound,
+		"rejecting another goal's contribution under goal A's id must not succeed")
+
+	// The row is untouched.
+	var status string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT status FROM savings_goal_contributions WHERE id = $1`, contribID).Scan(&status))
+	assert.Equal(t, "proposed", status, "the mismatched call mutated the row anyway")
+
+	// The correct goal still works.
+	confirmed, err := repo.ConfirmContribution(ctx, userID, goalB, contribID)
+	require.NoError(t, err, "binding the goal must not break the legitimate call")
+	assert.Equal(t, "confirmed", confirmed.Status)
 }
