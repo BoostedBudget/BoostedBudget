@@ -94,6 +94,8 @@ type SavingsContributionRepository interface {
 	// Returns ErrContributionNotFound if id is not found or does not belong to userID.
 	// Returns ErrContributionOverAllocated if confirming would exceed the txn's capacity.
 	// Returns ErrContributionAlreadyConfirmed if the row is already confirmed.
+	// Returns ErrContributionAlreadyRejected if the row is a rejected sticky tombstone (R3-7,
+	// #1625 Task 9) — a rejection is a deliberate user decision and confirm must not reverse it.
 	ConfirmContribution(ctx context.Context, userID, goalID, id string) (*domain.SavingsGoalContribution, error)
 
 	// RejectContribution sets a proposed contribution's status to 'rejected' (sticky tombstone).
@@ -802,6 +804,14 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 
 	if contrib.Status == "confirmed" {
 		err = domain.ErrContributionAlreadyConfirmed
+		return nil, err
+	}
+
+	// #1625 Task 9: a rejected row is a sticky tombstone (R3-7) — the user deliberately declined
+	// this contribution. Confirming it would undo that decision, so it must be refused here (not
+	// just at the handler) since this is the single choke point every confirm path locks through.
+	if contrib.Status == "rejected" {
+		err = domain.ErrContributionAlreadyRejected
 		return nil, err
 	}
 

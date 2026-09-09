@@ -424,6 +424,40 @@ func TestConfirmContribution_AlreadyConfirmed_Returns409(t *testing.T) {
 
 	_, err := handler.ConfirmContribution(ctx, input)
 	require.Error(t, err)
+
+	var statusErr huma.StatusError
+	require.ErrorAs(t, err, &statusErr, "expected a huma.StatusError, got %T: %v", err, err)
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
+}
+
+// TestConfirmContribution_AlreadyRejected_Returns409 verifies #1625 Task 9: confirming a
+// contribution the user already rejected (a sticky tombstone, R3-7) must surface as a 409, not
+// fall through to the default LoggingMapError branch (which would 500 — the exact defect class
+// this ticket was opened to close).
+func TestConfirmContribution_AlreadyRejected_Returns409(t *testing.T) {
+	goalID := "goal-rejected"
+	userID := "user-rejected"
+	contribID := "contrib-rejected"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	handler := NewContributionHandler(contribRepo, nil, nil)
+
+	contribRepo.On("ConfirmContribution", mock.Anything, userID, goalID, contribID).
+		Return(nil, domain.ErrContributionAlreadyRejected)
+
+	ctx := context.Background()
+	input := &ConfirmContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		ID:                 contribID,
+	}
+
+	_, err := handler.ConfirmContribution(ctx, input)
+	require.Error(t, err)
+
+	var statusErr huma.StatusError
+	require.ErrorAs(t, err, &statusErr, "expected a huma.StatusError, got %T: %v", err, err)
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
 }
 
 // TestConfirmContribution_OverAllocated_Returns422 verifies ErrContributionOverAllocated → 422.

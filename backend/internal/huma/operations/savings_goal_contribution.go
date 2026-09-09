@@ -364,6 +364,8 @@ func (h *ContributionHandler) ConfirmContribution(ctx context.Context, input *Co
 			return nil, huma.Error404NotFound("contribution not found")
 		case domain.ErrContributionAlreadyConfirmed:
 			return nil, huma.Error409Conflict("contribution is already confirmed")
+		case domain.ErrContributionAlreadyRejected:
+			return nil, huma.Error409Conflict("contribution was already rejected and cannot be confirmed")
 		case domain.ErrContributionOverAllocated:
 			return nil, huma.Error422UnprocessableEntity("over-allocated", err)
 		default:

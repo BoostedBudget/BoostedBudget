@@ -519,4 +519,8 @@ var (
 	// ErrContributionNotProposed is returned when attempting to reject a contribution that is
 	// not in 'proposed' status (e.g., already confirmed or already rejected). (R3-7)
 	ErrContributionNotProposed = errors.New("only proposed contributions can be rejected")
+	// ErrContributionAlreadyRejected is returned when attempting to confirm a contribution that
+	// is a rejected sticky tombstone (R3-7). Rejection is a deliberate user decision that must
+	// not be reversible via confirm — see #1625 Task 9.
+	ErrContributionAlreadyRejected = errors.New("contribution was already rejected and cannot be confirmed")
 )
