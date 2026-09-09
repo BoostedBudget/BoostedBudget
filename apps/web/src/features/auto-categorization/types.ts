@@ -313,20 +313,82 @@ const FUSED_CHOICES: ConditionChoice[] = (
   .filter((t) => t !== 'expression')
   .map((t) => ({ key: t, label: CONDITION_TYPE_LABELS[t], type: t }))
 
-/** The pairs that have no fused ancestor — the capability gap #1625 closes. */
-const PAIR_CHOICES: ConditionChoice[] = [
-  { key: 'name:contains', label: 'Description contains', field: 'name', operator: 'contains' },
-  { key: 'name:eq', label: 'Description is', field: 'name', operator: 'eq' },
-  { key: 'name:starts_with', label: 'Description starts with', field: 'name', operator: 'starts_with' },
-  { key: 'name:ends_with', label: 'Description ends with', field: 'name', operator: 'ends_with' },
-  { key: 'merchant_id:eq', label: 'Merchant ID is', field: 'merchant_id', operator: 'eq' },
-  { key: 'direction:eq', label: 'Money in / out is', field: 'direction', operator: 'eq' },
-  { key: 'signed_amount:gt', label: 'Signed amount is greater than', field: 'signed_amount', operator: 'gt' },
-  { key: 'signed_amount:lt', label: 'Signed amount is less than', field: 'signed_amount', operator: 'lt' },
-  { key: 'signed_amount:eq', label: 'Signed amount is', field: 'signed_amount', operator: 'eq' },
+/**
+ * #1625: (field, operator) pairs that already have a fused `ConditionType`. Mirrors backend
+ * `fusedToTriple` in `condition_schema.go` exactly — keep the two in step, or a pair ends up
+ * offered twice (once as its fused choice, once as a generated pair choice) or not at all.
+ */
+const FUSED_PAIR_KEYS = new Set<string>([
+  'merchant:contains', 'merchant:eq', 'merchant:starts_with', 'merchant:ends_with',
+  'amount:gt', 'amount:lt', 'amount:eq', 'amount:between',
+  'account_id:eq', 'account_type:eq', 'payment_channel:eq',
+  'date:between',
+  'pfc_primary:eq', 'pfc_detailed:eq',
+])
+
+/** Deterministic iteration order — cosmetic only, keeps the generated list's ordering stable. */
+const FIELD_ORDER: ConditionField[] = [
+  'merchant', 'effective_merchant', 'name', 'merchant_id',
+  'amount', 'signed_amount', 'direction',
+  'account_id', 'account_type', 'payment_channel',
+  'date', 'pfc_primary', 'pfc_detailed',
+]
+const OPERATOR_ORDER: ConditionOperator[] = [
+  'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between', 'contains', 'starts_with', 'ends_with', 'in',
 ]
 
+/**
+ * #1625 PRODUCT DECISION — how wide to go, recorded here so the next reader knows it was chosen
+ * rather than overlooked.
+ *
+ * PAIR_CHOICES offers every legal (field, operator) pair EXCEPT:
+ *   - pairs with a fused equivalent (FUSED_CHOICES already offers those, under their existing
+ *     fused key — offering both would put two options in the dropdown for the same condition).
+ *   - the `in` operator, on every field. `in` needs a multi-value (chip-list) input widget that
+ *     does not exist anywhere in this editor today; every existing value widget (text, number,
+ *     date, single-select) writes exactly one scalar. Silently letting a user pick "is any of"
+ *     and then type into a single text/number box would produce a condition whose displayed
+ *     intent ("any of") does not match what gets sent (one value) — the exact silent-corruption
+ *     shape this ticket exists to close, not something to introduce. `in` becomes reachable once
+ *     a multi-value widget exists (tracked as a follow-up); until then it is a deliberately
+ *     curated omission, not an oversight — the reachability test below asserts fields, not
+ *     operators, so this exclusion is intentionally invisible to it.
+ *
+ * Every included pair gets a real input widget: `getInputTypeForCondition` in
+ * AutoCategorizationRuleEditor.tsx routes by (field, operator) for amount/signed_amount/date
+ * (number, amount-range, or single-date) and by field alone for account_id/pfc_primary/
+ * pfc_detailed/direction (their existing lookup selects) — nothing here falls back to a
+ * mismatched widget. account_type/payment_channel's non-`eq` operators (e.g. "contains") use the
+ * generic text box rather than their curated enum picker, since the picker only makes sense for
+ * exact equality; that is a deliberate, narrower widget choice, not a gap.
+ */
+const PAIR_CHOICES: ConditionChoice[] = FIELD_ORDER.flatMap((field) =>
+  OPERATOR_ORDER
+    .filter((op) => FIELD_OPERATORS[field].includes(op))
+    .filter((op) => op !== 'in')
+    .filter((op) => !FUSED_PAIR_KEYS.has(`${field}:${op}`))
+    .map((op) => ({
+      key: `${field}:${op}`,
+      label: `${CONDITION_FIELD_LABELS[field]} ${CONDITION_OPERATOR_LABELS[op]}`,
+      field,
+      operator: op,
+    })),
+)
+
 export const CONDITION_CHOICES: ConditionChoice[] = [...FUSED_CHOICES, ...PAIR_CHOICES]
+
+/**
+ * #1625 Task 5: a condition whose key matches no entry in CONDITION_CHOICES (a field the
+ * frontend does not recognize yet, or a corrupted/legacy combination) must never be silently
+ * displayed as the FIRST option — see AutoCategorizationRuleEditor.tsx, which renders this as an
+ * extra, disabled `<option>` instead of letting the `<select>` fall back on its own.
+ */
+export function unmatchedConditionLabel(condition: Pick<RuleCondition, 'type' | 'field' | 'operator'>): string {
+  if (condition.field && condition.operator) {
+    return `Unsupported condition (${condition.field}:${condition.operator})`
+  }
+  return `Unsupported condition (${condition.type ?? 'unknown'})`
+}
 
 /** The choice key for a condition, whichever shape it arrived in. */
 export function conditionChoiceKey(condition: Pick<RuleCondition, 'type' | 'field' | 'operator'>): string {
