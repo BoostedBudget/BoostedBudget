@@ -31,7 +31,19 @@ export type SankeyViewMode =
  */
 export type NodeAction =
   | { kind: 'focus'; key: string }
-  | { kind: 'navigate'; pfcPrimaries?: string[]; pfcDetaileds?: string[]; customCategoryIds?: string[] }
+  | {
+    kind: 'navigate'
+    pfcPrimaries?: string[]
+    pfcDetaileds?: string[]
+    customCategoryIds?: string[]
+    /**
+     * #1626 Phase 2. The uncategorized sentinel has no category value to send, so it navigates by
+     * its own flag. Deliberately a separate field rather than a magic member of pfcPrimaries: the
+     * server ORs a dedicated `uncategorized` predicate, and sending 'UNCATEGORIZED' as a category
+     * would look like a working filter while matching zero rows.
+     */
+    uncategorized?: true
+  }
   | { kind: 'none' }
 
 export type SankeyNodeKind = 'income' | 'expense' | 'hub' | 'savings' | 'deficit' | 'other' | 'direct'
@@ -42,6 +54,13 @@ export interface SankeyNode {
   itemStyle: { color: string }
   nodeKind: SankeyNodeKind
   action: NodeAction
+  /**
+   * The node's REAL depth in the category hierarchy, 1-based. Carried explicitly because the
+   * income fan is flattened — every income node's id is `in:l1:*` whatever its true depth — so
+   * deriving depth from the id would report every income navigation as level 1. Used only by the
+   * navigation analytics event, which must carry structure and never a category name or id.
+   */
+  depth: number
 }
 
 export interface SankeyLink {
@@ -67,12 +86,12 @@ const isPFCDetailed = (key: string, parentKey: string) => key.startsWith(`${pare
  */
 function navigateAction(key: string, parentKey: string | undefined): NodeAction {
   // UNCATEGORIZED is a sentinel this analytics layer SYNTHESISES for a transaction with no primary
-  // at all; it is not a value any column holds (effective_pfc_primary is NULL for those rows). So
+  // at all; it is not a value any column holds (effective_pfc_primary is NULL for those rows), so
   // `pfc_primaries=UNCATEGORIZED` would match zero rows and the list would contradict the node the
-  // user just clicked. The node still renders and still counts toward every total — it just has no
-  // expressible filter, exactly like the direct and overflow buckets. Adding an `uncategorized`
-  // filter to the transactions list would make it navigable; tracked in #1627.
-  if (key === UNCATEGORIZED_KEY) return { kind: 'none' }
+  // user just clicked. #1626 Phase 2 added a dedicated `uncategorized` filter whose predicate is
+  // `category_override_kind IS NULL AND pfc_primary IS NULL` — the sentinel's own definition — so
+  // the node navigates by that flag instead of by a category value it does not have.
+  if (key === UNCATEGORIZED_KEY) return { kind: 'navigate', uncategorized: true }
   if (isCustom(key)) return { kind: 'navigate', customCategoryIds: [stripToken(key)] }
   if (parentKey && !isCustom(parentKey) && isPFCDetailed(key, parentKey)) {
     return { kind: 'navigate', pfcDetaileds: [key] }
@@ -210,6 +229,7 @@ function emitExpenses(forest: Rendered[]): { nodes: SankeyNode[]; links: SankeyL
       itemStyle: { color: CATEGORY_COLORS[colorIdx++ % CATEGORY_COLORS.length] },
       nodeKind: isOverflow ? 'other' : 'expense',
       action,
+      depth: ancestry.length + 1,
     })
     links.push({ source: parentId, target: id, value: n.total })
 
@@ -228,6 +248,8 @@ function emitExpenses(forest: Rendered[]): { nodes: SankeyNode[]; links: SankeyL
         itemStyle: { color: CATEGORY_COLORS[colorIdx++ % CATEGORY_COLORS.length] },
         nodeKind: 'direct',
         action: { kind: 'none' },
+        // A direct bucket sits alongside its parent's children, so it is one level deeper.
+        depth: nextAncestry.length + 1,
       })
       links.push({ source: id, target: directId, value: n.direct })
     }
@@ -285,18 +307,34 @@ function renderExpenseFan(roots: CategoryHierarchyNode[], mode: SankeyViewMode) 
  * A node's own direct income becomes a leaf in its own right, so a parent that has both children
  * and direct receipts contributes all of its money exactly once.
  */
-function incomeLeaves(nodes: CategoryHierarchyNode[], parentKey?: string): Array<{ key: string; display: string; total: number; parentKey?: string }> {
-  const out: Array<{ key: string; display: string; total: number; parentKey?: string }> = []
+interface IncomeLeaf {
+  key: string
+  display: string
+  total: number
+  parentKey?: string
+  /** REAL depth in the hierarchy, 1-based. The rendered ids are all `in:l1:*`; this is not. */
+  depth: number
+  /**
+   * True for a parent's OWN receipts emitted as a leaf. Such a node shows only the parent's direct
+   * money, but the only filter available for it is the parent's key — which matches every
+   * descendant too. So it must not navigate: showing a list bigger than the node is worse than
+   * showing no list, because nothing tells the user it is the wrong one (#1626 Phase 2).
+   */
+  directOnly?: true
+}
+
+function incomeLeaves(nodes: CategoryHierarchyNode[], parentKey?: string, depth = 1): IncomeLeaf[] {
+  const out: IncomeLeaf[] = []
   for (const n of nodes) {
     const kids = n.children ?? []
     if (kids.length === 0) {
-      if (n.total > 0) out.push({ key: n.category, display: n.display, total: n.total, parentKey })
+      if (n.total > 0) out.push({ key: n.category, display: n.display, total: n.total, parentKey, depth })
       continue
     }
-    out.push(...incomeLeaves(kids, n.category))
+    out.push(...incomeLeaves(kids, n.category, depth + 1))
     if (n.direct_total > 0) {
-      // The parent's own receipts, kept distinct from its children's.
-      out.push({ key: n.category, display: n.display, total: n.direct_total, parentKey })
+      // The parent's own receipts, kept distinct from its children's — and inert, see directOnly.
+      out.push({ key: n.category, display: n.display, total: n.direct_total, parentKey, depth, directOnly: true })
     }
   }
   return out
@@ -319,7 +357,8 @@ function renderIncomeFan(sources: CategoryHierarchyNode[]) {
       name: s.display,
       itemStyle: { color: CASH_FLOW_COLORS.income },
       nodeKind: 'income',
-      action: navigateAction(s.key, s.parentKey),
+      action: s.directOnly ? { kind: 'none' } : navigateAction(s.key, s.parentKey),
+      depth: s.depth,
     })
     links.push({ source: id, target: 'hub', value: s.total })
   })
@@ -332,6 +371,7 @@ function renderIncomeFan(sources: CategoryHierarchyNode[]) {
       itemStyle: { color: CASH_FLOW_COLORS.income },
       nodeKind: 'other',
       action: { kind: 'none' },
+      depth: 1,
     })
     links.push({ source: 'in:other', target: 'hub', value: overflow })
   }
@@ -362,6 +402,8 @@ export function buildSankeyData(
     itemStyle: { color: CASH_FLOW_COLORS.income },
     nodeKind: 'hub',
     action: { kind: 'none' },
+    // Synthetic: not a category, so it has no place in the hierarchy.
+    depth: 0,
   }]
   const links: SankeyLink[] = []
 
@@ -376,6 +418,8 @@ export function buildSankeyData(
       itemStyle: { color: CASH_FLOW_COLORS.netNegative },
       nodeKind: 'deficit',
       action: { kind: 'none' },
+      // Synthetic: not a category, so it has no place in the hierarchy.
+      depth: 0,
     })
     links.push({ source: 'deficit', target: 'hub', value: -surplus })
   }
@@ -391,6 +435,8 @@ export function buildSankeyData(
       itemStyle: { color: CASH_FLOW_COLORS.netPositive },
       nodeKind: 'savings',
       action: { kind: 'none' },
+      // Synthetic: not a category, so it has no place in the hierarchy.
+      depth: 0,
     })
     links.push({ source: 'hub', target: 'savings', value: surplus })
   }

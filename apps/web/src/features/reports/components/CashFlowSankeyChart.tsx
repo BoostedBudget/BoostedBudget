@@ -32,7 +32,14 @@ function navParams(action: Extract<NodeAction, { kind: 'navigate' }>, direction:
   if (action.pfcPrimaries?.length) params.set('pfc_primaries', action.pfcPrimaries.join(','))
   if (action.pfcDetaileds?.length) params.set('pfc_detaileds', action.pfcDetaileds.join(','))
   if (action.customCategoryIds?.length) params.set('custom_category_ids', action.customCategoryIds.join(','))
+  // #1626 Phase 2. The uncategorized sentinel has no category value to send — see NodeAction.
+  if (action.uncategorized) params.set('uncategorized', 'true')
   params.set('amount_type', direction)
+  // The Sankey aggregates POSTED spend only; the transactions list includes pending rows by
+  // default. Without pinning this, the node's amount and the list's total would differ by exactly
+  // the pending rows — and "the clicked amount equals the list total" is the claim Phase 2 exists
+  // to make true rather than approximately true.
+  params.set('pending', 'false')
   if (startDate) params.set('start_date', startDate)
   if (endDate) params.set('end_date', endDate)
   return params
@@ -75,6 +82,10 @@ export function CashFlowSankeyChart({
     // draft carried a cap for that case; the action model made it unreachable, and an unreachable
     // guard reads as protection that is not there.
     const direction = node.nodeKind === 'income' ? 'income' : 'expense'
+    // Structure only — depth and direction. ⚠ depth comes from the NODE, never from splitting its
+    // id: the income fan is flattened to `in:l1:*` whatever a leaf's real depth, so reading the id
+    // would report every income navigation as level 1. Same PII rule as the focus event above.
+    trackEvent(ANALYTICS_EVENTS.REPORT_SANKEY_NODE_NAVIGATED, { depth: node.depth, direction })
     navigate(`/transactions?${navParams(action, direction, startDate, endDate).toString()}`)
   }
 

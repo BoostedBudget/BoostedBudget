@@ -297,6 +297,44 @@ describe('buildSankeyData — the income fan is hierarchical too', () => {
     expect(hubIn).toBeCloseTo(5000, 6)
   })
 
+  // #1626 Phase 2, a parity defect of my own. incomeLeaves emits a parent's DIRECT receipts as a
+  // leaf in their own right — correct, it is money that must be counted exactly once — but the
+  // only filter available for that leaf is the parent's key, which matches every descendant too.
+  // So the node showed 500 and the list it navigated to would have shown 5000. There is no
+  // "direct-only" filter to express it, so the node is inert until there is: showing the wrong
+  // list is worse than showing no list, because the user cannot tell it is the wrong one.
+  it("a parent's own direct income is inert, because its filter would include its children", () => {
+    const withDirect: CategoryHierarchyNode[] = [
+      node('INCOME', 'Income', 5000, 500, [node('INCOME_WAGES', 'Wages', 4500)]),
+    ]
+    const data = buildSankeyData(withDirect, [node('FOOD_AND_DRINK', 'Food And Drink', 5000)], { kind: 'parents' })
+
+    const directLeaf = data.nodes.find(n => n.name === 'Income')
+    expect(directLeaf).toBeDefined()
+    expect(directLeaf?.action).toEqual({ kind: 'none' })
+
+    // Its child is a true leaf and stays navigable — the fix must be narrow.
+    expect(data.nodes.find(n => n.name === 'Wages')?.action)
+      .toEqual({ kind: 'navigate', pfcDetaileds: ['INCOME_WAGES'] })
+  })
+
+  // The analytics event reports a node's depth, and every income node's id is `in:l1:*` regardless
+  // of where it actually sits — the fan is flattened. Deriving depth from the id would report all
+  // income navigations as level 1: a plausible number that is simply wrong, which is worse than no
+  // number. So real depth is carried on the node.
+  it('carries each income leaf its REAL depth, not the depth its id implies', () => {
+    const deep: CategoryHierarchyNode[] = [
+      node('INCOME', 'Income', 1000, 0, [
+        node('INCOME_WAGES', 'Wages', 1000, 0, [node('custom:bonus', 'Bonus', 1000)]),
+      ]),
+    ]
+    const data = buildSankeyData(deep, [node('FOOD_AND_DRINK', 'Food And Drink', 1000)], { kind: 'parents' })
+
+    const bonus = data.nodes.find(n => n.name === 'Bonus')
+    expect(bonus?.id.startsWith('in:l1:')).toBe(true)
+    expect(bonus?.depth).toBe(3)
+  })
+
   it('a PFC detailed income leaf navigates by pfc_detaileds, not its primary', () => {
     const data = buildSankeyData(incomeTree, [node('FOOD_AND_DRINK', 'Food And Drink', 5500)], { kind: 'parents' })
     const wages = data.nodes.find(n => n.name === 'Wages')
@@ -326,15 +364,19 @@ describe('buildSankeyData — uncategorized spend', () => {
     expect(link?.value).toBeCloseTo(120, 6)
   })
 
-  it('uncategorized is NOT navigable, because no transactions filter can express it', () => {
+  // #1626 Phase 2. This used to assert { kind: 'none' } and the reasoning was correct at the time:
+  // 'UNCATEGORIZED' is a sentinel this analytics layer synthesises, not a value any column holds,
+  // so `pfc_primaries=UNCATEGORIZED` matched ZERO rows and the list would have contradicted the
+  // node the user just clicked. Phase 2 added the `uncategorized` filter — which is what a
+  // dedicated flag rather than a magic category value buys — so the node navigates now.
+  it('uncategorized navigates by its own flag, never by a category value', () => {
     const data = buildSankeyData(income, withUncategorized, { kind: 'parents' })
     const uncat = data.nodes.find(n => n.id === 'out:l1:UNCATEGORIZED')
 
-    // 'UNCATEGORIZED' is a sentinel this analytics layer synthesises; it is not a value any column
-    // holds. effective_pfc_primary is NULL for those rows, so `pfc_primaries=UNCATEGORIZED` would
-    // match ZERO rows — the list would contradict the node the user just clicked. Same rule as the
-    // direct and overflow buckets: no expressible filter means no navigation.
-    expect(uncat?.action).toEqual({ kind: 'none' })
+    expect(uncat?.action).toEqual({ kind: 'navigate', uncategorized: true })
+    // ⚠ Specifically NOT pfc_primaries: sending the sentinel as a category value is the bug this
+    // asserts against, and it would look like a working filter while returning nothing.
+    expect((uncat?.action as { pfcPrimaries?: string[] }).pfcPrimaries).toBeUndefined()
   })
 
   it('uncategorized still counts toward the totals', () => {
