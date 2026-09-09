@@ -31,6 +31,9 @@
  * OpenAPI spec version: 1.0.0
  */
 
+/**
+ * Legacy fused condition name. Send this OR field+operator, not a contradicting pair. 'expression' is RESPONSE-ONLY — the server emits it for a field+operator combination that has no legacy name, and rejects it as input; send field+operator instead.
+ */
 export type RuleConditionType = typeof RuleConditionType[keyof typeof RuleConditionType];
 
 

@@ -91,6 +91,7 @@ var MCPOperationManifest = map[string]MCPOperationClass{
 	"getCategoryTotalForPeriod":                      MCPClassRead,
 	"getCategoryTransactions":                        MCPClassRead,
 	"getCategoryUsage":                               MCPClassRead,
+	"getConditionSchema":                             MCPClassRead,
 	"getCurrentBudget":                               MCPClassRead,
 	"getDashboardPreferences":                        MCPClassRead,
 	"getDataExport":                                  MCPClassExcluded,

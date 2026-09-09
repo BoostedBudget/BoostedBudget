@@ -2143,6 +2143,60 @@ components:
         - actual
         - met
       type: object
+    ConditionFieldSchema:
+      additionalProperties: false
+      properties:
+        field:
+          type: string
+        notes:
+          type: string
+        operators:
+          items:
+            $ref: "#/components/schemas/ConditionOperatorSchema"
+          type:
+            - array
+            - "null"
+        values:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - field
+        - operators
+      type: object
+    ConditionOperatorSchema:
+      additionalProperties: false
+      properties:
+        example: {}
+        operator:
+          type: string
+        value_shape:
+          type: string
+      required:
+        - operator
+        - value_shape
+      type: object
+    ConditionSchemaResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ConditionSchemaResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        fields:
+          items:
+            $ref: "#/components/schemas/ConditionFieldSchema"
+          type:
+            - array
+            - "null"
+      required:
+        - fields
+      type: object
     ConfirmMatchBody:
       additionalProperties: false
       properties:
@@ -5861,6 +5915,7 @@ components:
       additionalProperties: false
       properties:
         field:
+          description: Transaction attribute to match. Not every operator is legal for every field — GET /api/v1/auto-categorization/condition-schema returns the full matrix, value shapes and semantics. Note 'amount' discards the sign; 'signed_amount' is POSITIVE for money leaving the account; 'direction' takes inflow|outflow.
           enum:
             - merchant
             - name
@@ -5876,6 +5931,7 @@ components:
             - pfc_detailed
           type: string
         operator:
+          description: Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array.
           enum:
             - eq
             - neq
@@ -5890,6 +5946,7 @@ components:
             - in
           type: string
         type:
+          description: Legacy fused condition name. Send this OR field+operator, not a contradicting pair. 'expression' is RESPONSE-ONLY — the server emits it for a field+operator combination that has no legacy name, and rejects it as input; send field+operator instead.
           enum:
             - merchant_contains
             - merchant_equals
@@ -10704,6 +10761,28 @@ paths:
       security:
         - clerk: []
       summary: Create a new categorization rule
+      tags:
+        - Auto-Categorization
+  /api/v1/auto-categorization/condition-schema:
+    get:
+      description: Returns every condition field, the operators each accepts, the value shape each operator requires, closed value sets, and the semantics that cannot be inferred from a type — notably that signed_amount is POSITIVE for money leaving the account. Derived from the same matrix the validator enforces, so it cannot drift from it.
+      operationId: getConditionSchema
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConditionSchemaResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get the condition matrix
       tags:
         - Auto-Categorization
   /api/v1/auto-categorization/preview:

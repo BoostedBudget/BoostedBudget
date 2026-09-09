@@ -31,6 +31,9 @@
  * OpenAPI spec version: 1.0.0
  */
 
+/**
+ * Transaction attribute to match. Not every operator is legal for every field — GET /api/v1/auto-categorization/condition-schema returns the full matrix, value shapes and semantics. Note 'amount' discards the sign; 'signed_amount' is POSITIVE for money leaving the account; 'direction' takes inflow|outflow.
+ */
 export type RuleConditionField = typeof RuleConditionField[keyof typeof RuleConditionField];
 
 
