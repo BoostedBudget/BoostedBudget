@@ -176,8 +176,39 @@ func initPFCValidationSets() {
 	})
 }
 
-// Validate checks that the CategorizationRule has all required fields and valid values.
-func (r *CategorizationRule) Validate() error {
+// Validate checks that the CategorizationRule has all required fields and valid values. Every
+// condition is judged, which is what a CREATE (or an update that rewrites the conditions) needs:
+// all of the data is data this request is writing.
+func (r *CategorizationRule) Validate() error { return r.validate(true) }
+
+// ValidateForUpdate is Validate with ONE difference: when the request supplied no `conditions`, the
+// stored conditions are not re-judged against the shape matrix.
+//
+// #1625 final review B1. Validating the MERGED rule made every legacy rule permanently
+// un-editable. `{amount_greater_than, "1000"}` is not hypothetical — dedac0aa (#346) checked the
+// condition TYPE and nothing about the value, so wrong-typed values have persisted through the
+// ordinary public API for the whole life of the feature; condition_coercion.go REPAIRS them at read
+// time precisely so those rules keep running, and the rule card tells the user to "edit the rule to
+// confirm that is what you meant". Re-judging them on an unrelated PATCH turned that advice into a
+// 422 on `{"name": "..."}` — the same "matchable but permanently un-updatable" failure
+// condition_schema.go's textValues comment already refuses to create one function over. (ToggleRule
+// escaped only because it skipped Validate entirely.)
+//
+// ⚠ This is NOT "the update path is lenient". A condition the request SUPPLIES is new data and is
+// checked exactly as strictly as on create — `conditionsSupplied` is the caller's `req.Conditions
+// != nil`, the same expression that gates the merge. A user submitting a bad shape is still
+// refused; a user renaming a rule is not asked to first repair data the server wrote for them.
+// Everything else (name, logic, actions, targets) is validated in both modes, because those ARE
+// re-derived from the merged rule on every update.
+//
+// Normalize is skipped with the shape check rather than kept, deliberately: an unnormalizable
+// stored condition is the same class of un-editable rule, and the repository already normalizes
+// what it loads (normalizeLoadedConditions), so nothing downstream depends on this call site.
+func (r *CategorizationRule) ValidateForUpdate(conditionsSupplied bool) error {
+	return r.validate(conditionsSupplied)
+}
+
+func (r *CategorizationRule) validate(checkConditions bool) error {
 	if r.UserID == "" {
 		return fmt.Errorf("%w: user_id is required", ErrInvalidRule)
 	}
@@ -199,12 +230,14 @@ func (r *CategorizationRule) Validate() error {
 	// Value against the field × operator × shape matrix. Previously only `type` membership was
 	// checked and Value was never shape-checked for non-PFC types, so a rule with e.g. a string
 	// amount_range persisted cleanly and then silently never matched.
-	for i := range r.Conditions {
-		if err := r.Conditions[i].Normalize(); err != nil {
-			return err
-		}
-		if err := r.Conditions[i].ValidateShape(); err != nil {
-			return err
+	if checkConditions {
+		for i := range r.Conditions {
+			if err := r.Conditions[i].Normalize(); err != nil {
+				return err
+			}
+			if err := r.Conditions[i].ValidateShape(); err != nil {
+				return err
+			}
 		}
 	}
 
