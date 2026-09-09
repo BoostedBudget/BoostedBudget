@@ -1798,6 +1798,12 @@ components:
         priority:
           format: int64
           type: integer
+        quarantine_reason:
+          description: "Why the rule cannot be evaluated. Fixed vocabulary: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, invalid_condition_value_shape."
+          type: string
+        quarantined:
+          description: True when this rule cannot be evaluated as written and will not match anything. Computed per request.
+          type: boolean
         source:
           type: string
         tag_behavior:

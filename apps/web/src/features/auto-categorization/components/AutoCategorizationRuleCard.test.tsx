@@ -503,4 +503,60 @@ describe('AutoCategorizationRuleCard', () => {
       expect(screen.getByText('Conditions (OR)')).toBeInTheDocument()
     })
   })
+
+  // #1625 Task 7: a rule that cannot be evaluated must SAY so.
+  //
+  // Before this, such a rule rendered as "Active" and simply matched nothing; the reason existed
+  // only in a Prometheus label the user cannot see. Surfacing it is the precondition for Task 8
+  // enforcing it -- enforcing invisibly is the failure mode this ticket exists to close.
+  describe('quarantine status', () => {
+    it('renders "Not running" and the reason instead of "Active"', () => {
+      render(
+        <AutoCategorizationRuleCard
+          rule={{
+            ...mockRule,
+            quarantined: true,
+            quarantine_reason: 'no_conditions_matches_everything',
+          }}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Not running')).toBeDefined()
+      expect(screen.queryByText('Active')).toBeNull()
+      expect(screen.getByText(/no conditions, so it would match every transaction/i)).toBeDefined()
+    })
+
+    it('falls back to a generic sentence for a reason it does not recognise', () => {
+      render(
+        <AutoCategorizationRuleCard
+          rule={{ ...mockRule, quarantined: true, quarantine_reason: 'invented_later' }}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      // Never render a raw enum at the user.
+      expect(screen.queryByText(/invented_later/)).toBeNull()
+      expect(screen.getByText(/cannot be evaluated as written/i)).toBeDefined()
+    })
+
+    it('leaves a healthy rule exactly as it was', () => {
+      render(
+        <AutoCategorizationRuleCard
+          rule={mockRule}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+      expect(screen.getByText('Active')).toBeDefined()
+      expect(screen.queryByText('Not running')).toBeNull()
+    })
+  })
+
 })

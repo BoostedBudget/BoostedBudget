@@ -47,6 +47,10 @@ export interface CategorizationRule {
   name: string;
   override_count: number;
   priority: number;
+  /** Why the rule cannot be evaluated. Fixed vocabulary: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, invalid_condition_value_shape. */
+  quarantine_reason?: string;
+  /** True when this rule cannot be evaluated as written and will not match anything. Computed per request. */
+  quarantined?: boolean;
   source: string;
   tag_behavior: string;
   target_custom_category_display?: string;
