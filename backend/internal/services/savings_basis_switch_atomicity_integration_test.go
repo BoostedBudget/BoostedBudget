@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,6 +73,7 @@ func setupBasisSwitchFixture(t *testing.T, basis string, currentAmount float64) 
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM savings_goal_contributions WHERE savings_goal_id IN
 			(SELECT id FROM savings_goals WHERE user_id = $1)`, userID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM savings_goals WHERE user_id = $1`, userID)
+		_, _ = pool.Exec(cleanupCtx, `DELETE FROM transactions WHERE user_id = $1`, userID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM accounts WHERE user_id = $1`, userID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM linked_items WHERE user_id = $1`, userID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM users WHERE id = $1`, userID)
@@ -601,4 +603,188 @@ func TestSavingsBasisSwitch_Integration_UnwiredServiceRefusesTheSwitch(t *testin
 	basis, amount := f.goalRow(t)
 	assert.Equal(t, domain.ProgressBasisManual, basis)
 	assert.Equal(t, 250.0, amount, "an unwired switch must not touch the balance either")
+}
+
+// =============================================================================
+// Task 22 — the same TOCTOU class on the three UPSERT paths
+// =============================================================================
+
+// seedTransaction inserts one posted transaction on the fixture's account and returns its id.
+// The three upsert paths under test are all transaction-linked, so they need a real row to lock.
+func (f *basisSwitchFixture) seedTransaction(t *testing.T, amount float64) string {
+	t.Helper()
+	txnID := uuid.New().String()
+	var linkedItemID string
+	require.NoError(t, f.pool.QueryRow(context.Background(),
+		`SELECT linked_item_id FROM accounts WHERE id = $1`, f.accountID).Scan(&linkedItemID))
+	_, err := f.pool.Exec(context.Background(), `
+		INSERT INTO transactions (
+			id, user_id, account_id, linked_item_id, source,
+			external_transaction_id, external_transaction_id_blind_idx,
+			amount, date, name, pfc_primary, pfc_detailed,
+			pending, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, 'plaid', $5, $6,
+			$7, CURRENT_DATE, 'Basis Test Transfer',
+			'TRANSFER_IN', 'TRANSFER_IN_SAVINGS',
+			false, now(), now()
+		)
+	`, txnID, f.userID, f.accountID, linkedItemID, "ext-"+txnID, "blind-"+txnID, amount)
+	require.NoError(t, err)
+	return txnID
+}
+
+func (f *basisSwitchFixture) contributionCount(t *testing.T) int {
+	t.Helper()
+	var n int
+	require.NoError(t, f.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM savings_goal_contributions WHERE savings_goal_id = $1`,
+		f.goalID).Scan(&n))
+	return n
+}
+
+// TestSavingsBasisSwitch_Integration_UpsertPathsRefuseAManualGoal is the sequential half of Task
+// 22: the predicate itself, on the three transaction-linked upsert paths, with no race required.
+//
+// These three were out of Task 17's scope and kept the original shape — an UNLOCKED ownership
+// probe (`SELECT 1 FROM savings_goals … `, no FOR UPDATE) and no basis assertion at all. Both
+// automatic callers do filter on the basis (transactionSyncService.detectAndUpsertProposed-
+// Contributions and transferCorrelationService.createBoostMatchContribution each skip a goal whose
+// ProgressBasis is not "contributions"), but that read is taken from a goal list loaded before a
+// whole loop of further round-trips — it is the definition of check-then-act, not a reason the
+// condition is unreachable.
+func TestSavingsBasisSwitch_Integration_UpsertPathsRefuseAManualGoal(t *testing.T) {
+	f := setupBasisSwitchFixture(t, domain.ProgressBasisManual, 0.0)
+	ctx := context.Background()
+
+	t.Run("UpsertFromTransaction", func(t *testing.T) {
+		txnID := f.seedTransaction(t, -120.0)
+		err := f.contribRepo.UpsertFromTransaction(ctx, f.userID, f.goalID, txnID, 50.0, "boost_match")
+		assert.ErrorIs(t, err, domain.ErrContributionBasisMismatch)
+	})
+
+	t.Run("UpsertProposedFromTransaction", func(t *testing.T) {
+		txnID := f.seedTransaction(t, -130.0)
+		err := f.contribRepo.UpsertProposedFromTransaction(ctx, f.userID, f.goalID, txnID, 60.0)
+		assert.ErrorIs(t, err, domain.ErrContributionBasisMismatch)
+	})
+
+	t.Run("InsertManualFromTransaction", func(t *testing.T) {
+		txnID := f.seedTransaction(t, -140.0)
+		_, err := f.contribRepo.InsertManualFromTransaction(ctx, f.userID, f.goalID, txnID, 70.0,
+			time.Now().Format("2006-01-02"))
+		assert.ErrorIs(t, err, domain.ErrContributionBasisMismatch)
+	})
+
+	assert.Equal(t, 0, f.contributionCount(t), "no refused upsert may have written anything")
+}
+
+// TestSavingsBasisSwitch_Integration_UpsertPathsStillAcceptALiveLedger is the other direction: the
+// guard must refuse a goal that has left the ledger and NOTHING else. Without it, a guard that
+// simply returned an error unconditionally would pass the test above.
+func TestSavingsBasisSwitch_Integration_UpsertPathsStillAcceptALiveLedger(t *testing.T) {
+	f := setupBasisSwitchFixture(t, domain.ProgressBasisContributions, 0.0)
+	ctx := context.Background()
+
+	proposedTxn := f.seedTransaction(t, -200.0)
+	require.NoError(t, f.contribRepo.UpsertProposedFromTransaction(ctx, f.userID, f.goalID, proposedTxn, 200.0))
+
+	confirmedTxn := f.seedTransaction(t, -300.0)
+	require.NoError(t, f.contribRepo.UpsertFromTransaction(ctx, f.userID, f.goalID, confirmedTxn, 300.0, "boost_match"))
+
+	manualTxn := f.seedTransaction(t, -400.0)
+	got, err := f.contribRepo.InsertManualFromTransaction(ctx, f.userID, f.goalID, manualTxn, 400.0,
+		time.Now().Format("2006-01-02"))
+	require.NoError(t, err)
+	assert.Equal(t, 400.0, got.Amount)
+
+	assert.Equal(t, 3, f.contributionCount(t), "all three live-ledger writes must have landed")
+}
+
+// TestSavingsBasisSwitch_Integration_UpsertPathsCannotDeadlockAgainstConfirm is the whole reason
+// Task 22 is a task of its own, and it is worth more than the two tests above put together.
+//
+// THE TRAP. The established lock order on this branch is goal → contribution → transaction.
+// ConfirmContribution takes all three in that order. The upsert paths already lock the
+// TRANSACTION, so bolting the goal assertion on AFTER that lock — the obvious place, right next to
+// the capacity check it protects — gives the upsert the order transaction → goal and creates a
+// textbook ABBA cycle. It would deadlock intermittently in production and be almost impossible to
+// attribute.
+//
+// THE MECHANISM, which is deterministic rather than a hope that two goroutines happen to
+// interleave. A third connection holds the GOAL row (and only the goal row) locked, so both racers
+// are parked at a known point:
+//
+//	blocker : BEGIN; SELECT … FROM savings_goals … FOR UPDATE          (holds G)
+//	confirm : ConfirmContribution → wants G first                      → queued behind blocker
+//	upsert  : UpsertFromTransaction → wants G first (fixed)            → queued behind confirm
+//	                                → takes T first (broken)           → holds T, queued for G
+//	blocker : COMMIT                                                   → releases G
+//
+// With the fix, the goal lock is the first thing both take, the wait queue is FIFO, and they
+// simply serialise. With the assertion after the transaction lock, `upsert` is sitting on T while
+// `confirm` — which now owns G — reaches for T, and Postgres kills one of them with
+// SQLSTATE 40P01. Asserting "neither error is a deadlock, and both returned" therefore fails RED
+// on the wrong placement and passes GREEN on the right one.
+func TestSavingsBasisSwitch_Integration_UpsertPathsCannotDeadlockAgainstConfirm(t *testing.T) {
+	f := setupBasisSwitchFixture(t, domain.ProgressBasisContributions, 0.0)
+	ctx := context.Background()
+
+	txnID := f.seedTransaction(t, -500.0)
+	proposedID := uuid.New().String()
+	_, err := f.pool.Exec(ctx, `
+		INSERT INTO savings_goal_contributions
+			(id, savings_goal_id, transaction_id, amount, source, status,
+			 managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at)
+		VALUES ($1, $2, $3, 100.0, 'confirmed_transfer', 'proposed', true, false, CURRENT_DATE, now(), now())
+	`, proposedID, f.goalID, txnID)
+	require.NoError(t, err)
+
+	// The blocker: holds the goal row, and nothing else, until both racers are parked.
+	blocker, err := f.pool.Begin(ctx)
+	require.NoError(t, err)
+	var heldBasis string
+	require.NoError(t, blocker.QueryRow(ctx,
+		`SELECT progress_basis FROM savings_goals WHERE id = $1 FOR UPDATE`, f.goalID).Scan(&heldBasis))
+
+	var confirmErr, upsertErr error
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		_, confirmErr = f.contribRepo.ConfirmContribution(ctx, f.userID, f.goalID, proposedID)
+	}()
+	// Let the confirmer reach the goal lock first, so it is ahead of the upsert in the wait queue.
+	time.Sleep(500 * time.Millisecond)
+
+	go func() {
+		defer wg.Done()
+		upsertErr = f.contribRepo.UpsertFromTransaction(ctx, f.userID, f.goalID, txnID, 100.0, "boost_match")
+	}()
+	// Let the upsert reach ITS first lock — the goal when the order is right, the transaction when
+	// it is not. This sleep is what makes the broken ordering deadlock deterministically instead
+	// of occasionally.
+	time.Sleep(500 * time.Millisecond)
+
+	require.NoError(t, blocker.Commit(ctx))
+
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("confirm and upsert did not both complete: they are blocked on each other")
+	}
+
+	for name, err := range map[string]error{"confirm": confirmErr, "upsert": upsertErr} {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			assert.NotEqual(t, "40P01", pgErr.Code,
+				"%s was killed as a deadlock victim — the upsert paths take their locks out of order", name)
+		}
+	}
+	// Neither is entitled to a basis mismatch here: the goal never left the contributions basis.
+	assert.NotErrorIs(t, confirmErr, domain.ErrContributionBasisMismatch)
+	assert.NotErrorIs(t, upsertErr, domain.ErrContributionBasisMismatch)
 }

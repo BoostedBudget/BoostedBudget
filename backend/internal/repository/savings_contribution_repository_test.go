@@ -181,10 +181,10 @@ func TestSavingsContributionRepository_UpsertFromTransaction_Success(t *testing.
 
 	mock.ExpectBegin()
 
-	// Step 0: goal ownership check passes.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+	// Step 0: locked basis assertion — ownership AND a still-live ledger (#1625 Task 22).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
 		WithArgs(goalID, userID).
-		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisContributions))
 
 	// Step 1: lock query returns transaction magnitude (with user_id check).
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
@@ -227,9 +227,9 @@ func TestSavingsContributionRepository_UpsertFromTransaction_ConfirmedRowSlotIsN
 
 	mock.ExpectBegin()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
 		WithArgs(goalID, userID).
-		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisContributions))
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
 		WithArgs(txnID, userID).
@@ -265,10 +265,10 @@ func TestSavingsContributionRepository_UpsertFromTransaction_TransactionNotFound
 
 	mock.ExpectBegin()
 
-	// Step 0: goal ownership check passes.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+	// Step 0: locked basis assertion — ownership AND a still-live ledger (#1625 Task 22).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
 		WithArgs(goalID, userID).
-		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisContributions))
 
 	// Step 1: lock fails — transaction not found for this user.
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
@@ -296,10 +296,10 @@ func TestSavingsContributionRepository_UpsertFromTransaction_OverAllocated(t *te
 
 	mock.ExpectBegin()
 
-	// Step 0: goal ownership check passes.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+	// Step 0: locked basis assertion — ownership AND a still-live ledger (#1625 Task 22).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
 		WithArgs(goalID, userID).
-		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisContributions))
 
 	// Step 1: transaction magnitude is 500.
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
@@ -332,10 +332,10 @@ func TestSavingsContributionRepository_UpsertFromTransaction_ExactCapacity(t *te
 
 	mock.ExpectBegin()
 
-	// Step 0: goal ownership check passes.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+	// Step 0: locked basis assertion — ownership AND a still-live ledger (#1625 Task 22).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
 		WithArgs(goalID, userID).
-		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisContributions))
 
 	// Step 1: transaction lock with user_id check.
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
@@ -587,8 +587,8 @@ func TestSavingsContributionRepository_UpsertFromTransaction_CrossUserGoalReject
 
 	mockDB.ExpectBegin()
 
-	// Goal ownership check: goal does NOT belong to callerUserID → ErrNoRows.
-	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+	// Step 0 locked basis assertion: goal does NOT belong to callerUserID → ErrNoRows.
+	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
 		WithArgs(goalID, callerUserID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -612,10 +612,10 @@ func TestSavingsContributionRepository_UpsertFromTransaction_CrossUserTransactio
 
 	mockDB.ExpectBegin()
 
-	// Goal ownership check passes (goal belongs to userID).
-	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+	// Step 0 locked basis assertion passes (goal belongs to userID, still on the ledger).
+	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
 		WithArgs(goalID, userID).
-		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisContributions))
 
 	// Transaction lock fails: transaction.user_id != userID → ErrNoRows.
 	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
@@ -644,10 +644,10 @@ func TestSavingsContributionRepository_UpsertFromTransaction_OwnershipCheckSucce
 
 	mockDB.ExpectBegin()
 
-	// Goal ownership check passes.
-	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+	// Step 0 locked basis assertion passes.
+	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
 		WithArgs(goalID, userID).
-		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisContributions))
 
 	// Transaction lock — now requires user_id check.
 	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
@@ -799,10 +799,12 @@ func TestSavingsContributionRepository_UpsertProposedFromTransaction_C3Guard(t *
 	txnID := uuid.New().String()
 	magnitude := 200.0
 
-	// Ownership checks pass.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+	// #1625 Task 22: this path became transactional so its Step 0 `SELECT … FOR UPDATE` on the
+	// goal outlives the statement. Ownership and a still-live ledger are now one assertion.
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
 		WithArgs(goalID, userID).
-		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisContributions))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`)).
 		WithArgs(txnID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
@@ -814,6 +816,7 @@ func TestSavingsContributionRepository_UpsertProposedFromTransaction_C3Guard(t *
 	mock.ExpectExec(regexp.QuoteMeta(`AND savings_goal_contributions.managed_by_reconciliation = true`)).
 		WithArgs(goalID, txnID, magnitude, pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
 
 	err := repo.UpsertProposedFromTransaction(ctx, userID, goalID, txnID, magnitude)
 	require.NoError(t, err)

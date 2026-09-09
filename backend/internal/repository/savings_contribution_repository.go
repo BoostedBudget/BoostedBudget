@@ -33,6 +33,11 @@ type SavingsContributionRepository interface {
 	// Returns ErrSavingsGoalNotFound if goalID does not belong to userID.
 	// Returns ErrContributionNotFound if transactionID does not belong to userID.
 	// Returns ErrContributionOverAllocated if the transaction would be over-allocated.
+	//
+	// #1625 Task 22: the ownership probe is a LOCKED basis assertion, taken before the transaction
+	// lock. Returns ErrContributionBasisMismatch when the goal has left the contributions basis —
+	// the reconciler may not write into a ledger the user closed. Locking the goal FIRST is what
+	// keeps this path on the branch's goal → contribution → transaction order.
 	UpsertFromTransaction(ctx context.Context, userID, goalID, transactionID string, amount float64, source string) error
 
 	// SumConfirmedByGoal returns the sum of all confirmed contributions for a goal.
@@ -50,6 +55,10 @@ type SavingsContributionRepository interface {
 	// this call skips the allocation-cap check because proposed rows do NOT consume capacity
 	// until the user confirms them (M18 / D6 source-b).
 	// userID is required: both the savings goal and the transaction must belong to userID.
+	//
+	// #1625 Task 22: transactional, so its locked basis assertion is honest. Returns
+	// ErrContributionBasisMismatch when the goal has left the contributions basis — a proposal is
+	// still a write into a closed ledger, and it re-takes the uniqueness slot ArchiveByGoal freed.
 	UpsertProposedFromTransaction(ctx context.Context, userID, goalID, transactionID string, magnitude float64) error
 
 	// ListByGoal returns all contributions for a goal ordered by occurred_on DESC.
@@ -154,7 +163,9 @@ type SavingsContributionRepository interface {
 	//
 	// Race-safe: same BEGIN+goal-ownership+SELECT ABS(amount)…FOR UPDATE+capacity-recompute
 	// as UpsertFromTransaction (Codex C2), then upserts with manual metadata and RETURNING the row.
-	// Returns ErrSavingsGoalNotFound, ErrContributionNotFound, or ErrContributionOverAllocated.
+	// Returns ErrSavingsGoalNotFound, ErrContributionNotFound, ErrContributionOverAllocated, or —
+	// since #1625 Task 22, from the same locked goal assertion its siblings take before the
+	// transaction lock — ErrContributionBasisMismatch.
 	InsertManualFromTransaction(ctx context.Context, userID, goalID, transactionID string, amount float64, occurredOn string) (*domain.SavingsGoalContribution, error)
 }
 
@@ -356,13 +367,20 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 		}
 	}()
 
-	// Step 0: Verify goal ownership (Codex C1 / G7 ownership guard).
-	var dummy int
-	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`
-	if err = tx.QueryRow(ctx, goalCheckQuery, goalID, userID).Scan(&dummy); err != nil {
-		if err == pgx.ErrNoRows {
-			err = domain.ErrSavingsGoalNotFound
-		}
+	// Step 0: Verify goal ownership AND that the ledger is still live, holding the goal row
+	// (#1625 Task 22). This replaces a bare ownership probe that took no lock: the two automatic
+	// callers both skip a goal whose basis is not "contributions", but they read that basis from a
+	// goal list loaded before a whole loop of further round-trips, so it is a check-then-act. A
+	// switch landing in that window used to let this write a live, unarchived, CONFIRMED row under
+	// a goal whose current_amount no longer reads the ledger at all.
+	//
+	// ⚠ STEP 0, BEFORE the transaction lock below, and that placement is load-bearing rather than
+	// stylistic. The lock order on this branch is goal → contribution → transaction, and
+	// ConfirmContribution takes all three in it. Asserting here keeps this path on the same order;
+	// asserting next to the capacity check it protects would make it transaction → goal and give
+	// the two paths an ABBA cycle. Pinned by
+	// TestSavingsBasisSwitch_Integration_UpsertPathsCannotDeadlockAgainstConfirm.
+	if err = assertLedgerIsLiveLocked(ctx, tx, goalID, userID); err != nil {
 		return err
 	}
 
@@ -500,13 +518,12 @@ func (r *savingsContributionRepository) InsertManualFromTransaction(
 		}
 	}()
 
-	// Step 0: Verify goal ownership (Codex C1 / G7 ownership guard).
-	var dummy int
-	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`
-	if err = tx.QueryRow(ctx, goalCheckQuery, goalID, userID).Scan(&dummy); err != nil {
-		if err == pgx.ErrNoRows {
-			err = domain.ErrSavingsGoalNotFound
-		}
+	// Step 0: Verify goal ownership AND that the ledger is still live, holding the goal row
+	// (#1625 Task 22) — see UpsertFromTransaction's Step 0 for why this goes BEFORE the
+	// transaction lock and not beside the capacity check. The handler has a gate of its own
+	// (ContributionHandler.assertLedgerIsLive) and it is worth keeping for its message, but it is
+	// a check against a row it does not hold.
+	if err = assertLedgerIsLiveLocked(ctx, tx, goalID, userID); err != nil {
 		return nil, err
 	}
 
@@ -606,20 +623,37 @@ func (r *savingsContributionRepository) UpsertProposedFromTransaction(
 	userID, goalID, transactionID string,
 	magnitude float64,
 ) error {
-	// Step 0: Verify goal ownership.
-	var dummy int
-	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`
-	if err := r.db.QueryRow(ctx, goalCheckQuery, goalID, userID).Scan(&dummy); err != nil {
-		if err == pgx.ErrNoRows {
-			return domain.ErrSavingsGoalNotFound
-		}
+	// This became transactional for the same reason insertInTx did (#1625 Task 22): the basis
+	// assertion below is a `SELECT … FOR UPDATE`, and outside a transaction the lock would be
+	// released the instant the statement returned, leaving the check advisory — exactly the
+	// check-then-act it exists to remove.
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
+
+	// Step 0: Verify goal ownership AND that the ledger is still live, holding the goal row.
+	//
+	// This path writes a PROPOSED row, which no progress sum counts, so the immediate damage is
+	// smaller than the confirmed siblings' — but it is not nil and it is not merely cosmetic. A
+	// proposal landing after the period closed is a live, unarchived row the UI offers the user to
+	// confirm on a goal that no longer has a ledger; and because migration 000191 scopes
+	// unique_contribution_per_goal_per_transaction to `archived_at IS NULL`, it also occupies the
+	// (transaction_id, savings_goal_id) slot that ArchiveByGoal had just released. The reconciler
+	// proposing into a ledger the user closed is the defect, whatever the row's status column says.
+	//
+	// ⚠ Step 0, ahead of everything else, for the lock-order reason spelled out in
+	// UpsertFromTransaction. This path takes no transaction row lock at all, so goal-first is
+	// trivially consistent with goal → contribution → transaction; taking it later would not be.
+	if err := assertLedgerIsLiveLocked(ctx, tx, goalID, userID); err != nil {
 		return err
 	}
 
 	// Step 1: Verify transaction ownership (no lock — proposed rows are best-effort).
 	var txnExists int
 	txnCheckQuery := `SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`
-	if err := r.db.QueryRow(ctx, txnCheckQuery, transactionID, userID).Scan(&txnExists); err != nil {
+	if err := tx.QueryRow(ctx, txnCheckQuery, transactionID, userID).Scan(&txnExists); err != nil {
 		if err == pgx.ErrNoRows {
 			return domain.ErrContributionNotFound
 		}
@@ -650,8 +684,10 @@ func (r *savingsContributionRepository) UpsertProposedFromTransaction(
 		WHERE savings_goal_contributions.status = 'proposed'
 		  AND savings_goal_contributions.managed_by_reconciliation = true
 	`
-	_, err := r.db.Exec(ctx, upsertQuery, goalID, transactionID, magnitude, now)
-	return err
+	if _, err := tx.Exec(ctx, upsertQuery, goalID, transactionID, magnitude, now); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // SumConfirmedByGoal returns the sum of all confirmed contributions for a goal.
