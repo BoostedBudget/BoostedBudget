@@ -37,6 +37,10 @@ export interface GetTransactionsOutputBody {
   readonly $schema?: string;
   limit: number;
   next_cursor?: string;
+  /** Summed amount of the whole filtered set, same sign convention as the rows. First page only. */
+  total_amount?: number;
+  /** Number of transactions in the whole filtered set. First page only. */
+  total_count?: number;
   /** @nullable */
   transactions: ActivityItem[] | null;
 }

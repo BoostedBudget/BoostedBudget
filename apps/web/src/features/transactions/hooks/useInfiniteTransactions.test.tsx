@@ -283,6 +283,71 @@ describe('useInfiniteTransactions', () => {
       expect(callParams.include_reversed).toBe('true')
     })
 
+    // ── #1626 Phase 2: uncategorized must survive the state→params boundary ─────────────
+    //
+    // This is the layer that turns filter state into a request. A registry entry and a URL param
+    // without this leaves the feature looking completely wired — the URL updates, the pill
+    // renders, the count increments — while the request goes out unfiltered and the list shows
+    // everything. It is the least visible of the seven layers and the most total in its failure.
+    it('omits uncategorized by default, so it never narrows a request nobody asked to narrow', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const { result } = renderHook(() => useInfiniteTransactions(defaultOpts), {
+        wrapper: createWrapper(),
+      })
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.uncategorized).toBeUndefined()
+    })
+
+    it('omits uncategorized when explicitly false, rather than sending "false"', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const { result } = renderHook(
+        () => useInfiniteTransactions({ ...defaultOpts, filters: { uncategorized: false } }),
+        { wrapper: createWrapper() },
+      )
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.uncategorized).toBeUndefined()
+    })
+
+    it('sends uncategorized=true when the Sankey navigates to it', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const { result } = renderHook(
+        () => useInfiniteTransactions({ ...defaultOpts, filters: { uncategorized: true } }),
+        { wrapper: createWrapper() },
+      )
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.uncategorized).toBe('true')
+    })
+
+    // The server ORs the four category predicates (#1626 defect C fixed exactly this), so sending
+    // them together must widen the set. A boundary that dropped one of them would look identical
+    // to the user until they compared totals.
+    it('sends uncategorized alongside the category filters, not instead of them', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const { result } = renderHook(
+        () => useInfiniteTransactions({
+          ...defaultOpts,
+          filters: { uncategorized: true, pfc_primaries: ['TRAVEL'], custom_category_ids: ['abc'] },
+        }),
+        { wrapper: createWrapper() },
+      )
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.uncategorized).toBe('true')
+      expect(callParams.pfc_primaries).toBe('TRAVEL')
+      expect(callParams.custom_category_ids).toBe('abc')
+    })
+
     // #1569 T12 (I2): dropped at the boundary, so it reaches NO consumer — not just the table.
     it('drops a settled pending before it reaches any consumer', async () => {
       mockGetTransactions.mockResolvedValue({

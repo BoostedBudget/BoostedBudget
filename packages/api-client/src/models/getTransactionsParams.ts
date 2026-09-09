@@ -63,17 +63,21 @@ start_date?: string;
  */
 end_date?: string;
 /**
- * Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL). OR-joined with pfc_detaileds and custom_category_ids: a transaction matches if ANY of the three matches.
+ * Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL). OR-joined with pfc_detaileds, custom_category_ids and uncategorized: a transaction matches if ANY of them matches.
  */
 pfc_primaries?: string;
 /**
- * Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). OR-joined with pfc_primaries and custom_category_ids.
+ * Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). OR-joined with pfc_primaries, custom_category_ids and uncategorized.
  */
 pfc_detaileds?: string;
 /**
- * Filter by custom category UUIDs (comma-separated). Each id also matches its child categories. OR-joined with pfc_primaries and pfc_detaileds — combining them returns the union, not the (always empty) intersection.
+ * Filter by custom category UUIDs (comma-separated). Each id also matches its child categories. OR-joined with pfc_primaries, pfc_detaileds and uncategorized — combining them returns the union, not the (always empty) intersection.
  */
 custom_category_ids?: string;
+/**
+ * When true, also match transactions with NO category at all — the rows analytics reports as 'Uncategorized'. OR-joined with pfc_primaries, pfc_detaileds and custom_category_ids. Omitted or false adds no filter; it never means 'exclude uncategorized'. Issue #1626.
+ */
+uncategorized?: string;
 /**
  * Search in merchant name or transaction name
  */

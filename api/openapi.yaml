@@ -3614,6 +3614,14 @@ components:
           type: integer
         next_cursor:
           type: string
+        total_amount:
+          description: Summed amount of the whole filtered set, same sign convention as the rows. First page only.
+          format: double
+          type: number
+        total_count:
+          description: Number of transactions in the whole filtered set. First page only.
+          format: int64
+          type: integer
         transactions:
           items:
             $ref: "#/components/schemas/ActivityItem"
@@ -14817,26 +14825,33 @@ paths:
           schema:
             description: Filter transactions on or before this date (YYYY-MM-DD)
             type: string
-        - description: "Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL). OR-joined with pfc_detaileds and custom_category_ids: a transaction matches if ANY of the three matches."
+        - description: "Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL). OR-joined with pfc_detaileds, custom_category_ids and uncategorized: a transaction matches if ANY of them matches."
           explode: false
           in: query
           name: pfc_primaries
           schema:
-            description: "Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL). OR-joined with pfc_detaileds and custom_category_ids: a transaction matches if ANY of the three matches."
+            description: "Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL). OR-joined with pfc_detaileds, custom_category_ids and uncategorized: a transaction matches if ANY of them matches."
             type: string
-        - description: Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). OR-joined with pfc_primaries and custom_category_ids.
+        - description: Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). OR-joined with pfc_primaries, custom_category_ids and uncategorized.
           explode: false
           in: query
           name: pfc_detaileds
           schema:
-            description: Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). OR-joined with pfc_primaries and custom_category_ids.
+            description: Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). OR-joined with pfc_primaries, custom_category_ids and uncategorized.
             type: string
-        - description: Filter by custom category UUIDs (comma-separated). Each id also matches its child categories. OR-joined with pfc_primaries and pfc_detaileds — combining them returns the union, not the (always empty) intersection.
+        - description: Filter by custom category UUIDs (comma-separated). Each id also matches its child categories. OR-joined with pfc_primaries, pfc_detaileds and uncategorized — combining them returns the union, not the (always empty) intersection.
           explode: false
           in: query
           name: custom_category_ids
           schema:
-            description: Filter by custom category UUIDs (comma-separated). Each id also matches its child categories. OR-joined with pfc_primaries and pfc_detaileds — combining them returns the union, not the (always empty) intersection.
+            description: Filter by custom category UUIDs (comma-separated). Each id also matches its child categories. OR-joined with pfc_primaries, pfc_detaileds and uncategorized — combining them returns the union, not the (always empty) intersection.
+            type: string
+        - description: "When true, also match transactions with NO category at all — the rows analytics reports as 'Uncategorized'. OR-joined with pfc_primaries, pfc_detaileds and custom_category_ids. Omitted or false adds no filter; it never means 'exclude uncategorized'. Issue #1626."
+          explode: false
+          in: query
+          name: uncategorized
+          schema:
+            description: "When true, also match transactions with NO category at all — the rows analytics reports as 'Uncategorized'. OR-joined with pfc_primaries, pfc_detaileds and custom_category_ids. Omitted or false adds no filter; it never means 'exclude uncategorized'. Issue #1626."
             type: string
         - description: Search in merchant name or transaction name
           explode: false
