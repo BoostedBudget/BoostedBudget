@@ -108,20 +108,82 @@ func TestBuildCategoryTree_ConservesTotalsAtEveryNode(t *testing.T) {
 	assert.InDelta(t, 67.0, grandTotal, 0.001)
 }
 
-// TestBuildCategoryTree_MergesByKeyNotDisplay guards the mid-rename window: effective_category_name
-// is refreshed asynchronously, so two rows for the SAME category can briefly disagree on its name.
-// Merging by display would split one category into two nodes and double its apparent presence.
-func TestBuildCategoryTree_MergesByKeyNotDisplay(t *testing.T) {
+// TestBuildCategoryTree_TwoKeysSharingOneDisplayStaySeparateNodes is the REACHABLE reason nodes are
+// keyed by the stable key, and it replaces a test that pinned an unreachable one (#1626 Phase 2,
+// review finding X6).
+//
+// WHAT THE OLD TEST GOT WRONG. It supplied ONE key carrying TWO displays and attributed the hazard
+// to the asynchronous `effective_category_name` refresh. That refresh is real, but this read does
+// not touch that column: categoryPathExprs resolves display from `cc.name` / `p.name`, joined LIVE,
+// so every row in a single result set sees the same current name and the mid-rename split cannot
+// occur. upsert's own comment says exactly that. So the test asserted production SQL cannot emit
+// the shape it fed in, while the hazard that IS reachable went untested.
+//
+// THE REACHABLE HAZARD. Display is a formatted string chosen by a CASE arm, and two DISTINCT
+// categories are free to share one: an empty name, a neutral placeholder, or plainly the same name
+// used under two different parents ("Coffee" under Food and "Coffee" under Gifts). Merging by
+// display would fuse them into one node — halving the apparent count of categories and summing two
+// unrelated pots of money into a single figure the user cannot decompose.
+//
+// The fixture uses two keys with an IDENTICAL display and UNEQUAL totals, so a merge is visible
+// both as one node instead of two AND as a total neither category has.
+func TestBuildCategoryTree_TwoKeysSharingOneDisplayStaySeparateNodes(t *testing.T) {
 	rows := []domain.CategoryHierarchyRow{
-		{L1Key: "custom:same", L1Display: "Old Name", Total: 10, TransactionCount: 1},
-		{L1Key: "custom:same", L1Display: "New Name", Total: 5, TransactionCount: 1},
+		{L1Key: "custom:aaa", L1Display: "Coffee", Total: 23, TransactionCount: 2},
+		{L1Key: "custom:bbb", L1Display: "Coffee", Total: 41, TransactionCount: 3},
 	}
 
 	levels, grandTotal := buildCategoryTree(rows)
 
-	require.Len(t, levels, 1, "one key is one node, whatever the display says")
-	assert.InDelta(t, 15.0, levels[0].Total, 0.001)
-	assert.InDelta(t, 15.0, grandTotal, 0.001)
+	require.Len(t, levels, 2, "two distinct keys are two nodes, however identical their displays")
+	byKey := map[string]domain.CategoryHierarchyNode{}
+	for _, l := range levels {
+		byKey[l.Category] = l
+	}
+	require.Contains(t, byKey, "custom:aaa")
+	require.Contains(t, byKey, "custom:bbb")
+	assert.InDelta(t, 23.0, byKey["custom:aaa"].Total, 0.001,
+		"merging by display would report 64 here and drop the other node entirely")
+	assert.InDelta(t, 41.0, byKey["custom:bbb"].Total, 0.001)
+	assert.Equal(t, 2, byKey["custom:aaa"].TransactionCount)
+	assert.Equal(t, 3, byKey["custom:bbb"].TransactionCount)
+	assert.Equal(t, "Coffee", byKey["custom:aaa"].Display)
+	assert.Equal(t, "Coffee", byKey["custom:bbb"].Display)
+	assert.InDelta(t, 64.0, grandTotal, 0.001, "the grand total still covers both")
+}
+
+// TestTreeNodeUpsert_FirstNonEmptyDisplayWins is a HELPER-LEVEL invariant, deliberately NOT a
+// production regression test (#1626 Phase 2, review finding X6).
+//
+// It is the surviving half of the test described above. One key arriving with two different
+// displays is a shape the category-path SQL cannot emit — it reads live joined names — so asserting
+// it over buildCategoryTree would claim coverage of a production path that does not exist. What
+// upsert's tie-break IS good for is the reachable case of a display arriving EMPTY on one row and
+// populated on another (a NULL `cc.name`, or a level a CASE arm left blank), where blanking an
+// established name would put "Custom category" on a node that has a real one. Asserted directly on
+// the helper, at the level where the rule actually lives.
+func TestTreeNodeUpsert_FirstNonEmptyDisplayWins(t *testing.T) {
+	t.Run("an empty display must not blank an established name", func(t *testing.T) {
+		root := newTreeNode("", "")
+		root.upsert("custom:same", "Therapy")
+		child := root.upsert("custom:same", "")
+		assert.Equal(t, "Therapy", child.display)
+		assert.Len(t, root.order, 1, "one key is one child")
+	})
+
+	t.Run("a later non-empty display fills in for an earlier empty one", func(t *testing.T) {
+		root := newTreeNode("", "")
+		root.upsert("custom:same", "")
+		child := root.upsert("custom:same", "Therapy")
+		assert.Equal(t, "Therapy", child.display)
+	})
+
+	t.Run("two keys are two children even with one display", func(t *testing.T) {
+		root := newTreeNode("", "")
+		root.upsert("custom:a", "Coffee")
+		root.upsert("custom:b", "Coffee")
+		assert.Len(t, root.order, 2)
+	})
 }
 
 // TestBuildCategoryTree_Empty — no rows must produce an empty tree, not a nil-deref or a phantom

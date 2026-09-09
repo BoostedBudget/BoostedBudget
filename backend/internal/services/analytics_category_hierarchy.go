@@ -48,11 +48,17 @@ func newTreeNode(key, display string) *treeNode {
 // resolves display from `cc.name` / `p.name`, joined live, so every row in one result set sees the
 // same current name and the split it described is unreachable here.
 //
-// Keying by the stable key stays, as defence in depth: the display is a formatted string chosen by
-// a CASE arm, and two distinct categories are free to share one (an empty name, a neutral
-// placeholder, or simply the same name under different parents). Merging by display would fuse
-// them. That is a real hazard; the async refresh was not. No test is added for the shape the old
-// comment described, because there is no way to produce it.
+// Keying by the stable key stays, and it is the REACHABLE hazard that justifies it: the display is
+// a formatted string chosen by a CASE arm, and two distinct categories are free to share one (an
+// empty name, a neutral placeholder, or simply the same name under different parents). Merging by
+// display would fuse them into one node, halving the apparent number of categories and summing two
+// unrelated pots into a figure the user cannot decompose. That is what
+// TestBuildCategoryTree_TwoKeysSharingOneDisplayStaySeparateNodes pins.
+//
+// The one-key-two-displays shape the old comment described has NO production regression test,
+// because the SQL cannot emit it. The tie-break below is instead pinned at THIS level, by
+// TestTreeNodeUpsert_FirstNonEmptyDisplayWins, for the shape that IS reachable: a display arriving
+// empty on one row and populated on another.
 func (n *treeNode) upsert(key, display string) *treeNode {
 	child, ok := n.children[key]
 	if !ok {

@@ -136,6 +136,22 @@ func (s *analyticsService) GetCashFlowSummary(ctx context.Context, userID string
 		return nil, fmt.Errorf("invalid filters: %w", err)
 	}
 
+	// ONE effectiveEnd, computed here at the service boundary and used for the echoed range only
+	// (#1626 Phase 2, review finding X7). Defect 1's clamp landed in GetCashFlowHistory alone, so
+	// for a future-ranged request the two endpoints reported DIFFERENT ranges for the same
+	// question. Both now resolve it through the same two functions — clampFillEnd for the horizon,
+	// responseEndDate for the floor that keeps start <= end when the whole range lies ahead.
+	//
+	// ⚠ THE ECHO ONLY, AND NOT THE QUERY BOUND. History threads its clamp into the repository call
+	// because it has gap-FILLING to stop: without it the query fabricates a zero-valued bucket for
+	// every future period. This method fabricates nothing — it is one aggregate over real rows —
+	// and transactions.date is a zoneless, effectively institution-local calendar date, so a user
+	// ahead of UTC legitimately has rows dated later than the UTC day. Clamping the query bound
+	// here would DELETE those rows from their total: real data loss to fix a cosmetic
+	// disagreement. The queried window, and the equal-length previous window compared against it,
+	// therefore stay on the REQUESTED range.
+	effectiveEnd := responseEndDate(filters.StartDate, clampFillEnd(filters.EndDate, time.Now()), nil)
+
 	// Get aggregated cash flow for current period
 	currentAgg, err := s.analyticsRepo.GetCashFlowAggregation(ctx, userID, filters)
 	if err != nil {
@@ -166,8 +182,9 @@ func (s *analyticsService) GetCashFlowSummary(ctx context.Context, userID string
 
 	// Build response
 	response := &domain.CashFlowSummaryResponse{
-		StartDate:    filters.StartDate,
-		EndDate:      filters.EndDate,
+		StartDate: filters.StartDate,
+		// effectiveEnd, not filters.EndDate — see the clamp's comment above.
+		EndDate:      effectiveEnd,
 		Income:       currentAgg.Income,
 		Expenses:     currentAgg.Expenses,
 		NetCashFlow:  currentAgg.NetCashFlow(),
