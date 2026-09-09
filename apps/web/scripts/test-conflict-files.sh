@@ -18,7 +18,7 @@ for arg in "$@"; do
     esac
 done
 
-echo "Running process-isolated test groups (A, B, C, D, E, F)..."
+echo "Running process-isolated test groups (A, B, C, D, E, F, G)..."
 cd /tmp
 
 run_group() {
@@ -175,11 +175,30 @@ for f in \
     GROUP_E_PRELOAD_ARGS+=(--preload "$f")
 done
 
+# Group G: SankeyViewModeControl (#1626) — must run WITHOUT the mocks/toggle-group.tsx preload so
+# it exercises the REAL @radix-ui/react-toggle-group. That mock does not forward an item's
+# aria-label, so under the shared bunfig-preloaded process this file could only prove the wrapper
+# forwards an aria-label, never that SankeyViewModeControl actually supplies one. Its own group
+# (not folded into Group A, which already runs the real toggle-group but lacks the track-event
+# preload) because the control calls useTrackEvent(), which without a mock drags in the real
+# PostHog client.
+GROUP_G_FILES=(
+    "$FRONTEND_DIR/src/features/reports/components/SankeyViewModeControl.test.tsx"
+)
+GROUP_G_PRELOAD_ARGS=()
+for f in \
+    "$FRONTEND_DIR/src/test/happydom.ts" \
+    "$FRONTEND_DIR/src/test/testing-library.ts" \
+    "$FRONTEND_DIR/src/test/mocks/track-event.ts"; do
+    GROUP_G_PRELOAD_ARGS+=(--preload "$f")
+done
+
 run_group A "Minimal preloads" "${GROUP_A_PRELOAD_ARGS[@]}" "${GROUP_A_FILES[@]}"
 run_group B "Registry/context" "${GROUP_B_PRELOAD_ARGS[@]}" "${GROUP_B_FILES[@]}"
 run_group C "Inline mocks" "${GROUP_C_PRELOAD_ARGS[@]}" "${GROUP_C_FILES[@]}"
 run_group D "Real hooks" "${GROUP_D_PRELOAD_ARGS[@]}" "${GROUP_D_FILES[@]}"
 run_group E "MerchantsTab inline DataTable mock" "${GROUP_E_PRELOAD_ARGS[@]}" "${GROUP_E_FILES[@]}"
 run_group F "Real savings-goals hooks + real query cache" "${GROUP_F_PRELOAD_ARGS[@]}" "${GROUP_F_FILES[@]}"
+run_group G "SankeyViewModeControl against real Radix toggle-group" "${GROUP_G_PRELOAD_ARGS[@]}" "${GROUP_G_FILES[@]}"
 
 echo "Process-isolated test groups completed!"
