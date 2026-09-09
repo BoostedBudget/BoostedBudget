@@ -1312,8 +1312,9 @@ func (r *analyticsRepository) GetCategoryTotalForPeriod(ctx context.Context, use
 
 	query := fmt.Sprintf(`
 		SELECT
-			COALESCE(SUM(t.amount), 0) as total,
-			COUNT(*)                   as transaction_count
+			COALESCE(SUM(t.amount), 0)                    as total,
+			COUNT(*)                                      as transaction_count,
+			MAX(t.effective_category_name)                as category_display
 		FROM transactions t
 		WHERE t.user_id = $1
 		  AND t.deleted_at IS NULL
@@ -1325,13 +1326,19 @@ func (r *analyticsRepository) GetCategoryTotalForPeriod(ctx context.Context, use
 	`, catExpr)
 
 	var row domain.CategoryTotalRow
+	// #1626: every row in this aggregate shares one category by construction (the WHERE pins it),
+	// so MAX() picks that category's name rather than choosing between rivals. Nullable: the
+	// column is app-maintained asynchronously, and an empty period returns no rows at all.
+	var display sql.NullString
 	err := r.db.QueryRow(ctx, query, userID, startDate, endDate, category).Scan(
 		&row.Total,
 		&row.TransactionCount,
+		&display,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get category total for period: %w", err)
 	}
+	row.CategoryDisplay = display.String
 	return &row, nil
 }
 
@@ -1346,6 +1353,7 @@ func (r *analyticsRepository) GetTopExpense(ctx context.Context, userID string, 
 			COALESCE(t.merchant_name, '') as merchant_name,
 			t.amount,
 			(%s)                          as category,
+			t.effective_category_name     as category_display,
 			t.date
 		FROM transactions t
 		WHERE t.user_id = $1
@@ -1359,11 +1367,13 @@ func (r *analyticsRepository) GetTopExpense(ctx context.Context, userID string, 
 	`, catExpr)
 
 	var row domain.TopExpenseRow
+	var topDisplay sql.NullString
 	err := r.db.QueryRow(ctx, query, userID, startDate, endDate).Scan(
 		&row.TransactionID,
 		&row.MerchantName,
 		&row.Amount,
 		&row.Category,
+		&topDisplay,
 		&row.Date,
 	)
 	if err != nil {
@@ -1372,6 +1382,7 @@ func (r *analyticsRepository) GetTopExpense(ctx context.Context, userID string, 
 		}
 		return nil, fmt.Errorf("failed to get top expense: %w", err)
 	}
+	row.CategoryDisplay = topDisplay.String
 	return &row, nil
 }
 
@@ -1701,7 +1712,7 @@ func (r *analyticsRepository) GetLargestTransactionsForPeriod(ctx context.Contex
 	limitPlaceholder := fmt.Sprintf("$%d", argIndex)
 
 	query := fmt.Sprintf(`
-		SELECT t.id, COALESCE(t.merchant_name, ''), t.amount, (%s), t.date, t.account_id::text
+		SELECT t.id, COALESCE(t.merchant_name, ''), t.amount, (%s), t.effective_category_name, t.date, t.account_id::text
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
@@ -1724,9 +1735,11 @@ func (r *analyticsRepository) GetLargestTransactionsForPeriod(ctx context.Contex
 	results := make([]domain.LargestTransactionRow, 0)
 	for rows.Next() {
 		var row domain.LargestTransactionRow
-		if err := rows.Scan(&row.TransactionID, &row.MerchantName, &row.Amount, &row.Category, &row.Date, &row.AccountID); err != nil {
+		var display sql.NullString
+		if err := rows.Scan(&row.TransactionID, &row.MerchantName, &row.Amount, &row.Category, &display, &row.Date, &row.AccountID); err != nil {
 			return nil, fmt.Errorf("failed to scan largest transaction row: %w", err)
 		}
+		row.CategoryDisplay = display.String
 		results = append(results, row)
 	}
 
@@ -1746,7 +1759,7 @@ func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Contex
 	filterClause, args, _ := buildSpendingFilter(filters, args)
 
 	query := fmt.Sprintf(`
-		SELECT (%s), SUM(t.amount), COUNT(*)
+		SELECT (%s), t.effective_category_name, SUM(t.amount), COUNT(*)
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		%s
@@ -1758,7 +1771,7 @@ func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Contex
 		  AND t.pending = false
 		  AND %s = $4::uuid
 		  %s
-		GROUP BY (%s)
+		GROUP BY (%s), t.effective_category_name
 		ORDER BY SUM(t.amount) DESC
 	`, catExpr, merchantSortJoins, effectiveMerchantIdExpr, filterClause, catExpr)
 
@@ -1771,9 +1784,11 @@ func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Contex
 	results := make([]domain.CategoryBreakdownForMerchantRow, 0)
 	for rows.Next() {
 		var row domain.CategoryBreakdownForMerchantRow
-		if err := rows.Scan(&row.Category, &row.Total, &row.Count); err != nil {
+		var display sql.NullString
+		if err := rows.Scan(&row.Category, &display, &row.Total, &row.Count); err != nil {
 			return nil, fmt.Errorf("failed to scan category breakdown row: %w", err)
 		}
+		row.CategoryDisplay = display.String
 		results = append(results, row)
 	}
 
@@ -1916,6 +1931,7 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 			COALESCE(t.merchant_name, ''),
 			t.amount,
 			(%s),
+			t.effective_category_name,
 			t.date,
 			b.mean_amount,
 			(t.amount - b.mean_amount) / b.stddev_amount AS sigma_above
@@ -1942,17 +1958,20 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 	results := make([]domain.UnusualSpendRow, 0)
 	for rows.Next() {
 		var row domain.UnusualSpendRow
+		var unusualDisplay sql.NullString
 		if err := rows.Scan(
 			&row.TransactionID,
 			&row.MerchantName,
 			&row.Amount,
 			&row.Category,
+			&unusualDisplay,
 			&row.Date,
 			&row.BaselineAvg,
 			&row.SigmaAbove,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan unusual spend row: %w", err)
 		}
+		row.CategoryDisplay = unusualDisplay.String
 		results = append(results, row)
 	}
 

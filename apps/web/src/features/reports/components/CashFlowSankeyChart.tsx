@@ -9,6 +9,8 @@ import {
   formatPercent,
   escapeHtml,
 } from '@/shared/charts'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { buildSankeyData } from './buildSankeyData'
 import type { NodeAction, SankeyNode, SankeyViewMode } from './buildSankeyData'
 
@@ -61,6 +63,7 @@ export function CashFlowSankeyChart({
 }: CashFlowSankeyChartProps) {
   const navigate = useNavigate()
   const isDark = useDarkMode()
+  const trackEvent = useTrackEvent()
 
   const sankeyData = useMemo(
     () => buildSankeyData(incomeData?.levels ?? [], expenseData?.levels ?? [], viewMode),
@@ -72,6 +75,9 @@ export function CashFlowSankeyChart({
     const { action } = node
     if (action.kind === 'none') return
     if (action.kind === 'focus') {
+      // Carries the LEVEL, never the category's name, id or amount — event properties are stored
+      // verbatim and are not covered by data-ph-mask.
+      trackEvent(ANALYTICS_EVENTS.REPORT_SANKEY_CATEGORY_FOCUSED, { level: node.id.split(':')[1] })
       onFocus(action.key)
       return
     }

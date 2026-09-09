@@ -111,13 +111,25 @@ func TestBuildWhereClause_PFCAndCustomAreSatisfiableTogether(t *testing.T) {
 		CustomCategoryIDs: []string{"9f1c2b3a-0000-4000-8000-000000000001"},
 	})
 
-	for _, c := range topLevelConjuncts(whereClause) {
+	// Find the conjunct FIRST and require it to exist. An assertion nested inside a loop
+	// condition is vacuous in exactly the failure mode that matters: drop the PFC predicate
+	// entirely and the loop body never runs, so the test passes while `pfc_primaries` is ignored.
+	conjuncts := topLevelConjuncts(whereClause)
+	var categoryConjunct string
+	for _, c := range conjuncts {
 		if strings.Contains(c, "effective_pfc_primary IN (") {
-			assert.Contains(t, c, "category_override_kind = 'custom'",
-				"the PFC and custom predicates must sit in the SAME conjunct, OR-joined; "+
-					"ANDing them yields the empty set (#1626)")
+			require.Empty(t, categoryConjunct, "the PFC predicate must appear in exactly one conjunct")
+			categoryConjunct = c
 		}
 	}
+	require.NotEmpty(t, categoryConjunct,
+		"the PFC predicate must be present at all — without this check, removing it would make "+
+			"the assertion below unreachable and this test would pass on a broken filter. Got:\n%s",
+		strings.Join(conjuncts, "\n--AND--\n"))
+
+	assert.Contains(t, categoryConjunct, "category_override_kind = 'custom'",
+		"the PFC and custom predicates must sit in the SAME conjunct, OR-joined; "+
+			"ANDing them yields the empty set (#1626)")
 }
 
 // TestBothTransactionBuildersShareTheCategoryGroup is the divergence guard.

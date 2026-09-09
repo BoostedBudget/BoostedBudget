@@ -194,3 +194,35 @@ func TestAnalyticsService_ResolvesDisplayForProductionShapedRows(t *testing.T) {
 		}
 	})
 }
+
+// TestIncomeSourcesMergeByKeyNotDisplay guards the asynchronous-rename window.
+//
+// The SQL groups income by key AND category_display, and effective_category_name is refreshed by a
+// queued job after a rename. Mid-window, one custom category therefore arrives as TWO rows — an
+// old-name one and a new-name one. Emitting both would split the user's income source in half and
+// halve each percentage, with nothing anywhere reporting an error.
+func TestIncomeSourcesMergeByKeyNotDisplay(t *testing.T) {
+	const key = "custom:9f1c2b3a-0000-4000-8000-000000000001"
+	mockRepo := &mockAnalyticsRepository{
+		getIncomeSourceBreakdownFn: func(context.Context, string, domain.SpendingFilters) ([]domain.IncomeSourceRow, error) {
+			return []domain.IncomeSourceRow{
+				{Category: key, CategoryDisplay: "Old Name", Total: 600, Count: 3},
+				{Category: key, CategoryDisplay: "New Name", Total: 400, Count: 2},
+			}, nil
+		},
+	}
+
+	result, err := NewAnalyticsService(mockRepo).GetIncomeSourceBreakdown(
+		context.Background(), "user-123",
+		domain.SpendingFilters{
+			StartDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			EndDate:   time.Date(2026, 3, 31, 0, 0, 0, 0, time.UTC),
+		})
+	require.NoError(t, err)
+
+	require.Len(t, result.Sources, 1, "one key is one income source, whatever the display says")
+	assert.InDelta(t, 1000.0, result.Sources[0].Total, 0.001)
+	assert.Equal(t, 5, result.Sources[0].TransactionCount)
+	assert.InDelta(t, 100.0, result.Sources[0].Percentage, 0.001,
+		"a split source would show two halves, each with half the percentage")
+}

@@ -125,6 +125,9 @@ export function SpendingReportsPage() {
   const handlePresetChange = (newPreset: DatePreset) => {
     setPreset(newPreset)
     setDrilldown(undefined)
+    // #1626: the focused category may not exist in the new universe. Leaving it set makes the
+    // control claim a focus the chart has silently abandoned.
+    setSankeyFocus(undefined)
     trackEvent(ANALYTICS_EVENTS.REPORT_DATE_CHANGED, { preset: newPreset })
   }
 
@@ -132,12 +135,18 @@ export function SpendingReportsPage() {
     setCustomStartDate(start)
     setCustomEndDate(end)
     setDrilldown(undefined)
+    // #1626: the focused category may not exist in the new universe. Leaving it set makes the
+    // control claim a focus the chart has silently abandoned.
+    setSankeyFocus(undefined)
     trackEvent(ANALYTICS_EVENTS.REPORT_DATE_CHANGED, { preset: 'custom' })
   }
 
   const handleCustomCategoryFilterChange = (ids: string[]) => {
     setCustomCategoryIds(ids)
     setDrilldown(undefined)
+    // #1626: the focused category may not exist in the new universe. Leaving it set makes the
+    // control claim a focus the chart has silently abandoned.
+    setSankeyFocus(undefined)
     trackEvent(ANALYTICS_EVENTS.REPORT_CUSTOM_CATEGORY_FILTERED, { count: ids.length })
   }
 
@@ -145,6 +154,9 @@ export function SpendingReportsPage() {
     if (category.startsWith('custom:')) return
     if (drilldown?.category === category) {
       setDrilldown(undefined)
+    // #1626: the focused category may not exist in the new universe. Leaving it set makes the
+    // control claim a focus the chart has silently abandoned.
+    setSankeyFocus(undefined)
     } else {
       setDrilldown({ category, displayLabel })
       trackEvent(ANALYTICS_EVENTS.REPORT_CATEGORY_CLICKED, { category })

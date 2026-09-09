@@ -202,6 +202,9 @@ type SpendingTrendRow struct {
 type CategoryTotalRow struct {
 	Total            float64
 	TransactionCount int
+	// CategoryDisplay carries effective_category_name so a custom category resolves to its own
+	// name rather than a title-cased UUID (#1626). Internal; the wire field stays PFCPrimaryDisplay.
+	CategoryDisplay string
 }
 
 // CategoryTotalResponse is the response for GET /analytics/category-total (AI-tool-callable)
@@ -221,6 +224,9 @@ type TopExpenseRow struct {
 	Amount        float64
 	Category      string
 	Date          time.Time
+	// CategoryDisplay carries effective_category_name so a custom category resolves to its own
+	// name rather than a title-cased UUID (#1626). Internal; the wire field stays PFCPrimaryDisplay.
+	CategoryDisplay string
 }
 
 // TopExpenseResponse is the response for GET /analytics/top-expense (AI-tool-callable)
@@ -328,6 +334,9 @@ type LargestTransactionRow struct {
 	Category      string
 	Date          time.Time
 	AccountID     string
+	// CategoryDisplay carries effective_category_name so a custom category resolves to its own
+	// name rather than a title-cased UUID (#1626). Internal; the wire field stays PFCPrimaryDisplay.
+	CategoryDisplay string
 }
 
 // LargestTransactionItem is a single transaction in the largest-transactions response.
@@ -354,6 +363,8 @@ type CategoryBreakdownForMerchantRow struct {
 	Category string
 	Total    float64
 	Count    int
+	// See CategoryTotalRow.CategoryDisplay (#1626).
+	CategoryDisplay string
 }
 
 // CategoryBreakdownItem is a single category in the merchant-category-breakdown response.
@@ -418,6 +429,8 @@ type UnusualSpendRow struct {
 	Date          time.Time
 	BaselineAvg   float64
 	SigmaAbove    float64
+	// See CategoryTotalRow.CategoryDisplay (#1626).
+	CategoryDisplay string
 }
 
 // UnusualSpendItem is a single unusual spend transaction in the response.

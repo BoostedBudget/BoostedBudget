@@ -504,7 +504,7 @@ func (s *analyticsService) GetCategoryTotalForPeriod(ctx context.Context, userID
 
 	return &domain.CategoryTotalResponse{
 		Category:          category,
-		PFCPrimaryDisplay: PFCPrimaryDisplayName(category),
+		PFCPrimaryDisplay: resolveCategoryDisplay(category, row.CategoryDisplay),
 		Total:             row.Total,
 		TransactionCount:  row.TransactionCount,
 		StartDate:         startDate.Format("2006-01-02"),
@@ -655,7 +655,7 @@ func (s *analyticsService) GetLargestTransactionsForPeriod(ctx context.Context, 
 			MerchantName:      row.MerchantName,
 			Amount:            row.Amount,
 			Category:          row.Category,
-			PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+			PFCPrimaryDisplay: resolveCategoryDisplay(row.Category, row.CategoryDisplay),
 			Date:              row.Date.Format("2006-01-02"),
 			AccountID:         row.AccountID,
 		})
@@ -687,7 +687,7 @@ func (s *analyticsService) GetCategoryBreakdownForMerchant(ctx context.Context, 
 	for _, row := range rows {
 		item := domain.CategoryBreakdownItem{
 			Category:          row.Category,
-			PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+			PFCPrimaryDisplay: resolveCategoryDisplay(row.Category, row.CategoryDisplay),
 			Total:             row.Total,
 			TransactionCount:  row.Count,
 			Percentage:        calculatePercentage(row.Total, totalSpend),
@@ -716,17 +716,37 @@ func (s *analyticsService) GetIncomeSourceBreakdown(ctx context.Context, userID 
 		totalIncome += row.Total
 	}
 
-	sources := make([]domain.IncomeSourceItem, 0, len(rows))
+	// Merge by the STABLE KEY, mirroring the expense read. The SQL groups by key AND display, and
+	// effective_category_name is refreshed asynchronously after a rename — so mid-window one custom
+	// category yields TWO rows, an old-name one and a new-name one. Emitting both would split the
+	// user's income source in half and halve each percentage.
+	merged := make(map[string]*domain.IncomeSourceItem, len(rows))
+	order := make([]string, 0, len(rows))
 	for _, row := range rows {
-		item := domain.IncomeSourceItem{
+		if existing, ok := merged[row.Category]; ok {
+			existing.Total += row.Total
+			existing.TransactionCount += row.Count
+			// First non-empty name wins; a stale empty display must not blank an established name.
+			if existing.PFCPrimaryDisplay == unnamedCustomCategoryLabel && row.CategoryDisplay != "" {
+				existing.PFCPrimaryDisplay = resolveCategoryDisplay(row.Category, row.CategoryDisplay)
+			}
+			continue
+		}
+		merged[row.Category] = &domain.IncomeSourceItem{
 			Category: row.Category,
 			// #1626: NOT PFCPrimaryDisplayName(row.Category). For a custom-categorised income
 			// source the key is `custom:<uuid>`, which that function title-cases into a UUID.
 			PFCPrimaryDisplay: resolveCategoryDisplay(row.Category, row.CategoryDisplay),
 			Total:             row.Total,
 			TransactionCount:  row.Count,
-			Percentage:        calculatePercentage(row.Total, totalIncome),
 		}
+		order = append(order, row.Category)
+	}
+
+	sources := make([]domain.IncomeSourceItem, 0, len(order))
+	for _, key := range order {
+		item := *merged[key]
+		item.Percentage = calculatePercentage(item.Total, totalIncome)
 		sources = append(sources, item)
 	}
 
@@ -755,7 +775,7 @@ func (s *analyticsService) GetTopExpense(ctx context.Context, userID string, sta
 		MerchantName:      row.MerchantName,
 		Amount:            row.Amount,
 		Category:          row.Category,
-		PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+		PFCPrimaryDisplay: resolveCategoryDisplay(row.Category, row.CategoryDisplay),
 		Date:              row.Date.Format("2006-01-02"),
 		StartDate:         startDate.Format("2006-01-02"),
 		EndDate:           endDate.Format("2006-01-02"),
@@ -783,7 +803,7 @@ func (s *analyticsService) GetUnusualSpend(ctx context.Context, userID string, s
 			MerchantName:      row.MerchantName,
 			Amount:            row.Amount,
 			Category:          row.Category,
-			PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+			PFCPrimaryDisplay: resolveCategoryDisplay(row.Category, row.CategoryDisplay),
 			Date:              row.Date.Format("2006-01-02"),
 			BaselineAvg:       row.BaselineAvg,
 			SigmaAbove:        row.SigmaAbove,
