@@ -12,8 +12,11 @@ interface CategoryHierarchyFilters {
 interface UseCategoryHierarchyOptions {
   filters: CategoryHierarchyFilters
   /**
-   * Which side of the ledger. The endpoint's default depth is asymmetric on purpose — income reads
-   * best one level down (wages, dividends, rental), expenses at the primary level.
+   * Which side of the ledger. The endpoint returns the SAME full tree for both — direction selects
+   * which transactions are aggregated, not how deep the result goes. How many levels to SHOW is the
+   * CHART's choice: it renders income at leaf depth (wages, dividends, rental) and expenses at
+   * primary depth. Saying "the endpoint's depth is asymmetric" here would restate the inaccuracy
+   * the operation's own doc was corrected to remove.
    */
   direction: 'income' | 'expense'
   enabled?: boolean

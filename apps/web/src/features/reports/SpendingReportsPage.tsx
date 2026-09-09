@@ -153,10 +153,10 @@ export function SpendingReportsPage() {
   const handleCategoryClick = (category: string, displayLabel: string) => {
     if (category.startsWith('custom:')) return
     if (drilldown?.category === category) {
+      // Deliberately does NOT touch sankeyFocus. A pie drilldown does not change the Sankey's
+      // universe — the chart reads its own endpoint, which has no `category` param at all — so
+      // resetting its focus here would re-couple the two views that are kept separate on purpose.
       setDrilldown(undefined)
-    // #1626: the focused category may not exist in the new universe. Leaving it set makes the
-    // control claim a focus the chart has silently abandoned.
-    setSankeyFocus(undefined)
     } else {
       setDrilldown({ category, displayLabel })
       trackEvent(ANALYTICS_EVENTS.REPORT_CATEGORY_CLICKED, { category })
@@ -235,7 +235,7 @@ export function SpendingReportsPage() {
               <SankeyViewModeControl
                 value={sankeyMode}
                 onChange={setSankeyMode}
-                focusedLabel={sankeyFocus}
+                focusedKey={sankeyFocus}
                 onClearFocus={() => setSankeyFocus(undefined)}
               />
             </div>

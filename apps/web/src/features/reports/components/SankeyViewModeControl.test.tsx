@@ -54,7 +54,7 @@ describe('SankeyViewModeControl', () => {
       <SankeyViewModeControl
         value="parents"
         onChange={mock(() => {})}
-        focusedLabel="FOOD_AND_DRINK"
+        focusedKey="FOOD_AND_DRINK"
         onClearFocus={onClearFocus}
       />,
     )
