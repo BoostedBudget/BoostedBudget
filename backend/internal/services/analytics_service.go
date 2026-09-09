@@ -683,17 +683,46 @@ func (s *analyticsService) GetCategoryBreakdownForMerchant(ctx context.Context, 
 		totalSpend += row.Total
 	}
 
-	categories := make([]domain.CategoryBreakdownItem, 0, len(rows))
-	for _, row := range rows {
-		item := domain.CategoryBreakdownItem{
+	// #1626 Phase 2, item 10. Merge by the STABLE KEY, exactly as the income and expense reads do.
+	// Phase 1 added effective_category_name to this read's GROUP BY so a custom category could be
+	// NAMED rather than showing a UUID, but did not add the merge — and that column is refreshed
+	// asynchronously after a rename, so mid-refresh one category arrives as TWO rows. See
+	// mergeCategoryRows for why merging alone is not enough.
+	items := make([]domain.CategoryBreakdownItem, len(rows))
+	for i, row := range rows {
+		items[i] = domain.CategoryBreakdownItem{
 			Category:          row.Category,
 			PFCPrimaryDisplay: resolveCategoryDisplay(row.Category, row.CategoryDisplay),
 			Total:             row.Total,
 			TransactionCount:  row.Count,
-			Percentage:        calculatePercentage(row.Total, totalSpend),
 		}
+	}
+
+	order := mergeCategoryRows(
+		len(items),
+		func(i int) string { return items[i].Category },
+		func(dst, src int) {
+			items[dst].Total += items[src].Total
+			items[dst].TransactionCount += items[src].TransactionCount
+			// First real name wins; a stale placeholder must not blank an established one.
+			if items[dst].PFCPrimaryDisplay == unnamedCustomCategoryLabel && items[src].PFCPrimaryDisplay != unnamedCustomCategoryLabel {
+				items[dst].PFCPrimaryDisplay = items[src].PFCPrimaryDisplay
+			}
+		},
+	)
+
+	categories := make([]domain.CategoryBreakdownItem, 0, len(order))
+	for _, i := range order {
+		item := items[i]
+		// From the MERGED total. Computed before merging, each half of a split category reports
+		// half its real share, and the halves together overstate the number of categories.
+		item.Percentage = calculatePercentage(item.Total, totalSpend)
 		categories = append(categories, item)
 	}
+
+	// Re-sort: a merged 120 must outrank an unmerged 100, and the rows arrive in the SQL's
+	// pre-merge order, where each half was smaller than its rival.
+	sortCategoryBreakdownItems(categories)
 
 	return &domain.CategoryBreakdownForMerchantResponse{
 		MerchantName: merchantID,

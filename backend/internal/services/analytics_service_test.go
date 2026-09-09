@@ -1506,6 +1506,71 @@ func TestAnalyticsService_GetCategoryBreakdownForMerchant(t *testing.T) {
 		}
 	})
 
+	// ── #1626 Phase 2, item 10: PHASE 1 CAUSED THIS ──────────────────────────────────────────
+	//
+	// Phase 1 added t.effective_category_name to this read's GROUP BY so a custom category could
+	// be NAMED instead of showing a UUID. It did not add the merge the income and expense paths
+	// already had. That column is denormalised per transaction and refreshed ASYNCHRONOUSLY after
+	// a rename, so mid-refresh ONE custom category yields TWO rows — one per name — and the fix
+	// for a cosmetic bug became a correctness bug: the category appears twice, its spend split,
+	// and both percentages halved.
+	//
+	// ⚠ Merging alone is not sufficient, which is why this fixture has a COMPETING category. Two
+	// merged 60s outrank an unmerged 100, so percentages must come from the MERGED total and the
+	// list must be RE-SORTED after merging. A two-row single-key fixture cannot expose either
+	// failure — it would pass against a merge that forgot both.
+	t.Run("a mid-rename custom category is ONE row, correctly ranked", func(t *testing.T) {
+		const catKey = "custom:11111111-1111-1111-1111-111111111111"
+		mockRepo := &mockAnalyticsRepository{
+			getCategoryBreakdownForMerchantFn: func(ctx context.Context, userID string, mID string, f domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
+				// The SQL orders by total DESC, so the competing category leads on arrival: each
+				// half of the split category is smaller than it.
+				return []domain.CategoryBreakdownForMerchantRow{
+					{Category: "SHOPPING", CategoryDisplay: "SHOPPING", Total: 100.0, Count: 1},
+					{Category: catKey, CategoryDisplay: "Coffee runs", Total: 60.0, Count: 3},
+					{Category: catKey, CategoryDisplay: "Coffee", Total: 60.0, Count: 2},
+				}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+
+		result, err := service.GetCategoryBreakdownForMerchant(ctx, "user-123", merchantID, filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(result.Categories) != 2 {
+			t.Fatalf("expected the two names to merge into ONE category (2 total), got %d: %+v",
+				len(result.Categories), result.Categories)
+		}
+
+		// Ranking: 120 merged beats 100, so the custom category must lead. This is the assertion a
+		// merge without a re-sort fails — it would leave SHOPPING first, in pre-merge order.
+		if result.Categories[0].Category != catKey {
+			t.Errorf("expected the merged category (120) to outrank SHOPPING (100), got %q first",
+				result.Categories[0].Category)
+		}
+		if result.Categories[0].Total != 120.0 {
+			t.Errorf("expected merged total 120, got %f", result.Categories[0].Total)
+		}
+		if result.Categories[0].TransactionCount != 5 {
+			t.Errorf("expected merged count 5, got %d", result.Categories[0].TransactionCount)
+		}
+
+		// Percentages from the MERGED total: 120/220. Computed pre-merge they would be 27.27 each,
+		// which sums past 100 across the two halves and understates the real share.
+		wantPct := 120.0 / 220.0 * 100
+		if diff := result.Categories[0].Percentage - wantPct; diff > 0.001 || diff < -0.001 {
+			t.Errorf("expected merged percentage %f, got %f", wantPct, result.Categories[0].Percentage)
+		}
+
+		// The name resolves to one of the two the rows carried — never to a UUID, which is the
+		// bug #1626 exists to fix and which a merge could reintroduce by blanking the display.
+		if d := result.Categories[0].PFCPrimaryDisplay; d != "Coffee runs" && d != "Coffee" {
+			t.Errorf("expected a real name, got %q", d)
+		}
+	})
+
 	t.Run("empty result returns non-nil response with empty categories", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
 			getCategoryBreakdownForMerchantFn: func(ctx context.Context, userID string, mID string, f domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
