@@ -3549,7 +3549,6 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		%s%s%s%s%s%s
 
 		ORDER BY sort_date DESC, source_disc ASC, id ASC
-		LIMIT $%d
 	`,
 		bankingMerchantJoins,
 		transactionTombstoneCondition("t", filters.IncludeReversed),
@@ -3558,8 +3557,11 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		retainedAccountVisibilityLegs("it", "it.date"),
 		investmentSyncExclusionCondition("it"),
 		investAcctFilter, investDateFilter, investSearchFilter, investActivityFilter, investCursorFilter, investBankingOnlyFilter,
-		limitPH,
 	)
+
+	// The LIMIT is appended rather than interpolated so the whole-set aggregate below can wrap this
+	// exact query without it — the page's only difference from the set (#1626 Phase 2).
+	limitClause := fmt.Sprintf("\n\t\tLIMIT $%d", limitPH)
 
 	// ── Whole-set totals, FIRST PAGE ONLY (#1626 Phase 2) ────────────────────
 	//
@@ -3572,57 +3574,35 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	// the busiest list in the app would be real cost for a number that does not change as the user
 	// pages. TestBankingKeysetCursoredPage_SkipsTheAggregateEntirely pins the skip.
 	//
-	// ⚠ IT REUSES THE PAGE QUERY’S OWN FRAGMENTS AND ARGS — that is the whole correctness
-	// argument. Rebuilding the predicate would let the total drift from the rows it describes, and
-	// a wrong total is worse than none because the client cannot tell that it is wrong. Two SQL
-	// strings agreeing is not two result sets agreeing, so the agreement is pinned behaviourally
-	// by TestFeedTotals_AgreeWithTheRowsTheyDescribe_Integration, not by reading these queries.
-	// Exact here because the cursor fragments are EMPTY whenever cursor is nil (the only case
-	// computed), and the LIMIT placeholder is simply left unreferenced — Postgres does not mind an
-	// unused trailing parameter, so every other $N keeps its meaning.
+	// ⚠ IT WRAPS THE PAGE QUERY ITSELF rather than restating its predicates, and that is
+	// deliberate. The first attempt here hand-copied the two UNION arms' WHERE clauses; it was
+	// syntactically invalid on the first real-Postgres run, and had it merely been subtly wrong
+	// instead it would have shipped a total that quietly disagreed with the rows it described —
+	// worse than no total, because the client cannot tell that it is wrong. Wrapping makes drift
+	// impossible by construction: there is only one copy of the predicate.
+	//
+	// `amount` is the second UNION arm's own column too, and a UNION takes its output names from
+	// the first arm, so the sum is over both banking and investment rows with their own signs.
+	// The LIMIT lives in limitClause, appended only to the page query — the sole difference.
+	//
+	// ⚠ And the LIMIT's ARGUMENT has to go with it. An earlier version of this comment claimed
+	// Postgres does not mind an unused trailing parameter; it does — the extended protocol rejects
+	// the bind outright ("expected 1 arguments, got 2"). args[:limitPH-1] drops exactly that one,
+	// which is sound only because the limit is appended last and $limitPH appears nowhere else.
 	var totals *domain.FeedTotals
 	if cursor == nil {
-		aggQuery := fmt.Sprintf(`
-		-- tombstone-exempt(transactions t): the placeholder two lines below this SELECT interpolates
-		-- transactionTombstoneCondition("t", filters.IncludeReversed) unconditionally, exactly as the
-		-- page query does — this aggregate shares that fragment rather than restating it, which is
-		-- what keeps the total from drifting from the rows (#1569, #1626).
-		SELECT COUNT(*), COALESCE(SUM(amt), 0) FROM (
-			SELECT t.amount AS amt
-			FROM transactions t
-			%s
-			WHERE t.user_id = $1::uuid
-			  %s
-			  AND (%s
-			  )
-			  %s%s%s%s%s
-			UNION ALL
-			SELECT it.amount AS amt
-			FROM investment_transactions it
-			WHERE it.user_id = $1::uuid
-			  AND (%s
-			  )
-			  %s
-			  %s%s%s%s%s
-		) agg`,
-			bankingMerchantJoins,
-			transactionTombstoneCondition("t", filters.IncludeReversed),
-			retainedAccountVisibilityLegs("t", "t.date"),
-			bankingAcctFilter, bankingDateFilter, bankingSearchFilter, bankingExtraFilter, bankingActivityFilter,
-			retainedAccountVisibilityLegs("it", "it.date"),
-			investmentSyncExclusionCondition("it"),
-			investAcctFilter, investDateFilter, investSearchFilter, investActivityFilter, investBankingOnlyFilter,
-		)
+		aggQuery := fmt.Sprintf(
+			`SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM (%s) agg`, query)
 
 		var count int
 		var amount float64
-		if err := r.db.QueryRow(ctx, aggQuery, args...).Scan(&count, &amount); err != nil {
+		if err := r.db.QueryRow(ctx, aggQuery, args[:limitPH-1]...).Scan(&count, &amount); err != nil {
 			return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified totals: %w", err)
 		}
 		totals = &domain.FeedTotals{Count: count, Amount: amount}
 	}
 
-	rows, err := r.db.Query(ctx, query, args...)
+	rows, err := r.db.Query(ctx, query+limitClause, args...)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified: %w", err)
 	}
