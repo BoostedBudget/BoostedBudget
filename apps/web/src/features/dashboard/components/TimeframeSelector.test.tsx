@@ -78,7 +78,9 @@ describe('TimeframeSelector', () => {
     // 2025-01-15 is Wednesday; Monday of that week = Jan 13
     const testCases: [string, string, string][] = [
       ['This Week', '2025-01-13', '2025-01-15'],
-      ['This Month', '2025-01-01', '2025-01-31'],
+      // Ends on the frozen "today", not on Jan 31: this_month no longer emits a future end
+      // date (#1626 Phase 3, Defect 1).
+      ['This Month', '2025-01-01', '2025-01-15'],
       ['Last Month', '2024-12-01', '2024-12-31'],
       ['Last 3 Months', '2024-10-15', '2025-01-15'],
       ['Last 6 Months', '2024-07-15', '2025-01-15'],
