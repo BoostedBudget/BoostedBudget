@@ -97,3 +97,9 @@ func sortIncomeSources(rows []domain.IncomeSourceItem) {
 		)
 	})
 }
+
+// sortSliceStable is a tiny generic wrapper so callers express a comparator over ELEMENTS rather
+// than indices, which is what makes lessCategoryDisplay reusable across three response shapes.
+func sortSliceStable[T any](s []T, less func(a, b T) bool) {
+	sort.SliceStable(s, func(i, j int) bool { return less(s[i], s[j]) })
+}

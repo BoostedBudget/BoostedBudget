@@ -50,6 +50,11 @@ import (
 // TestCachedReadRepoFileListHasNotDrifted guards the list against a new *_cached.go appearing.
 var cachedReadRepoFiles = []string{
 	"analytics_repository.go",
+	// #1626: GetCategoryHierarchy's SQL lives in its own file, and it IS a cached read. Its read
+	// set adds no new table — transactions and custom_categories were already in
+	// expectedCachedReadTables — but the premise-checking scans below walk THIS list, so omitting
+	// the file would exempt the new SQL from them.
+	"analytics_category_path.go",
 	"balance_snapshot_repository.go",
 	"dashboard_preferences_repository.go",
 	"user_identity_repository.go",
@@ -758,7 +763,11 @@ func TestCachedReadRepoFileListHasNotDrifted(t *testing.T) {
 	// A cached read can also enter through dependency injection rather than a new import: that is
 	// exactly how balance_snapshots joins the read set, via analyticsService.SetBalanceSnapshotRepo.
 	wantGetOrLoadCounts := map[string]int{
-		"analytics_service_cached.go":             17,
+		// 18 since #1626 added GetCategoryHierarchy. Re-derived rather than merely incremented:
+		// its read set is transactions + custom_categories, both ALREADY in
+		// expectedCachedReadTables, so no previously-disjoint write becomes overlapping and every
+		// dispositionDerivedNoCacheImpact entry still holds.
+		"analytics_service_cached.go":             18,
 		"dashboard_preferences_service_cached.go": 1,
 		"identity_resolver_cached.go":             1,
 	}
