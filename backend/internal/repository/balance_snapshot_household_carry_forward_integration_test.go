@@ -371,3 +371,47 @@ func TestHouseholdAggregatedHistoryCarry_JointAccount_CarriedCopyDoesNotDoubleCo
 		"on day 2 the owner's real observation outranks the member's carried inference, and the "+
 			"joint account is still counted exactly once")
 }
+
+// TestHouseholdAggregatedHistoryCarry_WindowStart_InheritsABalanceFromBeforeTheWindow is why the
+// observed set is UNBOUNDED BELOW and the caller's start date is applied to the FILLED series
+// instead.
+//
+// ⚠ ADDED BY MUTATION. The first version of this file passed with the lower bound restored to the
+// observed CTE, because every fixture window opened before every fixture snapshot — so the
+// difference between "bound the observations" and "bound the filled series" was unobservable, and
+// the comment claiming the distinction mattered was unfalsifiable. Here the window opens on day 2
+// and the member's most recent sync is on day 0: bounding the observations would erase that account
+// from the chart entirely, which is the "this month chart under-counts every account whose last
+// sync was last month" defect stated as a test.
+func TestHouseholdAggregatedHistoryCarry_WindowStart_InheritsABalanceFromBeforeTheWindow(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+	c := newHouseholdCarryClock()
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ownerAcct := setupHouseholdMemberAccount(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+	backdateHouseholdAccountActive(t, pool, ownerAcct.AccountID, c.day(-20))
+	backdateHouseholdAccountActive(t, pool, memberAcct.AccountID, c.day(-20))
+
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, nil, domain.ShareVisibilityShared, c.at(-5, 8, 0))
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, nil, domain.ShareVisibilityShared, c.at(-5, 8, 0))
+
+	// The member's last sync is BEFORE the requested window opens.
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 307.89, c.at(0, 10, 33))
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 1000.11, c.at(0, 9, 17))
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 1100.22, c.at(3, 9, 17))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, c.day(2), c.day(10), nil)
+	require.NoError(t, err)
+
+	_, hasDay0 := totalOn(points, c.day(0))
+	assert.False(t, hasDay0, "the window's own lower bound still applies to what is RETURNED")
+	requireTotalOn(t, points, c.day(3), 1408.11,
+		"day 3 must inherit the member's day-0 balance even though day 0 is outside the window — "+
+			"bounding the OBSERVATIONS below would erase that account from the whole chart")
+}
