@@ -43,7 +43,11 @@ import (
 //     changed its range bounds from instant to calendar-date comparison, gained a per-account
 //     carry-forward, and stopped discarding an orphaned snapshot's balance from the type
 //     breakdown — so the same arguments return different money, and a surviving pre-fix entry
-//     would keep serving the collapsed day the fix exists to repair.
+//     would keep serving the collapsed day the fix exists to repair. #1626 Phase 3 Defect 1 took
+//     it to 5: GetCashFlowHistory, also cached here, stopped fabricating zero-valued buckets for
+//     periods that have not happened yet and now clamps its period_end and end_date to today, so
+//     a pre-fix entry — which decodes cleanly, the response struct being unchanged — would keep
+//     serving chart points dated in the future.
 //   - NamespaceAnalyticsRows 2 — the deleted_at tombstone filters and household-grants rewrite in
 //     analytics_repository.go, whose GetTopExpense / GetLargestTransactionsForPeriod /
 //     GetCategoryBreakdownForMerchant / GetUnusualSpend results are cached here.
@@ -52,7 +56,7 @@ import (
 // saying why in the same commit.
 func TestSchemaVersionBump_OrphansEntriesWrittenUnderThePriorVersion(t *testing.T) {
 	requiredFloor := map[Namespace]int{
-		NamespaceAnalytics:     4,
+		NamespaceAnalytics:     5,
 		NamespaceAnalyticsRows: 2,
 	}
 

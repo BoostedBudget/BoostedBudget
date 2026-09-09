@@ -209,10 +209,19 @@ func (s *analyticsService) GetCashFlowHistory(ctx context.Context, userID string
 		return nil, fmt.Errorf("invalid filters: %w", err)
 	}
 
-	// Default to daily grouping if not specified
+	// Default to daily grouping if not specified. Deliberately BEFORE the clamp below: the
+	// grouping describes the range the user ASKED for, so clamping first would silently
+	// re-bucket a three-month request as weekly the moment most of it lies in the future.
 	if filters.Grouping == "" {
 		filters.Grouping = autoSelectGrouping(filters.StartDate, filters.EndDate)
 	}
+
+	// ONE effectiveEnd, computed here at the service boundary and threaded into the repository
+	// call, so the same value bounds the query and the gap-filling (#1626 Phase 3, Defect 1).
+	// Nothing downstream re-derives "now": a clamp buried in the fill loop would leave the
+	// query, the fill and the response disagreeing about which day the answer stops on.
+	effectiveEnd := clampFillEnd(filters.EndDate, time.Now())
+	filters.EndDate = effectiveEnd
 
 	// Get grouped cash flow data
 	groupedData, err := s.analyticsRepo.GetCashFlowGrouped(ctx, userID, filters)
@@ -223,11 +232,9 @@ func (s *analyticsService) GetCashFlowHistory(ctx context.Context, userID string
 	// Convert to response format
 	periods := make([]domain.CashFlowPeriodData, len(groupedData))
 	for i, data := range groupedData {
-		periodEnd := calculatePeriodEnd(data.PeriodStart, filters.Grouping)
-
 		periods[i] = domain.CashFlowPeriodData{
 			PeriodStart:      data.PeriodStart,
-			PeriodEnd:        periodEnd,
+			PeriodEnd:        clampPeriodEnd(data.PeriodStart, calculatePeriodEnd(data.PeriodStart, filters.Grouping), effectiveEnd),
 			Income:           data.Income,
 			Expenses:         data.Expenses,
 			NetCashFlow:      data.Income - data.Expenses,
@@ -237,10 +244,62 @@ func (s *analyticsService) GetCashFlowHistory(ctx context.Context, userID string
 
 	return &domain.CashFlowHistoryResponse{
 		StartDate: filters.StartDate,
-		EndDate:   filters.EndDate,
+		EndDate:   responseEndDate(filters.StartDate, effectiveEnd, periods),
 		Grouping:  filters.Grouping,
 		Periods:   periods,
 	}, nil
+}
+
+// clampFillEnd returns the last calendar day a response may FABRICATE data for: the requested
+// end, or today (UTC) when the request reaches past it.
+//
+// UTC, not browser-local and not user-local: the API parses YYYY-MM-DD to UTC midnight and
+// buckets on UTC calendar dates, and the frontend presets now resolve "today" the same way
+// (shared/dates/presets.ts). A per-user IANA timezone exists (users.timezone, default "UTC")
+// and moving every date boundary to user-local is a coherent follow-up; mixing the two is what
+// produces an off-by-a-day disagreement, so both ends resolve UTC for now.
+//
+// This clamp is safe to thread into the query bound only because nothing downstream rebuilds the
+// result from the clamped horizon alone — see fillMissingPeriods in
+// repository/analytics_repository.go, which keeps every period its query returned even when the
+// period lies beyond this end.
+func clampFillEnd(requestedEnd, now time.Time) time.Time {
+	u := now.UTC()
+	today := time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
+	if requestedEnd.After(today) {
+		return today
+	}
+	return requestedEnd
+}
+
+// clampPeriodEnd stops a bucket advertising an end date the response has no data for: a weekly
+// bucket beginning last Monday runs to Sunday, and on a Wednesday that Sunday has not happened.
+// A bucket that begins beyond effectiveEnd keeps its own calculated end — it is real data past
+// the horizon (see fillMissingPeriods), and clamping it would produce an end before its start.
+func clampPeriodEnd(periodStart, periodEnd, effectiveEnd time.Time) time.Time {
+	if periodStart.After(effectiveEnd) {
+		return periodEnd
+	}
+	if periodEnd.After(effectiveEnd) {
+		return effectiveEnd
+	}
+	return periodEnd
+}
+
+// responseEndDate reports the range the response actually answered for: the clamped end, widened
+// to cover any real period lying beyond it rather than contradicting the periods it ships, and
+// floored at the start date so start <= end survives a range that is entirely in the future.
+func responseEndDate(startDate, effectiveEnd time.Time, periods []domain.CashFlowPeriodData) time.Time {
+	end := effectiveEnd
+	if end.Before(startDate) {
+		end = startDate
+	}
+	for _, p := range periods {
+		if p.PeriodEnd.After(end) {
+			end = p.PeriodEnd
+		}
+	}
+	return end
 }
 
 // autoSelectGrouping automatically determines the best grouping based on date range

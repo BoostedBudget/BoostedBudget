@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -373,27 +374,52 @@ func (r *analyticsRepository) getCashFlowGroupedHousehold(ctx context.Context, r
 	return results, nil
 }
 
-// fillMissingPeriods fills in missing periods with zero values for chart continuity
-func fillMissingPeriods(data []domain.CashFlowGroupedData, startDate, endDate time.Time, grouping string) []domain.CashFlowGroupedData {
+// periodKeyLayout is the calendar-date key a cash-flow bucket is identified by. Buckets come
+// out of DATE_TRUNC as dates with no time part, so the key is the whole of their identity.
+const periodKeyLayout = "2006-01-02"
+
+// fillMissingPeriods returns every period the query produced, plus zero-valued periods for the
+// gaps between them, so a chart gets a continuous series.
+//
+// fillEnd is the last period this function may FABRICATE. The service clamps it (see
+// clampFillEnd in services/analytics_service.go) so a request reaching into the future does not
+// manufacture buckets for days that have not happened yet — the user-visible defect was a Cash
+// Flow chart showing "Week of Sep 13 / Sep 20 / Sep 27" on Sep 9, flat at exactly 0
+// (#1626 Phase 3, Defect 1). Two invariants make that clamp safe to apply:
+//
+//   - Nothing empty is generated past fillEnd, and nothing at all when the requested range lies
+//     entirely beyond it. That second guard is not redundant: truncateDate moves a start date
+//     BACKWARD to Monday/month-start, so a range wholly in the future (today Wednesday, request
+//     starting Friday) still truncated to a Monday inside the horizon and emitted one fake
+//     "current period" bucket.
+//   - No period present in `data` is ever dropped. This function rebuilds its output from the
+//     generated key sequence alone, so a real row whose key falls outside that sequence would be
+//     DISCARDED rather than merely left unfilled. That is precisely why the obvious fix — clamp
+//     the generated horizon to now — is a data-DELETING change and not a fix: transactions are
+//     bucketed on t.date, a zoneless calendar date that is effectively institution-local, so a
+//     user ahead of UTC has real, already-returned spending for a period the clamp would drop.
+//     Pinned by TestFillMissingPeriods_KeepsEveryRealPeriodBeyondTheHorizon.
+func fillMissingPeriods(data []domain.CashFlowGroupedData, startDate, fillEnd time.Time, grouping string) []domain.CashFlowGroupedData {
 	if len(data) == 0 {
-		return generateEmptyPeriods(startDate, endDate, grouping)
+		return generateEmptyPeriods(startDate, fillEnd, grouping)
 	}
 
-	periodMap := make(map[string]domain.CashFlowGroupedData)
+	periodMap := make(map[string]domain.CashFlowGroupedData, len(data))
 	for _, d := range data {
-		key := d.PeriodStart.Format("2006-01-02")
-		periodMap[key] = d
+		periodMap[d.PeriodStart.Format(periodKeyLayout)] = d
 	}
 
-	var result []domain.CashFlowGroupedData
-	current := truncateDate(startDate, grouping)
-	end := endDate
+	result := make([]domain.CashFlowGroupedData, 0, len(data))
+	emitted := make(map[string]bool, len(data))
 
-	for !current.After(end) {
-		key := current.Format("2006-01-02")
-		if existing, ok := periodMap[key]; ok {
-			result = append(result, existing)
-		} else {
+	if !startDate.After(fillEnd) {
+		for current := truncateDate(startDate, grouping); !current.After(fillEnd); current = advancePeriod(current, grouping) {
+			key := current.Format(periodKeyLayout)
+			emitted[key] = true
+			if existing, ok := periodMap[key]; ok {
+				result = append(result, existing)
+				continue
+			}
 			result = append(result, domain.CashFlowGroupedData{
 				PeriodStart:      current,
 				Income:           0,
@@ -401,18 +427,38 @@ func fillMissingPeriods(data []domain.CashFlowGroupedData, startDate, endDate ti
 				TransactionCount: 0,
 			})
 		}
-		current = advancePeriod(current, grouping)
 	}
+
+	// Real periods the generated sequence did not cover — beyond fillEnd, or before the start
+	// date the caller asked to fill from. Kept, never zeroed and never dropped.
+	for _, d := range data {
+		key := d.PeriodStart.Format(periodKeyLayout)
+		if emitted[key] {
+			continue
+		}
+		emitted[key] = true
+		result = append(result, d)
+	}
+
+	sort.Slice(result, func(i, j int) bool { return result[i].PeriodStart.Before(result[j].PeriodStart) })
 
 	return result
 }
 
-// generateEmptyPeriods creates a list of zero-value periods
-func generateEmptyPeriods(startDate, endDate time.Time, grouping string) []domain.CashFlowGroupedData {
+// generateEmptyPeriods creates a list of zero-value periods covering [startDate, fillEnd].
+// Returns nothing when the range lies entirely beyond fillEnd — see fillMissingPeriods above
+// for why truncateDate makes that guard necessary rather than merely defensive. This is the
+// path an empty result set takes, so it needs the guard in its own right: the clamp would
+// otherwise never be reached for a user with no transactions in the requested range.
+func generateEmptyPeriods(startDate, fillEnd time.Time, grouping string) []domain.CashFlowGroupedData {
+	if startDate.After(fillEnd) {
+		return nil
+	}
+
 	var result []domain.CashFlowGroupedData
 	current := truncateDate(startDate, grouping)
 
-	for !current.After(endDate) {
+	for !current.After(fillEnd) {
 		result = append(result, domain.CashFlowGroupedData{
 			PeriodStart:      current,
 			Income:           0,
