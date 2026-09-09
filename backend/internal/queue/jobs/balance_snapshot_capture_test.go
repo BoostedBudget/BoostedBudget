@@ -523,6 +523,27 @@ func TestBalanceSnapshotDispatchUniqueOpts_DoesNotSuppressTheScheduledRunOnADepl
 		"Completed is required by RunOnStart — without it a run that completed minutes ago does not "+
 			"suppress the start-of-process catch-up insert")
 
+	// ⚠ THE MECHANISM, NOT JUST A BOUND. River's dedup bucket is Truncate(ByPeriod) of the enqueue
+	// instant, so "does a deploy suppress the scheduled run" is decided by whether the two instants
+	// land in the SAME bucket. This computes that directly for every hour of a day, which is
+	// stronger than the `< 24h` bound above: a ByPeriod of exactly 24h fails on every hour, and any
+	// ByPeriod long enough to swallow part of the day fails on the hours it swallows.
+	//
+	// It is still an assertion about the OPTIONS rather than about River's own behaviour — nothing
+	// in-process can observe River's bucketing without a real client and database — but it encodes
+	// the rule those options are consumed by instead of a proxy for it.
+	scheduled := time.Date(2026, 9, 9, BalanceSnapshotDispatchHourUTC, 0, 0, 0, time.UTC)
+	for hour := 0; hour < 24; hour++ {
+		if hour == BalanceSnapshotDispatchHourUTC {
+			continue // the scheduled run itself; suppressing a duplicate of it is the POINT
+		}
+		deploy := time.Date(2026, 9, 9, hour, 0, 0, 0, time.UTC)
+		assert.NotEqual(t, deploy.Truncate(opts.ByPeriod), scheduled.Truncate(opts.ByPeriod),
+			"a deploy at %02d:00 UTC and the %02d:00 UTC scheduled run must fall in DIFFERENT dedup "+
+				"buckets, or the scheduled run is discarded against the completed deploy-time run",
+			hour, BalanceSnapshotDispatchHourUTC)
+	}
+
 	// The per-item capture is the OPPOSITE, and the asymmetry is deliberate: a completed capture
 	// must not suppress a later one, because a capture that ran this morning covered this morning's
 	// roster and an account linked since then still needs a row today. The cohort skip is what makes
