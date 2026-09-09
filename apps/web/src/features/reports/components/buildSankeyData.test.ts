@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'bun:test'
-import { buildSankeyData, EXPENSE_NODE_BUDGET, INCOME_NODE_BUDGET, TOTAL_NODE_BUDGET } from './buildSankeyData'
+import {
+  buildSankeyData,
+  EXPENSE_LADDER,
+  EXPENSE_NODE_BUDGET,
+  INCOME_NODE_BUDGET,
+  TOTAL_NODE_BUDGET,
+} from './buildSankeyData'
 import type { CategoryHierarchyNode } from '@boostedbudget/api-client/models'
 
 function node(
@@ -384,5 +390,127 @@ describe('buildSankeyData — uncategorized spend', () => {
     const hubOut = data.links.filter(l => l.source === 'hub').reduce((s, l) => s + l.value, 0)
     const hubIn = data.links.filter(l => l.target === 'hub').reduce((s, l) => s + l.value, 0)
     expect(hubOut).toBeCloseTo(hubIn, 6)
+  })
+})
+
+describe('buildSankeyData — degradation ladder conservation (#1626 Phase 2, item 3)', () => {
+  /**
+   * Generates N roots, each with M children, each with K grandchildren — scaled at the CALL SITE
+   * from the real budget constants rather than hand-picked numbers, so the matrix below tracks the
+   * ladder if either budget or the rung table changes instead of silently drifting onto a different
+   * rung while still reporting green (the exact failure mode this test exists to rule out).
+   */
+  // Built bottom-up so total == direct_total + sum(children.total) at every level, matching the
+  // real API's own guarantee (see the "buildSankeyData — focus edge cases" fixture comment) — a
+  // fixture that violates it would make the conservation assertions below measure the fixture's
+  // own arithmetic instead of the builder's.
+  function genTree(roots: number, children: number, grandchildren: number): CategoryHierarchyNode[] {
+    const grandTotal = 1
+    const childDirect = 1
+    const childTotal = childDirect + grandchildren * grandTotal
+    const rootDirect = 1
+    const rootTotal = rootDirect + children * childTotal
+    return Array.from({ length: roots }, (_, i) =>
+      node(`P${i}`, `Parent ${i}`, rootTotal, rootDirect, Array.from({ length: children }, (_, j) =>
+        node(`C${i}_${j}`, `Child ${i}.${j}`, childTotal, childDirect, Array.from({ length: grandchildren }, (_, k) =>
+          node(`G${i}_${j}_${k}`, `Grand ${i}.${j}.${k}`, grandTotal))))))
+  }
+
+  // Swept across a spread of scales derived from EXPENSE_NODE_BUDGET rather than any single
+  // hand-tuned shape: no entry here is chosen to land on a PARTICULAR rung (that is the FORBIDDEN
+  // approach — see the brief), it is the coverage assertion below, over the whole matrix, that
+  // proves every reachable rung ran — and would fail loudly, not silently, if the sweep stopped
+  // being broad enough.
+  const rootCounts = [
+    1, 2, 4,
+    Math.round(EXPENSE_NODE_BUDGET / 4), Math.round(EXPENSE_NODE_BUDGET / 3), Math.round(EXPENSE_NODE_BUDGET / 2),
+    EXPENSE_NODE_BUDGET, EXPENSE_NODE_BUDGET * 2,
+  ]
+  const childCounts = [0, 1, 2, 6, Math.round(EXPENSE_NODE_BUDGET / 2), EXPENSE_NODE_BUDGET]
+  const grandchildCounts = [0, 1, 3]
+
+  const shapes = rootCounts.flatMap(roots =>
+    childCounts.flatMap(children =>
+      grandchildCounts.map(grandchildren => ({ roots, children, grandchildren }))))
+
+  it('conserves flow and respects both budgets at every generated shape, and exercises every rung', () => {
+    const observedRungs = new Set<number>()
+
+    for (const { roots, children, grandchildren } of shapes) {
+      const expenses = genTree(roots, children, grandchildren)
+      const data = buildSankeyData(income, expenses, { kind: 'expanded' })
+      const shapeLabel = `roots=${roots} children=${children} grandchildren=${grandchildren}`
+
+      const hubOut = data.links.filter(l => l.source === 'hub').reduce((s, l) => s + l.value, 0)
+      const hubIn = data.links.filter(l => l.target === 'hub').reduce((s, l) => s + l.value, 0)
+      expect(hubOut, shapeLabel).toBeCloseTo(hubIn, 6)
+      expectConservation(data)
+
+      const incomeNodes = data.nodes.filter(n => n.nodeKind === 'income' || n.id === 'in:other')
+      const expenseNodes = data.nodes.filter(n => n.id.startsWith('out:') || n.nodeKind === 'direct')
+      expect(incomeNodes.length, shapeLabel).toBeLessThanOrEqual(INCOME_NODE_BUDGET)
+      expect(expenseNodes.length, shapeLabel).toBeLessThanOrEqual(EXPENSE_NODE_BUDGET)
+      expect(data.nodes.length, shapeLabel).toBeLessThanOrEqual(TOTAL_NODE_BUDGET)
+
+      expect(data.expenseRungIndex, shapeLabel).toBeDefined()
+      observedRungs.add(data.expenseRungIndex as number)
+    }
+
+    // The LAST rung, [0, 0, 10], is UNREACHABLE under the current constants — a real finding from
+    // building this test, reported in the task report rather than fixed here (this task changes no
+    // production BEHAVIOUR). Proof: the rung immediately before it, [0, 0, 30], depth-0-collapses
+    // every kept root to exactly one node each and adds at most one overflow node, so it renders at
+    // most maxRoots + 1 nodes; 30 + 1 === EXPENSE_NODE_BUDGET (31), so that rung can never exceed
+    // the budget and fall through to the next one. The assertion below pins that maxRoots value so
+    // this exclusion breaks loudly — not silently — if EXPENSE_LADDER or the budget ever change
+    // under it.
+    const secondToLastRungMaxRoots = EXPENSE_LADDER[EXPENSE_LADDER.length - 2]?.[2]
+    expect(secondToLastRungMaxRoots).toBe(EXPENSE_NODE_BUDGET - 1)
+
+    // The assertion that makes all of the above trustworthy: without it, a matrix that only ever
+    // hit rung 0 would look like full coverage of the ladder.
+    const reachableRungIndices = new Set(EXPENSE_LADDER.map((_, i) => i).slice(0, -1))
+    expect(observedRungs).toEqual(reachableRungIndices)
+  })
+})
+
+describe('buildSankeyData — terminal collapse vs recursive rendering (#1626 Phase 2, item 4)', () => {
+  // Unlike the existing focus test, the collapsed sibling here (TRANSPORTATION) has its OWN
+  // children. A leaf sibling cannot distinguish "collapse renders one replacement node" from
+  // "the whole subtree still gets rendered", because a leaf has no subtree to wrongly render — both
+  // behaviours produce identical output. This fixture is the minimal one that can tell them apart.
+  const treeWithNestedSibling = [
+    node('TRANSPORTATION', 'Transportation', 500, 100, [
+      node('TRANSPORTATION_GAS', 'Gas', 300),
+      node('TRANSPORTATION_PARKING', 'Parking', 100),
+    ]),
+    node('FOOD_AND_DRINK', 'Food And Drink', 165, 40, [
+      node('custom:eo', 'Eating Out', 125, 100, [node('custom:cf', 'Coffee Runs', 25)]),
+    ]),
+  ]
+
+  it('collapses a sibling subtree into exactly ONE node, never one per descendant', () => {
+    const data = buildSankeyData(income, treeWithNestedSibling, { kind: 'focus', key: 'custom:eo' })
+
+    // Terminal collapse: one "Other" node stands in for the whole TRANSPORTATION subtree.
+    const others = data.nodes.filter(n => n.nodeKind === 'other')
+    expect(others).toHaveLength(1)
+    const collapsedLink = data.links.find(l => l.target === others[0]?.id)
+    expect(collapsedLink?.value).toBeCloseTo(500, 6)
+
+    // Recursive rendering would leak the subtree's own nodes; terminal collapse must not.
+    expect(data.nodes.some(n => n.id.includes('TRANSPORTATION'))).toBe(false)
+
+    // The focused path itself still renders normally.
+    const ids = data.nodes.map(n => n.id)
+    expect(ids).toContain('out:l1:FOOD_AND_DRINK')
+    expect(ids).toContain('out:l2:FOOD_AND_DRINK|custom:eo')
+
+    // Conservation once more: the collapsed subtree's full total must still reach the hub, so a
+    // "collapse" that actually DROPPED the subtree instead of folding it in would fail here too.
+    const hubOut = data.links.filter(l => l.source === 'hub').reduce((s, l) => s + l.value, 0)
+    const hubIn = data.links.filter(l => l.target === 'hub').reduce((s, l) => s + l.value, 0)
+    expect(hubOut).toBeCloseTo(hubIn, 6)
+    expectConservation(data)
   })
 })

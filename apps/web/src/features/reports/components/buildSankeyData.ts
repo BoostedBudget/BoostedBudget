@@ -74,6 +74,15 @@ export interface SankeyData {
   links: SankeyLink[]
   /** Max of the FULL income and expense sums — the true hub throughput, before any truncation. */
   hubTotal: number
+  /**
+   * Which rung of `EXPENSE_LADDER` rendered the expense fan, when the root ladder ran (undefined
+   * for an empty chart, and also when the focus-specific ladder in `renderExpenseFan` rendered the
+   * fan instead). DIAGNOSTIC ONLY (#1626 Phase 2, item 3): it exists so a test can name the rung
+   * that ran without inferring it from output shape — several rungs can produce output consistent
+   * with a small tree, so inference can silently "cover" a rung that never actually ran. No
+   * production code may branch on this value.
+   */
+  expenseRungIndex?: number
 }
 
 const isCustom = (key: string) => key.startsWith(CUSTOM_TOKEN)
@@ -260,26 +269,50 @@ function emitExpenses(forest: Rendered[]): { nodes: SankeyNode[]; links: SankeyL
 }
 
 /**
+ * The root-mode degradation ladder, used by the 'expanded' view and as the fallback when a focus
+ * view's key no longer exists (see the `mode.kind === 'focus'` fallthrough below). Exported so a
+ * test can name a rung by INDEX rather than restating this table (#1626 Phase 2, item 3): a
+ * hand-typed rung index in a test would silently point at the wrong rung the moment this table
+ * changes, and nothing would say so.
+ */
+export const EXPENSE_LADDER: Array<[depth: number, maxChildren: number, maxRoots: number]> =
+  [[2, 6, 30], [1, 6, 30], [1, 6, 10], [0, 0, 30], [0, 0, 10]]
+
+interface ExpenseFanResult {
+  nodes: SankeyNode[]
+  links: SankeyLink[]
+  /**
+   * Index into `EXPENSE_LADDER` when that ladder rendered the fan (root-mode: 'parents' or
+   * 'expanded', or a focus view's fallback). Index into the focus-specific ladder below when a
+   * focus view rendered directly. DIAGNOSTIC ONLY, see `SankeyData.expenseRungIndex` — no
+   * production code may branch on this.
+   */
+  rungIndex: number
+}
+
+/**
  * The degradation ladder. Each rung is re-counted; the first that fits wins. The floor is the
  * consolidated view, which renders one node per parent and therefore always fits.
  */
-function renderExpenseFan(roots: CategoryHierarchyNode[], mode: SankeyViewMode) {
+function renderExpenseFan(roots: CategoryHierarchyNode[], mode: SankeyViewMode): ExpenseFanResult {
   if (mode.kind === 'focus') {
-    for (const [depth, maxChildren] of [[2, 6], [1, 6], [1, 3], [0, 0]] as const) {
+    const focusLadder = [[2, 6], [1, 6], [1, 3], [0, 0]] as const
+    for (let i = 0; i < focusLadder.length; i++) {
+      const [depth, maxChildren] = focusLadder[i]
       const forest = pruneForFocus(roots, mode.key, depth, maxChildren)
       if (!forest) break // focused key no longer exists — fall through to the consolidated view
       const emitted = emitExpenses(forest)
-      if (emitted.nodes.length <= EXPENSE_NODE_BUDGET) return emitted
+      if (emitted.nodes.length <= EXPENSE_NODE_BUDGET) return { ...emitted, rungIndex: i }
     }
   }
 
   const rungs: Array<[depth: number, maxChildren: number, maxRoots: number]> =
-    mode.kind === 'parents'
-      ? [[0, 0, 10]]
-      : [[2, 6, 30], [1, 6, 30], [1, 6, 10], [0, 0, 30], [0, 0, 10]]
+    mode.kind === 'parents' ? [[0, 0, 10]] : EXPENSE_LADDER
 
   let last: { nodes: SankeyNode[]; links: SankeyLink[] } = { nodes: [], links: [] }
-  for (const [depth, maxChildren, maxRoots] of rungs) {
+  let lastIndex = 0
+  for (let i = 0; i < rungs.length; i++) {
+    const [depth, maxChildren, maxRoots] = rungs[i]
     const sorted = [...roots].sort((a, b) => b.total - a.total)
     const kept = sorted.slice(0, maxRoots).map(r => prune(r, depth, maxChildren))
     const dropped = sorted.slice(maxRoots)
@@ -291,9 +324,10 @@ function renderExpenseFan(roots: CategoryHierarchyNode[], mode: SankeyViewMode) 
       })
     }
     last = emitExpenses(kept)
-    if (last.nodes.length <= EXPENSE_NODE_BUDGET) return last
+    lastIndex = i
+    if (last.nodes.length <= EXPENSE_NODE_BUDGET) return { ...last, rungIndex: i }
   }
-  return last
+  return { ...last, rungIndex: lastIndex }
 }
 
 /**
@@ -427,6 +461,10 @@ export function buildSankeyData(
   const outFan = renderExpenseFan(validExpenses, mode)
   nodes.push(...outFan.nodes)
   links.push(...outFan.links)
+  // Root-mode ladder index only (see ExpenseFanResult) — a focus view that rendered directly
+  // (rather than falling through to the root ladder) reports an index into its OWN, different
+  // ladder here, which is why this field is diagnostic-only rather than something to branch on.
+  const expenseRungIndex = outFan.rungIndex
 
   if (surplus > 0) {
     nodes.push({
@@ -441,5 +479,5 @@ export function buildSankeyData(
     links.push({ source: 'hub', target: 'savings', value: surplus })
   }
 
-  return { nodes, links, hubTotal: Math.max(incomeSum, expenseSum) }
+  return { nodes, links, hubTotal: Math.max(incomeSum, expenseSum), expenseRungIndex }
 }
