@@ -472,6 +472,27 @@ func buildParityCases(t *testing.T, f *parityFixture, now time.Time) []parityCas
 		Bump: bumpPersonal(f),
 	})
 
+	// ── GetCategoryHierarchy (#1626) ─────────────────────────────────────────────────────────
+	// Direction is a METHOD ARGUMENT rather than a SpendingFilters field, so it is not covered by
+	// EncodeSpendingFilters; this case exists partly to prove the wrapper caches and invalidates
+	// correctly around that extra key component.
+	chFilters := domain.SpendingFilters{StartDate: periodStart, EndDate: periodEnd}
+	cases = append(cases, parityCase{
+		Name: "GetCategoryHierarchy",
+		Seed: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+			f.seedTransaction(t, ctx, 75.00, now.AddDate(0, 0, -5), "Groceries", "Market", "FOOD_AND_DRINK", "FOOD_AND_DRINK_GROCERIES")
+		},
+		Call: func(t *testing.T, ctx context.Context, svc AnalyticsService) any {
+			resp, err := svc.GetCategoryHierarchy(ctx, f.userID, chFilters, domain.CategoryDirectionExpense)
+			require.NoError(t, err)
+			return resp
+		},
+		Mutate: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+			f.seedTransaction(t, ctx, 40.00, now.AddDate(0, 0, -1), "Coffee", "Cafe", "FOOD_AND_DRINK", "FOOD_AND_DRINK_COFFEE")
+		},
+		Bump: bumpPersonal(f),
+	})
+
 	return cases
 }
 
@@ -806,6 +827,7 @@ func buildParityCasesTemplate() []string {
 		"GetAverageMonthlySpend",
 		"GetCategoryTotalForPeriod",
 		"GetIncomeSourceBreakdown",
+		"GetCategoryHierarchy",
 	)
 	return names
 }

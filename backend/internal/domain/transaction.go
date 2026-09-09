@@ -123,13 +123,13 @@ type Transaction struct {
 	ExternalMetadata *string `json:"external_metadata,omitempty" db:"external_metadata"`
 
 	// Core transaction fields (standardized across all providers)
-	Amount         float64    `json:"amount" db:"amount"` // Positive=outflow, Negative=inflow (Plaid PFCv2)
-	Date           time.Time  `json:"date" db:"date"`
-	AuthorizedDate *time.Time `json:"authorized_date,omitempty" db:"authorized_date"`
-	Name           string     `json:"name" db:"name"`
-	MerchantName          *string `json:"merchant_name,omitempty" db:"merchant_name"`
-	MerchantID            *string `json:"merchant_id,omitempty" db:"merchant_id"`
-	EffectiveMerchantName *string `json:"effective_merchant_name,omitempty" db:"-"`
+	Amount                float64    `json:"amount" db:"amount"` // Positive=outflow, Negative=inflow (Plaid PFCv2)
+	Date                  time.Time  `json:"date" db:"date"`
+	AuthorizedDate        *time.Time `json:"authorized_date,omitempty" db:"authorized_date"`
+	Name                  string     `json:"name" db:"name"`
+	MerchantName          *string    `json:"merchant_name,omitempty" db:"merchant_name"`
+	MerchantID            *string    `json:"merchant_id,omitempty" db:"merchant_id"`
+	EffectiveMerchantName *string    `json:"effective_merchant_name,omitempty" db:"-"`
 
 	// PFCv2 source columns (from Plaid)
 	PFCPrimary         *string `json:"pfc_primary,omitempty" db:"pfc_primary"`
@@ -398,8 +398,14 @@ type TransactionFilters struct {
 	// EndDate filters transactions on or before this date (inclusive)
 	EndDate *time.Time
 
-	// PFCPrimaries filters by effective PFC primary enum(s) (OR logic within).
+	// PFCPrimaries filters by effective PFC primary enum(s).
 	// Matches the effective category: override if set, else source pfc_primary.
+	//
+	// #1626: PFCPrimaries, PFCDetaileds and CustomCategoryIDs are ONE OR-joined group — a
+	// transaction matches if any of them matches. They used to be separate AND-ed conditions,
+	// which returned zero rows whenever a PFC and a custom filter were combined: a row is either
+	// pfc-kind or custom-kind (effective_pfc_primary is NULL on custom rows), so the conjunction
+	// of the two selected disjoint sets. See categoryFilterGroup.
 	PFCPrimaries []string
 
 	// PFCDetaileds filters by effective PFC detailed sub-category enum(s) (OR logic within).

@@ -4,6 +4,8 @@ import { MemoryRouter } from 'react-router'
 import React from 'react'
 
 import '@/test/mocks/shared-charts'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { createLocationHarness } from '@/test/utils/locationProbe'
 import { CashFlowSankeyChart } from './CashFlowSankeyChart'
 import type { CategoryHierarchyNode, CategoryHierarchyResponse } from '@boostedbudget/api-client/models'
@@ -70,6 +72,7 @@ const defaultProps = {
 beforeEach(() => {
   resetLocationProbe()
   focused = []
+  mockTrackEvent.mockClear()
 })
 
 describe('CashFlowSankeyChart', () => {
@@ -131,6 +134,38 @@ describe('CashFlowSankeyChart', () => {
 
       expect(focused).toEqual(['FOOD_AND_DRINK'])
       expect(currentUrl()).not.toContain('/transactions')
+    })
+
+    it('focusing a category is tracked, carrying the LEVEL and nothing identifying', () => {
+      render(<CashFlowSankeyChart {...defaultProps} viewMode={{ kind: 'parents' }} />)
+      fireEvent.click(screen.getByText(/Total Income → Food And Drink/))
+
+      expect(mockTrackEvent).toHaveBeenCalledWith(
+        ANALYTICS_EVENTS.REPORT_SANKEY_CATEGORY_FOCUSED,
+        { level: 'l1' },
+      )
+      // Event properties are stored verbatim and are NOT covered by data-ph-mask, so a category's
+      // name, id or amount must never appear in them.
+      const call = mockTrackEvent.mock.calls[0] as unknown as [string, Record<string, unknown>]
+      const props = JSON.stringify(call?.[1] ?? {})
+      expect(props).not.toContain('Food And Drink')
+      expect(props).not.toContain('FOOD_AND_DRINK')
+      expect(props).not.toContain('custom:')
+    })
+
+    it('every navigate action carries exactly ONE filter value', () => {
+      // This is why no URL-length cap is needed: parents focus, and a leaf resolves to a single
+      // custom id, detailed enum or primary. If a future change accumulated descendants' ids into
+      // one action, the query string would grow unbounded and session replay records it verbatim.
+      render(<CashFlowSankeyChart {...defaultProps} />)
+      for (const label of [/Food And Drink → Fast Food/, /Food And Drink → Eating Out/]) {
+        resetLocationProbe()
+        fireEvent.click(screen.getByText(label))
+        const params = new URLSearchParams(currentUrl().split('?')[1] ?? '')
+        const values = ['pfc_primaries', 'pfc_detaileds', 'custom_category_ids']
+          .flatMap(k => (params.get(k) ?? '').split(',').filter(Boolean))
+        expect(values).toHaveLength(1)
+      }
     })
 
     it('a synthetic node is inert — it neither navigates nor acts on its parent', () => {

@@ -342,6 +342,44 @@ describe('SpendingReportsPage Sankey drilldown immunity (G3 — Codex fix #4 reg
     mockUseGetSpendingByCategory.mockClear()
   })
 
+  it('a focused category is cleared when the date range changes', () => {
+    // The Sankey needs real data for there to be a node to focus.
+    mockUseGetCategoryHierarchy.mockReturnValue({
+      data: {
+        levels: [{
+          category: 'FOOD_AND_DRINK', display: 'Food And Drink', total: 300, direct_total: 100,
+          percentage: 100, transaction_count: 5,
+          children: [{
+            category: 'FOOD_AND_DRINK_FAST_FOOD', display: 'Fast Food', total: 200,
+            direct_total: 200, percentage: 66, transaction_count: 3, children: [],
+          }],
+        }],
+        total: 300, direction: 'expense', start_date: '2024-01-01', end_date: '2024-01-31',
+      },
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve({})),
+    } as never)
+
+    renderPage()
+
+    // Focus a category through the chart's own click path. Targeted by label rather than by
+    // position: the first button in the sr-only table is an INCOME row, which navigates.
+    const sankey = screen.getByTestId('sankey-chart')
+    fireEvent.click(within(sankey).getByText(/Total Income → Food And Drink/))
+    expect(screen.queryByText(/Back to all categories/)).not.toBeNull()
+
+    // Changing the date range changes the expense universe: the focused category may not exist in
+    // the new period. Leaving the focus set made the control claim a focus the chart had silently
+    // abandoned, since buildSankeyData falls back to a full view for an unknown key.
+    fireEvent.click(screen.getByText('This Month'))
+    expect(screen.queryByText(/Back to all categories/)).toBeNull()
+
+    mockUseGetCategoryHierarchy.mockReturnValue({
+      data: null, isLoading: false, error: null, refetch: mock(() => Promise.resolve({})),
+    } as never)
+  })
+
   it('the Sankey reads a different endpoint entirely, so a drilldown cannot narrow it', () => {
     renderPage()
     mockUseGetSpendingByCategory.mockClear()

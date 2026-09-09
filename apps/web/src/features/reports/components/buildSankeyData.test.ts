@@ -82,11 +82,27 @@ describe('buildSankeyData — hierarchy', () => {
     expectConservation(data)
   })
 
-  it('a direct bucket never claims to navigate — it has no expressible filter', () => {
-    const data = buildSankeyData(income, mixedExpenses(), { kind: 'expanded' })
-    for (const n of data.nodes.filter(x => x.nodeKind === 'direct' || x.nodeKind === 'other')) {
-      expect(n.action).toEqual({ kind: 'none' })
+  it('every synthetic node is inert — none of them has an expressible filter', () => {
+    // Covers the hub, savings and deficit as well as direct/overflow buckets: none of them names a
+    // set of transactions any filter can select, so none may claim it will navigate somewhere
+    // matching its own amount.
+    const surplus = buildSankeyData(income, mixedExpenses(), { kind: 'expanded' })
+    const deficit = buildSankeyData(
+      [node('INCOME', 'Income', 10)],
+      [node('RENT_AND_UTILITIES', 'Rent', 900)],
+      { kind: 'expanded' },
+    )
+    const synthetic = new Set(['hub', 'savings', 'deficit', 'other', 'direct'])
+    for (const data of [surplus, deficit]) {
+      const seen = new Set<string>()
+      for (const n of data.nodes.filter(x => synthetic.has(x.nodeKind))) {
+        seen.add(n.nodeKind)
+        expect(n.action).toEqual({ kind: 'none' })
+      }
+      expect(seen.has('hub')).toBe(true)
     }
+    expect(surplus.nodes.some(n => n.nodeKind === 'savings')).toBe(true)
+    expect(deficit.nodes.some(n => n.nodeKind === 'deficit')).toBe(true)
   })
 
   it('a PFC detailed leaf navigates by pfc_detaileds only, never widened to its primary', () => {
@@ -164,8 +180,19 @@ describe('buildSankeyData — node budget', () => {
     expect(hubIn).toBeCloseTo(manyIncome.reduce((s, n) => s + n.total, 0), 6)
   })
 
-  it('budgets are allocated so the floor is provable, not asserted', () => {
-    expect(INCOME_NODE_BUDGET + EXPENSE_NODE_BUDGET + 2).toBe(TOTAL_NODE_BUDGET)
+  it('the expense fan alone respects its own share of the budget', () => {
+    // The previous version of this test compared the exported constants to each other, which is
+    // tautological — it would pass even if buildSankeyData ignored every budget. This asserts the
+    // allocation is actually ENFORCED: the expense fan must fit its 31, not merely the global 45,
+    // or a wide expense tree would eat the income fan's share.
+    const data = buildSankeyData(income, hugeTree(), { kind: 'expanded' })
+    const expenseNodes = data.nodes.filter(
+      n => n.id.startsWith('out:') || n.nodeKind === 'direct',
+    )
+    expect(expenseNodes.length).toBeLessThanOrEqual(EXPENSE_NODE_BUDGET)
+
+    const incomeNodes = data.nodes.filter(n => n.nodeKind === 'income' || n.id === 'in:other')
+    expect(incomeNodes.length).toBeLessThanOrEqual(INCOME_NODE_BUDGET)
   })
 })
 

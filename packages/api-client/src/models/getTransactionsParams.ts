@@ -63,15 +63,15 @@ start_date?: string;
  */
 end_date?: string;
 /**
- * Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)
+ * Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL). OR-joined with pfc_detaileds and custom_category_ids: a transaction matches if ANY of the three matches.
  */
 pfc_primaries?: string;
 /**
- * Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). Combined with pfc_primaries using OR logic.
+ * Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). OR-joined with pfc_primaries and custom_category_ids.
  */
 pfc_detaileds?: string;
 /**
- * Filter by custom category UUIDs (comma-separated)
+ * Filter by custom category UUIDs (comma-separated). Each id also matches its child categories. OR-joined with pfc_primaries and pfc_detaileds — combining them returns the union, not the (always empty) intersection.
  */
 custom_category_ids?: string;
 /**
