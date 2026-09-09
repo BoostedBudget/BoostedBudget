@@ -109,9 +109,10 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
     // repairLinkedItem. Both are excludedWrite, so `allowed`/`read`/`write` are UNCHANGED and only
     // total and excluded move — reconnecting a bank needs a human in Plaid Link, so neither is a
     // capability an agent could ever exercise.
-    expect(fresh.totalOperations).toBe(208)
-    expect(fresh.allowedOperations).toBe(139)
-    expect(fresh.readOperations).toBe(94)
+    // #1626 added getCategoryHierarchy, a read: +1 total, +1 allowed, +1 read.
+    expect(fresh.totalOperations).toBe(209)
+    expect(fresh.allowedOperations).toBe(140)
+    expect(fresh.readOperations).toBe(95)
     expect(fresh.writeOperations).toBe(45)
     expect(fresh.excludedOperations).toBe(69)
     expect(fresh.destructiveWriteOperations).toBe(4)

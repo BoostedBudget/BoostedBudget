@@ -1287,6 +1287,7 @@ func TestSpendingRouteRegistration(t *testing.T) {
 		"/api/v1/analytics/largest-transactions",
 		"/api/v1/analytics/merchant-category-breakdown",
 		"/api/v1/analytics/income-sources",
+		"/api/v1/analytics/category-hierarchy",
 		"/api/v1/analytics/unusual-spend",
 		"/api/v1/analytics/net-worth-trend",
 		"/api/v1/analytics/budget-vs-actual",
@@ -1886,4 +1887,64 @@ func TestGetSpendingByCategory_HouseholdScope_ResolvesAndAttachesToFilters(t *te
 	require.NotNil(t, mockSvc.lastSpendingFilters)
 	assert.Same(t, scope, mockSvc.lastSpendingFilters.HouseholdScope)
 	mockHousehold.AssertExpectations(t)
+}
+
+// TestGetCategoryHierarchy_PassesDirectionAndScoping pins the handler's parameter plumbing (#1626).
+//
+// Direction is the one param that changes WHICH HALF OF THE LEDGER is read, so an unset or
+// misspelled value must not silently swap income for expense. The enum tag rejects garbage at the
+// edge, but the handler still defaults defensively, and that default is what this asserts.
+func TestGetCategoryHierarchy_PassesDirectionAndScoping(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		categoryHierarchyResponse: &domain.CategoryHierarchyResponse{Direction: "expense"},
+	}
+	handler := NewAnalyticsHandler(mockService, nil)
+
+	t.Run("income direction reaches the service", func(t *testing.T) {
+		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+			Direction:          "income",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, domain.CategoryDirectionIncome, mockService.lastCategoryDirection)
+	})
+
+	t.Run("an empty direction defaults to expense, never to income", func(t *testing.T) {
+		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, domain.CategoryDirectionExpense, mockService.lastCategoryDirection,
+			"an unset direction must not read the other half of the ledger")
+	})
+
+	t.Run("custom category scoping and roll-up default", func(t *testing.T) {
+		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+			CustomCategoryIDs:  " abc , def ,, ",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, mockService.lastSpendingFilters)
+		assert.Equal(t, []string{"abc", "def"}, mockService.lastSpendingFilters.CustomCategoryIDs,
+			"blank entries must be dropped and values trimmed")
+		assert.True(t, mockService.lastSpendingFilters.RollUpChildren,
+			"roll-up defaults to true — only the literal \"false\" disables it")
+	})
+
+	t.Run("roll_up=false disables roll-up", func(t *testing.T) {
+		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+			RollUp:             "false",
+		})
+		require.NoError(t, err)
+		assert.False(t, mockService.lastSpendingFilters.RollUpChildren)
+	})
 }

@@ -86,7 +86,7 @@ describe('createApiClient', () => {
     )
   })
 
-  it('contains exactly 138 allowed operation methods', () => {
+  it('contains exactly 140 allowed operation methods', () => {
     const mutator = mock(() => Promise.resolve({})) as unknown as FetchMutator
     const client = createApiClient(mutator)
 
@@ -113,6 +113,8 @@ describe('createApiClient', () => {
     //                is also newly classified but excluded, so it adds no facade method.
     // +1 from #1569: getAccountBalanceHistory (read) — the reader for balance_snapshots, which
     //                was written by every sync and had no per-account reader at all.
-    expect(count).toBe(139)
+    // +1 from #1626: getCategoryHierarchy (read) — the three-level category tree per flow
+    //                direction, designed to be tool-callable in one round trip.
+    expect(count).toBe(140)
   })
 })

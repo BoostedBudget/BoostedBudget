@@ -371,7 +371,9 @@ describe('completeness', () => {
     //   either one out. They shipped in the spec before being classified, which broke
     //   check:manifest and the spec-index build until this entry — the same failure mode Task 16
     //   records above.
-    expect(ALL_OPERATION_IDS.length).toBe(208)
+    // +1 from Issue #1626: getCategoryHierarchy, a read. Every Analytics-tagged operation must
+    //   be read-class — TestMCPManifest_AnalyticsOpsAreInGoManifest enforces that on the Go side.
+    expect(ALL_OPERATION_IDS.length).toBe(209)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified
