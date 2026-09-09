@@ -28,9 +28,9 @@ import (
 type RuleConditionField string
 
 const (
-	FieldMerchant       RuleConditionField = "merchant"
-	FieldName           RuleConditionField = "name"
-	FieldMerchantID     RuleConditionField = "merchant_id"
+	FieldMerchant   RuleConditionField = "merchant"
+	FieldName       RuleConditionField = "name"
+	FieldMerchantID RuleConditionField = "merchant_id"
 	// FieldAmount is the ABSOLUTE magnitude, frozen at the pre-#1625 semantics.
 	FieldAmount RuleConditionField = "amount"
 	// FieldSignedAmount is the raw signed amount: positive = outflow, negative = inflow.
@@ -121,14 +121,14 @@ var numberOps = map[RuleConditionOperator]ValueShape{
 
 // FieldSpecs is the authoritative field × operator × value-shape matrix.
 var FieldSpecs = map[RuleConditionField]FieldSpec{
-	FieldMerchant:     {Field: FieldMerchant, Ops: textOps},
-	FieldName:         {Field: FieldName, Ops: textOps},
-	FieldMerchantID:   {Field: FieldMerchantID, Ops: idOps},
-	FieldAccountID:    {Field: FieldAccountID, Ops: idOps},
-	FieldAccountType:  {Field: FieldAccountType, Ops: textOps},
+	FieldMerchant:       {Field: FieldMerchant, Ops: textOps},
+	FieldName:           {Field: FieldName, Ops: textOps},
+	FieldMerchantID:     {Field: FieldMerchantID, Ops: idOps},
+	FieldAccountID:      {Field: FieldAccountID, Ops: idOps},
+	FieldAccountType:    {Field: FieldAccountType, Ops: textOps},
 	FieldPaymentChannel: {Field: FieldPaymentChannel, Ops: textOps},
-	FieldAmount:       {Field: FieldAmount, Ops: numberOps},
-	FieldSignedAmount: {Field: FieldSignedAmount, Ops: numberOps},
+	FieldAmount:         {Field: FieldAmount, Ops: numberOps},
+	FieldSignedAmount:   {Field: FieldSignedAmount, Ops: numberOps},
 	FieldDirection: {
 		Field:  FieldDirection,
 		Ops:    map[RuleConditionOperator]ValueShape{RuleOpEq: ShapeText, RuleOpNeq: ShapeText, RuleOpIn: ShapeText},

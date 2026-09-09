@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -24,7 +25,7 @@ func TestQuarantineReason_FlagsTheStructurallyBrokenRules(t *testing.T) {
 	tests := []struct {
 		name       string
 		mutate     func(*domain.CategorizationRule)
-		wantReason string
+		wantReason observability.QuarantineReason
 	}{
 		{"a valid rule is not flagged", func(*domain.CategorizationRule) {}, ""},
 		{
@@ -33,19 +34,19 @@ func TestQuarantineReason_FlagsTheStructurallyBrokenRules(t *testing.T) {
 			// persisted row — which is exactly where it would recategorise a whole ledger.
 			"no conditions matches everything",
 			func(r *domain.CategorizationRule) { r.Conditions = nil },
-			"no_conditions_matches_everything",
+			observability.QuarantineNoConditions,
 		},
 		{
 			"invalid condition_logic silently defaults to AND",
 			func(r *domain.CategorizationRule) { r.ConditionLogic = "XOR" },
-			"invalid_condition_logic_defaults_to_and",
+			observability.QuarantineInvalidLogic,
 		},
 		{
 			"unknown condition type cannot be normalized",
 			func(r *domain.CategorizationRule) {
 				r.Conditions = []domain.RuleCondition{{Type: "amount", Value: 1000}}
 			},
-			"unnormalizable_condition",
+			observability.QuarantineUnnormalizable,
 		},
 		{
 			"a value shape the evaluator can never use",
@@ -54,7 +55,7 @@ func TestQuarantineReason_FlagsTheStructurallyBrokenRules(t *testing.T) {
 					{Type: domain.ConditionAmountRange, Value: "not-an-object"},
 				}
 			},
-			"invalid_condition_value_shape",
+			observability.QuarantineInvalidValue,
 		},
 	}
 

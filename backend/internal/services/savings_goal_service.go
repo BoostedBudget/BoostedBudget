@@ -176,7 +176,7 @@ func (s *savingsGoalService) CreateGoal(ctx context.Context, userID string, req 
 		Name:              req.Name,
 		Description:       req.Description,
 		TargetAmount:      req.TargetAmount,
-		CurrentAmount:     req.CurrentAmount,
+		CurrentAmount:     seedCurrentAmount(progressBasis, req.CurrentAmount),
 		CurrencyCode:      req.CurrencyCode,
 		AccountID:         req.AccountID,
 		Deadline:          req.Deadline,
@@ -240,24 +240,6 @@ func (s *savingsGoalService) CreateGoal(ctx context.Context, userID string, req 
 			// Report what was actually persisted, not what the caller asked for.
 			goal.CurrentAmount = recomputed
 		}
-	} else if goal.ProgressBasis == domain.ProgressBasisContributions {
-		// #1625, Codex gap analysis C4/C5: not every caller has a progress service wired. The
-		// MCP create path builds a TRANSACTION-LOCAL goal service (huma/operations/
-		// savings_goal.go) and cannot borrow the global one, because that is constructed with
-		// pool-backed repositories — mixing the two would put a transaction and the pool in one
-		// call. Building a transaction-bound progress service here would need an account
-		// repository and its field encryptor, which that handler does not have.
-		//
-		// It does not need one. A goal created THIS instant under the contributions basis has,
-		// by definition, no contributions, so its current_amount is zero — no query required.
-		// Without this the MCP path returned whatever current_amount the caller sent while the
-		// basis said the ledger owns it, i.e. a brand-new goal reporting progress it does not
-		// have.
-		//
-		// Deliberately scoped to `contributions`: for the balance and account_percentage bases,
-		// zero would be a fabricated answer rather than a derived one, so those keep the
-		// pre-existing behaviour and are corrected by the next sync's recompute.
-		goal.CurrentAmount = 0
 	}
 
 	s.logger.Info("savings goal created",
@@ -631,4 +613,26 @@ func (s *savingsGoalService) validateAccountOwnershipWithAccount(ctx context.Con
 	}
 
 	return nil, errors.New("account not found or does not belong to user")
+}
+
+// seedCurrentAmount decides what current_amount a goal is CREATED with (#1625).
+//
+// A goal created this instant under the contributions basis has, by definition, no
+// contributions, so its current_amount is zero — no query required. A caller-supplied figure is
+// meaningless there: the ledger owns that number.
+//
+// ⚠ This runs BEFORE the insert, deliberately. The first version of this fix zeroed the
+// in-memory goal AFTER goalRepo.Create, which left the row holding the caller's 5000 while the
+// response said 0 — a worse bug than the one it replaced, because the two now disagreed and
+// only one of them was visible. Codex review caught it; the mock expectation in the test was
+// mock.AnythingOfType, so the test could not see the persisted argument at all.
+//
+// Scoped to `contributions` on purpose. For the balance and account_percentage bases zero would
+// be a fabricated answer rather than a derived one, so those keep the caller's value and are
+// corrected by the next recompute.
+func seedCurrentAmount(progressBasis string, requested float64) float64 {
+	if progressBasis == domain.ProgressBasisContributions {
+		return 0
+	}
+	return requested
 }

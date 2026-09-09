@@ -1427,14 +1427,24 @@ func TestCreateGoal_ContributionsBasisIsZeroWithoutARecomputer(t *testing.T) {
 
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(
 		[]domain.Account{createTestAccountForGoal(userID)}, nil)
-	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+	// ⚠ Assert the PERSISTED argument, not just the returned struct. The first version of this
+	// test used a bare mock.AnythingOfType and therefore could not see that the fix zeroed the
+	// in-memory copy AFTER the insert — the row held 5000 while the response said 0, and the
+	// test passed. Codex review caught what the test could not.
+	var persisted float64
+	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).
+		Run(func(args mock.Arguments) {
+			persisted = args.Get(1).(*domain.SavingsGoal).CurrentAmount
+		}).Return(nil)
 
 	goal, err := service.CreateGoal(ctx, userID, req)
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.ProgressBasisContributions, goal.ProgressBasis)
-	assert.Equal(t, 0.0, goal.CurrentAmount,
-		"a goal created this instant has no contributions, so its current_amount is zero")
+	assert.Equal(t, 0.0, persisted,
+		"the row must be INSERTED with zero — a goal created this instant has no contributions")
+	assert.Equal(t, 0.0, goal.CurrentAmount, "and the response must agree with the row")
 }
 
 // ...but a basis whose value is DERIVED FROM AN ACCOUNT must not be zeroed: zero would be a
@@ -1453,10 +1463,16 @@ func TestCreateGoal_BalanceBasisIsNotZeroedWithoutARecomputer(t *testing.T) {
 
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(
 		[]domain.Account{createTestAccountForGoal(userID)}, nil)
-	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+	var persisted float64
+	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).
+		Run(func(args mock.Arguments) {
+			persisted = args.Get(1).(*domain.SavingsGoal).CurrentAmount
+		}).Return(nil)
 
 	goal, err := service.CreateGoal(ctx, userID, req)
 
 	require.NoError(t, err)
-	assert.Equal(t, 5000.0, goal.CurrentAmount)
+	assert.Equal(t, 5000.0, persisted, "a derived-from-account basis keeps the caller's seed on the row")
+	assert.Equal(t, 5000.0, goal.CurrentAmount, "and the response agrees with the row")
 }
