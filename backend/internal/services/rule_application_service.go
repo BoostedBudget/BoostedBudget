@@ -819,7 +819,7 @@ func (s *ruleApplicationService) reportQuarantineCandidates(ctx context.Context,
 			// The operator cannot infer this from the reason without knowing the enforcement
 			// set, and the whole failure class here is a rule being described as one thing
 			// while it does another.
-			slog.Bool("stopped_matching", observability.QuarantineReasonStopsMatching(reason)),
+			slog.Bool("stopped_matching", quarantineStopsMatching(reason)),
 		)
 	}
 }
@@ -833,4 +833,19 @@ func (s *ruleApplicationService) reportQuarantineCandidates(ctx context.Context,
 // run would then be two different sets.
 func quarantineReason(rule *domain.CategorizationRule) observability.QuarantineReason {
 	return rules.QuarantineReasonFor(rule)
+}
+
+// quarantineStopsMatching is the ONE answer to "is this rule actually prevented from matching".
+//
+// #1625 final review I3. There were THREE sources of truth: RuleMatches gated on the kill switch,
+// while annotateQuarantineStatus and reportQuarantineCandidates consulted
+// observability.QuarantineReasonStopsMatching alone. With RULE_QUARANTINE_ENFORCE off, the card
+// therefore said "Not running" while the engine went on recategorising the user's ledger — the
+// divergence RuleMatches' own doc comment calls impossible, and the precise failure this ticket
+// exists to remove.
+//
+// The reason predicate answers "does this REASON stop a rule". That is only half the question
+// while a kill switch exists; the other half is whether enforcement is on at all.
+func quarantineStopsMatching(reason observability.QuarantineReason) bool {
+	return rules.QuarantineEnforced() && observability.QuarantineReasonStopsMatching(reason)
 }
