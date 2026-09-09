@@ -376,8 +376,10 @@ func TestCategorizationRuleRepository_Update(t *testing.T) {
 	rule := createTestRule(uuid.New().String())
 	rule.ID = uuid.New().String()
 	rule.Name = "Updated Name"
+	rule.UpdatedAt = time.Now().Add(-time.Hour) // the value observed by the caller's prior read
 
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE categorization_rules`)).
+	returnedUpdatedAt := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE categorization_rules`)).
 		WithArgs(
 			rule.Name,
 			pgxmock.AnyArg(), // description
@@ -391,17 +393,20 @@ func TestCategorizationRuleRepository_Update(t *testing.T) {
 			pgxmock.AnyArg(), // target_custom_category_id
 			pgxmock.AnyArg(), // target_tags JSON
 			pgxmock.AnyArg(), // tag_behavior
-			pgxmock.AnyArg(), // updated_at
 			rule.ID,
-		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+			rule.UpdatedAt, // the optimistic-concurrency predicate (#1625 Task 19)
+		).WillReturnRows(pgxmock.NewRows([]string{"updated_at"}).AddRow(returnedUpdatedAt))
 
 	err := repo.Update(ctx, rule)
 
 	assert.NoError(t, err)
+	assert.Equal(t, returnedUpdatedAt, rule.UpdatedAt, "the trigger-stamped value must be read back, not assumed")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestCategorizationRuleRepository_Update_NotFound tests update of non-existent rule
+// TestCategorizationRuleRepository_Update_NotFound tests update of non-existent rule: zero rows
+// matched because the id itself does not exist, disambiguated from a concurrency conflict below
+// by the follow-up EXISTS check (#1625 Task 19).
 func TestCategorizationRuleRepository_Update_NotFound(t *testing.T) {
 	mock, repo := setupRuleMockDB(t)
 	defer mock.Close()
@@ -410,7 +415,7 @@ func TestCategorizationRuleRepository_Update_NotFound(t *testing.T) {
 	rule := createTestRule(uuid.New().String())
 	rule.ID = uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE categorization_rules`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE categorization_rules`)).
 		WithArgs(
 			pgxmock.AnyArg(), // name
 			pgxmock.AnyArg(), // description
@@ -424,14 +429,57 @@ func TestCategorizationRuleRepository_Update_NotFound(t *testing.T) {
 			pgxmock.AnyArg(), // target_custom_category_id
 			pgxmock.AnyArg(), // target_tags JSON
 			pgxmock.AnyArg(), // tag_behavior
-			pgxmock.AnyArg(), // updated_at
 			rule.ID,
-		).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+			rule.UpdatedAt,
+		).WillReturnError(pgx.ErrNoRows)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT EXISTS(SELECT 1 FROM categorization_rules WHERE id = $1)`)).
+		WithArgs(rule.ID).
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(false))
 
 	err := repo.Update(ctx, rule)
 
 	assert.Error(t, err)
 	assert.Equal(t, domain.ErrRuleNotFound, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCategorizationRuleRepository_Update_ConcurrentModification tests the other zero-rows case:
+// the id exists but updated_at moved underneath this write — the optimistic-concurrency conflict
+// #1625 Task 19 exists to catch, distinguished from Update_NotFound by the follow-up EXISTS check.
+func TestCategorizationRuleRepository_Update_ConcurrentModification(t *testing.T) {
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	rule := createTestRule(uuid.New().String())
+	rule.ID = uuid.New().String()
+	rule.UpdatedAt = time.Now().Add(-time.Hour) // stale — another write already moved the row on
+
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE categorization_rules`)).
+		WithArgs(
+			pgxmock.AnyArg(), // name
+			pgxmock.AnyArg(), // description
+			pgxmock.AnyArg(), // enabled
+			pgxmock.AnyArg(), // priority
+			pgxmock.AnyArg(), // conditions JSON
+			pgxmock.AnyArg(), // condition_logic
+			pgxmock.AnyArg(), // target_kind
+			pgxmock.AnyArg(), // target_pfc_primary
+			pgxmock.AnyArg(), // target_pfc_detailed
+			pgxmock.AnyArg(), // target_custom_category_id
+			pgxmock.AnyArg(), // target_tags JSON
+			pgxmock.AnyArg(), // tag_behavior
+			rule.ID,
+			rule.UpdatedAt,
+		).WillReturnError(pgx.ErrNoRows)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT EXISTS(SELECT 1 FROM categorization_rules WHERE id = $1)`)).
+		WithArgs(rule.ID).
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
+
+	err := repo.Update(ctx, rule)
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrRuleConcurrentlyModified)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

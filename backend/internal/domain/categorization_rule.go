@@ -327,6 +327,17 @@ var (
 	ErrRuleNotFound      = errors.New("categorization rule not found")
 	ErrRuleAlreadyExists = errors.New("categorization rule with this name already exists")
 	ErrRuleLimitExceeded = errors.New("categorization rule limit exceeded for subscription tier")
+
+	// ErrRuleConcurrentlyModified is returned when a read-modify-write (UpdateRule or ToggleRule)
+	// loses an optimistic-concurrency race: the row's updated_at no longer matches the value this
+	// write observed when it read the rule, because another request wrote the row in between.
+	// #1625 Task 19: without this, ToggleRule and UpdateRule both read-modify-write the WHOLE row,
+	// so a toggle racing a repair could write the repair's own PRIOR (malformed) definition back
+	// over it — last-writer-wins across every column, not just the one either caller meant to
+	// change. It is a PRECONDITION failure, not a fault: the honest answer is 409 and "read it
+	// again, then retry" — same shape as domain.ErrSavingsGoalBasisConflict. It must never
+	// surface as a 500 (see internal/huma/errors/mapper.go).
+	ErrRuleConcurrentlyModified = errors.New("categorization rule was modified concurrently")
 )
 
 // RulePreviewResult is the outcome of a dry run (#1625).
