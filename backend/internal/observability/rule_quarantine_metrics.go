@@ -65,6 +65,26 @@ var knownQuarantineReasons = func() map[QuarantineReason]struct{} {
 	return m
 }()
 
+// initQuarantineSeries creates an explicit zero-valued series for every reason at startup.
+//
+// A CounterVec label combination is absent from /metrics until first incremented, so without this
+// an empty scrape is ambiguous: no rules would be quarantined, or this code never executed? Shadow
+// mode exists solely to build that inventory before enforcement, so the ambiguity made the whole
+// deferral unjustifiable — a reviewer called it "unsafe" on exactly that ground.
+//
+// Derived from AllQuarantineReasons(), so a reason added later is pre-warmed without anyone
+// remembering this function exists.
+func initQuarantineSeries() {
+	for _, r := range AllQuarantineReasons() {
+		ruleQuarantineCandidates.WithLabelValues(string(r)).Add(0)
+	}
+	// "other" too: an unrecognised reason folds into it, and a scrape that omits the bucket
+	// entirely cannot be distinguished from one reporting no unrecognised reasons.
+	ruleQuarantineCandidates.WithLabelValues("other").Add(0)
+}
+
+func init() { initQuarantineSeries() }
+
 // RecordRuleQuarantineCandidate increments the shadow-mode quarantine counter for one reason.
 // An unrecognised reason is recorded as "other" rather than as itself: a metric is the wrong
 // place to discover that someone invented a label, and dropping the sample entirely would make
