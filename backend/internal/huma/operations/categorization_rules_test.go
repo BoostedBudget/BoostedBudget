@@ -1,11 +1,11 @@
 package operations
 
 import (
-	"github.com/maxnussbaum/BoostedBudget/internal/services"
-	"errors"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"net/http"
 	"testing"
 	"time"
@@ -19,13 +19,13 @@ import (
 
 // mockCategorizationRuleService is a mock implementation of services.CategorizationRuleService
 type mockCategorizationRuleService struct {
-	rules       []*domain.CategorizationRule
-	rule        *domain.CategorizationRule
-	createErr   error
-	getErr      error
-	updateErr   error
-	deleteErr   error
-	toggleErr   error
+	rules         []*domain.CategorizationRule
+	rule          *domain.CategorizationRule
+	createErr     error
+	getErr        error
+	updateErr     error
+	deleteErr     error
+	toggleErr     error
 	previewResult *domain.RulePreviewResult
 	previewErr    error
 }
@@ -537,6 +537,43 @@ func TestRuleValidationNeverReturns5xx(t *testing.T) {
 		}},
 	}
 
+	// UpdateRule validates independently and, before #1625, had NO 400 mapping whatsoever — every
+	// update validation failure was a 500. Codex review: the first version of this test only
+	// exercised CreateRule while the commit message claimed both, so the handler that was
+	// strictly worse had no coverage at all.
+	for _, tt := range invalidBodies {
+		// "no action at all" is unreachable through UPDATE: the request merges into the loaded
+		// rule, which already carries a target, and a nil TargetKind means "leave it alone"
+		// rather than "remove it". Skipping it here is a statement about the update contract,
+		// not a gap — the create path still covers that case.
+		if tt.name == "no action at all" {
+			continue
+		}
+		t.Run("update/"+tt.name, func(t *testing.T) {
+			// UpdateRule LOADS the existing rule before validating — it has to, since it merges
+			// the request into it — so unlike the create path it cannot run against a nil
+			// repository. This stub supplies an owned rule and nothing else; validation is still
+			// the real domain code.
+			svc := services.NewCategorizationRuleService(
+				&stubRuleRepoForValidation{owner: "user-123"}, nil)
+			handler := NewCategorizationRuleHandler(svc)
+
+			conds := tt.body.Conditions
+			_, err := handler.UpdateRule(context.Background(), &UpdateRuleInput{
+				AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+				ID:                 "rule-1",
+				Body: domain.UpdateCategorizationRuleRequest{
+					Name:       &tt.body.Name,
+					Conditions: &conds,
+					TargetKind: tt.body.TargetKind,
+				},
+			})
+
+			require.Error(t, err)
+			assertClientError(t, err)
+		})
+	}
+
 	for _, tt := range invalidBodies {
 		t.Run("create/"+tt.name, func(t *testing.T) {
 			// The REAL service and domain validation — a mock would only prove the mock's shape.
@@ -571,3 +608,45 @@ func assertClientError(t *testing.T, err error) {
 }
 
 func strPtrOps(s string) *string { return &s }
+
+// stubRuleRepoForValidation returns an owned rule from GetByID so UpdateRule reaches its
+// validation step. Every other method is unreachable in these tests and fails loudly if that
+// assumption ever stops holding.
+type stubRuleRepoForValidation struct {
+	owner string
+}
+
+func (s *stubRuleRepoForValidation) GetByID(_ context.Context, id string) (*domain.CategorizationRule, error) {
+	return &domain.CategorizationRule{
+		ID:             id,
+		UserID:         s.owner,
+		Name:           "existing",
+		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "x"}},
+		ConditionLogic: "AND",
+		TargetKind:     strPtrOps("clear"),
+		TagBehavior:    "add",
+		Source:         "manual",
+	}, nil
+}
+
+func (s *stubRuleRepoForValidation) Create(context.Context, *domain.CategorizationRule) error {
+	panic("Create must not be reached: these inputs are all invalid")
+}
+func (s *stubRuleRepoForValidation) Update(context.Context, *domain.CategorizationRule) error {
+	panic("Update must not be reached: these inputs are all invalid")
+}
+func (s *stubRuleRepoForValidation) GetByUserID(context.Context, string) ([]*domain.CategorizationRule, error) {
+	return nil, nil
+}
+func (s *stubRuleRepoForValidation) GetEnabledByUserID(context.Context, string) ([]*domain.CategorizationRule, error) {
+	return nil, nil
+}
+func (s *stubRuleRepoForValidation) GetByName(context.Context, string, string) (*domain.CategorizationRule, error) {
+	return nil, nil
+}
+func (s *stubRuleRepoForValidation) Delete(context.Context, string) error { return nil }
+func (s *stubRuleRepoForValidation) CountByUserID(context.Context, string) (int, error) {
+	return 0, nil
+}
+func (s *stubRuleRepoForValidation) IncrementMatchCount(context.Context, string) error    { return nil }
+func (s *stubRuleRepoForValidation) IncrementOverrideCount(context.Context, string) error { return nil }

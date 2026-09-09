@@ -90,6 +90,24 @@ describe('RulePreviewPanel (#1625)', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(/unknown field/i)
     })
+    // The message quotes back what the user sent, so the element carrying it must be masked.
+    expect(screen.getByRole('alert').closest('[data-ph-mask]')).not.toBeNull()
+  })
+
+  it('masks a validation error that quotes the user\'s own value back at them', async () => {
+    // A malformed date is echoed verbatim by the domain validator; an unknown-field message
+    // names what was sent. Either way the error line is user content, not a fixed string.
+    mockPreviewRuleMutateAsync.mockRejectedValueOnce({
+      response: { data: { detail: 'invalid value shape: "SENTINEL_MERCHANT_XYZ" is not a YYYY-MM-DD date' } },
+    } as never)
+
+    renderPanel()
+    fireEvent.click(screen.getByRole('button', { name: /preview matches/i }))
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('SENTINEL_MERCHANT_XYZ')
+    expect(alert.closest('[data-ph-mask]')).not.toBeNull()
   })
 
   it('says so plainly when nothing matched, without implying the rule is broken', async () => {

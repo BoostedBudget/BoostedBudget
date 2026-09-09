@@ -108,7 +108,11 @@ export function RulePreviewPanel({
       </div>
 
       {error && (
-        <p role="alert" className="mt-2 text-sm text-destructive">
+        // ⚠ MASKED. Codex review: a validation error is not a fixed string — the mapper returns
+        // the domain error verbatim, and several of those ECHO THE USER'S VALUE (a malformed
+        // date is quoted back, and an unknown-field message names what was sent). So this line
+        // can carry user-typed financial detail and must be masked like any other value.
+        <p role="alert" className="mt-2 text-sm text-destructive" data-ph-mask>
           {error}
         </p>
       )}

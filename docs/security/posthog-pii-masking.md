@@ -54,8 +54,15 @@ The denylist itself (`PII_PROPERTY_DENYLIST` in `piiScrubbing.ts`) currently inc
   It is as sensitive as the transactions table itself, and more concentrated — the rows shown are
   precisely the ones the user is about to act on. Masked per-cell via `data-ph-mask` on every
   `<td>`, never on the table, so the column headers and the fixed field/operator vocabulary stay
-  legible in replay while the contents do not. Enforced twice: a local masking assertion in
-  `RulePreviewPanel.test.tsx` and a sentinel sweep in `pii-coverage.test.tsx` (#1625 block).
+  legible in replay while the contents do not. TWO paths render user content and both are
+  masked: the match rows, and the VALIDATION ERROR line — the mapper returns the domain error
+  verbatim and several of those quote the user's own value back (a malformed date is echoed;
+  an unknown-field message names what was sent), so the error is not a fixed string.
+  Coverage is uneven by design and worth knowing: the match rows are enforced twice (a local
+  assertion in `RulePreviewPanel.test.tsx` and a sentinel sweep in `pii-coverage.test.tsx`),
+  the error line only by the local test, because the central sweep drives a SUCCESSFUL
+  response. Codex review found the error path unmasked after this entry already claimed
+  coverage.
   ⚠ Its `RULE_PREVIEWED` / `RULE_SAVED` analytics carry counts, booleans and the field/operator
   vocabulary ONLY — never a condition value, which is user-typed financial detail. None of those
   property names is an `isPiiKey` match (verified, not assumed), so scrubbing is not what keeps

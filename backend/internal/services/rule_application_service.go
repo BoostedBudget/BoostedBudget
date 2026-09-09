@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
-	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/rules"
 )
 
@@ -712,28 +712,28 @@ func (s *ruleApplicationService) reportQuarantineCandidates(ctx context.Context,
 		s.logger.WarnContext(ctx, "categorization rule would be quarantined (shadow mode — still executing)",
 			slog.String("user_id", userID),
 			slog.String("rule_id", rule.ID),
-			slog.String("reason", reason),
+			slog.String("reason", string(reason)),
 		)
 	}
 }
 
 // quarantineReason returns a non-empty reason when a rule would be refused at write time today.
 // It never inspects user CONTENT — only structure — so it is safe to log.
-func quarantineReason(rule *domain.CategorizationRule) string {
+func quarantineReason(rule *domain.CategorizationRule) observability.QuarantineReason {
 	if len(rule.Conditions) == 0 {
 		// engine.go treats this as "match everything", which would recategorise a whole ledger.
-		return "no_conditions_matches_everything"
+		return observability.QuarantineNoConditions
 	}
 	if rule.ConditionLogic != "AND" && rule.ConditionLogic != "OR" {
-		return "invalid_condition_logic_defaults_to_and"
+		return observability.QuarantineInvalidLogic
 	}
 	for i := range rule.Conditions {
 		c := rule.Conditions[i] // copy: Normalize mutates, and this must not touch the live rule
 		if err := c.Normalize(); err != nil {
-			return "unnormalizable_condition"
+			return observability.QuarantineUnnormalizable
 		}
 		if err := c.ValidateShape(); err != nil {
-			return "invalid_condition_value_shape"
+			return observability.QuarantineInvalidValue
 		}
 	}
 	return ""
