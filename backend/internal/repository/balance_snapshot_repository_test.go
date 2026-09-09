@@ -696,4 +696,16 @@ func TestAggregatedHistorySQLBase_PinsItsLoadBearingFragments(t *testing.T) {
 
 	// 4. The optional predicate is the ONLY hole, so the type filter cannot be rendered anywhere else.
 	assert.Equal(t, 1, strings.Count(sql, "%s"), "exactly one format hole")
+
+	// 5. The missing-history leg of the removal bound demands a LIVE accounts row (#1626 X1).
+	//    Without the status term the leg is satisfied forever by migration 000152's terminal-only
+	//    backfill shape, and vacuously by an orphan, so a closed account's balance is carried onto
+	//    every later observed day. The behavioural proofs are
+	//    TestAggregatedHistoryCarry_TerminalOnlyAccount_DoesNotCarryPastItsOwnSnapshot and
+	//    TestAggregatedHistoryCarry_OrphanedSnapshot_DoesNotCarryPastItsOwnDay; this is the cheap
+	//    structural half, which a template edit cannot slip past by moving an expectation with it.
+	assert.Contains(t, sql, "AND a_carry.status = 'active'",
+		"the missing-history carry leg must be scoped to an account that still exists AND is active")
+	assert.NotContains(t, sql, "WHERE ash_any.account_id = o.account_id",
+		"the unscoped NOT EXISTS form of the missing-history leg must not come back")
 }

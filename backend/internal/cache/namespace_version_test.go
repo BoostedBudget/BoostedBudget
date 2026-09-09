@@ -35,7 +35,7 @@ import (
 //
 // The floors are a TABLE, so each namespace's requirement is stated once and independently:
 //
-//   - NamespaceAnalytics 4 — #1531/#1569 took it to 2 (GetNetWorthTrend's grain fix); #1626 Phase 2
+//   - NamespaceAnalytics 6 — #1531/#1569 took it to 2 (GetNetWorthTrend's grain fix); #1626 Phase 2
 //     took it to 3, because the analytics grouping keys and display resolution changed shape and a
 //     pre-#1626 envelope decodes cleanly into the new struct while carrying UUIDs where names
 //     belong. Decoding cleanly is exactly what makes the bump necessary rather than optional.
@@ -47,7 +47,13 @@ import (
 //     it to 5: GetCashFlowHistory, also cached here, stopped fabricating zero-valued buckets for
 //     periods that have not happened yet and now clamps its period_end and end_date to today, so
 //     a pre-fix entry — which decodes cleanly, the response struct being unchanged — would keep
-//     serving chart points dated in the future.
+//     serving chart points dated in the future. #1626 Phase 2's review finding X1 took it to 6:
+//     GetAggregatedHistory's carry-forward was permitted by "this account has no recorded 'active'
+//     interval", which is TRUE FOREVER for migration 000152's deliberate terminal-only backfill
+//     shape and vacuously true for an orphaned snapshot — so a closed account's retained balance
+//     was carried onto every later observed day, and a pre-fix entry (which again decodes cleanly)
+//     would keep serving that overstated total. The same bump covers GetCashFlowSummary's echoed
+//     end_date, now clamped to today for a future-ranged request.
 //   - NamespaceAnalyticsRows 2 — the deleted_at tombstone filters and household-grants rewrite in
 //     analytics_repository.go, whose GetTopExpense / GetLargestTransactionsForPeriod /
 //     GetCategoryBreakdownForMerchant / GetUnusualSpend results are cached here.
@@ -56,7 +62,7 @@ import (
 // saying why in the same commit.
 func TestSchemaVersionBump_OrphansEntriesWrittenUnderThePriorVersion(t *testing.T) {
 	requiredFloor := map[Namespace]int{
-		NamespaceAnalytics:     5,
+		NamespaceAnalytics:     6,
 		NamespaceAnalyticsRows: 2,
 	}
 
