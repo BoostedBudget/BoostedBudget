@@ -589,3 +589,68 @@ func TestHouseholdAggregatedHistoryCarry_RefingerprintedJointAccount_CarriedRowU
 		"by day 2 the re-share records the joint identity, so the CARRIED copy must collapse into "+
 			"the owner's real observation. 820.99 here is the same physical account counted twice")
 }
+
+// TestHouseholdAggregatedHistoryCarry_RelinkChain_CarriedPredecessorIsStillSuperseded is why
+// live_all is built from the FILLED series rather than from the observed rows.
+//
+// ⚠ ADDED BY MUTATION. Pointing live_all at `observed` was killed only by the structural pin test.
+// The succession rule emits a (predecessor, successor) pair only when BOTH members are live on that
+// day, and it takes "live on that day" from live_all — so if live_all sees only the OBSERVED rows,
+// a predecessor that is present on a later day ONLY because the carry put it there is never marked
+// superseded, and the same physical account is counted twice on exactly the days the carry adds.
+//
+// The predecessor here is genuinely carriable on day 3: its recorded 'active' interval runs until
+// 06:00 that day (accountLiveOnDateClause is an interval OVERLAP test), even though accounts.status
+// already reads 'replaced'. That combination is what makes the day-3 assertion the one that
+// separates the two spellings of live_all.
+func TestHouseholdAggregatedHistoryCarry_RelinkChain_CarriedPredecessorIsStillSuperseded(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+	c := newHouseholdCarryClock()
+
+	owner := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ua := insertTestUserAccount(t, pool, owner)
+	li := insertTestLinkedItem(t, pool, owner)
+
+	// Both chain members hang off ONE user_account, which is what a Plaid re-link produces.
+	oldID := insertTestAccountNamed(t, pool, li, owner, ua, "Old (relinked)", "depository")
+	newID := insertTestAccountNamed(t, pool, li, owner, ua, "New (relinked)", "depository")
+	backdateHouseholdAccountActive(t, pool, oldID, c.day(-20))
+	backdateHouseholdAccountActive(t, pool, newID, c.at(2, 0, 0))
+
+	// The recorded succession, plus the terminal status the re-link handler writes.
+	_, err := pool.Exec(ctx, `
+		UPDATE accounts SET status = 'replaced', replaced_at = $2, replaced_by_id = $3::uuid
+		WHERE id = $1`, oldID, c.at(3, 6, 0), newID)
+	require.NoError(t, err)
+	tag, err := pool.Exec(ctx, `
+		UPDATE account_status_history SET valid_to = $2
+		WHERE account_id = $1 AND status = 'active'`, oldID, c.at(3, 6, 0))
+	require.NoError(t, err)
+	require.Equal(t, int64(1), tag.RowsAffected(), "expected one 'active' interval to close")
+	tag, err = pool.Exec(ctx, `
+		UPDATE account_status_history SET valid_from = $2
+		WHERE account_id = $1 AND status = 'replaced'`, oldID, c.at(3, 6, 0))
+	require.NoError(t, err)
+	require.Equal(t, int64(1), tag.RowsAffected(), "expected one 'replaced' interval to backdate")
+
+	insertHouseholdShare(t, pool, hh, ua, nil, domain.ShareVisibilityShared, c.at(-5, 8, 0))
+
+	// Day 2: the overlap day, both members report. Day 3: only the successor does.
+	insertBalanceSnapshot(t, pool, owner, oldID, ua, 300.33, c.at(2, 9, 17))
+	insertBalanceSnapshot(t, pool, owner, newID, ua, 500.55, c.at(2, 10, 41))
+	insertBalanceSnapshot(t, pool, owner, newID, ua, 520.66, c.at(3, 9, 17))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, c.day(-1), c.day(10), nil)
+	require.NoError(t, err)
+
+	requireTotalOn(t, points, c.day(2), 500.55,
+		"the overlap day was already collapsed before the carry existed — 800.88 here means the "+
+			"recorded-succession rule stopped being applied at all")
+	requireTotalOn(t, points, c.day(3), 520.66,
+		"and a predecessor present only BECAUSE of the carry must still be superseded — 820.99 "+
+			"here is one physical account counted twice on a day the carry itself added")
+}
