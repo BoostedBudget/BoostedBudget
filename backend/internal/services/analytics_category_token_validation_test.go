@@ -24,7 +24,7 @@ import (
 // ⚠ VALIDATED AT THE SERVICE BOUNDARY, not in the Huma input struct, and that is deliberate: the
 // repository is the layer that casts, the analytics methods are documented as AI-tool-callable
 // (CLAUDE.md), and a handler-only check would leave every non-HTTP caller free to reach the cast.
-// The mapper turns the sentinel into 400 — see TestMapError_InvalidCategoryToken.
+// The mapper turns the sentinel into 400 — see TestLoggingMapError_400_InvalidCategoryToken.
 //
 // ⚠ THE VALIDATION IS NOT "looks like a uuid". It is uuid.Parse on the SUFFIX ONLY, and only when
 // the `custom:` prefix is present. A PFC token is not a UUID and must stay untouched.

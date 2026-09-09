@@ -2423,3 +2423,114 @@ func fillMissingPeriodsForTest(filters domain.CashFlowFilters) []domain.CashFlow
 	}
 	return []domain.CashFlowGroupedData{{PeriodStart: filters.StartDate}}
 }
+
+// ─── #1626 Phase 2, X7: the two cash-flow endpoints must agree about the range they answered ──
+//
+// Defect 1's clamp landed in GetCashFlowHistory only, so for a future-ranged request the two
+// endpoints reported DIFFERENT ranges for the same question: history echoed today, summary echoed
+// the requested end. Neither fabricates data, so this is not the original defect — but two
+// endpoints disagreeing about what they answered is its own bug, and it was introduced by the
+// clamp landing in one of them.
+//
+// ⚠ ONLY THE ECHO IS CLAMPED, and that is deliberate rather than an oversight. History threads the
+// clamp into its repository call because it has gap-FILLING to stop: without it the query
+// fabricates a zero-valued bucket for every future period. The summary fabricates nothing — it is
+// one aggregate over real rows — and transactions.date is a zoneless, effectively
+// institution-local calendar date, so a user ahead of UTC legitimately has rows dated later than
+// the UTC day (this is the same fact TestGetCashFlowHistory_KeepsARealPeriodDatedBeyondTheClamp
+// rests on). Clamping the summary's QUERY bound would therefore delete those rows from the user's
+// total: real data loss, to fix a cosmetic disagreement. The window it queries, and the
+// equal-length previous window it compares against, stay on the REQUESTED range.
+
+func TestGetCashFlowSummary_ClampsItsEchoedEndDateLikeTheHistoryEndpoint(t *testing.T) {
+	today := todayUTCForTest()
+	start := today.AddDate(0, 0, -2)
+	requestedEnd := today.AddDate(0, 0, 21)
+
+	var seen domain.CashFlowFilters
+	repo := &mockAnalyticsRepository{
+		getCashFlowAggregationFn: func(_ context.Context, _ string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
+			if filters.StartDate.Equal(start) {
+				seen = filters
+			}
+			return &domain.CashFlowAggregation{Income: 900, Expenses: 250, IncomeCount: 3, ExpenseCount: 7}, nil
+		},
+	}
+	svc := NewAnalyticsService(repo)
+
+	resp, err := svc.GetCashFlowSummary(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: start,
+		EndDate:   requestedEnd,
+	})
+	require.NoError(t, err)
+
+	assert.True(t, resp.EndDate.Equal(today),
+		"summary end_date %v must be clamped to today %v, exactly as GetCashFlowHistory does — "+
+			"otherwise the two endpoints report different ranges for the same question",
+		resp.EndDate, today)
+	assert.True(t, resp.StartDate.Equal(start), "the start date must not move")
+
+	assert.True(t, seen.EndDate.Equal(requestedEnd),
+		"the QUERY bound must stay on the requested end (%v, got %v): transactions.date is "+
+			"institution-local, so clamping it would drop rows a user ahead of UTC really has",
+		requestedEnd, seen.EndDate)
+}
+
+// TestGetCashFlowSummary_LeavesAPastRangeAlone is the narrow half. The clamp must be inert for
+// every request that does not reach past today — which is nearly all of them — so a bug here
+// cannot be dismissed as "only affects future ranges".
+func TestGetCashFlowSummary_LeavesAPastRangeAlone(t *testing.T) {
+	today := todayUTCForTest()
+	start := today.AddDate(0, 0, -40)
+	end := today.AddDate(0, 0, -9)
+
+	repo := &mockAnalyticsRepository{
+		getCashFlowAggregationFn: func(_ context.Context, _ string, _ domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
+			return &domain.CashFlowAggregation{Income: 100, Expenses: 40}, nil
+		},
+	}
+	resp, err := NewAnalyticsService(repo).GetCashFlowSummary(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: start,
+		EndDate:   end,
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.EndDate.Equal(end), "a wholly-past end date must be echoed verbatim")
+}
+
+// TestGetCashFlowSummary_EntirelyFutureRangeEchoesTheSameRangeAsHistory pins the agreement at the
+// awkward boundary rather than only in the easy middle: when the whole requested range lies ahead,
+// the clamp alone would produce an end BEFORE the start. Both endpoints resolve that through the
+// same responseEndDate floor, so both echo the start date — and, crucially, they echo the SAME
+// thing. Asserted by running both and comparing, not by restating the expected value, so a change
+// to the rule cannot leave this test agreeing with only one of them.
+func TestGetCashFlowSummary_EntirelyFutureRangeEchoesTheSameRangeAsHistory(t *testing.T) {
+	today := todayUTCForTest()
+	filters := domain.CashFlowFilters{
+		StartDate: today.AddDate(0, 0, 3),
+		EndDate:   today.AddDate(0, 0, 10),
+		Grouping:  "weekly",
+	}
+
+	repo := &mockAnalyticsRepository{
+		getCashFlowAggregationFn: func(_ context.Context, _ string, _ domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
+			return &domain.CashFlowAggregation{}, nil
+		},
+		getCashFlowGroupedFn: func(_ context.Context, _ string, f domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			return fillMissingPeriodsForTest(f), nil
+		},
+	}
+	svc := NewAnalyticsService(repo)
+
+	summary, err := svc.GetCashFlowSummary(context.Background(), "u1", filters)
+	require.NoError(t, err)
+	history, err := svc.GetCashFlowHistory(context.Background(), "u1", filters)
+	require.NoError(t, err)
+
+	assert.True(t, summary.StartDate.Equal(history.StartDate),
+		"summary start %v vs history start %v", summary.StartDate, history.StartDate)
+	assert.True(t, summary.EndDate.Equal(history.EndDate),
+		"the two endpoints must report the SAME answered range: summary %v vs history %v",
+		summary.EndDate, history.EndDate)
+	assert.False(t, summary.EndDate.Before(summary.StartDate),
+		"the echoed range must never be inverted")
+}

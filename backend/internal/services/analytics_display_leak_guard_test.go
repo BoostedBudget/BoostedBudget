@@ -41,6 +41,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -105,13 +106,22 @@ func isProvablySafeArg(arg ast.Expr) bool {
 	return false
 }
 
-func TestNoAnalyticsReadResolvesAGroupingKeyThroughThePFCRegistry(t *testing.T) {
+// scanForDisplayLeaks IS THE GUARD. It is a helper rather than an inline loop for exactly one
+// reason: the meta-test below has to be able to invoke the real scanner and inspect what it looked
+// at (#1626 Phase 2, review finding X5). The version of that meta-test this replaces only checked
+// that five filenames EXIST on disk, so it passed unchanged against the pre-fix ONE-FILE scanner —
+// a test whose entire purpose was to prove the widening had happened, and which could not tell
+// whether it had. Returning the scanned set is what makes the claim checkable at all.
+//
+// It returns (scanned, offenders): every non-test Go file in the package directory it actually
+// parsed, and every registry call whose argument it could not prove safe.
+func scanForDisplayLeaks(t *testing.T) (scanned []string, offenders []string) {
+	t.Helper()
+
 	entries, err := os.ReadDir(".")
 	require.NoError(t, err)
 
 	fset := token.NewFileSet()
-	var offenders []string
-	scanned := 0
 
 	for _, e := range entries {
 		name := e.Name()
@@ -122,7 +132,7 @@ func TestNoAnalyticsReadResolvesAGroupingKeyThroughThePFCRegistry(t *testing.T) 
 		require.NoError(t, readErr)
 		parsed, parseErr := parser.ParseFile(fset, name, src, parser.ParseComments)
 		require.NoError(t, parseErr, "%s must parse", name)
-		scanned++
+		scanned = append(scanned, name)
 
 		for _, decl := range parsed.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
@@ -146,10 +156,15 @@ func TestNoAnalyticsReadResolvesAGroupingKeyThroughThePFCRegistry(t *testing.T) 
 			})
 		}
 	}
+	return scanned, offenders
+}
 
-	require.NotZero(t, scanned, "the guard must actually have files to scan — a zero here means the "+
-		"walk broke and the guard silently stopped guarding, which is the failure mode this file's "+
-		"header is about")
+func TestNoAnalyticsReadResolvesAGroupingKeyThroughThePFCRegistry(t *testing.T) {
+	scanned, offenders := scanForDisplayLeaks(t)
+
+	require.NotEmpty(t, scanned, "the guard must actually have files to scan — an empty set here "+
+		"means the walk broke and the guard silently stopped guarding, which is the failure mode "+
+		"this file's header is about")
 
 	require.Empty(t, offenders,
 		"an argument that is not provably a PFC registry value reached the registry (#1626). If it "+
@@ -164,21 +179,44 @@ func TestNoAnalyticsReadResolvesAGroupingKeyThroughThePFCRegistry(t *testing.T) 
 }
 
 // TestDisplayLeakGuardScansTheWholePackage pins the second half of the correction above: the
-// guard's blindness to other files was as much of the vacuity as its argument allowlist. If this
-// ever finds fewer than the handful of files that actually define these reads, the walk has broken.
+// guard's blindness to other files was as much of the vacuity as its argument allowlist.
+//
+// ⚠ IT INVOKES THE SCANNER, AND THAT IS THE WHOLE POINT (#1626 Phase 2, review finding X5). The
+// version this replaces only asserted that five filenames EXIST in the package directory. Those
+// files all existed before the scanner was widened, so every assertion in it passed against the
+// pre-fix one-file implementation — a test added as the proof that the widening had happened, which
+// could not distinguish the widened scanner from the narrow one. Third vacuous test on this branch,
+// and the same class as the other two: asserting a precondition of the fix instead of the fix.
+//
+// What it asserts now is the scanner's OWN report of what it read: the set it scanned must be
+// EXACTLY this package's non-test Go files, derived here independently. Set equality rather than
+// containment, in both directions, so neither a shrunken walk (the original defect) nor a walk that
+// wandered outside the package or began swallowing _test.go files can pass.
 func TestDisplayLeakGuardScansTheWholePackage(t *testing.T) {
+	scanned, _ := scanForDisplayLeaks(t)
+
 	entries, err := os.ReadDir(".")
 	require.NoError(t, err)
-
-	present := map[string]bool{}
+	var want []string
 	for _, e := range entries {
-		if !e.IsDir() {
-			present[e.Name()] = true
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
 		}
+		want = append(want, name)
 	}
+	require.NotEmpty(t, want, "this package must contain non-test Go files for the guard to scan")
 
-	// The files that host a category-shaped analytics read or the display resolution itself. The
-	// first attempt at this guard scanned only the first one.
+	assert.ElementsMatch(t, want, scanned,
+		"the guard must scan EVERY non-test Go file in the package and nothing else — %d such files "+
+			"exist and the scanner reported %d. A scanner narrower than the package is how this leak "+
+			"class survived its first guard", len(want), len(scanned))
+
+	// And, named explicitly, the files that host a category-shaped analytics read or the display
+	// resolution itself. Set equality above already covers them; naming them keeps the failure
+	// legible when one is renamed or moved, so the reader is told which coverage claim went stale
+	// instead of being handed a diff of two long lists. The first attempt at this guard scanned only
+	// the first one.
 	for _, must := range []string{
 		"analytics_service.go",
 		"analytics_service_cached.go",
@@ -186,8 +224,8 @@ func TestDisplayLeakGuardScansTheWholePackage(t *testing.T) {
 		"analytics_category_display.go",
 		"plaid_categories.go",
 	} {
-		require.True(t, present[must],
-			"%s no longer exists in this package; the guard's coverage claim is stale and its "+
-				"file list must be re-derived rather than quietly shrinking", filepath.Base(must))
+		assert.Contains(t, scanned, must,
+			"%s was not scanned by the guard; if it was renamed or moved, re-derive the guard's "+
+				"coverage claim rather than letting it quietly shrink", filepath.Base(must))
 	}
 }
