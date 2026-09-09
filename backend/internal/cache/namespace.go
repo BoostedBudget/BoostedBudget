@@ -103,8 +103,19 @@ var namespaceRegistry = map[Namespace]namespaceConfig{
 	// breakdown. A deploy never touches the per-scope generation token, so without this bump a
 	// pre-fix Redis entry would remain a valid hit under post-fix code and keep serving the
 	// collapsed day the fix exists to repair. Same reasoning as versions 2 and 3 above.
+	// SchemaVersion 5 (#1626 Phase 3, Defect 1): GetCashFlowHistory — cached in this namespace —
+	// changed what it RETURNS for the same arguments whenever the requested end date reaches into
+	// the future. It no longer fabricates a zero-valued bucket for a period that has not happened
+	// (the user-visible symptom was "Week of Sep 13 / Sep 20 / Sep 27" rendered on Sep 9, flat at
+	// exactly 0), and its period_end and end_date now stop at today rather than at the requested
+	// end. An entry written before the fix decodes cleanly into the unchanged response struct —
+	// which is exactly what makes the bump necessary rather than optional — and a deploy never
+	// touches the per-scope generation token (it is minted once and only Bump()'d by explicit
+	// invalidation), so without this bump a pre-fix entry would stay a valid hit and keep serving
+	// the future buckets the fix exists to remove. The 120s TTL makes that window short, not
+	// absent, and "short" is not a correctness argument. Same reasoning as versions 2, 3 and 4.
 	NamespaceAnalytics: {
-		TTL: 120 * time.Second, SchemaVersion: 4, ScopeKind: ScopeUser, DefaultEnabled: true,
+		TTL: 120 * time.Second, SchemaVersion: 5, ScopeKind: ScopeUser, DefaultEnabled: true,
 	},
 	// SchemaVersion 2 (#1569, round 11): analytics_repository.go added `t.deleted_at IS NULL` to
 	// the queries backing GetTopExpense, GetLargestTransactionsForPeriod,

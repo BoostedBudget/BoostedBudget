@@ -2263,3 +2263,163 @@ func TestAnalyticsService_GetSpendingByCategory_MidRefreshNameSurvives(t *testin
 	assert.InDelta(t, 120.0/220.0*100, result.Categories[0].Percentage, 0.001,
 		"percentages must come from the MERGED total")
 }
+
+// ─── #1626 Phase 3, Defect 1: the cash-flow response must not reach into the future ─────────
+//
+// With "this month" selected on 2026-09-09 the Cash Flow chart showed weekly buckets labelled
+// "Week of Sep 13 / Sep 20 / Sep 27" — all entirely in the future, with Net Cash Flow flat at
+// exactly 0 — because the requested end date (the 30th) was taken verbatim and the repository
+// zero-filled every period up to it. The clamp lives HERE, at the service boundary, as a single
+// effectiveEnd threaded into the repository call, rather than buried in the fill loop.
+
+func todayUTCForTest() time.Time {
+	n := time.Now().UTC()
+	return time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+func TestGetCashFlowHistory_ClampsAFutureEndDateToToday(t *testing.T) {
+	today := todayUTCForTest()
+	var seen domain.CashFlowFilters
+	repo := &mockAnalyticsRepository{
+		getCashFlowGroupedFn: func(_ context.Context, _ string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			seen = filters
+			return []domain.CashFlowGroupedData{
+				{PeriodStart: today, Income: 10, Expenses: 4, TransactionCount: 2},
+			}, nil
+		},
+	}
+	svc := NewAnalyticsService(repo)
+
+	resp, err := svc.GetCashFlowHistory(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: today.AddDate(0, 0, -2),
+		EndDate:   today.AddDate(0, 0, 21),
+		Grouping:  "daily",
+	})
+	require.NoError(t, err)
+
+	// The clamp is threaded into the repository call: the same value bounds the query and the
+	// gap-filling, so neither can fabricate a bucket the other would not.
+	assert.True(t, seen.EndDate.Equal(today), "repository received end date %v, expected today %v", seen.EndDate, today)
+	assert.True(t, seen.StartDate.Equal(today.AddDate(0, 0, -2)), "the start date must not move")
+
+	// The response reports the range it actually answered for.
+	assert.True(t, resp.EndDate.Equal(today), "response end_date %v should be clamped to %v", resp.EndDate, today)
+	for _, p := range resp.Periods {
+		assert.False(t, p.PeriodStart.After(today), "period starts in the future: %v", p.PeriodStart)
+		assert.False(t, p.PeriodEnd.After(today), "period_end reaches into the future: %v", p.PeriodEnd)
+	}
+}
+
+// The grouping describes the range the USER asked for, so it is chosen before the clamp:
+// clamping first would silently re-bucket a three-month request as weekly or daily.
+func TestGetCashFlowHistory_ClampDoesNotChangeTheAutoSelectedGrouping(t *testing.T) {
+	today := todayUTCForTest()
+	repo := &mockAnalyticsRepository{
+		getCashFlowGroupedFn: func(_ context.Context, _ string, _ domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			return nil, nil
+		},
+	}
+	svc := NewAnalyticsService(repo)
+
+	resp, err := svc.GetCashFlowHistory(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: today.AddDate(0, 0, -2),
+		EndDate:   today.AddDate(0, 0, 21), // 23 days requested → weekly
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "weekly", resp.Grouping)
+}
+
+// A weekly bucket that STARTS in the past but whose calendar week has not finished must not
+// advertise an end date in the future.
+func TestGetCashFlowHistory_ClampsTheLastPeriodEnd(t *testing.T) {
+	today := todayUTCForTest()
+	weekday := int(today.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	monday := today.AddDate(0, 0, -(weekday - 1))
+
+	repo := &mockAnalyticsRepository{
+		getCashFlowGroupedFn: func(_ context.Context, _ string, _ domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			return []domain.CashFlowGroupedData{
+				{PeriodStart: monday, Income: 500, Expenses: 120, TransactionCount: 9},
+			}, nil
+		},
+	}
+	svc := NewAnalyticsService(repo)
+
+	resp, err := svc.GetCashFlowHistory(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: monday,
+		EndDate:   today.AddDate(0, 0, 30),
+		Grouping:  "weekly",
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Periods, 1)
+	assert.True(t, resp.Periods[0].PeriodEnd.Equal(today),
+		"period_end %v should be clamped to today %v", resp.Periods[0].PeriodEnd, today)
+	assert.Equal(t, 500.0-120.0, resp.Periods[0].NetCashFlow)
+}
+
+// The clamp must not delete data. Transactions are bucketed on t.date — a zoneless calendar
+// date that is effectively institution-local — so a user ahead of UTC legitimately has rows
+// dated later than the UTC calendar day. Whatever the repository returns is reported.
+func TestGetCashFlowHistory_KeepsARealPeriodDatedBeyondTheClamp(t *testing.T) {
+	today := todayUTCForTest()
+	tomorrow := today.AddDate(0, 0, 1)
+	repo := &mockAnalyticsRepository{
+		getCashFlowGroupedFn: func(_ context.Context, _ string, _ domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			return []domain.CashFlowGroupedData{
+				{PeriodStart: today, Income: 0, Expenses: 20, TransactionCount: 1},
+				{PeriodStart: tomorrow, Income: 0, Expenses: 33, TransactionCount: 1},
+			}, nil
+		},
+	}
+	svc := NewAnalyticsService(repo)
+
+	resp, err := svc.GetCashFlowHistory(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: today.AddDate(0, 0, -1),
+		EndDate:   today.AddDate(0, 0, 21),
+		Grouping:  "daily",
+	})
+	require.NoError(t, err)
+
+	require.Len(t, resp.Periods, 2, "a period the repository returned was dropped: %+v", resp.Periods)
+	beyond := resp.Periods[1]
+	assert.True(t, beyond.PeriodStart.Equal(tomorrow))
+	assert.Equal(t, 33.0, beyond.Expenses)
+	// Its own period_end is never clamped BEFORE its start — that would be a nonsense range.
+	assert.False(t, beyond.PeriodEnd.Before(beyond.PeriodStart))
+	// And the response's end_date widens to cover it rather than contradicting the data.
+	assert.False(t, resp.EndDate.Before(beyond.PeriodStart),
+		"end_date %v excludes a period the response contains (%v)", resp.EndDate, beyond.PeriodStart)
+}
+
+// A range lying entirely in the future answers for nothing at all — no fabricated "current
+// period", which is what truncateDate's backward move used to produce.
+func TestGetCashFlowHistory_EntirelyFutureRangeReturnsNoPeriods(t *testing.T) {
+	today := todayUTCForTest()
+	repo := &mockAnalyticsRepository{
+		getCashFlowGroupedFn: func(_ context.Context, _ string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			// Mirror the repository's own behaviour for the clamped bounds it is handed.
+			return fillMissingPeriodsForTest(filters), nil
+		},
+	}
+	svc := NewAnalyticsService(repo)
+
+	resp, err := svc.GetCashFlowHistory(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: today.AddDate(0, 0, 3),
+		EndDate:   today.AddDate(0, 0, 10),
+		Grouping:  "weekly",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, resp.Periods)
+}
+
+// fillMissingPeriodsForTest is the repository's guard in miniature: nothing is generated when
+// the (already clamped) end lies before the start.
+func fillMissingPeriodsForTest(filters domain.CashFlowFilters) []domain.CashFlowGroupedData {
+	if filters.StartDate.After(filters.EndDate) {
+		return nil
+	}
+	return []domain.CashFlowGroupedData{{PeriodStart: filters.StartDate}}
+}
