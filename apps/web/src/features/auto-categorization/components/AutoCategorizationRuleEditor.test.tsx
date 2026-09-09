@@ -1763,6 +1763,51 @@ describe('AutoCategorizationRuleEditor', () => {
       })
     })
 
+    // #1625 final review B4. The lazy-load gate keyed on the LEGACY FUSED type only
+    // (`c.type === 'existing_pfc_detailed'`), but a PAIR choice writes `type: undefined` and
+    // sets {field, operator} instead. So `pfc_detailed:neq` — an option the picker offers —
+    // never enabled the fetch: `plaidDetailed` stayed [], and the primary SearchableSelect
+    // rendered DISABLED with zero options. The user could pick "PFC Detailed is not" and then
+    // had no way to say what it is not.
+    //
+    // ⚠ Asserted on the FETCH GATE, not just on the rendered select, because the empty-options
+    // symptom is downstream: a future change that populated the list some other way would make a
+    // render-only assertion pass while the gate stayed broken for the next pair choice added.
+    it('detailed_endpoint_fetched_for_the_pair_form_too_not_only_the_fused_type', async () => {
+      const user = userEvent.setup({ delay: null })
+      mockUseGetPlaidDetailedCategories.mockClear()
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+          plaidPrimaries={mockPlaidPrimaries}
+        />
+      )
+
+      expect(mockUseGetPlaidDetailedCategories).toHaveBeenCalledWith(
+        expect.objectContaining({ query: { enabled: false } })
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /add condition/i }))
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      // The PAIR choice, not the fused one. Its key is `<field>:<operator>`.
+      await user.selectOptions(typeSelect, 'pfc_detailed:neq')
+
+      await waitFor(() => {
+        expect(mockUseGetPlaidDetailedCategories).toHaveBeenCalledWith(
+          expect.objectContaining({ query: { enabled: true } })
+        )
+      })
+
+      // And the consequence the user sees: the primary picker is usable rather than an empty,
+      // disabled control.
+      const primaryPicker = screen.getByRole('combobox', { name: /select pfc primary for detailed/i })
+      expect(primaryPicker.getAttribute('aria-disabled')).not.toBe('true')
+    })
+
   })
 
   // Issue #1514 (fix round 2): SearchableSelect only masks option label/sublabel text
