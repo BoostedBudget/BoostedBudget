@@ -59,32 +59,38 @@ function utcCalendarDay(now: Date = new Date()): Date {
   return new Date(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
 }
 
+/**
+ * Builds a `getRange` for a preset whose window ENDS TODAY and only its start varies.
+ *
+ * Every relative preset below is of that shape, and having them share this one construction is
+ * what keeps the #1626 Phase 3 Defect 1 fix structural rather than repeated: `this_month` used to
+ * end on `endOfMonth(today)`, and an end date in the future made the backend zero-fill and the
+ * frontend forward-fill manufacture chart points for days that had not happened yet. (The
+ * manual-entry path was already clamped by DateRangePicker's `max={today}`; the presets were the
+ * hole.) A new preset written through this helper cannot reopen it.
+ *
+ * `now` is resolved through utcCalendarDay in one place for the same reason — see there for why a
+ * browser-local `new Date()` disagrees with the backend by up to a day.
+ */
+function rangeEndingToday(
+  startFrom: (today: Date) => Date
+): (now?: Date) => DateRange {
+  return (now) => {
+    const today = utcCalendarDay(now)
+    return { startDate: fmt(startFrom(today)), endDate: fmt(today) }
+  }
+}
+
 export const PRESETS: PresetDefinition[] = [
   {
     value: 'this_week',
     label: 'This Week',
-    getRange: (now) => {
-      const today = utcCalendarDay(now)
-      return {
-        startDate: fmt(startOfWeek(today, { weekStartsOn: 1 })),
-        endDate: fmt(today),
-      }
-    },
+    getRange: rangeEndingToday((today) => startOfWeek(today, { weekStartsOn: 1 })),
   },
   {
     value: 'this_month',
     label: 'This Month',
-    // Ends TODAY, not on endOfMonth(today): an end date in the future made the backend
-    // zero-fill and the frontend forward-fill manufacture chart points for days that had not
-    // happened yet (#1626 Phase 3, Defect 1). The manual-entry path was already clamped by
-    // DateRangePicker's `max={today}`; this preset was the hole.
-    getRange: (now) => {
-      const today = utcCalendarDay(now)
-      return {
-        startDate: fmt(startOfMonth(today)),
-        endDate: fmt(today),
-      }
-    },
+    getRange: rangeEndingToday((today) => startOfMonth(today)),
   },
   {
     value: 'last_month',
@@ -102,35 +108,17 @@ export const PRESETS: PresetDefinition[] = [
   {
     value: 'last_3_months',
     label: 'Last 3 Months',
-    getRange: (now) => {
-      const today = utcCalendarDay(now)
-      return {
-        startDate: fmt(subMonths(today, 3)),
-        endDate: fmt(today),
-      }
-    },
+    getRange: rangeEndingToday((today) => subMonths(today, 3)),
   },
   {
     value: 'last_6_months',
     label: 'Last 6 Months',
-    getRange: (now) => {
-      const today = utcCalendarDay(now)
-      return {
-        startDate: fmt(subMonths(today, 6)),
-        endDate: fmt(today),
-      }
-    },
+    getRange: rangeEndingToday((today) => subMonths(today, 6)),
   },
   {
     value: 'ytd',
     label: 'Year to Date',
-    getRange: (now) => {
-      const today = utcCalendarDay(now)
-      return {
-        startDate: fmt(startOfYear(today)),
-        endDate: fmt(today),
-      }
-    },
+    getRange: rangeEndingToday((today) => startOfYear(today)),
   },
   {
     value: 'all',
