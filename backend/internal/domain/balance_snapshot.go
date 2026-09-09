@@ -20,7 +20,7 @@ type BalanceSnapshot struct {
 	AvailableBalance *float64  `json:"available_balance,omitempty" db:"available_balance"`
 	CurrencyCode     string    `json:"currency_code" db:"currency_code"` // ISO 4217 currency code
 	SnapshotAt       time.Time `json:"snapshot_at" db:"snapshot_at"`     // Timestamp when this snapshot was captured
-	Source           string    `json:"source" db:"source"`               // plaid_webhook, migration, manual
+	Source           string    `json:"source" db:"source"`               // plaid_webhook, migration, manual, daily_capture
 	CreatedAt        time.Time `json:"created_at" db:"created_at"`       // When this record was created
 }
 
@@ -29,6 +29,22 @@ const (
 	SnapshotSourcePlaidWebhook = "plaid_webhook"
 	SnapshotSourceMigration    = "migration"
 	SnapshotSourceManual       = "manual"
+	// SnapshotSourceDailyCapture marks a row written by the periodic balance-snapshot
+	// gap-filler (#1626 Phase 3, Defect 3) rather than by a Plaid webhook sync.
+	//
+	// It is a distinct provenance for two reasons, only one of which is reporting. The first is
+	// the idempotency key: migration 000017 dropped generic UNIQUE(account_id, snapshot_date)
+	// on purpose, because a webhook may legitimately record several rows for one account in one
+	// day, so per-day uniqueness can only ever be scoped to a source that IS once-daily by
+	// construction. The partial unique index that backs the gap-filler is scoped to exactly this
+	// value. The second is that an operator looking at a flat series needs to be able to tell
+	// "nothing changed" from "no webhook arrived and the daily job filled the gap".
+	//
+	// ⚠ It is NOT a fabricated observation. The row carries a balance Plaid returned from
+	// /accounts/get during this run; there is deliberately no fallback to accounts.current_balance,
+	// which is written only at link time and would beat a genuine earlier webhook row on every
+	// read (all of them take the latest snapshot_at). A missed day stays missing.
+	SnapshotSourceDailyCapture = "daily_capture"
 )
 
 // Validate checks that the BalanceSnapshot has all required fields
@@ -54,9 +70,10 @@ func (bs *BalanceSnapshot) Validate() error {
 		SnapshotSourcePlaidWebhook: true,
 		SnapshotSourceMigration:    true,
 		SnapshotSourceManual:       true,
+		SnapshotSourceDailyCapture: true,
 	}
 	if !validSources[bs.Source] {
-		return errors.New("invalid source: must be one of plaid_webhook, migration, manual")
+		return errors.New("invalid source: must be one of plaid_webhook, migration, manual, daily_capture")
 	}
 
 	// At least one balance should be present
@@ -91,4 +108,19 @@ type BalanceHistoryPoint struct {
 	// TotalBalance that is not its ByType sum). An invariant a caller can violate by accident is
 	// not an invariant.
 	UntypedBalance float64 `json:"untyped_balance,omitempty"`
+}
+
+// BalanceCaptureTarget identifies one linked item the periodic balance-snapshot dispatcher should
+// enqueue a capture job for (#1626 Phase 3, Defect 3).
+//
+// Two identifiers and nothing else, deliberately. The dispatcher's whole job is to fan out, and a
+// global scan that decrypted an access token per row would pay a per-item crypto cost for data it
+// does not use — the capture worker re-reads its own item (and re-checks its status) at execution
+// time, because minutes can pass between enqueue and run.
+//
+// LinkedItemID is the internal UUID, never Plaid's item_id: it is what the capture job's args carry
+// and what every repository read on this path keys on.
+type BalanceCaptureTarget struct {
+	LinkedItemID string `json:"linked_item_id"`
+	UserID       string `json:"user_id"`
 }

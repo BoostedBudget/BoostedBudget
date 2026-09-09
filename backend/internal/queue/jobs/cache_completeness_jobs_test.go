@@ -180,6 +180,34 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"do NOT bump — reviewed and found to carry no cache impact of their own, see " +
 		"TestHouseholdOverCapacityCheck_SetOverCapacity_DoesNotBumpHousehold."},
 
+	"balance_snapshot_capture.go": {dispositionBumps, "#1626 Phase 3, Defect 3. This file " +
+		"holds TWO workers and only one of them writes: BalanceSnapshotDispatchWorker enqueues " +
+		"capture jobs and touches no data at all, while BalanceSnapshotCaptureWorker writes " +
+		"balance_snapshots rows through services.BalanceCaptureService -> " +
+		"BalanceSnapshotRepository.CreateDailyCapture. That write IS cache-relevant, and by the " +
+		"same argument as BalanceSnapshotRepository.Create's entry in the repository-side table: " +
+		"GetNetWorthTrend is cached (analytics_service_cached.go) and reads " +
+		"BalanceSnapshotRepository.GetAggregatedHistory / GetAggregatedHistoryForHousehold, both " +
+		"of which aggregate exactly the rows this job inserts. A River job never passes through " +
+		"NewCacheInvalidationMiddleware, so C1 fails and this cannot be CoveredByHTTPMiddleware. " +
+		"Covered instead by BalanceSnapshotCaptureWorker.bumpCacheForUser, called from Work on " +
+		"the success path, bumping ScopeUser and — when the household lookup is wired and resolves " +
+		"— ScopeHousehold, on a detached context.WithoutCancel plus a bounded bumpCacheTimeout. " +
+		"⚠ THE BUMP IS CONDITIONAL ON outcome.Written > 0 AND THAT IS DELIBERATE, unlike every " +
+		"other entry in this table: this job runs for EVERY item EVERY day and its overwhelmingly " +
+		"common outcome is CohortComplete (a webhook already covered the day), which writes " +
+		"nothing. An unconditional bump would therefore discard every active user's cached " +
+		"analytics once a day for a run that changed no data — a guaranteed daily dashboard cache " +
+		"miss for the whole user base, not the harmless over-invalidation the unconditional bumps " +
+		"elsewhere are justified as. The condition is exactly \"did this job change what a cached " +
+		"read would see\". AlreadyPresent is excluded on purpose: that row was written by the " +
+		"capture that WON the uniqueness race, and that capture did its own bump. Pinned by " +
+		"TestBalanceSnapshotCapture_BumpsTheUserAndHouseholdCacheGeneration and its two negative " +
+		"twins (...DoesNotBumpWhenTheCohortWasAlreadyComplete, ...DoesNotBumpWhenTheCaptureFailed). " +
+		"Does NOT prove household coverage when GetHouseholdForUser errors — that branch logs and " +
+		"returns, deliberately leaving the household scope stale until its namespace TTL, matching " +
+		"bumpCacheForSync."},
+
 	// --- NoCacheImpact (Task 10b-2a-iii). ---
 	"portfolio_snapshot_worker.go": {dispositionNoCacheImpact, "CORRECTED from an initial " +
 		"ExplicitBump attempt after Codex adversarial review disproved the premise: this job's " +

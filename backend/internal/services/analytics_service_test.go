@@ -1934,6 +1934,16 @@ func (m *mockBalanceSnapshotRepository) GetLatestByAccountID(ctx context.Context
 func (m *mockBalanceSnapshotRepository) GetAccountBalanceHistory(context.Context, string, string, *time.Time, *time.Time) ([]domain.AccountBalanceHistoryPoint, error) {
 	panic("analytics/dashboard must not read per-account retained balance history")
 }
+
+// The two #1626 Phase 3 gap-filler methods are WRITE/PLANNING operations belonging to the periodic
+// balance-capture job, and nothing in analytics or the dashboard may reach them — analytics reads;
+// it does not decide what to snapshot. Panics for the same reason the method above does.
+func (m *mockBalanceSnapshotRepository) CreateDailyCapture(context.Context, *domain.BalanceSnapshot) (bool, error) {
+	panic("analytics/dashboard must not write balance snapshots")
+}
+func (m *mockBalanceSnapshotRepository) AccountsMissingDailySnapshot(context.Context, string, time.Time) ([]string, error) {
+	panic("analytics/dashboard must not ask the daily-capture cohort question")
+}
 func (m *mockBalanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
 	return nil, nil
 }
