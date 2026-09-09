@@ -67,8 +67,11 @@ import (
 //     adds to totalAssets by its positive sign, overstating household net worth by twice the debt.
 //     A pre-fix entry decodes cleanly, as ever, and would keep serving that overstated figure. The
 //     same bump covers finding F5 — the personal read's accountTypes filter now tests the recovered
-//     type, so a filtered request returns an orphan it used to omit: two changes in one undeployed
-//     branch, one bump, exactly as version 6 covered two.
+//     type, so a filtered request returns an orphan it used to omit — and finding F2, which puts
+//     GetCashFlowSummary's echoed end_date back on the requested range (version 6's clamp made the
+//     endpoint label a window its own aggregate did not measure) and adds requested_end_date to
+//     GetCashFlowHistory's response. Three changes in one undeployed branch, one bump, exactly as
+//     version 6 covered two.
 //   - NamespaceAnalyticsRows 2 — the deleted_at tombstone filters and household-grants rewrite in
 //     analytics_repository.go, whose GetTopExpense / GetLargestTransactionsForPeriod /
 //     GetCategoryBreakdownForMerchant / GetUnusualSpend results are cached here.

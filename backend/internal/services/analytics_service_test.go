@@ -2434,25 +2434,39 @@ func fillMissingPeriodsForTest(filters domain.CashFlowFilters) []domain.CashFlow
 	return []domain.CashFlowGroupedData{{PeriodStart: filters.StartDate}}
 }
 
-// ─── #1626 Phase 2, X7: the two cash-flow endpoints must agree about the range they answered ──
+// ─── #1626 final whole-branch review, F2: each endpoint labels the window it MEASURED ─────────
 //
-// Defect 1's clamp landed in GetCashFlowHistory only, so for a future-ranged request the two
-// endpoints reported DIFFERENT ranges for the same question: history echoed today, summary echoed
-// the requested end. Neither fabricates data, so this is not the original defect — but two
-// endpoints disagreeing about what they answered is its own bug, and it was introduced by the
-// clamp landing in one of them.
+// ⚠ THIS FAMILY REPLACES THE X7 ONE, AND REVERSES ITS RULING. X7 observed that for a
+// future-ranged request the two cash-flow endpoints echoed different ranges for the same
+// question, and fixed it by clamping the SUMMARY'S ECHO to today while leaving its QUERY on the
+// requested range. That made the endpoint inconsistent WITH ITSELF: the label said "through
+// today", the number covered rows past today, and for an entirely-future range responseEndDate
+// floored the echo to StartDate so the response claimed [start, start] while the aggregate
+// covered [start, requestedEnd]. Before X7 each endpoint was at least internally coherent and
+// they disagreed only on the LABEL — which the code called cosmetic; the fix is what made it
+// non-cosmetic.
 //
-// ⚠ ONLY THE ECHO IS CLAMPED, and that is deliberate rather than an oversight. History threads the
-// clamp into its repository call because it has gap-FILLING to stop: without it the query
-// fabricates a zero-valued bucket for every future period. The summary fabricates nothing — it is
-// one aggregate over real rows — and transactions.date is a zoneless, effectively
-// institution-local calendar date, so a user ahead of UTC legitimately has rows dated later than
-// the UTC day (this is the same fact TestGetCashFlowHistory_KeepsARealPeriodDatedBeyondTheClamp
-// rests on). Clamping the summary's QUERY bound would therefore delete those rows from the user's
-// total: real data loss, to fix a cosmetic disagreement. The window it queries, and the
-// equal-length previous window it compares against, stay on the REQUESTED range.
+// THE RULING NOW: a range and the numbers described by it must be the same range, per endpoint.
+//
+//   - The SUMMARY fabricates nothing — one aggregate over rows that exist — so it queries the
+//     requested range and echoes the requested range. It must NOT clamp the query:
+//     transactions.date is a zoneless, effectively institution-local calendar date, so a user
+//     ahead of UTC legitimately has rows dated later than the UTC day (the same fact
+//     TestGetCashFlowHistory_KeepsARealPeriodDatedBeyondTheClamp rests on), and clamping would
+//     delete those rows from their own total. That is real data loss to fix a label.
+//   - The HISTORY endpoint gap-FILLS, so an unclamped future end fabricates a zero-valued bucket
+//     per unhappened period. It keeps its clamp on both the query and the echo, and DISCLOSES the
+//     difference in requested_end_date rather than leaving a caller to guess why the two
+//     endpoints' windows differ.
+//
+// So the two endpoints still agree about the range they were ASKED for, and each is honest about
+// the range it ANSWERED for. What is gone is the third state: a label describing a window nobody
+// measured.
 
-func TestGetCashFlowSummary_ClampsItsEchoedEndDateLikeTheHistoryEndpoint(t *testing.T) {
+// TestGetCashFlowSummary_EchoesTheWindowItActuallyQueried asserts the property by COMPARING the
+// echo with the filters the repository was handed, not by restating the expected date — so the
+// label and the measurement cannot drift apart without this failing, whichever of them moves.
+func TestGetCashFlowSummary_EchoesTheWindowItActuallyQueried(t *testing.T) {
 	today := todayUTCForTest()
 	start := today.AddDate(0, 0, -2)
 	requestedEnd := today.AddDate(0, 0, 21)
@@ -2474,20 +2488,20 @@ func TestGetCashFlowSummary_ClampsItsEchoedEndDateLikeTheHistoryEndpoint(t *test
 	})
 	require.NoError(t, err)
 
-	assert.True(t, resp.EndDate.Equal(today),
-		"summary end_date %v must be clamped to today %v, exactly as GetCashFlowHistory does — "+
-			"otherwise the two endpoints report different ranges for the same question",
-		resp.EndDate, today)
-	assert.True(t, resp.StartDate.Equal(start), "the start date must not move")
-
 	assert.True(t, seen.EndDate.Equal(requestedEnd),
 		"the QUERY bound must stay on the requested end (%v, got %v): transactions.date is "+
 			"institution-local, so clamping it would drop rows a user ahead of UTC really has",
 		requestedEnd, seen.EndDate)
+	assert.True(t, resp.EndDate.Equal(seen.EndDate),
+		"summary end_date %v must be the window it MEASURED (%v). Clamping the echo alone made "+
+			"this endpoint label a range it did not query — its number covered rows past today "+
+			"while its label said 'through today'",
+		resp.EndDate, seen.EndDate)
+	assert.True(t, resp.StartDate.Equal(seen.StartDate), "and the start likewise")
 }
 
-// TestGetCashFlowSummary_LeavesAPastRangeAlone is the narrow half. The clamp must be inert for
-// every request that does not reach past today — which is nearly all of them — so a bug here
+// TestGetCashFlowSummary_LeavesAPastRangeAlone is the narrow half: nothing may rewrite the echoed
+// end for a request that does not reach past today, which is nearly all of them — so a bug here
 // cannot be dismissed as "only affects future ranges".
 func TestGetCashFlowSummary_LeavesAPastRangeAlone(t *testing.T) {
 	today := todayUTCForTest()
@@ -2507,13 +2521,15 @@ func TestGetCashFlowSummary_LeavesAPastRangeAlone(t *testing.T) {
 	assert.True(t, resp.EndDate.Equal(end), "a wholly-past end date must be echoed verbatim")
 }
 
-// TestGetCashFlowSummary_EntirelyFutureRangeEchoesTheSameRangeAsHistory pins the agreement at the
-// awkward boundary rather than only in the easy middle: when the whole requested range lies ahead,
-// the clamp alone would produce an end BEFORE the start. Both endpoints resolve that through the
-// same responseEndDate floor, so both echo the start date — and, crucially, they echo the SAME
-// thing. Asserted by running both and comparing, not by restating the expected value, so a change
-// to the rule cannot leave this test agreeing with only one of them.
-func TestGetCashFlowSummary_EntirelyFutureRangeEchoesTheSameRangeAsHistory(t *testing.T) {
+// TestGetCashFlowSummary_EntirelyFutureRange_TheTwoEndpointsAgreeAboutWhatWasASKED pins the
+// awkward boundary rather than only the easy middle: when the whole requested range lies ahead,
+// history's clamp alone would produce an end BEFORE its start, and responseEndDate floors it to
+// the start. That is the one case where the two endpoints' ANSWERED windows genuinely differ, so
+// it is the case where the disclosure has to work.
+//
+// Asserted by running both and comparing, never by restating an expected value, so a change to
+// the rule cannot leave this test agreeing with only one of them.
+func TestGetCashFlowSummary_EntirelyFutureRange_TheTwoEndpointsAgreeAboutWhatWasASKED(t *testing.T) {
 	today := todayUTCForTest()
 	filters := domain.CashFlowFilters{
 		StartDate: today.AddDate(0, 0, 3),
@@ -2521,8 +2537,12 @@ func TestGetCashFlowSummary_EntirelyFutureRangeEchoesTheSameRangeAsHistory(t *te
 		Grouping:  "weekly",
 	}
 
+	var summarySeen domain.CashFlowFilters
 	repo := &mockAnalyticsRepository{
-		getCashFlowAggregationFn: func(_ context.Context, _ string, _ domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
+		getCashFlowAggregationFn: func(_ context.Context, _ string, f domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
+			if f.StartDate.Equal(filters.StartDate) {
+				summarySeen = f
+			}
 			return &domain.CashFlowAggregation{}, nil
 		},
 		getCashFlowGroupedFn: func(_ context.Context, _ string, f domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
@@ -2538,9 +2558,82 @@ func TestGetCashFlowSummary_EntirelyFutureRangeEchoesTheSameRangeAsHistory(t *te
 
 	assert.True(t, summary.StartDate.Equal(history.StartDate),
 		"summary start %v vs history start %v", summary.StartDate, history.StartDate)
-	assert.True(t, summary.EndDate.Equal(history.EndDate),
-		"the two endpoints must report the SAME answered range: summary %v vs history %v",
-		summary.EndDate, history.EndDate)
+
+	// They agree about the REQUEST.
+	assert.True(t, history.RequestedEndDate.Equal(filters.EndDate),
+		"history must echo the caller's own end date in requested_end_date: %v vs %v",
+		history.RequestedEndDate, filters.EndDate)
+	assert.True(t, summary.EndDate.Equal(history.RequestedEndDate),
+		"the two endpoints must agree about the range they were ASKED for: summary end_date %v "+
+			"vs history requested_end_date %v", summary.EndDate, history.RequestedEndDate)
+
+	// And each is honest about what it ANSWERED. History answered nothing here — its whole range
+	// is unhappened — so its end_date floors to the start and it ships no periods.
+	assert.True(t, summary.EndDate.Equal(summarySeen.EndDate),
+		"summary still labels the window it measured, even when that window is entirely ahead: "+
+			"echoed %v, queried %v", summary.EndDate, summarySeen.EndDate)
+	assert.True(t, history.EndDate.Equal(filters.StartDate),
+		"history answered for no period at all, so its end_date floors to the start: got %v",
+		history.EndDate)
+	assert.Empty(t, history.Periods)
+	assert.False(t, history.EndDate.After(history.RequestedEndDate),
+		"the answered window can never exceed the requested one")
 	assert.False(t, summary.EndDate.Before(summary.StartDate),
-		"the echoed range must never be inverted")
+		"and no echoed range may be inverted")
+}
+
+// TestGetCashFlowHistory_DisclosesTheRequestedEndItClampedAway is the disclosure in the ordinary
+// case: a range that straddles today. Without the field a caller comparing this endpoint with
+// cash-flow-summary sees two different end dates and no way to tell that one of them is a
+// deliberate horizon rather than a disagreement.
+func TestGetCashFlowHistory_DisclosesTheRequestedEndItClampedAway(t *testing.T) {
+	today := todayUTCForTest()
+	requestedEnd := today.AddDate(0, 0, 21)
+	repo := &mockAnalyticsRepository{
+		getCashFlowGroupedFn: func(_ context.Context, _ string, _ domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			return []domain.CashFlowGroupedData{
+				{PeriodStart: today, Income: 10, Expenses: 4, TransactionCount: 2},
+			}, nil
+		},
+	}
+
+	resp, err := NewAnalyticsService(repo).GetCashFlowHistory(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: today.AddDate(0, 0, -2),
+		EndDate:   requestedEnd,
+		Grouping:  "daily",
+	})
+	require.NoError(t, err)
+
+	assert.True(t, resp.RequestedEndDate.Equal(requestedEnd),
+		"requested_end_date must be the caller's own end date, unchanged: %v vs %v",
+		resp.RequestedEndDate, requestedEnd)
+	assert.True(t, resp.EndDate.Equal(today),
+		"end_date is the horizon actually answered for: %v vs %v", resp.EndDate, today)
+	assert.True(t, resp.EndDate.Before(resp.RequestedEndDate),
+		"and the gap between them is what this response deliberately does not cover")
+}
+
+// TestGetCashFlowHistory_RequestedEndEqualsEndDateForAPastRange is the narrow half: the two fields
+// coincide for every request that does not reach past today, which is nearly all of them. A
+// disclosure field that silently differed on ordinary ranges would be worse than none.
+func TestGetCashFlowHistory_RequestedEndEqualsEndDateForAPastRange(t *testing.T) {
+	today := todayUTCForTest()
+	end := today.AddDate(0, 0, -9)
+	repo := &mockAnalyticsRepository{
+		getCashFlowGroupedFn: func(_ context.Context, _ string, _ domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			return []domain.CashFlowGroupedData{
+				{PeriodStart: today.AddDate(0, 0, -40), Income: 100, Expenses: 40, TransactionCount: 1},
+			}, nil
+		},
+	}
+
+	resp, err := NewAnalyticsService(repo).GetCashFlowHistory(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: today.AddDate(0, 0, -40),
+		EndDate:   end,
+		Grouping:  "monthly",
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.RequestedEndDate.Equal(end))
+	assert.True(t, resp.EndDate.Equal(end),
+		"nothing was clamped away, so the two windows are the same window")
 }
