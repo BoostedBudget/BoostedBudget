@@ -506,6 +506,22 @@ var (
 	// repository.ErrAccountNotDisconnected on the account purge (Issue #1569, Task 6). Issue #1569.
 	ErrSavingsGoalNotDeleted = errors.New("savings goal must be deleted before it can be purged")
 
+	// ErrSavingsGoalBasisConflict is returned when a write that was computed for one
+	// progress_basis reaches a row that is now on a DIFFERENT one — the goal moved underneath the
+	// request. #1625: two distinct callers raise it, for the same reason.
+	//
+	//  1. UpdateWithBasisGuardInTx — a basis switch whose observed prior basis (read back under
+	//     SELECT … FOR UPDATE) is not the one the caller planned the switch from. Two concurrent
+	//     manual→contributions requests would otherwise BOTH archive and BOTH seed a synthetic
+	//     carry-over contribution, and because a seed carries no transaction_id it sits outside
+	//     the partial unique index — nothing else stops the second, and the goal reads double.
+	//  2. UpdateCurrentAmount — a recompute that summed the ledger for basis X trying to land on
+	//     a row that is now on basis Y. The value is right for a basis the row no longer has.
+	//
+	// It is a PRECONDITION failure, not a fault: the honest answer is 409 and "read it again",
+	// which is why it must never surface as a 500 (see internal/huma/errors/mapper.go).
+	ErrSavingsGoalBasisConflict = errors.New("savings goal progress_basis changed concurrently")
+
 	// ErrContributionNotFound is returned when a savings_goal_contribution is not found.
 	ErrContributionNotFound = errors.New("savings goal contribution not found")
 	// ErrContributionOverAllocated is returned when adding a contribution would exceed

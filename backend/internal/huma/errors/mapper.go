@@ -140,6 +140,12 @@ func MapError(err error) error {
 		return huma.Error409Conflict("A categorization rule with this name already exists")
 	case errors.Is(err, domain.ErrSavingsGoalAlreadyExists):
 		return huma.Error409Conflict("A savings goal with this name already exists")
+	// #1625: raised by the repository's own locked basis assertion, which is the TOCTOU-free half
+	// of ContributionHandler.assertLedgerIsLive. The handler's copy still produces the better
+	// message for the ordinary case; this mapping is what stops the RACE-losing case — which only
+	// the repository can detect — from surfacing as a 500.
+	case errors.Is(err, domain.ErrContributionBasisMismatch):
+		return huma.Error422UnprocessableEntity("This goal no longer tracks progress through its contribution ledger. Reload the goal and try again.")
 	case errors.Is(err, repository.ErrDuplicateEmail):
 		return huma.Error409Conflict("Email address already in use")
 	case errors.Is(err, repository.ErrDuplicateAccount):
@@ -166,6 +172,12 @@ func MapError(err error) error {
 	// gated on the goal already having been deleted. Same 409 shape as ErrAccountNotDisconnected.
 	case errors.Is(err, domain.ErrSavingsGoalNotDeleted):
 		return huma.Error409Conflict("This savings goal must be deleted before it can be purged.")
+	// #1625: the goal's progress_basis moved underneath this request — a concurrent switch won the
+	// row, or a recompute computed its figure for a basis the row has since left. A PRECONDITION,
+	// not a fault: 4xx, and retryable after a re-read. Mapping it to 500 would be the exact defect
+	// this ticket was opened for, since the losing request did nothing wrong.
+	case errors.Is(err, domain.ErrSavingsGoalBasisConflict):
+		return huma.Error409Conflict("This savings goal's progress basis was changed by another request. Reload the goal and try again.")
 	// GAP AW: idempotency key reused for a different operation — RFC 7231 / Stripe semantics.
 	case errors.Is(err, repository.ErrIdempotencyKeyConflict):
 		return huma.Error409Conflict("This idempotency key was already used for a different operation. Use a new key to perform a different request.")

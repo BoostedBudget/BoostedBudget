@@ -145,14 +145,17 @@ func TestSavingsProgress_Balance_Relink_FollowsChainToLiveAccount(t *testing.T) 
 	// The terminal row is reachable (.Maybe()) on purpose: a regression that ignores the chain
 	// then recomputes 3500 and fails the value assertion below, instead of panicking in testify.
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(terminal, nil).Maybe()
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
 	require.NoError(t, recomputeErr)
 
 	args, called := callArgsTo(&goalRepo.Mock, "UpdateCurrentAmount")
 	require.True(t, called, "a re-linked goal must resume recomputation, not stay frozen")
-	assert.Equal(t, 4200.00, args.Get(2), "must be the LIVE account's balance, not the frozen 3500")
+	// #1625 shifted the amount to index 3: the basis it was computed for is now bound into the
+	// statement, so it is argument 2.
+	assert.Equal(t, domain.ProgressBasisBalance, args.Get(2))
+	assert.Equal(t, 4200.00, args.Get(3), "must be the LIVE account's balance, not the frozen 3500")
 	assert.Equal(t, []string{"uaid-1"}, resolver.calls(), "chain must be resolved from the goal's stable user_account_id")
 	assertNoAccountRead(t, &accountRepo.Mock, "acc-old")
 }
@@ -195,7 +198,7 @@ func TestSavingsProgress_AccountPercentage_Relink_FollowsChainToLiveAccount(t *t
 	}
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-new", "u1").Return(live, nil).Maybe()
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(terminal, nil).Maybe()
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
 	require.NoError(t, recomputeErr)
@@ -203,7 +206,8 @@ func TestSavingsProgress_AccountPercentage_Relink_FollowsChainToLiveAccount(t *t
 	args, called := callArgsTo(&goalRepo.Mock, "UpdateCurrentAmount")
 	require.True(t, called, "a re-linked account_percentage goal must resume recomputation")
 	// 4000 * 0.25 = 1000 (the frozen row would give 800 * 0.25 = 200)
-	assert.Equal(t, 1000.00, args.Get(2))
+	assert.Equal(t, domain.ProgressBasisAccountPercentage, args.Get(2))
+	assert.Equal(t, 1000.00, args.Get(3))
 	assertNoAccountRead(t, &accountRepo.Mock, "acc-old")
 }
 
@@ -234,7 +238,7 @@ func TestSavingsProgress_Balance_ChainHasNoLiveMember_StillFreezes(t *testing.T)
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(terminal, nil).Maybe()
 	// Registered as .Maybe() so a regression RECORDS the write instead of panicking on an
 	// unexpected mock call — AssertNotCalled below then fails as a real assertion.
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
@@ -280,7 +284,7 @@ func TestSavingsProgress_Balance_ChainHasTwoLiveMembers_StillFreezes(t *testing.
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(physicalRow, nil)
 	// Registered as .Maybe() so a regression that guesses a sibling RECORDS the write instead
 	// of panicking on an unexpected mock call.
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
@@ -386,7 +390,7 @@ func TestSavingsProgress_Balance_NilUserAccountID_DegradesToPhysicalRow_AndFreez
 	}
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(terminal, nil)
 	// See the .Maybe() note in the no-live-member test above.
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
@@ -416,7 +420,7 @@ func TestSavingsProgress_Balance_NilUserAccountID_ActiveAccount_StillRecomputes(
 		Status: domain.AccountStatusActive, UpdatedAt: time.Now(),
 	}
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(live, nil)
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 1234.56, mock.Anything, mock.Anything).Return(nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 1234.56, mock.Anything, mock.Anything).Return(nil)
 
 	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
 	require.NoError(t, recomputeErr)
@@ -444,7 +448,7 @@ func TestSavingsProgress_Balance_EmptyUserAccountID_DegradesToPhysicalRow(t *tes
 		Status: domain.AccountStatusActive, UpdatedAt: time.Now(),
 	}
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(live, nil)
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 500.00, mock.Anything, mock.Anything).Return(nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 500.00, mock.Anything, mock.Anything).Return(nil)
 
 	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
 	require.NoError(t, recomputeErr)
@@ -475,7 +479,7 @@ func TestSavingsProgress_Balance_ResolverTransportError_IsReported(t *testing.T)
 	goal := makeGoal("g1", "u1", "acc-old", domain.ProgressBasisBalance, 10000, 3500)
 	goal.UserAccountID = strPtr1569("uaid-1")
 
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	accountRepo.On("GetByIDAndUser", mock.Anything, mock.Anything, "u1").Return(&domain.Account{
 		ID: "acc-old", UserID: "u1", Status: domain.AccountStatusActive, CurrentBalance: &frozenForTransportTest,
 	}, nil).Maybe()
@@ -616,7 +620,7 @@ func TestSavingsProgress_AccountPercentage_ChainHasNoLiveMember_StillFreezes(t *
 		Status: domain.AccountStatusRemoved, UpdatedAt: time.Now().Add(-90 * 24 * time.Hour),
 	}
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(terminal, nil).Maybe()
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
@@ -647,7 +651,7 @@ func TestSavingsProgress_AccountPercentage_NilUserAccountID_DegradesToPhysicalRo
 		Status: domain.AccountStatusReplaced, UpdatedAt: time.Now(),
 	}
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(terminal, nil)
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)

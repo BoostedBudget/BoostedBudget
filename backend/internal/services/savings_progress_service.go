@@ -24,7 +24,12 @@ type SavingsProgressGoalRepo interface {
 	// without scanning all active goals.
 	GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error)
 	// UpdateCurrentAmount stores the recomputed current_amount + timestamps.
-	UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error
+	//
+	// basis is the progress_basis this figure was computed for, and the repository binds it into
+	// the statement's WHERE (#1625). A recompute that lost a race to a basis switch therefore
+	// lands nowhere and reports domain.ErrSavingsGoalBasisConflict, instead of overwriting the
+	// winner's value with one that is right for a basis the row no longer has.
+	UpdateCurrentAmount(ctx context.Context, goalID, basis string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error
 	// MarkCompleted sets is_completed and sticky completed_at (Codex C5).
 	MarkCompleted(ctx context.Context, goalID string) error
 	// CountCompletedByUserID counts the user's completed goals. Required because
@@ -216,7 +221,7 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 	// conflated them reported a figure the database did not have.
 
 	// Persist updated current_amount and timestamps.
-	if err := s.goalRepo.UpdateCurrentAmount(ctx, goal.ID, newAmount, now, balanceAsOf); err != nil {
+	if err := s.goalRepo.UpdateCurrentAmount(ctx, goal.ID, basis, newAmount, now, balanceAsOf); err != nil {
 		// Nothing was written: the row still holds the amount it had on entry.
 		return goal.CurrentAmount, fmt.Errorf("savings_progress: update current_amount for goal %s: %w", goal.ID, err)
 	}

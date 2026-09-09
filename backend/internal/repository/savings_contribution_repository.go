@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -132,6 +133,17 @@ type SavingsContributionRepository interface {
 	// "contributions" — rows become historical records (Codex C10 basis-switch semantics).
 	ArchiveByGoal(ctx context.Context, goalID string) error
 
+	// ArchiveByGoalInTx is ArchiveByGoal run inside the caller's transaction. The savings basis
+	// switch drives it there so that persisting the new basis, closing the old period and seeding
+	// the carry-over contribution commit or roll back as one (#1625).
+	ArchiveByGoalInTx(ctx context.Context, tx Transaction, goalID string) error
+
+	// InsertInTx is Insert run inside the caller's transaction — same reason as
+	// ArchiveByGoalInTx. The basis-switch seed goes through this, so a failed seed rolls the whole
+	// switch back instead of leaving a goal on the contributions basis with an empty ledger and a
+	// current_amount of zero.
+	InsertInTx(ctx context.Context, tx Transaction, userID string, contrib *domain.SavingsGoalContribution) error
+
 	// InsertManualFromTransaction inserts (or updates) a user-initiated contribution that
 	// is linked to a specific transaction. Keeps manual semantics: managed_by_reconciliation=false,
 	// confirmed_by_user=true, source='manual', occurred_on=caller's date.
@@ -192,27 +204,81 @@ func NewSavingsContributionRepository(db DB) SavingsContributionRepository {
 	return &savingsContributionRepository{db: db}
 }
 
+// assertLedgerIsLiveLocked takes the goal row's lock and refuses the mutation unless the goal is
+// STILL on the contributions basis (#1625, defect 3).
+//
+// The handler has a gate of its own (ContributionHandler.assertLedgerIsLive) and it is worth
+// keeping — it produces a far better message. But it is a check-then-act against a row it does not
+// hold, so on its own it is a TOCTOU: a contribution could clear the gate, a concurrent PUT could
+// switch the goal to the manual basis and archive the period, and the contribution would then land
+// LIVE and UNARCHIVED under a goal whose current_amount no longer reads the ledger at all. Money
+// recorded where nothing counts it.
+//
+// `FOR UPDATE` and not a plain read: the lock must outlive the statement so the basis cannot move
+// between this check and the write that follows. It is the SAME lock, on the same row, that
+// UpdateWithBasisGuardInTx takes, and every path here takes it BEFORE locking any contribution
+// row — one global lock order (goal, then contribution), so a switch racing a confirm blocks
+// rather than deadlocking.
+//
+// Returns ErrSavingsGoalNotFound when the goal does not exist, is tombstoned or belongs to another
+// user, and ErrContributionBasisMismatch when it exists but has left the contributions basis. Both
+// are 4xx: the caller's request was refused, nothing faulted.
+func assertLedgerIsLiveLocked(ctx context.Context, q Querier, goalID, userID string) error {
+	var basis string
+	if err := q.QueryRow(ctx, goalBasisLockQuery, goalID, userID).Scan(&basis); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrSavingsGoalNotFound
+		}
+		return err
+	}
+	if normaliseBasis(basis) != domain.ProgressBasisContributions {
+		return fmt.Errorf("%w: goal %s is on progress_basis %q",
+			domain.ErrContributionBasisMismatch, goalID, normaliseBasis(basis))
+	}
+	return nil
+}
+
 // Insert inserts a new contribution row. ID is generated if empty.
 func (r *savingsContributionRepository) Insert(ctx context.Context, userID string, contrib *domain.SavingsGoalContribution) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
+
+	if err := r.insertInTx(ctx, tx, userID, contrib); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// InsertInTx implements SavingsContributionRepository.InsertInTx — see that method's doc comment.
+func (r *savingsContributionRepository) InsertInTx(ctx context.Context, tx Transaction, userID string, contrib *domain.SavingsGoalContribution) error {
+	return r.insertInTx(ctx, tx, userID, contrib)
+}
+
+// insertInTx is the shared body. It runs in a transaction unconditionally because the basis
+// assertion below is a SELECT … FOR UPDATE: outside one, the lock would be released the instant
+// the statement returned and the check would be back to being advisory.
+func (r *savingsContributionRepository) insertInTx(ctx context.Context, tx Querier, userID string, contrib *domain.SavingsGoalContribution) error {
 	if contrib.ID == "" {
 		contrib.ID = uuid.New().String()
 	}
 
-	// Verify goal ownership (Codex C1 / IDOR guard) — mirrors UpsertFromTransaction.
-	var dummy int
-	if err := r.db.QueryRow(ctx,
-		`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
-		contrib.SavingsGoalID, userID,
-	).Scan(&dummy); err != nil {
-		if err == pgx.ErrNoRows {
-			return domain.ErrSavingsGoalNotFound
-		}
+	// Verify goal ownership (Codex C1 / IDOR guard) AND that the ledger is still live, with the
+	// goal row locked (#1625). This replaces a bare ownership probe: the handler's
+	// assertLedgerIsLive check was a TOCTOU, so a contribution could pass the gate, race a switch
+	// to the manual basis, and land unarchived and uncounted under a goal that no longer reads its
+	// ledger. Asserted here because this is the only point that can hold the goal still while the
+	// row goes in.
+	if err := assertLedgerIsLiveLocked(ctx, tx, contrib.SavingsGoalID, userID); err != nil {
 		return err
 	}
 
 	// Verify transaction ownership if an optional link was supplied.
 	if contrib.TransactionID != nil {
-		if err := r.db.QueryRow(ctx,
+		var dummy int
+		if err := tx.QueryRow(ctx,
 			`SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
 			*contrib.TransactionID, userID,
 		).Scan(&dummy); err != nil {
@@ -231,7 +297,7 @@ func (r *savingsContributionRepository) Insert(ctx context.Context, userID strin
 		contrib.Status = "confirmed"
 	}
 
-	_, err := r.db.Exec(ctx, `
+	_, err := tx.Exec(ctx, `
 		INSERT INTO savings_goal_contributions (
 			id, savings_goal_id, transaction_id, amount, source, status,
 			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
@@ -779,7 +845,14 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 		}
 	}()
 
-	// Step 0: Load + lock the contribution row; verify it belongs to userID via goal ownership,
+	// Step 0a: lock the GOAL and re-assert the contributions basis (#1625, defect 3). Taken
+	// before the contribution row's own lock so every writer here acquires locks in the same
+	// order — goal, then contribution — as the basis switch does.
+	if err = assertLedgerIsLiveLocked(ctx, tx, goalID, userID); err != nil {
+		return nil, err
+	}
+
+	// Step 0b: Load + lock the contribution row; verify it belongs to userID via goal ownership,
 	// AND that it belongs to the goal the caller named.
 	//
 	// #1625: the goal binding is not cosmetic. Without it the handler's contributions-basis gate
@@ -994,6 +1067,22 @@ func (r *savingsContributionRepository) DeleteContribution(ctx context.Context, 
 // The row is retained so the partial-unique-index key (transaction_id, savings_goal_id)
 // blocks UpsertProposedFromTransaction from re-proposing the same transfer-in (R3-7).
 func (r *savingsContributionRepository) RejectContribution(ctx context.Context, userID, goalID, id string) (*domain.SavingsGoalContribution, error) {
+	// #1625 (defect 3): this became transactional so the contributions-basis assertion below can
+	// hold the goal row. An `AND g.progress_basis = 'contributions'` bolted onto the UPDATE … FROM
+	// would NOT have been equivalent: under READ COMMITTED, an UPDATE re-reads only its TARGET
+	// table's concurrently-updated rows, so the joined savings_goals row is evaluated against the
+	// statement's original snapshot and a switch that committed a moment earlier is invisible to
+	// it. Locking the goal first is the only form of this check that is not still a race.
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
+
+	if err := assertLedgerIsLiveLocked(ctx, tx, goalID, userID); err != nil {
+		return nil, err
+	}
+
 	// UPDATE … RETURNING so we can return the updated row and verify it was 'proposed'.
 	// Join through savings_goals to enforce ownership (Codex C1).
 	query := `
@@ -1015,7 +1104,7 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 			c.managed_by_reconciliation, c.confirmed_by_user,
 			to_char(c.occurred_on, 'YYYY-MM-DD'), c.created_at, c.updated_at, c.archived_at`
 	contrib := &domain.SavingsGoalContribution{}
-	err := r.db.QueryRow(ctx, query, id, userID, goalID).Scan(
+	err = tx.QueryRow(ctx, query, id, userID, goalID).Scan(
 		&contrib.ID, &contrib.SavingsGoalID, &contrib.TransactionID,
 		&contrib.Amount, &contrib.Source, &contrib.Status,
 		&contrib.ManagedByReconciliation, &contrib.ConfirmedByUser,
@@ -1035,13 +1124,17 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 				WHERE c.id = $1 AND g.user_id = $2 AND c.savings_goal_id = $3
 				  AND c.deleted_at IS NULL AND c.archived_at IS NULL
 			`
-			if chkErr := r.db.QueryRow(ctx, checkQuery, id, userID, goalID).Scan(&exists); chkErr != nil {
+			if chkErr := tx.QueryRow(ctx, checkQuery, id, userID, goalID).Scan(&exists); chkErr != nil {
 				// Row not found or wrong user.
 				return nil, domain.ErrContributionNotFound
 			}
 			// Row exists but status != 'proposed' (already confirmed or rejected).
 			return nil, domain.ErrContributionNotProposed
 		}
+		return nil, err
+	}
+
+	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return contrib, nil
@@ -1117,6 +1210,16 @@ func (r *savingsContributionRepository) DeleteManagedForTransaction(ctx context.
 // CONFLICT clause still refuses to touch it. A rejection is a decision about a transaction, not an
 // entry in a period — it must outlive periods, which is exactly what "sticky" means.
 func (r *savingsContributionRepository) ArchiveByGoal(ctx context.Context, goalID string) error {
+	return r.archiveByGoal(ctx, r.db, goalID)
+}
+
+// ArchiveByGoalInTx implements SavingsContributionRepository.ArchiveByGoalInTx — see that
+// method's doc comment.
+func (r *savingsContributionRepository) ArchiveByGoalInTx(ctx context.Context, tx Transaction, goalID string) error {
+	return r.archiveByGoal(ctx, tx, goalID)
+}
+
+func (r *savingsContributionRepository) archiveByGoal(ctx context.Context, q Querier, goalID string) error {
 	query := `
 		UPDATE savings_goal_contributions
 		SET managed_by_reconciliation = false,
@@ -1127,6 +1230,6 @@ func (r *savingsContributionRepository) ArchiveByGoal(ctx context.Context, goalI
 		  AND status != 'rejected'
 		  AND (archived_at IS NULL OR managed_by_reconciliation = true)
 	`
-	_, err := r.db.Exec(ctx, query, goalID)
+	_, err := q.Exec(ctx, query, goalID)
 	return err
 }
