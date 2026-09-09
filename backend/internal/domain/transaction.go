@@ -509,3 +509,18 @@ func (t *Transaction) Reversed() bool {
 		t.DeletedReason != nil &&
 		*t.DeletedReason == TxnDeletedProviderRemovedPosted
 }
+
+// FeedTotals carries whole-result-set aggregates for a transaction feed page (#1626 Phase 2).
+//
+// WHY IT EXISTS. The cursor-paginated feed returned only a page of rows, so nothing in the product
+// could answer "how much does this filtered set come to". That made the reports Sankey's
+// click-through unverifiable: a node showed an amount, the list showed rows, and no one could tell
+// whether they agreed. They now can.
+//
+// ⚠ Populated ONLY for the FIRST page (no cursor supplied). Computing it on every page would put a
+// full aggregate over the filtered set on the busiest list in the app, for a number that does not
+// change as the user pages. A nil pointer means "not computed", never "zero".
+type FeedTotals struct {
+	Count  int     `json:"count"`
+	Amount float64 `json:"amount"`
+}

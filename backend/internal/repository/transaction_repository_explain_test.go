@@ -285,7 +285,7 @@ func TestUnifiedFeed_EmittedQuery_EXPLAIN(t *testing.T) {
 
 	rec := &recordingDB{}
 	repo := NewTransactionRepository(rec, newTestFieldEncryptor(t))
-	_, _, err := repo.GetByUserIDKeysetUnified(ctx, "00000000-0000-0000-0000-000000000000",
+	_, _, _, err := repo.GetByUserIDKeysetUnified(ctx, "00000000-0000-0000-0000-000000000000",
 		domain.TransactionFilters{IncludeInvestmentActivity: true}, nil, 10)
 	require.ErrorIs(t, err, errRecordingDB, "the recording DB must be the only thing that failed")
 	require.NotEmpty(t, rec.sql, "no SQL captured — GetByUserIDKeysetUnified stopped calling Query")

@@ -204,7 +204,7 @@ func TestBuildAccountMapsStorageRoundTrip_RetainedAccountTransactionVisibleInUni
 	require.NoError(t, err, "the retained account must accept a stored transaction, not be skipped")
 
 	// Step 3: the row is visible through the real unified feed, not merely present in the table.
-	items, _, err := txnRepo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	items, _, _, err := txnRepo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Post-Disconnect Delivery"}, feedNames(items),
 		"a transaction stored against a retained account after this fix must appear in the unified feed")

@@ -330,13 +330,13 @@ func TestTombstone_HiddenFromEveryRead_Integration(t *testing.T) {
 	byUserAccount, err := f.repo.GetByUserAccountID(ctx, f.userID, f.userAccountID)
 	assertHidden("GetByUserAccountID", byUserAccount, err)
 
-	keyset, _, err := f.repo.GetByUserIDKeyset(ctx, f.userID, domain.TransactionFilters{}, nil, 100)
+	keyset, _, _, err := f.repo.GetByUserIDKeyset(ctx, f.userID, domain.TransactionFilters{}, nil, 100)
 	assertHidden("GetByUserIDKeyset", keyset, err)
 
 	// The unified feed is the one the brief singles out: retainedAccountVisibilityLeg deliberately
 	// WIDENS which accounts' rows are visible, so it is the query most able to resurrect a
 	// tombstone, not the least.
-	items, _, err := f.repo.GetByUserIDKeysetUnified(ctx, f.userID, domain.TransactionFilters{}, nil, 100)
+	items, _, _, err := f.repo.GetByUserIDKeysetUnified(ctx, f.userID, domain.TransactionFilters{}, nil, 100)
 	require.NoError(t, err)
 	sawLiveInFeed := false
 	for _, it := range items {
@@ -398,7 +398,7 @@ func TestTombstone_HiddenFromTheRetainedVisibilityLeg_Integration(t *testing.T) 
 	f.tombstoneBoth(t, ctx)
 	f.disconnectChain(t, ctx)
 
-	items, _, err := f.repo.GetByUserIDKeysetUnified(ctx, f.userID, domain.TransactionFilters{}, nil, 100)
+	items, _, _, err := f.repo.GetByUserIDKeysetUnified(ctx, f.userID, domain.TransactionFilters{}, nil, 100)
 	require.NoError(t, err)
 
 	feed := map[string]bool{}
@@ -416,7 +416,7 @@ func TestTombstone_HiddenFromTheRetainedVisibilityLeg_Integration(t *testing.T) 
 		"a posted reversal must stay hidden by default even when the retained leg has widened the feed")
 
 	// And the opt-in still behaves the same way through the widened leg.
-	withReversals, _, err := f.repo.GetByUserIDKeysetUnified(
+	withReversals, _, _, err := f.repo.GetByUserIDKeysetUnified(
 		ctx, f.userID, domain.TransactionFilters{IncludeReversed: true}, nil, 100)
 	require.NoError(t, err)
 	optIn := map[string]bool{}
@@ -464,7 +464,7 @@ func TestTombstone_SettledPendingIsNeverSurfaced_Integration(t *testing.T) {
 	require.NotNil(t, reversal.DeletedAt)
 	assert.False(t, live.Reversed(), "a live row is not a reversal")
 
-	items, _, err := f.repo.GetByUserIDKeysetUnified(ctx, f.userID, filters, nil, 100)
+	items, _, _, err := f.repo.GetByUserIDKeysetUnified(ctx, f.userID, filters, nil, 100)
 	require.NoError(t, err)
 	feed := map[string]*domain.ActivityItem{}
 	for _, it := range items {

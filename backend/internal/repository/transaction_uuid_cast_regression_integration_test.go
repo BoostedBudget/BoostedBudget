@@ -216,7 +216,7 @@ func TestUuidCastRegression_UnifiedFeed_SearchWithInvestmentRow(t *testing.T) {
 		SortBy:                    "date",         // required by GetByUserIDKeysetUnified
 	}
 	// Banking branch has mno.user_id=$1::text; investment branch has it.user_id=$1::uuid.
-	_, _, err = repo.GetByUserIDKeysetUnified(ctx, userStr, filters, nil, 10)
+	_, _, _, err = repo.GetByUserIDKeysetUnified(ctx, userStr, filters, nil, 10)
 	require.NoError(t, err)
 }
 
@@ -244,6 +244,6 @@ func TestUuidCastRegression_UnifiedFeed_SearchWithCustomCategory(t *testing.T) {
 		CustomCategoryIDs:         []string{catID}, // custom_categories.user_id=$1 subquery
 		SortBy:                    "date",
 	}
-	_, _, err = repo.GetByUserIDKeysetUnified(ctx, userStr, filters, nil, 10)
+	_, _, _, err = repo.GetByUserIDKeysetUnified(ctx, userStr, filters, nil, 10)
 	require.NoError(t, err)
 }

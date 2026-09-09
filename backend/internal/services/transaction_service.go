@@ -112,10 +112,13 @@ type TransactionService interface {
 type TransactionListResponse struct {
 	Transactions []*domain.ActivityItem `json:"transactions"`
 	TotalCount   int                    `json:"total_count,omitempty"`
-	Limit        int                    `json:"limit"`
-	Offset       int                    `json:"offset,omitempty"`
-	HasMore      bool                   `json:"has_more,omitempty"`
-	NextCursor   *string                `json:"next_cursor,omitempty"`
+	// TotalAmount is the summed amount of the whole filtered set, not the page (#1626 Phase 2).
+	// Populated on the cursor path only for the FIRST page — see domain.FeedTotals.
+	TotalAmount float64 `json:"total_amount,omitempty"`
+	Limit       int     `json:"limit"`
+	Offset      int     `json:"offset,omitempty"`
+	HasMore     bool    `json:"has_more,omitempty"`
+	NextCursor  *string `json:"next_cursor,omitempty"`
 }
 
 // transactionService implements TransactionService
@@ -274,7 +277,7 @@ func (s *transactionService) ListTransactionsByCursor(
 			}
 		}
 
-		items, nextRepoCursor, err := s.repo.GetByUserIDKeysetUnified(ctx, userID, filters, cursor, limit)
+		items, nextRepoCursor, totals, err := s.repo.GetByUserIDKeysetUnified(ctx, userID, filters, cursor, limit)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get unified feed by cursor: %w", err)
 		}
@@ -306,11 +309,13 @@ func (s *transactionService) ListTransactionsByCursor(
 		if err != nil {
 			return nil, err
 		}
-		return &TransactionListResponse{
+		resp := &TransactionListResponse{
 			Transactions: items,
 			Limit:        limit,
 			NextCursor:   encodedCursor,
-		}, nil
+		}
+		applyFeedTotals(resp, totals)
+		return resp, nil
 	}
 
 	// Banking-only path: V:2 cursor with Inc=true means it was minted under the investment-feed
@@ -319,7 +324,7 @@ func (s *transactionService) ListTransactionsByCursor(
 		return nil, domain.ErrCursorFilterMismatch
 	}
 
-	transactions, nextRepoCursor, err := s.repo.GetByUserIDKeyset(ctx, userID, filters, cursor, limit)
+	transactions, nextRepoCursor, totals, err := s.repo.GetByUserIDKeyset(ctx, userID, filters, cursor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get transactions by cursor: %w", err)
 	}
@@ -341,11 +346,26 @@ func (s *transactionService) ListTransactionsByCursor(
 	if err != nil {
 		return nil, err
 	}
-	return &TransactionListResponse{
+	resp := &TransactionListResponse{
 		Transactions: bankingItems,
 		Limit:        limit,
 		NextCursor:   encodedCursor,
-	}, nil
+	}
+	applyFeedTotals(resp, totals)
+	return resp, nil
+}
+
+// applyFeedTotals copies whole-set totals onto the response when the repository computed them.
+//
+// It is deliberately a no-op for nil rather than writing zeroes: nil means "not computed on this
+// page", and a zero total is indistinguishable from a genuinely empty set. Both keyset paths route
+// through here so neither can grow a divergent convention for absence (#1626 Phase 2).
+func applyFeedTotals(resp *TransactionListResponse, totals *domain.FeedTotals) {
+	if totals == nil {
+		return
+	}
+	resp.TotalCount = totals.Count
+	resp.TotalAmount = totals.Amount
 }
 
 // encodeNextCursor encodes a cursor for pagination. Returns nil if cursor is nil.

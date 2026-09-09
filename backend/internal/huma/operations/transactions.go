@@ -100,6 +100,17 @@ type GetTransactionsOutput struct {
 		Transactions []*domain.ActivityItem `json:"transactions"`
 		NextCursor   *string                `json:"next_cursor,omitempty"`
 		Limit        int                    `json:"limit"`
+		// TotalCount and TotalAmount describe the WHOLE filtered set, not this page, and are
+		// present only on the FIRST page (no cursor supplied) — re-aggregating the set on every
+		// page of the busiest list in the app would cost real time for a number that does not
+		// change as the user pages. Omitted, not zeroed, when absent: a zero total is
+		// indistinguishable from a genuinely empty set. TotalAmount follows the same sign
+		// convention as the rows (PFCv2: expenses positive, inflows negative), so a client must
+		// not assume it is a magnitude. Added in #1626 so the reports Sankey's click-through
+		// ("this node's amount equals the filtered list's total") is something a consumer — or a
+		// test — can actually check.
+		TotalCount  int     `json:"total_count,omitempty" doc:"Number of transactions in the whole filtered set. First page only."`
+		TotalAmount float64 `json:"total_amount,omitempty" doc:"Summed amount of the whole filtered set, same sign convention as the rows. First page only."`
 	}
 }
 
@@ -456,6 +467,8 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 	out.Body.Transactions = result.Transactions
 	out.Body.NextCursor = result.NextCursor
 	out.Body.Limit = result.Limit
+	out.Body.TotalCount = result.TotalCount
+	out.Body.TotalAmount = result.TotalAmount
 	return out, nil
 }
 

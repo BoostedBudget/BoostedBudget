@@ -358,12 +358,12 @@ func (m *MockTransactionRepository) UpdateEffectiveCategoryNameByCustomCategoryI
 	return args.Get(0).(int64), args.Error(1)
 }
 
-func (m *MockTransactionRepository) GetByUserIDKeyset(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]domain.Transaction, *domain.TransactionCursor, error) {
-	return nil, nil, nil
+func (m *MockTransactionRepository) GetByUserIDKeyset(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]domain.Transaction, *domain.TransactionCursor, *domain.FeedTotals, error) {
+	return nil, nil, nil, nil
 }
 
-func (m *MockTransactionRepository) GetByUserIDKeysetUnified(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]*domain.ActivityItem, *domain.TransactionCursor, error) {
-	return nil, nil, nil
+func (m *MockTransactionRepository) GetByUserIDKeysetUnified(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]*domain.ActivityItem, *domain.TransactionCursor, *domain.FeedTotals, error) {
+	return nil, nil, nil, nil
 }
 
 func (m *MockTransactionRepository) GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error) {

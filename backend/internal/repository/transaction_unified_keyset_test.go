@@ -137,7 +137,7 @@ func TestUnifiedFeed_ChainExpansion_SQLShape(t *testing.T) {
 		WithArgs(anyArgs(2)...). // userID + limit+1
 		WillReturnRows(rows)
 
-	_, _, err = repo.GetByUserIDKeysetUnified(
+	_, _, _, err = repo.GetByUserIDKeysetUnified(
 		ctx,
 		userID,
 		domain.TransactionFilters{
@@ -177,7 +177,7 @@ func TestUnifiedFeed_InvestmentChainPredicate_SQLShape(t *testing.T) {
 		WithArgs(anyArgs(2)...).
 		WillReturnRows(rows)
 
-	_, _, err = repo.GetByUserIDKeysetUnified(
+	_, _, _, err = repo.GetByUserIDKeysetUnified(
 		ctx,
 		userID,
 		domain.TransactionFilters{
@@ -212,7 +212,7 @@ func TestUnifiedFeed_BankingChainPredicate_SQLShape(t *testing.T) {
 		WithArgs(anyArgs(2)...).
 		WillReturnRows(rows)
 
-	_, _, err = repo.GetByUserIDKeysetUnified(
+	_, _, _, err = repo.GetByUserIDKeysetUnified(
 		ctx,
 		userID,
 		domain.TransactionFilters{},
@@ -253,7 +253,7 @@ func TestUnifiedFeed_NoActiveJoin_SQLShape(t *testing.T) {
 			WithArgs(anyArgs(2)...).
 			WillReturnRows(rows)
 
-		_, _, _ = repo.GetByUserIDKeysetUnified(
+		_, _, _, _ = repo.GetByUserIDKeysetUnified(
 			ctx,
 			"user-no-join-1",
 			domain.TransactionFilters{},
@@ -284,7 +284,7 @@ func TestUnifiedFeed_NoActiveJoin_SQLShape(t *testing.T) {
 			WithArgs(anyArgs(2)...).
 			WillReturnRows(rows)
 
-		_, _, _ = repo.GetByUserIDKeysetUnified(
+		_, _, _, _ = repo.GetByUserIDKeysetUnified(
 			ctx,
 			"user-no-join-2",
 			domain.TransactionFilters{IncludeInvestmentActivity: true},

@@ -217,13 +217,15 @@ type TransactionRepository interface {
 	// GetByUserIDKeyset retrieves transactions using keyset (cursor) pagination.
 	// cursor=nil returns the first page. Fetches limit+1 rows to detect end-of-list.
 	// Returns a slice of up to limit transactions and the cursor for the next page (nil = end of list).
+	// The third return is whole-set totals for the filtered set, non-nil ONLY when cursor is nil
+	// (the first page). nil means "not computed", never "zero" — see domain.FeedTotals (#1626).
 	GetByUserIDKeyset(
 		ctx context.Context,
 		userID string,
 		filters domain.TransactionFilters,
 		cursor *domain.TransactionCursor,
 		limit int,
-	) ([]domain.Transaction, *domain.TransactionCursor, error)
+	) ([]domain.Transaction, *domain.TransactionCursor, *domain.FeedTotals, error)
 
 	// GetRecentInflowsByUserID returns posted (non-pending) inflow transactions
 	// (amount < 0 under PFCv2) for a user with a date on or after since.
@@ -245,13 +247,14 @@ type TransactionRepository interface {
 	// Issue #138: unified activity feed with cursor-correct UNION ALL.
 	// Requires filters.SortBy = "date" (enforced at service layer).
 	// Returns V:2 cursor; nil cursor = end of list.
+	// The third return is whole-set totals, non-nil ONLY on the first page — see GetByUserIDKeyset.
 	GetByUserIDKeysetUnified(
 		ctx context.Context,
 		userID string,
 		filters domain.TransactionFilters,
 		cursor *domain.TransactionCursor,
 		limit int,
-	) ([]*domain.ActivityItem, *domain.TransactionCursor, error)
+	) ([]*domain.ActivityItem, *domain.TransactionCursor, *domain.FeedTotals, error)
 
 	// ResolveEffectiveMerchantNames returns a map of merchant ID → effective display name
 	// for the given set of merchant IDs and user, in one DB round-trip.
@@ -2554,7 +2557,7 @@ func (r *transactionRepository) GetByUserIDKeyset(
 	filters domain.TransactionFilters,
 	cursor *domain.TransactionCursor,
 	limit int,
-) ([]domain.Transaction, *domain.TransactionCursor, error) {
+) ([]domain.Transaction, *domain.TransactionCursor, *domain.FeedTotals, error) {
 	whereClause, args := buildWhereClause(userID, filters)
 
 	sortKey := filters.SortBy
@@ -2634,6 +2637,43 @@ func (r *transactionRepository) GetByUserIDKeyset(
 		joinClause = merchantSortJoins
 	}
 
+	// ── Whole-set totals, FIRST PAGE ONLY (#1626 Phase 2) ────────────────────
+	//
+	// WHY. The response carried only a page, so "what does this filtered set come to" was not a
+	// question the product could answer — which is what made the reports Sankey's click-through
+	// claim (this node's amount equals the filtered list's total) unverifiable rather than merely
+	// untested.
+	//
+	// ⚠ ONLY when no cursor was supplied. Re-aggregating the whole filtered set on every page of
+	// the busiest list in the app would be real cost for a number that does not change as the user
+	// pages. TestBankingKeysetCursoredPage_SkipsTheAggregateEntirely pins the skip.
+	//
+	// ⚠ IT REUSES THE PAGE QUERY’S OWN FRAGMENTS AND ARGS — that is the whole correctness
+	// argument. Rebuilding the predicate would let the total drift from the rows it describes, and
+	// a wrong total is worse than none because the client cannot tell that it is wrong. Two SQL
+	// strings agreeing is not two result sets agreeing, so the agreement is pinned behaviourally
+	// by TestFeedTotals_AgreeWithTheRowsTheyDescribe_Integration, not by reading these queries.
+	// Exact here because the cursor clause is the only later mutation of whereClause and the LIMIT
+	// arg the only later append to args, and neither has happened yet on this path.
+	var totals *domain.FeedTotals
+	if cursor == nil {
+		aggQuery := fmt.Sprintf(`
+		-- tombstone-exempt(transactions t): shares buildWhereClause's interpolated WHERE with the
+		-- page query below, which emits transactionTombstoneCondition("t", ...) unconditionally (#1569).
+		SELECT COUNT(*), COALESCE(SUM(t.amount), 0)
+		FROM transactions t
+		%s
+		%s
+	`, joinClause, whereClause)
+
+		var count int
+		var amount float64
+		if err := r.db.QueryRow(ctx, aggQuery, args...).Scan(&count, &amount); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to aggregate transactions (keyset totals): %w", err)
+		}
+		totals = &domain.FeedTotals{Count: count, Amount: amount}
+	}
+
 	// For merchant sort, select an extra column to capture the EFF value for cursor building.
 	selectExpr := transactionSelectExprT
 	effMerchantExtra := ""
@@ -2657,7 +2697,7 @@ func (r *transactionRepository) GetByUserIDKeyset(
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to query transactions (keyset): %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to query transactions (keyset): %w", err)
 	}
 	defer rows.Close()
 
@@ -2671,26 +2711,26 @@ func (r *transactionRepository) GetByUserIDKeyset(
 			dest, state := r.scanTransactionDestSliceWithState(&tx)
 			dest = append(dest, &effMerchantName)
 			if err := rows.Scan(dest...); err != nil {
-				return nil, nil, fmt.Errorf("failed to scan transaction: %w", err)
+				return nil, nil, nil, fmt.Errorf("failed to scan transaction: %w", err)
 			}
 			if err := r.postScanTransactionState(&tx, state); err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			txs = append(txs, tx)
 			effMerchantNames = append(effMerchantNames, effMerchantName)
 		}
 		if err := rows.Err(); err != nil {
-			return nil, nil, fmt.Errorf("error iterating transactions (keyset): %w", err)
+			return nil, nil, nil, fmt.Errorf("error iterating transactions (keyset): %w", err)
 		}
 	} else {
 		txs, err = r.scanTransactions(rows)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 
 	if err := r.enrichEffectiveMerchantNames(ctx, userID, txs); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if len(txs) == limit+1 {
@@ -2701,12 +2741,12 @@ func (r *transactionRepository) GetByUserIDKeyset(
 		}
 		nextCursor, buildErr := buildKeysetCursor(last, sortKey, sortDir, effMN)
 		if buildErr != nil {
-			return nil, nil, fmt.Errorf("failed to build next cursor: %w", buildErr)
+			return nil, nil, nil, fmt.Errorf("failed to build next cursor: %w", buildErr)
 		}
-		return txs[:limit], nextCursor, nil
+		return txs[:limit], nextCursor, totals, nil
 	}
 
-	return txs, nil, nil
+	return txs, nil, totals, nil
 }
 
 // buildKeysetCursor constructs a TransactionCursor from a transaction row.
@@ -3120,7 +3160,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	filters domain.TransactionFilters,
 	cursor *domain.TransactionCursor,
 	limit int,
-) ([]*domain.ActivityItem, *domain.TransactionCursor, error) {
+) ([]*domain.ActivityItem, *domain.TransactionCursor, *domain.FeedTotals, error) {
 	args := []any{userID}
 	argIdx := 2
 
@@ -3337,7 +3377,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		// SVT is always populated for K="date" cursors by DecodeTransactionCursor;
 		// guard here defensively to avoid a nil-pointer on tampered/malformed cursors.
 		if cursor.SVT == nil {
-			return nil, nil, fmt.Errorf("cursor: missing sort date — restart pagination")
+			return nil, nil, nil, fmt.Errorf("cursor: missing sort date — restart pagination")
 		}
 		// We add: cursorDate, cursorDate, cursorID to args (3 slots).
 		// Both branches can reference argIdx..(argIdx+2) as needed.
@@ -3521,9 +3561,70 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		limitPH,
 	)
 
+	// ── Whole-set totals, FIRST PAGE ONLY (#1626 Phase 2) ────────────────────
+	//
+	// WHY. The response carried only a page, so "what does this filtered set come to" was not a
+	// question the product could answer — which is what made the reports Sankey's click-through
+	// claim (this node's amount equals the filtered list's total) unverifiable rather than merely
+	// untested.
+	//
+	// ⚠ ONLY when no cursor was supplied. Re-aggregating the whole filtered set on every page of
+	// the busiest list in the app would be real cost for a number that does not change as the user
+	// pages. TestBankingKeysetCursoredPage_SkipsTheAggregateEntirely pins the skip.
+	//
+	// ⚠ IT REUSES THE PAGE QUERY’S OWN FRAGMENTS AND ARGS — that is the whole correctness
+	// argument. Rebuilding the predicate would let the total drift from the rows it describes, and
+	// a wrong total is worse than none because the client cannot tell that it is wrong. Two SQL
+	// strings agreeing is not two result sets agreeing, so the agreement is pinned behaviourally
+	// by TestFeedTotals_AgreeWithTheRowsTheyDescribe_Integration, not by reading these queries.
+	// Exact here because the cursor fragments are EMPTY whenever cursor is nil (the only case
+	// computed), and the LIMIT placeholder is simply left unreferenced — Postgres does not mind an
+	// unused trailing parameter, so every other $N keeps its meaning.
+	var totals *domain.FeedTotals
+	if cursor == nil {
+		aggQuery := fmt.Sprintf(`
+		-- tombstone-exempt(transactions t): the placeholder two lines below this SELECT interpolates
+		-- transactionTombstoneCondition("t", filters.IncludeReversed) unconditionally, exactly as the
+		-- page query does — this aggregate shares that fragment rather than restating it, which is
+		-- what keeps the total from drifting from the rows (#1569, #1626).
+		SELECT COUNT(*), COALESCE(SUM(amt), 0) FROM (
+			SELECT t.amount AS amt
+			FROM transactions t
+			%s
+			WHERE t.user_id = $1::uuid
+			  %s
+			  AND (%s
+			  )
+			  %s%s%s%s%s
+			UNION ALL
+			SELECT it.amount AS amt
+			FROM investment_transactions it
+			WHERE it.user_id = $1::uuid
+			  AND (%s
+			  )
+			  %s
+			  %s%s%s%s%s
+		) agg`,
+			bankingMerchantJoins,
+			transactionTombstoneCondition("t", filters.IncludeReversed),
+			retainedAccountVisibilityLegs("t", "t.date"),
+			bankingAcctFilter, bankingDateFilter, bankingSearchFilter, bankingExtraFilter, bankingActivityFilter,
+			retainedAccountVisibilityLegs("it", "it.date"),
+			investmentSyncExclusionCondition("it"),
+			investAcctFilter, investDateFilter, investSearchFilter, investActivityFilter, investBankingOnlyFilter,
+		)
+
+		var count int
+		var amount float64
+		if err := r.db.QueryRow(ctx, aggQuery, args...).Scan(&count, &amount); err != nil {
+			return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified totals: %w", err)
+		}
+		totals = &domain.FeedTotals{Count: count, Amount: amount}
+	}
+
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified: %w", err)
+		return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified: %w", err)
 	}
 	defer rows.Close()
 
@@ -3576,7 +3677,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			&invType, &invSubtype,
 			&invQuantity, &invPrice, &invFees,
 		); err != nil {
-			return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified scan: %w", err)
+			return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified scan: %w", err)
 		}
 
 		item := &domain.ActivityItem{
@@ -3644,7 +3745,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		if externalTxnID != nil {
 			decrypted, decErr := r.enc.DecryptNullableString(externalTxnID)
 			if decErr != nil {
-				return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified decrypt: %w", decErr)
+				return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified decrypt: %w", decErr)
 			}
 			item.ExternalTransactionID = decrypted
 		}
@@ -3653,7 +3754,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		if len(tagsJSON) > 0 {
 			var tags []string
 			if err := json.Unmarshal(tagsJSON, &tags); err != nil {
-				return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified unmarshal tags: %w", err)
+				return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified unmarshal tags: %w", err)
 			}
 			item.Tags = tags
 		}
@@ -3661,7 +3762,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		items = append(items, item)
 	}
 	if rows.Err() != nil {
-		return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified rows: %w", rows.Err())
+		return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified rows: %w", rows.Err())
 	}
 
 	// Build next-page cursor from the limit+1 probe row.
@@ -3669,7 +3770,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		last := items[limit-1]
 		lastID, err := uuid.Parse(last.ID)
 		if err != nil {
-			return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified: invalid id %q: %w", last.ID, err)
+			return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified: invalid id %q: %w", last.ID, err)
 		}
 		svt := last.SortDate
 		sv := last.SortDate.Format(time.DateOnly)
@@ -3683,8 +3784,8 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			Src: last.Source,
 			Inc: true,
 		}
-		return items[:limit], nextCursor, nil
+		return items[:limit], nextCursor, totals, nil
 	}
 
-	return items, nil, nil
+	return items, nil, totals, nil
 }

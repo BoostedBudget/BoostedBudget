@@ -96,7 +96,7 @@ func TestUnifiedFeed_AccountWithNoActiveInterval_StillShowsItsTransactions_Integ
 	seedTxn(visibleTxn, terminalOnly, "On terminal-only account")
 	seedTxn(hiddenTxn, governed, "On governed account")
 
-	items, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(),
+	items, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(),
 		domain.TransactionFilters{IncludeInvestmentActivity: false}, nil, 50)
 	require.NoError(t, err)
 
