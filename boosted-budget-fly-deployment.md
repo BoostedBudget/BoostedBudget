@@ -476,6 +476,9 @@ jobs:
         # Deploy with blue-green strategy
         # Note: Migrations run automatically via docker-entrypoint.sh
         # The entrypoint handles Neon pooler URL transformation for migrations
+        # ⚠ RECOVERY: if a CONCURRENTLY index build is interrupted, see
+        #    "Interrupted CONCURRENTLY index build" below — the container will NOT start
+        #    and `migrate up` alone cannot fix it.
         flyctl deploy \
           --app boostedbudget-api \
           --image ${{ needs.build-images.outputs.backend-image }} \
@@ -1538,3 +1541,46 @@ All phases include rollback procedures to safely return to single-region deploym
 ---
 
 This approach gives you complete control over your Docker images while leveraging Fly.io's excellent global infrastructure for deployment. The single-region MVP provides a stable foundation, with clear expansion paths when justified by business growth.
+
+## Recovery: interrupted `CONCURRENTLY` index build
+
+**Symptom: the backend container fails to start after a deploy.**
+
+`CREATE UNIQUE INDEX CONCURRENTLY` cannot run inside a transaction, so an interrupted build
+leaves two things behind at once:
+
+1. the index present but `indisvalid = false`, and
+2. golang-migrate marked **dirty** at that version.
+
+`docker-entrypoint.sh` only retries `migrate up`, which refuses to run while dirty. So the
+deploy loops on a failing start and no amount of restarting fixes it.
+
+### Repair
+
+```bash
+migrate -path backend/migrations -database "$DATABASE_URL" force 189
+migrate -path backend/migrations -database "$DATABASE_URL" up
+```
+
+⚠ **Force to 189, not 190.** Migration `000190` is the step that conditionally drops an
+`indisvalid = false` leftover; forcing to 190 skips that drop and leaves the invalid index in
+place **while reporting success**. `000191` then re-creates nothing and the unique constraint
+silently does not exist.
+
+### Verify, because the version number is not evidence
+
+A `schema_migrations` row saying `191` with `dirty = false` does **not** prove the index exists —
+this was observed for real on a scratch database that had been *forced* to 191 without the
+migration executing. Check the index itself:
+
+```sql
+SELECT indexrelid::regclass, indisvalid FROM pg_index
+WHERE indexrelid::regclass::text = 'uq_balance_snapshots_daily_capture';
+```
+
+Expect exactly one row with `indisvalid = t`. No rows means the index is absent: repair as above.
+A row with `indisvalid = f` means an interrupted build: repair as above.
+
+Symptom if it is missing: writes to `balance_snapshots` from the daily capture job fail with
+`SQLSTATE 42P10` (`ON CONFLICT` names an arbiter that does not exist). That is deliberate — the
+insert fails loudly rather than silently double-writing a row per account per day.
