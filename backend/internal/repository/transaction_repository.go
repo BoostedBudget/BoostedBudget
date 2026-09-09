@@ -2907,7 +2907,45 @@ func (r *transactionRepository) GetRecentInflowsByUserID(ctx context.Context, us
 // below; neither should be called on its own, and TestRetainedVisibilityLegsTravelTogether holds
 // that to account.
 func retainedAccountVisibilityLegs(alias, dateCol string) string {
-	return activeChainSiblingLeg(alias) + retainedAccountNoLiveSuccessorLeg(alias, dateCol)
+	return activeChainSiblingLeg(alias) +
+		retainedAccountNoLiveSuccessorLeg(alias, dateCol) +
+		accountWithNoActiveIntervalLeg(alias)
+}
+
+// accountWithNoActiveIntervalLeg admits a transaction whose account has NO 'active' row in
+// account_status_history at all (#1626 Phase 2).
+//
+// WHY IT EXISTS. The two legs above cover "the chain has a live sibling" and "this account was
+// active over an interval covering the row's date". An account with no 'active' row satisfies
+// neither, and migration 000152's zero-length-interval guard creates exactly that shape: it skips
+// the 'active' prefix when replaced_at/removed_at/updated_at is NULL or <= created_at, leaving only
+// a terminal row. The comment on the leg above already recorded the consequence — "its transactions
+// stay hidden ... a backfill-data property, not a decision taken here".
+//
+// It stopped being merely a data property once the reports Sankey began offering click-through
+// whose list is supposed to account for the node's amount: the analytics reads apply no visibility
+// predicate at all, so such a row counts toward the chart and could never appear in the list.
+// Hiding a user's own retained history because an interval was never written is the #1569 defect in
+// miniature, so absence of interval data is treated as "no reason to hide", not as evidence.
+//
+// ⚠ NARROW BY CONSTRUCTION, and this is the whole safety argument: it fires only when there is no
+// 'active' row WHATSOEVER. An account the user genuinely disconnected has an 'active' row followed
+// by a terminal one, so the historical leg continues to govern it with its existing date bounds.
+// This cannot resurrect a deliberately removed account.
+//
+// ⚠ NOT EXISTS, not a LEFT JOIN: one account has many history rows, so joining would multiply
+// every feed row by that count. A semi-join asks the only question that matters and cannot fan out.
+func accountWithNoActiveIntervalLeg(alias string) string {
+	return fmt.Sprintf(`
+		      OR EXISTS (
+		          SELECT 1
+		          FROM accounts na
+		          WHERE na.id = %s.account_id
+		            AND NOT EXISTS (
+		                SELECT 1 FROM account_status_history h2
+		                WHERE h2.account_id = na.id AND h2.status = 'active'
+		            )
+		      )`, alias)
 }
 
 // investmentSyncExclusionCondition renders the predicate that hides an investment_transactions row
