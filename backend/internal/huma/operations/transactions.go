@@ -54,9 +54,10 @@ type GetTransactionsInput struct {
 	AccountIDs        string `query:"account_ids" doc:"Filter by multiple account IDs (comma-separated UUIDs)"`
 	StartDate         string `query:"start_date" doc:"Filter transactions on or after this date (YYYY-MM-DD)"`
 	EndDate           string `query:"end_date" doc:"Filter transactions on or before this date (YYYY-MM-DD)"`
-	PFCPrimaries      string `query:"pfc_primaries" doc:"Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL). OR-joined with pfc_detaileds and custom_category_ids: a transaction matches if ANY of the three matches."`
-	PFCDetaileds      string `query:"pfc_detaileds" doc:"Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). OR-joined with pfc_primaries and custom_category_ids."`
-	CustomCategoryIDs string `query:"custom_category_ids" doc:"Filter by custom category UUIDs (comma-separated). Each id also matches its child categories. OR-joined with pfc_primaries and pfc_detaileds — combining them returns the union, not the (always empty) intersection."`
+	PFCPrimaries      string `query:"pfc_primaries" doc:"Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL). OR-joined with pfc_detaileds, custom_category_ids and uncategorized: a transaction matches if ANY of them matches."`
+	PFCDetaileds      string `query:"pfc_detaileds" doc:"Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). OR-joined with pfc_primaries, custom_category_ids and uncategorized."`
+	CustomCategoryIDs string `query:"custom_category_ids" doc:"Filter by custom category UUIDs (comma-separated). Each id also matches its child categories. OR-joined with pfc_primaries, pfc_detaileds and uncategorized — combining them returns the union, not the (always empty) intersection."`
+	Uncategorized     string `query:"uncategorized" doc:"When true, also match transactions with NO category at all — the rows analytics reports as 'Uncategorized'. OR-joined with pfc_primaries, pfc_detaileds and custom_category_ids. Omitted or false adds no filter; it never means 'exclude uncategorized'. Issue #1626."`
 	Search            string `query:"search" doc:"Search in merchant name or transaction name"`
 	Pending           string `query:"pending" doc:"Filter by pending status (true/false)"`
 	Reviewed          string `query:"reviewed" doc:"Filter by review state: true (reviewed), false (unreviewed inbox), omit for both"`
@@ -348,6 +349,17 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 			return nil, huma.Error400BadRequest("Invalid include_reversed parameter (expected true or false)")
 		}
 		filters.IncludeReversed = includeReversed
+	}
+
+	// Uncategorized (#1626 Phase 2) — parsed like include_reversed above, and for the same reason:
+	// the raw string is the ONLY place absence can be distinguished from an explicit false, and an
+	// invalid value is rejected rather than coerced. `false` is a no-op, never an exclusion.
+	if input.Uncategorized != "" {
+		uncategorized, err := strconv.ParseBool(input.Uncategorized)
+		if err != nil {
+			return nil, huma.Error400BadRequest("Invalid uncategorized parameter (expected true or false)")
+		}
+		filters.Uncategorized = uncategorized
 	}
 
 	// Category source filter (Issue #1210) — comma-separated, validated enum tokens
