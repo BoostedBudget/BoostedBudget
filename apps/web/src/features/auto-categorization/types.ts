@@ -221,6 +221,12 @@ export interface CategorizationRule {
   last_matched_at?: string | null // ISO 8601 date-time
   created_at: string // ISO 8601 date-time
   updated_at: string // ISO 8601 date-time
+  // #1625: response-only, recomputed by the server on every read. True when the rule cannot be
+  // evaluated as written and is therefore matching nothing. `quarantine_reason` is a fixed
+  // backend vocabulary, never user content -- see QUARANTINE_EXPLANATIONS in
+  // AutoCategorizationRuleCard for the rendering.
+  quarantined?: boolean
+  quarantine_reason?: string
 }
 
 /**

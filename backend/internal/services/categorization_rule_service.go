@@ -169,11 +169,27 @@ func (s *categorizationRuleService) GetUserRules(ctx context.Context, userID str
 	}
 	for _, r := range rules {
 		r.PopulatePFCDisplay()
+		annotateQuarantineStatus(r)
 	}
 	if err := s.enrichCustomCategoryDisplay(ctx, userID, rules); err != nil {
 		return nil, err
 	}
 	return rules, nil
+}
+
+// annotateQuarantineStatus fills the response-only quarantine fields.
+//
+// #1625 Task 7. It classifies with quarantineReason -- the SAME function that labels the
+// shadow-mode metric -- rather than a second implementation, so the status a user is shown and
+// the inventory an operator reads can never describe the same rule differently.
+func annotateQuarantineStatus(r *domain.CategorizationRule) {
+	if r == nil {
+		return
+	}
+	if reason := quarantineReason(r); reason != "" {
+		r.Quarantined = true
+		r.QuarantineReason = string(reason)
+	}
 }
 
 // GetRuleByID retrieves a specific rule by ID.
@@ -189,6 +205,7 @@ func (s *categorizationRuleService) GetRuleByID(ctx context.Context, userID, rul
 	}
 
 	rule.PopulatePFCDisplay()
+	annotateQuarantineStatus(rule)
 	if err := s.enrichCustomCategoryDisplay(ctx, userID, []*domain.CategorizationRule{rule}); err != nil {
 		return nil, err
 	}

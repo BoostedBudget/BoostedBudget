@@ -123,6 +123,24 @@ type CategorizationRule struct {
 	TargetPFCDetailedDisplay *string `json:"target_pfc_detailed_display,omitempty" db:"-"`
 	// Custom category display name (populated by service enrichment from custom_categories table, not stored in DB)
 	TargetCustomCategoryDisplay *string    `json:"target_custom_category_display,omitempty" db:"-"`
+
+	// Quarantined reports that this rule cannot be evaluated as written. RESPONSE ONLY, computed
+	// at read time from the rule's own conditions and never persisted -- a stored copy could only
+	// go stale relative to the conditions it describes.
+	//
+	// #1625: shadow-mode quarantine counted and logged, so the only party who could discover that
+	// a rule was not going to run was an operator reading /metrics. The user whose rule silently
+	// stopped matching could not. Surfacing this is a PRECONDITION for enforcing it.
+	//
+	// Deliberately no `quarantined_at`: nothing records when a rule entered this state, and a
+	// timestamp filled in at response time would answer "when did you ask", not "since when has
+	// this been broken". Reporting a number the system does not know is the defect class this
+	// whole ticket is about.
+	Quarantined bool `json:"quarantined,omitempty" db:"-" doc:"True when this rule cannot be evaluated as written and will not match anything. Computed per request."`
+	// QuarantineReason is a fixed vocabulary (never user content), shared with the
+	// categorization_rule_quarantine_candidates_total metric so the two cannot describe the same
+	// condition differently.
+	QuarantineReason string `json:"quarantine_reason,omitempty" db:"-" doc:"Why the rule cannot be evaluated. Fixed vocabulary: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, invalid_condition_value_shape."`
 	TargetTags                  []string   `json:"target_tags,omitempty" db:"target_tags"`
 	TagBehavior                 string     `json:"tag_behavior" db:"tag_behavior"` // "add" or "replace"
 	Source                      string     `json:"source" db:"source"`             // "manual", "ai", or "template"
