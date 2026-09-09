@@ -660,6 +660,49 @@ func TestSavingsContributionRepository_Integration_ConfirmContribution_RejectsTo
 			"silently counting reversed money toward a goal")
 }
 
+// TestSavingsContributionRepository_Integration_ConfirmContribution_RefusesRejectedRow closes
+// #1625 Task 9: RejectContribution sets a sticky tombstone (R3-7) so a later Plaid sync cannot
+// re-propose a transfer the user already turned down. ConfirmContribution rejected only
+// status=='confirmed' and then unconditionally flipped the row to 'confirmed' — so a direct
+// confirm call on a rejected row silently undid the user's decision. This is a DIFFERENT scenario
+// from TestSavingsContributionRepository_Integration_RejectTombstone_SurvivesResync above (which
+// pins that a sync cannot resurrect the row): this one pins that the confirm API itself cannot.
+func TestSavingsContributionRepository_Integration_ConfirmContribution_RefusesRejectedRow(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -50.0)
+
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	proposed := &domain.SavingsGoalContribution{
+		SavingsGoalID: goalID,
+		TransactionID: &txnID,
+		Amount:        20.0,
+		Source:        "confirmed_transfer",
+		Status:        "proposed",
+		OccurredOn:    time.Now().Format("2006-01-02"),
+	}
+	require.NoError(t, repo.Insert(ctx, userID, proposed))
+
+	rejected, err := repo.RejectContribution(ctx, userID, goalID, proposed.ID)
+	require.NoError(t, err, "RejectContribution must succeed on a proposed row")
+	require.Equal(t, "rejected", rejected.Status)
+
+	_, err = repo.ConfirmContribution(ctx, userID, goalID, proposed.ID)
+	require.Error(t, err, "confirming a rejected sticky tombstone must be refused, not silently succeed")
+	assert.ErrorIs(t, err, domain.ErrContributionAlreadyRejected)
+
+	var statusAfter string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT status FROM savings_goal_contributions WHERE id = $1`, proposed.ID,
+	).Scan(&statusAfter))
+	assert.Equal(t, "rejected", statusAfter,
+		"the row must remain 'rejected' — the refused confirm must not have mutated it")
+}
+
 // tombstoneTransaction applies the #1569 tombstone directly, so these tests do not depend on the
 // Plaid sync path to reach the state they are about.
 func tombstoneTransaction(t *testing.T, pool *pgxpool.Pool, txnID string) {
