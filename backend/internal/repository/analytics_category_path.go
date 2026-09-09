@@ -71,9 +71,15 @@ func categoryPathExprs() (l1Key, l1Display, l2Key, l2Display, l3Key, l3Display s
 	// The same guard doubles as the no-self-edge rule: a detailed equal to its primary, or absent,
 	// yields NULL rather than a level that points at itself.
 	pfcChild := func(primary, detailed string) string {
+		// starts_with(), not LIKE. `detailed LIKE primary || '\_%'` would escape only the separator
+		// underscore this expression appends — every underscore INSIDE the primary itself would
+		// remain a LIKE single-character wildcard, so FOOD_AND_DRINK would build the pattern
+		// FOOD?AND?DRINK_%. No two PFC enums collide under that today, so it produced no wrong
+		// answer, but it asserts something weaker than it reads as. starts_with is an exact,
+		// wildcard-free prefix test and needs no escaping at all.
 		return `CASE WHEN ` + detailed + ` IS NOT NULL
 		              AND ` + detailed + ` <> ` + primary + `
-		              AND ` + detailed + ` LIKE ` + primary + ` || '\_%'
+		              AND starts_with(` + detailed + `, ` + primary + ` || '_')
 		         THEN ` + detailed + ` END`
 	}
 
