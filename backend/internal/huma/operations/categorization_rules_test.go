@@ -653,6 +653,9 @@ func (s *stubRuleRepoForValidation) CountByUserID(context.Context, string) (int,
 }
 func (s *stubRuleRepoForValidation) IncrementMatchCount(context.Context, string) error    { return nil }
 func (s *stubRuleRepoForValidation) IncrementOverrideCount(context.Context, string) error { return nil }
+func (s *stubRuleRepoForValidation) ListAllForQuarantineCensus(context.Context) ([]*domain.CategorizationRule, error) {
+	return nil, nil
+}
 
 // TestUpdateRule_EmptyingTagsOnATagOnlyRule covers the update-specific way to end up with a rule
 // that does nothing: a tag-only rule (no target_kind) whose tags are replaced with an empty
@@ -709,6 +712,9 @@ func (s *stubTagOnlyRuleRepo) Delete(context.Context, string) error             
 func (s *stubTagOnlyRuleRepo) CountByUserID(context.Context, string) (int, error)   { return 0, nil }
 func (s *stubTagOnlyRuleRepo) IncrementMatchCount(context.Context, string) error    { return nil }
 func (s *stubTagOnlyRuleRepo) IncrementOverrideCount(context.Context, string) error { return nil }
+func (s *stubTagOnlyRuleRepo) ListAllForQuarantineCensus(context.Context) ([]*domain.CategorizationRule, error) {
+	return nil, nil
+}
 
 // N2 (#1625): the literal /condition-schema route must actually be REACHABLE.
 //

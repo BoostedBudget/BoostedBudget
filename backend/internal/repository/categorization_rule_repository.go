@@ -29,6 +29,16 @@ type CategorizationRuleRepository interface {
 	// GetByName retrieves a rule by user ID and name.
 	GetByName(ctx context.Context, userID, name string) (*domain.CategorizationRule, error)
 
+	// ListAllForQuarantineCensus returns every rule in the table (all users), populated with only
+	// the fields the quarantine classifier reads (id, conditions, condition_logic). #1625 Task 18:
+	// the shadow-mode counter in the observability package increments once per SYNC PASS a rule is
+	// re-observed in, so it cannot answer "how many distinct rules are quarantined" — a rule
+	// re-evaluated 1000 times and 1000 distinct rules look identical on that counter. Answering the
+	// real question requires seeing every rule exactly once, which a per-user, per-sync view
+	// structurally cannot do. This is a full-table scan; it is meant for a periodic census, not a
+	// request hot path — see services.RunRuleQuarantineCensus.
+	ListAllForQuarantineCensus(ctx context.Context) ([]*domain.CategorizationRule, error)
+
 	// Update updates an existing rule.
 	Update(ctx context.Context, rule *domain.CategorizationRule) error
 
@@ -286,6 +296,39 @@ func (r *categorizationRuleRepository) GetByName(ctx context.Context, userID, na
 	}
 
 	return rule, nil
+}
+
+// ListAllForQuarantineCensus implements CategorizationRuleRepository.ListAllForQuarantineCensus —
+// see that method's doc comment for why a table-wide scan is the correct shape here. Only the
+// three fields the classifier reads are populated; every other field on the returned rules is the
+// zero value, so this result must never be used for anything but classification.
+func (r *categorizationRuleRepository) ListAllForQuarantineCensus(ctx context.Context) ([]*domain.CategorizationRule, error) {
+	query := `SELECT id, conditions, condition_logic FROM categorization_rules`
+
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var rules []*domain.CategorizationRule
+	for rows.Next() {
+		rule := &domain.CategorizationRule{}
+		var conditionsJSON []byte
+		if err := rows.Scan(&rule.ID, &conditionsJSON, &rule.ConditionLogic); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(conditionsJSON, &rule.Conditions); err != nil {
+			return nil, err
+		}
+		normalizeLoadedConditions(rule)
+		rules = append(rules, rule)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return rules, nil
 }
 
 // Update updates an existing rule.

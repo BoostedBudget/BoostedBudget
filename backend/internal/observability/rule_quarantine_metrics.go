@@ -21,7 +21,23 @@ import (
 // high-cardinality poison and, worse here, user financial content.
 var ruleQuarantineCandidates = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "categorization_rule_quarantine_candidates_total",
-	Help: "Categorization rules found broken by the quarantine classifier, by reason. Reasons that stop matching are enforced in RuleMatches; invalid_condition_value_shape is repaired by read-path coercion and still executes.",
+	Help: "Categorization rules found broken by the quarantine classifier, by reason. Reasons that stop matching are enforced in RuleMatches; invalid_condition_value_shape is repaired by read-path coercion and still executes. This is a per-OBSERVATION counter (it increments once every time a rule is re-evaluated, e.g. once per sync pass) and therefore cannot answer how many DISTINCT rules are affected — one rule observed 1000 times and 1000 distinct rules look identical here. For that question, see categorization_rule_quarantine_population.",
+}, []string{"reason"})
+
+// ruleQuarantinePopulation is the DISTINCT-rule census #1625 Task 18 adds. Unlike
+// ruleQuarantineCandidates above (a Counter that increments once per observation and therefore
+// conflates "one rule seen 1000 times" with "1000 rules"), this is a Gauge set from a periodic
+// full-table census (services.RunRuleQuarantineCensus) that visits every rule EXACTLY once and
+// counts distinct rule ids per reason. Set (not Inc) is what makes it self-correcting: a repaired
+// rule's count drops on the next census run instead of accumulating forever.
+//
+// ⚠ Do NOT put rule ids in this (or any) Prometheus label. Cardinality is unbounded (one series
+// per rule, forever, since Prometheus never forgets a label combination that was ever
+// observed) and a rule id is user data — neither belongs in a metrics label. "reason" is a fixed,
+// small, closed vocabulary (AllQuarantineReasons()), which is what makes it safe as a label here.
+var ruleQuarantinePopulation = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	Name: "categorization_rule_quarantine_population",
+	Help: "Current DISTINCT count of categorization rules the quarantine classifier finds broken, by reason, as of the last census. Unlike categorization_rule_quarantine_candidates_total (which counts observations, not rules), this answers 'how many rules would enforcement affect' — set from a full-table scan, not incremented per sync pass.",
 }, []string{"reason"})
 
 // QuarantineReason is a CLOSED set. The recorder previously took a bare string and handed it
@@ -130,9 +146,19 @@ var knownQuarantineReasons = func() map[QuarantineReason]struct{} {
 func initQuarantineSeries() {
 	for _, r := range AllQuarantineReasons() {
 		ruleQuarantineCandidates.WithLabelValues(string(r)).Add(0)
+		// The population gauge gets the same pre-warm treatment and for the same reason: a
+		// GaugeVec label combination is likewise absent from /metrics until first Set, so an
+		// empty scrape before the first census run would be indistinguishable from "the census
+		// has run and found zero quarantined rules."
+		ruleQuarantinePopulation.WithLabelValues(string(r)).Set(0)
 	}
 	// "other" too: an unrecognised reason folds into it, and a scrape that omits the bucket
 	// entirely cannot be distinguished from one reporting no unrecognised reasons.
+	//
+	// The population gauge has NO "other" bucket: unlike RecordRuleQuarantineCandidate (a public
+	// entry point that can be handed anything), SetRuleQuarantinePopulation is fed exclusively by
+	// the census's own classifier, which returns only members of AllQuarantineReasons() or "" —
+	// there is no third-party input for an "other" bucket to defend against.
 	ruleQuarantineCandidates.WithLabelValues("other").Add(0)
 }
 
@@ -158,4 +184,26 @@ func RecordRuleQuarantineCandidate(reason QuarantineReason) {
 		return
 	}
 	ruleQuarantineCandidates.WithLabelValues(string(reason)).Inc()
+}
+
+// SetRuleQuarantinePopulation replaces the entire distinct-rule census: every known reason's
+// gauge is set to counts[reason], defaulting to 0 for a reason absent from the map. #1625 Task 18.
+//
+// Set, not Add — this is the whole point. RecordRuleQuarantineCandidate above answers "how many
+// times has a broken rule been observed"; this answers "how many distinct rules are broken right
+// now", which requires overwriting the prior census wholesale rather than accumulating on top of
+// it. A rule that gets repaired between two census runs must see its reason's count go DOWN, not
+// stay inflated forever the way an ever-incrementing counter would.
+//
+// counts is expected to be built by classifying every rule with the SAME classifier
+// RecordRuleQuarantineCandidate's callers use (rules.QuarantineReasonFor via
+// services.quarantineReason) — see services.RunRuleQuarantineCensus — so a reason key outside
+// AllQuarantineReasons() cannot occur from that caller. Defensively, an unknown key is simply
+// ignored rather than creating a new unbounded label series: the closed vocabulary is what keeps
+// this metric's cardinality bounded, and a caller-side bug must not be able to defeat that by
+// handing this function an arbitrary string.
+func SetRuleQuarantinePopulation(counts map[QuarantineReason]int) {
+	for _, r := range AllQuarantineReasons() {
+		ruleQuarantinePopulation.WithLabelValues(string(r)).Set(float64(counts[r]))
+	}
 }

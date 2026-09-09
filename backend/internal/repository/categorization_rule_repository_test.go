@@ -333,6 +333,40 @@ func TestCategorizationRuleRepository_GetEnabledByUserID(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestCategorizationRuleRepository_ListAllForQuarantineCensus tests the #1625 Task 18 census
+// query: it must scan the WHOLE table (no user_id filter — this is the point, a per-user view
+// cannot deduplicate a rule seen across many users' syncs), and it must populate only the three
+// columns the classifier needs.
+func TestCategorizationRuleRepository_ListAllForQuarantineCensus(t *testing.T) {
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	id1, id2 := uuid.New().String(), uuid.New().String()
+	columns := []string{"id", "conditions", "condition_logic"}
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, conditions, condition_logic FROM categorization_rules`)).
+		WillReturnRows(pgxmock.NewRows(columns).
+			AddRow(id1, `[]`, "AND").
+			AddRow(id2, `[{"type":"merchant_contains","value":"starbucks"}]`, "OR"))
+
+	rules, err := repo.ListAllForQuarantineCensus(ctx)
+
+	assert.NoError(t, err)
+	require.Len(t, rules, 2)
+	assert.Equal(t, id1, rules[0].ID)
+	assert.Empty(t, rules[0].Conditions)
+	assert.Equal(t, "AND", rules[0].ConditionLogic)
+	assert.Equal(t, id2, rules[1].ID)
+	require.Len(t, rules[1].Conditions, 1)
+	assert.Equal(t, "OR", rules[1].ConditionLogic)
+	// Fields the classifier never reads must be left at the zero value, not silently populated —
+	// a caller must not be tempted to use this result for anything but classification.
+	assert.Empty(t, rules[0].UserID)
+	assert.Empty(t, rules[0].Name)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestCategorizationRuleRepository_Update tests rule update
 func TestCategorizationRuleRepository_Update(t *testing.T) {
 	mock, repo := setupRuleMockDB(t)

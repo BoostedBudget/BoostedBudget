@@ -52,6 +52,14 @@ func (m *mockRuleRepository) GetByName(ctx context.Context, userID, name string)
 	return args.Get(0).(*domain.CategorizationRule), args.Error(1)
 }
 
+func (m *mockRuleRepository) ListAllForQuarantineCensus(ctx context.Context) ([]*domain.CategorizationRule, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.CategorizationRule), args.Error(1)
+}
+
 func (m *mockRuleRepository) Update(ctx context.Context, rule *domain.CategorizationRule) error {
 	args := m.Called(ctx, rule)
 	return args.Error(0)
