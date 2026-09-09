@@ -97,4 +97,3 @@ func sortIncomeSources(rows []domain.IncomeSourceItem) {
 		)
 	})
 }
-

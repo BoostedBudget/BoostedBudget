@@ -192,3 +192,128 @@ describe('buildSankeyData — savings and deficit', () => {
     expect(data.links).toHaveLength(0)
   })
 })
+
+describe('buildSankeyData — focus edge cases', () => {
+  // The server guarantees total == direct_total + sum(children.total) at every node — it is
+  // asserted there by walking the whole tree — so fixtures must honour it too. A fixture that does
+  // not is testing a shape the API cannot produce, and the conservation assertions below would be
+  // measuring the fixture's arithmetic rather than the builder's.
+  const tree = [
+    node('TRANSPORTATION', 'Transportation', 500),
+    node('FOOD_AND_DRINK', 'Food And Drink', 165, 40, [
+      node('custom:eo', 'Eating Out', 125, 100, [node('custom:cf', 'Coffee Runs', 25)]),
+    ]),
+  ]
+
+  it('a stale focus key degrades to a full view rather than an empty chart', () => {
+    // Reachable: the user focuses a category, then changes the date range to a period in which
+    // that category has no spend. Rendering nothing would read as "you spent nothing", which is a
+    // claim about the user's money that a missing key does not support.
+    const data = buildSankeyData(income, tree, { kind: 'focus', key: 'custom:deleted' })
+
+    expect(data.nodes.some(n => n.nodeKind === 'expense')).toBe(true)
+    const hubOut = data.links.filter(l => l.source === 'hub').reduce((s, l) => s + l.value, 0)
+    const hubIn = data.links.filter(l => l.target === 'hub').reduce((s, l) => s + l.value, 0)
+    expect(hubOut).toBeCloseTo(hubIn, 6)
+  })
+
+  it('focusing the DEEPEST node still conserves flow along its whole ancestor path', () => {
+    const data = buildSankeyData(income, tree, { kind: 'focus', key: 'custom:cf' })
+
+    const ids = data.nodes.map(n => n.id)
+    expect(ids).toContain('out:l1:FOOD_AND_DRINK')
+    expect(ids).toContain('out:l2:FOOD_AND_DRINK|custom:eo')
+
+    const outflow = new Map<string, number>()
+    const inflow = new Map<string, number>()
+    for (const l of data.links) {
+      outflow.set(l.source, (outflow.get(l.source) ?? 0) + l.value)
+      inflow.set(l.target, (inflow.get(l.target) ?? 0) + l.value)
+    }
+    for (const n of data.nodes) {
+      const out = outflow.get(n.id)
+      const inn = inflow.get(n.id)
+      if (out === undefined || inn === undefined) continue
+      expect(out).toBeCloseTo(inn, 6)
+    }
+  })
+})
+
+describe('buildSankeyData — the income fan is hierarchical too', () => {
+  // Production income is shaped INCOME -> INCOME_WAGES etc: the endpoint returns a TREE for both
+  // directions. Rendering only the roots collapses every source into one "Income" node, which is
+  // the opposite of the asymmetric default the endpoint documents — income's useful distinction
+  // lives one level down.
+  const incomeTree: CategoryHierarchyNode[] = [
+    node('INCOME', 'Income', 5000, 0, [
+      node('INCOME_WAGES', 'Wages', 4000),
+      node('INCOME_DIVIDENDS', 'Dividends', 1000),
+    ]),
+    node('custom:side', 'Side hustle', 500),
+  ]
+
+  it('renders income LEAVES, not just roots', () => {
+    const data = buildSankeyData(incomeTree, [node('FOOD_AND_DRINK', 'Food And Drink', 5500)], { kind: 'parents' })
+    const names = data.nodes.filter(n => n.nodeKind === 'income').map(n => n.name).sort()
+
+    expect(names).toEqual(['Dividends', 'Side hustle', 'Wages'])
+    expect(names).not.toContain('Income')
+  })
+
+  it('a parent with its own direct income keeps that money as its own leaf', () => {
+    const withDirect: CategoryHierarchyNode[] = [
+      node('INCOME', 'Income', 5000, 500, [node('INCOME_WAGES', 'Wages', 4500)]),
+    ]
+    const data = buildSankeyData(withDirect, [node('FOOD_AND_DRINK', 'Food And Drink', 5000)], { kind: 'parents' })
+
+    const hubIn = data.links.filter(l => l.target === 'hub').reduce((s, l) => s + l.value, 0)
+    expect(hubIn).toBeCloseTo(5000, 6)
+  })
+
+  it('a PFC detailed income leaf navigates by pfc_detaileds, not its primary', () => {
+    const data = buildSankeyData(incomeTree, [node('FOOD_AND_DRINK', 'Food And Drink', 5500)], { kind: 'parents' })
+    const wages = data.nodes.find(n => n.name === 'Wages')
+    expect(wages?.action).toEqual({ kind: 'navigate', pfcDetaileds: ['INCOME_WAGES'] })
+
+    const side = data.nodes.find(n => n.name === 'Side hustle')
+    expect(side?.action).toEqual({ kind: 'navigate', customCategoryIds: ['side'] })
+  })
+})
+
+describe('buildSankeyData — uncategorized spend', () => {
+  // The SQL synthesises 'UNCATEGORIZED' as the L1 key whenever a transaction has no primary at
+  // all, so uncategorized money is NOT dropped from the payload — it arrives as an ordinary
+  // category and must render as an ordinary node. Hiding it would understate the expense fan and
+  // make the hub stop balancing.
+  const withUncategorized = [
+    node('FOOD_AND_DRINK', 'Food And Drink', 300),
+    node('UNCATEGORIZED', 'Uncategorized', 120),
+  ]
+
+  it('renders uncategorized spend as a visible node', () => {
+    const data = buildSankeyData(income, withUncategorized, { kind: 'parents' })
+    const names = data.nodes.filter(n => n.nodeKind === 'expense').map(n => n.name)
+    expect(names).toContain('Uncategorized')
+
+    const link = data.links.find(l => l.target === 'out:l1:UNCATEGORIZED')
+    expect(link?.value).toBeCloseTo(120, 6)
+  })
+
+  it('uncategorized is NOT navigable, because no transactions filter can express it', () => {
+    const data = buildSankeyData(income, withUncategorized, { kind: 'parents' })
+    const uncat = data.nodes.find(n => n.id === 'out:l1:UNCATEGORIZED')
+
+    // 'UNCATEGORIZED' is a sentinel this analytics layer synthesises; it is not a value any column
+    // holds. effective_pfc_primary is NULL for those rows, so `pfc_primaries=UNCATEGORIZED` would
+    // match ZERO rows — the list would contradict the node the user just clicked. Same rule as the
+    // direct and overflow buckets: no expressible filter means no navigation.
+    expect(uncat?.action).toEqual({ kind: 'none' })
+  })
+
+  it('uncategorized still counts toward the totals', () => {
+    const data = buildSankeyData(income, withUncategorized, { kind: 'parents' })
+    const hubOut = data.links.filter(l => l.source === 'hub').reduce((s, l) => s + l.value, 0)
+    const hubIn = data.links.filter(l => l.target === 'hub').reduce((s, l) => s + l.value, 0)
+    expect(hubOut).toBeCloseTo(hubIn, 6)
+  })
+})

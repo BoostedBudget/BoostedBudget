@@ -16,6 +16,8 @@ export const TOTAL_NODE_BUDGET = INCOME_NODE_BUDGET + EXPENSE_NODE_BUDGET + RESE
 
 const MAX_INCOME_LEAVES = INCOME_NODE_BUDGET - 1
 const CUSTOM_TOKEN = 'custom:'
+/** Mirrors effectiveCategoryExpr's sentinel for a transaction with no primary category. */
+const UNCATEGORIZED_KEY = 'UNCATEGORIZED'
 
 export type SankeyViewMode =
   | { kind: 'parents' }
@@ -64,6 +66,13 @@ const isPFCDetailed = (key: string, parentKey: string) => key.startsWith(`${pare
  * would widen the result to the whole primary, so the list would not match the node just clicked.
  */
 function navigateAction(key: string, parentKey: string | undefined): NodeAction {
+  // UNCATEGORIZED is a sentinel this analytics layer SYNTHESISES for a transaction with no primary
+  // at all; it is not a value any column holds (effective_pfc_primary is NULL for those rows). So
+  // `pfc_primaries=UNCATEGORIZED` would match zero rows and the list would contradict the node the
+  // user just clicked. The node still renders and still counts toward every total — it just has no
+  // expressible filter, exactly like the direct and overflow buckets. Adding an `uncategorized`
+  // filter to the transactions list would make it navigable; tracked in #1627.
+  if (key === UNCATEGORIZED_KEY) return { kind: 'none' }
   if (isCustom(key)) return { kind: 'navigate', customCategoryIds: [stripToken(key)] }
   if (parentKey && !isCustom(parentKey) && isPFCDetailed(key, parentKey)) {
     return { kind: 'navigate', pfcDetaileds: [key] }
@@ -265,28 +274,59 @@ function renderExpenseFan(roots: CategoryHierarchyNode[], mode: SankeyViewMode) 
   return last
 }
 
+/**
+ * Income LEAVES, flattened depth-first.
+ *
+ * The endpoint returns a TREE for both directions, and production income is shaped
+ * INCOME -> INCOME_WAGES / INCOME_DIVIDENDS. Rendering only the roots would collapse every source
+ * into a single "Income" node — the exact opposite of the asymmetric default the endpoint
+ * documents, which exists because income's useful distinction lives one level down.
+ *
+ * A node's own direct income becomes a leaf in its own right, so a parent that has both children
+ * and direct receipts contributes all of its money exactly once.
+ */
+function incomeLeaves(nodes: CategoryHierarchyNode[], parentKey?: string): Array<{ key: string; display: string; total: number; parentKey?: string }> {
+  const out: Array<{ key: string; display: string; total: number; parentKey?: string }> = []
+  for (const n of nodes) {
+    const kids = n.children ?? []
+    if (kids.length === 0) {
+      if (n.total > 0) out.push({ key: n.category, display: n.display, total: n.total, parentKey })
+      continue
+    }
+    out.push(...incomeLeaves(kids, n.category))
+    if (n.direct_total > 0) {
+      // The parent's own receipts, kept distinct from its children's.
+      out.push({ key: n.category, display: n.display, total: n.direct_total, parentKey })
+    }
+  }
+  return out
+}
+
+/** Income is capped in its own right: it is not restricted to a single primary and can fan wide. */
 /** Income is capped in its own right: it is not restricted to a single primary and can fan wide. */
 function renderIncomeFan(sources: CategoryHierarchyNode[]) {
   const nodes: SankeyNode[] = []
   const links: SankeyLink[] = []
-  const sorted = [...sources].sort((a, b) => b.total - a.total)
+  const sorted = incomeLeaves(sources).sort((a, b) => b.total - a.total)
   const kept = sorted.slice(0, MAX_INCOME_LEAVES)
   const dropped = sorted.slice(MAX_INCOME_LEAVES)
 
-  for (const s of kept) {
-    const id = `in:l1:${s.category}`
+  kept.forEach((s, i) => {
+    // Namespaced by index as well as key: a parent contributing BOTH children and its own direct
+    // receipts appears twice under the same key, and two nodes cannot share an id.
+    const id = `in:l1:${s.key}:${i}`
     nodes.push({
       id,
       name: s.display,
       itemStyle: { color: CASH_FLOW_COLORS.income },
       nodeKind: 'income',
-      action: navigateAction(s.category, undefined),
+      action: navigateAction(s.key, s.parentKey),
     })
     links.push({ source: id, target: 'hub', value: s.total })
-  }
+  })
 
   if (dropped.length > 0) {
-    const overflow = dropped.reduce((s, d) => s + d.total, 0)
+    const overflow = dropped.reduce((sum, d) => sum + d.total, 0)
     nodes.push({
       id: 'in:other',
       name: `Other income (${dropped.length})`,
@@ -313,7 +353,7 @@ export function buildSankeyData(
   // Derived from the FULL row set, never the rendered subset: truncation collapses rather than
   // drops, so these stay equal, and computing them here keeps the two fans internally consistent
   // even if their two endpoints were fetched a moment apart.
-  const incomeSum = validIncome.reduce((s, i) => s + i.total, 0)
+  const incomeSum = incomeLeaves(validIncome).reduce((s, i) => s + i.total, 0)
   const expenseSum = validExpenses.reduce((s, e) => s + e.total, 0)
   const surplus = incomeSum - expenseSum
 

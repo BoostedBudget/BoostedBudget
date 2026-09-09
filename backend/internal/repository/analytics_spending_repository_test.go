@@ -873,9 +873,12 @@ func TestGetLargestTransactionsForPeriod(t *testing.T) {
 		defer mock.Close()
 
 		txDate := time.Date(2024, 2, 15, 0, 0, 0, 0, time.UTC)
-		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "date", "account_id"}).
-			AddRow("tx-001", "Amazon", 500.0, "SHOPPING", txDate, "acc-001").
-			AddRow("tx-002", "Whole Foods", 200.0, "FOOD_AND_DRINK", txDate, "acc-001")
+		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "category_display", "date", "account_id"}).
+			// #1626: the read now also selects effective_category_name. The custom row is the
+			// regression case — its key is the synthetic token and its name lives only here.
+			AddRow("tx-001", "Amazon", 500.0, "SHOPPING", "SHOPPING", txDate, "acc-001").
+			AddRow("tx-002", "Whole Foods", 200.0, "FOOD_AND_DRINK", "FOOD_AND_DRINK", txDate, "acc-001").
+			AddRow("tx-003", "Therapist", 150.0, "custom:9f1c2b3a-0000-4000-8000-000000000001", "Therapy", txDate, "acc-001")
 
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
@@ -883,7 +886,9 @@ func TestGetLargestTransactionsForPeriod(t *testing.T) {
 
 		result, err := repo.GetLargestTransactionsForPeriod(ctx, userID, filters, limit)
 		require.NoError(t, err)
-		assert.Len(t, result, 2)
+		assert.Len(t, result, 3)
+		assert.Equal(t, "Therapy", result[2].CategoryDisplay,
+			"a custom category's own name must survive the read (#1626)")
 		assert.Equal(t, "tx-001", result[0].TransactionID)
 		assert.Equal(t, "Amazon", result[0].MerchantName)
 		assert.InDelta(t, 500.0, result[0].Amount, 0.001)
@@ -894,7 +899,7 @@ func TestGetLargestTransactionsForPeriod(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "date", "account_id"})
+		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "category_display", "date", "account_id"})
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
 			WillReturnRows(rows)
@@ -921,7 +926,7 @@ func TestGetLargestTransactionsForPeriod(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "date", "account_id"})
+		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "category_display", "date", "account_id"})
 		mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
 			WillReturnRows(rows)
@@ -945,9 +950,12 @@ func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"category", "total", "count"}).
-			AddRow("SHOPPING", 400.0, 5).
-			AddRow("GENERAL_MERCHANDISE", 200.0, 3)
+		// #1626: the read now also selects effective_category_name; the custom row is the case
+		// that used to surface as a title-cased UUID.
+		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "count"}).
+			AddRow("SHOPPING", "SHOPPING", 400.0, 5).
+			AddRow("GENERAL_MERCHANDISE", "GENERAL_MERCHANDISE", 200.0, 3).
+			AddRow("custom:9f1c2b3a-0000-4000-8000-000000000001", "Gifts", 100.0, 2)
 
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, merchantID).
@@ -955,7 +963,9 @@ func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 
 		result, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantID, filters)
 		require.NoError(t, err)
-		assert.Len(t, result, 2)
+		assert.Len(t, result, 3)
+		assert.Equal(t, "Gifts", result[2].CategoryDisplay,
+			"a custom category's own name must survive the read (#1626)")
 		assert.Equal(t, "SHOPPING", result[0].Category)
 		assert.InDelta(t, 400.0, result[0].Total, 0.001)
 		assert.Equal(t, 5, result[0].Count)

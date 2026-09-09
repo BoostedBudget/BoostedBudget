@@ -46,8 +46,12 @@ describe('SpendingReportsPage', () => {
     renderPage()
     // radiogroup, not group: DateRangePicker renders <ToggleGroup type="single">.
     // See src/test/mocks/toggle-group.tsx for why the role changed.
-    // getAllByRole since #1626: the Sankey's view-mode control is a second ToggleGroup.
-    expect(screen.getAllByRole('radiogroup').length).toBeGreaterThan(0)
+    //
+    // Identified by its own preset, not by role: #1626 added a SECOND ToggleGroup (the Sankey's
+    // view-mode control), so `getAllByRole('radiogroup').length > 0` would pass even with the date
+    // picker gone entirely — which is the one thing this test is named for.
+    expect(screen.getByText('Last 3 Months')).toBeDefined()
+    expect(screen.getAllByRole('radiogroup').length).toBeGreaterThanOrEqual(2)
   })
 
   it('renders category breakdown section', () => {
