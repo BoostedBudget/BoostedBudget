@@ -46,8 +46,15 @@ export function BalanceHistoryChart({
           return {
             name: typeKey.charAt(0).toUpperCase() + typeKey.slice(1),
             type: 'line' as const,
-            data: snapshots.map((s) => (s.by_type as Record<string, number> | undefined)?.[typeKey] ?? 0),
+            // `?? null` rather than `?? 0`: a day with no recorded balance for this account
+            // type is a GAP, not a zero balance. ECharts renders null as a break in the line,
+            // and connectNulls stays off so the break is visible instead of bridged. Same
+            // anti-pattern as the zero-filled future buckets #1626 Phase 3 removed.
+            data: snapshots.map((s) => (s.by_type as Record<string, number> | undefined)?.[typeKey] ?? null),
             smooth: true,
+            // A MODIFIER of smooth, not a replacement — with smooth false it does nothing.
+            // Stops the curve overshooting between points without flattening a genuine step.
+            smoothMonotone: 'x' as const,
             showSymbol: true,
             symbolSize: 6,
             lineStyle: { color, width: 2 },
@@ -59,6 +66,7 @@ export function BalanceHistoryChart({
           type: 'line' as const,
           data: snapshots.map((s) => s.balance),
           smooth: true,
+          smoothMonotone: 'x' as const,
           showSymbol: true,
           symbolSize: 6,
           lineStyle: { color: ACCOUNT_TYPE_COLORS.balance, width: 2 },
@@ -72,10 +80,13 @@ export function BalanceHistoryChart({
         trigger: 'axis',
         formatter: (params: unknown) => {
           if (!Array.isArray(params) || params.length === 0) return '';
-          const points = params as Array<{ seriesName: string; value: number; dataIndex: number }>;
+          const points = params as Array<{ seriesName: string; value: number | null; dataIndex: number }>;
           const snapshot = snapshots[points[0].dataIndex];
           const label = snapshot ? formatHistoryLabel(snapshot.date, 'MMMM d, yyyy') : '';
-          return `<b>${escapeHtml(label)}</b><br>${points.map((p) => `${escapeHtml(p.seriesName)}: ${formatCurrency(p.value)}`).join('<br>')}`;
+          // A null point is a gap; listing it would print a fabricated amount for a day this
+          // account type has no balance for.
+          const observed = points.filter((p) => p.value !== null && p.value !== undefined);
+          return `<b>${escapeHtml(label)}</b><br>${observed.map((p) => `${escapeHtml(p.seriesName)}: ${formatCurrency(p.value as number)}`).join('<br>')}`;
         },
       },
       series,
