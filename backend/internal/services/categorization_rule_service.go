@@ -290,8 +290,13 @@ func (s *categorizationRuleService) UpdateRule(ctx context.Context, userID, rule
 		rule.TagBehavior = *req.TagBehavior
 	}
 
-	// Validate
-	if err := rule.Validate(); err != nil {
+	// Validate.
+	//
+	// #1625 final review B1: the condition SHAPE check applies only when this request supplied
+	// conditions. `req.Conditions != nil` is the same expression that gated the merge above, so the
+	// rule is exactly "judge what this request writes, do not re-judge what it left alone" — see
+	// CategorizationRule.ValidateForUpdate for why re-judging made every legacy rule un-renamable.
+	if err := rule.ValidateForUpdate(req.Conditions != nil); err != nil {
 		return nil, err
 	}
 

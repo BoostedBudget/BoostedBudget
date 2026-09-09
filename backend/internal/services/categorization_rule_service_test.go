@@ -759,3 +759,97 @@ func TestCategorizationRuleService_ToggleRule_RefusesToArmOntoATombstonedCategor
 	mockRepo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
 	mockCategoryRepo.AssertExpectations(t)
 }
+
+// TestCategorizationRuleService_UpdateRule_RenamesALegacyStringValuedRule is #1625's final-review
+// B1 reproduction.
+//
+// `{amount_greater_than, "1000"}` is the corpus condition_coercion.go documents as REAL and common:
+// dedac0aa (#346) validated only the condition TYPE, so a number sent as a string has persisted
+// through the ordinary public API for the entire life of the feature, and this branch deliberately
+// REPAIRS it at read time so such rules keep running. The card even tells the user to "edit the
+// rule to confirm that is what you meant".
+//
+// Until this test, that advice was a dead end: UpdateRule ran ValidateShape over the MERGED rule,
+// so a PATCH that supplied nothing but a name was refused with
+// `invalid value shape: field "amount" with operator "gt" needs a number, got string` — a 422 on an
+// edit that never touched a condition. condition_schema.go's own textValues comment names that
+// failure ("permanently un-updatable ... precisely the quarantine-a-working-rule failure this
+// validator is meant to avoid") on a neighbouring case; this is the same failure one function over.
+//
+// ⚠ The write path stays STRICT for conditions the request actually supplies — see
+// TestCategorizationRuleService_UpdateRule_StillRefusesANewlySuppliedBadShape below. Skipping the
+// shape check for untouched conditions is not "accept anything on update"; it is "do not re-judge
+// data this request did not write".
+func TestCategorizationRuleService_UpdateRule_RenamesALegacyStringValuedRule(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
+	ctx := context.Background()
+	userID := "user-123"
+	ruleID := "rule-legacy"
+
+	legacy := &domain.CategorizationRule{
+		ID:     ruleID,
+		UserID: userID,
+		Name:   "Big purchases",
+		// The exact stored shape #1625 repairs at read time: a number as a string.
+		Conditions:       []domain.RuleCondition{{Type: domain.ConditionAmountGreaterThan, Value: "1000"}},
+		ConditionLogic:   "AND",
+		TargetKind:       ptrStr("pfc"),
+		TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		TagBehavior:      "add",
+		Source:           "manual",
+	}
+
+	// Falsifiability: the stored condition really is one the strict validator rejects. Without
+	// this, a future change that made "1000" legal would leave the test passing while testing
+	// nothing.
+	require.Error(t, legacy.Conditions[0].ValidateShape(),
+		"fixture is not a legacy-shape rule any more — ValidateShape now accepts it, so this test "+
+			"no longer reproduces B1")
+
+	mockRepo.On("GetByID", ctx, ruleID).Return(legacy, nil)
+	mockRepo.On("Update", ctx, mock.AnythingOfType("*domain.CategorizationRule")).Return(nil)
+
+	newName := "Big purchases (renamed)"
+	rule, err := service.UpdateRule(ctx, userID, ruleID, &domain.UpdateCategorizationRuleRequest{Name: &newName})
+
+	require.NoError(t, err, "renaming a rule whose stored conditions the server itself repairs at "+
+		"read time must not 422 — the rule is running, and the UI tells the user to edit it")
+	assert.Equal(t, newName, rule.Name)
+	assert.Equal(t, "1000", rule.Conditions[0].Value,
+		"the untouched condition must be persisted byte-identical; rewriting it here would be a "+
+			"silent write the user did not ask for")
+	mockRepo.AssertExpectations(t)
+}
+
+// TestCategorizationRuleService_UpdateRule_StillRefusesANewlySuppliedBadShape is the other half of
+// B1: relaxing the update path must not become a back door for WRITING a malformed condition.
+// A request that supplies `conditions` is judged exactly as strictly as CreateRule.
+func TestCategorizationRuleService_UpdateRule_StillRefusesANewlySuppliedBadShape(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
+	ctx := context.Background()
+	userID := "user-123"
+	ruleID := "rule-legacy"
+
+	legacy := &domain.CategorizationRule{
+		ID:               ruleID,
+		UserID:           userID,
+		Name:             "Big purchases",
+		Conditions:       []domain.RuleCondition{{Type: domain.ConditionAmountGreaterThan, Value: "1000"}},
+		ConditionLogic:   "AND",
+		TargetKind:       ptrStr("pfc"),
+		TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		TagBehavior:      "add",
+		Source:           "manual",
+	}
+
+	mockRepo.On("GetByID", ctx, ruleID).Return(legacy, nil)
+
+	bad := []domain.RuleCondition{{Type: domain.ConditionAmountGreaterThan, Value: "still-not-a-number"}}
+	_, err := service.UpdateRule(ctx, userID, ruleID, &domain.UpdateCategorizationRuleRequest{Conditions: &bad})
+
+	require.Error(t, err, "a condition the REQUEST supplied is new data and must be shape-checked")
+	assert.ErrorIs(t, err, domain.ErrInvalidConditionValue)
+	mockRepo.AssertNotCalled(t, "Update", ctx, mock.AnythingOfType("*domain.CategorizationRule"))
+}
