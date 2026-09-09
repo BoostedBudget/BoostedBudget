@@ -8,6 +8,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -114,3 +115,52 @@ func TestPreviewRule_WithoutAReaderReportsUnavailable(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not available")
 }
+
+// TestPreviewRule_RunsTheSameOwnershipCheckAsCreate closes a gap two independent reviews found.
+//
+// The endpoint's own description promises "a rule that previews cleanly will also save cleanly"
+// (huma/operations/categorization_rules.go). PreviewRule called only rule.Validate(), which does
+// NOT check custom-category ownership — so a rule targeting another user's (or a tombstoned)
+// category previewed 200 and then 404'd on save. That is precisely the
+// documentation-contradicts-behaviour loop #1625 exists to kill, shipped inside the feature added
+// to prevent it.
+func TestPreviewRule_RunsTheSameOwnershipCheckAsCreate(t *testing.T) {
+	ctx := context.Background()
+	userID := "u1"
+	foreignCat := "cat-belonging-to-someone-else"
+
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	// GetLiveNamesByIDs is user-scoped AND tombstone-filtered, so an absent id means "not yours
+	// or deleted" — the same answer create acts on.
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{foreignCat}).
+		Return(map[string]string{}, nil)
+
+	svc := &categorizationRuleService{customCategoryRepo: mockCategoryRepo}
+	svc.SetTransactionReader(&stubTxReader{txns: sampleTxns()})
+
+	rule := candidateRule()
+	rule.TargetKind = strPtrPreview("custom")
+	rule.TargetCustomCategoryID = &foreignCat
+
+	_, err := svc.PreviewRule(ctx, userID, rule, 0)
+
+	require.Error(t, err, "preview must refuse a target that create would refuse")
+	assert.True(t, errors.Is(err, domain.ErrCategoryNotFound),
+		"and it must fail the SAME way, so preview is a usable oracle for save: %v", err)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// ...and a rule with no custom-category target must still preview without touching the repo.
+func TestPreviewRule_NoCustomTargetSkipsTheOwnershipLookup(t *testing.T) {
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	svc := &categorizationRuleService{customCategoryRepo: mockCategoryRepo}
+	svc.SetTransactionReader(&stubTxReader{txns: sampleTxns()})
+
+	res, err := svc.PreviewRule(context.Background(), "u1", candidateRule(), 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.MatchCount)
+	mockCategoryRepo.AssertNotCalled(t, "GetLiveNamesByIDs", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func strPtrPreview(s string) *string { return &s }

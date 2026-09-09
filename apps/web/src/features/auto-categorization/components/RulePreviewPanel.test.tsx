@@ -79,6 +79,40 @@ describe('RulePreviewPanel (#1625)', () => {
     }
   })
 
+  // #1625 follow-up: the request SHAPE was previously checked by neither the compiler (the
+  // payload was cast `as never`) nor any test — only the response was asserted. A preview that
+  // silently sends the wrong conditions would still render a plausible result.
+  it('sends the conditions currently on screen, not a stale or empty set', async () => {
+    mockPreviewRuleMutateAsync.mockResolvedValueOnce({
+      scanned_count: 200, match_count: 0, matches: [],
+    } as never)
+
+    renderPanel({ name: '  Zelle to Jack  ', conditionLogic: 'OR' })
+    fireEvent.click(screen.getByRole('button', { name: /preview matches/i }))
+
+    await waitFor(() => expect(mockPreviewRuleMutateAsync).toHaveBeenCalled())
+    const call = mockPreviewRuleMutateAsync.mock.calls[0] as unknown as [{ data: Record<string, unknown> }]
+    const sent = call[0].data
+
+    expect(sent.conditions).toEqual(CONDITIONS)
+    expect(sent.condition_logic).toBe('OR')
+    expect(sent.name).toBe('Zelle to Jack')
+  })
+
+  it('names an untitled rule rather than sending an empty one', async () => {
+    mockPreviewRuleMutateAsync.mockResolvedValueOnce({
+      scanned_count: 0, match_count: 0, matches: [],
+    } as never)
+
+    renderPanel({ name: '   ' })
+    fireEvent.click(screen.getByRole('button', { name: /preview matches/i }))
+
+    await waitFor(() => expect(mockPreviewRuleMutateAsync).toHaveBeenCalled())
+    const call = mockPreviewRuleMutateAsync.mock.calls[0] as unknown as [{ data: Record<string, unknown> }]
+    // Validate() rejects an empty name, so preview would 422 on a rule the user has not named yet.
+    expect(call[0].data.name).toBe('Untitled rule')
+  })
+
   it('surfaces a validation error instead of leaving the user to discover it on save', async () => {
     mockPreviewRuleMutateAsync.mockRejectedValueOnce({
       response: { data: { detail: 'invalid condition: unknown field "amount_typo"' } },

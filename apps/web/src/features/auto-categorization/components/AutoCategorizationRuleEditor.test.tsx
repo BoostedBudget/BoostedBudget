@@ -187,6 +187,104 @@ describe('AutoCategorizationRuleEditor', () => {
       })
     })
 
+    // ── #1625: what the editor actually EMITS ────────────────────────────────────────────
+    //
+    // The condition dropdown now offers BOTH shapes: the 14 legacy fused type names and the
+    // {field, operator} pairs that have no fused ancestor (name, merchant_id, signed_amount,
+    // direction). Until these tests existed, `selectConditionChoice` could have been deleted
+    // outright and every frontend test stayed green — the only payload assertion above checks
+    // the fused shape, which is also what the pre-#1625 code produced.
+    //
+    // Picking one shape must CLEAR the other: sending a `type` that contradicts the pair is a
+    // 422 (ErrConditionShapeConflict) by design, so the server never has to guess.
+
+    async function fillRuleAndSave(user: ReturnType<typeof userEvent.setup>, choiceLabel: string, value: string) {
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+      fireEvent.click(screen.getByRole('button', { name: /add condition/i }))
+
+      fireEvent.change(screen.getByLabelText('Condition type'), { target: { value: choiceLabel } })
+
+      const input = screen.queryByPlaceholderText(/enter value/i)
+      if (input) await user.type(input, value)
+
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food And Drink'))
+      fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    }
+
+    function renderEditor() {
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+          plaidPrimaries={mockPlaidPrimaries}
+        />
+      )
+    }
+
+    it('emits {field, operator} and NO type for a pair choice', async () => {
+      const user = userEvent.setup({ delay: null })
+      renderEditor()
+
+      // "name:contains" is the capability the reporter needed: a Zelle transfer has no
+      // merchant_name, so only the raw description can identify the payee.
+      await fillRuleAndSave(user, 'name:contains', 'jack liu')
+
+      await waitFor(() => expect(mockOnSave).toHaveBeenCalled())
+      const [saved] = mockOnSave.mock.calls[0] as unknown as [{ conditions: Record<string, unknown>[] }]
+      const cond = saved.conditions[0]
+
+      expect(cond).toMatchObject({ field: 'name', operator: 'contains', value: 'jack liu' })
+      expect(cond.type).toBeUndefined()
+    })
+
+    it('emits a bare type and NO field/operator for a legacy fused choice', async () => {
+      const user = userEvent.setup({ delay: null })
+      renderEditor()
+
+      await fillRuleAndSave(user, 'merchant_contains', 'amazon')
+
+      await waitFor(() => expect(mockOnSave).toHaveBeenCalled())
+      const [saved] = mockOnSave.mock.calls[0] as unknown as [{ conditions: Record<string, unknown>[] }]
+      const cond = saved.conditions[0]
+
+      expect(cond).toMatchObject({ type: 'merchant_contains', value: 'amazon' })
+      expect(cond.field).toBeUndefined()
+      expect(cond.operator).toBeUndefined()
+    })
+
+    it('switching from a pair choice to a fused one clears the stale pair', async () => {
+      const user = userEvent.setup({ delay: null })
+      renderEditor()
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+      fireEvent.click(screen.getByRole('button', { name: /add condition/i }))
+
+      const select = screen.getByLabelText('Condition type')
+      fireEvent.change(select, { target: { value: 'name:contains' } })
+      fireEvent.change(select, { target: { value: 'merchant_contains' } })
+
+      const input = screen.getByPlaceholderText(/enter value/i)
+      await user.type(input, 'amazon')
+
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food And Drink'))
+      fireEvent.click(screen.getByRole('button', { name: /save/i }))
+
+      await waitFor(() => expect(mockOnSave).toHaveBeenCalled())
+      const [saved] = mockOnSave.mock.calls[0] as unknown as [{ conditions: Record<string, unknown>[] }]
+      const cond = saved.conditions[0]
+
+      // A type that contradicts a leftover field/operator is a 422 by design.
+      expect(cond.type).toBe('merchant_contains')
+      expect(cond.field).toBeUndefined()
+      expect(cond.operator).toBeUndefined()
+    })
+
     it('should call onCancel when Cancel is clicked', () => {
       render(
         <AutoCategorizationRuleEditor

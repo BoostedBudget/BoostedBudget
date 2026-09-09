@@ -52,6 +52,17 @@ func (s *categorizationRuleService) PreviewRule(
 		return nil, fmt.Errorf("rule preview is not available: no transaction reader configured")
 	}
 
+	// ⚠ The endpoint promises "a rule that previews cleanly will also save cleanly", so preview
+	// must refuse everything create refuses — not merely everything Validate() refuses. Ownership
+	// of a custom-category target is an IDOR guard (#1540) plus a tombstone check (#1569 T9) that
+	// lives OUTSIDE Validate(), so without this a rule aimed at another user's or a deleted
+	// category previewed 200 and then 404'd on save. Found by review, not by me: it is the same
+	// documentation-contradicts-behaviour loop this ticket exists to close, in the very feature
+	// added to close it.
+	if err := s.assertTargetCategoryOwnedAndLive(ctx, userID, rule.TargetCustomCategoryID); err != nil {
+		return nil, err
+	}
+
 	rule.UserID = userID
 	// ⚠ A candidate built from a create request has Enabled at its zero value, and
 	// RuleMatches returns false for a disabled rule — so without this every preview would
