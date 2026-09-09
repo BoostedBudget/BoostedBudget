@@ -15,6 +15,7 @@ import type {
   UpdateRuleRequest,
   RuleCondition,
   ConditionType,
+  ConditionOperator,
   ConditionLogic,
   TagBehavior,
   AmountRangeValue,
@@ -24,6 +25,7 @@ import type {
 import {
   CONDITION_CHOICES,
   conditionChoiceKey,
+  unmatchedConditionLabel,
   type ConditionChoice,
   type ConditionField,
 } from '../types'
@@ -52,10 +54,22 @@ const PAYMENT_CHANNELS = [
 /**
  * Determines the input type for a given condition type
  */
-function getInputTypeForCondition(conditionType: ConditionType, field?: ConditionField): string {
-  // #1625: fields with no fused ancestor decide the input on their own.
+function getInputTypeForCondition(
+  conditionType: ConditionType,
+  field?: ConditionField,
+  operator?: ConditionOperator,
+): string {
+  // #1625: fields with no fused ancestor decide the input on their own. Guarded by operator
+  // where a field has more than one shape (amount/signed_amount's `between` needs the range
+  // widget, not a single number box) — everything else is one shape regardless of operator.
   if (field === 'direction') return 'direction_select'
-  if (field === 'signed_amount') return 'number'
+  if (field === 'amount' || field === 'signed_amount') {
+    return operator === 'between' ? 'amount_range' : 'number'
+  }
+  if (field === 'account_id') return 'account_select'
+  if (field === 'pfc_primary') return 'pfc_primary_select'
+  if (field === 'pfc_detailed') return 'pfc_detailed_select'
+  if (field === 'date' && operator !== 'between') return 'date_single'
   switch (conditionType) {
     case 'amount_greater_than':
     case 'amount_less_than':
@@ -84,17 +98,22 @@ function getInputTypeForCondition(conditionType: ConditionType, field?: Conditio
  * Validates a single condition and returns an error message if invalid
  */
 function validateCondition(condition: RuleCondition): string | null {
-  const { type, value } = condition
+  const { type, field, operator, value } = condition
+  // #1625: amount/signed_amount pairs with no fused ancestor (field set, type='expression') need
+  // the same numeric/range checks the fused amount_* types already got — the field decides the
+  // shape now, not just the legacy type name.
+  const isRangePair = (field === 'amount' || field === 'signed_amount') && operator === 'between'
+  const isNumericPair = (field === 'amount' || field === 'signed_amount') && !isRangePair
 
   // Required value check (except for some range types that allow partial values)
-  if (type !== 'date_range' && type !== 'amount_range') {
+  if (type !== 'date_range' && type !== 'amount_range' && !isRangePair) {
     if (value === undefined || value === null || value === '') {
       return 'Value is required'
     }
   }
 
   // Amount validation
-  if (['amount_greater_than', 'amount_less_than', 'amount_equals'].includes(type)) {
+  if (['amount_greater_than', 'amount_less_than', 'amount_equals'].includes(type) || isNumericPair) {
     const numValue = typeof value === 'string' ? parseFloat(value) : value
     if (typeof numValue !== 'number' || isNaN(numValue)) {
       return 'Must be a valid number'
@@ -102,7 +121,7 @@ function validateCondition(condition: RuleCondition): string | null {
   }
 
   // Amount range validation
-  if (type === 'amount_range') {
+  if (type === 'amount_range' || isRangePair) {
     const rangeValue = value as AmountRangeValue
     if (!rangeValue || (rangeValue.min === undefined && rangeValue.max === undefined)) {
       return 'At least one value is required'
@@ -343,8 +362,9 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
   // per-type defaults so their behaviour is untouched.
   const getDefaultValueForChoice = (choice: ConditionChoice): RuleCondition['value'] => {
     if (choice.type) return getDefaultValueForType(choice.type)
+    if (choice.operator === 'between') return { min: 0, max: 100 } as AmountRangeValue
     if (choice.field === 'direction') return 'outflow'
-    if (choice.field === 'signed_amount') return 0
+    if (choice.field === 'amount' || choice.field === 'signed_amount') return 0
     return ''
   }
 
@@ -506,7 +526,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
 
   // Render the appropriate input for a condition based on its type
   const renderConditionValueInput = (condition: RuleCondition, index: number) => {
-    const inputType = getInputTypeForCondition(condition.type, condition.field)
+    const inputType = getInputTypeForCondition(condition.type, condition.field, condition.operator)
     const inputCls = 'flex-1 min-w-[100px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
     const numberInputCls = 'max-w-[120px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
     const dateInputCls = 'max-w-[150px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
@@ -575,6 +595,19 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
           </div>
         )
       }
+
+      case 'date_single':
+        return (
+          <input
+            type="date"
+            className={dateInputCls}
+            value={String(condition.value || '')}
+            onChange={(e) => updateCondition(index, { value: e.target.value })}
+            onBlur={() => validateSingleCondition(index, conditions[index])}
+            disabled={saving}
+            aria-label="Condition value"
+          />
+        )
 
       case 'date_range': {
         const dateValue = (condition.value as DateRangeValue) || { start: '', end: '' }
@@ -873,6 +906,15 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
                   onChange={(e) => selectConditionChoice(index, e.target.value)}
                   disabled={saving}
                 >
+                  {/* #1625 Task 5: a key matching no known choice (an unrecognized field, or a
+                      corrupted/legacy combination) is shown as its own disabled option instead
+                      of letting the <select> silently fall back to the first real choice — the
+                      user must never be shown a condition their rule does not have. */}
+                  {!CONDITION_CHOICES.some((c) => c.key === conditionChoiceKey(condition)) && (
+                    <option value={conditionChoiceKey(condition)} disabled>
+                      {unmatchedConditionLabel(condition)}
+                    </option>
+                  )}
                   {CONDITION_CHOICES.map((choice) => (
                     <option key={choice.key} value={choice.key}>
                       {choice.label}

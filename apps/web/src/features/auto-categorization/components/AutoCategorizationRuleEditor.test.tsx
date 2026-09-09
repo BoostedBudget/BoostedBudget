@@ -1854,4 +1854,43 @@ describe('AutoCategorizationRuleEditor', () => {
       expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
     })
   })
+
+  // #1625 Task 5: `conditionChoiceKey` can only return a key CONDITION_CHOICES actually offers,
+  // OR the raw `field:operator`/`type` for anything it doesn't recognize. Before the fix, the
+  // <select> silently fell back to its FIRST <option> ("Merchant contains") for any unmatched
+  // key — showing the user a condition their rule does not have. This simulates the exact shape
+  // that shipped `effective_merchant` unreachable: a condition using a field the frontend does
+  // not know about (i.e. the backend/API gained a capability the frontend has not caught up to
+  // yet), so it stays a valid regression guard even after Task 4 widens CONDITION_CHOICES and
+  // makes every CURRENTLY known field reachable.
+  describe('unmatched condition key (#1625 Task 5)', () => {
+    it('shows an unrecognized condition as itself, never silently as the first option', () => {
+      const ruleWithUnknownCondition: CategorizationRule = {
+        ...mockExistingRule,
+        conditions: [
+          {
+            type: 'expression',
+            field: 'not_yet_supported_field' as CategorizationRule['conditions'][number]['field'],
+            operator: 'contains',
+            value: 'x',
+          },
+        ],
+      }
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="edit"
+          rule={ruleWithUnknownCondition}
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      const typeSelect = screen.getByLabelText(/condition type/i) as HTMLSelectElement
+      // The bug: this silently reads 'merchant_contains' (the first <option>) instead.
+      expect(typeSelect.value).toBe('not_yet_supported_field:contains')
+      expect(screen.getByText(/unsupported condition/i)).toBeInTheDocument()
+    })
+  })
 })

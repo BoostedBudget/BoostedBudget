@@ -21,6 +21,20 @@ describe('condition vocabulary pinned to the generated backend enums (#1625)', (
     expect(Object.keys(FIELD_OPERATORS).sort()).toEqual(Object.values(RuleConditionField).sort())
   })
 
+  // Task 4: the cross-language pin above (and the old `types.test.ts`) only ever asserted that
+  // every OFFERED pair is legal — never that every LEGAL field is offered. That one-directional
+  // gap is exactly how `effective_merchant` shipped to the domain/API/OpenAPI/frontend TYPE and
+  // then sat unreachable from the dropdown: nothing failed. This asserts the missing direction,
+  // against the GENERATED enum (not a hand-written copy), so a future field added to the backend
+  // schema and mirrored into `ConditionField`/`FIELD_OPERATORS` but never wired into a
+  // CONDITION_CHOICES entry fails here instead of shipping silently unreachable again.
+  it('makes every backend-declared field reachable through CONDITION_CHOICES', () => {
+    const reachableFields = new Set(CONDITION_CHOICES.map((c) => c.field).filter(Boolean))
+    for (const field of Object.values(RuleConditionField)) {
+      expect(reachableFields, `${field} is a legal RuleConditionField but no CONDITION_CHOICES entry offers it`).toContain(field)
+    }
+  })
+
   it('never offers an operator the backend does not define', () => {
     const backendOps = new Set<string>(Object.values(RuleConditionOperator))
     for (const [field, ops] of Object.entries(FIELD_OPERATORS)) {
