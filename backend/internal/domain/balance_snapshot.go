@@ -73,4 +73,22 @@ type BalanceHistoryPoint struct {
 	Date         time.Time          `json:"date"`
 	TotalBalance float64            `json:"total_balance"`
 	ByType       map[string]float64 `json:"by_type,omitempty"` // Optional breakdown by account type
+	// UntypedBalance is the part of TotalBalance that belongs to NO account type, carried
+	// explicitly because net-worth history is reconstructed from ByType alone and this part used
+	// to vanish (#1626 Phase 3 item 5).
+	//
+	// It is nonzero only for an ORPHANED balance snapshot whose chain row is gone as well —
+	// accounts row hard-deleted (account_id ON DELETE SET NULL) AND user_accounts row hard-deleted
+	// (user_account_id likewise), leaving nothing that records what kind of account it was. The
+	// aggregated reads recover a type from user_accounts.identity_type whenever the chain row
+	// survives, so this is the residue of a residue — but a day whose ONLY rows were such
+	// snapshots reported net worth of exactly zero beside a correct balance, and that day is on
+	// somebody's chart.
+	//
+	// ⚠ AN EXPLICIT FIELD, not TotalBalance minus the ByType sum. That subtraction is only valid
+	// while every producer keeps the two consistent, and a test fixture in this repo already did
+	// not (dashboard_service_test.go's TestGetNetWorthHistory_LiabilitiesSignedCorrectly states a
+	// TotalBalance that is not its ByType sum). An invariant a caller can violate by accident is
+	// not an invariant.
+	UntypedBalance float64 `json:"untyped_balance,omitempty"`
 }

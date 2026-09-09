@@ -1610,3 +1610,82 @@ func TestGetNetWorthHistory_Household_UsesHouseholdAggregatedHistory(t *testing.
 
 	mockSnapshotRepo.AssertNotCalled(t, "GetAggregatedHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
+
+// TestGetNetWorthHistory_UntypedBalance_IsNotReadAsZeroNetWorth is #1626 Phase 3 item 5.
+//
+// THE DEFECT. Net-worth history is reconstructed EXCLUSIVELY from a point's ByType breakdown, and
+// an ORPHANED balance snapshot — accounts row hard-deleted, balance_snapshots.account_id SET NULL —
+// carries no type. GetAggregatedHistory counted it toward TotalBalance and omitted it from ByType,
+// so a day whose only rows were such orphans reported net worth of EXACTLY ZERO next to a correct
+// balance figure: the chart's "your net worth collapsed" day.
+//
+// The repository now recovers a type from the snapshot's own chain row (user_accounts.identity_type)
+// wherever one survives, which is both the common case and the only way to get the SIGN right for a
+// credit card. This test covers the residue that recovery cannot reach — a snapshot whose chain row
+// is gone too — and it is a SERVICE-level property because the service is where ByType becomes a
+// net worth.
+func TestGetNetWorthHistory_UntypedBalance_IsNotReadAsZeroNetWorth(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-id"
+	startDate := time.Now().UTC().AddDate(0, 0, -2).Truncate(24 * time.Hour)
+	endDate := time.Now().UTC().Truncate(24 * time.Hour)
+
+	history := []domain.BalanceHistoryPoint{
+		// A day of fully-detached orphans: a real total, no type breakdown at all.
+		{Date: startDate, TotalBalance: 4200.00, ByType: map[string]float64{}, UntypedBalance: 4200.00},
+		// A mixed day: one typed account plus an untyped remainder.
+		{Date: endDate, TotalBalance: 4200.00, ByType: map[string]float64{"depository": 1000.00},
+			UntypedBalance: 3200.00},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockSnapshotRepo.On("GetAggregatedHistory", ctx, userID, mock.AnythingOfType("time.Time"),
+		mock.AnythingOfType("time.Time"), []string(nil)).Return(history, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+	result, err := service.GetNetWorthHistory(ctx, userID, &domain.DashboardFilters{
+		StartDate: &startDate, EndDate: &endDate,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Snapshots, 2)
+
+	assert.InDelta(t, 4200.00, result.Snapshots[0].NetWorth, 0.01,
+		"an orphan-only day must not report net worth of exactly zero beside a $4200 balance")
+	assert.InDelta(t, 4200.00, result.Snapshots[0].TotalAssets, 0.01,
+		"a positive untyped balance reads as an asset at face value")
+
+	assert.InDelta(t, 4200.00, result.Snapshots[1].NetWorth, 0.01,
+		"the untyped remainder of a mixed day counts too, not just a wholly untyped day")
+}
+
+// TestGetNetWorthHistory_UntypedNegativeBalance_ReadsAsALiability is the other half: the sign of an
+// untyped balance is the only signal left about what it is, so a negative one must not be added to
+// assets. Without this, an untyped debt would IMPROVE the reported net worth.
+func TestGetNetWorthHistory_UntypedNegativeBalance_ReadsAsALiability(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-id"
+	startDate := time.Now().UTC().AddDate(0, 0, -1).Truncate(24 * time.Hour)
+	endDate := time.Now().UTC().Truncate(24 * time.Hour)
+
+	history := []domain.BalanceHistoryPoint{
+		{Date: endDate, TotalBalance: -300.00, ByType: map[string]float64{}, UntypedBalance: -300.00},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockSnapshotRepo.On("GetAggregatedHistory", ctx, userID, mock.AnythingOfType("time.Time"),
+		mock.AnythingOfType("time.Time"), []string(nil)).Return(history, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+	result, err := service.GetNetWorthHistory(ctx, userID, &domain.DashboardFilters{
+		StartDate: &startDate, EndDate: &endDate,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Snapshots, 1)
+
+	assert.InDelta(t, 300.00, result.Snapshots[0].TotalLiabilities, 0.01,
+		"a negative untyped balance is a debt, not an asset")
+	assert.InDelta(t, 0.00, result.Snapshots[0].TotalAssets, 0.01)
+	assert.InDelta(t, -300.00, result.Snapshots[0].NetWorth, 0.01)
+}

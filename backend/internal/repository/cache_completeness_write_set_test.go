@@ -87,11 +87,15 @@ var cachedReadRepoFiles = []string{
 // reachable-cached-tables set as a result. Regenerated against the live schema post-migration
 // (see TestDeleteCascadeMapMatchesLiveSchema, which caught the drift).
 var deleteCascadeReachesCachedTables = map[string][]string{
-	"accounts":          {"balance_snapshots", "transactions"},
+	// #1626 Phase 3 added account_status_history to the cached-read set (see
+	// expectedCachedReadTables); this map records only the cascade targets a cached read can
+	// observe, so the three roots that reach it — accounts, linked_items, users — gain it here.
+	// Re-derived from pg_constraint by TestDeleteCascadeMapMatchesLiveSchema.
+	"accounts":          {"account_status_history", "balance_snapshots", "transactions"},
 	"budgets":           {"budget_categories"},
 	"custom_categories": {"budget_categories"},
 	"households":        {"household_account_shares"},
-	"linked_items":      {"accounts", "balance_snapshots", "transactions"},
+	"linked_items":      {"account_status_history", "accounts", "balance_snapshots", "transactions"},
 	"merchants":         {"merchant_name_overrides"},
 	"savings_goals":     {"budget_categories"},
 	"user_accounts":     {"balance_snapshots", "household_account_shares"},
@@ -99,7 +103,8 @@ var deleteCascadeReachesCachedTables = map[string][]string{
 	// linked_items became a CACHED-READ table (see expectedCachedReadTables). This map records
 	// only the cascade targets that a cached read can observe, so widening that set widens this
 	// one. Re-derived from pg_constraint by TestDeleteCascadeMapMatchesLiveSchema.
-	"users": {"accounts", "balance_snapshots", "budget_categories", "budgets", "custom_categories",
+	"users": {"account_status_history", "accounts", "balance_snapshots", "budget_categories",
+		"budgets", "custom_categories",
 		"household_account_shares", "linked_items", "merchant_name_overrides", "transactions",
 		"user_accounts", "user_dashboard_preferences", "user_identities"},
 }
@@ -594,10 +599,18 @@ func sortedKeys(m map[string]bool) []string {
 // cached balance/net-worth answer is therefore sensitive to that ONE column — see
 // linkedItemsSuccessionColumnsOnly and TestCachedReadsReadOnlyTheSuccessionColumnsOfLinkedItems,
 // which is what makes the nine column-scoped dispositions below re-derivable rather than asserted.
+//
+// ⚠ `account_status_history` joined this list in #1626 Phase 3 and is now the newest member. The
+// balance reads gained a per-account carry-forward, and a CARRIED balance — unlike an observed one
+// — is bounded by the account's recorded 'active' interval, so a cached balance/net-worth answer is
+// sensitive to that table (see aggregatedHistorySQLBase's removal bound and accountLiveOnDateSQL).
+// No Go statement in this package WRITES it: it is written entirely by the triggers
+// account_status_history_insert_trigger / _update_trigger on `accounts`, so it appears in no
+// method's text-derived write set and instead widens deleteCascadeReachesCachedTables below.
 var expectedCachedReadTables = []string{
-	"accounts", "balance_snapshots", "budget_categories", "budgets", "custom_categories",
-	"household_account_shares", "linked_items", "merchant_name_overrides", "merchants",
-	"transactions", "user_accounts", "user_dashboard_preferences", "user_identities",
+	"account_status_history", "accounts", "balance_snapshots", "budget_categories", "budgets",
+	"custom_categories", "household_account_shares", "linked_items", "merchant_name_overrides",
+	"merchants", "transactions", "user_accounts", "user_dashboard_preferences", "user_identities",
 }
 
 // linkedItemsSuccessionColumnsOnly is the premise every column-scoped `linked_items` disposition

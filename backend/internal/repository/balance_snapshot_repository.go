@@ -156,21 +156,168 @@ func (r *balanceSnapshotRepository) Create(ctx context.Context, snapshot *domain
 // 90-line statement is a maintenance trap and told us nothing about correctness that the
 // integration tests do not tell us better.
 var aggregatedHistorySQLBase = `
-		WITH RECURSIVE per_account_per_day AS (
+		-- ── observed: the rows that EXIST, one per (UTC day, physical account) ────────────────
+		--
+		-- Unbounded BELOW on purpose. The caller's start date is applied at the very end, to the
+		-- filled series, because a day at the START of the window has to be able to inherit an
+		-- account's last balance from BEFORE the window — otherwise a "this month" chart would
+		-- under-count every account whose most recent sync happened last month.
+		WITH RECURSIVE observed AS (
 		    SELECT DISTINCT ON ((bs.snapshot_at AT TIME ZONE 'UTC')::date, ` + snapshotIdentityKey + `)
 		        (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
+		        ` + snapshotIdentityKey + ` AS identity_key,
 		        bs.account_id,
 		        bs.current_balance,
-		        a.type AS account_type
+		        -- An ORPHANED snapshot (accounts row gone, account_id SET NULL) still knows its
+		        -- LOGICAL account, and user_accounts.identity_type is that account's recorded type
+		        -- — immutable, enforced by trg_user_accounts_identity_immutable. Recovering it is
+		        -- #1626 Phase 3 item 5: orphans counted toward TotalBalance but carried no ByType
+		        -- entry, and net-worth history is reconstructed EXCLUSIVELY from ByType
+		        -- (dashboard_service.go GetNetWorthHistory), so a day whose only rows were orphans
+		        -- reported net worth of EXACTLY ZERO beside a correct balance. Falling back to an
+		        -- untyped bucket would not have been enough either: domain.AccountTypeCategory
+		        -- defaults to "assets", so an orphaned CREDIT CARD would have been reconstructed as
+		        -- an asset and overstated net worth by twice its balance.
+		        COALESCE(a.type, ua.identity_type) AS account_type
 		    FROM balance_snapshots bs
 		    LEFT JOIN accounts a ON a.id = bs.account_id
+		    -- LEFT and on the snapshot's OWN chain pointer: this join exists only to recover a type
+		    -- the accounts row can no longer supply, and user_accounts(id) is the PRIMARY KEY
+		    -- (migration 000033) so it cannot multiply the row.
+		    LEFT JOIN user_accounts ua ON ua.id = bs.user_account_id
 		    WHERE bs.user_id = $1
-		      AND bs.snapshot_at >= $2
-		      AND bs.snapshot_at <= $3
+		      -- #1626 Phase 3 step 1f: CALENDAR DATES, not instants, and the two scopes now agree.
+		      -- This bound used to be "bs.snapshot_at <= $3" against an endDate that is MIDNIGHT UTC
+		      -- by construction — dateutil.ParseDate turns YYYY-MM-DD into midnight and both
+		      -- dashboard services (GetBalanceHistory, GetNetWorthHistory) pass that instant
+		      -- straight through — so a snapshot written today at any hour fell OUTSIDE a range
+		      -- ending "today" and today's data was invisible. The frontend then fabricated it by
+		      -- forward-fill, which is why the chart looked plausible while being wrong.
+		      --
+		      -- The household twin GetAggregatedHistoryForHousehold already compared dates and was
+		      -- already correct; matching it means ONE comparison style across both scopes rather
+		      -- than two, and this is also the INDEXED form (migration 000017's
+		      -- idx_balance_snapshots_date_trunc is on (user_id, ((snapshot_at AT TIME ZONE
+		      -- 'UTC')::date)) — verified present in this schema). endOfDay() in dashboard_service.go
+		      -- would also have worked and was rejected for exactly that reason: it would have left
+		      -- the two scopes phrased differently and left the index unusable here.
+		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date <= $3::date
 		      %s
 		    ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date, ` + snapshotIdentityKey + `,
 		             bs.snapshot_at DESC, bs.id DESC
 		),
+		-- ── the grid the carry-forward fills ─────────────────────────────────────────────────
+		--
+		-- DAYS ARE NOT INVENTED, only VALUES. A chart point exists for a day only if some snapshot
+		-- was actually taken on it; a day nobody synced at all is still absent from the series and
+		-- the frontend still bridges it. That is deliberate and narrow: generating a full calendar
+		-- grid would also generate rows for days in the FUTURE (endDate is unvalidated against
+		-- today), turning a frontend-fabricated flat line into a backend-fabricated one. The future
+		-- clamp is a separate change and this read must not pre-empt it.
+		observed_days AS (
+		    SELECT DISTINCT snapshot_date FROM observed
+		),
+		-- Every account this user has EVER reported at or before the window's end. Keyed on
+		-- identity_key rather than account_id for the same reason the DISTINCT ON is — see
+		-- snapshotIdentityKey, whose third COALESCE arm keeps orphans from collapsing into one.
+		observed_keys AS (
+		    SELECT DISTINCT identity_key FROM observed
+		),
+		grid AS (
+		    SELECT d.snapshot_date, k.identity_key
+		    FROM observed_days d
+		    CROSS JOIN observed_keys k
+		),
+		-- carry_source resolves, for each (day, account), WHICH observed day supplies its balance:
+		-- the latest one at or before this day. A running max() over the LEFT-JOINed grid is the
+		-- LOCF idiom Postgres can express without IGNORE NULLS, and it is O(rows log rows) rather
+		-- than the O(days x rows) a per-day LATERAL would cost on a multi-year window.
+		--
+		-- ⚠ THE JOIN EXCLUDES A NULL current_balance, AND THAT IS DECISION 4 OF THIS CHANGE.
+		-- transactionSyncService accepts a snapshot with current_balance NULL and available_balance
+		-- present (see its balance write), and this aggregation sums only current_balance — so such
+		-- an account used to be silently dropped from the day's total, and on a day whose ONLY row
+		-- was one of those, SUM() returned SQL NULL and the row scan failed outright with "cannot
+		-- scan NULL into *float64", i.e. a 500 for the whole chart.
+		--
+		-- The two candidate fixes were COALESCE to available_balance, or exclude the row and let the
+		-- carry-forward supply the account's previous real value. EXCLUDE was chosen: available
+		-- balance is a DIFFERENT QUANTITY, not a degraded version of the same one. On a credit card
+		-- it is the remaining credit line, so substituting it would report a large positive asset
+		-- where a debt belongs. "Last known CURRENT balance" is the honest answer, and it is what
+		-- LOCF already computes. The day itself still survives, because observed_days is built from
+		-- observed rather than from this join.
+		carry_source AS (
+		    SELECT g.snapshot_date,
+		           g.identity_key,
+		           max(o.snapshot_date) OVER (
+		               PARTITION BY g.identity_key ORDER BY g.snapshot_date
+		               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+		           ) AS source_date
+		    FROM grid g
+		    LEFT JOIN observed o
+		      ON o.identity_key = g.identity_key
+		     AND o.snapshot_date = g.snapshot_date
+		     AND o.current_balance IS NOT NULL
+		),
+		-- ── per_account_per_day: the filled series, which is what the aggregate sums ──────────
+		--
+		-- THE DEFECT THIS CLOSES. This CTE used to BE the observed rows, so a day's total was the
+		-- sum of only the accounts that happened to receive a snapshot that day. Snapshots are
+		-- written per-ITEM on webhook sync, so a day on which one item synced reported only that
+		-- item's accounts and the total collapsed toward zero — while every other account's balance
+		-- was merely ABSENT from that date rather than gone. Every per-account balance is provider
+		-- truth; the day-level AGGREGATE was not, and that distinction is the whole defect. Carrying
+		-- forward also REPAIRS EXISTING history, which no amount of future snapshotting can.
+		--
+		-- Step 2b, decided here: history starts PER ACCOUNT, at that account's earliest snapshot.
+		-- A key with no observed row at or before the day has a NULL source_date and this join
+		-- drops it, so the total GROWS as accounts join rather than starting at the first day on
+		-- which every account happens to have data. The alternative hides real history.
+		per_account_per_day AS (
+		    SELECT c.snapshot_date,
+		           o.account_id,
+		           o.current_balance,
+		           o.account_type
+		    FROM carry_source c
+		    JOIN observed o
+		      ON o.identity_key = c.identity_key
+		     AND o.snapshot_date = c.source_date
+		     AND o.current_balance IS NOT NULL
+		    WHERE c.snapshot_date >= $2::date
+		      -- ⚠ THE REMOVAL BOUND, AND IT APPLIES ONLY TO CARRIED ROWS. An account's OWN snapshot
+		      -- day keeps its value unconditionally — that row is provider truth about a day the
+		      -- account really reported, and re-asking account_status_history about it would delete
+		      -- a closed account's retained history from the chart, which is the opposite of what
+		      -- #1569 exists to do (see accountChainLiveAllCTE, which says so for the same reason).
+		      -- A CARRIED row is different in kind: it is this query's inference that the balance
+		      -- persisted, and that inference is only defensible while the account was still there.
+		      -- Without this, a closed account would contribute to net worth forever.
+		      --
+		      -- The first leg is the #1626 Phase 2 ruling that absence of interval data is "no
+		      -- reason to hide" rather than evidence: migration 000152's zero-length-interval guard
+		      -- leaves some accounts with NO 'active' row at all, and an orphan's rows cascade away
+		      -- with its accounts row (fk_ash_account_id ON DELETE CASCADE), so keying the carry on
+		      -- a recorded interval ALONE would silently make this whole fix a no-op for exactly
+		      -- those accounts. It is narrow by construction: an account the user really
+		      -- disconnected has an 'active' row followed by a terminal one, so the second leg
+		      -- governs it. Same shape as accountWithNoActiveIntervalLeg (transaction_repository.go).
+		      AND (
+		          o.snapshot_date = c.snapshot_date
+		          OR NOT EXISTS (
+		              SELECT 1 FROM account_status_history ash_any
+		              WHERE ash_any.account_id = o.account_id
+		                AND ash_any.status = 'active'
+		          )
+		          OR ` + accountLiveOnDateSQL("o.account_id", "c.snapshot_date") + `
+		      )
+		),
+		-- live_all is built from the FILLED series, not the observed one, and that is what makes the
+		-- succession collapse below correct after this change. Before the carry-forward a
+		-- predecessor appeared only on days it actually reported, so an overlap day rarely held both
+		-- chain members; now both are present on every day after their own first snapshot, which is
+		-- exactly the input accountChainSupersessionCTE exists to collapse. Feeding it the observed
+		-- rows instead would double-count every carried re-link.
 		live_all AS (
 		    SELECT p.snapshot_date, a.id AS account_id, a.user_id AS owner_id,
 		           a.user_account_id, a.linked_item_id
@@ -251,6 +398,13 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 		current.TotalBalance += bal
 		if accountType != "" {
 			current.ByType[accountType] += bal
+		} else {
+			// #1626 Phase 3 item 5: an untyped balance is RECORDED rather than discarded, so the
+			// net-worth reconstruction (dashboard_service.go GetNetWorthHistory), which is driven
+			// entirely by ByType, can no longer read an orphan-only day as exactly zero. See
+			// domain.BalanceHistoryPoint.UntypedBalance for why this is a field and not a
+			// subtraction the consumer performs.
+			current.UntypedBalance += bal
 		}
 	}
 
@@ -623,6 +777,13 @@ func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context
 		current.TotalBalance += bal
 		if accountType != "" {
 			current.ByType[accountType] += bal
+		} else {
+			// #1626 Phase 3 item 5: an untyped balance is RECORDED rather than discarded, so the
+			// net-worth reconstruction (dashboard_service.go GetNetWorthHistory), which is driven
+			// entirely by ByType, can no longer read an orphan-only day as exactly zero. See
+			// domain.BalanceHistoryPoint.UntypedBalance for why this is a field and not a
+			// subtraction the consumer performs.
+			current.UntypedBalance += bal
 		}
 	}
 

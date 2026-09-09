@@ -35,10 +35,15 @@ import (
 //
 // The floors are a TABLE, so each namespace's requirement is stated once and independently:
 //
-//   - NamespaceAnalytics 3 — #1531/#1569 took it to 2 (GetNetWorthTrend's grain fix); #1626 took
-//     it to 3, because the analytics grouping keys and display resolution changed shape and a
+//   - NamespaceAnalytics 4 — #1531/#1569 took it to 2 (GetNetWorthTrend's grain fix); #1626 Phase 2
+//     took it to 3, because the analytics grouping keys and display resolution changed shape and a
 //     pre-#1626 envelope decodes cleanly into the new struct while carrying UUIDs where names
 //     belong. Decoding cleanly is exactly what makes the bump necessary rather than optional.
+//     #1626 Phase 3 took it to 4: GetAggregatedHistory, which GetNetWorthTrend is cached over,
+//     changed its range bounds from instant to calendar-date comparison, gained a per-account
+//     carry-forward, and stopped discarding an orphaned snapshot's balance from the type
+//     breakdown — so the same arguments return different money, and a surviving pre-fix entry
+//     would keep serving the collapsed day the fix exists to repair.
 //   - NamespaceAnalyticsRows 2 — the deleted_at tombstone filters and household-grants rewrite in
 //     analytics_repository.go, whose GetTopExpense / GetLargestTransactionsForPeriod /
 //     GetCategoryBreakdownForMerchant / GetUnusualSpend results are cached here.
@@ -47,7 +52,7 @@ import (
 // saying why in the same commit.
 func TestSchemaVersionBump_OrphansEntriesWrittenUnderThePriorVersion(t *testing.T) {
 	requiredFloor := map[Namespace]int{
-		NamespaceAnalytics:     3,
+		NamespaceAnalytics:     4,
 		NamespaceAnalyticsRows: 2,
 	}
 
