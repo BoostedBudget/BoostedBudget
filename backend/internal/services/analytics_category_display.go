@@ -1,8 +1,11 @@
 package services
 
 import (
+	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
@@ -43,6 +46,33 @@ func resolveCategoryDisplay(categoryKey, storedDisplay string) string {
 		return unnamedCustomCategoryLabel
 	}
 	return pfcDisplayName(categoryKey)
+}
+
+// validateCategoryToken rejects a `custom:` grouping key whose suffix is not a UUID (#1626 Phase 2,
+// review finding X2).
+//
+// WHY IT IS A GATE AND NOT A NORMALISATION. GetCategoryTotalForPeriod resolves a custom category's
+// name through `cc.id = $5::uuid`, so the suffix is CAST by Postgres rather than compared as text —
+// and an unparseable one fails the whole statement, which MapError classifies as a 500. Before that
+// scalar subquery landed the token was only ever a text comparison and a malformed one matched no
+// transactions, so this closes a regression rather than a pre-existing hole.
+//
+// ⚠ It says nothing about whether the category EXISTS, and must not: a valid UUID naming a
+// tombstoned or absent custom category is a legitimate request that answers with a zero total and
+// the "Custom category" fallback label. Only the SHAPE is checked, and only for the custom prefix —
+// a PFC enum is not a UUID and is left alone.
+//
+// ⚠ uuid.Parse, not a regexp: it is the same parser the ::uuid cast will apply, so the gate cannot
+// admit a spelling Postgres would then reject.
+func validateCategoryToken(categoryKey string) error {
+	if !strings.HasPrefix(categoryKey, customCategoryTokenPrefix) {
+		return nil
+	}
+	suffix := strings.TrimPrefix(categoryKey, customCategoryTokenPrefix)
+	if _, err := uuid.Parse(suffix); err != nil {
+		return fmt.Errorf("%w: %q", ErrInvalidCategoryToken, suffix)
+	}
+	return nil
 }
 
 // categoryDisplayRow is the minimal shape sortCategoryRows needs: a stable key, the RESOLVED

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -15,6 +16,16 @@ import (
 // unusualSpendSigmaThreshold is the number of standard deviations above category mean
 // required for a transaction to be flagged as unusual.
 const unusualSpendSigmaThreshold = 2.0
+
+// ErrInvalidCategoryToken is returned when a `custom:<id>` category token's suffix is not a UUID.
+//
+// It exists because the suffix is CAST, not compared: GetCategoryTotalForPeriod resolves a custom
+// category's name through `cc.id = $5::uuid` (#1626 Phase 2), so an unparseable suffix reaches
+// Postgres and fails with invalid-input-syntax — which MapError classifies as a server error.
+// Before that scalar subquery the token was only ever a text comparison and a malformed one simply
+// matched nothing, so this is the guard for a regression the display fix introduced, not a
+// pre-existing hole. Mapped to 400; see huma/errors/mapper.go.
+var ErrInvalidCategoryToken = errors.New("category token suffix is not a valid UUID")
 
 // AnalyticsService provides cash flow analytics functionality
 // Issue #354: Cash Flow Analysis & Income/Expense Visualization
@@ -564,6 +575,12 @@ func calculatePercentage(value, total float64) float64 {
 func (s *analyticsService) GetCategoryTotalForPeriod(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalResponse, error) {
 	if endDate.Before(startDate) {
 		return nil, fmt.Errorf("end_date cannot be before start_date")
+	}
+
+	// #1626 Phase 2 (X2): the repository casts a custom token's suffix to uuid, so a malformed one
+	// must be refused HERE — reaching Postgres with it turns a bad request into a 500.
+	if err := validateCategoryToken(category); err != nil {
+		return nil, err
 	}
 
 	row, err := s.analyticsRepo.GetCategoryTotalForPeriod(ctx, userID, category, startDate, endDate)
