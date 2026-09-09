@@ -133,7 +133,7 @@ func (c *preFlushBumpContext) decide(shouldBump bool) {
 // where the 4xx policy is applied — the same policy the post-next block uses: a genuine 4xx is
 // assumed not to have reached a commit, so skipping the bump costs nothing.
 func (c *preFlushBumpContext) SetStatus(code int) {
-	c.decide(!(code >= 400 && code < 500))
+	c.decide(code < 400 || code >= 500)
 	c.embeddedHumaContext.SetStatus(code)
 }
 

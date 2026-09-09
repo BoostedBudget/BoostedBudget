@@ -47,8 +47,10 @@ type GoalProgressRecomputer interface {
 // progress_basis changes (Issue #1300 M14 / Codex C10).
 //   - Insert: seeds a "manual"-source contribution row equal to prior current_amount when
 //     switching manual → contributions, so existing savings history is preserved.
-//   - ArchiveByGoal: clears managed_by_reconciliation on all rows when switching away from
-//     "contributions" so the reconciler stops managing them (they become historical records).
+//   - ArchiveByGoal: archives contributions for a goal by setting managed_by_reconciliation=false
+//     and archived_at=NOW() (or preserving existing archived_at). Called on switches INTO
+//     contributions (to close any prior contributions period) and away from contributions (to
+//     close the current period). Excludes rejected rows (sticky tombstones remain managed).
 //
 // #1625: both methods are the InTx forms. The switch is no longer three independent writes that
 // each commit on their own — it is ONE transaction owned by applyBasisSwitch, and these run inside
