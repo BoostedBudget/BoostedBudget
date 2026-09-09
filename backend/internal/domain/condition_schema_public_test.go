@@ -1,6 +1,10 @@
 package domain
 
-import "testing"
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
 
 // The condition MATRIX, not just the vocabulary.
 //
@@ -136,6 +140,46 @@ func TestConditionSchema_EveryClosedSetIsPublishedOrExempt(t *testing.T) {
 			t.Errorf("field %q declares a closed set (EnumFn is set) but publishes no values, and "+
 				"is not a documented exemption — an agent can only discover its legal values by 422",
 				field)
+		}
+	}
+}
+
+// #1625 Task 11: the OpenAPI `enum:` struct tag is a FOURTH hand-maintained copy of the field
+// list, and nothing checked it.
+//
+// Adding effective_merchant to FieldSpecs, to allConditionFieldsOrdered and to the evaluator left
+// the tag untouched, so the generated OpenAPI enum, the orval model and the MCP spec index all
+// still advertised twelve fields while the server accepted thirteen. The frontend's cross-language
+// pin could not catch it either: it compares against the GENERATED enum, which is produced from
+// this very tag, so both sides were consistently wrong.
+//
+// The tag is what reaches agents, which makes a silent omission here exactly the
+// undiscoverable-contract failure #1625 was opened for.
+func TestConditionFieldEnumTag_ListsEveryFieldTheServerAccepts(t *testing.T) {
+	field, ok := reflect.TypeOf(RuleCondition{}).FieldByName("Field")
+	if !ok {
+		t.Fatal("RuleCondition has no Field member")
+	}
+	tag := field.Tag.Get("enum")
+	if tag == "" {
+		t.Fatal("the Field member has no enum tag — the OpenAPI schema would advertise no values")
+	}
+
+	declared := map[string]bool{}
+	for _, v := range strings.Split(tag, ",") {
+		declared[strings.TrimSpace(v)] = true
+	}
+
+	for f := range FieldSpecs {
+		if !declared[string(f)] {
+			t.Errorf("field %q is accepted by the validator but absent from the enum tag — it "+
+				"reaches no client, no generated model and no MCP spec index", f)
+		}
+	}
+	for v := range declared {
+		if _, ok := FieldSpecs[RuleConditionField(v)]; !ok {
+			t.Errorf("the enum tag advertises %q, which the validator rejects — a client copying "+
+				"it from the schema gets a 422", v)
 		}
 	}
 }

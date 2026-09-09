@@ -798,6 +798,10 @@ func main() {
 		}
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
 		ruleApplicationService.SetAnalytics(phClient)
+		// #1625 Task 11: lets a rule match `effective_merchant` -- the name the user sees after
+		// their own rename or merge -- during sync, not just in preview. Fail-open: unwired, such
+		// conditions fall back to the raw provider name.
+		ruleApplicationService.SetEffectiveMerchantResolver(transactionRepo)
 		// Issue #1569 Task 5 (#1572): the automation audit trail's writer. Until this line
 		// rule_execution_history had no production writer at all — it was backfilled by migration
 		// 000164 and then never written to again, so the trail was permanently empty.

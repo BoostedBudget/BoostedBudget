@@ -76,3 +76,84 @@ func TestApplyRulesToTransaction_ReachesTheQuarantineInventory(t *testing.T) {
 		"the quarantine inventory was not reached through ApplyRulesToTransaction — deleting the "+
 			"call site would leave CI green while the inventory silently never ran")
 }
+
+// stubMerchantResolver records what it was asked for.
+type stubMerchantResolver struct {
+	names map[string]string
+	calls [][]string
+	err   error
+}
+
+func (s *stubMerchantResolver) ResolveEffectiveMerchantNames(_ context.Context, _ string, ids []string) (map[string]string, error) {
+	s.calls = append(s.calls, ids)
+	return s.names, s.err
+}
+
+// #1625 Task 11: enrichment must actually reach the EVALUATOR through ApplyRulesToBatch.
+//
+// The field, the evaluator case and the resolver can all be correct while nothing connects them —
+// which is what "all-or-nothing" meant: enriching only the repo read paths would make a rule match
+// in preview and not during sync, the same preview/reality divergence this ticket already fixed
+// once. This drives the whole path.
+func TestApplyRulesToBatch_MatchesOnTheMerchantNameTheUserSees(t *testing.T) {
+	merchantID := "m-1"
+	raw := "SQ *BLUE BOTTLE 1234"
+
+	rule := &domain.CategorizationRule{
+		ID: "r-1", UserID: "u1", Enabled: true, ConditionLogic: "AND",
+		Conditions: []domain.RuleCondition{{
+			Field:    domain.FieldEffectiveMerchant,
+			Operator: string(domain.RuleOpContains),
+			Value:    "blue bottle coffee",
+		}},
+		TargetKind: strPtrSvc("pfc"), TargetPFCPrimary: strPtrSvc("FOOD_AND_DRINK"),
+		TagBehavior: "add", Source: "manual",
+	}
+
+	resolver := &stubMerchantResolver{names: map[string]string{merchantID: "Blue Bottle Coffee"}}
+	svc := NewRuleApplicationService(&stubRuleApplicationRepo{rules: []*domain.CategorizationRule{rule}})
+	svc.SetLogger(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	svc.SetEffectiveMerchantResolver(resolver)
+
+	txns := []domain.Transaction{
+		{ID: "t1", UserID: "u1", Name: "card purchase", MerchantName: &raw, MerchantID: &merchantID},
+	}
+
+	applied, err := svc.ApplyRulesToBatch(context.Background(), txns, "u1")
+	require.NoError(t, err)
+	require.Len(t, applied, 1)
+	assert.True(t, applied[0].CategoryApplied,
+		"the rule matched in preview but not in sync — enrichment never reached the evaluator")
+	assert.Equal(t, [][]string{{merchantID}}, resolver.calls,
+		"merchant ids must be resolved once for the whole batch, deduplicated")
+}
+
+// Fail-open: a resolver error must leave the sync categorising on the raw name, not abort it.
+func TestApplyRulesToBatch_ResolverFailureFallsBackToTheRawName(t *testing.T) {
+	merchantID := "m-1"
+	raw := "STARBUCKS STORE 42"
+
+	rule := &domain.CategorizationRule{
+		ID: "r-1", UserID: "u1", Enabled: true, ConditionLogic: "AND",
+		Conditions: []domain.RuleCondition{{
+			Field:    domain.FieldEffectiveMerchant,
+			Operator: string(domain.RuleOpContains),
+			Value:    "starbucks",
+		}},
+		TargetKind: strPtrSvc("pfc"), TargetPFCPrimary: strPtrSvc("FOOD_AND_DRINK"),
+		TagBehavior: "add", Source: "manual",
+	}
+
+	resolver := &stubMerchantResolver{err: context.DeadlineExceeded}
+	svc := NewRuleApplicationService(&stubRuleApplicationRepo{rules: []*domain.CategorizationRule{rule}})
+	svc.SetLogger(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	svc.SetEffectiveMerchantResolver(resolver)
+
+	applied, err := svc.ApplyRulesToBatch(context.Background(),
+		[]domain.Transaction{{ID: "t1", UserID: "u1", Name: "x", MerchantName: &raw, MerchantID: &merchantID}}, "u1")
+
+	require.NoError(t, err, "a merchant lookup must never fail a sync")
+	require.Len(t, applied, 1)
+	assert.True(t, applied[0].CategoryApplied,
+		"with resolution unavailable the rule must still match on the raw provider name")
+}

@@ -122,10 +122,10 @@ func TestNormalize_ExpressionIsNotAcceptedAsInput(t *testing.T) {
 // TestFieldSpecs_CoverEveryConditionField guards the matrix against a field being added to the
 // enum without a spec — which would make it unvalidatable and silently no-match at evaluation.
 func TestFieldSpecs_CoverEveryConditionField(t *testing.T) {
-	all := []RuleConditionField{
-		FieldMerchant, FieldName, FieldMerchantID, FieldAmount, FieldSignedAmount, FieldDirection,
-		FieldAccountID, FieldAccountType, FieldPaymentChannel, FieldDate, FieldPFCPrimary, FieldPFCDetailed,
-	}
+	// Derived from allConditionFieldsOrdered rather than hand-copied. #1625 Task 11 found THREE
+	// hand-maintained copies of this list (here, allConditionFieldsOrdered, and FieldSpecs), so
+	// adding a field failed two guards for the same reason twice. One list to update now.
+	all := allConditionFieldsOrdered()
 	if len(all) != len(FieldSpecs) {
 		t.Fatalf("FieldSpecs has %d entries, the enumerated list has %d — one of them was not updated",
 			len(FieldSpecs), len(all))
