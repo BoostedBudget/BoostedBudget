@@ -8,6 +8,7 @@ import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { createLocationHarness } from '@/test/utils/locationProbe'
 import { CashFlowSankeyChart } from './CashFlowSankeyChart'
+import { buildSankeyData } from './buildSankeyData'
 import type { CategoryHierarchyNode, CategoryHierarchyResponse } from '@boostedbudget/api-client/models'
 
 // CashFlowSankeyChart calls useNavigate() unconditionally, so every render needs a real Router
@@ -55,6 +56,16 @@ const mockExpenseData = hierarchy(
   ],
   'expense',
 )
+
+// Resolves a node's index in the emitted node list — which is what ECharts reports as dataIndex.
+// Derived from buildSankeyData rather than hard-coded so a change to node ordering makes the test
+// click the right node instead of silently clicking a different one.
+function nodeIndexOf(expenses: CategoryHierarchyResponse, id: string): number {
+  const built = buildSankeyData(mockIncomeData.levels, expenses.levels, { kind: 'expanded' })
+  const idx = built.nodes.findIndex(n => n.id === id)
+  if (idx < 0) throw new Error(`no node ${id} in the built Sankey`)
+  return idx
+}
 
 let focused: string[] = []
 
@@ -166,6 +177,85 @@ describe('CashFlowSankeyChart', () => {
           .flatMap(k => (params.get(k) ?? '').split(',').filter(Boolean))
         expect(values).toHaveLength(1)
       }
+    })
+
+    // ── #1626 Phase 2: the Uncategorized node navigates ────────────────────────────────
+    describe('the uncategorized node', () => {
+      const withUncategorized = hierarchy(
+        [node('FOOD_AND_DRINK', 'Food And Drink', 300), node('UNCATEGORIZED', 'Uncategorized', 120)],
+        'expense',
+      )
+
+      it('navigates by the dedicated flag, never by a category value', () => {
+        render(<CashFlowSankeyChart {...defaultProps} expenseData={withUncategorized} />)
+        fireEvent.click(screen.getByText(/Total Income → Uncategorized/))
+
+        const params = new URLSearchParams(currentUrl().split('?')[1] ?? '')
+        expect(params.get('uncategorized')).toBe('true')
+        // Sending the synthesised sentinel as a category value would look like a working filter
+        // and match zero rows — the failure this node was inert to avoid.
+        expect(params.get('pfc_primaries')).toBeNull()
+        expect(params.get('pfc_detaileds')).toBeNull()
+        expect(params.get('custom_category_ids')).toBeNull()
+      })
+
+      // The Sankey aggregates POSTED spend; the transactions list shows pending rows too. Without
+      // this the node's amount and the list's total would differ by exactly the pending rows, and
+      // the whole point of Phase 2 is that those two numbers agree.
+      it('pins pending=false, so the list totals match the amount the node showed', () => {
+        render(<CashFlowSankeyChart {...defaultProps} expenseData={withUncategorized} />)
+        fireEvent.click(screen.getByText(/Total Income → Uncategorized/))
+
+        expect(new URLSearchParams(currentUrl().split('?')[1] ?? '').get('pending')).toBe('false')
+      })
+
+      // Two independent activation paths reach the same node: ECharts' onClick (which the chart
+      // mock surfaces as a hidden echarts-point-N button, carrying dataIndex ONLY) and the sr-only
+      // table's own button. A keyboard or screen-reader user landing on a DIFFERENT filtered list
+      // than a mouse user is exactly the kind of divergence that survives review because nobody
+      // exercises both paths in one test.
+      it('produces the same URL from the ECharts click and the screen-reader button', () => {
+        const { unmount } = render(<CashFlowSankeyChart {...defaultProps} expenseData={withUncategorized} />)
+        fireEvent.click(screen.getByText(/Total Income → Uncategorized/))
+        const fromTable = currentUrl()
+        expect(fromTable).toContain('uncategorized=true')
+        unmount()
+
+        resetLocationProbe()
+        render(<CashFlowSankeyChart {...defaultProps} expenseData={withUncategorized} />)
+        // Find the node's index the same way ECharts would: its position in the emitted node list.
+        const idx = nodeIndexOf(withUncategorized, 'out:l1:UNCATEGORIZED')
+        fireEvent.click(screen.getByTestId(`echarts-point-${idx}`))
+
+        expect(currentUrl()).toBe(fromTable)
+      })
+
+      it('is tracked with structure only — depth and direction, never a category', () => {
+        render(<CashFlowSankeyChart {...defaultProps} expenseData={withUncategorized} />)
+        fireEvent.click(screen.getByText(/Total Income → Uncategorized/))
+
+        expect(mockTrackEvent).toHaveBeenCalledWith(
+          ANALYTICS_EVENTS.REPORT_SANKEY_NODE_NAVIGATED,
+          { depth: 1, direction: 'expense' },
+        )
+      })
+    })
+
+    // The income fan is FLATTENED — every income node's id is `in:l1:*` whatever its real depth —
+    // so an event that read depth from the id would report all income navigations as level 1. A
+    // plausible wrong number is worse than none, because nothing downstream can tell.
+    it('reports an income leaf its REAL depth, not the level its id implies', () => {
+      const deepIncome = hierarchy(
+        [node('INCOME', 'Income', 5000, 0, [node('INCOME_WAGES', 'Wages', 5000)])],
+        'income',
+      )
+      render(<CashFlowSankeyChart {...defaultProps} incomeData={deepIncome} />)
+      fireEvent.click(screen.getByText(/Wages → Total Income/))
+
+      expect(mockTrackEvent).toHaveBeenCalledWith(
+        ANALYTICS_EVENTS.REPORT_SANKEY_NODE_NAVIGATED,
+        { depth: 2, direction: 'income' },
+      )
     })
 
     it('a synthetic node is inert — it neither navigates nor acts on its parent', () => {
