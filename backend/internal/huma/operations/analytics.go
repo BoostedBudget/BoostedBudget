@@ -122,7 +122,7 @@ type GetCategoryHierarchyInput struct {
 	inputs.AuthenticatedInput
 	StartDate         string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
 	EndDate           string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
-	Direction         string `query:"direction" enum:"income,expense" default:"expense" doc:"Which side of the ledger to aggregate. Income defaults to a deeper view than expense: income's useful distinction (wages, dividends, rental) lives one level down, while expenses read best at the primary level."`
+	Direction         string `query:"direction" enum:"income,expense" default:"expense" doc:"Which side of the ledger to aggregate: income is amount < 0, expense is amount > 0. Both directions return the SAME full tree — this parameter selects which transactions are aggregated, not how deep the result goes. How many levels to SHOW is a presentation choice: the reports Sankey renders income at leaf depth, because income's useful distinction (wages, dividends, rental) lives one level down, and expenses at primary depth, because they read better consolidated."`
 	AccountTypes      string `query:"account_types" doc:"Comma-separated account types to filter"`
 	IncludeTransfers  string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
 	CustomCategoryIDs string `query:"custom_category_ids" doc:"Comma-separated custom category UUIDs to scope the report. NOTE: supplying any value narrows the WHOLE tree to custom-categorised transactions, so no PFC branches are returned — that is what scoping a report to specific custom categories means, and it matches the reports page's existing custom-category filter."`
