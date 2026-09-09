@@ -92,8 +92,19 @@ var namespaceRegistry = map[Namespace]namespaceConfig{
 	// so a pre-fix Redis entry would remain a valid hit under post-fix code and keep serving raw
 	// enums and UUIDs until its own TTL expired. The 120s TTL makes that window short, not absent,
 	// and "short" is not a correctness argument. Same reasoning as version 2 above.
+	// SchemaVersion 4 (#1626 Phase 3): GetAggregatedHistory — this namespace's only balance read,
+	// reached through GetNetWorthTrend — changed what it RETURNS for the same arguments, in three
+	// ways that all move money. (1) Its range bounds moved from instant to calendar-date
+	// comparison, so a snapshot written on the end date at any hour is now inside the range instead
+	// of outside it. (2) Each account's last known balance is now carried forward across days it
+	// has no snapshot for, so a day on which only one Plaid item synced no longer collapses toward
+	// zero. (3) An orphaned snapshot now recovers its account type from its chain row and, failing
+	// that, is reported as an explicit untyped balance rather than vanishing from the type
+	// breakdown. A deploy never touches the per-scope generation token, so without this bump a
+	// pre-fix Redis entry would remain a valid hit under post-fix code and keep serving the
+	// collapsed day the fix exists to repair. Same reasoning as versions 2 and 3 above.
 	NamespaceAnalytics: {
-		TTL: 120 * time.Second, SchemaVersion: 3, ScopeKind: ScopeUser, DefaultEnabled: true,
+		TTL: 120 * time.Second, SchemaVersion: 4, ScopeKind: ScopeUser, DefaultEnabled: true,
 	},
 	// SchemaVersion 2 (#1569, round 11): analytics_repository.go added `t.deleted_at IS NULL` to
 	// the queries backing GetTopExpense, GetLargestTransactionsForPeriod,
