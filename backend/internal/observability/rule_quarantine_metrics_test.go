@@ -16,7 +16,7 @@ func TestRecordRuleQuarantineCandidate_UsesTheReasonLabel(t *testing.T) {
 	RecordRuleQuarantineCandidate(QuarantineNoConditions)
 
 	const want = `
-# HELP categorization_rule_quarantine_candidates_total Categorization rules found broken by the quarantine classifier, by reason. Reasons that stop matching are enforced in RuleMatches; invalid_condition_value_shape is repaired by read-path coercion and still executes.
+# HELP categorization_rule_quarantine_candidates_total Categorization rules found broken by the quarantine classifier, by reason. Reasons that stop matching are enforced in RuleMatches; invalid_condition_value_shape is repaired by read-path coercion and still executes. This is a per-OBSERVATION counter (it increments once every time a rule is re-evaluated, e.g. once per sync pass) and therefore cannot answer how many DISTINCT rules are affected — one rule observed 1000 times and 1000 distinct rules look identical here. For that question, see categorization_rule_quarantine_population.
 # TYPE categorization_rule_quarantine_candidates_total counter
 categorization_rule_quarantine_candidates_total{reason="no_conditions_matches_everything"} 1
 `
@@ -34,7 +34,7 @@ func TestRecordRuleQuarantineCandidate_FoldsAnUnknownReasonIntoOther(t *testing.
 	RecordRuleQuarantineCandidate("Coffee at Blue Bottle")
 
 	const want = `
-# HELP categorization_rule_quarantine_candidates_total Categorization rules found broken by the quarantine classifier, by reason. Reasons that stop matching are enforced in RuleMatches; invalid_condition_value_shape is repaired by read-path coercion and still executes.
+# HELP categorization_rule_quarantine_candidates_total Categorization rules found broken by the quarantine classifier, by reason. Reasons that stop matching are enforced in RuleMatches; invalid_condition_value_shape is repaired by read-path coercion and still executes. This is a per-OBSERVATION counter (it increments once every time a rule is re-evaluated, e.g. once per sync pass) and therefore cannot answer how many DISTINCT rules are affected — one rule observed 1000 times and 1000 distinct rules look identical here. For that question, see categorization_rule_quarantine_population.
 # TYPE categorization_rule_quarantine_candidates_total counter
 categorization_rule_quarantine_candidates_total{reason="other"} 1
 `
@@ -126,13 +126,74 @@ func TestQuarantineMetric_SeriesExistBeforeAnythingIsRecorded(t *testing.T) {
 	}
 }
 
-// seriesCountAtStartup is captured in TestMain, which runs AFTER every package-level var and every
-// init() but BEFORE any test — the only point at which the process's real startup state is still
-// observable. A package-level var would be too early (vars initialize before init functions) and
-// any Test function too late (an earlier test may have called Reset()).
-var seriesCountAtStartup int
+// TestSetRuleQuarantinePopulation_SetsExactlyTheGivenCounts pins the Set-not-Add contract: calling
+// it twice with different counts must leave the SECOND call's values, never a sum of both, and a
+// reason omitted from the map must read back as an explicit 0 (a rule that stops being
+// quarantined must disappear from the population, not linger at its last nonzero count).
+func TestSetRuleQuarantinePopulation_SetsExactlyTheGivenCounts(t *testing.T) {
+	ruleQuarantinePopulation.Reset()
+
+	SetRuleQuarantinePopulation(map[QuarantineReason]int{
+		QuarantineNoConditions: 3,
+		QuarantineInvalidLogic: 1,
+	})
+	if got := testutil.ToFloat64(ruleQuarantinePopulation.WithLabelValues(string(QuarantineNoConditions))); got != 3 {
+		t.Errorf("QuarantineNoConditions: got %v, want 3", got)
+	}
+	if got := testutil.ToFloat64(ruleQuarantinePopulation.WithLabelValues(string(QuarantineUnnormalizable))); got != 0 {
+		t.Errorf("a reason absent from the map must read 0, got %v", got)
+	}
+
+	// Second census: no_conditions dropped to 0 (repaired), unnormalizable rose to 2 (newly seen).
+	SetRuleQuarantinePopulation(map[QuarantineReason]int{
+		QuarantineUnnormalizable: 2,
+	})
+	if got := testutil.ToFloat64(ruleQuarantinePopulation.WithLabelValues(string(QuarantineNoConditions))); got != 0 {
+		t.Errorf("QuarantineNoConditions must drop to 0 on a census that no longer reports it, got %v (Add semantics would leave 3)", got)
+	}
+	if got := testutil.ToFloat64(ruleQuarantinePopulation.WithLabelValues(string(QuarantineUnnormalizable))); got != 2 {
+		t.Errorf("QuarantineUnnormalizable: got %v, want 2", got)
+	}
+}
+
+// TestQuarantinePopulation_SeriesExistBeforeAnyCensusRuns is TestQuarantineMetric_SeriesExistBeforeAnythingIsRecorded's
+// counterpart for the #1625 Task 18 gauge: an empty scrape before the first census must not be
+// mistaken for "the census ran and found nothing quarantined".
+func TestQuarantinePopulation_SeriesExistBeforeAnyCensusRuns(t *testing.T) {
+	want := len(AllQuarantineReasons()) // no "other" bucket for the population gauge — see its doc comment
+	if populationSeriesCountAtStartup != want {
+		t.Fatalf("at process start %d population series existed, want %d — the pre-warm is not "+
+			"wired into package initialization, so a real /metrics scrape before the first census "+
+			"run would omit the labels entirely", populationSeriesCountAtStartup, want)
+	}
+
+	ruleQuarantinePopulation.Reset()
+	initQuarantineSeries()
+
+	if n := testutil.CollectAndCount(ruleQuarantinePopulation); n != want {
+		t.Fatalf("expected %d zero-valued population series to exist before any census has run, "+
+			"got %d", want, n)
+	}
+
+	for _, r := range AllQuarantineReasons() {
+		if got := testutil.ToFloat64(ruleQuarantinePopulation.WithLabelValues(string(r))); got != 0 {
+			t.Errorf("reason %q population should start at an explicit 0, got %v", r, got)
+		}
+	}
+}
+
+// seriesCountAtStartup and populationSeriesCountAtStartup are captured in TestMain, which runs
+// AFTER every package-level var and every init() but BEFORE any test — the only point at which the
+// process's real startup state is still observable. A package-level var would be too early (vars
+// initialize before init functions) and any Test function too late (an earlier test may have
+// called Reset()).
+var (
+	seriesCountAtStartup           int
+	populationSeriesCountAtStartup int
+)
 
 func TestMain(m *testing.M) {
 	seriesCountAtStartup = testutil.CollectAndCount(ruleQuarantineCandidates)
+	populationSeriesCountAtStartup = testutil.CollectAndCount(ruleQuarantinePopulation)
 	os.Exit(m.Run())
 }
