@@ -246,6 +246,69 @@ func TestListContributions_ReturnsGoalContributions(t *testing.T) {
 	contribRepo.AssertExpectations(t)
 }
 
+// TestListContributions_ArchivedAtReachesTheAPIResponse (#1625 Task 13) proves ArchivedAt
+// survives all the way to the JSON huma actually writes on the wire.
+//
+// Before this test, ArchivedAt was exercised only at the repository layer (its NULL/non-NULL
+// scan) -- nothing verified it was still there once wrapped in ListContributionsOutput.Body and
+// marshaled the way huma marshals every handler response. output.Body is exactly what huma's
+// runtime writes back to the caller, so json.Marshal on it here is not a stand-in for the wire
+// format -- it IS the wire format. Both directions are asserted: a closed-period row (created by
+// #1625 migration 000190/191) must carry a present, correctly-valued "archived_at", and an
+// ordinary in-progress row must have the key OMITTED (omitempty) rather than present as null --
+// a caller that only checks for the KEY's presence would otherwise misread a null-but-present
+// key on every row as "this row is archived".
+func TestListContributions_ArchivedAtReachesTheAPIResponse(t *testing.T) {
+	goalID := "goal-archived-1"
+	userID := "user-archived-1"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	handler := NewContributionHandler(contribRepo, nil, nil)
+
+	archivedAt := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	archived := makeTestContribution(goalID)
+	archived.ID = "contrib-archived"
+	archived.ArchivedAt = &archivedAt
+
+	live := makeTestContribution(goalID)
+	live.ID = "contrib-live"
+	live.ArchivedAt = nil
+
+	contribRepo.On("ListByGoal", mock.Anything, userID, goalID).
+		Return([]*domain.SavingsGoalContribution{archived, live}, nil)
+
+	ctx := context.Background()
+	input := &ListContributionsInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+	}
+
+	output, err := handler.ListContributions(ctx, input)
+	require.NoError(t, err)
+	require.Len(t, output.Body, 2)
+
+	wire, err := json.Marshal(output.Body)
+	require.NoError(t, err)
+
+	var parsed []map[string]interface{}
+	require.NoError(t, json.Unmarshal(wire, &parsed))
+	require.Len(t, parsed, 2)
+
+	archivedJSON := parsed[0]
+	liveJSON := parsed[1]
+
+	rawArchivedAt, present := archivedJSON["archived_at"]
+	require.True(t, present, "archived_at must reach the response for a closed-period row")
+	parsedTime, err := time.Parse(time.RFC3339, rawArchivedAt.(string))
+	require.NoError(t, err)
+	assert.True(t, archivedAt.Equal(parsedTime), "archived_at value must round-trip through JSON")
+
+	_, present = liveJSON["archived_at"]
+	assert.False(t, present, "archived_at must be OMITTED (not null) for a row still in the live ledger")
+
+	contribRepo.AssertExpectations(t)
+}
+
 // =============================================================================
 // Tests — LogContribution (POST)
 // =============================================================================

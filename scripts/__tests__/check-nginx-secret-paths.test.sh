@@ -23,14 +23,26 @@ pass=0; fail=0
 ok()  { echo "  PASS: $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL: $1"; fail=$((fail+1)); }
 
+# Fail closed in CI: a guard that "skips" there is a guard that silently didn't run. Locally
+# (no CI env var) the same condition is a graceful skip, so a developer without Docker/openssl
+# still gets a usable run of the rest of the suite. See #1625 -- a Codex reviewer could not run
+# this script for exactly this reason and its "skip" read as a pass.
+skip_or_fail() {
+  if [ -n "${CI:-}" ]; then
+    echo "FAIL: $1 -- CI must not silently skip this guard."
+    exit 1
+  fi
+  echo "⚠ SKIP: $1"
+  exit 0
+}
+
 if [ ! -f "$CONF" ]; then
   echo "FAIL: $CONF not found — the suite's subject moved and this guard is now inert."
   exit 1
 fi
 
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-  echo "⚠ SKIP: Docker unavailable — cannot exercise the real nginx. CI always has it."
-  exit 0
+  skip_or_fail "Docker unavailable — cannot exercise the real nginx. CI always has it."
 fi
 
 CID=""
@@ -107,8 +119,7 @@ mkdir -p "$TMP/ssl"
 if ! openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
       -keyout "$TMP/ssl/key.pem" -out "$TMP/ssl/cert.pem" \
       -subj "/CN=localhost" >/dev/null 2>&1; then
-  echo "⚠ SKIP: openssl unavailable — cannot generate the certificate nginx requires to boot."
-  exit 0
+  skip_or_fail "openssl unavailable — cannot generate the certificate nginx requires to boot."
 fi
 
 # An explicit high port rather than `-P` + `docker port`: the latter is a second call that can
@@ -120,10 +131,7 @@ CID="$(docker run -d --rm -p "127.0.0.1:$PORT:443" \
   -v "$CONF:/etc/nginx/nginx.conf:ro" \
   -v "$ROOT:/usr/share/nginx/html:ro" \
   -v "$TMP/ssl:/etc/nginx/ssl:ro" \
-  nginx:alpine 2>/dev/null)" || {
-    echo "⚠ SKIP: could not start nginx:alpine (offline?)."
-    exit 0
-  }
+  nginx:alpine 2>/dev/null)" || skip_or_fail "could not start nginx:alpine (offline?)."
 
 # Wait for readiness rather than sleeping a guessed interval.
 ready=0
