@@ -311,7 +311,7 @@ func TestInvestmentService_ListInvestmentTransactions_EncodesNextCursor(t *testi
 		ID:  uuid.MustParse("00000000-0000-0000-0000-000000000001"),
 	}
 	invTxnRepo.On("GetByUserIDKeyset", ctx, userID, filters, (*domain.InvestmentTransactionCursor)(nil), 10).
-		Return(txns, nextCursor, nil)
+		Return(txns, nextCursor, nil, nil)
 
 	result, encodedCursor, err := svc.ListInvestmentTransactions(ctx, userID, filters, nil, 10)
 
@@ -333,7 +333,7 @@ func TestInvestmentService_ListInvestmentTransactions_LastPage(t *testing.T) {
 
 	filters := domain.InvestmentTransactionFilters{}
 	invTxnRepo.On("GetByUserIDKeyset", ctx, userID, filters, (*domain.InvestmentTransactionCursor)(nil), 10).
-		Return([]domain.InvestmentTransaction{}, (*domain.InvestmentTransactionCursor)(nil), nil)
+		Return([]domain.InvestmentTransaction{}, (*domain.InvestmentTransactionCursor)(nil), nil, nil)
 
 	result, encodedCursor, err := svc.ListInvestmentTransactions(ctx, userID, filters, nil, 10)
 
@@ -366,7 +366,7 @@ func TestInvestmentService_ListInvestmentTransactions_ForwardsSecurityFields(t *
 		},
 	}
 	invTxnRepo.On("GetByUserIDKeyset", ctx, userID, filters, (*domain.InvestmentTransactionCursor)(nil), 10).
-		Return(txns, (*domain.InvestmentTransactionCursor)(nil), nil)
+		Return(txns, (*domain.InvestmentTransactionCursor)(nil), nil, nil)
 
 	result, _, err := svc.ListInvestmentTransactions(ctx, userID, filters, nil, 10)
 

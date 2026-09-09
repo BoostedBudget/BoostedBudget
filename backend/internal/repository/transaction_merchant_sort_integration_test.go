@@ -187,7 +187,7 @@ func TestTransactionMerchantSort_OverrideFlipsSortOrder(t *testing.T) {
 	repo := &transactionRepository{db: pool, enc: enc}
 
 	filters := domain.TransactionFilters{SortBy: "merchant", SortDir: "asc"}
-	txns, _, err := repo.GetByUserIDKeyset(ctx, f.userID, filters, nil, 50)
+	txns, _, _, err := repo.GetByUserIDKeyset(ctx, f.userID, filters, nil, 50)
 	require.NoError(t, err)
 
 	// Collect IDs in returned order
@@ -222,7 +222,7 @@ func TestTransactionMerchantSort_MergeChain(t *testing.T) {
 	repo := &transactionRepository{db: db, enc: newTestFieldEncryptor(t)}
 
 	filters := domain.TransactionFilters{SortBy: "merchant", SortDir: "asc"}
-	txns, _, err := repo.GetByUserIDKeyset(ctx, f.userID, filters, nil, 50)
+	txns, _, _, err := repo.GetByUserIDKeyset(ctx, f.userID, filters, nil, 50)
 	require.NoError(t, err)
 
 	var ids []string
@@ -256,7 +256,7 @@ func TestTransactionMerchantSort_NullMerchantSortsByName(t *testing.T) {
 	repo := &transactionRepository{db: db, enc: newTestFieldEncryptor(t)}
 
 	filters := domain.TransactionFilters{SortBy: "merchant", SortDir: "asc"}
-	txns, _, err := repo.GetByUserIDKeyset(ctx, f.userID, filters, nil, 50)
+	txns, _, _, err := repo.GetByUserIDKeyset(ctx, f.userID, filters, nil, 50)
 	require.NoError(t, err)
 
 	var ids []string
@@ -278,7 +278,7 @@ func TestTransactionMerchantSort_MerchantNameNoIDSortsByMerchantName(t *testing.
 	repo := &transactionRepository{db: db, enc: newTestFieldEncryptor(t)}
 
 	filters := domain.TransactionFilters{SortBy: "merchant", SortDir: "asc"}
-	txns, _, err := repo.GetByUserIDKeyset(ctx, f.userID, filters, nil, 50)
+	txns, _, _, err := repo.GetByUserIDKeyset(ctx, f.userID, filters, nil, 50)
 	require.NoError(t, err)
 
 	var ids []string
@@ -311,7 +311,7 @@ func TestTransactionMerchantSort_PaginationBoundary(t *testing.T) {
 			filters := domain.TransactionFilters{SortBy: "merchant", SortDir: dir}
 
 			// Get full result in one shot
-			full, _, err := repo.GetByUserIDKeyset(ctx, f.userID, filters, nil, 100)
+			full, _, _, err := repo.GetByUserIDKeyset(ctx, f.userID, filters, nil, 100)
 			require.NoError(t, err)
 			require.NotEmpty(t, full, "should have transactions")
 
@@ -319,7 +319,7 @@ func TestTransactionMerchantSort_PaginationBoundary(t *testing.T) {
 			var pages [][]domain.Transaction
 			var cur *domain.TransactionCursor
 			for {
-				page, next, err2 := repo.GetByUserIDKeyset(ctx, f.userID, filters, cur, 2)
+				page, next, _, err2 := repo.GetByUserIDKeyset(ctx, f.userID, filters, cur, 2)
 				require.NoError(t, err2)
 				if len(page) == 0 {
 					break
@@ -373,7 +373,7 @@ func TestTransactionMerchantSort_SearchFindsByEffectiveName(t *testing.T) {
 		Search: &searchTerm,
 	}
 
-	txns, _, err := repo.GetByUserIDKeyset(ctx, f.userID, filters, nil, 50)
+	txns, _, _, err := repo.GetByUserIDKeyset(ctx, f.userID, filters, nil, 50)
 	require.NoError(t, err)
 
 	var ids []string
@@ -401,7 +401,7 @@ func TestTransactionMerchantSort_OffsetPathParity(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get via keyset path (single page, large limit)
-	keysetTxns, _, err := repo.GetByUserIDKeyset(ctx, f.userID, filters, nil, 100)
+	keysetTxns, _, _, err := repo.GetByUserIDKeyset(ctx, f.userID, filters, nil, 100)
 	require.NoError(t, err)
 
 	require.Equal(t, len(offsetTxns), len(keysetTxns),

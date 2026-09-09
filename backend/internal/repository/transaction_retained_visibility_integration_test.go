@@ -167,13 +167,13 @@ func TestUnifiedFeed_DisconnectedChain_TransactionsStayVisible(t *testing.T) {
 
 	repo := NewTransactionRepository(tx, nil)
 
-	before, _, err := repo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	before, _, _, err := repo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
 	require.NoError(t, err)
 	require.Len(t, before, 2, "sanity: both rows are visible while the chain is active")
 
 	disconnect(ctx, t, tx, f)
 
-	after, _, err := repo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	after, _, _, err := repo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"Coffee Before Disconnect", "Buy Before Disconnect"}, feedNames(after),
 		"a soft-removed chain's transactions are RETAINED; retained but invisible fails #1569 as "+
@@ -204,7 +204,7 @@ func TestUnifiedFeed_DisconnectedChain_KeepsTransactionsDatedBeforeAccountCreati
 	disconnect(ctx, t, tx, f)
 
 	repo := NewTransactionRepository(tx, nil)
-	items, _, err := repo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	items, _, _, err := repo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
 	require.NoError(t, err)
 	assert.ElementsMatch(t,
 		[]string{"Ancient Backfilled Purchase", "Ancient Backfilled Buy"}, feedNames(items),
@@ -236,12 +236,12 @@ func TestUnifiedFeed_DisconnectedChain_DoesNotLeakAcrossUsers(t *testing.T) {
 
 	repo := NewTransactionRepository(tx, nil)
 
-	got, _, err := repo.GetByUserIDKeysetUnified(ctx, mine.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	got, _, _, err := repo.GetByUserIDKeysetUnified(ctx, mine.UserID.String(), domain.TransactionFilters{}, nil, 50)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"My Banking Row", "My Investment Row"}, feedNames(got),
 		"the historical leg must not widen tenancy: the other user's retained rows stay out")
 
-	gotTheirs, _, err := repo.GetByUserIDKeysetUnified(ctx, theirs.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	gotTheirs, _, _, err := repo.GetByUserIDKeysetUnified(ctx, theirs.UserID.String(), domain.TransactionFilters{}, nil, 50)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"Their Banking Row", "Their Investment Row"}, feedNames(gotTheirs),
 		"and symmetrically in the other direction")
@@ -273,7 +273,7 @@ func TestUnifiedFeed_OrphanedTransactions_StayVisible(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := NewTransactionRepository(tx, nil)
-	items, _, err := repo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	items, _, _, err := repo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
 	require.NoError(t, err)
 	assert.ElementsMatch(t,
 		[]string{"Orphaned Banking Row"}, feedNames(items),
@@ -336,7 +336,7 @@ func TestUnifiedFeed_TransactionDatedAfterTheIntervalClosed_StaysHidden(t *testi
 	closeActiveIntervalAt(ctx, t, tx, f.AccountID, now.AddDate(0, 0, -100))
 
 	repo := NewTransactionRepository(tx, nil)
-	items, _, err := repo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	items, _, _, err := repo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"Inside The Interval", "Inside The Interval Buy"}, feedNames(items),
 		"only rows dated at or before the interval's close are the account's history; a row dated "+
@@ -383,7 +383,7 @@ func TestUnifiedFeed_FullyDisconnectedRelinkChain_ShowsPreRelinkTransactions(t *
 	seedBankingTxn(ctx, t, tx, post, now.AddDate(0, 0, -10), "Post-Relink")
 
 	repo := NewTransactionRepository(tx, nil)
-	live, _, err := repo.GetByUserIDKeysetUnified(ctx, old.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	live, _, _, err := repo.GetByUserIDKeysetUnified(ctx, old.UserID.String(), domain.TransactionFilters{}, nil, 50)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"Pre-Relink Chained", "Post-Relink"}, feedNames(live),
 		"sanity, and the #1109 contract: while the chain is live the unchained pre-relink row stays "+
@@ -396,7 +396,7 @@ func TestUnifiedFeed_FullyDisconnectedRelinkChain_ShowsPreRelinkTransactions(t *
 		newAccountID)
 	require.NoError(t, err)
 
-	dead, _, err := repo.GetByUserIDKeysetUnified(ctx, old.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	dead, _, _, err := repo.GetByUserIDKeysetUnified(ctx, old.UserID.String(), domain.TransactionFilters{}, nil, 50)
 	require.NoError(t, err)
 	assert.ElementsMatch(t,
 		[]string{"Pre-Relink Chained", "Pre-Relink Unchained", "Post-Relink"}, feedNames(dead),
@@ -433,7 +433,7 @@ func TestUnifiedFeed_LiveRelinkChain_KeepsUnchainedPreRelinkRowHidden(t *testing
 	require.NoError(t, err)
 
 	repo := NewTransactionRepository(tx, nil)
-	items, _, err := repo.GetByUserIDKeysetUnified(ctx, old.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	items, _, _, err := repo.GetByUserIDKeysetUnified(ctx, old.UserID.String(), domain.TransactionFilters{}, nil, 50)
 	require.NoError(t, err)
 	assert.Empty(t, feedNames(items),
 		"an active sibling still owns this chain, so #1109's rule holds and the historical leg must "+
@@ -465,7 +465,7 @@ func TestUnifiedFeed_ExpiredChain_TransactionsStayVisible(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := NewTransactionRepository(tx, nil)
-	items, _, err := repo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	items, _, _, err := repo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"Expired Chain Purchase", "Expired Chain Buy"}, feedNames(items),
 		"a fingerprint-expired chain is as disconnected as a removed one and its history is retained "+
@@ -512,7 +512,7 @@ func TestDisconnectedChain_InvestmentTransactions_VisibleOnBothSurfaces(t *testi
 
 	disconnect(ctx, t, tx, f)
 
-	feed, _, err := txnRepo.GetByUserIDKeysetUnified(ctx, f.UserID.String(),
+	feed, _, _, err := txnRepo.GetByUserIDKeysetUnified(ctx, f.UserID.String(),
 		domain.TransactionFilters{}, nil, 50)
 	require.NoError(t, err)
 	require.Equal(t, []string{"Buy Before Disconnect"}, feedNames(feed),
