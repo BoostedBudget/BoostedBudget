@@ -364,8 +364,21 @@ func TestSomething_RealPostgresNullMustNotError(t *testing.T) {
 // each new one is clean under the gate above. That is the whole value of the pin — the gate proves
 // no file makes an undisclosed claim, and this proves nobody quietly changed WHICH files the gate
 // is looking at.
+//
+// ⚠ This pins CARDINALITY only, not membership: it asserts how many files import pgxmock, not
+// WHICH ones. Swapping one pgxmock-importing file for a different one (delete file A, add file B)
+// leaves this count unchanged and green. If membership ever needs to be pinned too, parse the
+// import and assert an explicit sorted manifest of paths instead of a bare count.
 func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 	root := repoInternalRoot(t)
+	// This guard's own file matches pgxmockImportRe against its OWN source text (the regex's
+	// literal pattern spells out the import path it looks for), even though this file does not
+	// itself import pgxmock. Exclude it by path, the same way TestNoUndisclosedPgxmockNullToleranceClaim
+	// above does, so the count below is actually the number of files that import pgxmock rather
+	// than one inflated by the guard counting its own source.
+	selfPath, err := filepath.Abs("pgxmock_null_tolerance_claim_guard_test.go")
+	require.NoError(t, err)
+
 	count := 0
 	walkErr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -379,6 +392,13 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 			return nil
 		}
 		if !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		abs, absErr := filepath.Abs(path)
+		if absErr != nil {
+			return absErr
+		}
+		if abs == selfPath {
 			return nil
 		}
 		src, readErr := os.ReadFile(path)
@@ -408,4 +428,4 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 // backend/internal. Re-derived for the final whole-branch review with the same walk the test
 // performs (skipping testdata/vendor/node_modules directories and any file carrying
 // `//go:build integration`).
-const pgxmockSweepFileCount = 68
+const pgxmockSweepFileCount = 67

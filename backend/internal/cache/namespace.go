@@ -149,30 +149,26 @@ var namespaceRegistry = map[Namespace]namespaceConfig{
 	// ERRORED, so it wrote no cache entry at all — there is no pre-fix envelope for it to invalidate
 	// — and a request that did not hit one returns byte-identical results. A bump for it would have
 	// been cargo-culted, not reasoned.
-	// SchemaVersion 8 (#1626 final whole-branch review, finding F1): GetAggregatedHistoryForHousehold
-	// — the household balance read, reached through GetNetWorthTrend with a scope — again returns
-	// different money for identical arguments, and this time a WRONG NUMBER becomes a right one.
-	// Version 7's carry-forward left the household `observed` projection reading `a.type` alone,
-	// while the personal statement recovers an orphan's type from its own chain row
-	// (COALESCE(a.type, user_accounts.identity_type)). An orphaned snapshot (accounts row
-	// hard-deleted, account_id SET NULL by migration 000150) therefore emitted the empty type, the
-	// Go loop routed it to UntypedBalance, and GetNetWorthHistory adds a POSITIVE UntypedBalance to
-	// totalAssets — while Plaid reports a credit card's current_balance as a POSITIVE DEBT. So a
-	// household's orphaned credit card ADDED its balance to assets instead of subtracting it,
-	// overstating household net worth by TWICE the debt. A pre-fix entry decodes cleanly into the
-	// unchanged response struct, which is exactly what makes the bump necessary rather than
-	// optional, and a deploy never touches the per-scope generation token — so without it a pre-fix
-	// entry would stay a valid hit and keep serving the overstated net worth. The 120s TTL makes
-	// that window short, not absent. Same reasoning as versions 2 through 7.
+	// SchemaVersion 8 (#1626 final whole-branch review, finding F2): GetCashFlowSummary and
+	// GetCashFlowHistory — both cached in this namespace — again return different bytes for
+	// identical arguments. GetCashFlowSummary echoes the requested end date again (version 6
+	// clamped it, which made the endpoint label a window its own aggregate did not measure), and
+	// GetCashFlowHistory's response gained requested_end_date. A pre-fix entry decodes cleanly into
+	// the unchanged response struct, which is exactly what makes the bump necessary rather than
+	// optional, and a deploy never touches the per-scope generation token — so without it a
+	// pre-fix entry would stay a valid hit and keep serving the stale echoed date. The 120s TTL
+	// makes that window short, not absent. Same reasoning as versions 2 through 7.
 	//
-	// Version 8 also covers the SAME finding's sibling F5 — the personal read's account-type filter
-	// now tests the recovered type, so a request with accountTypes=['credit'] returns an orphaned
-	// credit card it used to omit — and finding F2, which changes both cash-flow reads cached here:
-	// GetCashFlowSummary echoes the requested end date again (version 6 clamped it, which made the
-	// endpoint label a window its own aggregate did not measure), and GetCashFlowHistory's response
-	// gained requested_end_date. All three change what a cached read returns for identical
-	// arguments and all three ship in the same undeployed branch, so one bump orphans every
-	// pre-fix envelope — exactly as version 6 covered two findings at once.
+	// ⚠ The same review's findings F1 and F5 do NOT justify this bump, despite an earlier version
+	// of this comment claiming they did — the eleventh false comment retracted on this branch. F1
+	// fixes DashboardService.GetNetWorthHistory (the household-orphan UntypedBalance sign bug), and
+	// F5 changes GetAggregatedHistory / GetAggregatedHistoryForHousehold's ByType/UntypedBalance
+	// output and account-type filtering. But the only method from that call chain actually cached
+	// in this namespace is GetNetWorthTrend (cachedAnalyticsService.GetNetWorthTrend), which passes
+	// a nil account-type filter and builds its cached response from each BalanceHistoryPoint's
+	// TotalBalance alone — never ByType or UntypedBalance. So neither F1 nor F5 changes the bytes
+	// GetNetWorthTrend returns for identical arguments, and the bump does not need them: F2 alone
+	// is sufficient and is the only reason recorded here.
 	NamespaceAnalytics: {
 		TTL: 120 * time.Second, SchemaVersion: 8, ScopeKind: ScopeUser, DefaultEnabled: true,
 	},
