@@ -159,7 +159,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory(t *testing.T) {
 		AddRow(time.Date(2024, 11, 2, 0, 0, 0, 0, time.UTC), "depository", 5150.00).
 		AddRow(time.Date(2024, 11, 3, 0, 0, 0, 0, time.UTC), "depository", 5300.00)
 
-	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(aggregatedHistorySQLBase, "AND a.type = ANY($4)"))).
+	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(aggregatedHistorySQLBase, aggregatedHistoryTypePredicate))).
 		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).WillReturnRows(rows)
 
 	history, err := repo.GetAggregatedHistory(ctx, userID, startDate, endDate, accountTypes)
@@ -568,7 +568,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistory_AccountTypesFilter_Popul
 		AddRow(day1, "depository", 5000.00).
 		AddRow(day1, "investment", 8000.00)
 
-	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(aggregatedHistorySQLBase, "AND a.type = ANY($4)"))).WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(aggregatedHistorySQLBase, aggregatedHistoryTypePredicate))).WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).WillReturnRows(rows)
 
 	history, err := repo.GetAggregatedHistory(ctx, userID, startDate, endDate, accountTypes)
 
@@ -687,6 +687,16 @@ func TestAggregatedHistorySQLBase_PinsItsLoadBearingFragments(t *testing.T) {
 	assert.NotContains(t, sql, "a.user_account_id = bs.user_account_id",
 		"the chain-wide join must not come back")
 
+	// 2b. An ORPHAN's type is recovered from its own chain row, and the SAME expression is what the
+	//     account-type predicate tests. Dropping the COALESCE puts an orphaned credit card in the
+	//     untyped bucket, which GetNetWorthHistory routes to ASSETS by its positive sign — a debt
+	//     that improves net worth. Dropping it from the predicate alone makes the same account
+	//     present for an unfiltered request and absent for accountTypes=['credit'] (finding F5).
+	assert.Contains(t, sql, "COALESCE(a.type, ua.identity_type) AS account_type",
+		"an orphan's type must be recovered from user_accounts.identity_type")
+	assert.Contains(t, sql, "LEFT JOIN user_accounts ua ON ua.id = bs.user_account_id",
+		"and recovered through the snapshot's OWN chain pointer, which cannot multiply the row")
+
 	// 3. Succession is applied, and by the shared rule rather than a second copy of it.
 	assert.Contains(t, sql, accountChainSupersessionCTESQL("TRUE"),
 		"there is ONE succession rule in the backend; a second copy is how the balance side and "+
@@ -696,6 +706,12 @@ func TestAggregatedHistorySQLBase_PinsItsLoadBearingFragments(t *testing.T) {
 
 	// 4. The optional predicate is the ONLY hole, so the type filter cannot be rendered anywhere else.
 	assert.Equal(t, 1, strings.Count(sql, "%s"), "exactly one format hole")
+
+	// 4b. And what is rendered into that hole tests the RECOVERED type, not the raw column. The
+	//     predicate is a named constant precisely so this can be pinned: it lives outside the
+	//     template, so fragment 2b above cannot see it.
+	assert.Equal(t, "AND COALESCE(a.type, ua.identity_type) = ANY($4)", aggregatedHistoryTypePredicate,
+		"the type filter must test the same expression the projection emits (finding F5)")
 
 	// 5. The missing-history leg of the removal bound demands a LIVE accounts row (#1626 X1).
 	//    Without the status term the leg is satisfied forever by migration 000152's terminal-only
@@ -731,6 +747,17 @@ func TestAggregatedHistoryHouseholdSQLBase_PinsItsLoadBearingFragments(t *testin
 		"the LOCF partition must be a rendered, NULL-safe key at the (user_account, account) grain")
 	assert.Contains(t, sql, "PARTITION BY g.carry_key ORDER BY g.snapshot_date",
 		"and the running max must partition on that same key")
+
+	// 2b. An ORPHAN's type is recovered from its own chain row, in the SAME words the personal
+	//     statement uses — and the outer type predicate (`AND k.account_type = ANY($6)`) reads this
+	//     projection, so pinning it here covers the filter too. Without it an orphaned credit card
+	//     reached UntypedBalance, which GetNetWorthHistory routes to ASSETS by its positive sign,
+	//     overstating household net worth by twice the debt (finding F1). This half of Phase 3
+	//     item 5 shipped in personal scope only, and the household test defended its absence.
+	assert.Contains(t, sql, "COALESCE(a.type, ua.identity_type) AS account_type",
+		"an orphan's type must be recovered from user_accounts.identity_type in household scope too")
+	assert.Contains(t, sql, "LEFT JOIN user_accounts ua ON ua.id = bs.user_account_id",
+		"and recovered through the snapshot's OWN chain pointer, which cannot multiply the row")
 
 	// 3. THE PARTIAL-GRANT-DAY DECISION: day INTERSECTION, not full coverage. Both halves are pinned
 	//    because each is wrong in its own direction — a stricter opening bound drops the revocation

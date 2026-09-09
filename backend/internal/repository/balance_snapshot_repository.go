@@ -513,6 +513,23 @@ var aggregatedHistorySQLBase = `
 		ORDER BY p.snapshot_date ASC, account_type ASC
 	`
 
+// aggregatedHistoryTypePredicate is what GetAggregatedHistory renders into
+// aggregatedHistorySQLBase's single hole when the caller filters by account type.
+//
+// ⚠ IT TESTS THE RECOVERED TYPE, NOT THE RAW COLUMN, and that is the correction of a live
+// inconsistency (final whole-branch review, finding F5). Written as `AND a.type = ANY($4)` it
+// disagreed with the projection in the same CTE, which is the COALESCE: an ORPHANED snapshot
+// (accounts row gone, account_id SET NULL) has a NULL a.type, so the very same credit card
+// appeared in ByType["credit"] for an unfiltered request and VANISHED for
+// accountTypes=['credit']. One account, two answers, decided by a filter whose job is to SELECT
+// rows rather than to redefine what they are.
+//
+// It is a named constant rather than an inline literal so the structural pin test can assert it:
+// it lives OUTSIDE the template, so TestAggregatedHistorySQLBase_PinsItsLoadBearingFragments's
+// scan of the template cannot see it. The household statement needs no equivalent — its filter is
+// applied outer, to `k.account_type`, which IS the projection.
+const aggregatedHistoryTypePredicate = "AND COALESCE(a.type, ua.identity_type) = ANY($4)"
+
 // GetAggregatedHistory retrieves aggregated balance history for dashboard charts.
 // The query LEFT JOINs accounts unconditionally so that per-type breakdowns are always
 // available for net-worth computation. Orphaned snapshots (deleted account rows) are
@@ -522,7 +539,7 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
 
 	// Base query with parameterized account-type filter in CTE.
-	// If accountTypes is provided, add AND a.type = ANY($4) to the WHERE clause.
+	// If accountTypes is provided, aggregatedHistoryTypePredicate is rendered into the hole.
 	// #1569 task 19: this used to resolve the winning row per (day, chain) with
 	// MAX(snapshot_at) AND MAX(id::text) computed INDEPENDENTLY, then join back on both. When a day
 	// held two snapshots for one re-link chain — exactly what an institution-change overlap day
@@ -545,7 +562,7 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 	var args []interface{}
 
 	if len(accountTypes) > 0 {
-		query = fmt.Sprintf(queryBase, "AND a.type = ANY($4)")
+		query = fmt.Sprintf(queryBase, aggregatedHistoryTypePredicate)
 		args = []interface{}{userID, startDate, endDate, accountTypes}
 	} else {
 		query = fmt.Sprintf(queryBase, "")
@@ -821,7 +838,25 @@ var aggregatedHistoryHouseholdSQLBase = `
 		        bs.snapshot_at,
 		        bs.id AS snapshot_id,
 		        bs.current_balance,
-		        a.type AS account_type
+		        -- ⚠ THE COALESCE IS THE HOUSEHOLD HALF OF #1626 PHASE 3 ITEM 5, and its absence was
+		        -- a LIVE WRONG NUMBER (final whole-branch review, finding F1). An ORPHANED snapshot
+		        -- (accounts row hard-deleted, account_id SET NULL by migration 000150) still knows
+		        -- its LOGICAL account, and user_accounts.identity_type is that account's recorded
+		        -- type — frozen once set, enforced by trg_user_accounts_identity_immutable.
+		        --
+		        -- The personal statement recovered it; this one read 'a.type' alone, so an orphan
+		        -- emitted '' from the outer COALESCE, the Go loop routed it to UntypedBalance, and
+		        -- GetNetWorthHistory adds a POSITIVE UntypedBalance to totalAssets. Plaid reports a
+		        -- credit card's current_balance as a POSITIVE DEBT — so a household's orphaned
+		        -- credit card ADDED its balance to assets instead of subtracting it, overstating
+		        -- household net worth by TWICE the debt. Falling back to an untyped bucket is not a
+		        -- safe default here: domain.AccountTypeCategory defaults to "assets", which is
+		        -- exactly the sign guess this recovery exists to avoid.
+		        --
+		        -- The outer type predicate (AND k.account_type = ANY($6)) reads this projection,
+		        -- so the filter and the breakdown agree by construction — the disagreement finding
+		        -- F5 records in personal scope cannot arise here.
+		        COALESCE(a.type, ua.identity_type) AS account_type
 		    FROM balance_snapshots bs
 		    JOIN household_accounts ha ON ha.user_account_id = bs.user_account_id
 		    -- ⚠ THIS JOIN IS ON THE SNAPSHOT'S OWN ACCOUNT (a.id = bs.account_id), which #1569 T10.2
@@ -838,8 +873,19 @@ var aggregatedHistoryHouseholdSQLBase = `
 		    -- TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory (an
 		    -- expired account still has a row, so a.type is not NULL and the type filter still
 		    -- matches). LEFT, because bs.account_id is nullable (ON DELETE SET NULL) and an orphaned
-		    -- snapshot must still reach the total, in the '' type bucket, exactly as in personal scope.
+		    -- snapshot must still reach the total, exactly as in personal scope — where, failing the
+		    -- chain-row recovery below, it lands in the '' type bucket.
 		    LEFT JOIN accounts a ON a.id = bs.account_id
+		    -- The chain-row recovery, in the SAME words the personal statement uses: LEFT, and on
+		    -- the snapshot's OWN chain pointer. It exists only to supply a type the accounts row can
+		    -- no longer give, and user_accounts(id) is the PRIMARY KEY (migration 000033), so it
+		    -- cannot multiply the row. It is a SECOND join to user_accounts — household_accounts
+		    -- already joined that table to build its grants — because the grants CTE is keyed on the
+		    -- GRANT, emitting one row per interval, whereas this needs the one row the snapshot
+		    -- itself points at. Reading identity_type through ha would also work and was rejected
+		    -- for keeping the two statements' recovery textually identical, so one structural
+		    -- fragment pins both.
+		    LEFT JOIN user_accounts ua ON ua.id = bs.user_account_id
 		    -- The caller's window's UPPER end only, at date resolution because that is what it is: the
 		    -- last calendar day the chart covers.
 		    WHERE (bs.snapshot_at AT TIME ZONE 'UTC')::date <= $5::date
