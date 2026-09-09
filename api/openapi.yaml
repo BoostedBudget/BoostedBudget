@@ -1897,6 +1897,71 @@ components:
         - percentage
         - transaction_count
       type: object
+    CategoryHierarchyNode:
+      additionalProperties: false
+      properties:
+        category:
+          type: string
+        children:
+          items:
+            $ref: "#/components/schemas/CategoryHierarchyNode"
+          type:
+            - array
+            - "null"
+        direct_total:
+          format: double
+          type: number
+        display:
+          type: string
+        percentage:
+          format: double
+          type: number
+        total:
+          format: double
+          type: number
+        transaction_count:
+          format: int64
+          type: integer
+      required:
+        - category
+        - display
+        - total
+        - direct_total
+        - transaction_count
+        - percentage
+      type: object
+    CategoryHierarchyResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CategoryHierarchyResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        direction:
+          type: string
+        end_date:
+          type: string
+        levels:
+          items:
+            $ref: "#/components/schemas/CategoryHierarchyNode"
+          type:
+            - array
+            - "null"
+        start_date:
+          type: string
+        total:
+          format: double
+          type: number
+      required:
+        - levels
+        - total
+        - direction
+        - start_date
+        - end_date
+      type: object
     CategoryPreviewRequest:
       additionalProperties: false
       properties:
@@ -9724,6 +9789,95 @@ paths:
       security:
         - clerk: []
       summary: Get cash flow summary
+      tags:
+        - Analytics
+  /api/v1/analytics/category-hierarchy:
+    get:
+      description: "Returns the category tree for one flow direction (income or expense), up to three levels deep: PFC primary, then its detailed categories or custom categories nested under it, then custom categories nested under those. Each node carries a roll-up total, its own direct total, and a transaction count. Levels are ragged — a branch ends where its data ends."
+      operationId: getCategoryHierarchy
+      parameters:
+        - description: Start of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD)
+            type: string
+        - description: End of date range (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD)
+            type: string
+        - description: "Which side of the ledger to aggregate. Income defaults to a deeper view than expense: income's useful distinction (wages, dividends, rental) lives one level down, while expenses read best at the primary level."
+          explode: false
+          in: query
+          name: direction
+          schema:
+            default: expense
+            description: "Which side of the ledger to aggregate. Income defaults to a deeper view than expense: income's useful distinction (wages, dividends, rental) lives one level down, while expenses read best at the primary level."
+            enum:
+              - income
+              - expense
+            type: string
+        - description: Comma-separated account types to filter
+          explode: false
+          in: query
+          name: account_types
+          schema:
+            description: Comma-separated account types to filter
+            type: string
+        - description: Include transfer transactions (true/false, default false)
+          explode: false
+          in: query
+          name: include_transfers
+          schema:
+            description: Include transfer transactions (true/false, default false)
+            type: string
+        - description: "Comma-separated custom category UUIDs to scope the report. NOTE: supplying any value narrows the WHOLE tree to custom-categorised transactions, so no PFC branches are returned — that is what scoping a report to specific custom categories means, and it matches the reports page's existing custom-category filter."
+          explode: false
+          in: query
+          name: custom_category_ids
+          schema:
+            description: "Comma-separated custom category UUIDs to scope the report. NOTE: supplying any value narrows the WHOLE tree to custom-categorised transactions, so no PFC branches are returned — that is what scoping a report to specific custom categories means, and it matches the reports page's existing custom-category filter."
+            type: string
+        - description: When true, a parent custom category also includes its children (default true)
+          explode: false
+          in: query
+          name: roll_up
+          schema:
+            description: When true, a parent custom category also includes its children (default true)
+            type: string
+        - description: "Aggregation scope: personal (default) or household (requires active household membership). Custom category scoping always resolves to the requester's own categories, never a household member's."
+          explode: false
+          in: query
+          name: scope
+          schema:
+            default: personal
+            description: "Aggregation scope: personal (default) or household (requires active household membership). Custom category scoping always resolves to the requester's own categories, never a household member's."
+            enum:
+              - personal
+              - household
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoryHierarchyResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get the category hierarchy
       tags:
         - Analytics
   /api/v1/analytics/category-total:

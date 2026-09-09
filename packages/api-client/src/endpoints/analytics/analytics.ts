@@ -52,6 +52,7 @@ import type {
   CashFlowHistoryResponse,
   CashFlowSummaryResponse,
   CategoryBreakdownForMerchantResponse,
+  CategoryHierarchyResponse,
   CategoryTotalResponse,
   ErrorModel,
   FinancialSummaryResponse,
@@ -61,6 +62,7 @@ import type {
   GetCashFlowHistoryParams,
   GetCashFlowSummaryParams,
   GetCategoryBreakdownForMerchantParams,
+  GetCategoryHierarchyParams,
   GetCategoryTotalForPeriodParams,
   GetFinancialSummaryParams,
   GetIncomeSourceBreakdownParams,
@@ -479,6 +481,100 @@ export function useGetCashFlowSummary<TData = Awaited<ReturnType<typeof getCashF
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getGetCashFlowSummaryQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Returns the category tree for one flow direction (income or expense), up to three levels deep: PFC primary, then its detailed categories or custom categories nested under it, then custom categories nested under those. Each node carries a roll-up total, its own direct total, and a transaction count. Levels are ragged — a branch ends where its data ends.
+ * @summary Get the category hierarchy
+ */
+export const getCategoryHierarchy = (
+    params: GetCategoryHierarchyParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<CategoryHierarchyResponse>(
+      {url: `/api/v1/analytics/category-hierarchy`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetCategoryHierarchyQueryKey = (params?: GetCategoryHierarchyParams,) => {
+    return [
+    `/api/v1/analytics/category-hierarchy`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetCategoryHierarchyQueryOptions = <TData = Awaited<ReturnType<typeof getCategoryHierarchy>>, TError = ErrorType<ErrorModel>>(params: GetCategoryHierarchyParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCategoryHierarchy>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetCategoryHierarchyQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCategoryHierarchy>>> = ({ signal }) => getCategoryHierarchy(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getCategoryHierarchy>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetCategoryHierarchyQueryResult = NonNullable<Awaited<ReturnType<typeof getCategoryHierarchy>>>
+export type GetCategoryHierarchyQueryError = ErrorType<ErrorModel>
+
+
+export function useGetCategoryHierarchy<TData = Awaited<ReturnType<typeof getCategoryHierarchy>>, TError = ErrorType<ErrorModel>>(
+ params: GetCategoryHierarchyParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCategoryHierarchy>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCategoryHierarchy>>,
+          TError,
+          Awaited<ReturnType<typeof getCategoryHierarchy>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetCategoryHierarchy<TData = Awaited<ReturnType<typeof getCategoryHierarchy>>, TError = ErrorType<ErrorModel>>(
+ params: GetCategoryHierarchyParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCategoryHierarchy>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCategoryHierarchy>>,
+          TError,
+          Awaited<ReturnType<typeof getCategoryHierarchy>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetCategoryHierarchy<TData = Awaited<ReturnType<typeof getCategoryHierarchy>>, TError = ErrorType<ErrorModel>>(
+ params: GetCategoryHierarchyParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCategoryHierarchy>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get the category hierarchy
+ */
+
+export function useGetCategoryHierarchy<TData = Awaited<ReturnType<typeof getCategoryHierarchy>>, TError = ErrorType<ErrorModel>>(
+ params: GetCategoryHierarchyParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCategoryHierarchy>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetCategoryHierarchyQueryOptions(params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
