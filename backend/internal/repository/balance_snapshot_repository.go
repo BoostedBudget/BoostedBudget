@@ -104,6 +104,56 @@ type BalanceSnapshotRepository interface {
 	//
 	// start/end are inclusive UTC calendar-day bounds; either may be nil for "unbounded".
 	GetAccountBalanceHistory(ctx context.Context, userID, accountID string, start, end *time.Time) ([]domain.AccountBalanceHistoryPoint, error)
+
+	// CreateDailyCapture inserts a snapshot written by the periodic gap-filler (#1626 Phase 3,
+	// Defect 3) and reports whether it actually inserted.
+	//
+	// It is a SEPARATE method from Create rather than a flag on it, for two reasons:
+	//
+	//  1. Conflict handling. This is the ONE provenance for which per-(account, UTC day)
+	//     uniqueness is safe — the gap-filler is once-daily by construction and every read
+	//     collapses to latest-per-account-per-day, so a second same-day row from it could not
+	//     surface anywhere. Migration 000191's partial unique index says exactly that, and this
+	//     statement's ON CONFLICT names that index's key AND its predicate, so it can never
+	//     silently swallow any other conflict (a duplicate primary key included). Create keeps its
+	//     plain INSERT, so webhook history keeps the several-rows-per-day freedom migration 000017
+	//     deliberately restored.
+	//  2. Cache classification. Create's cache disposition rests on "the sync is its sole caller".
+	//     A new writer must not quietly falsify that premise inside an existing entry; it gets its
+	//     own entry, with its own argument. See cache_completeness_repo_test.go.
+	//
+	// The boolean is not decoration. The job needs to distinguish "I filled the gap" from
+	// "somebody already had", and a conflict here is a NORMAL outcome (two capture jobs racing),
+	// not an error — which is why it is reported rather than returned. Every OTHER failure is
+	// returned, because the capture path must fail loudly: the writer this replaces logged and
+	// swallowed individual insert failures while reporting success, which is exactly how a partial
+	// cohort came to commit with River recording success.
+	//
+	// ⚠ SQLSTATE 42P10 here means migration 000191's index is missing, not that the caller did
+	// anything wrong. That is deliberate: a missing idempotency key should be loud.
+	CreateDailyCapture(ctx context.Context, snapshot *domain.BalanceSnapshot) (bool, error)
+
+	// AccountsMissingDailySnapshot returns the IDs of linkedItemID's ACTIVE accounts that have no
+	// balance snapshot at all on the given UTC calendar day. An empty result means the item's full
+	// cohort is covered for that day.
+	//
+	// This is the question the periodic job's "skip this item, make no Plaid call" decision rests
+	// on, and three of its details are load-bearing:
+	//
+	//   - FULL COHORT, not "any row today". A webhook that snapshotted 3 of an item's 5 accounts
+	//     leaves the incomplete-cohort defect in place for that day (a day's aggregate used to be
+	//     the sum of only the accounts that received a row), so a partial day must NOT count as
+	//     done.
+	//   - ANY source counts. The point is to make no provider call when a webhook has already
+	//     covered the day; requiring a daily_capture row would call Plaid for every item every day.
+	//   - ACTIVE accounts only. A removed account must accrue no snapshots — counting it would make
+	//     its item report an incomplete cohort every day forever, so the item would be processed
+	//     daily and the "zero calls for actively-syncing users" property would never hold.
+	//
+	// The day is a UTC CALENDAR day, compared with the same `(snapshot_at AT TIME ZONE 'UTC')::date`
+	// expression every aggregated read groups by and migration 000191's index is built on. Any
+	// instant within the intended day may be passed.
+	AccountsMissingDailySnapshot(ctx context.Context, linkedItemID string, day time.Time) ([]string, error)
 }
 
 // balanceSnapshotRepository implements BalanceSnapshotRepository using PostgreSQL
@@ -148,6 +198,111 @@ func (r *balanceSnapshotRepository) Create(ctx context.Context, snapshot *domain
 	)
 
 	return err
+}
+
+// createDailyCaptureSQL is CreateDailyCapture's statement.
+//
+// The ON CONFLICT target spells out BOTH halves of migration 000191's index — the (account_id, UTC
+// day) key and the `WHERE source = 'daily_capture'` predicate — because Postgres infers an arbiter
+// index by matching them. Two consequences, both wanted:
+//
+//   - it can only ever swallow a conflict on THAT index, so a duplicate primary key or any future
+//     constraint still errors out loudly. A bare `ON CONFLICT DO NOTHING` would swallow all of
+//     them, and this is a write path whose entire remit is to stop failing silently;
+//   - if the index is missing, this fails with SQLSTATE 42P10 rather than degrading to a
+//     duplicate-producing insert.
+//
+// The predicate must stay spelled the way the index spells it. A rewrite of either (say to
+// `source <> 'plaid_webhook'`) stops Postgres proving the implication and the statement starts
+// erroring, which is at least loud — but it is one edit away from wrong.
+const createDailyCaptureSQL = `
+		INSERT INTO balance_snapshots
+		(id, account_id, user_account_id, user_id, current_balance, available_balance, currency_code, snapshot_at, source, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (account_id, ((snapshot_at AT TIME ZONE 'UTC')::date))
+		    WHERE source = 'daily_capture'
+		DO NOTHING
+	`
+
+// CreateDailyCapture — see the interface for the contract and for why it is not Create with a flag.
+func (r *balanceSnapshotRepository) CreateDailyCapture(ctx context.Context, snapshot *domain.BalanceSnapshot) (bool, error) {
+	if snapshot == nil {
+		return false, errors.New("balance snapshot is nil")
+	}
+	// A caller that reached here with any other provenance would be inserting a row the ON CONFLICT
+	// clause's arbiter cannot cover, so the uniqueness this method advertises would silently not
+	// apply. Refuse rather than write an unconstrained row through the constrained door.
+	if snapshot.Source != domain.SnapshotSourceDailyCapture {
+		return false, fmt.Errorf("CreateDailyCapture requires source %q, got %q",
+			domain.SnapshotSourceDailyCapture, snapshot.Source)
+	}
+	if snapshot.ID == "" {
+		snapshot.ID = uuid.New().String()
+	}
+	snapshot.CreatedAt = time.Now()
+
+	tag, err := r.db.Exec(ctx, createDailyCaptureSQL,
+		snapshot.ID,
+		snapshot.AccountID,
+		snapshot.UserAccountID,
+		snapshot.UserID,
+		snapshot.CurrentBalance,
+		snapshot.AvailableBalance,
+		snapshot.CurrencyCode,
+		snapshot.SnapshotAt,
+		snapshot.Source,
+		snapshot.CreatedAt,
+	)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// accountsMissingDailySnapshotSQL is AccountsMissingDailySnapshot's statement.
+//
+// NOT EXISTS rather than a LEFT JOIN ... IS NULL: the question is existence, so a semi-join cannot
+// multiply an account by the several snapshots it may already have for the day (webhook history
+// permits many, by design — migration 000017).
+//
+// The date comparison is on the account's snapshots, not on a range of instants, and it uses the
+// same `(snapshot_at AT TIME ZONE 'UTC')::date` expression as migration 000017's
+// idx_balance_snapshots_date_trunc and 000191's uniqueness key — one notion of "the day a snapshot
+// belongs to" across the schema. Comparing instants here would reintroduce the bug #1626 Phase 3
+// step 1f fixed on the read side, where a snapshot written today at any hour fell outside a range
+// ending "today".
+const accountsMissingDailySnapshotSQL = `
+		SELECT a.id
+		FROM accounts a
+		WHERE a.linked_item_id = $1
+		  AND a.status = 'active'
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM balance_snapshots bs
+		      WHERE bs.account_id = a.id
+		        AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = ($2::timestamptz AT TIME ZONE 'UTC')::date
+		  )
+		ORDER BY a.id
+	`
+
+// AccountsMissingDailySnapshot — see the interface for the contract and for which three details of
+// it are load-bearing.
+func (r *balanceSnapshotRepository) AccountsMissingDailySnapshot(ctx context.Context, linkedItemID string, day time.Time) ([]string, error) {
+	rows, err := r.db.Query(ctx, accountsMissingDailySnapshotSQL, linkedItemID, day.UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	missing := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		missing = append(missing, id)
+	}
+	return missing, rows.Err()
 }
 
 // aggregatedHistorySQLBase is GetAggregatedHistory's statement with ONE %s hole for the optional

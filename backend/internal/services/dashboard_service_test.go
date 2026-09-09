@@ -71,6 +71,22 @@ func (m *MockBalanceSnapshotRepository) GetAccountBalanceHistory(context.Context
 	panic("the dashboard must not read per-account retained balance history")
 }
 
+// #1626 Phase 3, Defect 3: the periodic gap-filler's two methods. Real testify stubs rather than
+// panics — unlike the historical read above, these ARE exercised from this package's tests
+// (balance_capture_service_test.go), and a panic would make that whole suite unwritable.
+func (m *MockBalanceSnapshotRepository) CreateDailyCapture(ctx context.Context, snapshot *domain.BalanceSnapshot) (bool, error) {
+	args := m.Called(ctx, snapshot)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockBalanceSnapshotRepository) AccountsMissingDailySnapshot(ctx context.Context, linkedItemID string, day time.Time) ([]string, error) {
+	args := m.Called(ctx, linkedItemID, day)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
+}
+
 func (m *MockBalanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
 	args := m.Called(ctx, requestingUserID, scope, asOf)
 	if args.Get(0) == nil {

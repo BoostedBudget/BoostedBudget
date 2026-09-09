@@ -110,3 +110,45 @@ func TestBalanceSnapshot_TimestampPrecision(t *testing.T) {
 	}
 }
 
+
+// TestValidate_AcceptsTheDailyCaptureSource is #1626 Phase 3 Task G's T12.
+//
+// Validate() hard-rejects any source outside its constant set. Nothing calls it on the
+// production write path today, which makes it a landmine rather than a blocker: the periodic
+// gap-filler writes a FOURTH provenance, and the day anything starts validating a snapshot the
+// new rows would be the only ones rejected. The constant and the validator are extended
+// together for that reason.
+func TestValidate_AcceptsTheDailyCaptureSource(t *testing.T) {
+	balance := 123.45
+	snapshot := &BalanceSnapshot{
+		UserID:         "user-1",
+		AccountID:      "acct-1",
+		CurrencyCode:   "USD",
+		SnapshotAt:     time.Now().UTC(),
+		Source:         SnapshotSourceDailyCapture,
+		CurrentBalance: &balance,
+	}
+
+	if err := snapshot.Validate(); err != nil {
+		t.Fatalf("Validate() rejected the periodic gap-filler's own provenance: %v", err)
+	}
+}
+
+// TestValidate_StillRejectsAnUnknownSource is the other half: extending the set must not
+// degrade it into "accept anything". Without this, deleting the validSources map entirely
+// would leave the test above green.
+func TestValidate_StillRejectsAnUnknownSource(t *testing.T) {
+	balance := 1.0
+	snapshot := &BalanceSnapshot{
+		UserID:         "user-1",
+		AccountID:      "acct-1",
+		CurrencyCode:   "USD",
+		SnapshotAt:     time.Now().UTC(),
+		Source:         "periodic_local",
+		CurrentBalance: &balance,
+	}
+
+	if err := snapshot.Validate(); err == nil {
+		t.Fatal("Validate() accepted an unknown source — the constant set is the whole point")
+	}
+}

@@ -1689,86 +1689,60 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		}
 	}
 
-	// Build map: plaid_account_id -> internal account
-	accountMap := make(map[string]domain.Account)
-	for _, account := range internalAccounts {
-		accountMap[account.PlaidAccountID] = account
-	}
-
-	// Step 3: Create balance snapshots for each account
+	// Step 3: Create balance snapshots for each account.
+	//
+	// #1626 Phase 3 Task G: the per-account loop that used to live here is now writeBalanceCohort
+	// (balance_capture_service.go), shared with the periodic gap-filler. This call site keeps the
+	// roster read and the two reconciliation passes above; the gap-filler calls the same writer with
+	// no reconciliation at all.
+	//
+	// The dedup window, the NULL-balance rule, the unmatched-account rule and the removed-account
+	// rule are all unchanged — they moved, they were not rewritten. What DID change is where the
+	// error policy lives, and that is the point of the extraction: the writer now RETURNS its
+	// per-account failures instead of swallowing them, and this caller applies the sync's policy
+	// explicitly (below) while the capture path applies its own.
 	now := time.Now().UTC()
-	deduplicationWindow := 5 * time.Minute
-	successCount, skippedCount, dedupedCount := 0, 0, 0
+	result, writeErr := writeBalanceCohort(ctx, balanceCohortInput{
+		logger:         s.logger,
+		linkedItem:     linkedItem,
+		plaidAccounts:  plaidAccounts,
+		activeAccounts: internalAccounts,
+		source:         domain.SnapshotSourcePlaidWebhook,
+		capturedAt:     now,
+		dedupWindow:    balanceSnapshotDeduplicationWindow,
+		latest:         s.balanceSnapshotRepo.GetLatestByAccountID,
+		// Create, not CreateDailyCapture: webhook history deliberately permits several rows per
+		// account per day (migration 000017 dropped that uniqueness on purpose), so there is no
+		// arbiter to conflict against and none is wanted. The bool is always true on success.
+		insert: func(ctx context.Context, snapshot *domain.BalanceSnapshot) (bool, error) {
+			if err := s.balanceSnapshotRepo.Create(ctx, snapshot); err != nil {
+				return false, err
+			}
+			return true, nil
+		},
+	})
 
-	for _, plaidAccount := range plaidAccounts {
-		plaidAccountID := plaidAccount.GetAccountId()
-
-		// Find matching internal account
-		internalAccount, exists := accountMap[plaidAccountID]
-		if !exists {
-			s.logger.Warn("Plaid account not found in internal accounts, skipping snapshot", "plaid_account_id", plaidAccountID)
-			skippedCount++
-			continue
-		}
-
-		// Extract balance from Plaid response
-		balances, hasBalances := plaidAccount.GetBalancesOk()
-		if !hasBalances || balances == nil {
-			s.logger.Warn("no balance data for account, skipping snapshot", "plaid_account_id", plaidAccountID)
-			skippedCount++
-			continue
-		}
-
-		// Create and validate balance snapshot
-		//
-		// #1569 task 20 (S8): built BEFORE the deduplication check, not after. The check now needs
-		// to know what the new balance IS — see isRedundantSnapshot.
-		snapshot := s.createBalanceSnapshot(internalAccount, linkedItem, balances, now, plaidAccountID)
-		if snapshot == nil {
-			skippedCount++
-			continue
-		}
-
-		// Deduplication (5-minute window AND unchanged figures).
-		//
-		// #1569 task 20 (S8). This used to be purely time-based: if a snapshot existed inside the
-		// window, the incoming one was dropped whatever it said. So two genuinely different
-		// balances arriving less than five minutes apart — a paycheck landing between a webhook
-		// and a manual refresh, or two webhooks for one settlement burst — silently lost the LATER,
-		// truer one, and the balance history recorded a figure that had already stopped being true.
-		// (Note the direction: the row kept is the OLDER one, because it is the incoming write that
-		// is skipped.)
-		//
-		// The window's purpose was never to suppress information; the comment above says it exists
-		// to "REDUCE excessive snapshots", i.e. to stop high-frequency syncs writing the SAME number
-		// over and over. Adding the value test keeps that entirely and stops it discarding history.
-		latestSnapshot, err := s.balanceSnapshotRepo.GetLatestByAccountID(ctx, internalAccount.ID)
-		if err != nil {
-			s.logger.Warn("failed to check latest snapshot for account", "plaid_account_id", plaidAccountID, "error", err)
-		} else if isRedundantSnapshot(latestSnapshot, snapshot, now, deduplicationWindow) {
-			s.logger.Debug("skipping snapshot, an identical recent snapshot exists",
-				"plaid_account_id", plaidAccountID,
-				"age", now.Sub(latestSnapshot.SnapshotAt).Round(time.Second),
-			)
-			dedupedCount++
-			continue
-		}
-
-		// Store snapshot
-		if err := s.balanceSnapshotRepo.Create(ctx, snapshot); err != nil {
-			s.logger.Warn("failed to create balance snapshot", "plaid_account_id", plaidAccountID, "error", err)
-			skippedCount++
-			continue
-		}
-
-		successCount++
+	// ⚠ THE SYNC'S POLICY, STATED RATHER THAN INHERITED: a balance-snapshot failure is NON-FATAL
+	// here, and that is unchanged behaviour, not a regression introduced by the extraction. This
+	// function's own doc comment says why — balance snapshots are non-critical to a transaction
+	// sync, and failing the sync would discard the transaction work that already committed while
+	// the next webhook would retry the snapshot anyway.
+	//
+	// The periodic capture path makes the OPPOSITE choice on the same writer, because a job whose
+	// entire remit is "every active account has a row for today" must not report success having
+	// written some of them. Before the extraction there was one baked-in policy — swallow — and the
+	// capture path would have inherited exactly the wrong one.
+	if writeErr != nil {
+		s.logger.Warn("some balance snapshots failed during sync; the sync itself is unaffected and "+
+			"the next webhook will retry them",
+			"item_id", linkedItem.ID, "error", writeErr)
 	}
 
 	s.logger.Info("created balance snapshots",
 		"item_id", linkedItem.ID,
-		"created", successCount,
-		"skipped", skippedCount,
-		"deduped", dedupedCount,
+		"created", result.Written,
+		"skipped", result.Unmatched+result.NoBalance,
+		"deduped", result.Deduped,
 	)
 	return nil
 }
@@ -1825,46 +1799,3 @@ func sameBalance(a, b *float64) bool {
 	return *a == *b
 }
 
-// createBalanceSnapshot builds a BalanceSnapshot from Plaid balance data.
-// Returns nil if the snapshot is invalid (missing both current and available balance).
-func (s *transactionSyncService) createBalanceSnapshot(
-	account domain.Account,
-	linkedItem *domain.LinkedItem,
-	balances *plaid.AccountBalance,
-	timestamp time.Time,
-	plaidAccountID string,
-) *domain.BalanceSnapshot {
-	snapshot := &domain.BalanceSnapshot{
-		AccountID:     account.ID,
-		UserAccountID: account.UserAccountID,
-		UserID:        linkedItem.UserID,
-		SnapshotAt:    timestamp,
-		Source:        domain.SnapshotSourcePlaidWebhook,
-		CurrencyCode:  "USD",
-	}
-
-	// Set current balance if available
-	if current, ok := balances.GetCurrentOk(); ok && current != nil {
-		currentFloat := float64(*current)
-		snapshot.CurrentBalance = &currentFloat
-	}
-
-	// Set available balance if available
-	if available, ok := balances.GetAvailableOk(); ok && available != nil {
-		availableFloat := float64(*available)
-		snapshot.AvailableBalance = &availableFloat
-	}
-
-	// Set currency code if available
-	if currencyCode, ok := balances.GetIsoCurrencyCodeOk(); ok && currencyCode != nil {
-		snapshot.CurrencyCode = *currencyCode
-	}
-
-	// Validate snapshot has at least one balance
-	if snapshot.CurrentBalance == nil && snapshot.AvailableBalance == nil {
-		s.logger.Warn("account has neither current nor available balance, skipping snapshot", "plaid_account_id", plaidAccountID)
-		return nil
-	}
-
-	return snapshot
-}
