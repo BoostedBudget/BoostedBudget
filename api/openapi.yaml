@@ -1799,10 +1799,10 @@ components:
           format: int64
           type: integer
         quarantine_reason:
-          description: "Why the rule is broken. Fixed vocabulary. Four values are ENFORCED (quarantined=true, the rule matches nothing): no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. One is REPAIRED (quarantined=false, the rule still runs): invalid_condition_value_shape — a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only. The stored rule is never rewritten; edit it to make the repair permanent."
+          description: "Why the rule is broken. Fixed vocabulary. Four values are ENFORCED (quarantined=true, the rule matches nothing): no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. One is REPAIRED (quarantined=false, so quarantine is not what stops it — but check enabled too, which this field ignores entirely): invalid_condition_value_shape — a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only. The stored rule is never rewritten; edit it to make the repair permanent."
           type: string
         quarantined:
-          description: "True only when this rule is actually PREVENTED from matching — it is refused before any condition is evaluated and applies to nothing. False WITH a quarantine_reason means the opposite: the rule has a problem the server repaired well enough to keep running it (a wrong-typed condition value with one honest reading is coerced at read time), so it IS still matching and the problem is reported rather than enforced. Computed per request; never persisted."
+          description: "True only when QUARANTINE is what prevents this rule from matching — it is refused before any condition is evaluated and applies to nothing. False WITH a quarantine_reason means the rule has a problem the server repaired well enough to keep running it (a wrong-typed condition value with one honest reading is coerced at read time), so quarantine is not stopping it and the problem is reported rather than enforced. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless of what this says, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is this rule running. Computed per request; never persisted."
           type: boolean
         source:
           type: string
@@ -2630,8 +2630,9 @@ components:
         description:
           type: string
         name:
-          description: Goal name (1-100 characters).
+          description: Goal name (1-100 characters, counted in Unicode code points).
           maxLength: 100
+          minLength: 1
           type: string
         progress_basis:
           description: "How current_amount is derived. ⚠ BREAKING (#1625): omitting this now means \"contributions\", NOT \"manual\". A goal created without it derives progress from its contribution ledger, and a later PUT setting current_amount directly is refused with a 400. Pass \"manual\" explicitly if you intend to manage current_amount yourself."
@@ -7794,8 +7795,9 @@ components:
         description:
           type: string
         name:
-          description: Goal name (1-100 characters).
+          description: Goal name (1-100 characters, counted in Unicode code points). Omit to leave unchanged; an empty string is refused, not treated as omitted.
           maxLength: 100
+          minLength: 1
           type: string
         progress_basis:
           type: string

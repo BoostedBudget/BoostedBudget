@@ -9,8 +9,10 @@ import (
 // CoercedValue returns a READ-PATH repair of the condition's value, or ok=false when the value
 // has no single honest reading.
 //
-// #1625 Task 2. Of the four quarantine reasons, `invalid_condition_value_shape` is the only one
-// real user rules can be in: dedac0aa (#346) — the commit that created categorization rules —
+// #1625 Task 2. Of the FIVE quarantine reasons (observability.AllQuarantineReasons(); this said
+// "four" because it was written in the very commit that added the fifth,
+// uncoercible_condition_value — #1625 final review I1), `invalid_condition_value_shape` is the
+// only one real user rules can be in: dedac0aa (#346) — the commit that created categorization rules —
 // validated `cond.Type.IsValid()` and NOTHING about the value, so a wrong-typed value has
 // persisted through the ordinary public API for the entire life of the feature. Enforcing that
 // reason would switch off rules people wrote and use. Most of those values are a number sent as
@@ -63,9 +65,15 @@ func (c *RuleCondition) CoercedValue() (interface{}, bool) {
 }
 
 // coerceTextShape normalizes to []string so the evaluators' ExtractStringValues sees one shape.
-// A non-string MEMBER of an array is coerced rather than dropped: textValues already drops it
-// silently today, which means `["uber", 7]` validates and then matches only "uber" — the value
-// says one thing and the rule does another.
+// A non-string MEMBER of an array is coerced rather than dropped, so a value that reaches here at
+// all is repaired whole rather than half.
+//
+// ⚠ #1625 final review I5: this docstring used to say the coercion FIXES `["uber", 7]` matching
+// only "uber". It does not, and must not. textValues DROPS the 7 and still reports ok, so that
+// value PASSES ValidateShape — and repairedForEvaluation only calls CoercedValue on a condition
+// ValidateShape REJECTS, precisely so a rule the write path still accepts cannot silently start
+// matching transactions it did not match yesterday. The silent drop may well be a bug; fixing it
+// belongs at the WRITE path, in its own change. This function never sees that value.
 func coerceTextShape(v interface{}, spec FieldSpec) (interface{}, bool) {
 	var raw []interface{}
 	switch val := v.(type) {

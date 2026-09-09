@@ -3,6 +3,7 @@ package domain
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -741,5 +742,44 @@ func TestLogContributionRequest_RejectsMalformedDates(t *testing.T) {
 	valid := LogContributionRequest{Amount: 10, OccurredOn: "2026-09-08"}
 	if err := valid.Validate(); err != nil {
 		t.Errorf("a well-formed YYYY-MM-DD date must be accepted: %v", err)
+	}
+}
+
+// TestSavingsGoal_NameLengthIsCountedInRunes is #1625's final-review I4.
+//
+// Huma's `maxLength:"100"` on Create/UpdateSavingsGoalRequest counts RUNES (JSON Schema
+// semantics). Validate counted BYTES. A 60-character CJK name is 180 bytes: it passes the schema
+// the API publishes, reaches the service, and is then refused by a message that says "100
+// characters" while counting something the user cannot see. The two must agree, and they must
+// agree on the unit the message names.
+func TestSavingsGoal_NameLengthIsCountedInRunes(t *testing.T) {
+	valid := func(name string) *SavingsGoal {
+		return &SavingsGoal{
+			UserID:       "user-1",
+			Name:         name,
+			TargetAmount: 100,
+			CurrencyCode: "USD",
+			AccountID:    "account-456",
+		}
+	}
+
+	// 60 CJK characters — 180 bytes, well under 100 runes.
+	sixtyCJK := strings.Repeat("目", 60)
+	if len(sixtyCJK) <= 100 {
+		t.Fatalf("fixture is not falsifiable: %d bytes does not exceed the byte limit, so a "+
+			"byte-counting implementation would accept it too", len(sixtyCJK))
+	}
+	if err := valid(sixtyCJK).Validate(); err != nil {
+		t.Errorf("a 60-character name was rejected: %v — Huma's published maxLength accepts it, so "+
+			"the server refuses a name its own schema advertises as legal", err)
+	}
+
+	// 101 runes must still be refused, or the fix has simply removed the limit.
+	if err := valid(strings.Repeat("目", 101)).Validate(); err == nil {
+		t.Error("a 101-character name was accepted — the limit must still apply, in runes")
+	}
+	if err := valid(strings.Repeat("a", 101)).Validate(); err == nil {
+		t.Error("a 101-byte ASCII name was accepted — runes and bytes coincide here, so this is the " +
+			"pre-existing behaviour and must not have changed")
 	}
 }

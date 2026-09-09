@@ -616,26 +616,51 @@ describe('AutoCategorizationRuleCard', () => {
     // rule is not running no matter what quarantine_reason or quarantined says. The badge must
     // read "Disabled" -- not "Not running" or "Needs attention" -- for a disabled rule, in
     // every quarantine combination.
-    it('reads "Disabled" regardless of quarantine reason, and never says Not running/Needs attention', () => {
-      render(
-        <AutoCategorizationRuleCard
-          rule={{
-            ...mockRule,
-            enabled: false,
-            quarantined: true,
-            quarantine_reason: 'no_conditions_matches_everything',
-          }}
-          onToggle={mockOnToggle}
-          onEdit={mockOnEdit}
-          onDelete={mockOnDelete}
-        />
-      )
+    //
+    // #1625 final review I5: this docstring said "every quarantine combination" while the test
+    // below covered ONE (no_conditions x quarantined=true) and its sibling covered a second.
+    // It is now the product it always claimed to be: the whole reason vocabulary (plus absent,
+    // plus an unrecognised one) x both values of `quarantined`. Enumerated from
+    // observability.AllQuarantineReasons()'s wire values rather than a subset, so a reason added
+    // later is a one-line addition here instead of a silent gap.
+    const ALL_QUARANTINE_REASONS = [
+      undefined,
+      'no_conditions_matches_everything',
+      'invalid_condition_logic_defaults_to_and',
+      'unnormalizable_condition',
+      'invalid_condition_value_shape',
+      'uncoercible_condition_value',
+      'invented_later',
+    ] as const
 
-      expect(screen.getByText('Disabled')).toBeDefined()
-      expect(screen.queryByText('Not running')).toBeNull()
-      expect(screen.queryByText('Needs attention')).toBeNull()
-      expect(screen.queryByText('Active')).toBeNull()
-    })
+    for (const reason of ALL_QUARANTINE_REASONS) {
+      for (const quarantined of [true, false]) {
+        it(`reads "Disabled" for reason=${reason ?? 'none'} quarantined=${quarantined}, and never says Not running/Needs attention/Active`, () => {
+          render(
+            <AutoCategorizationRuleCard
+              rule={{
+                ...mockRule,
+                enabled: false,
+                quarantined,
+                quarantine_reason: reason,
+              }}
+              onToggle={mockOnToggle}
+              onEdit={mockOnEdit}
+              onDelete={mockOnDelete}
+            />
+          )
+
+          expect(screen.getByText('Disabled')).toBeDefined()
+          expect(screen.queryByText('Not running')).toBeNull()
+          expect(screen.queryByText('Needs attention')).toBeNull()
+          expect(screen.queryByText('Active')).toBeNull()
+          // Never render a raw enum at the user, in any combination.
+          if (reason) {
+            expect(screen.queryByText(new RegExp(reason))).toBeNull()
+          }
+        })
+      }
+    }
 
     // A disabled rule with a repaired (still-would-run-if-enabled) reason must not claim it is
     // "STILL RUNNING" -- that claim is only true while the rule is enabled.

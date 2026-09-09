@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 )
 
 // ProgressBasis constants define how a savings goal's current_amount is derived (Issue #1300).
@@ -70,7 +71,11 @@ func (sg *SavingsGoal) Validate() error {
 		return fmt.Errorf("%w: name is required", ErrInvalidSavingsGoal)
 	}
 
-	if len(sg.Name) > 100 {
+	// ⚠ #1625 final review I4: RUNES, not bytes. Huma's maxLength on the request structs counts
+	// runes (JSON Schema semantics), so `len()` here made the published schema and the validator
+	// disagree: a 60-character CJK name is 180 bytes, passes the schema Huma advertises, then is
+	// rejected by a message that says "100 characters" while counting something else.
+	if utf8.RuneCountInString(sg.Name) > 100 {
 		return fmt.Errorf("%w: name must be 100 characters or less", ErrInvalidSavingsGoal)
 	}
 
@@ -381,7 +386,9 @@ type CreateSavingsGoalRequest struct {
 	// domain.SavingsGoal.Validate() sentinel doc). This makes both constraints visible in the
 	// published OpenAPI schema, so an MCP agent can learn "positive, <=100 chars" without first
 	// submitting a bad value and reading the 4xx (#1625, second half).
-	Name         string  `json:"name" required:"true" maxLength:"100" doc:"Goal name (1-100 characters)."`
+	// minLength is load-bearing: Validate() rejects an empty name, and without it the published
+	// schema said "1-100 characters" while accepting "" (#1625 final review I4).
+	Name         string  `json:"name" required:"true" minLength:"1" maxLength:"100" doc:"Goal name (1-100 characters, counted in Unicode code points)."`
 	Description  *string `json:"description,omitempty"`
 	TargetAmount float64 `json:"target_amount" required:"true" exclusiveMinimum:"0" doc:"Target amount to save. Must be positive."`
 	// CurrentAmount seeds the goal's progress. Under "manual" it is the value, and stays so.
@@ -410,7 +417,7 @@ type CreateSavingsGoalRequest struct {
 // UpdateSavingsGoalRequest represents the request to update a savings goal.
 type UpdateSavingsGoalRequest struct {
 	// Name and TargetAmount carry Huma-native tags (see CreateSavingsGoalRequest above for why).
-	Name         *string  `json:"name,omitempty" maxLength:"100" doc:"Goal name (1-100 characters)."`
+	Name         *string  `json:"name,omitempty" minLength:"1" maxLength:"100" doc:"Goal name (1-100 characters, counted in Unicode code points). Omit to leave unchanged; an empty string is refused, not treated as omitted."`
 	Description  *string  `json:"description,omitempty"`
 	TargetAmount *float64 `json:"target_amount,omitempty" exclusiveMinimum:"0" doc:"Target amount to save. Must be positive."`
 	// CurrentAmount may ONLY be set when the goal's progress_basis is "manual" — every other

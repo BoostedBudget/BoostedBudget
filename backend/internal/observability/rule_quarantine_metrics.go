@@ -24,6 +24,11 @@ var ruleQuarantineCandidates = promauto.NewCounterVec(prometheus.CounterOpts{
 	Help: "Categorization rules found broken by the quarantine classifier, by reason. Reasons that stop matching are enforced in RuleMatches; invalid_condition_value_shape is repaired by read-path coercion and still executes. This is a per-OBSERVATION counter (it increments once every time a rule is re-evaluated, e.g. once per sync pass) and therefore cannot answer how many DISTINCT rules are affected — one rule observed 1000 times and 1000 distinct rules look identical here. For that question, see categorization_rule_quarantine_population.",
 }, []string{"reason"})
 
+// ⚠ #1625 final review I4: it counts every rule in the table, ENABLED OR NOT
+// (ListAllForQuarantineCensus has no `enabled` predicate, deliberately — a disabled broken rule is
+// still broken and still shows the size of the repair backlog). So this gauge is NOT "how many
+// running rules enforcement stops"; the help string says so.
+//
 // ruleQuarantinePopulation is the DISTINCT-rule census #1625 Task 18 adds. Unlike
 // ruleQuarantineCandidates above (a Counter that increments once per observation and therefore
 // conflates "one rule seen 1000 times" with "1000 rules"), this is a Gauge set from a periodic
@@ -37,7 +42,7 @@ var ruleQuarantineCandidates = promauto.NewCounterVec(prometheus.CounterOpts{
 // small, closed vocabulary (AllQuarantineReasons()), which is what makes it safe as a label here.
 var ruleQuarantinePopulation = promauto.NewGaugeVec(prometheus.GaugeOpts{
 	Name: "categorization_rule_quarantine_population",
-	Help: "Current DISTINCT count of categorization rules the quarantine classifier finds broken, by reason, as of the last census. Unlike categorization_rule_quarantine_candidates_total (which counts observations, not rules), this answers 'how many rules would enforcement affect' — set from a full-table scan, not incremented per sync pass.",
+	Help: "Current DISTINCT count of categorization rules the quarantine classifier finds broken, by reason, as of the last census. Unlike categorization_rule_quarantine_candidates_total (which counts observations, not rules), this counts rules — set from a full-table scan, not incremented per sync pass. NOTE: the scan has no `enabled` predicate, so this counts DISABLED rules too; it answers 'how many broken rules exist', not 'how many running rules enforcement would stop'.",
 }, []string{"reason"})
 
 // QuarantineReason is a CLOSED set. The recorder previously took a bare string and handed it

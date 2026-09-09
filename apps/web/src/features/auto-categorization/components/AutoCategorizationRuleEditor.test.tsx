@@ -1763,6 +1763,42 @@ describe('AutoCategorizationRuleEditor', () => {
       })
     })
 
+    // #1625 final review I4: the account_type checkbox group is reached for BOTH `eq` and `neq`
+    // (a closed-set picker expresses either equally well — types.ts says so deliberately), but the
+    // caption was hard-coded "Match ANY of:". For neq the backend computes `!anyOf(equals)`
+    // (field_evaluator.go's matchText), i.e. match NONE of — so the caption told the user the
+    // exact opposite of what the rule does.
+    it('captions the account_type picker "Match NONE of" for neq and "Match ANY of" for eq', async () => {
+      const user = userEvent.setup({ delay: null })
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+          plaidPrimaries={mockPlaidPrimaries}
+        />
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /add condition/i }))
+      const typeSelect = screen.getByLabelText(/condition type/i)
+
+      await user.selectOptions(typeSelect, 'account_type:neq')
+      await waitFor(() => {
+        expect(screen.getByText('Match NONE of:')).toBeDefined()
+      })
+      expect(screen.queryByText('Match ANY of:')).toBeNull()
+
+      // Falsifiability: the same widget, the inclusive operator, the opposite caption. The
+      // inclusive choice is the LEGACY FUSED key `account_type` — there is no `account_type:eq`
+      // pair, because FUSED_PAIR_KEYS excludes pairs that already have a fused equivalent.
+      await user.selectOptions(typeSelect, 'account_type')
+      await waitFor(() => {
+        expect(screen.getByText('Match ANY of:')).toBeDefined()
+      })
+      expect(screen.queryByText('Match NONE of:')).toBeNull()
+    })
+
     // #1625 final review B4. The lazy-load gate keyed on the LEGACY FUSED type only
     // (`c.type === 'existing_pfc_detailed'`), but a PAIR choice writes `type: undefined` and
     // sets {field, operator} instead. So `pfc_detailed:neq` — an option the picker offers —
