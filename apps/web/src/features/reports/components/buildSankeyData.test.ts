@@ -88,27 +88,57 @@ describe('buildSankeyData — hierarchy', () => {
     expectConservation(data)
   })
 
+  /**
+   * Wide enough to force an expense OVERFLOW node: the parents-only floor keeps 30 roots, so 42
+   * roots must collapse the remaining 12 into one `other`. Totals descend so which roots survive
+   * is deterministic rather than a tie-break.
+   */
+  function overflowingExpenses(): CategoryHierarchyNode[] {
+    return Array.from({ length: 42 }, (_, i) => node(`P${i}`, `Parent ${i}`, 1000 - i))
+  }
+
+  /** Wide enough to force an INCOME overflow node: 11 leaves are kept, so 15 leaves collapse 4. */
+  function overflowingIncome(): CategoryHierarchyNode[] {
+    return Array.from({ length: 15 }, (_, i) => node(`INCOME_${i}`, `Source ${i}`, 500 - i))
+  }
+
   it('every synthetic node is inert — none of them has an expressible filter', () => {
-    // Covers the hub, savings and deficit as well as direct/overflow buckets: none of them names a
-    // set of transactions any filter can select, so none may claim it will navigate somewhere
-    // matching its own amount.
-    const surplus = buildSankeyData(income, mixedExpenses(), { kind: 'expanded' })
-    const deficit = buildSankeyData(
-      [node('INCOME', 'Income', 10)],
-      [node('RENT_AND_UTILITIES', 'Rent', 900)],
-      { kind: 'expanded' },
-    )
+    // Covers the hub, savings, deficit, direct AND overflow buckets: none of them names a set of
+    // transactions any filter can select, so none may claim it will navigate somewhere matching
+    // its own amount.
+    //
+    // ⚠ THE EXPECTED SET IS PINNED PER FIXTURE, AND THAT IS THE POINT (#1626 Phase 2, review
+    // finding X4). This test used to iterate whatever synthetic nodes happened to exist and assert
+    // only that `hub` was among them — and neither of its two fixtures could produce an `other`
+    // node at all, so an overflow bucket was free to acquire a navigation action while this stayed
+    // green. Measured, not assumed: giving both overflow emitters a `navigate` action left all 27
+    // tests in this file passing. Requiring an exact SET means a kind that stops being emitted
+    // fails just as loudly as one that starts.
+    const cases: Array<{ name: string; data: ReturnType<typeof buildSankeyData>; expect: string[] }> = [
+      { name: 'surplus', data: buildSankeyData(income, mixedExpenses(), { kind: 'expanded' }), expect: ['hub', 'savings', 'direct'] },
+      {
+        name: 'deficit',
+        data: buildSankeyData([node('INCOME', 'Income', 10)], [node('RENT_AND_UTILITIES', 'Rent', 900)], { kind: 'expanded' }),
+        expect: ['hub', 'deficit'],
+      },
+      { name: 'expense overflow', data: buildSankeyData(income, overflowingExpenses(), { kind: 'expanded' }), expect: ['hub', 'deficit', 'other'] },
+      { name: 'income overflow', data: buildSankeyData(overflowingIncome(), mixedExpenses(), { kind: 'expanded' }), expect: ['hub', 'savings', 'other', 'direct'] },
+    ]
+
     const synthetic = new Set(['hub', 'savings', 'deficit', 'other', 'direct'])
-    for (const data of [surplus, deficit]) {
+    for (const c of cases) {
       const seen = new Set<string>()
-      for (const n of data.nodes.filter(x => synthetic.has(x.nodeKind))) {
+      for (const n of c.data.nodes.filter(x => synthetic.has(x.nodeKind))) {
         seen.add(n.nodeKind)
-        expect(n.action).toEqual({ kind: 'none' })
+        expect(n.action, `${c.name}: ${n.nodeKind} node ${n.id} must be inert`).toEqual({ kind: 'none' })
       }
-      expect(seen.has('hub')).toBe(true)
+      expect([...seen].sort(), `${c.name}: synthetic kinds present`).toEqual([...c.expect].sort())
     }
-    expect(surplus.nodes.some(n => n.nodeKind === 'savings')).toBe(true)
-    expect(deficit.nodes.some(n => n.nodeKind === 'deficit')).toBe(true)
+
+    // And the two overflow fixtures must really have overflowed, so a budget change that stops
+    // producing an `other` node is a failure here rather than a silent loss of coverage.
+    expect(cases[2].data.nodes.filter(n => n.nodeKind === 'other').map(n => n.id)).toEqual(['out:other:l1'])
+    expect(cases[3].data.nodes.filter(n => n.nodeKind === 'other').map(n => n.id)).toEqual(['in:other'])
   })
 
   it('a PFC detailed leaf navigates by pfc_detaileds only, never widened to its primary', () => {
