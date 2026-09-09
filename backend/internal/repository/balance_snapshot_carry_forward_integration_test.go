@@ -640,3 +640,134 @@ func TestAggregatedHistoryCarry_AccountWithNoRecordedActiveInterval_StillCarries
 		"an account with no recorded 'active' interval must still carry forward; keying the carry "+
 			"on a recorded interval alone reports 100")
 }
+
+// seedCarryTerminalAccount inserts an account whose FIRST recorded status is already terminal, so
+// account_status_history holds exactly ONE row and it is NOT 'active'.
+//
+// ⚠ THIS SHAPE IS NOT HYPOTHETICAL AND IT IS NOT THE SAME AS THE NO-HISTORY SHAPE ABOVE.
+// record_account_status_change() opens an interval at the row's own status, so an account inserted
+// terminal never gets an 'active' prefix; migration 000152's removed branch produces the same shape
+// whenever removed_at is NULL or <= created_at
+// (000152_backfill_account_status_history.up.sql, the 'removed accounts' INSERT pair). The
+// distinction that matters for the carry-forward is that the accounts row still EXISTS and its
+// status is terminal — so a predicate keyed only on "has no 'active' interval" reads TRUE here and
+// carries a closed account's balance forever.
+func seedCarryTerminalAccount(
+	ctx context.Context, t *testing.T, db DB, f carryFixture, prefix, accountType string,
+) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	_, err := db.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status,
+		                      removed_at, removed_reason)
+		VALUES ($1, $2, $3, $4, $5, $6, 'removed', now(), 'user_disconnect')`,
+		id, f.linkedItemID, f.userID, prefix+"-"+id.String(), prefix, accountType)
+	require.NoError(t, err, "seed terminal account")
+
+	var active, total int
+	require.NoError(t, db.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE status = 'active'), count(*)
+		FROM account_status_history WHERE account_id = $1`, id).Scan(&active, &total))
+	require.Zero(t, active, "the fixture must actually produce the TERMINAL-ONLY shape: no 'active' row")
+	require.Positive(t, total, "and it must still have a terminal row, not no history at all")
+	return id
+}
+
+// TestAggregatedHistoryCarry_TerminalOnlyAccount_DoesNotCarryPastItsOwnSnapshot is X1's RED.
+//
+// THE BUG IT PINS, and it is a wrong NUMBER rather than a missing row. The removal bound's first
+// leg read `NOT EXISTS (… status='active')` as unconditional permission to carry, on the argument
+// that absence of interval data is "no reason to hide". That argument is right for a row that
+// HAPPENED (a transaction) and wrong for an INFERENCE that a balance persisted: a terminal-only
+// account satisfies the NOT EXISTS forever, so its last retained balance was carried onto every
+// later observed day, permanently overstating net worth.
+//
+// ⚠ RETENTION IS NOT WHAT IS BEING REMOVED. The closed account's OWN snapshot day keeps its full
+// value below — that is provider truth about a day it really reported, and #1569 requires it to
+// stay queryable. What stops is the carry.
+func TestAggregatedHistoryCarry_TerminalOnlyAccount_DoesNotCarryPastItsOwnSnapshot(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	f := seedCarryFixture(ctx, t, tx, "carry-terminal")
+	d1, d3 := utcDay(2026, 4, 2), utcDay(2026, 4, 4)
+
+	// Deliberately off every convenient boundary: the two balances are unequal, neither is a round
+	// number, and their sum is not either of them — so a mutation that carries, drops, or doubles
+	// one of them cannot land on the expected total by coincidence.
+	closed := seedCarryTerminalAccount(ctx, t, tx, f, "carry-terminal-closed", "depository")
+	live := seedCarryAccount(ctx, t, tx, f, "carry-terminal-live", "depository", utcDay(2026, 3, 1))
+
+	repo := NewBalanceSnapshotRepository(tx)
+	snap(ctx, t, repo, f, closed, d1.Add(9*time.Hour), amt(713), amt(713))
+	snap(ctx, t, repo, f, live, d1.Add(9*time.Hour), amt(101), amt(101))
+	snap(ctx, t, repo, f, live, d3.Add(9*time.Hour), amt(317), amt(317))
+
+	history, err := repo.GetAggregatedHistory(ctx, f.userID.String(), d1, utcDay(2026, 4, 30), nil)
+	require.NoError(t, err)
+
+	p1 := pointOn(history, d1)
+	require.NotNil(t, p1, "the closed account's own snapshot day must remain a chart point (#1569)")
+	assert.InDelta(t, 814.0, p1.TotalBalance, 0.01,
+		"the closed account's OWN day keeps its retained balance: 713 + 101")
+
+	p3 := pointOn(history, d3)
+	require.NotNil(t, p3)
+	assert.InDelta(t, 317.0, p3.TotalBalance, 0.01,
+		"a terminal-only account must not be carried onto a later day; carrying it reports 1030 "+
+			"and does so on every later observed day, forever")
+}
+
+// TestAggregatedHistoryCarry_OrphanedSnapshot_DoesNotCarryPastItsOwnDay is X1's second RED, and it
+// is a DIFFERENT shape from the one above rather than a variation of it: here the accounts row is
+// GONE (balance_snapshots.account_id ON DELETE SET NULL, migration 000150) and its status history
+// cascaded away with it (fk_ash_account_id ON DELETE CASCADE).
+//
+// So the NOT EXISTS was satisfied for the emptiest possible reason — there is no account to ask
+// about — and, because live_all inner-joins accounts, no succession could ever suppress the carried
+// row either. An orphan is the one shape where the carry can never be corrected by anything
+// downstream.
+func TestAggregatedHistoryCarry_OrphanedSnapshot_DoesNotCarryPastItsOwnDay(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	f := seedCarryFixture(ctx, t, tx, "carry-orphan")
+	d1, d3 := utcDay(2026, 5, 6), utcDay(2026, 5, 8)
+
+	doomed := seedCarryAccount(ctx, t, tx, f, "carry-orphan-gone", "depository", utcDay(2026, 4, 1))
+	live := seedCarryAccount(ctx, t, tx, f, "carry-orphan-live", "depository", utcDay(2026, 4, 1))
+
+	repo := NewBalanceSnapshotRepository(tx)
+	snap(ctx, t, repo, f, doomed, d1.Add(9*time.Hour), amt(907), amt(907))
+	snap(ctx, t, repo, f, live, d1.Add(9*time.Hour), amt(101), amt(101))
+	snap(ctx, t, repo, f, live, d3.Add(9*time.Hour), amt(317), amt(317))
+
+	_, err = tx.Exec(ctx, `DELETE FROM accounts WHERE id = $1`, doomed)
+	require.NoError(t, err, "orphan the snapshot the way a hard delete does")
+
+	var orphaned int
+	require.NoError(t, tx.QueryRow(ctx, `
+		SELECT count(*) FROM balance_snapshots
+		WHERE user_id = $1 AND account_id IS NULL`, f.userID).Scan(&orphaned))
+	require.Equal(t, 1, orphaned, "the fixture must actually produce an account_id IS NULL snapshot")
+
+	history, err := repo.GetAggregatedHistory(ctx, f.userID.String(), d1, utcDay(2026, 5, 31), nil)
+	require.NoError(t, err)
+
+	p1 := pointOn(history, d1)
+	require.NotNil(t, p1, "an orphaned snapshot is still the user's own retained history (#1569)")
+	assert.InDelta(t, 1008.0, p1.TotalBalance, 0.01,
+		"the orphan's OWN day keeps its retained balance: 907 + 101")
+
+	p3 := pointOn(history, d3)
+	require.NotNil(t, p3)
+	assert.InDelta(t, 317.0, p3.TotalBalance, 0.01,
+		"an orphaned snapshot must not be carried onto a later day; carrying it reports 1224 and "+
+			"nothing downstream can ever suppress it")
+}

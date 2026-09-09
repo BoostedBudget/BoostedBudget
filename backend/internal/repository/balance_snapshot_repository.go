@@ -294,20 +294,41 @@ var aggregatedHistorySQLBase = `
 		      -- persisted, and that inference is only defensible while the account was still there.
 		      -- Without this, a closed account would contribute to net worth forever.
 		      --
-		      -- The first leg is the #1626 Phase 2 ruling that absence of interval data is "no
-		      -- reason to hide" rather than evidence: migration 000152's zero-length-interval guard
-		      -- leaves some accounts with NO 'active' row at all, and an orphan's rows cascade away
-		      -- with its accounts row (fk_ash_account_id ON DELETE CASCADE), so keying the carry on
-		      -- a recorded interval ALONE would silently make this whole fix a no-op for exactly
-		      -- those accounts. It is narrow by construction: an account the user really
-		      -- disconnected has an 'active' row followed by a terminal one, so the second leg
-		      -- governs it. Same shape as accountWithNoActiveIntervalLeg (transaction_repository.go).
+		      -- The missing-history leg is the #1626 Phase 2 ruling that absence of interval data is
+		      -- "no reason to hide" rather than evidence: migration 000152's zero-length-interval
+		      -- guard leaves some accounts with NO 'active' row at all, so keying the carry on a
+		      -- recorded interval ALONE would silently make this whole fix a no-op for exactly those
+		      -- accounts. It is narrow by construction: an account the user really disconnected has
+		      -- an 'active' row followed by a terminal one, so the last leg governs it.
+		      --
+		      -- ⚠ IT ALSO DEMANDS accounts.status = 'active', AND THAT IS THE CORRECTION OF A LIVE
+		      -- WRONG NUMBER (#1626 Phase 2, X1). Shaped only as NOT EXISTS(active interval) it read
+		      -- as unconditional permission to carry, and TWO real shapes satisfy that forever:
+		      -- migration 000152's removed branch DELIBERATELY writes a terminal-only history when
+		      -- removed_at is NULL or <= created_at, and an orphan (account_id IS NULL, migration
+		      -- 000150's ON DELETE SET NULL) has no history to find at all — so a closed account's
+		      -- last retained balance was carried onto every later observed day, permanently. The
+		      -- orphan case could not even be corrected downstream, because live_all inner-joins
+		      -- accounts and supersession therefore never sees the carried row.
+		      --
+		      -- ⚠ THIS IS NOT accountWithNoActiveIntervalLeg, and it must not be made to match it.
+		      -- That leg governs the transactions table — a dated thing that HAPPENED, retained
+		      -- forever (#1569 EVENT universe), where no status may hide it. This governs an
+		      -- INFERENCE that a balance persisted on a day nobody reported one, which is only
+		      -- defensible while somebody is still confirming the account exists. Nothing retained
+		      -- becomes unqueryable: the account's OWN snapshot days are preserved by the first leg
+		      -- above, and its as-of balances are untouched.
 		      AND (
 		          o.snapshot_date = c.snapshot_date
-		          OR NOT EXISTS (
-		              SELECT 1 FROM account_status_history ash_any
-		              WHERE ash_any.account_id = o.account_id
-		                AND ash_any.status = 'active'
+		          OR EXISTS (
+		              SELECT 1 FROM accounts a_carry
+		              WHERE a_carry.id = o.account_id
+		                AND a_carry.status = 'active'
+		                AND NOT EXISTS (
+		                    SELECT 1 FROM account_status_history ash_any
+		                    WHERE ash_any.account_id = a_carry.id
+		                      AND ash_any.status = 'active'
+		                )
 		          )
 		          OR ` + accountLiveOnDateSQL("o.account_id", "c.snapshot_date") + `
 		      )

@@ -114,8 +114,25 @@ var namespaceRegistry = map[Namespace]namespaceConfig{
 	// invalidation), so without this bump a pre-fix entry would stay a valid hit and keep serving
 	// the future buckets the fix exists to remove. The 120s TTL makes that window short, not
 	// absent, and "short" is not a correctness argument. Same reasoning as versions 2, 3 and 4.
+	// SchemaVersion 6 (#1626 Phase 2, review finding X1): GetAggregatedHistory — this namespace's
+	// only balance read, reached through GetNetWorthTrend — again changed what it RETURNS for
+	// identical arguments, and this time a WRONG NUMBER becomes a right one. Version 4's
+	// carry-forward permitted the carry whenever an account had no recorded 'active' interval, and
+	// two real shapes satisfy that condition forever: migration 000152 deliberately writes a
+	// terminal-only history when removed_at is NULL or <= created_at, and an orphaned snapshot
+	// (account_id IS NULL) has no history to find at all. So a closed account's last retained
+	// balance was carried onto every later observed day — permanently overstating balance and net
+	// worth. The carry is now scoped to an account that still exists and is active. A pre-fix entry
+	// decodes cleanly into the unchanged response struct, which is exactly what makes the bump
+	// necessary rather than optional, and a deploy never touches the per-scope generation token —
+	// so without it a pre-fix entry would stay a valid hit and keep serving the overstated total.
+	// The 120s TTL makes that window short, not absent. Same reasoning as versions 2 through 5.
+	//
+	// Version 6 also covers GetCashFlowSummary (review finding X7), likewise cached here: its
+	// echoed end_date is now clamped to today for a future-ranged request, so that response too
+	// differs for identical arguments.
 	NamespaceAnalytics: {
-		TTL: 120 * time.Second, SchemaVersion: 5, ScopeKind: ScopeUser, DefaultEnabled: true,
+		TTL: 120 * time.Second, SchemaVersion: 6, ScopeKind: ScopeUser, DefaultEnabled: true,
 	},
 	// SchemaVersion 2 (#1569, round 11): analytics_repository.go added `t.deleted_at IS NULL` to
 	// the queries backing GetTopExpense, GetLargestTransactionsForPeriod,
