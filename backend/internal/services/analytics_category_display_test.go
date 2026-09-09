@@ -226,3 +226,48 @@ func TestIncomeSourcesMergeByKeyNotDisplay(t *testing.T) {
 	assert.InDelta(t, 100.0, result.Sources[0].Percentage, 0.001,
 		"a split source would show two halves, each with half the percentage")
 }
+
+// TestSpendingTrendsResolvesDisplayLikeEveryOtherRead closes the last leak of the #1626 mechanism.
+//
+// GetSpendingTrends used `stored display, else pfcDisplayName`, which is wrong in BOTH directions:
+// the stored display holds the RAW enum for a PFC row (so it echoed FOOD_AND_DRINK), and an empty
+// one for a custom row fell through to the registry, which title-cases the `custom:<uuid>` token
+// into a UUID — the original reported symptom, in a different chart.
+func TestSpendingTrendsResolvesDisplayLikeEveryOtherRead(t *testing.T) {
+	const customKey = "custom:9f1c2b3a-0000-4000-8000-000000000001"
+	mockRepo := &mockAnalyticsRepository{
+		getSpendingTrendsFn: func(context.Context, string, domain.SpendingFilters) ([]domain.SpendingTrendRow, error) {
+			return []domain.SpendingTrendRow{
+				// Production shape: category_display carries the raw enum for PFC rows.
+				{PeriodStart: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Category: "FOOD_AND_DRINK", CategoryDisplay: "FOOD_AND_DRINK", Total: 300},
+				{PeriodStart: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Category: customKey, CategoryDisplay: "Therapy", Total: 200},
+				// A custom row whose name has not reached the denormalized column yet.
+				{PeriodStart: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Category: "custom:9f1c2b3a-0000-4000-8000-000000000002", CategoryDisplay: "", Total: 100},
+			}, nil
+		},
+	}
+
+	result, err := NewAnalyticsService(mockRepo).GetSpendingTrends(context.Background(), "user-123",
+		domain.SpendingFilters{
+			StartDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			EndDate:   time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC),
+		})
+	require.NoError(t, err)
+	require.NotEmpty(t, result.Periods)
+
+	byKey := map[string]string{}
+	for _, c := range result.Periods[0].Categories {
+		byKey[c.Category] = c.PFCPrimaryDisplay
+	}
+
+	assert.Equal(t, "Food And Drink", byKey["FOOD_AND_DRINK"],
+		"a PFC row must resolve through the registry, not echo its raw enum")
+	assert.Equal(t, "Therapy", byKey[customKey])
+	assert.Equal(t, unnamedCustomCategoryLabel, byKey["custom:9f1c2b3a-0000-4000-8000-000000000002"],
+		"a custom row with no stored name must never render as a title-cased UUID")
+
+	for _, display := range byKey {
+		assert.NotContains(t, display, "custom:")
+		assert.NotContains(t, display, "9f1c2b3a-0000-4000-8000")
+	}
+}

@@ -430,15 +430,15 @@ func (s *analyticsService) GetSpendingTrends(ctx context.Context, userID string,
 		}
 
 		// Build category list (top categories first, then Other if present).
-		// Use server-resolved display when available; fall back to pfcDisplayName for PFC rows.
+		// #1626: through resolveCategoryDisplay like every other category-shaped response. The old
+		// `stored display, else pfcDisplayName` shape was wrong in BOTH directions here: the stored
+		// display holds the RAW enum for a PFC row, and an empty one for a custom row fell through
+		// to the registry, which title-cased the `custom:<uuid>` token into a UUID.
 		var periodTotal float64
 		cats := make([]domain.CategorySpending, 0)
 		for _, tc := range topCategories {
 			if spend, ok := catSpend[tc]; ok {
-				display := categoryDisplays[tc]
-				if display == "" {
-					display = pfcDisplayName(tc)
-				}
+				display := resolveCategoryDisplay(tc, categoryDisplays[tc])
 				cats = append(cats, domain.CategorySpending{
 					Category:          tc,
 					PFCPrimaryDisplay: display,

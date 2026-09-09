@@ -14,14 +14,6 @@ import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { buildSankeyData } from './buildSankeyData'
 import type { NodeAction, SankeyNode, SankeyViewMode } from './buildSankeyData'
 
-/**
- * A mixed subtree emits one filter value per descendant custom category. Capped so a user with
- * hundreds of them cannot produce a multi-KB query string — which session replay records verbatim.
- * Past the cap the node focuses instead, which is lossless: the same categories are still reachable
- * one level down.
- */
-const MAX_NAV_FILTER_VALUES = 25
-
 interface CashFlowSankeyChartProps {
   incomeData: CategoryHierarchyResponse | null
   expenseData: CategoryHierarchyResponse | null
@@ -44,10 +36,6 @@ function navParams(action: Extract<NodeAction, { kind: 'navigate' }>, direction:
   if (startDate) params.set('start_date', startDate)
   if (endDate) params.set('end_date', endDate)
   return params
-}
-
-function totalFilterValues(action: Extract<NodeAction, { kind: 'navigate' }>) {
-  return (action.pfcPrimaries?.length ?? 0) + (action.pfcDetaileds?.length ?? 0) + (action.customCategoryIds?.length ?? 0)
 }
 
 export function CashFlowSankeyChart({
@@ -81,11 +69,11 @@ export function CashFlowSankeyChart({
       onFocus(action.key)
       return
     }
-    // A subtree wide enough to blow up the URL focuses instead — the categories stay reachable.
-    if (totalFilterValues(action) > MAX_NAV_FILTER_VALUES) {
-      onFocus(node.id)
-      return
-    }
+    // No filter-value cap is needed: only LEAVES navigate, and a leaf resolves to exactly ONE
+    // filter value (one custom id, one detailed enum, or one primary). Parents focus instead, so
+    // there is no path that accumulates a descendant's ids into a long query string. An earlier
+    // draft carried a cap for that case; the action model made it unreachable, and an unreachable
+    // guard reads as protection that is not there.
     const direction = node.nodeKind === 'income' ? 'income' : 'expense'
     navigate(`/transactions?${navParams(action, direction, startDate, endDate).toString()}`)
   }
