@@ -183,6 +183,10 @@ func MapError(err error) error {
 	// write did nothing wrong, the row just moved underneath it — so 409 with "reload and retry",
 	// same shape as ErrSavingsGoalBasisConflict just above. Mapping it to 500 would be the exact
 	// defect issue #1625 was opened for.
+	//
+	// ⚠ #1625 final review B2: this message is only TRUE because the guard is keyed on `version`
+	// (migration 000192), which only user-facing updates move. While it was keyed on updated_at,
+	// an ordinary sync's IncrementMatchCount produced this 409 for a change nobody made.
 	case errors.Is(err, domain.ErrRuleConcurrentlyModified):
 		return huma.Error409Conflict("This rule was changed by another request. Reload it and try again.")
 	// GAP AW: idempotency key reused for a different operation — RFC 7231 / Stripe semantics.

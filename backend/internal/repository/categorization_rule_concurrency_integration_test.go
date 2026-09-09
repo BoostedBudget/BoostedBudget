@@ -21,6 +21,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -155,4 +156,133 @@ func toFloat(t *testing.T, v interface{}) float64 {
 		t.Fatalf("expected condition value to decode as float64, got %T (%v)", v, v)
 	}
 	return f
+}
+
+// TestCategorizationRuleRepository_MatchCountBumpIsNotAConflict_Integration is #1625's final-review
+// B2 reproduction.
+//
+// Task 19's guard keyed on `updated_at`. But `updated_at` is not a user-edit version: the table
+// carries a BEFORE UPDATE trigger that stamps NOW() on EVERY write, and IncrementMatchCount — the
+// engine's per-matched-transaction bookkeeping, which runs during an ordinary Plaid sync with no
+// user involved at all — is a write. So a sync landing inside a user's read-modify-write window
+// rejected their save with "This rule was changed by another request", which is FALSE: nothing the
+// user cares about changed, and the likelihood scaled with how WELL the rule worked.
+//
+// The fix is a `version` column bumped only by user-facing updates (migration 000192).
+// IncrementMatchCount and IncrementOverrideCount deliberately do not touch it — asserted below, on
+// the column, not merely on the absence of a 409, so that a future writer adding `version =
+// version + 1` to the bookkeeping path fails here rather than reintroducing the false conflict.
+//
+// ⚠ The genuine-conflict case is NOT weakened: TestCategorizationRuleRepository_
+// ConcurrentRepairAndToggle_Integration above still requires exactly one of two racing USER writes
+// to be refused. Both tests must pass together, or the lock has been traded for the lost update
+// Task 19 existed to close.
+func TestCategorizationRuleRepository_MatchCountBumpIsNotAConflict_Integration(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewCategorizationRuleRepository(pool)
+
+	userID := insertTestUser(t, pool)
+
+	original := &domain.CategorizationRule{
+		UserID:         userID,
+		Name:           "Match Count Bump Rule " + uuid.New().String(),
+		Enabled:        true,
+		Priority:       1,
+		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "starbucks"}},
+		ConditionLogic: "AND",
+		TargetTags:     []string{"bump-fixture"},
+		TagBehavior:    "add",
+		Source:         "manual",
+	}
+	require.NoError(t, repo.Create(ctx, original))
+	ruleID := original.ID
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM categorization_rules WHERE id = $1`, ruleID) //nolint:errcheck
+	})
+
+	// The user opens the editor: one read, held while they type.
+	editing, err := repo.GetByID(ctx, ruleID)
+	require.NoError(t, err)
+	versionAtRead := editing.Version
+	require.NotZero(t, versionAtRead, "a stored rule must carry a version; 0 would make the guard vacuous")
+
+	// A sync fires the rule twice while the editor is open. No user is involved.
+	require.NoError(t, repo.IncrementMatchCount(ctx, ruleID))
+	require.NoError(t, repo.IncrementMatchCount(ctx, ruleID))
+
+	// Falsifiability: prove the bookkeeping really did move `updated_at`, which is what the old
+	// guard keyed on. Without this the test could pass against a trigger that stopped firing.
+	var updatedAtAfterBump time.Time
+	var versionAfterBump int64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT updated_at, version FROM categorization_rules WHERE id = $1`, ruleID,
+	).Scan(&updatedAtAfterBump, &versionAfterBump))
+	// The precise property, and it is exactly the OLD guard's predicate: `updated_at = $14` would
+	// no longer match. Asserted as inequality rather than "is later" on purpose — the Docker
+	// Postgres clock and the host clock are not the same clock (the trigger stamps DB NOW(), the
+	// insert wrote a host time.Now()), so an ordering assertion here is a flake, not a stronger
+	// check.
+	require.NotEqual(t, editing.UpdatedAt, updatedAtAfterBump,
+		"IncrementMatchCount did not move updated_at, so this test no longer reproduces B2")
+	require.Equal(t, int64(versionAtRead), versionAfterBump,
+		"background bookkeeping must NOT bump version — that is the whole distinction the column exists to draw")
+
+	// The user hits Save.
+	editing.Name = "Match Count Bump Rule (renamed) " + uuid.New().String()
+	require.NoError(t, repo.Update(ctx, editing),
+		"a background match-count bump is not a competing edit and must not be reported to the "+
+			"user as \"This rule was changed by another request\"")
+
+	saved, err := repo.GetByID(ctx, ruleID)
+	require.NoError(t, err)
+	assert.Equal(t, editing.Name, saved.Name)
+	assert.Equal(t, versionAtRead+1, saved.Version, "a user-facing update bumps the version exactly once")
+	assert.EqualValues(t, 2, saved.MatchCount, "the bookkeeping the user's save raced must not be lost")
+}
+
+// TestCategorizationRuleRepository_StaleVersionIsStillRefused_Integration is the other half of B2:
+// a SECOND save from a stale in-memory copy is still a 409. Without this, "no false conflicts"
+// could be satisfied by having no conflicts at all — which is the lost update Task 19 closed.
+func TestCategorizationRuleRepository_StaleVersionIsStillRefused_Integration(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewCategorizationRuleRepository(pool)
+
+	userID := insertTestUser(t, pool)
+
+	original := &domain.CategorizationRule{
+		UserID:         userID,
+		Name:           "Stale Version Rule " + uuid.New().String(),
+		Enabled:        true,
+		Priority:       1,
+		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "starbucks"}},
+		ConditionLogic: "AND",
+		TargetTags:     []string{"stale-fixture"},
+		TagBehavior:    "add",
+		Source:         "manual",
+	}
+	require.NoError(t, repo.Create(ctx, original))
+	ruleID := original.ID
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM categorization_rules WHERE id = $1`, ruleID) //nolint:errcheck
+	})
+
+	first, err := repo.GetByID(ctx, ruleID)
+	require.NoError(t, err)
+	second, err := repo.GetByID(ctx, ruleID)
+	require.NoError(t, err)
+
+	first.Priority = 9
+	require.NoError(t, repo.Update(ctx, first))
+
+	second.Priority = 3
+	err = repo.Update(ctx, second)
+	require.Error(t, err, "the second writer read a version the first has since superseded")
+	assert.True(t, errors.Is(err, domain.ErrRuleConcurrentlyModified),
+		"a genuine competing user edit must still be refused, got: %v", err)
+
+	final, err := repo.GetByID(ctx, ruleID)
+	require.NoError(t, err)
+	assert.Equal(t, 9, final.Priority, "the loser's write must not have landed")
 }

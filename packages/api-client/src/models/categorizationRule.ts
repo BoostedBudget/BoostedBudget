@@ -64,4 +64,6 @@ export interface CategorizationRule {
   target_tags?: string[] | null;
   updated_at: string;
   user_id: string;
+  /** Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict. */
+  version: number;
 }

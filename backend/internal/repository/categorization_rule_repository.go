@@ -76,6 +76,11 @@ func (r *categorizationRuleRepository) Create(ctx context.Context, rule *domain.
 	now := time.Now()
 	rule.CreatedAt = now
 	rule.UpdatedAt = now
+	// version is seeded by the column DEFAULT (migration 000192) rather than written here, so the
+	// database is the only thing that decides a new rule's starting token. Mirrored onto the struct
+	// because the caller returns this object straight to the client, and a zero would make the
+	// FIRST update look like a stale write.
+	rule.Version = 1
 
 	// Marshal JSON fields
 	conditionsJSON, err := json.Marshal(rule.Conditions)
@@ -140,7 +145,7 @@ func (r *categorizationRuleRepository) GetByID(ctx context.Context, id string) (
 			conditions, condition_logic,
 			target_kind, target_pfc_primary, target_pfc_detailed, target_custom_category_id,
 			target_tags, tag_behavior, source, match_count, override_count,
-			last_matched_at, created_at, updated_at
+			last_matched_at, created_at, updated_at, version
 		FROM categorization_rules
 		WHERE id = $1
 	`
@@ -169,6 +174,7 @@ func (r *categorizationRuleRepository) GetByID(ctx context.Context, id string) (
 		&rule.LastMatchedAt,
 		&rule.CreatedAt,
 		&rule.UpdatedAt,
+		&rule.Version,
 	)
 
 	if err != nil {
@@ -197,7 +203,7 @@ func (r *categorizationRuleRepository) GetByUserID(ctx context.Context, userID s
 			conditions, condition_logic,
 			target_kind, target_pfc_primary, target_pfc_detailed, target_custom_category_id,
 			target_tags, tag_behavior, source, match_count, override_count,
-			last_matched_at, created_at, updated_at
+			last_matched_at, created_at, updated_at, version
 		FROM categorization_rules
 		WHERE user_id = $1
 		ORDER BY priority DESC, created_at ASC
@@ -225,7 +231,7 @@ func (r *categorizationRuleRepository) GetEnabledByUserID(ctx context.Context, u
 			conditions, condition_logic,
 			target_kind, target_pfc_primary, target_pfc_detailed, target_custom_category_id,
 			target_tags, tag_behavior, source, match_count, override_count,
-			last_matched_at, created_at, updated_at
+			last_matched_at, created_at, updated_at, version
 		FROM categorization_rules
 		WHERE user_id = $1 AND enabled = true
 		  AND (
@@ -248,7 +254,7 @@ func (r *categorizationRuleRepository) GetByName(ctx context.Context, userID, na
 			conditions, condition_logic,
 			target_kind, target_pfc_primary, target_pfc_detailed, target_custom_category_id,
 			target_tags, tag_behavior, source, match_count, override_count,
-			last_matched_at, created_at, updated_at
+			last_matched_at, created_at, updated_at, version
 		FROM categorization_rules
 		WHERE user_id = $1 AND name = $2
 	`
@@ -277,6 +283,7 @@ func (r *categorizationRuleRepository) GetByName(ctx context.Context, userID, na
 		&rule.LastMatchedAt,
 		&rule.CreatedAt,
 		&rule.UpdatedAt,
+		&rule.Version,
 	)
 
 	if err != nil {
@@ -337,14 +344,26 @@ func (r *categorizationRuleRepository) ListAllForQuarantineCensus(ctx context.Co
 // ToggleRule both read-modify-write the WHOLE row (every column, not just the field either caller
 // meant to change), so without this guard a toggle racing a repair could win the write and put
 // the repair's PRIOR, malformed conditions back — last-writer-wins across the entire row. rule
-// carries the updated_at value its caller observed via GetByID; if the stored value has since
-// moved, this UPDATE matches zero rows and the write is refused rather than silently overwriting
-// whatever changed it. The table also carries a BEFORE UPDATE trigger
-// (update_categorization_rules_updated_at) that stamps NEW.updated_at = NOW() on every successful
-// write regardless of what this query supplies for it, which is why the fresh value is read back
-// via RETURNING rather than assumed to be time.Now() from this process.
+// carries the version its caller observed via GetByID; if the stored value has since moved, this
+// UPDATE matches zero rows and the write is refused rather than silently overwriting whatever
+// changed it.
+//
+// ⚠ #1625 final review B2: the guard was `AND updated_at = $14` and that produced FALSE conflicts.
+// The table carries a BEFORE UPDATE trigger (update_categorization_rules_updated_at) that stamps
+// NEW.updated_at = NOW() on EVERY successful write, and IncrementMatchCount is a write — engine
+// bookkeeping during an ordinary sync, with no user involved. A sync landing inside a user's
+// read-modify-write window therefore refused their save as "changed by another request", for a
+// change nobody made, with a likelihood that scaled with how well the rule worked.
+//
+// `version` (migration 000192) is moved ONLY here, so a competing user EDIT still conflicts and
+// background bookkeeping does not. Reverting to `WHERE id = $13` alone was the ship-sooner option
+// and was rejected: it reinstates the lost update Task 19 closed, and a silent lost update is
+// worse than a false 409 precisely because the user cannot see it.
+//
+// updated_at is still read back via RETURNING rather than assumed to be time.Now() from this
+// process, because the trigger — not this query — decides it.
 func (r *categorizationRuleRepository) Update(ctx context.Context, rule *domain.CategorizationRule) error {
-	expectedUpdatedAt := rule.UpdatedAt // observed by the caller's prior read; the concurrency guard
+	expectedVersion := rule.Version // observed by the caller's prior read; the concurrency guard
 
 	// Marshal JSON fields
 	conditionsJSON, err := json.Marshal(rule.Conditions)
@@ -363,9 +382,10 @@ func (r *categorizationRuleRepository) Update(ctx context.Context, rule *domain.
 			conditions = $5, condition_logic = $6,
 			target_kind = $7, target_pfc_primary = $8, target_pfc_detailed = $9,
 			target_custom_category_id = $10,
-			target_tags = $11, tag_behavior = $12
-		WHERE id = $13 AND updated_at = $14
-		RETURNING updated_at
+			target_tags = $11, tag_behavior = $12,
+			version = version + 1
+		WHERE id = $13 AND version = $14
+		RETURNING updated_at, version
 	`
 
 	err = r.db.QueryRow(ctx, query,
@@ -382,12 +402,12 @@ func (r *categorizationRuleRepository) Update(ctx context.Context, rule *domain.
 		tagsJSON,
 		rule.TagBehavior,
 		rule.ID,
-		expectedUpdatedAt,
-	).Scan(&rule.UpdatedAt)
+		expectedVersion,
+	).Scan(&rule.UpdatedAt, &rule.Version)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Zero rows matched either because the id doesn't exist, or because it exists but
-			// updated_at moved underneath us. Those are different failures for the caller (404
+			// `version` moved underneath us. Those are different failures for the caller (404
 			// vs. 409), so a second, cheap lookup disambiguates rather than guessing.
 			var exists bool
 			if existsErr := r.db.QueryRow(ctx,
@@ -441,6 +461,12 @@ func (r *categorizationRuleRepository) CountByUserID(ctx context.Context, userID
 }
 
 // IncrementMatchCount increments the match count and updates last_matched_at.
+//
+// ⚠ It must NEVER touch `version`. This is engine bookkeeping that runs per matched transaction
+// during a sync; bumping the optimistic-concurrency token here would refuse the user's next save
+// as a conflict they did not cause — the exact defect #1625 final review B2 fixed. Pinned by
+// TestCategorizationRuleRepository_MatchCountBumpIsNotAConflict_Integration, which asserts on the
+// COLUMN and not merely on the absence of a 409.
 func (r *categorizationRuleRepository) IncrementMatchCount(ctx context.Context, ruleID string) error {
 	query := `
 		UPDATE categorization_rules
@@ -461,6 +487,8 @@ func (r *categorizationRuleRepository) IncrementMatchCount(ctx context.Context, 
 }
 
 // IncrementOverrideCount increments the override count.
+//
+// ⚠ Same invariant as IncrementMatchCount above: background bookkeeping, so no `version` bump.
 func (r *categorizationRuleRepository) IncrementOverrideCount(ctx context.Context, ruleID string) error {
 	query := `
 		UPDATE categorization_rules
@@ -514,6 +542,7 @@ func (r *categorizationRuleRepository) queryRules(ctx context.Context, query str
 			&rule.LastMatchedAt,
 			&rule.CreatedAt,
 			&rule.UpdatedAt,
+			&rule.Version,
 		)
 		if err != nil {
 			return nil, err
