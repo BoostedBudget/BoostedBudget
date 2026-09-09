@@ -62,12 +62,15 @@ function utcCalendarDay(now: Date = new Date()): Date {
 /**
  * Builds a `getRange` for a preset whose window ENDS TODAY and only its start varies.
  *
- * Every relative preset below is of that shape, and having them share this one construction is
- * what keeps the #1626 Phase 3 Defect 1 fix structural rather than repeated: `this_month` used to
- * end on `endOfMonth(today)`, and an end date in the future made the backend zero-fill and the
- * frontend forward-fill manufacture chart points for days that had not happened yet. (The
- * manual-entry path was already clamped by DateRangePicker's `max={today}`; the presets were the
- * hole.) A new preset written through this helper cannot reopen it.
+ * Five of the presets below are of that shape and share this one construction — `this_week`,
+ * `this_month`, `last_3_months`, `last_6_months`, and `ytd`. (`last_month` deliberately does not
+ * use this helper: it ends at the *previous* month's end, not today — see its own comment below.)
+ * Sharing this construction is what keeps the #1626 Phase 3 Defect 1 fix structural rather than
+ * repeated: `this_month` used to end on `endOfMonth(today)`, and an end date in the future made
+ * the backend zero-fill and the frontend forward-fill manufacture chart points for days that had
+ * not happened yet. (The manual-entry path was already clamped by DateRangePicker's
+ * `max={today}`; the presets were the hole.) A new preset written through this helper cannot
+ * reopen it.
  *
  * `now` is resolved through utcCalendarDay in one place for the same reason — see there for why a
  * browser-local `new Date()` disagrees with the backend by up to a day.

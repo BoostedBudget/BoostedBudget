@@ -1557,9 +1557,33 @@ deploy loops on a failing start and no amount of restarting fixes it.
 
 ### Repair
 
+`$DATABASE_URL` is the Neon **pooled** endpoint — golang-migrate cannot use it (see "Database
+Configuration" above: poolers reject the session-level parameters migrations set). Use the
+**direct** endpoint instead, in whichever of these two contexts you're repairing from.
+
+**From a repo checkout**, using `MIGRATION_DATABASE_URL` (the direct connection string):
+
 ```bash
-migrate -path backend/migrations -database "$DATABASE_URL" force 189
-migrate -path backend/migrations -database "$DATABASE_URL" up
+test -n "$MIGRATION_DATABASE_URL"  # must be the direct (non "-pooler") Neon endpoint
+migrate -path backend/migrations -database "$MIGRATION_DATABASE_URL" force 189
+migrate -path backend/migrations -database "$MIGRATION_DATABASE_URL" up
+```
+
+If you don't have `MIGRATION_DATABASE_URL` handy: `fly secrets` are write-only (`fly secrets list`
+shows names, never values), so pull the direct connection string from the **Neon console**
+(Project → Connection Details → select the branch/database → "Direct" toggle, i.e. the endpoint
+*without* `-pooler` in its hostname — see "Neon Connection String Formats" above).
+
+**From inside a Fly machine** (migrations live at `/app/migrations` in the image, and the
+`migrate` binary is already on `PATH`):
+
+```bash
+fly ssh console --app boostedbudget-api   # or boostedbudget-staging-api
+# Prefer MIGRATION_DATABASE_URL if the secret is set; otherwise derive the direct endpoint
+# from DATABASE_URL the same way docker-entrypoint.sh does (strip "-pooler" from the host):
+MIGRATION_URL="${MIGRATION_DATABASE_URL:-$(echo "$DATABASE_URL" | sed 's/\(@[^/]*\)-pooler\./\1./')}"
+migrate -path /app/migrations -database "$MIGRATION_URL" force 189
+migrate -path /app/migrations -database "$MIGRATION_URL" up
 ```
 
 ⚠ **Force to 189, not 190.** Migration `000190` is the step that conditionally drops an
