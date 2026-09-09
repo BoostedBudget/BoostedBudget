@@ -165,11 +165,14 @@ var namespaceRegistry = map[Namespace]namespaceConfig{
 	// entry would stay a valid hit and keep serving the overstated net worth. The 120s TTL makes
 	// that window short, not absent. Same reasoning as versions 2 through 7.
 	//
-	// Version 8 also covers the SAME finding's sibling F5: the personal read's account-type filter
+	// Version 8 also covers the SAME finding's sibling F5 — the personal read's account-type filter
 	// now tests the recovered type, so a request with accountTypes=['credit'] returns an orphaned
-	// credit card it used to omit. Both change what a cached read returns for identical arguments
-	// and both ship in the same undeployed branch, so one bump orphans every pre-fix envelope —
-	// exactly as version 6 covered two findings at once.
+	// credit card it used to omit — and finding F2, which changes both cash-flow reads cached here:
+	// GetCashFlowSummary echoes the requested end date again (version 6 clamped it, which made the
+	// endpoint label a window its own aggregate did not measure), and GetCashFlowHistory's response
+	// gained requested_end_date. All three change what a cached read returns for identical
+	// arguments and all three ship in the same undeployed branch, so one bump orphans every
+	// pre-fix envelope — exactly as version 6 covered two findings at once.
 	NamespaceAnalytics: {
 		TTL: 120 * time.Second, SchemaVersion: 8, ScopeKind: ScopeUser, DefaultEnabled: true,
 	},

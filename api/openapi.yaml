@@ -1636,12 +1636,16 @@ components:
           type:
             - array
             - "null"
+        requested_end_date:
+          format: date-time
+          type: string
         start_date:
           format: date-time
           type: string
       required:
         - start_date
         - end_date
+        - requested_end_date
         - grouping
         - periods
       type: object

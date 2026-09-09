@@ -33,11 +33,17 @@ var ErrInvalidCategoryToken = errors.New("category token suffix is not a valid U
 // Issue #1215: AI-tool-callable analytics endpoints
 type AnalyticsService interface {
 	// GetCashFlowSummary returns aggregated cash flow data for a date range
-	// Includes income, expenses, net cash flow, and period comparison
+	// Includes income, expenses, net cash flow, and period comparison.
+	// It answers for the REQUESTED range verbatim and echoes it — nothing is fabricated and
+	// nothing is clamped, so the label always describes the window the numbers cover. Compare
+	// GetCashFlowHistory, which clamps and discloses.
 	GetCashFlowSummary(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowSummaryResponse, error)
 
 	// GetCashFlowHistory returns time series cash flow data grouped by period
-	// Used for rendering cash flow bar charts
+	// Used for rendering cash flow bar charts.
+	// Because it GAP-FILLS, a requested end past today is clamped in both the query and the
+	// response's end_date; the caller's own end is reported unchanged in requested_end_date, so
+	// the two cash-flow endpoints agree about what was asked while each labels what it answered.
 	GetCashFlowHistory(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowHistoryResponse, error)
 
 	// GetSpendingByCategory returns spending totals grouped by category with percentages
@@ -136,21 +142,29 @@ func (s *analyticsService) GetCashFlowSummary(ctx context.Context, userID string
 		return nil, fmt.Errorf("invalid filters: %w", err)
 	}
 
-	// ONE effectiveEnd, computed here at the service boundary and used for the echoed range only
-	// (#1626 Phase 2, review finding X7). Defect 1's clamp landed in GetCashFlowHistory alone, so
-	// for a future-ranged request the two endpoints reported DIFFERENT ranges for the same
-	// question. Both now resolve it through the same two functions — clampFillEnd for the horizon,
-	// responseEndDate for the floor that keeps start <= end when the whole range lies ahead.
+	// ⚠ NO CLAMP HERE, AND THAT IS A DECISION THIS METHOD MADE TWICE (final whole-branch review,
+	// finding F2 — which reverses #1626 Phase 2's finding X7).
 	//
-	// ⚠ THE ECHO ONLY, AND NOT THE QUERY BOUND. History threads its clamp into the repository call
+	// X7 observed that for a future-ranged request this endpoint and GetCashFlowHistory echoed
+	// different ranges for the same question, and clamped THIS ONE'S ECHO to today while leaving
+	// its query on the requested range. That left the endpoint inconsistent WITH ITSELF: the label
+	// said "through today", the number covered rows past today, and for an entirely-future range
+	// responseEndDate floored the echo to StartDate so the response claimed [start, start] while
+	// the aggregate covered [start, requestedEnd]. A label and a number describing different
+	// windows is not a cosmetic improvement on two labels that differ.
+	//
+	// THE QUERY MUST NOT BE CLAMPED EITHER. History threads a clamp into its repository call
 	// because it has gap-FILLING to stop: without it the query fabricates a zero-valued bucket for
-	// every future period. This method fabricates nothing — it is one aggregate over real rows —
-	// and transactions.date is a zoneless, effectively institution-local calendar date, so a user
-	// ahead of UTC legitimately has rows dated later than the UTC day. Clamping the query bound
-	// here would DELETE those rows from their total: real data loss to fix a cosmetic
-	// disagreement. The queried window, and the equal-length previous window compared against it,
-	// therefore stay on the REQUESTED range.
-	effectiveEnd := responseEndDate(filters.StartDate, clampFillEnd(filters.EndDate, time.Now()), nil)
+	// every future period. This method fabricates nothing — it is one aggregate over rows that
+	// exist — and transactions.date is a zoneless, effectively institution-local calendar date, so
+	// a user ahead of UTC legitimately has rows dated later than the UTC day. Clamping the query
+	// bound would DELETE those rows from their own total: real data loss, to fix a label.
+	//
+	// So: this endpoint queries the requested range and echoes the requested range. The two
+	// endpoints still agree about the range they were ASKED for — GetCashFlowHistory reports it in
+	// requested_end_date — and each labels the window it actually measured. Asserted by comparing
+	// the echo with the filters the repository was handed, in
+	// TestGetCashFlowSummary_EchoesTheWindowItActuallyQueried.
 
 	// Get aggregated cash flow for current period
 	currentAgg, err := s.analyticsRepo.GetCashFlowAggregation(ctx, userID, filters)
@@ -183,8 +197,8 @@ func (s *analyticsService) GetCashFlowSummary(ctx context.Context, userID string
 	// Build response
 	response := &domain.CashFlowSummaryResponse{
 		StartDate: filters.StartDate,
-		// effectiveEnd, not filters.EndDate — see the clamp's comment above.
-		EndDate:      effectiveEnd,
+		// The requested end, which is the end this aggregate measured — see the block above.
+		EndDate:      filters.EndDate,
 		Income:       currentAgg.Income,
 		Expenses:     currentAgg.Expenses,
 		NetCashFlow:  currentAgg.NetCashFlow(),
@@ -248,6 +262,13 @@ func (s *analyticsService) GetCashFlowHistory(ctx context.Context, userID string
 	// call, so the same value bounds the query and the gap-filling (#1626 Phase 3, Defect 1).
 	// Nothing downstream re-derives "now": a clamp buried in the fill loop would leave the
 	// query, the fill and the response disagreeing about which day the answer stops on.
+	//
+	// requestedEnd is captured BEFORE the clamp overwrites it, because the response now DISCLOSES
+	// the tail it dropped (final whole-branch review, finding F2). Without that, a caller
+	// comparing this endpoint with GetCashFlowSummary — which queries and echoes the requested
+	// range, having nothing to fabricate — sees two different end dates and no way to tell a
+	// deliberate horizon from a disagreement.
+	requestedEnd := filters.EndDate
 	effectiveEnd := clampFillEnd(filters.EndDate, time.Now())
 	filters.EndDate = effectiveEnd
 
@@ -271,10 +292,11 @@ func (s *analyticsService) GetCashFlowHistory(ctx context.Context, userID string
 	}
 
 	return &domain.CashFlowHistoryResponse{
-		StartDate: filters.StartDate,
-		EndDate:   responseEndDate(filters.StartDate, effectiveEnd, periods),
-		Grouping:  filters.Grouping,
-		Periods:   periods,
+		StartDate:        filters.StartDate,
+		EndDate:          responseEndDate(filters.StartDate, effectiveEnd, periods),
+		RequestedEndDate: requestedEnd,
+		Grouping:         filters.Grouping,
+		Periods:          periods,
 	}, nil
 }
 

@@ -46,6 +46,15 @@ func (f *CashFlowFilters) Validate() error {
 
 // CashFlowSummaryResponse represents the response for GET /api/v1/analytics/cash-flow-summary
 // Provides aggregated income, expenses, and net cash flow for a date range.
+//
+// ⚠ start_date and end_date are the range this response's NUMBERS cover, which is the range the
+// caller requested, verbatim (final whole-branch review, finding F2). This endpoint fabricates
+// nothing — it is one aggregate over rows that exist — and transactions.date is a zoneless,
+// effectively institution-local calendar date, so a user ahead of UTC legitimately has rows dated
+// later than the UTC day. Clamping the QUERY to today would delete those rows from their own
+// total, and clamping only the LABEL is worse: it advertises a window the aggregate did not
+// measure. Compare CashFlowHistoryResponse, which DOES clamp, discloses it in
+// requested_end_date, and has a fabrication problem to solve that this endpoint does not have.
 type CashFlowSummaryResponse struct {
 	StartDate        time.Time                 `json:"start_date"`
 	EndDate          time.Time                 `json:"end_date"`
@@ -72,11 +81,28 @@ type CashFlowPeriodComparison struct {
 
 // CashFlowHistoryResponse represents the response for GET /api/v1/analytics/cash-flow-history
 // Provides time series cash flow data for charts with period grouping.
+//
+// ⚠ THIS ENDPOINT CLAMPS ITS QUERY, AND SAYS SO. Unlike the summary it GAP-FILLS, so an
+// unclamped future end fabricates a zero-valued bucket for every period that has not happened
+// (#1626 Phase 3, Defect 1 — the user-visible symptom was "Week of Sep 13 / Sep 20 / Sep 27"
+// rendered on Sep 9, flat at exactly 0). end_date is therefore the horizon actually queried and
+// answered for, and requested_end_date is what the caller asked for. When they differ, the
+// difference is the tail this response deliberately does not cover — stated as a field rather
+// than left for the caller to infer, so an API or LLM-tool consumer comparing this endpoint with
+// cash-flow-summary can see WHY the two windows differ instead of concluding they disagree
+// (final whole-branch review, finding F2).
+//
+// end_date can also exceed the clamp: a period the repository genuinely returned beyond today
+// (institution-local dates run ahead of UTC) widens it rather than being contradicted — see
+// responseEndDate. So end_date > requested_end_date is impossible, but end_date > today is not.
 type CashFlowHistoryResponse struct {
-	StartDate time.Time            `json:"start_date"`
-	EndDate   time.Time            `json:"end_date"`
-	Grouping  string               `json:"grouping"` // "daily", "weekly", "monthly"
-	Periods   []CashFlowPeriodData `json:"periods"`
+	StartDate time.Time `json:"start_date"`
+	EndDate   time.Time `json:"end_date"`
+	// RequestedEndDate is the caller's own end date, echoed unchanged. Equal to EndDate for every
+	// request that does not reach past today, which is nearly all of them.
+	RequestedEndDate time.Time            `json:"requested_end_date"`
+	Grouping         string               `json:"grouping"` // "daily", "weekly", "monthly"
+	Periods          []CashFlowPeriodData `json:"periods"`
 }
 
 // CashFlowPeriodData represents a single period in the cash flow history timeline
