@@ -255,6 +255,27 @@ func RegisterCategorizationRuleRoutes(api huma.API, handler *CategorizationRuleH
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetUserRules)
 
+	// GET /api/v1/auto-categorization/condition-schema - the published condition matrix
+	//
+	// MUST be registered before GET /{id}. humatest resolves routes in registration order, so a
+	// literal that shares a prefix with a parameterised sibling is shadowed by it when registered
+	// second — which is what happened here: this route answered from GetRuleByID (200 with a null
+	// body) and no test noticed, because none called it. Production's Echo router prefers the
+	// literal regardless, so ordering never affected production; it only made the endpoint
+	// untestable. Pinned by TestConditionSchemaRoute_IsNotShadowedByTheIDRoute.
+	huma.Register(api, huma.Operation{
+		OperationID: "getConditionSchema",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/auto-categorization/condition-schema",
+		Summary:     "Get the condition matrix",
+		Description: "Returns every condition field, the operators each accepts, the value shape " +
+			"each operator requires, closed value sets, and the semantics that cannot be inferred " +
+			"from a type — notably that signed_amount is POSITIVE for money leaving the account. " +
+			"Derived from the same matrix the validator enforces, so it cannot drift from it.",
+		Tags:     []string{"Auto-Categorization"},
+		Security: []map[string][]string{{"clerk": {}}},
+	}, handler.GetConditionSchema)
+
 	// GET /api/v1/auto-categorization/{id} - Get rule by ID
 	huma.Register(api, huma.Operation{
 		OperationID: "getRuleByID",
@@ -301,36 +322,21 @@ func RegisterCategorizationRuleRoutes(api huma.API, handler *CategorizationRuleH
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteRule)
 
-	// GET /api/v1/auto-categorization/condition-schema - the published condition matrix
-	//
-	// Registered before the {id} routes for the same reason preview is: humatest is
-	// registration-order sensitive where production's Echo router is not.
-	huma.Register(api, huma.Operation{
-		OperationID: "getConditionSchema",
-		Method:      http.MethodGet,
-		Path:        "/api/v1/auto-categorization/condition-schema",
-		Summary:     "Get the condition matrix",
-		Description: "Returns every condition field, the operators each accepts, the value shape " +
-			"each operator requires, closed value sets, and the semantics that cannot be inferred " +
-			"from a type — notably that signed_amount is POSITIVE for money leaving the account. " +
-			"Derived from the same matrix the validator enforces, so it cannot drift from it.",
-		Tags:     []string{"Auto-Categorization"},
-		Security: []map[string][]string{{"clerk": {}}},
-	}, handler.GetConditionSchema)
-
 	// POST /api/v1/auto-categorization/preview - Dry-run a candidate rule
 	//
-	// Registered BEFORE the {id} routes: humatest is registration-order sensitive, so a literal
-	// path that shares a prefix with a parameterised one must come first there. Production's
-	// Echo router always prefers the literal, but a route can look dead in tests otherwise.
+	// Unlike condition-schema above, ordering is not load-bearing here: this is a POST and there
+	// is no POST /{id} for it to be shadowed by. (An earlier revision of this comment claimed it
+	// was "registered BEFORE the {id} routes" — it was not, and for preview it does not matter.)
 	huma.Register(api, huma.Operation{
 		OperationID: "previewRule",
 		Method:      http.MethodPost,
 		Path:        "/api/v1/auto-categorization/preview",
 		Summary:     "Preview a categorization rule",
 		Description: "Reports which of your recent transactions a candidate rule would match, " +
-			"WITHOUT saving the rule. Validation is identical to createRule, so a rule that " +
-			"previews cleanly will also save cleanly.",
+			"WITHOUT saving the rule. Condition, shape and target-category validation is identical " +
+			"to createRule. Two things preview cannot check, because they depend on state at the " +
+			"moment of the write: rule names must be unique per user, and the target category must " +
+			"still exist when you save.",
 		Tags:     []string{"Auto-Categorization"},
 		Security: []map[string][]string{{"clerk": {}}},
 	}, handler.PreviewRule)

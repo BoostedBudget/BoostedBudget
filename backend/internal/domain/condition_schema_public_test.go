@@ -77,3 +77,65 @@ func TestConditionSchema_ExposesTheSemanticsThatFailSilently(t *testing.T) {
 			"and the rule just never matches, which is unguessable and undebuggable")
 	}
 }
+
+// N1 (#1625, Codex adversarial round 5): the published Example must actually VALIDATE.
+//
+// Both PFC fields shipped `"example text"` — they use ShapeText, so exampleFor fell through to its
+// default, and their EnumFn rejects anything outside the curated PFC registry. An agent copying the
+// advertised example got a 422 from the endpoint that exists to stop agents guessing. The earlier
+// test could not see this: it compared operator and shape STRINGS and never once exercised Example.
+//
+// This is deliberately written as a sweep over everything the schema publishes rather than a
+// two-case check, so a field added later cannot reintroduce the same defect quietly.
+func TestConditionSchema_EveryPublishedExampleValidates(t *testing.T) {
+	for _, f := range ConditionSchema().Fields {
+		for _, op := range f.Operators {
+			cond := RuleCondition{
+				Field:    RuleConditionField(f.Field),
+				Operator: op.Operator,
+				Value:    op.Example,
+			}
+			if err := cond.ValidateShape(); err != nil {
+				t.Errorf("%s %s: the published example %#v does not validate: %v\n"+
+					"a caller copying it verbatim gets a 422 from the endpoint meant to prevent that",
+					f.Field, op.Operator, op.Example, err)
+			}
+		}
+	}
+}
+
+// N3: a field with a closed set must publish it, or be an explicit, reasoned exemption.
+//
+// closedValuesFor is a hand-written switch keyed by field while FieldSpec.EnumFn is the actual
+// declaration that a closed set exists. Nothing connected them, so a new field with an EnumFn
+// published `nil` silently and an agent had to discover its legal values by 422.
+//
+// The PFC exemption is real and deliberate, not an oversight: those two sets are ~120 values that
+// already reach clients through their own published schema, so inlining them would bloat every
+// response with information the caller already has. Naming them here keeps that decision explicit
+// — adding a field to this map is a choice someone has to make on purpose.
+var closedSetExemptFields = map[RuleConditionField]string{
+	FieldPFCPrimary:  "PFC primaries are published separately; ~120 values would bloat every response",
+	FieldPFCDetailed: "PFC detaileds are published separately; ~120 values would bloat every response",
+}
+
+func TestConditionSchema_EveryClosedSetIsPublishedOrExempt(t *testing.T) {
+	published := map[string]ConditionFieldSchema{}
+	for _, f := range ConditionSchema().Fields {
+		published[f.Field] = f
+	}
+
+	for field, spec := range FieldSpecs {
+		if spec.EnumFn == nil {
+			continue
+		}
+		if _, exempt := closedSetExemptFields[field]; exempt {
+			continue
+		}
+		if len(published[string(field)].Values) == 0 {
+			t.Errorf("field %q declares a closed set (EnumFn is set) but publishes no values, and "+
+				"is not a documented exemption — an agent can only discover its legal values by 422",
+				field)
+		}
+	}
+}

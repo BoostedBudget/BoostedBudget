@@ -32,7 +32,7 @@
  */
 
 /**
- * Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array.
+ * Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array, or a single string as a one-element shorthand.
  */
 export type RuleConditionOperator = typeof RuleConditionOperator[keyof typeof RuleConditionOperator];
 

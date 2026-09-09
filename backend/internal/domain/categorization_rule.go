@@ -92,7 +92,7 @@ type RuleCondition struct {
 	// Operator is the comparison to apply. Before #1625 this field was declared, serialized into
 	// the public schema, and then never validated or read by ANY evaluator — which is precisely
 	// why callers guessed at it. It is now load-bearing.
-	Operator string `json:"operator,omitempty" enum:"eq,neq,gt,gte,lt,lte,between,contains,starts_with,ends_with,in" doc:"Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array."`
+	Operator string `json:"operator,omitempty" enum:"eq,neq,gt,gte,lt,lte,between,contains,starts_with,ends_with,in" doc:"Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array, or a single string as a one-element shorthand."`
 
 	// Value is a string, an array of strings ("any of"), a number, or a bounded range object,
 	// depending on the field and operator. See FieldSpecs.

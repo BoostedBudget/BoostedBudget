@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -86,6 +87,21 @@ func TestRecordRuleQuarantineCandidate_EveryDeclaredReasonRecordsAsItself(t *tes
 // "this code path never ran" — indistinguishable. The deferral of enforcement rests entirely on
 // reading that inventory, so an unreadable inventory made the deferral unjustifiable.
 func TestQuarantineMetric_SeriesExistBeforeAnythingIsRecorded(t *testing.T) {
+	// ⚠ Deliberately does NOT call initQuarantineSeries() — see seriesCountAtStartup.
+	//
+	// An earlier revision called Reset() and then initQuarantineSeries() here. That tested the
+	// FUNCTION and not the WIRING: deleting `func init()` from the production file left this green,
+	// because the test performed the pre-warm itself. This is the second falsifiability bug in this
+	// same test; the first was reading label values with WithLabelValues (see below).
+	want := len(AllQuarantineReasons()) + 1 // + "other"
+	if seriesCountAtStartup != want {
+		t.Fatalf("at process start %d series existed, want %d — the pre-warm is not wired into "+
+			"package initialization, so a real /metrics scrape before any rule is evaluated would "+
+			"omit the labels entirely", seriesCountAtStartup, want)
+	}
+
+	// The rest re-establishes the same property against a freshly reset vector, which additionally
+	// pins that initQuarantineSeries covers every reason rather than a stale hardcoded subset.
 	ruleQuarantineCandidates.Reset()
 	initQuarantineSeries()
 
@@ -96,7 +112,6 @@ func TestQuarantineMetric_SeriesExistBeforeAnythingIsRecorded(t *testing.T) {
 	// loop instantiated exactly the thing it was supposed to be verifying, and the count passed
 	// even with the pre-warm deleted. Caught by mutating initQuarantineSeries and seeing the test
 	// stay green.
-	want := len(AllQuarantineReasons()) + 1 // + "other"
 	if n := testutil.CollectAndCount(ruleQuarantineCandidates); n != want {
 		t.Fatalf("expected %d zero-valued series (one per reason plus \"other\") to exist before "+
 			"anything is recorded, got %d — an empty scrape would then be indistinguishable from "+
@@ -109,4 +124,15 @@ func TestQuarantineMetric_SeriesExistBeforeAnythingIsRecorded(t *testing.T) {
 			t.Errorf("reason %q should start at an explicit 0, got %v", r, got)
 		}
 	}
+}
+
+// seriesCountAtStartup is captured in TestMain, which runs AFTER every package-level var and every
+// init() but BEFORE any test — the only point at which the process's real startup state is still
+// observable. A package-level var would be too early (vars initialize before init functions) and
+// any Test function too late (an earlier test may have called Reset()).
+var seriesCountAtStartup int
+
+func TestMain(m *testing.M) {
+	seriesCountAtStartup = testutil.CollectAndCount(ruleQuarantineCandidates)
+	os.Exit(m.Run())
 }

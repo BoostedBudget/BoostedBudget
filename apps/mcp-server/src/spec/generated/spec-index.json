@@ -2320,7 +2320,7 @@
             "ends_with",
             "in"
           ],
-          "description": "Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array."
+          "description": "Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array, or a single string as a one-element shorthand."
         },
         {
           "name": "conditions[].type",
@@ -2527,7 +2527,7 @@
       ],
       "manifestClass": "read",
       "excluded": false,
-      "description": "Reports which of your recent transactions a candidate rule would match, WITHOUT saving the rule. Validation is identical to createRule, so a rule that previews cleanly will also save cleanly.",
+      "description": "Reports which of your recent transactions a candidate rule would match, WITHOUT saving the rule. Condition, shape and target-category validation is identical to createRule. Two things preview cannot check, because they depend on state at the moment of the write: rule names must be unique per user, and the target category must still exist when you save.",
       "requestBody": [
         {
           "name": "condition_logic",
@@ -2573,7 +2573,7 @@
             "ends_with",
             "in"
           ],
-          "description": "Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array."
+          "description": "Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array, or a single string as a one-element shorthand."
         },
         {
           "name": "conditions[].type",
@@ -2857,7 +2857,7 @@
             "ends_with",
             "in"
           ],
-          "description": "Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array."
+          "description": "Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array, or a single string as a one-element shorthand."
         },
         {
           "name": "conditions[].type",

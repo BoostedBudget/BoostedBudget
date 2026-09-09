@@ -364,7 +364,7 @@ export function useGetConditionSchema<TData = Awaited<ReturnType<typeof getCondi
 
 
 /**
- * Reports which of your recent transactions a candidate rule would match, WITHOUT saving the rule. Validation is identical to createRule, so a rule that previews cleanly will also save cleanly.
+ * Reports which of your recent transactions a candidate rule would match, WITHOUT saving the rule. Condition, shape and target-category validation is identical to createRule. Two things preview cannot check, because they depend on state at the moment of the write: rule names must be unique per user, and the target category must still exist when you save.
  * @summary Preview a categorization rule
  */
 export const previewRule = (
