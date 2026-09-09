@@ -2641,8 +2641,16 @@ func (r *transactionRepository) GetByUserIDKeyset(
 	//
 	// WHY. The response carried only a page, so "what does this filtered set come to" was not a
 	// question the product could answer — which is what made the reports Sankey's click-through
-	// claim (this node's amount equals the filtered list's total) unverifiable rather than merely
-	// untested.
+	// claim unverifiable rather than merely untested.
+	//
+	// ⚠ STATED PRECISELY, because the loose form ("this node's amount equals the filtered list's
+	// total") is FALSE for income and shipped in five comments before this branch was reviewed. A
+	// hierarchy node's amount is COALESCE(SUM(ABS(t.amount)),0) — an unsigned chart quantity — while
+	// this total is SUM(t.amount) under PFCv2 signs, where inflows are NEGATIVE. So the property that
+	// holds over the same filtered set is |node amount| == |total_amount|; for an expense node the
+	// two numbers also happen to be equal, and for an income node they differ by a factor of −1.
+	// Both SQL expressions are right for their own consumer: a chart needs magnitudes, a ledger
+	// total needs signs. Do not "fix" either one to make the sentence simpler.
 	//
 	// ⚠ ONLY when no cursor was supplied. Re-aggregating the whole filtered set on every page of
 	// the busiest list in the app would be real cost for a number that does not change as the user
@@ -2968,13 +2976,47 @@ func retainedAccountVisibilityLegs(alias, dateCol string) string {
 // Hiding a user's own retained history because an interval was never written is the #1569 defect in
 // miniature, so absence of interval data is treated as "no reason to hide", not as evidence.
 //
-// ⚠ NARROW BY CONSTRUCTION, and this is the whole safety argument: it fires only when there is no
-// 'active' row WHATSOEVER. An account the user genuinely disconnected has an 'active' row followed
-// by a terminal one, so the historical leg continues to govern it with its existing date bounds.
-// This cannot resurrect a deliberately removed account.
+// ⚠ NARROW BY CONSTRUCTION, and this is the whole safety argument — stated precisely, because an
+// earlier version of this comment stated it wrongly and this branch's own fixture is the
+// counterexample. What the leg cannot do is override a RECORDED active interval: it fires only when
+// there is no 'active' row WHATSOEVER, so the moment one exists the historical leg governs the
+// account with its existing date bounds, whatever the removal cause.
+//
+// It does NOT key on removal cause, and it must not. Removal CAUSE and whether an interval was ever
+// WRITTEN are orthogonal: migration 000152's removed branch skips the 'active' prefix whenever
+// removed_at IS NULL or <= created_at while hardcoding the terminal reason 'user_disconnect'
+// (000152_backfill_account_status_history.up.sql, the 'removed accounts' INSERT pair), and
+// record_account_status_change() writes the same single-terminal-row shape for any account whose
+// FIRST recorded status is already terminal. So a 'user_disconnect' account with no 'active' row is
+// reachable, and this leg admits its transactions. That is the #1569 answer, not an accident: a
+// disconnected chain KEEPS its history (#1569 task 2), and nothing here changes a balance or
+// un-removes an account — it only stops hiding retained rows because an interval was never written.
+// Adding `AND na.removed_reason IS DISTINCT FROM 'user_disconnect'` would contradict #1569, not
+// tighten this. TestUnifiedFeed_AccountWithNoActiveInterval_StillShowsItsTransactions_Integration
+// seeds exactly that account and pins both halves.
+//
+// ⚠ IT WIDENS FIVE READS, NOT ONE, and three of them are not the transactions feed. It is rendered
+// inside retainedAccountVisibilityLegs (see above), whose call sites are: this file's unified feed
+// (banking and investment arms), investmentTransactionRepository.GetByUserIDKeyset — the
+// investments page's own list — investmentTransactionRepository.GetByUserID, which has no
+// production caller today and is documented as a latent trap, and
+// investmentAnalyticsRepository.IncomeSummary. That last one is not a list: it is a
+// `COALESCE(-SUM(it.amount),0) ... GROUP BY income_type` aggregate whose result is dividend and
+// interest income REPORTED TO THE USER, so this leg changes a money number as well as a row set.
+//
+// That is in scope on purpose. IncomeSummary already carries these legs precisely so the income
+// total and the investments feed cannot disagree about the same rows (#1569 T12 — before it did,
+// TotalIncome went 120.00 -> 0.00 on a disconnection with nothing deleted). Widening the feed but
+// not the total would recreate exactly that divergence, one artifact narrower. The money change is
+// pinned in its own right by
+// TestIncomeSummary_AccountWithNoActiveInterval_StillCountsItsIncome_Integration, which also holds
+// the narrow half: an account whose recorded 'active' interval closed before the row's date stays
+// excluded.
 //
 // ⚠ NOT EXISTS, not a LEFT JOIN: one account has many history rows, so joining would multiply
 // every feed row by that count. A semi-join asks the only question that matters and cannot fan out.
+// It is also why the widening cannot double-count inside the aggregate: the semi-join is over
+// accounts.id, the primary key.
 func accountWithNoActiveIntervalLeg(alias string) string {
 	return fmt.Sprintf(`
 		      OR EXISTS (
@@ -3567,8 +3609,16 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	//
 	// WHY. The response carried only a page, so "what does this filtered set come to" was not a
 	// question the product could answer — which is what made the reports Sankey's click-through
-	// claim (this node's amount equals the filtered list's total) unverifiable rather than merely
-	// untested.
+	// claim unverifiable rather than merely untested.
+	//
+	// ⚠ STATED PRECISELY, because the loose form ("this node's amount equals the filtered list's
+	// total") is FALSE for income and shipped in five comments before this branch was reviewed. A
+	// hierarchy node's amount is COALESCE(SUM(ABS(t.amount)),0) — an unsigned chart quantity — while
+	// this total is SUM(t.amount) under PFCv2 signs, where inflows are NEGATIVE. So the property that
+	// holds over the same filtered set is |node amount| == |total_amount|; for an expense node the
+	// two numbers also happen to be equal, and for an income node they differ by a factor of −1.
+	// Both SQL expressions are right for their own consumer: a chart needs magnitudes, a ledger
+	// total needs signs. Do not "fix" either one to make the sentence simpler.
 	//
 	// ⚠ ONLY when no cursor was supplied. Re-aggregating the whole filtered set on every page of
 	// the busiest list in the app would be real cost for a number that does not change as the user

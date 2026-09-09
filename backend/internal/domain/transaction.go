@@ -517,6 +517,14 @@ func (t *Transaction) Reversed() bool {
 // click-through unverifiable: a node showed an amount, the list showed rows, and no one could tell
 // whether they agreed. They now can.
 //
+// ⚠ WHAT "AGREED" MEANS, exactly. Amount is SIGNED, following the rows (PFCv2: expenses positive,
+// inflows negative). A category-hierarchy node's amount is COALESCE(SUM(ABS(t.amount)),0), an
+// unsigned chart quantity. The property that holds over the same filtered set is therefore
+// |node amount| == |Amount| — equal outright for an expense node, off by a factor of −1 for an
+// income one. Five comments on this feature asserted plain equality before review caught it; both
+// SQL expressions are correct for their own consumer (a chart wants magnitudes, a ledger total
+// wants signs), so the sentence is what needed fixing, not the queries.
+//
 // ⚠ Populated ONLY for the FIRST page (no cursor supplied). Computing it on every page would put a
 // full aggregate over the filtered set on the busiest list in the app, for a number that does not
 // change as the user pages. A nil pointer means "not computed", never "zero".

@@ -37,8 +37,13 @@ function navParams(action: Extract<NodeAction, { kind: 'navigate' }>, direction:
   params.set('amount_type', direction)
   // The Sankey aggregates POSTED spend only; the transactions list includes pending rows by
   // default. Without pinning this, the node's amount and the list's total would differ by exactly
-  // the pending rows — and "the clicked amount equals the list total" is the claim Phase 2 exists
-  // to make true rather than approximately true.
+  // the pending rows — and the click-through claim is what Phase 2 exists to make true rather than
+  // approximately true.
+  //
+  // ⚠ The claim is |node amount| == |total_amount|, NOT plain equality. A node's amount is an ABS
+  // sum (an unsigned chart quantity); the list's total_amount is SIGNED like its rows (PFCv2:
+  // expenses positive, inflows negative), so for an INCOME node the two differ by a factor of −1.
+  // Both are correct for their own consumer; a consumer comparing them must compare magnitudes.
   params.set('pending', 'false')
   if (startDate) params.set('start_date', startDate)
   if (endDate) params.set('end_date', endDate)
@@ -70,9 +75,14 @@ export function CashFlowSankeyChart({
     const { action } = node
     if (action.kind === 'none') return
     if (action.kind === 'focus') {
-      // Carries the LEVEL, never the category's name, id or amount — event properties are stored
-      // verbatim and are not covered by data-ph-mask.
-      trackEvent(ANALYTICS_EVENTS.REPORT_SANKEY_CATEGORY_FOCUSED, { level: node.id.split(':')[1] })
+      // Structure only — the node's DEPTH, never the category's name, id or amount: event
+      // properties are stored verbatim and are not covered by data-ph-mask.
+      //
+      // ⚠ From node.depth, not from splitting the id on ':' — the same rule events.ts states for
+      // the navigate event 13 lines below, and for the same reason: the income fan is flattened to
+      // `in:l1:*` whatever a leaf's real depth, so an id-derived level is a plausible-looking
+      // number that stops being true the moment anything but an expense node can focus.
+      trackEvent(ANALYTICS_EVENTS.REPORT_SANKEY_CATEGORY_FOCUSED, { depth: node.depth })
       onFocus(action.key)
       return
     }

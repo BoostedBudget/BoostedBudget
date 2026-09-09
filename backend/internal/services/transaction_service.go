@@ -111,14 +111,24 @@ type TransactionService interface {
 // is a strict superset.
 type TransactionListResponse struct {
 	Transactions []*domain.ActivityItem `json:"transactions"`
-	TotalCount   int                    `json:"total_count,omitempty"`
-	// TotalAmount is the summed amount of the whole filtered set, not the page (#1626 Phase 2).
-	// Populated on the cursor path only for the FIRST page — see domain.FeedTotals.
-	TotalAmount float64 `json:"total_amount,omitempty"`
-	Limit       int     `json:"limit"`
-	Offset      int     `json:"offset,omitempty"`
-	HasMore     bool    `json:"has_more,omitempty"`
-	NextCursor  *string `json:"next_cursor,omitempty"`
+	// TotalCount and TotalAmount describe the WHOLE filtered set, not this page.
+	//
+	// ⚠ POINTERS, and that is the whole point (#1626 Phase 2). nil means "not computed on this
+	// page"; a non-nil zero means "computed, and it is zero". Non-pointer scalars with `omitempty`
+	// cannot express that at all — the zero value IS the omitted value, so a first page whose
+	// filter matched nothing would be byte-identical to a cursored page that computed no aggregate,
+	// and the DEFAULT mixed income/expense feed (which nets to exactly zero under PFCv2 signs)
+	// would report a count beside an absent amount. Pinned by
+	// TestApplyFeedTotals_DistinguishesAbsenceFromZero and, at the wire, by
+	// TestGetTransactions_WholeSetTotals_OmittedNeverZeroed.
+	//
+	// The offset path always computes TotalCount and therefore always sets it.
+	TotalCount  *int     `json:"total_count,omitempty"`
+	TotalAmount *float64 `json:"total_amount,omitempty"`
+	Limit       int      `json:"limit"`
+	Offset      int      `json:"offset,omitempty"`
+	HasMore     bool     `json:"has_more,omitempty"`
+	NextCursor  *string  `json:"next_cursor,omitempty"`
 }
 
 // transactionService implements TransactionService
@@ -215,7 +225,7 @@ func (s *transactionService) ListTransactions(
 
 	return &TransactionListResponse{
 		Transactions: items,
-		TotalCount:   totalCount,
+		TotalCount:   &totalCount,
 		Limit:        limit,
 		Offset:       offset,
 		HasMore:      hasMore,
@@ -358,14 +368,19 @@ func (s *transactionService) ListTransactionsByCursor(
 // applyFeedTotals copies whole-set totals onto the response when the repository computed them.
 //
 // It is deliberately a no-op for nil rather than writing zeroes: nil means "not computed on this
-// page", and a zero total is indistinguishable from a genuinely empty set. Both keyset paths route
-// through here so neither can grow a divergent convention for absence (#1626 Phase 2).
+// page". Both keyset paths route through here so neither can grow a divergent convention for
+// absence (#1626 Phase 2).
+//
+// ⚠ It assigns POINTERS, so a computed zero survives as a present zero. Assigning the scalars
+// instead would collapse "computed (0, 0)" onto "not computed" and silently undo the nil-vs-zero
+// discipline the repository and this function are both built around.
 func applyFeedTotals(resp *TransactionListResponse, totals *domain.FeedTotals) {
 	if totals == nil {
 		return
 	}
-	resp.TotalCount = totals.Count
-	resp.TotalAmount = totals.Amount
+	count, amount := totals.Count, totals.Amount
+	resp.TotalCount = &count
+	resp.TotalAmount = &amount
 }
 
 // encodeNextCursor encodes a cursor for pagination. Returns nil if cursor is nil.

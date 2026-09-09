@@ -280,9 +280,19 @@ function emitExpenses(forest: Rendered[]): { nodes: SankeyNode[]; links: SankeyL
  * test can name a rung by INDEX rather than restating this table (#1626 Phase 2, item 3): a
  * hand-typed rung index in a test would silently point at the wrong rung the moment this table
  * changes, and nothing would say so.
+ *
+ * EVERY rung here is reachable, and the rung sweep in buildSankeyData.test.ts asserts exactly that
+ * with no exclusions. A sixth rung, [0, 0, 10], used to sit after the floor and could never run:
+ * [0, 0, 30] depth-0-collapses every kept root to one node and adds at most one overflow node, so
+ * it renders at most maxRoots + 1 === EXPENSE_NODE_BUDGET nodes and therefore always fits. It was
+ * deleted rather than kept as documentation of a degradation step that cannot happen.
+ *
+ * ⚠ If you raise EXPENSE_NODE_BUDGET or change the floor's maxRoots, the floor stops being
+ * guaranteed to fit and renderExpenseFan falls back to its last-computed result. That is safe (it
+ * still returns a graph) but it is no longer a ladder — add a real floor instead.
  */
 export const EXPENSE_LADDER: Array<[depth: number, maxChildren: number, maxRoots: number]> =
-  [[2, 6, 30], [1, 6, 30], [1, 6, 10], [0, 0, 30], [0, 0, 10]]
+  [[2, 6, 30], [1, 6, 30], [1, 6, 10], [0, 0, 30]]
 
 interface ExpenseFanResult {
   nodes: SankeyNode[]

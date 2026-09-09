@@ -441,7 +441,8 @@ func TestTransactionService_ListTransactions_IncludesPaginationMetadata(t *testi
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, totalCount, result.TotalCount)
+	require.NotNil(t, result.TotalCount, "the offset path always counts, so it always sets the pointer")
+	assert.Equal(t, totalCount, *result.TotalCount)
 	assert.Equal(t, limit, result.Limit)
 	assert.Equal(t, offset, result.Offset)
 	assert.True(t, result.HasMore) // 150 total, 50 returned, so there's more
@@ -478,7 +479,8 @@ func TestTransactionService_ListTransactions_HasMoreFalseWhenNoMoreResults(t *te
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, totalCount, result.TotalCount)
+	require.NotNil(t, result.TotalCount, "the offset path always counts, so it always sets the pointer")
+	assert.Equal(t, totalCount, *result.TotalCount)
 	assert.False(t, result.HasMore) // offset=100 + returned=20 = 120, no more results
 	mockRepo.AssertExpectations(t)
 }
