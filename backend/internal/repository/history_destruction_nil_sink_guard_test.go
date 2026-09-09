@@ -61,7 +61,7 @@ var destructionMethodsTakingAnAuditSink = map[string]int{
 	"PurgeAccount":       4, // (ctx, accountID, userID, auditLog)
 	"PurgeLinkedItem":    4, // (ctx, linkedItemID, userID, auditLog)
 	"PurgeGoal":          4, // (ctx, goalID, userID, auditLog)
-	"DeleteContribution": 4, // (ctx, userID, id, auditLog)
+	"DeleteContribution": 5, // (ctx, userID, goalID, id, auditLog) — #1625 added goalID
 }
 
 // TestNoProductionCallerPassesANilAuditSinkToADestructionMethod is described above.
@@ -148,9 +148,9 @@ func TestNilAuditSinkGuard_FlagsTheConstructedViolation(t *testing.T) {
 		"func Offend(repo any, ctx any, a, b string) {\n" +
 		"\trepo.PurgeAccount(ctx, a, b, nil)\n" +
 		"}\n\n" +
-		"func Fine(repo any, ctx any, a, b string, sink any) {\n" +
+		"func Fine(repo any, ctx any, a, b, c string, sink any) {\n" +
 		"\trepo.PurgeGoal(ctx, a, b, sink)\n" +
-		"\trepo.DeleteContribution(ctx, a, b, sink)\n" +
+		"\trepo.DeleteContribution(ctx, a, b, c, sink)\n" +
 		// The service-layer method of the same name: three args, no sink, must not be inspected.
 		"\trepo.PurgeAccount(ctx, a, b)\n" +
 		// A method not on the list at all.

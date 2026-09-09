@@ -181,7 +181,14 @@ type DeleteContributionInput struct {
 // contributions basis and delete the row then. The accurate reason is narrower and still holds —
 // gating Delete would make deleting your own row require an unrelated, side-effecting change to
 // the goal's configuration first, to remove data the basis has no bearing on. Confirm and Reject
-// genuinely cannot take effect on a manual goal; a delete always does exactly what it says.
+// genuinely cannot take effect on a manual goal; a delete does not have that failure mode.
+//
+// ⚠ "A delete always does exactly what it says" was FALSIFIED (#1625): the repository looked the
+// contribution up by its own id alone, so a same-user DELETE through goal A's URL could destroy
+// goal B's contribution row — a hard delete of financial history the caller never named. Fixed by
+// binding goalID into DeleteContribution's WHERE, the same way Confirm/Reject were bound; see that
+// method's doc comment. The claim above is now true only because of that binding, not because
+// deletes are inherently free of this failure mode.
 //
 // `verb` completes the sentence, so each endpoint's message describes what IT could not do.
 func (h *ContributionHandler) assertLedgerIsLive(ctx context.Context, goalID, userID, verb string) error {
@@ -421,7 +428,7 @@ func (h *ContributionHandler) DeleteContribution(ctx context.Context, input *Del
 		return nil, humaerrors.LoggingMapError(ctx, repository.ErrAuditLogRepositoryNotWired)
 	}
 
-	if err := h.contribRepo.DeleteContribution(ctx, input.UserID, input.ID, h.auditLogRepo); err != nil {
+	if err := h.contribRepo.DeleteContribution(ctx, input.UserID, input.GoalID, input.ID, h.auditLogRepo); err != nil {
 		if err == domain.ErrContributionNotFound {
 			return nil, huma.Error404NotFound("contribution not found")
 		}

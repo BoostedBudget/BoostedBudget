@@ -62,7 +62,7 @@ func TestDeleteContribution_RefusesAnAlreadyTombstonedContribution_Integration(t
 		`SELECT deleted_at FROM savings_goal_contributions WHERE id = $1`, contribID).Scan(&deletedAt))
 	require.NotNil(t, deletedAt, "fixture precondition: the row must be tombstoned before the delete")
 
-	err := repo.DeleteContribution(ctx, userID, contribID, nil)
+	err := repo.DeleteContribution(ctx, userID, goalID, contribID, nil)
 	assert.ErrorIs(t, err, domain.ErrContributionNotFound,
 		"a tombstoned contribution is invisible in every product surface, so the user cannot have "+
 			"named it: the explicit-destruction path must refuse it, not destroy it")
@@ -104,7 +104,7 @@ func TestDeleteContribution_RefusesARejectedContribution_Integration(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, "rejected", rejected.Status)
 
-	err = repo.DeleteContribution(ctx, userID, proposed.ID, nil)
+	err = repo.DeleteContribution(ctx, userID, goalID, proposed.ID, nil)
 	assert.ErrorIs(t, err, domain.ErrContributionNotFound,
 		"destroying the sticky tombstone would both erase a row the product retains on purpose and "+
 			"regress R3-7: the next sync would re-propose the same transfer-in")
@@ -140,7 +140,7 @@ func TestDeleteContribution_WritesAnAuditRowInTheSameTransaction_Integration(t *
 		_, _ = pool.Exec(context.Background(), `DELETE FROM audit_logs WHERE resource_id = $1`, contrib.ID)
 	})
 
-	require.NoError(t, repo.DeleteContribution(ctx, userID, contrib.ID, repository.NewAuditLogRepository(pool)))
+	require.NoError(t, repo.DeleteContribution(ctx, userID, goalID, contrib.ID, repository.NewAuditLogRepository(pool)))
 
 	var audits int
 	require.NoError(t, pool.QueryRow(ctx, `
@@ -185,7 +185,7 @@ func TestDeleteContribution_AuditFailureRollsBackTheDelete_Integration(t *testin
 	}
 	require.NoError(t, repo.Insert(ctx, userID, contrib))
 
-	err := repo.DeleteContribution(ctx, userID, contrib.ID,
+	err := repo.DeleteContribution(ctx, userID, goalID, contrib.ID,
 		failingAuditLog{err: errors.New("audit sink down")})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "audit sink down")
@@ -219,7 +219,7 @@ func TestDeleteContribution_StillDestroysTheRowTheUserNamed_Integration(t *testi
 			OccurredOn:    time.Now().Format("2006-01-02"),
 		}
 		require.NoError(t, repo.Insert(ctx, userID, contrib), status)
-		require.NoError(t, repo.DeleteContribution(ctx, userID, contrib.ID, nil), status)
+		require.NoError(t, repo.DeleteContribution(ctx, userID, goalID, contrib.ID, nil), status)
 
 		var stillThere int
 		require.NoError(t, pool.QueryRow(ctx,
@@ -281,7 +281,7 @@ func TestDeleteContribution_AuditRowSharesTheDeletesTransaction_Integration(t *t
 	require.NoError(t, repo.Insert(ctx, userID, contrib))
 
 	spy := &spyAuditLog{contribID: contrib.ID}
-	require.NoError(t, repo.DeleteContribution(ctx, userID, contrib.ID, spy))
+	require.NoError(t, repo.DeleteContribution(ctx, userID, goalID, contrib.ID, spy))
 
 	require.NoError(t, spy.scanErr)
 	assert.True(t, spy.calledLogInTx, "the audit entry must be written with LogInTx")

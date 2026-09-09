@@ -101,8 +101,8 @@ func (m *mockSavingsContributionRepo) RejectContribution(ctx context.Context, us
 	return args.Get(0).(*domain.SavingsGoalContribution), args.Error(1)
 }
 
-func (m *mockSavingsContributionRepo) DeleteContribution(ctx context.Context, userID, id string, auditLog repository.AuditLogRepository) error {
-	args := m.Called(ctx, userID, id, auditLog)
+func (m *mockSavingsContributionRepo) DeleteContribution(ctx context.Context, userID, goalID, id string, auditLog repository.AuditLogRepository) error {
+	args := m.Called(ctx, userID, goalID, id, auditLog)
 	return args.Error(0)
 }
 
@@ -467,7 +467,7 @@ func TestDeleteContribution_Success(t *testing.T) {
 	// success path must wire one. See TestDeleteContribution_RefusesWithoutAuditSink.
 	handler.SetAuditLogRepository(&stubAuditLogRepository{})
 
-	contribRepo.On("DeleteContribution", mock.Anything, userID, contribID, mock.Anything).
+	contribRepo.On("DeleteContribution", mock.Anything, userID, goalID, contribID, mock.Anything).
 		Return(nil)
 	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
 
@@ -496,7 +496,7 @@ func TestDeleteContribution_NotFound_Returns404(t *testing.T) {
 	handler := NewContributionHandler(contribRepo, nil, nil)
 	handler.SetAuditLogRepository(&stubAuditLogRepository{})
 
-	contribRepo.On("DeleteContribution", mock.Anything, userID, contribID, mock.Anything).
+	contribRepo.On("DeleteContribution", mock.Anything, userID, goalID, contribID, mock.Anything).
 		Return(domain.ErrContributionNotFound)
 
 	ctx := context.Background()
@@ -1007,7 +1007,9 @@ func TestLogContribution_BasisMismatchMessageNamesTheRemedy(t *testing.T) {
 // the goal back to the contributions basis and delete them then. The real reason is narrower:
 // gating Delete would make removing your own row require an unrelated, side-effecting change to
 // the goal's configuration first. Confirm and Reject genuinely cannot take effect on a manual
-// goal; a delete always does exactly what it says it does.
+// goal; a delete does not have that failure mode. (⚠ "always does exactly what it says" was
+// FALSIFIED by the cross-goal DELETE bug #1625 fixed — see savings_goal_contribution.go's
+// assertLedgerIsLive comment.)
 // TestDeleteContribution_IsNotBlockedByBasis pins that.
 func TestConfirmContribution_RefusesOnANonContributionsBasis(t *testing.T) {
 	goalID, userID := "goal-manual", "user-1"
@@ -1067,7 +1069,7 @@ func TestDeleteContribution_IsNotBlockedByBasis(t *testing.T) {
 	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(&domain.SavingsGoal{
 		ID: goalID, UserID: userID, ProgressBasis: domain.ProgressBasisManual,
 	}, nil)
-	contribRepo.On("DeleteContribution", mock.Anything, userID, "contrib-1", mock.Anything).Return(nil)
+	contribRepo.On("DeleteContribution", mock.Anything, userID, goalID, "contrib-1", mock.Anything).Return(nil)
 
 	_, err := handler.DeleteContribution(context.Background(), &DeleteContributionInput{
 		AuthenticatedInput: authenticatedInput(userID),
@@ -1077,5 +1079,5 @@ func TestDeleteContribution_IsNotBlockedByBasis(t *testing.T) {
 
 	require.NoError(t, err,
 		"a row left behind by a basis switch must stay deletable, or the switch traps it forever")
-	contribRepo.AssertCalled(t, "DeleteContribution", mock.Anything, userID, "contrib-1", mock.Anything)
+	contribRepo.AssertCalled(t, "DeleteContribution", mock.Anything, userID, goalID, "contrib-1", mock.Anything)
 }
