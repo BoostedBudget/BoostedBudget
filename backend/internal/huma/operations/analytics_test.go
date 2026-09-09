@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -2055,4 +2057,42 @@ func TestGetCategoryHierarchy_PersonalScope_NeverCallsHouseholdServiceGolden(t *
 	require.NotNil(t, mockService.lastSpendingFilters)
 	assert.Nil(t, mockService.lastSpendingFilters.HouseholdScope)
 	mockHousehold.AssertNotCalled(t, "ResolveScope", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestGetCategoryTotalForPeriod_MalformedCustomTokenIsABadRequest is #1626 Phase 2's review
+// finding X2 at the API boundary.
+//
+// WHAT IT PROVES, precisely: the handler passes a service error through
+// humaerrors.LoggingMapError, so an ErrInvalidCategoryToken raised by the gate becomes a 400
+// huma.StatusError rather than the 500 that a `custom:not-a-uuid` query string used to produce
+// when its suffix reached the repository's `$5::uuid` cast.
+//
+// ⚠ WHAT IT DOES NOT PROVE, said out loud so nobody reads it as more than it is: the mock service
+// does not validate, so this does not exercise the gate itself. That is
+// TestGetCategoryTotalForPeriod_RejectsAMalformedCustomToken /
+// _AcceptsTheTokensItIsSupposedTo (internal/services), which cover the malformed, empty and valid
+// custom tokens plus the PFC tokens that must be left alone. The two halves together are the
+// chain; neither alone is.
+func TestGetCategoryTotalForPeriod_MalformedCustomTokenIsABadRequest(t *testing.T) {
+	mockSvc := &mockAnalyticsService{
+		categoryTotalErr: fmt.Errorf("%w: %q", services.ErrInvalidCategoryToken, "not-a-uuid"),
+	}
+	handler := NewAnalyticsHandler(mockSvc, nil)
+
+	input := &GetCategoryTotalForPeriodInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2026-01-01",
+		EndDate:            "2026-01-31",
+		Category:           "custom:not-a-uuid",
+	}
+	output, err := handler.GetCategoryTotalForPeriod(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	statusErr, ok := err.(huma.StatusError)
+	require.True(t, ok, "the handler must return a huma.StatusError, not a bare error")
+	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus(),
+		"a malformed category token is the client's mistake; 500 would page somebody for it")
+	assert.NotContains(t, statusErr.Error(), "not-a-uuid",
+		"the response must not echo the attacker-supplied suffix")
 }
