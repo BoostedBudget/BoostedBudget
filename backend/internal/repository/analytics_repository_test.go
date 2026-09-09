@@ -476,7 +476,7 @@ func TestFillMissingPeriods_FabricatesNothingWhenTheWholeRangeIsBeyondTheHorizon
 			assert.Empty(t, generateEmptyPeriods(tt.startDate, tt.horizon, tt.grouping))
 		})
 
-		t.Run(tt.name+" (real data inside the requested range)", func(t *testing.T) {
+		t.Run(tt.name+" (a real row at the truncated bucket start survives)", func(t *testing.T) {
 			real := domain.CashFlowGroupedData{
 				PeriodStart:      truncateDate(tt.startDate, tt.grouping),
 				Income:           0,
@@ -487,6 +487,22 @@ func TestFillMissingPeriods_FabricatesNothingWhenTheWholeRangeIsBeyondTheHorizon
 			// only because truncateDate moved it there.
 			result := fillMissingPeriods([]domain.CashFlowGroupedData{real}, tt.startDate, tt.horizon, tt.grouping)
 			require.Len(t, result, 1)
+			assert.Equal(t, real, result[0])
+		})
+
+		// The row here sits one period AFTER the truncated start, which is what makes this case
+		// able to fail: with the real row at the truncated start, suppressing the generated grid
+		// and generating it both produce the same single bucket, so a mutation that drops the
+		// guard survives. This subtest was added because that mutation DID survive.
+		t.Run(tt.name+" (a real row beyond the horizon licenses no fabricated bucket)", func(t *testing.T) {
+			real := domain.CashFlowGroupedData{
+				PeriodStart:      advancePeriod(truncateDate(tt.startDate, tt.grouping), tt.grouping),
+				Income:           0,
+				Expenses:         12,
+				TransactionCount: 1,
+			}
+			result := fillMissingPeriods([]domain.CashFlowGroupedData{real}, tt.startDate, tt.horizon, tt.grouping)
+			require.Len(t, result, 1, "fabricated a bucket for a range lying entirely beyond the horizon: %+v", result)
 			assert.Equal(t, real, result[0])
 		})
 	}
