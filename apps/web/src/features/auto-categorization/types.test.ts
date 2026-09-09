@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'bun:test'
+import { RuleConditionField } from '@boostedbudget/api-client/models/ruleConditionField'
+import { RuleConditionOperator } from '@boostedbudget/api-client/models/ruleConditionOperator'
 import {
   CONDITION_CHOICES,
   FIELD_OPERATORS,
@@ -7,8 +9,29 @@ import {
 } from './types'
 
 // #1625: the frontend mirrors backend `domain/condition_schema.go`. A drift here is silent —
-// the UI would offer a field/operator pair the server rejects with a 422 — so it is pinned.
-describe('condition vocabulary mirror (#1625)', () => {
+// the UI would offer a field/operator pair the server rejects with a 422.
+//
+// ⚠ The pin that matters is against RuleConditionField / RuleConditionOperator, which are
+// GENERATED from the Go schema via openapi -> orval. An earlier revision of this file claimed to
+// pin the mirror while comparing CONDITION_CHOICES against FIELD_OPERATORS — two FRONTEND
+// constants. That cannot fail when the backend changes, which is the only drift worth guarding.
+// The internal-consistency checks below are still useful; they are just not the pin.
+describe('condition vocabulary pinned to the generated backend enums (#1625)', () => {
+  it('offers exactly the fields the backend declares', () => {
+    expect(Object.keys(FIELD_OPERATORS).sort()).toEqual(Object.values(RuleConditionField).sort())
+  })
+
+  it('never offers an operator the backend does not define', () => {
+    const backendOps = new Set<string>(Object.values(RuleConditionOperator))
+    for (const [field, ops] of Object.entries(FIELD_OPERATORS)) {
+      for (const op of ops) {
+        expect(backendOps, `${field} offers ${op}, which is absent from the backend enum`).toContain(op)
+      }
+    }
+  })
+})
+
+describe('condition vocabulary internal consistency (#1625)', () => {
   it('offers every pair choice as a combination the backend matrix actually accepts', () => {
     for (const choice of CONDITION_CHOICES) {
       if (!choice.field || !choice.operator) continue
