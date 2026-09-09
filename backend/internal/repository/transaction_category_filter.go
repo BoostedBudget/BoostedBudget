@@ -67,10 +67,3 @@ func categoryFilterGroup(filters domain.TransactionFilters, argIdx int, args []i
 	}
 	return " AND (" + strings.Join(legs, " OR ") + ")", args, argIdx
 }
-
-// hasCategoryFilter reports whether any category dimension is being filtered. The keyset builder
-// uses it to decide whether to zero its investment branch: investment rows carry no category, so a
-// category-filtered request must not return them.
-func hasCategoryFilter(filters domain.TransactionFilters) bool {
-	return len(filters.PFCPrimaries) > 0 || len(filters.PFCDetaileds) > 0 || len(filters.CustomCategoryIDs) > 0
-}
