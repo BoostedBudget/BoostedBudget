@@ -17,13 +17,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make dev                    # Docker-compose up
 make test-fast              # Backend+frontend tests, NO e2e (~2min)
 make test-all               # ALL tests including e2e (~4min)
-make test-scripts           # The 25 shell guard suites: 23 in scripts/__tests__/, one in
+make test-scripts           # The 26 shell guard suites: 24 in scripts/__tests__/, one in
                              # apps/web/scripts/__tests__/, and — ⚠ do not drop this one when
                              # re-deriving the count from the two __tests__ globs, which is how
                              # this line came to say 19 — scripts/check-frontend-coverage.test.sh,
                              # which sits beside its subject rather than in a __tests__ dir.
                              # Verified #1569 r19: every on-disk suite is invoked by the target
-                             # (no orphans), and the target's own "N/25:" labels agree.
+                             # (no orphans), and the target's own "N/26:" labels agree.
+                             # ⚠ Re-verified #1625: 26 suites. The 26th is
+                             # check-nginx-secret-paths, hosted in **e2e-test** because it boots a
+                             # real nginx and needs Docker. Like check-route-weight it is
+                             # deliberately NOT in REQUIRED_UNGATED_STEPS: its subject is
+                             # apps/web/nginx.conf, which the `frontend` filter covers. Pin stays
+                             # at 12 step names.
                              # Separate CI steps, NOT covered by
                              # test-fast/test-all/bun run test. Fails on the first red. Docker/
                              # Postgres-dependent suites skip with a visible warning if unavailable
@@ -64,7 +70,7 @@ make test-scripts           # The 25 shell guard suites: 23 in scripts/__tests__
                              # step names, not 13. Re-derive with:
                              #   git ls-files -- '*__tests__/*.test.sh' 'scripts/*.test.sh' | wc -l
                              # and NOT by grepping the Makefile, which returns 50 because every
-                             # suite appears twice there — once in its "N/25:" label and once as
+                             # suite appears twice there — once in its "N/26:" label and once as
                              # the invoked path.
                              # Adding a suite to this target therefore does NOT put it in CI; add a
                              # step too. **CI is the ONLY authoritative gate** —
