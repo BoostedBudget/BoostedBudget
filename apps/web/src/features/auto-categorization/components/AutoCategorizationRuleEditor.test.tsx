@@ -1893,4 +1893,81 @@ describe('AutoCategorizationRuleEditor', () => {
       expect(screen.getByText(/unsupported condition/i)).toBeInTheDocument()
     })
   })
+
+  // #1625 review round 1: account_type and payment_channel are CLOSED enums with no backend
+  // EnumFn validation for either field (see FieldSpecs in condition_schema.go — only
+  // direction/pfc_primary/pfc_detailed get one). A bare text box lets a user type a near-miss
+  // string ("Credit Card", "ACH") that validates cleanly server-side and then never matches any
+  // real transaction — silently. getInputTypeForCondition must route account_type/payment_channel
+  // through their curated pickers for `eq`/`neq`, the same as their fused equivalents, even
+  // though the generated pair carries no `type` (only fused choices set `type`).
+  describe('closed-enum widgets for generated pairs (#1625 review round 1)', () => {
+    it('renders the account-type picker, not a bare text box, for account_type:neq', () => {
+      const ruleWithAccountTypeNeq: CategorizationRule = {
+        ...mockExistingRule,
+        conditions: [
+          { type: 'expression', field: 'account_type', operator: 'neq', value: ['depository'] },
+        ],
+      }
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="edit"
+          rule={ruleWithAccountTypeNeq}
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      // The bug: a bare text input carrying this placeholder from the generic default case.
+      expect(screen.queryByPlaceholderText('Enter value')).not.toBeInTheDocument()
+      // The real widget: one checkbox per known account type.
+      expect(screen.getByRole('checkbox', { name: /credit card/i })).toBeInTheDocument()
+    })
+
+    it('renders the payment-channel picker, not a bare text box, for payment_channel:neq', () => {
+      const ruleWithPaymentChannelNeq: CategorizationRule = {
+        ...mockExistingRule,
+        conditions: [
+          { type: 'expression', field: 'payment_channel', operator: 'neq', value: 'online' },
+        ],
+      }
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="edit"
+          rule={ruleWithPaymentChannelNeq}
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      expect(screen.queryByPlaceholderText('Enter value')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Select payment channel')).toBeInTheDocument()
+    })
+
+    it('still renders a free-text box for account_type:contains — substring match is a legitimate query a picker cannot express', () => {
+      const ruleWithAccountTypeContains: CategorizationRule = {
+        ...mockExistingRule,
+        conditions: [
+          { type: 'expression', field: 'account_type', operator: 'contains', value: 'credit' },
+        ],
+      }
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="edit"
+          rule={ruleWithAccountTypeContains}
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      expect(screen.getByPlaceholderText('Enter value')).toBeInTheDocument()
+      expect(screen.queryByRole('checkbox', { name: /credit card/i })).not.toBeInTheDocument()
+    })
+  })
 })
