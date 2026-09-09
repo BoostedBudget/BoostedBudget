@@ -224,16 +224,14 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 	// Mark completed (sticky — MarkCompleted only sets completed_at the first time, Codex C5).
 	// Never un-complete based on a subsequent computed drop.
 	if newAmount >= goal.TargetAmount {
-		if err := s.goalRepo.MarkCompleted(ctx, goal.ID); err == nil {
-			// Reflect the completion the row now carries. Without this a goal that is already
-			// complete on creation reports is_completed=false to the caller. Sticky, matching
-			// MarkCompleted: never cleared here by a later computed drop.
-			if !goal.IsCompleted {
-				goal.IsCompleted = true
-				completedAt := now
-				goal.CompletedAt = &completedAt
-			}
-		} else {
+		// ⚠ Deliberately does NOT mirror the completion onto the in-memory goal. A previous
+		// attempt set IsCompleted/CompletedAt here, which was wrong twice over: MarkCompleted
+		// stamps its OWN time.Now() (savings_goal_repository.go), so the mirrored timestamp
+		// could never equal the row's; and the two writes here also touch last_calculated_at,
+		// balance_as_of and updated_at, which no amount of field-by-field mirroring was going
+		// to keep up with. Callers that need a consistent struct re-read the goal — see
+		// reloadAfterRecompute in savings_goal_service.go.
+		if err := s.goalRepo.MarkCompleted(ctx, goal.ID); err != nil {
 			// The amount update ALREADY COMMITTED. Returning 0 here (as this did) made
 			// CreateGoal/UpdateGoal keep the pre-recompute figure while the row held newAmount.
 			// Reachable for the balance and account_percentage bases, whose computed value comes

@@ -704,7 +704,7 @@ func (s *stubTagOnlyRuleRepo) GetEnabledByUserID(context.Context, string) ([]*do
 func (s *stubTagOnlyRuleRepo) GetByName(context.Context, string, string) (*domain.CategorizationRule, error) {
 	return nil, nil
 }
-func (s *stubTagOnlyRuleRepo) Delete(context.Context, string) error                  { return nil }
-func (s *stubTagOnlyRuleRepo) CountByUserID(context.Context, string) (int, error)    { return 0, nil }
-func (s *stubTagOnlyRuleRepo) IncrementMatchCount(context.Context, string) error     { return nil }
-func (s *stubTagOnlyRuleRepo) IncrementOverrideCount(context.Context, string) error  { return nil }
+func (s *stubTagOnlyRuleRepo) Delete(context.Context, string) error                 { return nil }
+func (s *stubTagOnlyRuleRepo) CountByUserID(context.Context, string) (int, error)   { return 0, nil }
+func (s *stubTagOnlyRuleRepo) IncrementMatchCount(context.Context, string) error    { return nil }
+func (s *stubTagOnlyRuleRepo) IncrementOverrideCount(context.Context, string) error { return nil }

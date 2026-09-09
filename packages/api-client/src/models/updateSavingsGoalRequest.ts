@@ -36,6 +36,7 @@ export interface UpdateSavingsGoalRequest {
   readonly $schema?: string;
   account_id?: string;
   account_percentage?: number;
+  /** Only settable when progress_basis is 'manual'. Contributions-based goals derive this from their contribution ledger (POST /savings-goals/{goalID}/contributions); balance-based goals track their account. Sending this for any non-manual basis returns 400. */
   current_amount?: number;
   deadline?: string;
   description?: string;

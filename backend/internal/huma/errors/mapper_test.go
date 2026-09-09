@@ -255,3 +255,23 @@ func TestMapError_RepairNonceInvalidIs403AndSaysNothingAboutWhy(t *testing.T) {
 	assert.Contains(t, msg, "reconnect bank",
 		"the message must name the one recovery a user can actually perform")
 }
+
+// TestMapError_InvalidGoalUpdateIsA400 is the boundary test the service-level errors.Is check
+// cannot give: removing the mapper case would leave that test passing while the endpoint went
+// back to returning 500 for a client mistake. Ordering matters in this switch — several
+// sentinels wrap others — so this also pins that nothing earlier shadows it.
+func TestMapError_InvalidGoalUpdateIsA400(t *testing.T) {
+	err := humaerrors.LoggingMapError(context.Background(),
+		fmt.Errorf("%w: current_amount cannot be set", domain.ErrInvalidGoalUpdate))
+
+	var statusErr interface{ GetStatus() int }
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("mapped error carries no HTTP status: %v", err)
+	}
+	if got := statusErr.GetStatus(); got != http.StatusBadRequest {
+		t.Errorf("ErrInvalidGoalUpdate mapped to %d, want 400 — a client mistake must not be a server error", got)
+	}
+	if !strings.Contains(err.Error(), "current_amount") {
+		t.Errorf("the message must survive mapping so the caller learns which field: %v", err)
+	}
+}

@@ -365,9 +365,9 @@ func (sg *SavingsGoal) IsAchieved() bool {
 
 // CreateSavingsGoalRequest represents the request to create a new savings goal.
 type CreateSavingsGoalRequest struct {
-	Name          string     `json:"name" validate:"required,max=100"`
-	Description   *string    `json:"description,omitempty"`
-	TargetAmount  float64    `json:"target_amount" validate:"required,gt=0"`
+	Name         string  `json:"name" validate:"required,max=100"`
+	Description  *string `json:"description,omitempty"`
+	TargetAmount float64 `json:"target_amount" validate:"required,gt=0"`
 	// CurrentAmount seeds the goal's progress. Under "manual" it is the value, and stays so.
 	//
 	// Under "contributions" it is IGNORED: a goal created this instant has no contributions, so
@@ -405,10 +405,18 @@ func (r *CreateSavingsGoalRequest) Validate() error {
 
 // UpdateSavingsGoalRequest represents the request to update a savings goal.
 type UpdateSavingsGoalRequest struct {
-	Name          *string    `json:"name,omitempty" validate:"omitempty,max=100"`
-	Description   *string    `json:"description,omitempty"`
-	TargetAmount  *float64   `json:"target_amount,omitempty" validate:"omitempty,gt=0"`
-	CurrentAmount *float64   `json:"current_amount,omitempty" validate:"omitempty,gte=0"`
+	Name         *string  `json:"name,omitempty" validate:"omitempty,max=100"`
+	Description  *string  `json:"description,omitempty"`
+	TargetAmount *float64 `json:"target_amount,omitempty" validate:"omitempty,gt=0"`
+	// CurrentAmount may ONLY be set when the goal's progress_basis is "manual" — every other
+	// basis derives this value, and writing it by hand puts the row out of step with the source
+	// it claims to track. Sending it on a derived-basis goal is a 400 (#1625).
+	//
+	// ⚠ The description below is not decoration: it is what an MCP agent reads. Both reviewers
+	// flagged that making this a 400 without saying so in the published schema left the only
+	// documentation an agent has steering it straight into the error — which is the same
+	// undiscoverable-contract failure this whole ticket is about.
+	CurrentAmount *float64   `json:"current_amount,omitempty" validate:"omitempty,gte=0" doc:"Only settable when progress_basis is 'manual'. Contributions-based goals derive this from their contribution ledger (POST /savings-goals/{goalID}/contributions); balance-based goals track their account. Sending this for any non-manual basis returns 400."`
 	AccountID     *string    `json:"account_id,omitempty" validate:"omitempty,uuid"`
 	Deadline      *time.Time `json:"deadline,omitempty"`
 	// ProgressBasis changes the derivation mode for current_amount (Issue #1300).

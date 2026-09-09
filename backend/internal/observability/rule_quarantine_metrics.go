@@ -43,12 +43,27 @@ const (
 	QuarantineInvalidValue   QuarantineReason = "invalid_condition_value_shape"
 )
 
-var knownQuarantineReasons = map[QuarantineReason]struct{}{
-	QuarantineNoConditions:   {},
-	QuarantineInvalidLogic:   {},
-	QuarantineUnnormalizable: {},
-	QuarantineInvalidValue:   {},
+// AllQuarantineReasons is the SINGLE source of the vocabulary. The allowlist below is derived
+// from it, so the two cannot drift — an earlier version maintained a hand-written map AND a
+// hand-written list in the test, which meant adding a fifth constant and forgetting both left
+// both lengths at four and the "drift guard" passing. A guard that can be defeated by the exact
+// mistake it names is worse than none, because it is trusted.
+func AllQuarantineReasons() []QuarantineReason {
+	return []QuarantineReason{
+		QuarantineNoConditions,
+		QuarantineInvalidLogic,
+		QuarantineUnnormalizable,
+		QuarantineInvalidValue,
+	}
 }
+
+var knownQuarantineReasons = func() map[QuarantineReason]struct{} {
+	m := make(map[QuarantineReason]struct{})
+	for _, r := range AllQuarantineReasons() {
+		m[r] = struct{}{}
+	}
+	return m
+}()
 
 // RecordRuleQuarantineCandidate increments the shadow-mode quarantine counter for one reason.
 // An unrecognised reason is recorded as "other" rather than as itself: a metric is the wrong
@@ -60,8 +75,12 @@ func RecordRuleQuarantineCandidate(reason QuarantineReason) {
 		// metric to nowhere at all — the operator sees a bucket rise with no way to learn which
 		// label was invented. The reason is logged, not labelled: the log can be redacted later,
 		// a metric label effectively cannot.
-		slog.Warn("unrecognised rule quarantine reason recorded as \"other\" — add it to knownQuarantineReasons",
-			slog.String("reason", string(reason)))
+		// ⚠ The rejected value is NOT logged. It is unrecognised precisely because nobody
+		// vetted it, so it is the one string here that could carry user content — and a log is
+		// no place to discover that. The length is enough to tell a typo'd constant from
+		// something that should never have been passed at all.
+		slog.Warn("unrecognised rule quarantine reason recorded as \"other\" — add it to AllQuarantineReasons",
+			slog.Int("rejected_reason_length", len(reason)))
 		ruleQuarantineCandidates.WithLabelValues("other").Inc()
 		return
 	}

@@ -42,23 +42,40 @@ categorization_rule_quarantine_candidates_total{reason="other"} 1
 	}
 }
 
-// TestKnownQuarantineReasons_MatchesTheConstants guards the drift the reviewer flagged: the
-// allowlist duplicates the const block, so adding a fifth constant and forgetting the map would
-// silently record it as "other" while the log said the real reason.
-func TestKnownQuarantineReasons_MatchesTheConstants(t *testing.T) {
-	declared := []QuarantineReason{
-		QuarantineNoConditions,
-		QuarantineInvalidLogic,
-		QuarantineUnnormalizable,
-		QuarantineInvalidValue,
+// TestKnownQuarantineReasons_IsDerivedNotDuplicated. The previous version of this test kept its
+// OWN copy of the constant list, so forgetting a new constant in both the map and the test left
+// both at four and passed — the exact drift it claimed to catch. The allowlist is now built from
+// AllQuarantineReasons(), so this asserts the derivation rather than re-stating the data.
+func TestKnownQuarantineReasons_IsDerivedNotDuplicated(t *testing.T) {
+	all := AllQuarantineReasons()
+	if len(all) == 0 {
+		t.Fatal("AllQuarantineReasons is empty")
 	}
-	if len(declared) != len(knownQuarantineReasons) {
-		t.Fatalf("knownQuarantineReasons has %d entries, %d constants are declared — one was not updated",
-			len(knownQuarantineReasons), len(declared))
+	if len(all) != len(knownQuarantineReasons) {
+		t.Fatalf("allowlist has %d entries but AllQuarantineReasons returns %d — they are supposed to be the same data",
+			len(knownQuarantineReasons), len(all))
 	}
-	for _, r := range declared {
+	for _, r := range all {
 		if _, ok := knownQuarantineReasons[r]; !ok {
-			t.Errorf("constant %q is missing from knownQuarantineReasons, so it would record as \"other\"", r)
+			t.Errorf("%q is in AllQuarantineReasons but not the allowlist", r)
+		}
+		if r == "" {
+			t.Error("an empty reason would record as a blank label")
+		}
+	}
+}
+
+// TestRecordRuleQuarantineCandidate_EveryDeclaredReasonRecordsAsItself is the guard that a
+// hand-maintained list could not give: it walks the vocabulary rather than a copy of it, so a
+// constant added tomorrow is covered without anyone editing this file.
+func TestRecordRuleQuarantineCandidate_EveryDeclaredReasonRecordsAsItself(t *testing.T) {
+	for _, r := range AllQuarantineReasons() {
+		ruleQuarantineCandidates.Reset()
+		RecordRuleQuarantineCandidate(r)
+
+		got := testutil.ToFloat64(ruleQuarantineCandidates.WithLabelValues(string(r)))
+		if got != 1 {
+			t.Errorf("reason %q did not record under its own label (got %v) — it would have folded into \"other\"", r, got)
 		}
 	}
 }

@@ -241,6 +241,10 @@ func (s *savingsGoalService) CreateGoal(ctx context.Context, userID string, req 
 				slog.String("goal_id", goal.ID),
 				slog.String("error", err.Error()),
 			)
+		} else {
+			// Success: the recompute touched five more columns than the amount. Re-read rather
+			// than guess at them.
+			goal = s.reloadAfterRecompute(ctx, goal)
 		}
 	}
 
@@ -419,9 +423,13 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 		// adversarial review, not by me.
 		//
 		// Refused, not silently ignored: the caller asked for something the basis cannot honour,
-		// and a 4xx that says so beats a 200 that pretends. Switching basis and setting the
-		// amount in one request is refused for the same reason — the recompute that follows a
-		// basis change would overwrite the value anyway.
+		// and a 4xx that says so beats a 200 that pretends.
+		//
+		// The check is on the TARGET basis, so switching TO manual while setting the amount is
+		// ALLOWED — that is the escape hatch the error message advertises, and it must work or
+		// the advice is a dead end. Only a switch INTO a derived basis is refused. (An earlier
+		// version of this comment claimed any basis switch with an amount was refused; the code
+		// never did that, and the test table now covers both directions.)
 		targetBasis := goal.ProgressBasis
 		if req.ProgressBasis != nil {
 			targetBasis = *req.ProgressBasis
@@ -429,8 +437,10 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 		if targetBasis != domain.ProgressBasisManual {
 			return nil, fmt.Errorf(
 				"%w: current_amount cannot be set on a goal whose progress_basis is %q — that value is "+
-					"derived (contributions are logged via POST /savings-goals/{id}/contributions; "+
-					"balance-based goals track their account). Switch progress_basis to %q to set it by hand",
+					"derived. Log a contribution instead (POST /savings-goals/{id}/contributions); "+
+					"balance-based goals track their account automatically. Switching progress_basis to %q "+
+					"would let you set it by hand, but on a contributions goal that ARCHIVES the existing "+
+					"contribution ledger and switching back seeds only a single synthetic contribution",
 				domain.ErrInvalidGoalUpdate, targetBasis, domain.ProgressBasisManual)
 		}
 		goal.CurrentAmount = *req.CurrentAmount
@@ -494,6 +504,8 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 				slog.String("goal_id", goalID),
 				slog.String("error", err.Error()),
 			)
+		} else {
+			goal = s.reloadAfterRecompute(ctx, goal)
 		}
 	}
 
@@ -657,4 +669,32 @@ func seedCurrentAmount(progressBasis string, requested float64) float64 {
 		return 0
 	}
 	return requested
+}
+
+// reloadAfterRecompute re-reads the goal so the RESPONSE matches the ROW.
+//
+// #1625. RecomputeGoal writes through UpdateCurrentAmount (current_amount, last_calculated_at,
+// balance_as_of, updated_at) and MarkCompleted (is_completed, completed_at, updated_at) — six
+// columns across two statements, on two different clocks: UpdateCurrentAmount takes a Go
+// timestamp while MarkCompleted stamps its own, and updated_at is written by both.
+//
+// Three successive attempts to keep the in-memory struct in step by copying fields back were
+// each wrong in a new way, because the set of fields kept growing and the timestamps were
+// unknowable from here. Re-reading is one query and is correct for every column, including ones
+// added later. It replaces the mirroring rather than supplementing it.
+//
+// Best-effort, like the recompute it follows: a failed re-read logs and leaves the caller with
+// the pre-recompute struct, which is no worse than what it had before this existed.
+func (s *savingsGoalService) reloadAfterRecompute(ctx context.Context, goal *domain.SavingsGoal) *domain.SavingsGoal {
+	fresh, err := s.goalRepo.GetByID(ctx, goal.ID)
+	if err != nil || fresh == nil {
+		if err != nil {
+			s.logger.Warn("could not re-read goal after recompute; response may lag the row",
+				slog.String("goal_id", goal.ID),
+				slog.String("error", err.Error()),
+			)
+		}
+		return goal
+	}
+	return fresh
 }

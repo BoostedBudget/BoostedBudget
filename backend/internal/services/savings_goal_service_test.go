@@ -1009,6 +1009,10 @@ func TestSavingsGoalService_CreateGoal_TriggersRecomputeGoal(t *testing.T) {
 	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
 	// RecomputeGoal must be called with the created goal.
 	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(0.0, nil)
+	// #1625: a SUCCESSFUL recompute is followed by a re-read, because it writes six columns
+	// across two statements on two different clocks and mirroring them field-by-field was wrong
+	// three times running.
+	mockGoalRepo.On("GetByID", ctx, mock.AnythingOfType("string")).Return(nil, nil).Once()
 
 	goal, err := service.CreateGoal(ctx, userID, req)
 
@@ -1371,6 +1375,9 @@ func TestCreateGoal_ReturnsRecomputedAmount(t *testing.T) {
 		[]domain.Account{createTestAccountForGoal(userID)}, nil)
 	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
 	recomputer.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(0.0, nil)
+	// #1625: a successful recompute is followed by a re-read. Returning nil here keeps the test
+	// focused on the amount — reloadAfterRecompute falls back to the in-memory goal.
+	mockGoalRepo.On("GetByID", ctx, mock.AnythingOfType("string")).Return(nil, nil).Once()
 
 	goal, err := service.CreateGoal(ctx, userID, req)
 
@@ -1484,6 +1491,7 @@ func TestCreateGoal_BalanceBasisIsNotZeroedWithoutARecomputer(t *testing.T) {
 func TestUpdateGoal_RefusesCurrentAmountOnADerivedBasis(t *testing.T) {
 	amount := 5000.0
 	contributions := domain.ProgressBasisContributions
+	manual := domain.ProgressBasisManual
 
 	tests := []struct {
 		name        string
@@ -1495,6 +1503,9 @@ func TestUpdateGoal_RefusesCurrentAmountOnADerivedBasis(t *testing.T) {
 		{"balance goal refuses a hand-set amount", domain.ProgressBasisBalance, nil, true},
 		{"switching TO contributions while setting the amount is refused", domain.ProgressBasisManual, &contributions, true},
 		{"a manual goal still accepts one", domain.ProgressBasisManual, nil, false},
+		// The escape hatch the 400 advertises MUST work, or the advice is a dead end. The check
+		// is on the TARGET basis, so switching INTO manual while setting the amount is allowed.
+		{"switching TO manual while setting the amount is allowed", domain.ProgressBasisContributions, &manual, false},
 	}
 
 	for _, tt := range tests {
@@ -1528,4 +1539,81 @@ func TestUpdateGoal_RefusesCurrentAmountOnADerivedBasis(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCreateGoal_ReReadsTheGoalAfterASuccessfulRecompute pins the fix for the divergence class
+// that three earlier attempts each got wrong a different way.
+//
+// RecomputeGoal writes six columns across two statements — current_amount, last_calculated_at,
+// balance_as_of and updated_at via UpdateCurrentAmount, then is_completed, completed_at and
+// updated_at again via MarkCompleted — on two different clocks. Mirroring them back onto the
+// in-memory struct field-by-field failed repeatedly because the set kept growing and the
+// timestamps are not knowable from the service. Re-reading is correct for every column,
+// including ones added later.
+func TestCreateGoal_ReReadsTheGoalAfterASuccessfulRecompute(t *testing.T) {
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	recomputer := new(MockGoalProgressRecomputer)
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+	service.SetProgressService(recomputer)
+
+	ctx := context.Background()
+	userID := "user-123"
+	completedAt := time.Now().Add(-3 * time.Minute)
+	calculatedAt := time.Now().Add(-2 * time.Minute)
+
+	// What the ROW looks like after the recompute's two writes.
+	rowAfterRecompute := &domain.SavingsGoal{
+		ID:               "goal-1",
+		UserID:           userID,
+		ProgressBasis:    domain.ProgressBasisContributions,
+		CurrentAmount:    250,
+		IsCompleted:      true,
+		CompletedAt:      &completedAt,
+		LastCalculatedAt: &calculatedAt,
+	}
+
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(
+		[]domain.Account{createTestAccountForGoal(userID)}, nil)
+	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	recomputer.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(250.0, nil)
+	mockGoalRepo.On("GetByID", ctx, mock.AnythingOfType("string")).Return(rowAfterRecompute, nil).Once()
+
+	goal, err := service.CreateGoal(ctx, userID, createTestCreateSavingsGoalRequest())
+
+	require.NoError(t, err)
+	// Not just the amount: the completion flag and BOTH timestamps have to come back too, and
+	// none of them was reachable by the field-mirroring approach this replaced.
+	assert.Equal(t, 250.0, goal.CurrentAmount)
+	assert.True(t, goal.IsCompleted, "a goal already complete on creation must not report otherwise")
+	require.NotNil(t, goal.CompletedAt)
+	assert.Equal(t, completedAt, *goal.CompletedAt,
+		"completed_at must be the ROW's value — MarkCompleted stamps its own clock, so any value invented here is wrong by construction")
+	require.NotNil(t, goal.LastCalculatedAt)
+	assert.Equal(t, calculatedAt, *goal.LastCalculatedAt)
+	mockGoalRepo.AssertExpectations(t)
+}
+
+// ...and a failed re-read must not fail the create. It is best-effort, like the recompute.
+func TestCreateGoal_SurvivesAFailedReRead(t *testing.T) {
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	recomputer := new(MockGoalProgressRecomputer)
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+	service.SetProgressService(recomputer)
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(
+		[]domain.Account{createTestAccountForGoal(userID)}, nil)
+	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	recomputer.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(250.0, nil)
+	mockGoalRepo.On("GetByID", ctx, mock.AnythingOfType("string")).
+		Return(nil, errors.New("connection reset")).Once()
+
+	goal, err := service.CreateGoal(ctx, userID, createTestCreateSavingsGoalRequest())
+
+	require.NoError(t, err, "a failed re-read must not fail goal creation")
+	assert.Equal(t, 250.0, goal.CurrentAmount, "the amount RecomputeGoal reported still stands")
 }
