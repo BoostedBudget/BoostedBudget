@@ -859,6 +859,9 @@ func (r *savingsContributionRepository) SumConfirmedByDeletedGoal(ctx context.Co
 		  -- c.deleted_at IS NULL: same reasoning as ListByDeletedGoal's own comment above — this is
 		  -- the contribution row's OWN tombstone, never inverted.
 		  AND c.deleted_at IS NULL
+		  -- Deliberately does NOT filter archived_at, because it pairs with ListByDeletedGoal and both
+		  -- must describe the same set of rows. Unlike SumConfirmedByGoal (live goal, excludes archived),
+		  -- this deleted-goal ledger read includes archived contributions to match what ListByDeletedGoal returns.
 	`
 	var total float64
 	if err := r.db.QueryRow(ctx, query, goalID, userID).Scan(&total); err != nil {

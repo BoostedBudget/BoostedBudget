@@ -587,7 +587,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   write('logSavingsGoalContribution'),
   write('confirmSavingsGoalContribution', { idempotent: true }),
   write('rejectSavingsGoalContribution', { idempotent: true }), // R3-7: sticky tombstone
-  // Hard `DELETE FROM savings_goal_contributions` (savings_contribution_repository.go:656) —
+  // Hard `DELETE FROM savings_goal_contributions` (savings_contribution_repository.go:1067) —
   // no tombstone, no restore path. EXCLUDED (was an allowed `write` before Task 16): a
   // contribution is a money record in the user's savings ledger, so this is the same category of
   // loss as purgeSavingsGoal. rejectSavingsGoalContribution stays available as the reversible,

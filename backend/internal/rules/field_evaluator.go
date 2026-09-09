@@ -173,13 +173,7 @@ func matchAccountID(tx *domain.Transaction, op domain.RuleConditionOperator, val
 		}
 		return false
 	}
-	found := false
-	if tx.UserAccountID != nil && *tx.UserAccountID != "" && matches(*tx.UserAccountID) {
-		found = true
-	}
-	if !found && matches(tx.AccountID) {
-		found = true
-	}
+	found := tx.UserAccountID != nil && *tx.UserAccountID != "" && matches(*tx.UserAccountID) || matches(tx.AccountID)
 	if op == domain.RuleOpNeq {
 		return !found
 	}
