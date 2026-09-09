@@ -734,7 +734,7 @@ export function useListSavingsGoalContributions<TData = Awaited<ReturnType<typeo
 
 
 /**
- * Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation.
+ * Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation. Requires the goal's progress_basis to be "contributions". ⚠ BREAKING (#1625): the request body rejects unknown fields, and the phantom "notes" field was removed — a client that previously sent it was silently ignored and now gets a 422. Drop the field; contribution notes were never stored.
  * @summary Log a savings goal contribution
  */
 export const logSavingsGoalContribution = (

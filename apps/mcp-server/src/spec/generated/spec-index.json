@@ -8297,7 +8297,14 @@
         },
         {
           "name": "progress_basis",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "manual",
+            "contributions",
+            "balance",
+            "account_percentage"
+          ],
+          "description": "How current_amount is derived. ⚠ BREAKING (#1625): omitting this now means \"contributions\", NOT \"manual\". A goal created without it derives progress from its contribution ledger, and a later PUT setting current_amount directly is refused with a 400. Pass \"manual\" explicitly if you intend to manage current_amount yourself."
         },
         {
           "name": "target_amount",
@@ -8779,7 +8786,7 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation.",
+      "description": "Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation. Requires the goal's progress_basis to be \"contributions\". ⚠ BREAKING (#1625): the request body rejects unknown fields, and the phantom \"notes\" field was removed — a client that previously sent it was silently ignored and now gets a 422. Drop the field; contribution notes were never stored.",
       "parameters": [
         {
           "name": "goalID",

@@ -126,6 +126,7 @@ export * from './createInviteResponseBody';
 export * from './createMCPRecipeRequest';
 export * from './createReconnectLinkTokenInputBody';
 export * from './createSavingsGoalRequest';
+export * from './createSavingsGoalRequestProgressBasis';
 export * from './createUserTagRequest';
 export * from './customCategory';
 export * from './customCategoryParentPfcPrimary';
