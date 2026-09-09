@@ -124,14 +124,14 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 	case domain.ProgressBasisContributions:
 		sum, err := s.contribRepo.SumConfirmedByGoal(ctx, goal.UserID, goal.ID)
 		if err != nil {
-			return 0, fmt.Errorf("savings_progress: sum contributions for goal %s: %w", goal.ID, err)
+			return goal.CurrentAmount, fmt.Errorf("savings_progress: sum contributions for goal %s: %w", goal.ID, err)
 		}
 		newAmount = sum
 
 	case domain.ProgressBasisBalance:
 		account, err := s.resolveBasisAccount(ctx, goal.UserID, goal)
 		if err != nil {
-			return 0, err
+			return goal.CurrentAmount, err
 		}
 
 		// Issue #1569: a retained (non-active) account's current_balance is frozen at
@@ -173,11 +173,11 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 
 	case domain.ProgressBasisAccountPercentage:
 		if goal.AccountPercentage == nil {
-			return 0, fmt.Errorf("savings_progress: goal %s has account_percentage basis but nil percentage", goal.ID)
+			return goal.CurrentAmount, fmt.Errorf("savings_progress: goal %s has account_percentage basis but nil percentage", goal.ID)
 		}
 		account, err := s.resolveBasisAccount(ctx, goal.UserID, goal)
 		if err != nil {
-			return 0, err
+			return goal.CurrentAmount, err
 		}
 
 		// Issue #1569: see the identical check in the balance-basis branch above.
@@ -204,22 +204,42 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 		balanceAsOf = &balanceAt
 
 	default:
-		return 0, fmt.Errorf("savings_progress: unknown progress_basis %q for goal %s", basis, goal.ID)
+		return goal.CurrentAmount, fmt.Errorf("savings_progress: unknown progress_basis %q for goal %s", basis, goal.ID)
 	}
 
 	// Round to cents (2dp) — deterministic to avoid floating-point drift.
 	newAmount = roundToCents(newAmount)
 
+	// ⚠ #1625: every return below reports THE AMOUNT THE ROW NOW HOLDS, not a success flag.
+	// This function writes in two steps, and the second can fail after the first committed —
+	// so "returned an error" and "changed nothing" are different states, and callers that
+	// conflated them reported a figure the database did not have.
+
 	// Persist updated current_amount and timestamps.
 	if err := s.goalRepo.UpdateCurrentAmount(ctx, goal.ID, newAmount, now, balanceAsOf); err != nil {
-		return 0, fmt.Errorf("savings_progress: update current_amount for goal %s: %w", goal.ID, err)
+		// Nothing was written: the row still holds the amount it had on entry.
+		return goal.CurrentAmount, fmt.Errorf("savings_progress: update current_amount for goal %s: %w", goal.ID, err)
 	}
 
 	// Mark completed (sticky — MarkCompleted only sets completed_at the first time, Codex C5).
 	// Never un-complete based on a subsequent computed drop.
 	if newAmount >= goal.TargetAmount {
-		if err := s.goalRepo.MarkCompleted(ctx, goal.ID); err != nil {
-			return 0, fmt.Errorf("savings_progress: mark completed for goal %s: %w", goal.ID, err)
+		if err := s.goalRepo.MarkCompleted(ctx, goal.ID); err == nil {
+			// Reflect the completion the row now carries. Without this a goal that is already
+			// complete on creation reports is_completed=false to the caller. Sticky, matching
+			// MarkCompleted: never cleared here by a later computed drop.
+			if !goal.IsCompleted {
+				goal.IsCompleted = true
+				completedAt := now
+				goal.CompletedAt = &completedAt
+			}
+		} else {
+			// The amount update ALREADY COMMITTED. Returning 0 here (as this did) made
+			// CreateGoal/UpdateGoal keep the pre-recompute figure while the row held newAmount.
+			// Reachable for the balance and account_percentage bases, whose computed value comes
+			// straight off an account balance and can meet the target immediately, and for a
+			// manual→contributions switch whose seeded contribution already meets it.
+			return newAmount, fmt.Errorf("savings_progress: mark completed for goal %s: %w", goal.ID, err)
 		}
 	}
 

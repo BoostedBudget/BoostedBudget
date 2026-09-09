@@ -234,6 +234,8 @@ func MapError(err error) error {
 	// reported as a generic 400. Both carry the full message: an agent that cannot see WHICH
 	// field or operator was rejected has no way to correct itself, which is the whole reason
 	// these used to loop.
+	case errors.Is(err, domain.ErrInvalidGoalUpdate):
+		return huma.Error400BadRequest(err.Error())
 	case errors.Is(err, domain.ErrInvalidCondition):
 		return huma.Error422UnprocessableEntity(err.Error())
 	case errors.Is(err, domain.ErrInvalidRule):

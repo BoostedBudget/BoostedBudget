@@ -1476,3 +1476,56 @@ func TestCreateGoal_BalanceBasisIsNotZeroedWithoutARecomputer(t *testing.T) {
 	assert.Equal(t, 5000.0, persisted, "a derived-from-account basis keeps the caller's seed on the row")
 	assert.Equal(t, 5000.0, goal.CurrentAmount, "and the response agrees with the row")
 }
+
+// TestUpdateGoal_RefusesCurrentAmountOnADerivedBasis closes the route by which the ORIGINAL
+// #1625 bug came back: the create path was fixed and the update path was not, so
+// PUT {"current_amount": 5000} on a contributions goal wrote 5000 against an empty ledger.
+// Found by adversarial review, not by the author.
+func TestUpdateGoal_RefusesCurrentAmountOnADerivedBasis(t *testing.T) {
+	amount := 5000.0
+	contributions := domain.ProgressBasisContributions
+
+	tests := []struct {
+		name        string
+		goalBasis   string
+		reqBasis    *string
+		wantRefused bool
+	}{
+		{"contributions goal refuses a hand-set amount", domain.ProgressBasisContributions, nil, true},
+		{"balance goal refuses a hand-set amount", domain.ProgressBasisBalance, nil, true},
+		{"switching TO contributions while setting the amount is refused", domain.ProgressBasisManual, &contributions, true},
+		{"a manual goal still accepts one", domain.ProgressBasisManual, nil, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGoalRepo := new(MockSavingsGoalRepository)
+			mockAccountRepo := new(MockAccountRepository)
+			service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+
+			ctx := context.Background()
+			userID := "user-123"
+			existing := createTestSavingsGoal(userID)
+			existing.ProgressBasis = tt.goalBasis
+
+			mockGoalRepo.On("GetByID", ctx, existing.ID).Return(existing, nil)
+			mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil).Maybe()
+			mockAccountRepo.On("GetByUserID", ctx, userID).Return(
+				[]domain.Account{createTestAccountForGoal(userID)}, nil).Maybe()
+
+			_, err := service.UpdateGoal(ctx, userID, existing.ID, &domain.UpdateSavingsGoalRequest{
+				CurrentAmount: &amount,
+				ProgressBasis: tt.reqBasis,
+			})
+
+			if tt.wantRefused {
+				require.Error(t, err, "a derived basis owns current_amount and must refuse a hand-set one")
+				assert.True(t, errors.Is(err, domain.ErrInvalidGoalUpdate),
+					"must wrap ErrInvalidGoalUpdate so the mapper returns 400, not 500: %v", err)
+				mockGoalRepo.AssertNotCalled(t, "Update", ctx, mock.AnythingOfType("*domain.SavingsGoal"))
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

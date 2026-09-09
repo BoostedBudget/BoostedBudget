@@ -368,10 +368,16 @@ type CreateSavingsGoalRequest struct {
 	Name          string     `json:"name" validate:"required,max=100"`
 	Description   *string    `json:"description,omitempty"`
 	TargetAmount  float64    `json:"target_amount" validate:"required,gt=0"`
-	// CurrentAmount seeds the goal's progress. It is only honoured under the "manual" basis:
-	// every other basis DERIVES current_amount, so a supplied value is recomputed away
-	// immediately. #1625: this is no longer misleading, because CreateGoal now returns the
-	// recomputed figure rather than echoing what was sent — the response shows the real value.
+	// CurrentAmount seeds the goal's progress. Under "manual" it is the value, and stays so.
+	//
+	// Under "contributions" it is IGNORED: a goal created this instant has no contributions, so
+	// the row is written with zero regardless of what was sent.
+	//
+	// Under "balance" / "account_percentage" it is honoured at insert and then overwritten by
+	// the first recompute — but only if a progress service is wired. The MCP create path builds
+	// a transaction-local service with none, so there the seed PERSISTS until the next sync.
+	// (An earlier version of this comment claimed every non-manual basis recomputed the value
+	// away "immediately", which was not true of that path.)
 	CurrentAmount float64    `json:"current_amount,omitempty" validate:"gte=0"`
 	CurrencyCode  string     `json:"currency_code,omitempty"`
 	AccountID     string     `json:"account_id" validate:"required,uuid"`
@@ -467,6 +473,11 @@ type SavingsInflowTransaction struct {
 
 // SavingsGoal-related errors.
 var (
+	// ErrInvalidGoalUpdate is a client mistake in an update request — mapped to 400, never 500.
+	// #1625: introduced for "current_amount on a derived basis", which used to be written
+	// silently and left the row claiming progress the ledger did not have.
+	ErrInvalidGoalUpdate = errors.New("invalid savings goal update")
+
 	ErrSavingsGoalNotFound      = errors.New("savings goal not found")
 	ErrSavingsGoalAlreadyExists = errors.New("savings goal with this name already exists")
 
