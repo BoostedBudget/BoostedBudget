@@ -569,6 +569,23 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 		args = []interface{}{userID, startDate, endDate}
 	}
 
+	return r.scanAggregatedHistory(ctx, query, args...)
+}
+
+// scanAggregatedHistory folds a (day, account_type, balance) result set into one
+// domain.BalanceHistoryPoint per day.
+//
+// ONE implementation for BOTH scopes, deliberately. The two statements above it are the personal
+// and household halves of the same read and emit the SAME three columns in the same order, grouped
+// and ordered by day; a hand-copied fold in each method is a second place for the two scopes to
+// drift, and the live bug this branch fixed was precisely the two halves having drifted apart.
+// (The SQL itself stays as two statements — see the household statement's own header for the
+// differences that are deliberate, notably grant clipping at instant vs day resolution.)
+//
+// The rows MUST arrive grouped by day, which both statements guarantee with GROUP BY/ORDER BY on
+// snapshot_date: this walks the result once and starts a new point whenever the date changes, so an
+// interleaved result set would emit the same day twice.
+func (r *balanceSnapshotRepository) scanAggregatedHistory(ctx context.Context, query string, args ...interface{}) ([]domain.BalanceHistoryPoint, error) {
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -1228,43 +1245,8 @@ func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context
 		query = fmt.Sprintf(queryBase, householdAccountsCTEForBalancesPerDay(), "")
 	}
 
-	rows, err := r.db.Query(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var history []domain.BalanceHistoryPoint
-	var current *domain.BalanceHistoryPoint
-	for rows.Next() {
-		var d time.Time
-		var accountType string
-		var bal float64
-		if err := rows.Scan(&d, &accountType, &bal); err != nil {
-			return nil, err
-		}
-		if current == nil || !current.Date.Equal(d) {
-			history = append(history, domain.BalanceHistoryPoint{Date: d, ByType: map[string]float64{}})
-			current = &history[len(history)-1]
-		}
-		current.TotalBalance += bal
-		if accountType != "" {
-			current.ByType[accountType] += bal
-		} else {
-			// #1626 Phase 3 item 5: an untyped balance is RECORDED rather than discarded, so the
-			// net-worth reconstruction (dashboard_service.go GetNetWorthHistory), which is driven
-			// entirely by ByType, can no longer read an orphan-only day as exactly zero. See
-			// domain.BalanceHistoryPoint.UntypedBalance for why this is a field and not a
-			// subtraction the consumer performs.
-			current.UntypedBalance += bal
-		}
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return history, nil
+	// Same fold as personal scope, and shared with it on purpose — see scanAggregatedHistory.
+	return r.scanAggregatedHistory(ctx, query, args...)
 }
 
 // ── Per-account retained balance history (#1569) ──────────────────────────────────────────────
