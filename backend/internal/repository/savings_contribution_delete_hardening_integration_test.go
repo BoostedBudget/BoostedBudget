@@ -100,7 +100,7 @@ func TestDeleteContribution_RefusesARejectedContribution_Integration(t *testing.
 	}
 	require.NoError(t, repo.Insert(ctx, userID, proposed))
 
-	rejected, err := repo.RejectContribution(ctx, userID, proposed.ID)
+	rejected, err := repo.RejectContribution(ctx, userID, goalID, proposed.ID)
 	require.NoError(t, err)
 	require.Equal(t, "rejected", rejected.Status)
 

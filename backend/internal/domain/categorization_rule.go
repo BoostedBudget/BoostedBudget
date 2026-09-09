@@ -136,7 +136,7 @@ type CategorizationRule struct {
 	// timestamp filled in at response time would answer "when did you ask", not "since when has
 	// this been broken". Reporting a number the system does not know is the defect class this
 	// whole ticket is about.
-	Quarantined bool `json:"quarantined,omitempty" db:"-" doc:"True when this rule cannot be evaluated as written and will not match anything. Computed per request."`
+	Quarantined bool `json:"quarantined,omitempty" db:"-" doc:"True only when this rule is actually PREVENTED from matching. A rule with a quarantine_reason but quarantined=false still runs — the problem is reported, not enforced. Computed per request."`
 	// QuarantineReason is a fixed vocabulary (never user content), shared with the
 	// categorization_rule_quarantine_candidates_total metric so the two cannot describe the same
 	// condition differently.

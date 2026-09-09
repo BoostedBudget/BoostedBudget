@@ -1622,3 +1622,44 @@ func TestCreateGoal_SurvivesAFailedReRead(t *testing.T) {
 	require.NoError(t, err, "a failed re-read must not fail goal creation")
 	assert.Equal(t, 250.0, goal.CurrentAmount, "the amount RecomputeGoal reported still stands")
 }
+
+// #1625, found by adversarial review: a failed archive must NOT be followed by the seed.
+//
+// handleBasisSwitch logged the archive error and seeded anyway. That reinstates precisely the
+// defect Task 12 exists to remove — the prior period's rows are still live, the synthetic seed
+// lands beside them, and the goal reports both. Skipping the seed leaves current_amount
+// understated until the next recompute, which is recoverable and visible; double-counting is not.
+func TestUpdateGoal_BasisSwitch_FailedArchiveSkipsTheSeed(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-archive-fail"
+	goalID := "goal-archive-fail"
+
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockProgress := new(MockGoalProgressRecomputer)
+	mockContribRepo := new(MockGoalBasisSwitchContribRepo)
+	mockAnalytics := new(MockAnalytics)
+
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+	service.SetProgressService(mockProgress)
+	service.SetBasisSwitchContribRepo(mockContribRepo)
+	service.SetAnalytics(mockAnalytics)
+
+	existing := &domain.SavingsGoal{
+		ID: goalID, UserID: userID, Name: "Vacation", TargetAmount: 5000.0,
+		CurrentAmount: 750.0, CurrencyCode: "USD", AccountID: "account-savings",
+		ProgressBasis: domain.ProgressBasisManual,
+	}
+	newBasis := domain.ProgressBasisContributions
+
+	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
+	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	mockContribRepo.On("ArchiveByGoal", ctx, goalID).Return(errors.New("archive blew up"))
+	mockAnalytics.On("Capture", userID, "savings_goal_progress_basis_changed", mock.Anything).Return()
+	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(0.0, nil)
+
+	_, err := service.UpdateGoal(ctx, userID, goalID, &domain.UpdateSavingsGoalRequest{ProgressBasis: &newBasis})
+
+	require.NoError(t, err, "the basis change itself is still non-fatal")
+	mockContribRepo.AssertNotCalled(t, "Insert", mock.Anything, mock.Anything, mock.Anything)
+}
