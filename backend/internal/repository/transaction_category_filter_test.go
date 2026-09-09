@@ -59,14 +59,14 @@ func TestCategoryFilterGroup_OrsAllThreePredicates(t *testing.T) {
 
 	conjuncts := topLevelConjuncts(strings.TrimPrefix(strings.TrimSpace(clause), "AND "))
 	require.Len(t, conjuncts, 1,
-		"all three category predicates must share ONE top-level group; splitting them across "+
+		"all category predicates present must share ONE top-level group; splitting them across "+
 			"top-level ANDs is the #1626 defect — a row cannot be both pfc-kind and custom-kind, so "+
 			"the conjunction matches nothing. Got:\n%s", strings.Join(conjuncts, "\n--AND--\n"))
 
 	assert.Contains(t, clause, "effective_pfc_primary IN (")
 	assert.Contains(t, clause, "effective_pfc_detailed IN (")
 	assert.Contains(t, clause, "category_override_kind = 'custom'")
-	assert.Contains(t, clause, " OR ", "the three predicates must be OR-joined")
+	assert.Contains(t, clause, " OR ", "the predicates must be OR-joined")
 
 	assert.Contains(t, clause, "parent_id::text IN (",
 		"custom_category_ids must keep expanding to itself plus its children — the picker that "+
@@ -182,4 +182,65 @@ func renderNode(t *testing.T, fset *token.FileSet, decl *ast.FuncDecl) string {
 	require.Less(t, start, end)
 	require.LessOrEqual(t, end, len(src))
 	return src[start:end]
+}
+
+// TestCategoryFilterGroup_UncategorizedIsAFourthOrLeg is the #1626 Phase 2 guard.
+//
+// The Sankey renders an "Uncategorized" node from a sentinel the ANALYTICS layer synthesises:
+// effectiveCategoryExpr's ELSE arm coalesces a NULL pfc_primary to the literal 'UNCATEGORIZED'.
+// That string is not a value any column holds — effective_pfc_primary is NULL for those rows — so
+// `pfc_primaries=UNCATEGORIZED` matches nothing and the node had to be inert.
+//
+// The predicate mirrors the sentinel's own definition: that ELSE arm is reached exactly when
+// category_override_kind IS NULL, and it consults only pfc_primary. Note it deliberately does NOT
+// rely on the discriminator CHECK forbidding "ghost" override columns on a kind-NULL row — under
+// SQL three-valued logic that CHECK evaluates to UNKNOWN there, which Postgres accepts. The
+// equivalence holds because the CASE ignores those columns, not because they cannot exist.
+func TestCategoryFilterGroup_UncategorizedIsAFourthOrLeg(t *testing.T) {
+	t.Run("alone", func(t *testing.T) {
+		clause, args, idx := categoryFilterGroup(
+			domain.TransactionFilters{Uncategorized: true}, 2, []interface{}{"u"})
+
+		assert.Contains(t, clause, "t.category_override_kind IS NULL")
+		assert.Contains(t, clause, "t.pfc_primary IS NULL")
+		assert.NotContains(t, clause, "effective_pfc_primary IN (",
+			"no PFC leg when no PFC values were requested")
+		assert.Len(t, args, 1, "the predicate binds no parameters of its own")
+		assert.Equal(t, 2, idx, "no placeholders consumed")
+	})
+
+	t.Run("false is a no-op, never an exclusion", func(t *testing.T) {
+		clause, _, _ := categoryFilterGroup(
+			domain.TransactionFilters{Uncategorized: false}, 2, []interface{}{"u"})
+		assert.Empty(t, clause,
+			"uncategorized=false must add nothing; treating it as 'exclude uncategorized' would be "+
+				"a second, unrequested feature")
+	})
+
+	t.Run("unions with the other three rather than intersecting them", func(t *testing.T) {
+		filters := domain.TransactionFilters{
+			PFCPrimaries:      []string{"FOOD_AND_DRINK"},
+			PFCDetaileds:      []string{"TRANSPORTATION_RIDE_SHARE"},
+			CustomCategoryIDs: []string{"9f1c2b3a-0000-4000-8000-000000000001"},
+			Uncategorized:     true,
+		}
+		clause, args, _ := categoryFilterGroup(filters, 2, []interface{}{"u"})
+
+		conjuncts := topLevelConjuncts(strings.TrimPrefix(strings.TrimSpace(clause), "AND "))
+		require.Len(t, conjuncts, 1,
+			"all FOUR category predicates must share ONE top-level group. A row is pfc-kind, "+
+				"custom-kind, or uncategorised — never two at once — so splitting them across "+
+				"top-level ANDs selects the empty set, which is the #1626 part C defect. Got:\n%s",
+			strings.Join(conjuncts, "\n--AND--\n"))
+
+		for _, want := range []string{
+			"effective_pfc_primary IN (",
+			"effective_pfc_detailed IN (",
+			"category_override_kind = 'custom'",
+			"t.pfc_primary IS NULL",
+		} {
+			assert.Contains(t, clause, want)
+		}
+		require.Len(t, args, 4, "user_id plus one arg per bound value; the uncategorized leg binds none")
+	})
 }

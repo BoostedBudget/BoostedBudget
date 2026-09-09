@@ -398,6 +398,16 @@ type TransactionFilters struct {
 	// EndDate filters transactions on or before this date (inclusive)
 	EndDate *time.Time
 
+	// Uncategorized selects transactions with NO category at all — the rows the analytics layer
+	// reports under its synthesised 'UNCATEGORIZED' sentinel (#1626 Phase 2). It exists because
+	// that sentinel is not a value any column holds, so `pfc_primaries=UNCATEGORIZED` matches
+	// nothing and the Sankey's Uncategorized node had no way to be clickable.
+	//
+	// A plain bool, like IncludeReversed below: this is a positive-only opt-in, so false and absent
+	// both mean "no predicate". Absence is expressed at the handler boundary, not in the type.
+	// It joins the OR group with the three fields below — see categoryFilterGroup.
+	Uncategorized bool
+
 	// PFCPrimaries filters by effective PFC primary enum(s).
 	// Matches the effective category: override if set, else source pfc_primary.
 	//

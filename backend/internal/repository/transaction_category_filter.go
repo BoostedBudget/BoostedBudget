@@ -13,6 +13,9 @@ import (
 // or NULL, and the generated `effective_pfc_*` columns are NULL for a custom-kind row (migration
 // 000073). So the PFC predicates and the custom predicate select DISJOINT row sets.
 //
+// The group now has FOUR legs: PFC primary, PFC detailed, custom category, and uncategorised
+// (#1626 Phase 2).
+//
 // They used to be combined with AND — the PFC pair ORed with each other, then the custom predicate
 // appended as its own top-level condition. The conjunction of two disjoint sets is empty, so ANY
 // request carrying both kinds returned zero rows by construction. Nothing could depend on that
@@ -47,6 +50,23 @@ func categoryFilterGroup(filters domain.TransactionFilters, argIdx int, args []i
 	if len(filters.PFCDetaileds) > 0 {
 		legs = append(legs, "t.effective_pfc_detailed IN ("+bindAll(filters.PFCDetaileds)+")")
 	}
+	if filters.Uncategorized {
+		// The rows the analytics layer reports under its synthesised 'UNCATEGORIZED' sentinel.
+		//
+		// effectiveCategoryExpr reaches that sentinel only through its ELSE arm,
+		// `COALESCE(t.pfc_primary, 'UNCATEGORIZED')`, which is taken exactly when
+		// category_override_kind IS NULL — and that arm consults ONLY pfc_primary. So this predicate
+		// mirrors the sentinel's own definition.
+		//
+		// ⚠ It deliberately does NOT rest on `CHECK valid_category_override_discriminator` forbidding
+		// leftover override columns on a kind-NULL row. Under SQL three-valued logic that CHECK
+		// evaluates to UNKNOWN for such a row, which Postgres ACCEPTS, so those columns can exist.
+		// The equivalence holds because the CASE ignores them, not because they are impossible.
+		//
+		// Binds no parameters, so argIdx is untouched.
+		legs = append(legs, "(t.category_override_kind IS NULL AND t.pfc_primary IS NULL)")
+	}
+
 	if len(filters.CustomCategoryIDs) > 0 {
 		idList := bindAll(filters.CustomCategoryIDs)
 		// The id list expands to itself plus its children (parent_id), so filtering by a parent
