@@ -1,6 +1,6 @@
 package main
 
-// Issue #1448: every one of the 16 periodic River jobs registered by main.go must carry
+// Issue #1448: every one of the 17 periodic River jobs registered by main.go must carry
 // (1) a real dedup guarantee (queue-level UniqueOpts, or — for BudgetPeriodCloseCheck — its
 // own documented DB-level exactly-once marker), (2) RunOnStart: true, and (3) a non-empty,
 // stable PeriodicJobOpts.ID so River restores nextRunAt across restarts/leader elections
@@ -26,7 +26,7 @@ import (
 
 // allNonNilPeriodicJobsDeps returns a periodicJobsDeps with every worker field populated by a
 // real (zero-configured) worker instance, so buildPeriodicJobSpecs produces the full set of
-// 16 specs — one per periodic job main.go registers when every dependency is present.
+// 17 specs — one per periodic job main.go registers when every dependency is present.
 func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 	return periodicJobsDeps{
 		scheduledDeletionCheckWorker:        jobs.NewScheduledDeletionCheckWorker(jobs.ScheduledDeletionCheckWorkerDeps{}),
@@ -42,6 +42,7 @@ func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 		budgetPeriodCloseCheckWorker:        jobs.NewBudgetPeriodCloseCheckWorker(jobs.BudgetPeriodCloseCheckWorkerDeps{}),
 		savingsStatsWorker:                  jobs.NewSavingsStatsWorker(jobs.SavingsStatsWorkerDeps{}),
 		portfolioSnapshotWorker:             jobs.NewPortfolioSnapshotWorker(jobs.PortfolioSnapshotWorkerDeps{}),
+		ruleQuarantineCensusWorker:          jobs.NewRuleQuarantineCensusWorker(jobs.RuleQuarantineCensusWorkerDeps{}),
 		// Issue #1497. Only the RETRY worker appears here, because only it is nil-guardable: the
 		// orphan-token purge has no periodicJobsDeps field at all — its registration is unconditional
 		// on purpose, so there is nothing to set and nothing that could omit it. That asymmetry is
@@ -51,13 +52,14 @@ func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 }
 
 // TestBuildPeriodicJobSpecs_Count proves every nil-guarded worker (plus the always-on jobs)
-// produces exactly one spec when non-nil — 14 nil-guarded workers + 2 unconditional jobs
-// (idempotency cleanup, and Issue #1497's orphan-token purge) = 16.
+// produces exactly one spec when non-nil — 15 nil-guarded workers + 2 unconditional jobs
+// (idempotency cleanup, and Issue #1497's orphan-token purge) = 17. #1625 Task 18 fix round 1
+// added the rule quarantine census (nil-guarded), taking this from 16 to 17.
 func TestBuildPeriodicJobSpecs_Count(t *testing.T) {
 	specs := buildPeriodicJobSpecs(allNonNilPeriodicJobsDeps())
 
-	if len(specs) != 16 {
-		t.Fatalf("expected 16 periodic job specs when every worker is non-nil, got %d", len(specs))
+	if len(specs) != 17 {
+		t.Fatalf("expected 17 periodic job specs when every worker is non-nil, got %d", len(specs))
 	}
 }
 
@@ -96,8 +98,8 @@ func TestBuildPeriodicJobSpecs_NilWorkerOmitsItsSpec(t *testing.T) {
 
 	specs := buildPeriodicJobSpecs(deps)
 
-	if len(specs) != 15 {
-		t.Fatalf("expected 15 specs with itemCleanupCheckWorker nil, got %d", len(specs))
+	if len(specs) != 16 {
+		t.Fatalf("expected 16 specs with itemCleanupCheckWorker nil, got %d", len(specs))
 	}
 	for _, s := range specs {
 		if s.name == "item cleanup check" {

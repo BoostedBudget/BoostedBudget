@@ -553,6 +553,11 @@ func main() {
 	// Issue #138: Declare portfolio snapshot worker (daily per-user snapshot, no Plaid dependency)
 	var portfolioSnapshotWorker *jobs.PortfolioSnapshotWorker
 
+	// #1625 Task 18 fix round 1: declare rule quarantine census worker (daily full-table scan,
+	// no Plaid dependency) — constructed unconditionally alongside its siblings below, since
+	// categorizationRuleRepo has no configuration gate.
+	var ruleQuarantineCensusWorker *jobs.RuleQuarantineCensusWorker
+
 	// Issue #1123: Declare effective category refresh worker
 	var effectiveCategoryRefreshWorker *jobs.EffectiveCategoryRefreshWorker
 
@@ -1332,6 +1337,15 @@ func main() {
 		})
 		appLogger.Info("Portfolio snapshot worker created (River)")
 
+		// #1625 Task 18 fix round 1: create rule quarantine census worker (daily full-table
+		// scan feeding the distinct-rule population gauge). categorizationRuleRepo already exists
+		// in this scope (constructed above for the categorization-rule service/API).
+		ruleQuarantineCensusWorker = jobs.NewRuleQuarantineCensusWorker(jobs.RuleQuarantineCensusWorkerDeps{
+			RuleRepo: categorizationRuleRepo,
+			Logger:   appLogger,
+		})
+		appLogger.Info("Rule quarantine census worker created (River)")
+
 		// Issue #1123: Create effective category refresh worker (no external dependencies)
 		effectiveCategoryRefreshWorker = jobs.NewEffectiveCategoryRefreshWorker(jobs.EffectiveCategoryRefreshWorkerDeps{
 			TransactionRepo: transactionRepo,
@@ -1740,6 +1754,7 @@ func main() {
 				budgetPeriodCloseCheckWorker:        budgetPeriodCloseCheckWorker,
 				savingsStatsWorker:                  savingsStatsWorker,
 				portfolioSnapshotWorker:             portfolioSnapshotWorker,
+				ruleQuarantineCensusWorker:          ruleQuarantineCensusWorker,
 				plaidOrphanRetryWorker:              plaidOrphanRetryWorker,
 			}, appLogger)
 
@@ -1863,6 +1878,10 @@ func main() {
 			if portfolioSnapshotWorker != nil {
 				river.AddWorker(riverWorkers, portfolioSnapshotWorker)
 				appLogger.Info("Portfolio snapshot worker registered with River")
+			}
+			if ruleQuarantineCensusWorker != nil {
+				river.AddWorker(riverWorkers, ruleQuarantineCensusWorker)
+				appLogger.Info("Rule quarantine census worker registered with River")
 			}
 			if effectiveCategoryRefreshWorker != nil {
 				river.AddWorker(riverWorkers, effectiveCategoryRefreshWorker)
