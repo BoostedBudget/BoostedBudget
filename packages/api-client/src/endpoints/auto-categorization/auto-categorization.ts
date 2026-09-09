@@ -271,7 +271,7 @@ export const useCreateRule = <TError = ErrorType<ErrorModel>,
       return useMutation(getCreateRuleMutationOptions(options), queryClient);
     }
     /**
- * Returns every condition field, the operators each accepts, the value shape each operator requires, closed value sets, and the semantics that cannot be inferred from a type — notably that signed_amount is POSITIVE for money leaving the account. Derived from the same matrix the validator enforces, so it cannot drift from it.
+ * Returns every condition field, the operators each accepts, the value shape each operator requires, closed value sets inlined where practical, and the semantics that cannot be inferred from a type — notably that signed_amount is POSITIVE for money leaving the account. The two PFC fields (pfc_primary, pfc_detailed) have closed sets too, but each field's own notes name the endpoint that publishes it instead of duplicating ~120 values here. Derived from the same matrix the validator enforces, so it cannot drift from it.
  * @summary Get the condition matrix
  */
 export const getConditionSchema = (

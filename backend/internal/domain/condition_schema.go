@@ -541,6 +541,14 @@ var fieldNotes = map[RuleConditionField]string{
 	FieldEffectiveMerchant: "The merchant name YOU see: your rename, or the canonical name of a " +
 		"merchant you merged this one into, falling back to the raw provider name when you have " +
 		"set neither. Match this when your rule is written against what the app displays.",
+	// #1625 Task 20: this schema's own operation Description promises "closed value sets", but
+	// closedValuesFor deliberately returns nil for both PFC fields — the promise was false as
+	// written for the one caller who could not also read closedSetExemptFields in Go source.
+	// Naming the actual endpoint here, not just the count, is what makes the promise true.
+	FieldPFCPrimary: "Closed set of 18 curated PFCv2 primary categories. Not inlined here — call " +
+		"GET /api/v1/categories/plaid-primaries once and cache the result.",
+	FieldPFCDetailed: "Closed set of ~120 curated PFCv2 detailed categories. Not inlined here — " +
+		"call GET /api/v1/categories/plaid-detailed once and cache the result.",
 }
 
 // exampleFor returns a well-formed value for a shape, so callers copy rather than guess.
