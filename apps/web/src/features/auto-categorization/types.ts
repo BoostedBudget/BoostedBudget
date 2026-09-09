@@ -358,9 +358,11 @@ const OPERATOR_ORDER: ConditionOperator[] = [
  * AutoCategorizationRuleEditor.tsx routes by (field, operator) for amount/signed_amount/date
  * (number, amount-range, or single-date) and by field alone for account_id/pfc_primary/
  * pfc_detailed/direction (their existing lookup selects) — nothing here falls back to a
- * mismatched widget. account_type/payment_channel's non-`eq` operators (e.g. "contains") use the
- * generic text box rather than their curated enum picker, since the picker only makes sense for
- * exact equality; that is a deliberate, narrower widget choice, not a gap.
+ * mismatched widget. account_type/payment_channel's `eq` AND `neq` operators both get their
+ * curated enum picker (picking ONE known value works the same way whether the condition matches
+ * or excludes it); only their substring-style operators (`contains`/`starts_with`/`ends_with`)
+ * fall back to the generic text box, since a closed-set picker cannot express "match a
+ * substring" — that is a deliberate, narrower widget choice for those operators, not a gap.
  */
 const PAIR_CHOICES: ConditionChoice[] = FIELD_ORDER.flatMap((field) =>
   OPERATOR_ORDER
