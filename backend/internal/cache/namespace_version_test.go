@@ -53,7 +53,14 @@ import (
 //     shape and vacuously true for an orphaned snapshot — so a closed account's retained balance
 //     was carried onto every later observed day, and a pre-fix entry (which again decodes cleanly)
 //     would keep serving that overstated total. The same bump covers GetCashFlowSummary's echoed
-//     end_date, now clamped to today for a future-ranged request.
+//     end_date, now clamped to today for a future-ranged request. #1626 E2 Part 1 took it to 7:
+//     GetAggregatedHistoryForHousehold, the OTHER balance read cached here (GetNetWorthTrend with a
+//     household scope), gained the same per-account carry-forward its personal twin got at version
+//     4, so a household day on which only one member's item synced stops collapsing toward zero —
+//     and a pre-fix entry, decoding cleanly as ever, would keep serving that collapsed day. E2's
+//     Part 2 (four analytics reads now tolerating a NULL effective_category_name) deliberately did
+//     NOT contribute: the requests it fixes used to ERROR, so they cached nothing, and the requests
+//     that succeeded return byte-identical results.
 //   - NamespaceAnalyticsRows 2 — the deleted_at tombstone filters and household-grants rewrite in
 //     analytics_repository.go, whose GetTopExpense / GetLargestTransactionsForPeriod /
 //     GetCategoryBreakdownForMerchant / GetUnusualSpend results are cached here.
@@ -62,7 +69,7 @@ import (
 // saying why in the same commit.
 func TestSchemaVersionBump_OrphansEntriesWrittenUnderThePriorVersion(t *testing.T) {
 	requiredFloor := map[Namespace]int{
-		NamespaceAnalytics:     6,
+		NamespaceAnalytics:     7,
 		NamespaceAnalyticsRows: 2,
 	}
 
