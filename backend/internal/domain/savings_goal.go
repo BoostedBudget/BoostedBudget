@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -62,27 +63,27 @@ type SavingsGoal struct {
 // Validate checks that the SavingsGoal has all required fields and valid values.
 func (sg *SavingsGoal) Validate() error {
 	if sg.UserID == "" {
-		return errors.New("user_id is required")
+		return fmt.Errorf("%w: user_id is required", ErrInvalidSavingsGoal)
 	}
 
 	if sg.Name == "" {
-		return errors.New("name is required")
+		return fmt.Errorf("%w: name is required", ErrInvalidSavingsGoal)
 	}
 
 	if len(sg.Name) > 100 {
-		return errors.New("name must be 100 characters or less")
+		return fmt.Errorf("%w: name must be 100 characters or less", ErrInvalidSavingsGoal)
 	}
 
 	if sg.TargetAmount <= 0 {
-		return errors.New("target_amount must be positive")
+		return fmt.Errorf("%w: target_amount must be positive", ErrInvalidSavingsGoal)
 	}
 
 	if sg.CurrentAmount < 0 {
-		return errors.New("current_amount cannot be negative")
+		return fmt.Errorf("%w: current_amount cannot be negative", ErrInvalidSavingsGoal)
 	}
 
 	if sg.CurrencyCode == "" {
-		return errors.New("currency_code is required")
+		return fmt.Errorf("%w: currency_code is required", ErrInvalidSavingsGoal)
 	}
 
 	// Validate progress_basis and related fields (Issue #1300).
@@ -94,32 +95,32 @@ func (sg *SavingsGoal) Validate() error {
 	case ProgressBasisManual, ProgressBasisContributions:
 		// account_percentage must not be set for these bases
 		if sg.AccountPercentage != nil {
-			return errors.New("account_percentage must only be set when progress_basis is account_percentage")
+			return fmt.Errorf("%w: account_percentage must only be set when progress_basis is account_percentage", ErrInvalidSavingsGoal)
 		}
 	case ProgressBasisBalance:
 		if sg.AccountPercentage != nil {
-			return errors.New("account_percentage must only be set when progress_basis is account_percentage")
+			return fmt.Errorf("%w: account_percentage must only be set when progress_basis is account_percentage", ErrInvalidSavingsGoal)
 		}
 		if sg.AccountID == "" {
-			return errors.New("account_id is required when progress_basis is balance")
+			return fmt.Errorf("%w: account_id is required when progress_basis is balance", ErrInvalidSavingsGoal)
 		}
 	case ProgressBasisAccountPercentage:
 		if sg.AccountPercentage == nil {
-			return errors.New("account_percentage is required when progress_basis is account_percentage")
+			return fmt.Errorf("%w: account_percentage is required when progress_basis is account_percentage", ErrInvalidSavingsGoal)
 		}
 		if *sg.AccountPercentage <= 0 || *sg.AccountPercentage > 1 {
-			return errors.New("account_percentage must be between 0 and 1 (exclusive 0, inclusive 1)")
+			return fmt.Errorf("%w: account_percentage must be between 0 and 1 (exclusive 0, inclusive 1)", ErrInvalidSavingsGoal)
 		}
 		if sg.AccountID == "" {
-			return errors.New("account_id is required when progress_basis is account_percentage")
+			return fmt.Errorf("%w: account_id is required when progress_basis is account_percentage", ErrInvalidSavingsGoal)
 		}
 	default:
-		return errors.New("progress_basis must be one of: manual, contributions, balance, account_percentage")
+		return fmt.Errorf("%w: progress_basis must be one of: manual, contributions, balance, account_percentage", ErrInvalidSavingsGoal)
 	}
 
 	// account_id is required for all bases (savings goals always link to an account).
 	if sg.AccountID == "" {
-		return errors.New("account_id is required")
+		return fmt.Errorf("%w: account_id is required", ErrInvalidSavingsGoal)
 	}
 
 	return nil
@@ -165,11 +166,11 @@ type SavingsGoalContribution struct {
 // Validate checks SavingsGoalContribution required fields and invariants.
 func (c *SavingsGoalContribution) Validate() error {
 	if c.SavingsGoalID == "" {
-		return errors.New("savings_goal_id is required")
+		return fmt.Errorf("%w: savings_goal_id is required", ErrInvalidSavingsGoal)
 	}
 
 	if c.Amount <= 0 {
-		return errors.New("amount must be positive")
+		return fmt.Errorf("%w: amount must be positive", ErrInvalidSavingsGoal)
 	}
 
 	validSources := map[string]bool{
@@ -178,7 +179,7 @@ func (c *SavingsGoalContribution) Validate() error {
 		"boost_match":        true,
 	}
 	if !validSources[c.Source] {
-		return errors.New("source must be one of: manual, confirmed_transfer, boost_match")
+		return fmt.Errorf("%w: source must be one of: manual, confirmed_transfer, boost_match", ErrInvalidSavingsGoal)
 	}
 
 	// R4-4: include 'rejected' — sticky tombstone status added by migration 000099 (R3-7).
@@ -190,7 +191,7 @@ func (c *SavingsGoalContribution) Validate() error {
 		"rejected":  true,
 	}
 	if !validStatuses[c.Status] {
-		return errors.New("status must be one of: proposed, confirmed, rejected")
+		return fmt.Errorf("%w: status must be one of: proposed, confirmed, rejected", ErrInvalidSavingsGoal)
 	}
 
 	return nil
@@ -460,21 +461,21 @@ func validateProgressBasisRequest(basis string, accountPercentage *float64, acco
 	switch basis {
 	case ProgressBasisManual, ProgressBasisContributions:
 		if accountPercentage != nil {
-			return errors.New("account_percentage must only be set when progress_basis is account_percentage")
+			return fmt.Errorf("%w: account_percentage must only be set when progress_basis is account_percentage", ErrInvalidSavingsGoal)
 		}
 	case ProgressBasisBalance:
 		if accountPercentage != nil {
-			return errors.New("account_percentage must only be set when progress_basis is account_percentage")
+			return fmt.Errorf("%w: account_percentage must only be set when progress_basis is account_percentage", ErrInvalidSavingsGoal)
 		}
 	case ProgressBasisAccountPercentage:
 		if accountPercentage == nil {
-			return errors.New("account_percentage is required when progress_basis is account_percentage")
+			return fmt.Errorf("%w: account_percentage is required when progress_basis is account_percentage", ErrInvalidSavingsGoal)
 		}
 		if *accountPercentage <= 0 || *accountPercentage > 1 {
-			return errors.New("account_percentage must be between 0 and 1 (exclusive 0, inclusive 1)")
+			return fmt.Errorf("%w: account_percentage must be between 0 and 1 (exclusive 0, inclusive 1)", ErrInvalidSavingsGoal)
 		}
 	default:
-		return errors.New("progress_basis must be one of: manual, contributions, balance, account_percentage")
+		return fmt.Errorf("%w: progress_basis must be one of: manual, contributions, balance, account_percentage", ErrInvalidSavingsGoal)
 	}
 	return nil
 }
@@ -491,6 +492,16 @@ type SavingsInflowTransaction struct {
 
 // SavingsGoal-related errors.
 var (
+	// ErrInvalidSavingsGoal is the field-validation sentinel for SavingsGoal / SavingsGoalContribution
+	// (#1625, this ticket's headline defect surviving in a second domain: cluster A gave
+	// categorization rules ErrInvalidRule + a mapper case; savings goals had no equivalent, so a
+	// negative target_amount, an over-long name, or an invalid progress_basis/account_percentage
+	// combination reached the mapper's default branch as a bare, unwrapped error and became a
+	// 500 + Sentry event instead of a 4xx. Every Validate() failure in this file now wraps this
+	// sentinel so internal/huma/errors/mapper.go can classify it; see the mapper case comment for
+	// the ordering rationale mirrored from ErrInvalidRule/ErrInvalidCondition.
+	ErrInvalidSavingsGoal = errors.New("invalid savings goal")
+
 	// ErrInvalidGoalUpdate is a client mistake in an update request — mapped to 400, never 500.
 	// #1625: introduced for "current_amount on a derived basis", which used to be written
 	// silently and left the row claiming progress the ledger did not have.
