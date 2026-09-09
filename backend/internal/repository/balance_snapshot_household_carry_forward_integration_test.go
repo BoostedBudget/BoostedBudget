@@ -532,3 +532,60 @@ func TestHouseholdAggregatedHistoryCarry_OrphanedSnapshot_KeepsItsOwnDay(t *test
 		}
 	}
 }
+
+// TestHouseholdAggregatedHistoryCarry_RefingerprintedJointAccount_CarriedRowUsesTheDaysFingerprint
+// is why a carried row takes the fingerprint in force on the CARRIED day rather than the one its
+// source day recorded.
+//
+// ⚠ ADDED BY MUTATION. Replacing the CASE with a plain `o.fingerprint` was killed only by the
+// structural pin test, because no fixture re-fingerprinted anything. household_account_shares
+// records the physical identity per GRANT (physical_account_blind_idx), so a joint account
+// re-identified mid-history has one fingerprint before the re-share and another after — and the
+// joint-account collapse keys on the fingerprint. A stale one travelling forward across the
+// re-share stops colliding with the other member's copy, and the SAME physical account is summed
+// twice on precisely the days the carry-forward adds.
+//
+// The fixture: the member's grant is closed at 07:13 on day 1 and re-opened with the owner's
+// fingerprint, so day 0 legitimately counts both copies (the household had no record they were the
+// same account yet) while day 2 must count one.
+func TestHouseholdAggregatedHistoryCarry_RefingerprintedJointAccount_CarriedRowUsesTheDaysFingerprint(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+	c := newHouseholdCarryClock()
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ownerAcct := setupHouseholdMemberAccount(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+	backdateHouseholdAccountActive(t, pool, ownerAcct.AccountID, c.day(-20))
+	backdateHouseholdAccountActive(t, pool, memberAcct.AccountID, c.day(-20))
+
+	fpJoint := "joint-refp-" + hh
+	fpOld := "stale-refp-" + hh
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, &fpJoint, domain.ShareVisibilityShared, c.at(-5, 8, 0))
+	// The member's FIRST grant carries the pre-re-identification fingerprint …
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fpOld, domain.ShareVisibilityShared, c.at(-5, 8, 0))
+
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 300.33, c.at(0, 10, 33))
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 500.55, c.at(0, 9, 17))
+
+	// … and is replaced at 07:13 on day 1 by one that records the joint identity.
+	revokeHouseholdShareAt(t, pool, hh, member, memberAcct.UserAccountID, c.at(1, 7, 13))
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fpJoint, domain.ShareVisibilityShared, c.at(1, 7, 13))
+
+	// Day 2: only the owner's copy reports; the member's is carried from day 0.
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 520.66, c.at(2, 9, 17))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, c.day(-1), c.day(10), nil)
+	require.NoError(t, err)
+
+	requireTotalOn(t, points, c.day(0), 800.88,
+		"on day 0 the household had no record the two copies were one account, so both count — "+
+			"the fingerprint in force on a day is the one that was actually recorded then")
+	requireTotalOn(t, points, c.day(2), 520.66,
+		"by day 2 the re-share records the joint identity, so the CARRIED copy must collapse into "+
+			"the owner's real observation. 820.99 here is the same physical account counted twice")
+}
