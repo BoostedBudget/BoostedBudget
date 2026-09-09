@@ -208,13 +208,28 @@ func (h *ContributionHandler) assertLedgerIsLive(ctx context.Context, goalID, us
 	// #1625: the original message was the bare string "basis mismatch", naming neither the
 	// offending value nor the remedy — so an agent hitting it on a brand-new goal had no way to
 	// proceed. Say what is wrong and exactly how to fix it.
+	// ⚠ #1625 final review I4: the remedy has to be TRUE for the basis the caller is actually on.
+	// "or update current_amount directly instead" is only available on the MANUAL basis:
+	// savingsGoalService.UpdateGoal refuses a caller-supplied current_amount whenever the TARGET
+	// basis is not manual, with a 400. Telling a balance / account_percentage caller to do it sent
+	// them straight into another 4xx — the "an agent hitting this had no way to proceed" failure
+	// this message was rewritten to fix, one step further along.
+	remedy := fmt.Sprintf("Set progress_basis to %q (PUT /api/v1/savings-goals/%s) first.",
+		domain.ProgressBasisContributions, goalID)
+	if goal.ProgressBasis == domain.ProgressBasisManual {
+		remedy = fmt.Sprintf(
+			"Set progress_basis to %q (PUT /api/v1/savings-goals/%s) first, or update current_amount "+
+				"directly on this goal instead.",
+			domain.ProgressBasisContributions, goalID)
+	} else {
+		remedy += " current_amount cannot be set by hand on this basis either — it is derived from " +
+			"the linked account, and PUT /api/v1/savings-goals/{id} refuses a supplied value with a 400."
+	}
 	return huma.Error422UnprocessableEntity(
 		fmt.Sprintf(
 			"this goal's progress_basis is %q, so its current_amount is not tracked through the "+
-				"contribution ledger and contributions cannot be %s it. "+
-				"Set progress_basis to %q (PUT /api/v1/savings-goals/%s) first, or update "+
-				"current_amount directly instead.",
-			goal.ProgressBasis, verb, domain.ProgressBasisContributions, goalID,
+				"contribution ledger and contributions cannot be %s it. %s",
+			goal.ProgressBasis, verb, remedy,
 		),
 		domain.ErrContributionBasisMismatch)
 }

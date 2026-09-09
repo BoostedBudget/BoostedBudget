@@ -229,6 +229,56 @@ func TestDeleteContribution_StillDestroysTheRowTheUserNamed_Integration(t *testi
 	}
 }
 
+// TestDeleteContribution_StillDeletesAnArchivedRow_Integration is the reviewer's five-line ask
+// from #1625's final review.
+//
+// DeleteContribution's predicate is BLESSED, fragment by fragment, by
+// TestEveryAllowlistedHistoryDeleteStillCarriesItsPredicate (G2's second half) — but that guard
+// checks the fragments the entry NAMES are still present. It says nothing about fragments ADDED.
+// So someone tidying `AND c.archived_at IS NULL` in "for consistency" with the SumConfirmed reads
+// would keep every guard green while quietly making a closed period's contributions
+// undeletable — a row the user explicitly asked to destroy, silently retained.
+//
+// Archived means "belongs to a CLOSED contributions period", not "protected". The user's explicit
+// destruction verb outranks the period boundary; that is what makes DeleteContribution explicit
+// destruction rather than side-effect destruction (see the ADR's classification test).
+func TestDeleteContribution_StillDeletesAnArchivedRow_Integration(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+
+	repo := repository.NewSavingsContributionRepository(pool)
+	contrib := &domain.SavingsGoalContribution{
+		SavingsGoalID: goalID,
+		Amount:        50.0,
+		Source:        "manual",
+		Status:        "confirmed",
+		OccurredOn:    time.Now().Format("2006-01-02"),
+	}
+	require.NoError(t, repo.Insert(ctx, userID, contrib))
+
+	_, err := pool.Exec(ctx,
+		`UPDATE savings_goal_contributions SET archived_at = now() WHERE id = $1`, contrib.ID)
+	require.NoError(t, err, "archive the row (what a progress_basis round-trip does)")
+
+	// Falsifiability: the row really is archived, so the assertion below is about archived rows.
+	var archived *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT archived_at FROM savings_goal_contributions WHERE id = $1`, contrib.ID).Scan(&archived))
+	require.NotNil(t, archived, "fixture failed to archive the row")
+
+	require.NoError(t, repo.DeleteContribution(ctx, userID, goalID, contrib.ID, nil),
+		"an archived contribution the user explicitly asked to delete must still be deletable")
+
+	var stillThere int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM savings_goal_contributions WHERE id = $1`, contrib.ID).Scan(&stillThere))
+	assert.Equal(t, 0, stillThere, "the row the user named must be gone")
+}
+
 // spyAuditLog records WHICH audit method was used and, from inside LogInTx, whether the caller's
 // transaction can already see the contribution as gone.
 type spyAuditLog struct {

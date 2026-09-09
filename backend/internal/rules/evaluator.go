@@ -17,11 +17,17 @@ type ConditionRegistry struct {
 
 // NewConditionRegistry creates a registry.
 //
-// #1625: the fourteen per-fused-type evaluator structs are NO LONGER pre-registered. Every
+// #1625: the fourteen per-fused-type evaluator structs are GONE, not merely un-registered. Every
 // built-in condition — legacy fused or new triple — now resolves through the single field-based
 // implementation in field_evaluator.go, so "merchant contains" has exactly one meaning rather
-// than two implementations that can drift apart. The structs themselves are retained (they are
-// still directly unit-tested, and Register() can inject them or any replacement).
+// than two implementations that can drift apart.
+//
+// ⚠ #1625 final review I1: this comment said the structs were "retained (they are still directly
+// unit-tested, and Register() can inject them)" while the comment 15 lines below said they "are
+// gone". Both could not be true; a later commit on this branch deleted them and falsified this
+// half. Re-derived: `grep -rn 'Evaluator struct' internal/rules/` returns nothing. Register()
+// still exists and still works — for a CUSTOM type a caller supplies, which is the only thing it
+// was ever needed for.
 func NewConditionRegistry() *ConditionRegistry {
 	return &ConditionRegistry{
 		evaluators: make(map[domain.ConditionType]ConditionEvaluator),
@@ -42,6 +48,12 @@ func NewConditionRegistry() *ConditionRegistry {
 // silently beaten the unified path. That is the drift the rework existed to remove, and keeping
 // them left it as a latent trap.
 //
+// ⚠ #1625 final review I5: COERCION IS APPLIED BEFORE DISPATCH, not inside the fallback. It used
+// to sit only on the evaluateField call, so a registered evaluator received the RAW value while
+// the built-in path received the repaired one — the same rule meaning two different things
+// depending on whether someone had called Register(). That is the identical trap the paragraph
+// above documents for the deleted structs, one line further down.
+//
 // Returns (false, nil) for an unknown field rather than an error. Note the ORIGINAL reason no
 // longer holds: EvaluateRules used to abort a transaction's entire rule set on an error, and
 // since #1625 A8 an error is local to its own rule. This stays fail-quiet deliberately, because
@@ -53,10 +65,11 @@ func (r *ConditionRegistry) Evaluate(tx *domain.Transaction, condition domain.Ru
 			return false, nil
 		}
 	}
+	condition = repairedForEvaluation(condition)
 	if evaluator, ok := r.evaluators[condition.Type]; ok && condition.Type != domain.ConditionTypeExpression {
 		return evaluator.Evaluate(tx, condition)
 	}
-	return evaluateField(tx, repairedForEvaluation(condition))
+	return evaluateField(tx, condition)
 }
 
 // repairedForEvaluation returns the condition the evaluator should actually read.
@@ -75,7 +88,8 @@ func (r *ConditionRegistry) Evaluate(tx *domain.Transaction, condition domain.Ru
 //     well be a bug; fixing it belongs at the WRITE path, in its own change.)
 //  2. READ-PATH ONLY. `condition` is a COPY — the parameter is by value and Value is replaced,
 //     not mutated in place — so the stored row and rule_execution_history.definition_snapshot are
-//     untouched.
+//     untouched. Evaluate reassigns its own local `condition` from the return value for the same
+//     reason: the repair must reach every dispatch target without ever reaching the row.
 //
 // An uncoercible value is left exactly as it was: it is quarantined and enforced in RuleMatches,
 // and rewriting it here would only change which error the evaluator reports.

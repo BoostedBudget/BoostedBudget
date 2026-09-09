@@ -27,10 +27,17 @@ import (
 // ⚠ The ORIGINAL justification no longer holds and this comment used to still assert it:
 // EvaluateRules aborted a transaction's whole rule set on an error until #1625 A8 made errors
 // rule-local. Fail-quiet is kept for a different reason — under OR logic an error skips the entire
-// rule, where a non-match lets the rule's other conditions decide. That difference is observable:
-// TestQuarantineEnforcementMatchesTheAdvertisedSet pins that an unnormalizable condition under OR
-// still lets a valid sibling match, which is why such a rule is reported as "still running"
-// rather than as quarantined.
+// rule, where a non-match lets the rule's other conditions decide.
+//
+// ⚠ #1625 final review I1: this comment used to cite TestQuarantineEnforcementMatchesTheAdvertised
+// Set as pinning that "an unnormalizable condition under OR still lets a valid sibling match,
+// which is why such a rule is reported as still running rather than as quarantined". That test
+// asserts the OPPOSITE, and has since Task 2: unnormalizable_condition is ENFORCED, so the test
+// requires the rule NOT to match under either logic. The behaviour the citation described was
+// real BEFORE enforcement moved into RuleMatches, and it is precisely why enforcement had to move
+// there — a valid sibling carrying a rule the user did not write. Fail-quiet here is now a
+// defence-in-depth default for the reasons above, not the mechanism that decides whether a
+// quarantined rule runs.
 func evaluateField(tx *domain.Transaction, c domain.RuleCondition) (bool, error) {
 	op := domain.RuleConditionOperator(c.Operator)
 

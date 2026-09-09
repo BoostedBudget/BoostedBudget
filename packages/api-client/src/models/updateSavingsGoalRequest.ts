@@ -41,7 +41,8 @@ export interface UpdateSavingsGoalRequest {
   deadline?: string;
   description?: string;
   /**
-     * Goal name (1-100 characters).
+     * Goal name (1-100 characters, counted in Unicode code points). Omit to leave unchanged; an empty string is refused, not treated as omitted.
+     * @minLength 1
      * @maxLength 100
      */
   name?: string;

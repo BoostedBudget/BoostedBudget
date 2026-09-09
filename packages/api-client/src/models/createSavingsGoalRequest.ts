@@ -42,7 +42,8 @@ export interface CreateSavingsGoalRequest {
   deadline?: string;
   description?: string;
   /**
-     * Goal name (1-100 characters).
+     * Goal name (1-100 characters, counted in Unicode code points).
+     * @minLength 1
      * @maxLength 100
      */
   name: string;

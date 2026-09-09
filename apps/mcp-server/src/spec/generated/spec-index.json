@@ -2213,12 +2213,12 @@
         {
           "name": "quarantine_reason",
           "type": "string",
-          "description": "Why the rule is broken. Fixed vocabulary. Four values are ENFORCED (quarantined=true, the rule matches nothing): no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. One is REPAIRED (quarantined=false, the rule still runs): invalid_condition_value_shape — a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only. The stored rule is never rewritten; edit it to make the repair permanent."
+          "description": "Why the rule is broken. Fixed vocabulary. Four values are ENFORCED (quarantined=true, the rule matches nothing): no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. One is REPAIRED (quarantined=false, so quarantine is not what stops it — but check enabled too, which this field ignores entirely): invalid_condition_value_shape — a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only. The stored rule is never rewritten; edit it to make the repair permanent."
         },
         {
           "name": "quarantined",
           "type": "boolean",
-          "description": "True only when this rule is actually PREVENTED from matching — it is refused before any condition is evaluated and applies to nothing. False WITH a quarantine_reason means the opposite: the rule has a problem the server repaired well enough to keep running it (a wrong-typed condition value with one honest reading is coerced at read time), so it IS still matching and the problem is reported rather than enforced. Computed per request; never persisted."
+          "description": "True only when QUARANTINE is what prevents this rule from matching — it is refused before any condition is evaluated and applies to nothing. False WITH a quarantine_reason means the rule has a problem the server repaired well enough to keep running it (a wrong-typed condition value with one honest reading is coerced at read time), so quarantine is not stopping it and the problem is reported rather than enforced. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless of what this says, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is this rule running. Computed per request; never persisted."
         },
         {
           "name": "source",
@@ -2464,12 +2464,12 @@
         {
           "name": "quarantine_reason",
           "type": "string",
-          "description": "Why the rule is broken. Fixed vocabulary. Four values are ENFORCED (quarantined=true, the rule matches nothing): no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. One is REPAIRED (quarantined=false, the rule still runs): invalid_condition_value_shape — a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only. The stored rule is never rewritten; edit it to make the repair permanent."
+          "description": "Why the rule is broken. Fixed vocabulary. Four values are ENFORCED (quarantined=true, the rule matches nothing): no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. One is REPAIRED (quarantined=false, so quarantine is not what stops it — but check enabled too, which this field ignores entirely): invalid_condition_value_shape — a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only. The stored rule is never rewritten; edit it to make the repair permanent."
         },
         {
           "name": "quarantined",
           "type": "boolean",
-          "description": "True only when this rule is actually PREVENTED from matching — it is refused before any condition is evaluated and applies to nothing. False WITH a quarantine_reason means the opposite: the rule has a problem the server repaired well enough to keep running it (a wrong-typed condition value with one honest reading is coerced at read time), so it IS still matching and the problem is reported rather than enforced. Computed per request; never persisted."
+          "description": "True only when QUARANTINE is what prevents this rule from matching — it is refused before any condition is evaluated and applies to nothing. False WITH a quarantine_reason means the rule has a problem the server repaired well enough to keep running it (a wrong-typed condition value with one honest reading is coerced at read time), so quarantine is not stopping it and the problem is reported rather than enforced. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless of what this says, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is this rule running. Computed per request; never persisted."
         },
         {
           "name": "source",
@@ -2776,12 +2776,12 @@
         {
           "name": "quarantine_reason",
           "type": "string",
-          "description": "Why the rule is broken. Fixed vocabulary. Four values are ENFORCED (quarantined=true, the rule matches nothing): no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. One is REPAIRED (quarantined=false, the rule still runs): invalid_condition_value_shape — a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only. The stored rule is never rewritten; edit it to make the repair permanent."
+          "description": "Why the rule is broken. Fixed vocabulary. Four values are ENFORCED (quarantined=true, the rule matches nothing): no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. One is REPAIRED (quarantined=false, so quarantine is not what stops it — but check enabled too, which this field ignores entirely): invalid_condition_value_shape — a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only. The stored rule is never rewritten; edit it to make the repair permanent."
         },
         {
           "name": "quarantined",
           "type": "boolean",
-          "description": "True only when this rule is actually PREVENTED from matching — it is refused before any condition is evaluated and applies to nothing. False WITH a quarantine_reason means the opposite: the rule has a problem the server repaired well enough to keep running it (a wrong-typed condition value with one honest reading is coerced at read time), so it IS still matching and the problem is reported rather than enforced. Computed per request; never persisted."
+          "description": "True only when QUARANTINE is what prevents this rule from matching — it is refused before any condition is evaluated and applies to nothing. False WITH a quarantine_reason means the rule has a problem the server repaired well enough to keep running it (a wrong-typed condition value with one honest reading is coerced at read time), so quarantine is not stopping it and the problem is reported rather than enforced. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless of what this says, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is this rule running. Computed per request; never persisted."
         },
         {
           "name": "source",
@@ -3038,12 +3038,12 @@
         {
           "name": "quarantine_reason",
           "type": "string",
-          "description": "Why the rule is broken. Fixed vocabulary. Four values are ENFORCED (quarantined=true, the rule matches nothing): no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. One is REPAIRED (quarantined=false, the rule still runs): invalid_condition_value_shape — a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only. The stored rule is never rewritten; edit it to make the repair permanent."
+          "description": "Why the rule is broken. Fixed vocabulary. Four values are ENFORCED (quarantined=true, the rule matches nothing): no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. One is REPAIRED (quarantined=false, so quarantine is not what stops it — but check enabled too, which this field ignores entirely): invalid_condition_value_shape — a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only. The stored rule is never rewritten; edit it to make the repair permanent."
         },
         {
           "name": "quarantined",
           "type": "boolean",
-          "description": "True only when this rule is actually PREVENTED from matching — it is refused before any condition is evaluated and applies to nothing. False WITH a quarantine_reason means the opposite: the rule has a problem the server repaired well enough to keep running it (a wrong-typed condition value with one honest reading is coerced at read time), so it IS still matching and the problem is reported rather than enforced. Computed per request; never persisted."
+          "description": "True only when QUARANTINE is what prevents this rule from matching — it is refused before any condition is evaluated and applies to nothing. False WITH a quarantine_reason means the rule has a problem the server repaired well enough to keep running it (a wrong-typed condition value with one honest reading is coerced at read time), so quarantine is not stopping it and the problem is reported rather than enforced. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless of what this says, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is this rule running. Computed per request; never persisted."
         },
         {
           "name": "source",
@@ -3210,12 +3210,12 @@
         {
           "name": "quarantine_reason",
           "type": "string",
-          "description": "Why the rule is broken. Fixed vocabulary. Four values are ENFORCED (quarantined=true, the rule matches nothing): no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. One is REPAIRED (quarantined=false, the rule still runs): invalid_condition_value_shape — a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only. The stored rule is never rewritten; edit it to make the repair permanent."
+          "description": "Why the rule is broken. Fixed vocabulary. Four values are ENFORCED (quarantined=true, the rule matches nothing): no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. One is REPAIRED (quarantined=false, so quarantine is not what stops it — but check enabled too, which this field ignores entirely): invalid_condition_value_shape — a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only. The stored rule is never rewritten; edit it to make the repair permanent."
         },
         {
           "name": "quarantined",
           "type": "boolean",
-          "description": "True only when this rule is actually PREVENTED from matching — it is refused before any condition is evaluated and applies to nothing. False WITH a quarantine_reason means the opposite: the rule has a problem the server repaired well enough to keep running it (a wrong-typed condition value with one honest reading is coerced at read time), so it IS still matching and the problem is reported rather than enforced. Computed per request; never persisted."
+          "description": "True only when QUARANTINE is what prevents this rule from matching — it is refused before any condition is evaluated and applies to nothing. False WITH a quarantine_reason means the rule has a problem the server repaired well enough to keep running it (a wrong-typed condition value with one honest reading is coerced at read time), so quarantine is not stopping it and the problem is reported rather than enforced. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless of what this says, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is this rule running. Computed per request; never persisted."
         },
         {
           "name": "source",
@@ -8324,7 +8324,7 @@
           "name": "name",
           "type": "string",
           "required": true,
-          "description": "Goal name (1-100 characters)."
+          "description": "Goal name (1-100 characters, counted in Unicode code points)."
         },
         {
           "name": "progress_basis",
@@ -9279,7 +9279,7 @@
         {
           "name": "name",
           "type": "string",
-          "description": "Goal name (1-100 characters)."
+          "description": "Goal name (1-100 characters, counted in Unicode code points). Omit to leave unchanged; an empty string is refused, not treated as omitted."
         },
         {
           "name": "progress_basis",

@@ -166,3 +166,77 @@ func TestAccountIDMatching_ChainAware_Depth2(t *testing.T) {
 			tx.AccountID, stableUserAccountID, condition.Value)
 	}
 }
+
+// recordingEvaluator captures the condition it was handed, so a test can assert on the VALUE the
+// dispatch delivered rather than on a match result that could be right for the wrong reason.
+type recordingEvaluator struct{ got domain.RuleCondition }
+
+func (r *recordingEvaluator) Evaluate(_ *domain.Transaction, c domain.RuleCondition) (bool, error) {
+	r.got = c
+	return true, nil
+}
+
+// TestRegisteredEvaluatorReceivesTheCoercedValue is #1625's final-review I5.
+//
+// repairedForEvaluation used to be applied ONLY on the evaluateField fallback, i.e. AFTER the
+// registered-evaluator lookup. So a registered evaluator saw the RAW stored value while the
+// built-in path saw the repaired one, and the same rule meant two different things depending on
+// whether anyone had called Register(). evaluator.go's own doc comment documents that exact trap
+// for the fourteen deleted structs, one paragraph above the line that had it.
+func TestRegisteredEvaluatorReceivesTheCoercedValue(t *testing.T) {
+	registry := NewConditionRegistry()
+	rec := &recordingEvaluator{}
+	registry.Register(domain.ConditionAmountGreaterThan, rec)
+
+	// A value ValidateShape REJECTS and CoercedValue repairs: a number sent as a string.
+	raw := domain.RuleCondition{Type: domain.ConditionAmountGreaterThan, Value: "1000"}
+	if err := raw.Normalize(); err != nil {
+		t.Fatalf("fixture failed to normalize: %v", err)
+	}
+	if err := raw.ValidateShape(); err == nil {
+		t.Fatal("fixture is not falsifiable: ValidateShape now ACCEPTS this value, so coercion " +
+			"never runs on it and this test proves nothing")
+	}
+
+	if _, err := registry.Evaluate(&domain.Transaction{Amount: -2000}, raw); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got, ok := rec.got.Value.(float64); !ok || got != 1000 {
+		t.Errorf("registered evaluator received %#v (%T); it must receive the SAME repaired value "+
+			"the built-in path gets, or one rule has two meanings", rec.got.Value, rec.got.Value)
+	}
+}
+
+// The other half: a value the validator ACCEPTS must reach a registered evaluator byte-identical.
+// Coercion is gated on rejection, and hoisting it before dispatch must not have widened that.
+func TestRegisteredEvaluatorReceivesAValidValueUntouched(t *testing.T) {
+	registry := NewConditionRegistry()
+	rec := &recordingEvaluator{}
+	registry.Register(domain.ConditionMerchantContains, rec)
+
+	// ⚠ The value that motivated the gate: textValues drops the 42 and still reports ok, so this
+	// PASSES ValidateShape and the live write path accepts it today. Coercing it to ["uber","42"]
+	// would make the rule match transactions it did not match yesterday.
+	raw := domain.RuleCondition{
+		Type:  domain.ConditionMerchantContains,
+		Value: []interface{}{"uber", 42},
+	}
+	if err := raw.Normalize(); err != nil {
+		t.Fatalf("fixture failed to normalize: %v", err)
+	}
+	if err := raw.ValidateShape(); err != nil {
+		t.Fatalf("fixture is not falsifiable: ValidateShape now REJECTS this value (%v), so it "+
+			"would be coerced legitimately", err)
+	}
+
+	if _, err := registry.Evaluate(&domain.Transaction{}, raw); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	arr, ok := rec.got.Value.([]interface{})
+	if !ok || len(arr) != 2 || arr[0] != "uber" || arr[1] != 42 {
+		t.Errorf("registered evaluator received %#v; a value the validator accepts must arrive "+
+			"unchanged", rec.got.Value)
+	}
+}

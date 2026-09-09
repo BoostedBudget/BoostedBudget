@@ -753,9 +753,15 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
 
       case 'account_type_select': {
         const selectedTypes = (Array.isArray(condition.value) ? condition.value : []) as string[]
+        // #1625 final review I4: `neq` is match-NONE-of, not match-any-of. The backend's matchText
+        // computes `!anyOf(equals)` for neq (field_evaluator.go), so with the checkboxes read as
+        // "ANY of" the label said the exact opposite of what the rule would do — and this widget is
+        // reached for BOTH eq and neq, by design (a closed-set picker expresses either equally
+        // well). The picker is unchanged; only the sentence describing it is operator-aware.
+        const excludes = condition.operator === 'neq'
         return (
           <div className="flex flex-wrap gap-3 p-2 bg-muted rounded flex-1 min-w-[200px]">
-            <span className="w-full text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Match ANY of:</span>
+            <span className="w-full text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">{excludes ? 'Match NONE of:' : 'Match ANY of:'}</span>
             {ACCOUNT_TYPES.map((type) => (
               <label key={type.value} className="flex items-center gap-1.5 text-[0.8125rem] text-foreground cursor-pointer whitespace-nowrap">
                 <input
