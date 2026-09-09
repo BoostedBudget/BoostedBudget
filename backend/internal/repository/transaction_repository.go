@@ -3456,8 +3456,16 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	limitPH := argIdx
 
 	// ── Build UNION ALL query ─────────────────────────────────────────────────
-
-	query := fmt.Sprintf(`
+	//
+	// ⚠ unionBody CARRIES THE PREDICATES AND NOTHING ELSE — no ORDER BY, no LIMIT (#1626 Phase 2,
+	// review finding X3). Both statements this method issues are derived from it: the page appends
+	// the presentation ordering and the limit, the whole-set aggregate wraps it as-is. That keeps
+	// the drift-safety that mattered (there is exactly ONE copy of the predicate, so the total
+	// cannot describe a different row set than the rows) while stopping the page's ordering from
+	// leaking into a COUNT and a SUM, which are order-independent. It used to leak: the aggregate
+	// wrapped the ORDERED page query, so an unfiltered first page sorted every banking AND
+	// investment row merely to count them, and then the page query sorted again.
+	unionBody := fmt.Sprintf(`
 		SELECT
 			t.id::text,
 			t.user_id::text,
@@ -3589,8 +3597,6 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		  -- user still needs to see.
 %s
 		%s%s%s%s%s%s
-
-		ORDER BY sort_date DESC, source_disc ASC, id ASC
 	`,
 		bankingMerchantJoins,
 		transactionTombstoneCondition("t", filters.IncludeReversed),
@@ -3601,9 +3607,13 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		investAcctFilter, investDateFilter, investSearchFilter, investActivityFilter, investCursorFilter, investBankingOnlyFilter,
 	)
 
-	// The LIMIT is appended rather than interpolated so the whole-set aggregate below can wrap this
-	// exact query without it — the page's only difference from the set (#1626 Phase 2).
+	// The presentation ordering and the LIMIT are APPENDED rather than interpolated, so the
+	// whole-set aggregate below can wrap unionBody without either of them (#1626 Phase 2). They are
+	// the page's only two differences from the set, and both belong to the page alone: a list has an
+	// order the user sees, a COUNT and a SUM do not.
+	orderClause := "\n\t\tORDER BY sort_date DESC, source_disc ASC, id ASC"
 	limitClause := fmt.Sprintf("\n\t\tLIMIT $%d", limitPH)
+	query := unionBody + orderClause
 
 	// ── Whole-set totals, FIRST PAGE ONLY (#1626 Phase 2) ────────────────────
 	//
@@ -3624,16 +3634,23 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	// the busiest list in the app would be real cost for a number that does not change as the user
 	// pages. TestBankingKeysetCursoredPage_SkipsTheAggregateEntirely pins the skip.
 	//
-	// ⚠ IT WRAPS THE PAGE QUERY ITSELF rather than restating its predicates, and that is
-	// deliberate. The first attempt here hand-copied the two UNION arms' WHERE clauses; it was
-	// syntactically invalid on the first real-Postgres run, and had it merely been subtly wrong
-	// instead it would have shipped a total that quietly disagreed with the rows it described —
-	// worse than no total, because the client cannot tell that it is wrong. Wrapping makes drift
-	// impossible by construction: there is only one copy of the predicate.
+	// ⚠ IT WRAPS THE SHARED unionBody rather than restating its predicates, and that is deliberate.
+	// The first attempt here hand-copied the two UNION arms' WHERE clauses; it was syntactically
+	// invalid on the first real-Postgres run, and had it merely been subtly wrong instead it would
+	// have shipped a total that quietly disagreed with the rows it described — worse than no total,
+	// because the client cannot tell that it is wrong. Deriving both statements from one string
+	// makes drift impossible by construction: there is only one copy of the predicate.
+	//
+	// ⚠ unionBody, NOT the page query, and that distinction is #1626 Phase 2's review finding X3.
+	// This used to wrap `query`, which by then already carried the presentation ORDER BY — so an
+	// unfiltered first page sorted every banking AND investment row merely to COUNT and SUM them,
+	// and the page query then sorted again. COUNT and SUM are order-independent; the ordering is
+	// the page's alone. The drift-safety is unchanged, because the ordering was never part of the
+	// predicate. TestUnifiedFeed_EmittedQuery_EXPLAIN asserts BOTH halves — no ORDER BY in the
+	// aggregate's text and no Sort in its plan, while the page's plan still has one.
 	//
 	// `amount` is the second UNION arm's own column too, and a UNION takes its output names from
 	// the first arm, so the sum is over both banking and investment rows with their own signs.
-	// The LIMIT lives in limitClause, appended only to the page query — the sole difference.
 	//
 	// ⚠ And the LIMIT's ARGUMENT has to go with it. An earlier version of this comment claimed
 	// Postgres does not mind an unused trailing parameter; it does — the extended protocol rejects
@@ -3642,7 +3659,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	var totals *domain.FeedTotals
 	if cursor == nil {
 		aggQuery := fmt.Sprintf(
-			`SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM (%s) agg`, query)
+			`SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM (%s) agg`, unionBody)
 
 		var count int
 		var amount float64
