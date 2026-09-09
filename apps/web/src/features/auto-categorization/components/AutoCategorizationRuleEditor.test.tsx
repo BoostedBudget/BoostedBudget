@@ -202,7 +202,12 @@ describe('AutoCategorizationRuleEditor', () => {
       await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
       fireEvent.click(screen.getByRole('button', { name: /add condition/i }))
 
-      fireEvent.change(screen.getByLabelText('Condition type'), { target: { value: choiceLabel } })
+      const conditionSelect = screen.getByLabelText('Condition type') as HTMLSelectElement
+      fireEvent.change(conditionSelect, { target: { value: choiceLabel } })
+      // A `change` to a value that is not an option silently no-ops and leaves the default
+      // selected, which makes every assertion downstream vacuous. Fail here instead of passing a
+      // test that never exercised the choice it names.
+      expect(conditionSelect.value).toBe(choiceLabel)
 
       const input = screen.queryByPlaceholderText(/enter value/i)
       if (input) await user.type(input, value)
@@ -245,13 +250,15 @@ describe('AutoCategorizationRuleEditor', () => {
       const user = userEvent.setup({ delay: null })
       renderEditor()
 
-      await fillRuleAndSave(user, 'merchant_contains', 'amazon')
+      // Deliberately NOT merchant_contains: that is DEFAULT_CONDITION's type, so selecting it
+      // proves nothing — the change could no-op and every assertion below would still pass.
+      await fillRuleAndSave(user, 'merchant_equals', 'amazon')
 
       await waitFor(() => expect(mockOnSave).toHaveBeenCalled())
       const [saved] = mockOnSave.mock.calls[0] as unknown as [{ conditions: Record<string, unknown>[] }]
       const cond = saved.conditions[0]
 
-      expect(cond).toMatchObject({ type: 'merchant_contains', value: 'amazon' })
+      expect(cond).toMatchObject({ type: 'merchant_equals', value: 'amazon' })
       expect(cond.field).toBeUndefined()
       expect(cond.operator).toBeUndefined()
     })

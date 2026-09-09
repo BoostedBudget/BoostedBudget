@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
@@ -708,3 +709,34 @@ func (s *stubTagOnlyRuleRepo) Delete(context.Context, string) error             
 func (s *stubTagOnlyRuleRepo) CountByUserID(context.Context, string) (int, error)   { return 0, nil }
 func (s *stubTagOnlyRuleRepo) IncrementMatchCount(context.Context, string) error    { return nil }
 func (s *stubTagOnlyRuleRepo) IncrementOverrideCount(context.Context, string) error { return nil }
+
+// N2 (#1625): the literal /condition-schema route must actually be REACHABLE.
+//
+// It was registered 49 lines AFTER GET /{id} while its comment claimed the opposite, so humatest —
+// which is registration-order sensitive — dispatched /condition-schema to GetRuleByID. Production's
+// Echo router prefers the literal regardless, so this was never a production bug; it meant the
+// endpoint was untestable, and no route test called it. That is how it stayed wrong.
+//
+// Asserting on the BODY, not just the status: both handlers 401 unauthenticated, so a status-only
+// assertion passes under the very misrouting this test exists to catch.
+func TestConditionSchemaRoute_IsNotShadowedByTheIDRoute(t *testing.T) {
+	mockService := &mockCategorizationRuleService{rules: []*domain.CategorizationRule{}}
+
+	// Both handlers 401 unauthenticated, so drive it with an authenticated context and check WHICH
+	// handler answered — same technique the deleted-goals route test uses for this bug class.
+	authed := func(ctx huma.Context, next func(huma.Context)) {
+		next(huma.WithValue(ctx, inputs.UserIDKey, "user-123"))
+	}
+	_, api := humatest.New(t)
+	api.UseMiddleware(authed)
+	handler := NewCategorizationRuleHandler(mockService)
+	RegisterCategorizationRuleRoutes(api, handler)
+
+	resp := api.Get("/api/v1/auto-categorization/condition-schema")
+
+	// GetRuleByID would look up a rule whose id is the literal "condition-schema" and 404.
+	require.Equal(t, http.StatusOK, resp.Code,
+		"the literal route is shadowed by /{id} — body %s", resp.Body.String())
+	assert.Contains(t, resp.Body.String(), "signed_amount",
+		"response did not come from the schema handler")
+}

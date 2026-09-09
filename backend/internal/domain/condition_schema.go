@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/pfc"
 )
 
 // ─── Rule condition vocabulary (#1625) ──────────────────────────────────────────────────────
@@ -539,11 +541,33 @@ func exampleFor(shape ValueShape, field RuleConditionField) interface{} {
 	case ShapeDateRange:
 		return map[string]interface{}{"start": "2026-01-01", "end": "2026-01-31"}
 	default:
-		if field == FieldDirection {
+		switch field {
+		case FieldDirection:
 			return DirectionOutflow
+		case FieldPFCPrimary, FieldPFCDetailed:
+			// #1625 N1: these fields carry an EnumFn, so a generic placeholder is REJECTED by the
+			// very validator this schema exists to describe — the published example 422'd. Derive
+			// the example from the registry the EnumFn checks against, so it cannot drift from it.
+			return firstPFCExample(field)
 		}
 		return "example text"
 	}
+}
+
+// firstPFCExample returns a real value from the curated PFC registry — the same source
+// validatePFCValue checks against. Ordered accessors, so the published schema stays byte-stable
+// across builds.
+func firstPFCExample(field RuleConditionField) interface{} {
+	if field == FieldPFCDetailed {
+		if all := pfc.AllDetailed(); len(all) > 0 {
+			return all[0].Enum
+		}
+		return ""
+	}
+	if all := pfc.AllPrimaries(); len(all) > 0 {
+		return all[0].Enum
+	}
+	return ""
 }
 
 // closedValuesFor returns the legal values for fields that have a closed set.
