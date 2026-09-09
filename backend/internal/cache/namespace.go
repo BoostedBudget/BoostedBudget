@@ -131,8 +131,26 @@ var namespaceRegistry = map[Namespace]namespaceConfig{
 	// Version 6 also covers GetCashFlowSummary (review finding X7), likewise cached here: its
 	// echoed end_date is now clamped to today for a future-ranged request, so that response too
 	// differs for identical arguments.
+	// SchemaVersion 7 (#1626 E2 Part 1): GetAggregatedHistoryForHousehold — the HOUSEHOLD balance
+	// read, reached through GetNetWorthTrend with a scope, and this namespace's second balance read
+	// — gained the per-account carry-forward its personal twin got at version 4. It therefore
+	// returns different money for identical arguments: a day on which only one member's Plaid item
+	// synced no longer reports only that member's accounts, so the household total no longer
+	// collapses toward zero on it. A pre-fix entry decodes cleanly into the unchanged response
+	// struct — which is exactly what makes the bump necessary rather than optional — and a deploy
+	// never touches the per-scope generation token (it is minted once and only Bump()'d by explicit
+	// invalidation), so without this bump a pre-fix entry would stay a valid hit under post-fix code
+	// and keep serving the collapsed day the fix exists to repair. Same reasoning as versions 2
+	// through 6.
+	//
+	// ⚠ #1626 E2 Part 2 is NOT what moved it, and the distinction is worth keeping: that change made
+	// GetSpendingByCategory / GetSpendingTrends and their household twins tolerate a NULL
+	// effective_category_name instead of failing the scan. A request that hit the NULL previously
+	// ERRORED, so it wrote no cache entry at all — there is no pre-fix envelope for it to invalidate
+	// — and a request that did not hit one returns byte-identical results. A bump for it would have
+	// been cargo-culted, not reasoned.
 	NamespaceAnalytics: {
-		TTL: 120 * time.Second, SchemaVersion: 6, ScopeKind: ScopeUser, DefaultEnabled: true,
+		TTL: 120 * time.Second, SchemaVersion: 7, ScopeKind: ScopeUser, DefaultEnabled: true,
 	},
 	// SchemaVersion 2 (#1569, round 11): analytics_repository.go added `t.deleted_at IS NULL` to
 	// the queries backing GetTopExpense, GetLargestTransactionsForPeriod,

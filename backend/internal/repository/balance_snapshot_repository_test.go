@@ -709,3 +709,77 @@ func TestAggregatedHistorySQLBase_PinsItsLoadBearingFragments(t *testing.T) {
 	assert.NotContains(t, sql, "WHERE ash_any.account_id = o.account_id",
 		"the unscoped NOT EXISTS form of the missing-history leg must not come back")
 }
+
+// TestAggregatedHistoryHouseholdSQLBase_PinsItsLoadBearingFragments is the household sibling of
+// TestAggregatedHistorySQLBase_PinsItsLoadBearingFragments above, and it exists for the same reason
+// that one does: a pgxmock test of this method would render its ExpectQuery from the template, so a
+// silent edit moves production and expectation TOGETHER and stays green. The integration suite is
+// the real protection (balance_snapshot_household_carry_forward_integration_test.go and the
+// TestGetAggregatedHistoryForHousehold_* family); this is the cheap half, asserting as literal
+// fragments the decisions an edit could quietly reverse.
+func TestAggregatedHistoryHouseholdSQLBase_PinsItsLoadBearingFragments(t *testing.T) {
+	sql := aggregatedHistoryHouseholdSQLBase
+
+	// 1. Two format holes and no more: the grants CTE and the optional type predicate. A third
+	//    would mean something else had begun being interpolated into this statement.
+	assert.Equal(t, 2, strings.Count(sql, "%s"), "exactly two format holes")
+
+	// 2. The carry partition is NULL-SAFE. An orphaned snapshot has account_id IS NULL (migration
+	//    000150's ON DELETE SET NULL) and an equi-join on NULL matches nothing — so keyed on the raw
+	//    columns an orphan would lose even its OWN observed row on the way back out of the grid.
+	assert.Contains(t, sql, "ha.user_account_id::text || ':' || COALESCE(bs.account_id::text, '') AS carry_key",
+		"the LOCF partition must be a rendered, NULL-safe key at the (user_account, account) grain")
+	assert.Contains(t, sql, "PARTITION BY g.carry_key ORDER BY g.snapshot_date",
+		"and the running max must partition on that same key")
+
+	// 3. THE PARTIAL-GRANT-DAY DECISION: day INTERSECTION, not full coverage. Both halves are pinned
+	//    because each is wrong in its own direction — a stricter opening bound drops the revocation
+	//    day's real balance, a looser closing bound leaks a departed member's past their departure.
+	assert.Contains(t, sql, "ON ha.share_started_at < (d.snapshot_date::date + INTERVAL '1 day') AT TIME ZONE 'UTC'",
+		"a carried value is admitted on a day the grant covers even PARTIALLY")
+	assert.Contains(t, sql, "OR ha.share_ended_at > (d.snapshot_date::date)::timestamp AT TIME ZONE 'UTC')",
+		"and refused on a day the grant does not touch at all")
+	assert.NotContains(t, sql, "ha.share_started_at <= (d.snapshot_date::date)::timestamp",
+		"a FULL-coverage rule would drop the revocation day's balance while other members still "+
+			"report, reintroducing on that day the collapse this fill exists to remove")
+
+	// 4. A carried row needs BOTH gates, and they answer different questions. Losing the grant gate
+	//    carries a departed member forever; losing the status term carries a CLOSED account forever
+	//    (#1626 Phase 2, X1 — a live wrong number in the personal read, not to be re-made here).
+	assert.Contains(t, sql, "gd.user_account_id IS NOT NULL",
+		"the carried branch must require a grant covering the carried day")
+	assert.Contains(t, sql, "AND a_carry.status = 'active'",
+		"the missing-history carry leg must be scoped to an account that still exists AND is active")
+	assert.Contains(t, sql, accountLiveOnDateSQL("o.account_id", "c.snapshot_date"),
+		"and the recorded-interval leg must be the SHARED predicate, not a second copy of it")
+	assert.NotContains(t, sql, "WHERE ash_any.account_id = o.account_id",
+		"the unscoped NOT EXISTS form of the missing-history leg must not come back")
+
+	// 5. The caller's START date is applied to the FILLED series and NOWHERE ELSE. Bounding the
+	//    observed rows below would stop a day at the start of the window inheriting a balance from
+	//    before it, which under-counts every account whose last sync predates the window.
+	//    Counted on the PREDICATE form rather than on the bare `$4::date`, which also occurs inside
+	//    a SQL comment recording the bound this replaced.
+	assert.Equal(t, 1, strings.Count(sql, ">= $4::date"),
+		"exactly one lower bound, and it belongs to the filled series, never to observed")
+	assert.Contains(t, sql, "WHERE c.snapshot_date >= $4::date",
+		"and it must be the filled series that carries it")
+
+	// 6. The fingerprint is re-resolved for a CARRIED day. Letting the source day's travel forward
+	//    across a re-fingerprint stops the joint-account collapse from colliding, and the same
+	//    physical account is then summed twice.
+	assert.Contains(t, sql, "CASE WHEN o.snapshot_date = c.snapshot_date THEN o.fingerprint",
+		"an own row keeps the fingerprint recorded at its own instant")
+	assert.Contains(t, sql, "ELSE gd.fingerprint END AS fingerprint",
+		"a carried row takes the one in force on the carried day")
+
+	// 7. Succession is applied, by the SHARED rule, and to the FILLED series. Feeding it the
+	//    observed rows instead would double-count every carried re-link.
+	assert.Contains(t, sql, accountChainSupersessionCTESQL("TRUE"),
+		"there is ONE succession rule in the backend; a second copy is how the balance side and "+
+			"the portfolio side came to disagree about the same two rows")
+	assert.Contains(t, sql, "SELECT 1 FROM superseded x",
+		"the superseded rows must actually be filtered out, not merely computed")
+	assert.Contains(t, sql, "FROM kept k\n\t\t    JOIN accounts a ON a.id = k.account_id",
+		"live_all must be built from the FILLED series (kept), not from observed")
+}

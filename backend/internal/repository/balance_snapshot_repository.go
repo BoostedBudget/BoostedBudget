@@ -602,6 +602,368 @@ func (r *balanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Con
 	return r.scanSnapshots(ctx, query, args...)
 }
 
+// aggregatedHistoryHouseholdSQLBase is GetAggregatedHistoryForHousehold's statement, with TWO %s
+// holes: the household-grants CTE, and the optional account-type predicate.
+//
+// It is a package-level var for exactly the reason aggregatedHistorySQLBase is one — the structural
+// pin test (TestAggregatedHistoryHouseholdSQLBase_PinsItsLoadBearingFragments) has to read the SAME
+// string production renders, because the pgxmock tests build their ExpectQuery from the template
+// itself and therefore move production and expectation together. A hand-copied duplicate of a
+// 200-line statement would be a maintenance trap that told us nothing about correctness.
+//
+// ── The three-stage collapse, and where the carry-forward sits in it ─────────────────────────────
+//
+// observed -> per_account_per_day (the FILLED series) -> fingerprint_winner -> kept -> superseded.
+//
+// #1626 E2 introduced the fill. Before it, `per_account_per_day` WAS the observed rows, so a day's
+// total was the sum of only the accounts that happened to receive a snapshot that day — and
+// snapshots are written per-ITEM on webhook sync, so a day on which one member's item synced
+// reported only that member's accounts and the household total collapsed toward zero. Every
+// per-account balance was provider truth; the day-level AGGREGATE was not, and that distinction is
+// the whole defect. The personal read (aggregatedHistorySQLBase) was fixed first; this is the
+// household half of the same fix, and carrying forward REPAIRS EXISTING history, which no amount of
+// future snapshotting can.
+var aggregatedHistoryHouseholdSQLBase = `
+		WITH RECURSIVE %s,
+		observed AS (
+		    -- #1569 T7, stage 1 of 3. ONE row per (day, user_account_id, ACCOUNT), applying the
+		    -- grant INTERVAL clip that makes a departed member's shared period survive their
+		    -- departure without leaking a single day past it.
+		    --
+		    -- ⚠ RENAMED FROM per_account_per_day BY #1626 E2, and the name was not freed for
+		    -- decoration: per_account_per_day now means the FILLED series below, matching what the
+		    -- personal statement calls the same thing. This CTE is the OBSERVED rows — what the
+		    -- provider actually reported.
+		    --
+		    -- ⚠ UNBOUNDED BELOW ON PURPOSE. The caller's start date is applied to the FILLED series
+		    -- instead. A day at the START of the window has to be able to inherit an account's last
+		    -- balance from BEFORE the window, or a "this month" chart under-counts every account
+		    -- whose most recent sync happened last month. Personal scope does this for the same
+		    -- reason; its bound likewise lives on the filled series.
+		    --
+		    -- The user_account_id term is not redundant beside the account: household_accounts emits
+		    -- one row per grant INTERVAL, a user_account can match several on the same day (closed
+		    -- intervals are unconstrained by uq_household_account_shares_active and may overlap), and
+		    -- a re-fingerprinted account changes fingerprint between intervals — so without this
+		    -- collapse ONE account lands in two buckets and its balance is summed TWICE. Pinned by
+		    -- TestHouseholdShareRange_OverlappingRefingerprintedIntervalsDoNotDoubleCount.
+		    --
+		    -- The interval in force wins (share_started_at DESC, share_row_id), matching
+		    -- householdAccountsCTEForBalancesAsOf's rule, so the fingerprint carried onward is the one
+		    -- that was actually recorded on that day.
+		    SELECT DISTINCT ON ((bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.user_account_id, bs.account_id)
+		        (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
+		        ha.user_account_id,
+		        ha.fingerprint,
+		        bs.account_id,
+		        -- carry_key IS THE LOCF PARTITION, and it is a rendered text key rather than the two
+		        -- columns themselves because bs.account_id is NULLABLE (ON DELETE SET NULL, migration
+		        -- 000150): an equi-join on a NULL account_id matches nothing, so an orphaned snapshot
+		        -- would lose even its OWN observed row on the way back out of the grid. The grain is
+		        -- identical to the DISTINCT ON above, which is what keeps one account out of two
+		        -- carry partitions.
+		        ha.user_account_id::text || ':' || COALESCE(bs.account_id::text, '') AS carry_key,
+		        bs.snapshot_at,
+		        bs.id AS snapshot_id,
+		        bs.current_balance,
+		        a.type AS account_type
+		    FROM balance_snapshots bs
+		    JOIN household_accounts ha ON ha.user_account_id = bs.user_account_id
+		    -- ⚠ THIS JOIN IS ON THE SNAPSHOT'S OWN ACCOUNT (a.id = bs.account_id), which #1569 T10.2
+		    -- changed from a.user_account_id = bs.user_account_id. The old form matched EVERY member
+		    -- of a chain, so a.type had to be chosen by an explicit preference — an ORDER BY term
+		    -- reading (a.status = 'active') DESC NULLS LAST, a.id — and that preference had already
+		    -- been wrong in both directions once (as a filtered join it dropped an expired-only
+		    -- chain's history; with no preference at all it attributed a balance to a replaced
+		    -- member's type). A snapshot knows which account it came from. Reading the type from that
+		    -- account is what personal scope always did, needs no preference, and makes both pinned
+		    -- properties hold by construction rather than by tie-break:
+		    -- TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType (the snapshot is
+		    -- the active member's, so its type is the active member's) and
+		    -- TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory (an
+		    -- expired account still has a row, so a.type is not NULL and the type filter still
+		    -- matches). LEFT, because bs.account_id is nullable (ON DELETE SET NULL) and an orphaned
+		    -- snapshot must still reach the total, in the '' type bucket, exactly as in personal scope.
+		    LEFT JOIN accounts a ON a.id = bs.account_id
+		    -- The caller's window's UPPER end only, at date resolution because that is what it is: the
+		    -- last calendar day the chart covers.
+		    WHERE (bs.snapshot_at AT TIME ZONE 'UTC')::date <= $5::date
+		      -- The GRANT's own bounds, at INSTANT resolution — [share_started_at, share_ended_at),
+		      -- the same half-open interval householdAccountsCTEForBalancesAsOf evaluates, evaluated
+		      -- the same way. Comparing bs.snapshot_at directly is what lets both bounds be exact:
+		      -- the household keeps every instant it was genuinely entitled to, including ones
+		      -- earlier on the day it gained or lost access, and gets nothing outside them.
+		      --
+		      -- Both bounds used to be date-resolution, and each was wrong in its own direction. The
+		      -- opening bound was GREATEST($4::date, share_started_at::date), which admitted the
+		      -- WHOLE share-start day: a snapshot taken hours BEFORE the grant existed entered the
+		      -- series. The closing bound excluded the revocation day whole, which leaked nothing but
+		      -- threw away real history on a false binary — "drop the last partial day OR admit a
+		      -- post-departure instant" was never the choice. Pinned in both directions by
+		      -- TestHouseholdShareRange_ShareStartDayExcludesPreGrantInstants and
+		      -- TestHouseholdShareRange_RevocationDayKeepsOnlyPreRevocationInstants.
+		      --
+		      -- ⚠ IT IS ALSO WHAT MAKES THE CARRY SAFE AT THE OPENING END. A pre-grant instant never
+		      -- becomes an observed row, so there is nothing for the fill to carry INTO the
+		      -- share-start day — the household sees an account only from its first IN-GRANT
+		      -- snapshot. Pinned by
+		      -- TestHouseholdAggregatedHistoryCarry_ShareStartDay_DoesNotCarryAPreGrantInstant.
+		      AND bs.snapshot_at >= ha.share_started_at
+		      AND (ha.share_ended_at IS NULL OR bs.snapshot_at < ha.share_ended_at)
+		    ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.user_account_id, bs.account_id,
+		             ha.share_started_at DESC, ha.share_row_id,
+		             bs.snapshot_at DESC, bs.id DESC
+		),
+		-- ── the grid the carry-forward fills ─────────────────────────────────────────────────
+		--
+		-- DAYS ARE NOT INVENTED, only VALUES. A chart point exists for a day only if some shared
+		-- account actually reported on it; a day nobody synced at all is still absent from the series
+		-- and the frontend still bridges it. That is deliberate and narrow: generating a full calendar
+		-- grid would also generate rows for days in the FUTURE (endDate is unvalidated against today),
+		-- turning a frontend-fabricated flat line into a backend-fabricated one. Same ruling, same
+		-- wording, as the personal statement's observed_days. Pinned by
+		-- TestHouseholdAggregatedHistoryCarry_IncompleteCohort_CarriesTheOtherMembersLastKnownBalance,
+		-- which asserts the absent day as well as the carried one.
+		observed_days AS (
+		    SELECT DISTINCT snapshot_date FROM observed
+		),
+		observed_keys AS (
+		    SELECT DISTINCT carry_key, user_account_id FROM observed
+		),
+		grid AS (
+		    SELECT d.snapshot_date, k.carry_key, k.user_account_id
+		    FROM observed_days d
+		    CROSS JOIN observed_keys k
+		),
+		grant_on_day AS (
+		    -- ⚠ THE PARTIAL-GRANT-DAY DECISION. This CTE is the one thing the personal carry-forward
+		    -- has no analogue for, and it is a decision, not a mechanism.
+		    --
+		    -- Household grants are half-open intervals clipped for BALANCES at INSTANT resolution
+		    -- (docs/decisions/2026-08-26-household-grants-cte-performance.md, ADR Decision 7), and the
+		    -- observed clip above does exactly that. A CARRIED row has no instant to clip — it is this
+		    -- query's inference about a whole calendar day nobody reported. So the rule has to be
+		    -- stated at day resolution, and the ruling is DAY INTERSECTION: a carried value is
+		    -- admitted on a day the grant covers even PARTIALLY, and refused on a day the grant does
+		    -- not touch at all.
+		    --
+		    -- WHY INTERSECTION AND NOT FULL COVERAGE. Over the covered part of a revocation day the
+		    -- inference is about instants the household was genuinely entitled to — the same
+		    -- entitlement the instant clip expresses for real observations. Demanding full coverage
+		    -- would drop the departing account's balance on the revocation day while other members
+		    -- still report, which is precisely the collapse-toward-zero defect this fill exists to
+		    -- remove, reintroduced on the most visible day in a household's life. And it leaks
+		    -- nothing: the day AFTER the revocation has no row here, so the carry stops there.
+		    -- Asserted in BOTH directions by
+		    -- TestHouseholdAggregatedHistoryCarry_DepartedMember_CarriesThroughThePartialRevocationDayOnly.
+		    --
+		    -- IT ALSO RE-RESOLVES THE FINGERPRINT for the carried day rather than letting the source
+		    -- day's travel forward. A re-fingerprinted account changes fingerprint between grant
+		    -- intervals and the joint-account collapse below keys on the fingerprint, so a stale one
+		    -- carried across a re-fingerprint would stop colliding with the other member's copy and
+		    -- the same physical account would be summed twice.
+		    --
+		    -- The bounds are written the way accountLiveOnDateClause writes its own day-overlap test,
+		    -- and for the same reason: "date + INTERVAL '1 day'" is a timestamp WITHOUT time zone,
+		    -- which Postgres would otherwise resolve against the SESSION TimeZone, and the lower bound
+		    -- needs the explicit ::timestamp step because a bare "date AT TIME ZONE 'UTC'" casts the
+		    -- date to timestamptz FIRST (in the session zone) and then reads it out as UTC wall time.
+		    SELECT DISTINCT ON (d.snapshot_date, ha.user_account_id)
+		        d.snapshot_date,
+		        ha.user_account_id,
+		        ha.fingerprint
+		    FROM observed_days d
+		    JOIN household_accounts ha
+		      ON ha.share_started_at < (d.snapshot_date::date + INTERVAL '1 day') AT TIME ZONE 'UTC'
+		     AND (ha.share_ended_at IS NULL
+		          OR ha.share_ended_at > (d.snapshot_date::date)::timestamp AT TIME ZONE 'UTC')
+		    ORDER BY d.snapshot_date, ha.user_account_id, ha.share_started_at DESC, ha.share_row_id
+		),
+		carry_source AS (
+		    -- LOCF: for each (day, carry_key), WHICH observed day supplies the balance — the latest at
+		    -- or before this day. A running max() over the LEFT-JOINed grid is the idiom Postgres can
+		    -- express without IGNORE NULLS, and it is O(rows log rows) rather than the O(days x rows)
+		    -- a per-day LATERAL would cost on a multi-year window.
+		    --
+		    -- ⚠ THE JOIN EXCLUDES A NULL current_balance, and that is the same decision the personal
+		    -- statement records at length. transactionSyncService accepts a snapshot with
+		    -- current_balance NULL and available_balance present, and this aggregation sums only
+		    -- current_balance — so such a row used to be dropped from the day's total silently, and on
+		    -- a day whose ONLY row was one of those, SUM() returned SQL NULL and the scan failed
+		    -- outright. COALESCE to available_balance was rejected: available balance is a DIFFERENT
+		    -- QUANTITY, not a degraded version of the same one (on a credit card it is the remaining
+		    -- credit line, so substituting it reports a large positive asset where a debt belongs).
+		    -- "Last known CURRENT balance" is the honest answer and is what LOCF already computes. The
+		    -- day itself still survives, because observed_days is built from observed, not from here.
+		    SELECT g.snapshot_date,
+		           g.carry_key,
+		           max(o.snapshot_date) OVER (
+		               PARTITION BY g.carry_key ORDER BY g.snapshot_date
+		               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+		           ) AS source_date
+		    FROM grid g
+		    LEFT JOIN observed o
+		      ON o.carry_key = g.carry_key
+		     AND o.snapshot_date = g.snapshot_date
+		     AND o.current_balance IS NOT NULL
+		),
+		per_account_per_day AS (
+		    -- ── THE FILLED SERIES, which is what the three-stage collapse below now consumes ──
+		    --
+		    -- Step 2b, the same decision personal scope made: history starts PER ACCOUNT, at that
+		    -- account's earliest observed snapshot. A key with no observed row at or before the day
+		    -- has a NULL source_date and this join drops it, so the total GROWS as accounts join
+		    -- rather than starting on the first day every account happens to have data. The
+		    -- alternative hides real history.
+		    SELECT c.snapshot_date,
+		           o.user_account_id,
+		           -- An OWN row keeps the fingerprint recorded at its own instant; a CARRIED row takes
+		           -- the one in force on the carried day (see grant_on_day). Mixing these up is how a
+		           -- re-fingerprinted joint account would come to be counted twice.
+		           CASE WHEN o.snapshot_date = c.snapshot_date THEN o.fingerprint
+		                ELSE gd.fingerprint END AS fingerprint,
+		           o.account_id,
+		           o.snapshot_at,
+		           o.snapshot_id,
+		           o.current_balance,
+		           o.account_type
+		    FROM carry_source c
+		    JOIN observed o
+		      ON o.carry_key = c.carry_key
+		     AND o.snapshot_date = c.source_date
+		     AND o.current_balance IS NOT NULL
+		    LEFT JOIN grant_on_day gd
+		      ON gd.snapshot_date = c.snapshot_date
+		     AND gd.user_account_id = o.user_account_id
+		    WHERE c.snapshot_date >= $4::date
+		      AND (
+		          -- An account's OWN snapshot day keeps its value UNCONDITIONALLY. That row is
+		          -- provider truth about a day the account really reported, already clipped to the
+		          -- grant at instant resolution above, and re-asking account_status_history about it
+		          -- would delete a closed account's retained history from the chart — the opposite of
+		          -- what #1569 exists to do (see accountChainLiveAllCTE, which says so for the same
+		          -- reason).
+		          o.snapshot_date = c.snapshot_date
+		          OR (
+		              -- ⚠ A CARRIED ROW NEEDS BOTH GATES, and they answer different questions. gd asks
+		              -- "was the household entitled to this account on this day at all?" — the
+		              -- household-only half. The disjunction below asks "is anybody still confirming
+		              -- this account exists?" — the half personal scope also carries. Dropping either
+		              -- one produces a wrong number in a different direction: without gd a departed
+		              -- member's balance is carried forever, without the liveness legs a CLOSED
+		              -- account's is.
+		              gd.user_account_id IS NOT NULL
+		              AND (
+		                  -- The missing-history leg is the #1626 Phase 2 ruling that absence of
+		                  -- interval data is "no reason to hide" rather than evidence: migration
+		                  -- 000152's zero-length-interval guard leaves some accounts with NO 'active'
+		                  -- row at all, so keying the carry on a recorded interval ALONE would
+		                  -- silently make this whole fix a no-op for exactly those accounts. It is
+		                  -- narrow by construction: an account the user really disconnected has an
+		                  -- 'active' row followed by a terminal one, so the last leg governs it.
+		                  --
+		                  -- ⚠ IT ALSO DEMANDS accounts.status = 'active', AND THAT TERM IS THE
+		                  -- CORRECTION OF A LIVE WRONG NUMBER IN THE PERSONAL READ (#1626 Phase 2,
+		                  -- X1), NOT REPEATED HERE. Shaped only as NOT EXISTS(active interval) the leg
+		                  -- reads as unconditional permission to carry, and TWO real shapes satisfy
+		                  -- that forever: migration 000152's removed branch DELIBERATELY writes a
+		                  -- terminal-only history when removed_at is NULL or <= created_at, and an
+		                  -- orphan (account_id IS NULL, migration 000150's ON DELETE SET NULL) has no
+		                  -- history to find at all — so a closed account's last retained balance was
+		                  -- carried onto every later observed day, permanently.
+		                  --
+		                  -- ⚠ THIS IS NOT accountWithNoActiveIntervalLeg, and it must not be made to
+		                  -- match it. That leg governs the transactions table — a dated thing that
+		                  -- HAPPENED, retained forever (#1569 EVENT universe), where no status may hide
+		                  -- it. This governs an INFERENCE that a balance persisted on a day nobody
+		                  -- reported one, which is only defensible while somebody is still confirming
+		                  -- the account exists. Nothing retained becomes unqueryable: the account's OWN
+		                  -- snapshot days are preserved by the first leg above, and its as-of balances
+		                  -- are untouched. Pinned by
+		                  -- TestHouseholdAggregatedHistoryCarry_RemovedAccount_IsNotCarriedPastItsRemoval.
+		                  EXISTS (
+		                      SELECT 1 FROM accounts a_carry
+		                      WHERE a_carry.id = o.account_id
+		                        AND a_carry.status = 'active'
+		                        AND NOT EXISTS (
+		                            SELECT 1 FROM account_status_history ash_any
+		                            WHERE ash_any.account_id = a_carry.id
+		                              AND ash_any.status = 'active'
+		                        )
+		                  )
+		                  OR ` + accountLiveOnDateSQL("o.account_id", "c.snapshot_date") + `
+		              )
+		          )
+		      )
+		),
+		fingerprint_winner AS (
+		    -- Stage 2: resolve joint-account fingerprint collisions PER DAY — the same physical
+		    -- account linked and shared by TWO members must be counted ONCE, and it is the
+		    -- freshest-synced member's copy that wins, chosen independently each day so a member who
+		    -- only started syncing mid-range does not erase the other's earlier history.
+		    --
+		    -- ⚠ IT PICKS A WINNING user_account, NOT A WINNING ROW. Picking a row is what the
+		    -- pre-#1569-T10.2 version did, and with two maskless accounts behind one user_account it
+		    -- discarded the other one. The winner's ENTIRE set of accounts survives stage 3.
+		    --
+		    -- ⚠ IT NOW RANKS CARRIED ROWS TOO, and snapshot_at is what makes that come out right: a
+		    -- carried row carries its SOURCE instant, which is by construction older than any
+		    -- observation made on the day itself, so a real observation always outranks an inference
+		    -- about the same physical account. Pinned by
+		    -- TestHouseholdAggregatedHistoryCarry_JointAccount_CarriedCopyDoesNotDoubleCount.
+		    SELECT DISTINCT ON (snapshot_date, fingerprint)
+		        snapshot_date, fingerprint, user_account_id
+		    FROM per_account_per_day
+		    ORDER BY snapshot_date, fingerprint, snapshot_at DESC, snapshot_id DESC, user_account_id
+		),
+		kept AS (
+		    SELECT p.*
+		    FROM per_account_per_day p
+		    JOIN fingerprint_winner w
+		      ON w.snapshot_date = p.snapshot_date
+		     AND w.fingerprint = p.fingerprint
+		     AND w.user_account_id = p.user_account_id
+		),
+		-- live_all is built from the FILLED series, not the observed one, and that is what makes the
+		-- succession collapse below correct after the carry-forward. Before the fill a predecessor
+		-- appeared only on days it actually reported, so an overlap day rarely held both chain
+		-- members; now both are present on every day after their own first snapshot, which is exactly
+		-- the input accountChainSupersessionCTE exists to collapse. Feeding it the observed rows
+		-- instead would double-count every carried re-link. Same note as the personal statement's.
+		live_all AS (
+		    SELECT k.snapshot_date, a.id AS account_id, a.user_id AS owner_id,
+		           a.user_account_id, a.linked_item_id
+		    FROM kept k
+		    JOIN accounts a ON a.id = k.account_id
+		),` + accountChainSupersessionCTESQL("TRUE") + `
+		SELECT k.snapshot_date,
+		       COALESCE(k.account_type, '') AS account_type,
+		       SUM(k.current_balance) AS type_balance
+		FROM kept k
+		-- Stage 3: a genuine re-link chain, whose two members are two ACCOUNTS behind one
+		-- user_account and would otherwise both be summed on the overlap day. Same recorded-
+		-- succession rule the personal reads apply; see accountChainSupersessionCTE.
+		WHERE NOT EXISTS (
+		    SELECT 1 FROM superseded x
+		    WHERE x.snapshot_date = k.snapshot_date
+		      AND x.account_id = k.account_id
+		)
+		-- ⚠ THE TYPE FILTER IS APPLIED HERE, TO THE PER-DAY WINNER, and it deliberately does NOT move
+		-- into the observed CTE the way personal scope's does. Filtering the DISTINCT ON candidate set first
+		-- would let a stale copy whose type happens to match beat the freshest copy for a day — pinned
+		-- by
+		-- TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccountTypeFilterAppliesToWinner.
+		--
+		-- The consequence, stated rather than left to be discovered: observed_days is built BEFORE the
+		-- type filter, so a day whose only snapshot belongs to a filtered-out type still exists as a
+		-- chart day here (carrying the matching accounts' last known balances), whereas personal
+		-- scope — whose type predicate is rendered inside its own observed CTE — drops that day. Both
+		-- are defensible; they are not the same, and the difference is forced by the tie-break above.
+		%s
+		GROUP BY k.snapshot_date, k.account_type
+		ORDER BY k.snapshot_date ASC, account_type ASC
+	`
+
 // GetAggregatedHistoryForHousehold is the household-scope variant of GetAggregatedHistory:
 // aggregates across every account shared into the household, clipped per-account to
 // share_started_at.
@@ -652,118 +1014,7 @@ func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context
 	//
 	// ⚠ No schema change was needed; see GetSnapshotsAsOfForHousehold for the measurement that
 	// retired the "the share grain must move" premise.
-	queryBase := `
-		WITH RECURSIVE ` + `%s,` + `
-		per_account_per_day AS (
-		    -- #1569 T7, stage 1 of 3: ONE row per (day, user_account_id, ACCOUNT), applying the
-		    -- grant INTERVAL clip that makes a departed member's shared period survive their
-		    -- departure without leaking a single day past it.
-		    --
-		    -- The user_account_id term is not redundant beside the account: household_accounts emits
-		    -- one row per grant INTERVAL, a user_account can match several on the same day (closed
-		    -- intervals are unconstrained by uq_household_account_shares_active and may overlap), and
-		    -- a re-fingerprinted account changes fingerprint between intervals — so without this
-		    -- collapse ONE account lands in two buckets and its balance is summed TWICE. Pinned by
-		    -- TestHouseholdShareRange_OverlappingRefingerprintedIntervalsDoNotDoubleCount.
-		    --
-		    -- The interval in force wins (share_started_at DESC, share_row_id), matching
-		    -- householdAccountsCTEForBalancesAsOf's rule, so the fingerprint carried onward is the one
-		    -- that was actually recorded on that day.
-		    SELECT DISTINCT ON ((bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.user_account_id, bs.account_id)
-		        (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		        ha.user_account_id,
-		        ha.fingerprint,
-		        bs.account_id,
-		        bs.snapshot_at,
-		        bs.id AS snapshot_id,
-		        bs.current_balance,
-		        a.type AS account_type
-		    FROM balance_snapshots bs
-		    JOIN household_accounts ha ON ha.user_account_id = bs.user_account_id
-		    -- ⚠ THIS JOIN IS ON THE SNAPSHOT'S OWN ACCOUNT (a.id = bs.account_id), which #1569 T10.2
-		    -- changed from a.user_account_id = bs.user_account_id. The old form matched EVERY member
-		    -- of a chain, so a.type had to be chosen by an explicit preference — an ORDER BY term
-		    -- reading (a.status = 'active') DESC NULLS LAST, a.id — and that preference had already
-		    -- been wrong in both directions once (as a filtered join it dropped an expired-only
-		    -- chain's history; with no preference at all it attributed a balance to a replaced
-		    -- member's type). A snapshot knows which account it came from. Reading the type from that
-		    -- account is what personal scope always did, needs no preference, and makes both pinned
-		    -- properties hold by construction rather than by tie-break:
-		    -- TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType (the snapshot is
-		    -- the active member's, so its type is the active member's) and
-		    -- TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory (an
-		    -- expired account still has a row, so a.type is not NULL and the type filter still
-		    -- matches). LEFT, because bs.account_id is nullable (ON DELETE SET NULL) and an orphaned
-		    -- snapshot must still reach the total, in the '' type bucket, exactly as in personal scope.
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    -- The caller's requested window, at date resolution because that is what it is: a
-		    -- range of calendar days the chart covers.
-		    WHERE (bs.snapshot_at AT TIME ZONE 'UTC')::date >= $4::date
-		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date <= $5::date
-		      -- The GRANT's own bounds, at INSTANT resolution — [share_started_at, share_ended_at),
-		      -- the same half-open interval householdAccountsCTEForBalancesAsOf evaluates, evaluated
-		      -- the same way. Comparing bs.snapshot_at directly is what lets both bounds be exact:
-		      -- the household keeps every instant it was genuinely entitled to, including ones
-		      -- earlier on the day it gained or lost access, and gets nothing outside them.
-		      --
-		      -- Both bounds used to be date-resolution, and each was wrong in its own direction. The
-		      -- opening bound was GREATEST($4::date, share_started_at::date), which admitted the
-		      -- WHOLE share-start day: a snapshot taken hours BEFORE the grant existed entered the
-		      -- series. The closing bound excluded the revocation day whole, which leaked nothing but
-		      -- threw away real history on a false binary — "drop the last partial day OR admit a
-		      -- post-departure instant" was never the choice. Pinned in both directions by
-		      -- TestHouseholdShareRange_ShareStartDayExcludesPreGrantInstants and
-		      -- TestHouseholdShareRange_RevocationDayKeepsOnlyPreRevocationInstants.
-		      AND bs.snapshot_at >= ha.share_started_at
-		      AND (ha.share_ended_at IS NULL OR bs.snapshot_at < ha.share_ended_at)
-		    ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.user_account_id, bs.account_id,
-		             ha.share_started_at DESC, ha.share_row_id,
-		             bs.snapshot_at DESC, bs.id DESC
-		),
-		fingerprint_winner AS (
-		    -- Stage 2: resolve joint-account fingerprint collisions PER DAY — the same physical
-		    -- account linked and shared by TWO members must be counted ONCE, and it is the
-		    -- freshest-synced member's copy that wins, chosen independently each day so a member who
-		    -- only started syncing mid-range does not erase the other's earlier history.
-		    --
-		    -- ⚠ IT PICKS A WINNING user_account, NOT A WINNING ROW. Picking a row is what the
-		    -- pre-#1569-T10.2 version did, and with two maskless accounts behind one user_account it
-		    -- discarded the other one. The winner's ENTIRE set of accounts survives stage 3.
-		    SELECT DISTINCT ON (snapshot_date, fingerprint)
-		        snapshot_date, fingerprint, user_account_id
-		    FROM per_account_per_day
-		    ORDER BY snapshot_date, fingerprint, snapshot_at DESC, snapshot_id DESC, user_account_id
-		),
-		kept AS (
-		    SELECT p.*
-		    FROM per_account_per_day p
-		    JOIN fingerprint_winner w
-		      ON w.snapshot_date = p.snapshot_date
-		     AND w.fingerprint = p.fingerprint
-		     AND w.user_account_id = p.user_account_id
-		),
-		live_all AS (
-		    SELECT k.snapshot_date, a.id AS account_id, a.user_id AS owner_id,
-		           a.user_account_id, a.linked_item_id
-		    FROM kept k
-		    JOIN accounts a ON a.id = k.account_id
-		),` + accountChainSupersessionCTESQL("TRUE") + `
-		SELECT k.snapshot_date,
-		       COALESCE(k.account_type, '') AS account_type,
-		       SUM(k.current_balance) AS type_balance
-		FROM kept k
-		-- Stage 3: a genuine re-link chain, whose two members are two ACCOUNTS behind one
-		-- user_account and would otherwise both be summed on the overlap day. Same recorded-
-		-- succession rule the personal reads apply; see accountChainSupersessionCTE.
-		WHERE NOT EXISTS (
-		    SELECT 1 FROM superseded x
-		    WHERE x.snapshot_date = k.snapshot_date
-		      AND x.account_id = k.account_id
-		)
-		%s
-		GROUP BY k.snapshot_date, k.account_type
-		ORDER BY k.snapshot_date ASC, account_type ASC
-	`
+	queryBase := aggregatedHistoryHouseholdSQLBase
 
 	args := householdScopeArgs(requestingUserID, scope)
 	args = append(args, startDate, endDate)

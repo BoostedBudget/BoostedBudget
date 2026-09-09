@@ -227,10 +227,22 @@ func TestInvestment_Snapshot_PartialNullCostBasis_Integration(t *testing.T) {
 // SCOPED TO THE INVESTMENT DOMAIN on purpose. This comment used to say "consistent with all read
 // paths that JOIN accounts WHERE status='active'", which read as a universal about the codebase and
 // is not one: after #1561 no spending/cash-flow analytics join carries a status predicate at all
-// (#1109 had already removed the personal-scope ones), and GetAggregatedHistoryForHousehold
-// expresses status as a DISTINCT ON ordering preference rather than a filter
-// (balance_snapshot_repository.go:325). Investment reads are the remaining family that genuinely
-// filters, which is why this snapshot matching them is worth pinning.
+// (#1109 had already removed the personal-scope ones), and the household balance read carries no
+// status FILTER either.
+//
+// ⚠ THE PRECEDING CLAIM WAS RETRACTED BY #1626 E2, AND THE LINE NUMBER WITH IT. It read
+// "GetAggregatedHistoryForHousehold expresses status as a DISTINCT ON ordering preference rather
+// than a filter (balance_snapshot_repository.go:325)". Both halves were false, and the second is
+// why it is retracted rather than re-pointed: #1569 T10.2 had already deleted that ordering
+// preference — the ORDER BY term reading (a.status = 'active') DESC NULLS LAST — and replaced the
+// chain-wide join with a.id = bs.account_id, so no status expression of any kind remained in that
+// method, while the cited line had drifted into the PERSONAL statement's carry-forward, a different
+// method entirely. Re-anchored by NAMING the constructs instead of counting lines to them: the two
+// places accounts.status is now mentioned anywhere near this read are
+// aggregatedHistoryHouseholdSQLBase's carried-row leg (a_carry.status = 'active', which gates an
+// INFERENCE about a day nobody reported rather than the visibility of any retained row) and
+// accountLiveOnDateClause. Neither is a read filter. Investment reads are the remaining family that
+// genuinely filters, which is why this snapshot matching them is worth pinning.
 func TestInvestment_Snapshot_ExcludesInactiveAccounts_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()

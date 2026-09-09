@@ -544,8 +544,10 @@ func effectiveCategoryDisplayExpr() string {
 //
 // ⚠ #1626 falsified this paragraph's second half, which used to claim a NULL name was
 // "unreachable today — `effective_category_name` is scanned into a non-pointer string (a NULL
-// already fails the scan)". The replacement must be scoped read-by-read, because the tree is now
-// MIXED and a blanket "NULLs are tolerated here" would be the same error with the polarity flipped.
+// already fails the scan)". #1626 Phase 2 replaced it read-by-read because the tree was MIXED at
+// that point; #1626 E2 Part 2 converted the remaining four, so every read of this column is now
+// tolerant. The read-by-read form is KEPT anyway: it is what makes a new intolerant read visible as
+// an omission from a list rather than as a silent exception to a blanket claim.
 //
 // TOLERANT (7 reads, all scanning through `sql.NullString` and then taking .String): GetTopExpense,
 // GetLargestTransactionsForPeriod, GetCategoryBreakdownForMerchant, GetIncomeSourceBreakdown and
@@ -555,17 +557,17 @@ func effectiveCategoryDisplayExpr() string {
 // deterministic (NULLS LAST) and no longer decides what the user sees, because the service re-sorts
 // on the RESOLVED display where a NULL custom name has already become the neutral placeholder.
 //
-// ⚠ STILL A HARD SCAN (4 reads, PRE-EXISTING and NOT changed by #1626): GetSpendingByCategory and
-// getSpendingByCategoryHousehold scan `t.effective_category_name` into
-// domain.SpendingByCategory.PFCPrimaryDisplay, and GetSpendingTrends and getSpendingTrendsHousehold
-// scan it into domain.SpendingTrendRow.CategoryDisplay — both plain `string`, and pgx v5 fails the
-// scan outright on a NULL rather than yielding "". Migration 000073 leaves the column nullable and
-// builds a `WHERE effective_category_name IS NOT NULL` partial index, so the schema EXPECTS NULLs:
-// these four are a latent 500, not a proof of unreachability. #1626 did not introduce them and
-// deliberately does not convert them — that is a behaviour change on four different reads, outside
-// this issue's blast radius — but it also must not be read as asserting a tolerance they do not
-// have. A follow-up to convert all four to `sql.NullString` is OWED and not yet filed as its own
-// issue. The merchant name is unaffected either way: it still COALESCEs to the literal 'Unknown'.
+// ⚠ THE OWED FOLLOW-UP IS PAID (#1626 E2 Part 2), so this paragraph is REPLACED, not trimmed. It
+// used to record four reads — GetSpendingByCategory and getSpendingByCategoryHousehold scanning
+// `t.effective_category_name` into domain.SpendingByCategory.PFCPrimaryDisplay, GetSpendingTrends
+// and getSpendingTrendsHousehold scanning it into domain.SpendingTrendRow.CategoryDisplay — as
+// plain `string` scans, i.e. a latent 500, deferred to keep an earlier PR's blast radius
+// reviewable. All four now scan through `sql.NullString` like the seven above, so the tree is no
+// longer MIXED: every read of this column tolerates the NULL the schema expects. Pinned by
+// TestAnalyticsReads_NullEffectiveCategoryName_DoNotError, which is an INTEGRATION test because a
+// pgxmock NULL does not reproduce the failure — pgxmock converts Go values itself and never reaches
+// pgx's NULL handling, so the same assertions passed against the unfixed code. The merchant name is
+// unaffected either way: it still COALESCEs to the literal 'Unknown'.
 //
 // ⚠ Alphabetical alone does NOT determinise the MERCHANT reads. Their name is an aggregate
 // (`MAX(COALESCE(...))`) whose chain bottoms out in the literal 'Unknown', while the GROUP BY is on
@@ -1075,9 +1077,17 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 	var results []domain.SpendingByCategory
 	for rows.Next() {
 		var row domain.SpendingByCategory
-		if err := rows.Scan(&row.Category, &row.PFCPrimaryDisplay, &row.Total, &row.TransactionCount); err != nil {
+		// #1626 E2: sql.NullString, not string. effective_category_name is nullable BY DESIGN
+		// (migration 000073 leaves it nullable and indexes it partially on IS NOT NULL) and is
+		// refreshed asynchronously, so a custom-categorised row legitimately carries no name yet —
+		// and pgx v5 fails the scan on NULL rather than yielding "", which was a 500 for the whole
+		// report. The placeholder is resolveCategoryDisplay's decision in the service, not this
+		// layer's. Pinned by TestAnalyticsReads_NullEffectiveCategoryName_DoNotError.
+		var display sql.NullString
+		if err := rows.Scan(&row.Category, &display, &row.Total, &row.TransactionCount); err != nil {
 			return nil, fmt.Errorf("failed to scan spending by category: %w", err)
 		}
+		row.PFCPrimaryDisplay = display.String
 		results = append(results, row)
 	}
 
@@ -1140,9 +1150,12 @@ func (r *analyticsRepository) getSpendingByCategoryHousehold(ctx context.Context
 	var results []domain.SpendingByCategory
 	for rows.Next() {
 		var row domain.SpendingByCategory
-		if err := rows.Scan(&row.Category, &row.PFCPrimaryDisplay, &row.Total, &row.TransactionCount); err != nil {
+		// Nullable display, same as the personal read above — see there.
+		var display sql.NullString
+		if err := rows.Scan(&row.Category, &display, &row.Total, &row.TransactionCount); err != nil {
 			return nil, fmt.Errorf("failed to scan household spending by category: %w", err)
 		}
+		row.PFCPrimaryDisplay = display.String
 		results = append(results, row)
 	}
 
@@ -1309,9 +1322,12 @@ func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID stri
 	var results []domain.SpendingTrendRow
 	for rows.Next() {
 		var row domain.SpendingTrendRow
-		if err := rows.Scan(&row.PeriodStart, &row.Category, &row.CategoryDisplay, &row.Total); err != nil {
+		// Nullable display, same as GetSpendingByCategory — see there.
+		var display sql.NullString
+		if err := rows.Scan(&row.PeriodStart, &row.Category, &display, &row.Total); err != nil {
 			return nil, fmt.Errorf("failed to scan spending trend row: %w", err)
 		}
+		row.CategoryDisplay = display.String
 		results = append(results, row)
 	}
 
@@ -1360,9 +1376,12 @@ func (r *analyticsRepository) getSpendingTrendsHousehold(ctx context.Context, re
 	var results []domain.SpendingTrendRow
 	for rows.Next() {
 		var row domain.SpendingTrendRow
-		if err := rows.Scan(&row.PeriodStart, &row.Category, &row.CategoryDisplay, &row.Total); err != nil {
+		// Nullable display, same as GetSpendingByCategory — see there.
+		var display sql.NullString
+		if err := rows.Scan(&row.PeriodStart, &row.Category, &display, &row.Total); err != nil {
 			return nil, fmt.Errorf("failed to scan household spending trend row: %w", err)
 		}
+		row.CategoryDisplay = display.String
 		results = append(results, row)
 	}
 
