@@ -1,6 +1,8 @@
 package operations
 
 import (
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
+	"errors"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -479,3 +481,93 @@ func TestCategorizationRuleResponseJSON(t *testing.T) {
 	err := json.Unmarshal(resp.Body.Bytes(), &errorResp)
 	require.NoError(t, err, "Error response should be valid JSON")
 }
+
+// TestRuleValidationNeverReturns5xx is the anti-Sentry-noise proof at the HTTP boundary, and it
+// covers BOTH handlers. Codex gap analysis A1: the existing tests assert error TEXT, which would
+// still pass if the status regressed to 500 — and a 500 is exactly what these used to be, with
+// sentry.CaptureException firing on every one of them (mapper.go only reports at >= 500).
+//
+// The handler has no allowlist any more; classification lives entirely in the error mapper, so a
+// new Validate() failure that forgets to wrap a sentinel silently becomes a 500 again. This is
+// the test that catches that.
+func TestRuleValidationNeverReturns5xx(t *testing.T) {
+	invalidBodies := []struct {
+		name string
+		body domain.CreateCategorizationRuleRequest
+	}{
+		{"unknown condition type (the reported payload)", domain.CreateCategorizationRuleRequest{
+			Name:       "r",
+			Conditions: []domain.RuleCondition{{Type: "amount", Value: 1000}},
+			TargetKind: strPtrOps("clear"),
+		}},
+		{"unknown field", domain.CreateCategorizationRuleRequest{
+			Name:       "r",
+			Conditions: []domain.RuleCondition{{Field: "nope", Operator: "eq", Value: "x"}},
+			TargetKind: strPtrOps("clear"),
+		}},
+		{"operator the field does not accept", domain.CreateCategorizationRuleRequest{
+			Name:       "r",
+			Conditions: []domain.RuleCondition{{Field: domain.FieldMerchant, Operator: "gt", Value: 5}},
+			TargetKind: strPtrOps("clear"),
+		}},
+		{"value shape the evaluator can never use", domain.CreateCategorizationRuleRequest{
+			Name:       "r",
+			Conditions: []domain.RuleCondition{{Field: domain.FieldAmount, Operator: "gt", Value: "abc"}},
+			TargetKind: strPtrOps("clear"),
+		}},
+		{"type contradicting field+operator", domain.CreateCategorizationRuleRequest{
+			Name: "r",
+			Conditions: []domain.RuleCondition{
+				{Type: domain.ConditionAmountEquals, Field: domain.FieldMerchant, Operator: "contains", Value: "x"},
+			},
+			TargetKind: strPtrOps("clear"),
+		}},
+		{"missing name", domain.CreateCategorizationRuleRequest{
+			Conditions: []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "x"}},
+			TargetKind: strPtrOps("clear"),
+		}},
+		{"no conditions", domain.CreateCategorizationRuleRequest{
+			Name:       "r",
+			Conditions: []domain.RuleCondition{},
+			TargetKind: strPtrOps("clear"),
+		}},
+		{"no action at all", domain.CreateCategorizationRuleRequest{
+			Name:       "r",
+			Conditions: []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "x"}},
+		}},
+	}
+
+	for _, tt := range invalidBodies {
+		t.Run("create/"+tt.name, func(t *testing.T) {
+			// The REAL service and domain validation — a mock would only prove the mock's shape.
+			svc := services.NewCategorizationRuleService(nil, nil)
+			handler := NewCategorizationRuleHandler(svc)
+
+			_, err := handler.CreateRule(context.Background(), &CreateRuleInput{
+				AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+				Body:               tt.body,
+			})
+
+			require.Error(t, err)
+			assertClientError(t, err)
+		})
+	}
+}
+
+// assertClientError fails when the mapped HTTP status is >= 500. A 5xx here means the error
+// reached the mapper's default branch, which also fires sentry.CaptureException — user input
+// mistakes logged as server errors.
+func assertClientError(t *testing.T, err error) {
+	t.Helper()
+	var statusErr interface{ GetStatus() int }
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("error carries no HTTP status: %v", err)
+	}
+	status := statusErr.GetStatus()
+	assert.Less(t, status, 500,
+		"validation failure mapped to %d — it must be a 4xx, or client input pollutes Sentry as a server error: %v",
+		status, err)
+	assert.GreaterOrEqual(t, status, 400, "expected a client error, got %d", status)
+}
+
+func strPtrOps(s string) *string { return &s }

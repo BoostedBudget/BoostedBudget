@@ -240,6 +240,24 @@ func (s *savingsGoalService) CreateGoal(ctx context.Context, userID string, req 
 			// Report what was actually persisted, not what the caller asked for.
 			goal.CurrentAmount = recomputed
 		}
+	} else if goal.ProgressBasis == domain.ProgressBasisContributions {
+		// #1625, Codex gap analysis C4/C5: not every caller has a progress service wired. The
+		// MCP create path builds a TRANSACTION-LOCAL goal service (huma/operations/
+		// savings_goal.go) and cannot borrow the global one, because that is constructed with
+		// pool-backed repositories — mixing the two would put a transaction and the pool in one
+		// call. Building a transaction-bound progress service here would need an account
+		// repository and its field encryptor, which that handler does not have.
+		//
+		// It does not need one. A goal created THIS instant under the contributions basis has,
+		// by definition, no contributions, so its current_amount is zero — no query required.
+		// Without this the MCP path returned whatever current_amount the caller sent while the
+		// basis said the ledger owns it, i.e. a brand-new goal reporting progress it does not
+		// have.
+		//
+		// Deliberately scoped to `contributions`: for the balance and account_percentage bases,
+		// zero would be a fabricated answer rather than a derived one, so those keep the
+		// pre-existing behaviour and are corrected by the next sync's recompute.
+		goal.CurrentAmount = 0
 	}
 
 	s.logger.Info("savings goal created",

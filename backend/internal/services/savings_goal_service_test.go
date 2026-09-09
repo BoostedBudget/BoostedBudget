@@ -1408,3 +1408,55 @@ func req0(t *testing.T) *domain.CreateSavingsGoalRequest {
 	t.Helper()
 	return createTestCreateSavingsGoalRequest()
 }
+
+// TestCreateGoal_ContributionsBasisIsZeroWithoutARecomputer covers the MCP create path, which
+// builds a transaction-local goal service with NO progress service wired (Codex gap analysis
+// C4/C5). Before this, such a goal kept the caller-supplied current_amount while its basis said
+// the contribution ledger owns that number — a brand-new goal claiming progress it does not have.
+func TestCreateGoal_ContributionsBasisIsZeroWithoutARecomputer(t *testing.T) {
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+	// NOTE: SetProgressService is deliberately NOT called — that is the MCP path.
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	req := createTestCreateSavingsGoalRequest()
+	req.CurrentAmount = 5000 // a caller-supplied figure the ledger does not back
+
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(
+		[]domain.Account{createTestAccountForGoal(userID)}, nil)
+	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+	goal, err := service.CreateGoal(ctx, userID, req)
+
+	require.NoError(t, err)
+	assert.Equal(t, domain.ProgressBasisContributions, goal.ProgressBasis)
+	assert.Equal(t, 0.0, goal.CurrentAmount,
+		"a goal created this instant has no contributions, so its current_amount is zero")
+}
+
+// ...but a basis whose value is DERIVED FROM AN ACCOUNT must not be zeroed: zero would be a
+// fabricated answer rather than a computed one. Those are corrected by the next sync.
+func TestCreateGoal_BalanceBasisIsNotZeroedWithoutARecomputer(t *testing.T) {
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	req := createTestCreateSavingsGoalRequest()
+	req.ProgressBasis = domain.ProgressBasisBalance
+	req.CurrentAmount = 5000
+
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(
+		[]domain.Account{createTestAccountForGoal(userID)}, nil)
+	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+	goal, err := service.CreateGoal(ctx, userID, req)
+
+	require.NoError(t, err)
+	assert.Equal(t, 5000.0, goal.CurrentAmount)
+}

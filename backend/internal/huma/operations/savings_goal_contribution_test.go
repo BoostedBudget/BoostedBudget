@@ -963,3 +963,34 @@ func TestDeleteContribution_RefusesWithoutAuditSink(t *testing.T) {
 	require.Error(t, err)
 	mockassert.NoCallTo(t, &contribRepo.Mock, "DeleteContribution")
 }
+
+// Codex gap analysis C3: the existing test asserts the 422 status only, which would still pass
+// with the old bare "basis mismatch" string. That message named neither the offending value nor
+// the remedy, so an agent hitting it on a brand-new goal had no way to proceed — which is how
+// #1625 was reported in the first place. This pins the CONTENT.
+func TestLogContribution_BasisMismatchMessageNamesTheRemedy(t *testing.T) {
+	goalID := "goal-remedy"
+	userID := "user-remedy"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, nil, goalReader)
+
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(&domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		ProgressBasis: domain.ProgressBasisManual,
+	}, nil)
+
+	_, err := handler.LogContribution(context.Background(), &LogContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		Body:               domain.LogContributionRequest{Amount: 100, OccurredOn: "2026-06-14"},
+	})
+
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, domain.ProgressBasisManual, "the message must name the goal's CURRENT basis")
+	assert.Contains(t, msg, domain.ProgressBasisContributions, "and the basis it needs")
+	assert.Contains(t, msg, goalID, "and the goal to change, so the fix is a copyable call")
+}

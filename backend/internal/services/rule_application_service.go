@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/rules"
 )
@@ -704,6 +705,10 @@ func (s *ruleApplicationService) reportQuarantineCandidates(ctx context.Context,
 		if reason == "" {
 			continue
 		}
+		// The counter is the INVENTORY that a future enforcing pass depends on — the log line
+		// alone is not aggregatable, and "counts and logs" was only half true without it.
+		// Only the fixed reason vocabulary is labelled; ids and user content stay in the log.
+		observability.RecordRuleQuarantineCandidate(reason)
 		s.logger.WarnContext(ctx, "categorization rule would be quarantined (shadow mode — still executing)",
 			slog.String("user_id", userID),
 			slog.String("rule_id", rule.ID),

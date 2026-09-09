@@ -272,3 +272,73 @@ describe('HostProxyError', () => {
     expect(err).toBeInstanceOf(Error)
   })
 })
+
+// ── #1625: batch confirmation, tested at the PROXY boundary ──────────────────────────────
+//
+// Codex gap analysis P5: the multi-write scenario was only covered through execute.ts, so the
+// proxy's own contract — the thing that actually enforces user/grant binding, one-time slot use
+// and batch identity — had no direct test. These exercise confirmBatch/invoke directly.
+describe('confirmBatch (#1625)', () => {
+  const A = { operationId: ALLOWED_WRITE_OP, args: { url: '/a', method: 'POST', data: { n: 1 } } }
+  const B = { operationId: ALLOWED_WRITE_OP, args: { url: '/b', method: 'POST', data: { n: 2 } } }
+
+  it('issues ONE token covering every gated call in the batch', async () => {
+    const proxy = createHostProxy({ mutator: makeMutator(), userId: 'u1', grantId: 'g1' })
+    const decision = await proxy.confirmBatch([A, B])
+    expect(decision.needsConfirmation).toBe(true)
+    expect(decision.count).toBe(2)
+    expect(decision.token).toBeDefined()
+  })
+
+  it('lets BOTH writes through on the confirmed replay — the bug that made a batch uncompletable', async () => {
+    const mutator = makeMutator()
+    const proxy = createHostProxy({ mutator, userId: 'u1', grantId: 'g1' })
+    const { token } = await proxy.confirmBatch([A, B])
+
+    await expect(proxy.confirmBatch([A, B], token)).resolves.toMatchObject({ needsConfirmation: false })
+    await expect(proxy.invoke(A.operationId, A.args, { confirmationToken: token! })).resolves.toBeDefined()
+    await expect(proxy.invoke(B.operationId, B.args, { confirmationToken: token! })).resolves.toBeDefined()
+  })
+
+  it('consumes each slot exactly once, so a call cannot be replayed within the batch', async () => {
+    const proxy = createHostProxy({ mutator: makeMutator(), userId: 'u1', grantId: 'g1' })
+    const { token } = await proxy.confirmBatch([A, B])
+    await proxy.confirmBatch([A, B], token)
+
+    await proxy.invoke(A.operationId, A.args, { confirmationToken: token! })
+    const err = await proxy.invoke(A.operationId, A.args, { confirmationToken: token! }).catch((e) => e)
+    expect((err as HostProxyError).code).toBe('invalid_confirmation')
+  })
+
+  it('refuses a token issued for a DIFFERENT batch', async () => {
+    const proxy = createHostProxy({ mutator: makeMutator(), userId: 'u1', grantId: 'g1' })
+    const { token } = await proxy.confirmBatch([A, B])
+
+    const err = await proxy.confirmBatch([A], token).catch((e) => e)
+    expect((err as HostProxyError).code).toBe('invalid_confirmation')
+  })
+
+  it('refuses a batch token replayed by a different user, and by a different grant', async () => {
+    const proxy = createHostProxy({ mutator: makeMutator(), userId: 'u1', grantId: 'g1' })
+    const { token } = await proxy.confirmBatch([A, B])
+
+    const otherUser = createHostProxy({ mutator: makeMutator(), userId: 'u2', grantId: 'g1' })
+    const otherGrant = createHostProxy({ mutator: makeMutator(), userId: 'u1', grantId: 'g2' })
+
+    expect((await otherUser.confirmBatch([A, B], token).catch((e) => e) as HostProxyError).code)
+      .toBe('invalid_confirmation')
+    expect((await otherGrant.confirmBatch([A, B], token).catch((e) => e) as HostProxyError).code)
+      .toBe('invalid_confirmation')
+  })
+
+  it('names args-mismatch in the message, so an agent can self-correct instead of looping', async () => {
+    const proxy = createHostProxy({ mutator: makeMutator(), userId: 'u1', grantId: 'g1' })
+    const err = await proxy.confirmBatch([A], 'not-a-real-token').catch((e) => e)
+    expect((err as HostProxyError).message.toLowerCase()).toContain('identical')
+  })
+
+  it('reports no confirmation needed for a batch with no gated calls', async () => {
+    const proxy = createHostProxy({ mutator: makeMutator(), userId: 'u1', grantId: 'g1' })
+    await expect(proxy.confirmBatch([])).resolves.toMatchObject({ needsConfirmation: false, count: 0 })
+  })
+})
