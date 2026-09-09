@@ -167,6 +167,9 @@ func (s *ruleApplicationService) ApplyRulesToTransaction(ctx context.Context, tx
 	if err != nil {
 		return err
 	}
+	if result != nil {
+		s.logFailedRules(ctx, tx.UserID, tx.ID, result.FailedRuleIDs)
+	}
 
 	// No rules matched
 	if result == nil || (result.TargetKind == nil && len(result.Tags) == 0) {
@@ -278,7 +281,12 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 			continue
 		}
 
-		if result == nil || (result.TargetKind == nil && len(result.Tags) == 0) {
+		if result == nil {
+			continue
+		}
+		s.logFailedRules(ctx, userID, tx.ID, result.FailedRuleIDs)
+
+		if result.TargetKind == nil && len(result.Tags) == 0 {
 			continue
 		}
 
@@ -699,6 +707,22 @@ func (s *ruleApplicationService) writeExecutionHistory(ctx context.Context, user
 // depends on is a worse failure than the one being fixed. Enforcement is a follow-up, after the
 // counts are known and the FieldSpecs matrix has been widened to accept every legitimate legacy
 // shape the inventory turns up.
+// logFailedRules records rules that could not be EVALUATED, one line each.
+//
+// #1625 A8: an evaluator error used to abort EvaluateRules, so one broken rule silently
+// suppressed every other rule for that transaction and the batch handler logged a single
+// transaction-level line. Errors are rule-local now, so the honest record is per-rule — and it
+// names which rule, which the old line could not.
+func (s *ruleApplicationService) logFailedRules(ctx context.Context, userID, txID string, failed []string) {
+	for _, ruleID := range failed {
+		s.logger.WarnContext(ctx, "rule evaluation failed — this rule was skipped, others still applied",
+			slog.String("user_id", userID),
+			slog.String("transaction_id", txID),
+			slog.String("rule_id", ruleID),
+		)
+	}
+}
+
 func (s *ruleApplicationService) reportQuarantineCandidates(ctx context.Context, userID string, rules []*domain.CategorizationRule) {
 	for _, rule := range rules {
 		reason := quarantineReason(rule)
