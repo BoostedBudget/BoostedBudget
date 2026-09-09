@@ -812,6 +812,13 @@ describe('PII coverage — Cash Flow Sankey (G6 — Codex fix #2 regression guar
     // #1626: a custom category's name is user-authored and can be sensitive. data-ph-mask covers
     // TEXT, not attribute values — session replay records those verbatim — so the name must never
     // be interpolated into aria-label, title, or any other attribute.
+    //
+    // ⚠ THE PRECONDITION IS THE GUARD. The sweep below only means anything while the name is
+    // actually rendered: a ladder change, a prune bug or a fixture drifting to total:0 would drop
+    // the node entirely and make every not.toContain trivially true, and the sweep would stop
+    // guarding without a single test going red. So assert the name IS in the DOM first.
+    expect(document.body.textContent).toContain('Therapy sessions')
+
     for (const el of Array.from(document.querySelectorAll('*'))) {
       for (const attr of Array.from(el.attributes)) {
         expect(attr.value).not.toContain('Therapy sessions')

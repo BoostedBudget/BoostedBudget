@@ -79,9 +79,12 @@ func TestCategoryPathExprs_ResolveEveryReachableShape_Integration(t *testing.T) 
 	mustExec("topParent", `INSERT INTO custom_categories (id, user_id, name) VALUES ($1,$2,'Top Parent 1626')`, topParentID, userID)
 	mustExec("childOfTop", `INSERT INTO custom_categories (id, user_id, name, parent_id) VALUES ($1,$2,'Child Of Top 1626',$3)`, childOfTopID, userID, topParentID)
 
-	// The three-level chain. Order matters: the child must be attached BEFORE the parent is given a
-	// parent_pfc_primary would be fine too — the trigger only fires on parent_id — but doing it in
-	// this order proves the ordinary API sequence reaches the state.
+	// The three-level chain (PFC primary -> custom parent -> custom child). Parent first is the only
+	// valid order, and that is forced by the self-FK on parent_id, not by the trigger: the referenced
+	// row has to exist. Giving the parent its parent_pfc_primary in the same INSERT is irrelevant to
+	// trg_custom_category_two_levels, which inspects ONLY parent_id (migration 000078) — nesting
+	// under a PFC primary does not make the parent a child for its two-level rule, which is exactly
+	// why this three-level shape is reachable at all rather than rejected.
 	mustExec("pfcParent", `INSERT INTO custom_categories (id, user_id, name, parent_pfc_primary) VALUES ($1,$2,'Eating Out 1626','FOOD_AND_DRINK')`, pfcParentID, userID)
 	mustExec("grandChild", `INSERT INTO custom_categories (id, user_id, name, parent_id) VALUES ($1,$2,'Coffee Runs 1626',$3)`, grandChildID, userID, pfcParentID)
 

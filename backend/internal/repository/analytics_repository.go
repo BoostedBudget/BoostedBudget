@@ -498,11 +498,28 @@ func effectiveCategoryDisplayExpr() string {
 //
 // ⚠ #1626 falsified this paragraph's second half, which used to claim a NULL name was
 // "unreachable today — `effective_category_name` is scanned into a non-pointer string (a NULL
-// already fails the scan)". That is no longer true: the income pair and five other reads now scan
-// that column through `sql.NullString`, so a NULL is reachable and TOLERATED rather than fatal.
-// The ordering is still deterministic (NULLS LAST), and it no longer decides what the user sees:
-// the service re-sorts on the RESOLVED display, where a NULL custom name has already become the
-// neutral placeholder. The merchant name still COALESCEs to the literal 'Unknown'.
+// already fails the scan)". The replacement must be scoped read-by-read, because the tree is now
+// MIXED and a blanket "NULLs are tolerated here" would be the same error with the polarity flipped.
+//
+// TOLERANT (7 reads, all scanning through `sql.NullString` and then taking .String): GetTopExpense,
+// GetLargestTransactionsForPeriod, GetCategoryBreakdownForMerchant, GetIncomeSourceBreakdown and
+// its household twin, GetUnusualSpend — six reading `t.effective_category_name` — plus
+// GetCategoryTotalForPeriod, whose display is a `cc.name` scalar subquery (NULL::text for every PFC
+// token by construction). For these a NULL is reachable and survives; the ordering stays
+// deterministic (NULLS LAST) and no longer decides what the user sees, because the service re-sorts
+// on the RESOLVED display where a NULL custom name has already become the neutral placeholder.
+//
+// ⚠ STILL A HARD SCAN (4 reads, PRE-EXISTING and NOT changed by #1626): GetSpendingByCategory and
+// getSpendingByCategoryHousehold scan `t.effective_category_name` into
+// domain.SpendingByCategory.PFCPrimaryDisplay, and GetSpendingTrends and getSpendingTrendsHousehold
+// scan it into domain.SpendingTrendRow.CategoryDisplay — both plain `string`, and pgx v5 fails the
+// scan outright on a NULL rather than yielding "". Migration 000073 leaves the column nullable and
+// builds a `WHERE effective_category_name IS NOT NULL` partial index, so the schema EXPECTS NULLs:
+// these four are a latent 500, not a proof of unreachability. #1626 did not introduce them and
+// deliberately does not convert them — that is a behaviour change on four different reads, outside
+// this issue's blast radius — but it also must not be read as asserting a tolerance they do not
+// have. A follow-up to convert all four to `sql.NullString` is OWED and not yet filed as its own
+// issue. The merchant name is unaffected either way: it still COALESCEs to the literal 'Unknown'.
 //
 // ⚠ Alphabetical alone does NOT determinise the MERCHANT reads. Their name is an aggregate
 // (`MAX(COALESCE(...))`) whose chain bottoms out in the literal 'Unknown', while the GROUP BY is on
@@ -1312,7 +1329,8 @@ func (r *analyticsRepository) getSpendingTrendsHousehold(ctx context.Context, re
 
 // GetCategoryTotalForPeriod returns the total expense amount for a specific effective category.
 // Matches both PFC primary categories (e.g. "FOOD_AND_DRINK") and custom categories ("custom:<uuid>").
-// Expenses are amount > 0 (PFCv2 convention). Returns zero row when no matching transactions exist.
+// Expenses are amount > 0 (PFCv2 convention). Returns a single row of ZEROES when no matching
+// transactions exist — the aggregate is ungrouped, so there is no no-rows case (see the scan below).
 // customCategoryIDFromToken splits a `custom:<uuid>` grouping key. Kept beside its only caller
 // rather than shared: effectiveCategoryExpr's token format is an implementation detail of these
 // reads, and a widely-imported helper would invite parsing the token in places that should be
@@ -1389,7 +1407,12 @@ func (r *analyticsRepository) GetCategoryTotalForPeriod(ctx context.Context, use
 
 	var row domain.CategoryTotalRow
 	// Nullable: NULL for every PFC token by construction, and for a custom token whose category
-	// row is gone. An empty period returns no rows at all.
+	// row is gone.
+	//
+	// ⚠ An empty period returns ONE row of zeroes, not no rows: categoryTotalQuery is an UNGROUPED
+	// aggregate (COALESCE(SUM(...),0), COUNT(*)), so Postgres always emits exactly one row and
+	// QueryRow can never yield ErrNoRows here. An earlier revision of this comment claimed the
+	// opposite; nothing downstream relies on the no-rows case because there is none.
 	var display sql.NullString
 	err := r.db.QueryRow(ctx, query, args...).Scan(
 		&row.Total,

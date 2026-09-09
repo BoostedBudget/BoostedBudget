@@ -17,10 +17,14 @@ package repository
 // Hiding a user's own retained history because of missing interval data is the #1569 bug in
 // miniature, so the leg below admits it.
 //
-// ⚠ Deliberately narrow: it fires ONLY when there is no 'active' row whatsoever. An account the
-// user genuinely disconnected HAS an 'active' row followed by a terminal one, so the historical
-// leg keeps governing it with its existing date bounds. This does not resurrect deliberately
-// removed accounts.
+// ⚠ Deliberately narrow, and narrow in one specific respect: it fires ONLY when there is no
+// 'active' row whatsoever, so a RECORDED active interval is never overridden — the historical leg
+// keeps governing that account with its existing date bounds. It does NOT key on removal cause, and
+// an account whose interval was never written IS admitted whatever that cause says, including
+// 'user_disconnect'. That combination is reachable (migration 000152's removed branch skips the
+// 'active' prefix while hardcoding reason 'user_disconnect') and it is the retention-by-default
+// answer rather than an oversight: a disconnected chain keeps its history (#1569 task 2). See
+// accountWithNoActiveIntervalLeg's own comment for the full argument.
 
 import (
 	"regexp"

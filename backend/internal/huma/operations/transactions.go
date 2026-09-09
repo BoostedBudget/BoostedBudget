@@ -103,14 +103,24 @@ type GetTransactionsOutput struct {
 		// TotalCount and TotalAmount describe the WHOLE filtered set, not this page, and are
 		// present only on the FIRST page (no cursor supplied) — re-aggregating the set on every
 		// page of the busiest list in the app would cost real time for a number that does not
-		// change as the user pages. Omitted, not zeroed, when absent: a zero total is
-		// indistinguishable from a genuinely empty set. TotalAmount follows the same sign
-		// convention as the rows (PFCv2: expenses positive, inflows negative), so a client must
-		// not assume it is a magnitude. Added in #1626 so the reports Sankey's click-through
-		// ("this node's amount equals the filtered list's total") is something a consumer — or a
-		// test — can actually check.
-		TotalCount  int     `json:"total_count,omitempty" doc:"Number of transactions in the whole filtered set. First page only."`
-		TotalAmount float64 `json:"total_amount,omitempty" doc:"Summed amount of the whole filtered set, same sign convention as the rows. First page only."`
+		// change as the user pages.
+		//
+		// ⚠ POINTERS so that "not computed" (absent) and "computed, and zero" (present zero) are
+		// different responses. With non-pointer scalars the zero value IS the omitted value, so a
+		// first page whose filter matched nothing could not report "0 results, $0.00", and the
+		// default mixed income/expense feed — which nets to exactly zero under PFCv2 signs — sent
+		// a count with no amount beside it. Pinned by
+		// TestGetTransactions_WholeSetTotals_OmittedNeverZeroed.
+		//
+		// TotalAmount is SIGNED, following the rows (PFCv2: expenses positive, inflows negative),
+		// so a client must not assume it is a magnitude. The chart-side comparison it exists to
+		// make checkable is therefore on MAGNITUDES: a category-hierarchy node's amount is
+		// SUM(ABS(amount)) — an unsigned chart quantity — so the property that holds is
+		// |node amount| == |total_amount| over the same filtered set, not equality of the two
+		// numbers. Added in #1626 so the reports Sankey's click-through is something a consumer —
+		// or a test — can actually check.
+		TotalCount  *int     `json:"total_count,omitempty" doc:"Number of transactions in the whole filtered set. First page only; absent means not computed, a present 0 means the set is empty."`
+		TotalAmount *float64 `json:"total_amount,omitempty" doc:"Summed amount of the whole filtered set, SIGNED like the rows (PFCv2: expenses positive, inflows negative) — not a magnitude. A Sankey node's amount is an ABS sum, so the property that holds is |node amount| == |total_amount|. First page only; absent means not computed, a present 0 means the set nets to zero."`
 	}
 }
 

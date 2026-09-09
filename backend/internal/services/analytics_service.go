@@ -300,30 +300,40 @@ func (s *analyticsService) GetSpendingByCategory(ctx context.Context, userID str
 
 	// Merge by raw category token (UUID for custom, enum for PFC) to keep distinct rows — never by
 	// display, which is not unique and can change mid-rename while the async
-	// effective_category_refresh job catches up.
-	merged := make(map[string]*domain.SpendingByCategory)
-	var order []string
-	for _, c := range categories {
-		displayName := resolveCategoryDisplay(c.Category, c.PFCPrimaryDisplay)
-		if existing, ok := merged[c.Category]; ok {
-			existing.Total += c.Total
-			existing.TransactionCount += c.TransactionCount
-		} else {
-			merged[c.Category] = &domain.SpendingByCategory{
-				Category:          c.Category,
-				PFCPrimaryDisplay: displayName,
-				Total:             c.Total,
-				TransactionCount:  c.TransactionCount,
-			}
-			order = append(order, c.Category)
+	// effective_category_refresh job catches up. Routed through mergeCategoryRows, like both
+	// sibling reads, so the three cannot drift apart — this read's hand-rolled copy of the merge
+	// had already dropped the display upgrade below (#1626, branch review I4).
+	rows := make([]domain.SpendingByCategory, len(categories))
+	for i, c := range categories {
+		rows[i] = domain.SpendingByCategory{
+			Category:          c.Category,
+			PFCPrimaryDisplay: resolveCategoryDisplay(c.Category, c.PFCPrimaryDisplay),
+			Total:             c.Total,
+			TransactionCount:  c.TransactionCount,
 		}
 	}
 
+	order := mergeCategoryRows(
+		len(rows),
+		func(i int) string { return rows[i].Category },
+		func(dst, src int) {
+			rows[dst].Total += rows[src].Total
+			rows[dst].TransactionCount += rows[src].TransactionCount
+			// First REAL name wins, whichever half carried it. The SQL orders total DESC, so the
+			// survivor is simply the larger half — if that is the one whose effective_category_name
+			// had not been refreshed yet, the placeholder would otherwise be the user's answer while
+			// the real name sat in the very next row.
+			if rows[dst].PFCPrimaryDisplay == unnamedCustomCategoryLabel && rows[src].PFCPrimaryDisplay != unnamedCustomCategoryLabel {
+				rows[dst].PFCPrimaryDisplay = rows[src].PFCPrimaryDisplay
+			}
+		},
+	)
+
 	categories = make([]domain.SpendingByCategory, 0, len(order))
 	var totalSpent float64
-	for _, key := range order {
-		categories = append(categories, *merged[key])
-		totalSpent += merged[key].Total
+	for _, i := range order {
+		categories = append(categories, rows[i])
+		totalSpent += rows[i].Total
 	}
 
 	// Re-sort on the RESOLVED label (#1626). The SQL ordered by category_display, which is the raw

@@ -456,20 +456,21 @@ describe('buildSankeyData — degradation ladder conservation (#1626 Phase 2, it
       observedRungs.add(data.expenseRungIndex as number)
     }
 
-    // The LAST rung, [0, 0, 10], is UNREACHABLE under the current constants — a real finding from
-    // building this test, reported in the task report rather than fixed here (this task changes no
-    // production BEHAVIOUR). Proof: the rung immediately before it, [0, 0, 30], depth-0-collapses
-    // every kept root to exactly one node each and adds at most one overflow node, so it renders at
-    // most maxRoots + 1 nodes; 30 + 1 === EXPENSE_NODE_BUDGET (31), so that rung can never exceed
-    // the budget and fall through to the next one. The assertion below pins that maxRoots value so
-    // this exclusion breaks loudly — not silently — if EXPENSE_LADDER or the budget ever change
-    // under it.
-    const secondToLastRungMaxRoots = EXPENSE_LADDER[EXPENSE_LADDER.length - 2]?.[2]
-    expect(secondToLastRungMaxRoots).toBe(EXPENSE_NODE_BUDGET - 1)
+    // EVERY rung must be reachable — no `.slice`, no exclusions. The ladder previously carried a
+    // fifth rung, [0, 0, 10], that could never run: the rung before it, [0, 0, 30],
+    // depth-0-collapses every kept root to exactly one node and adds at most one overflow node, so
+    // it renders at most maxRoots + 1 nodes, and 30 + 1 === EXPENSE_NODE_BUDGET means it always
+    // fits and never falls through. It was reported by an earlier revision of this test and then
+    // DELETED, because a documented degradation step that cannot run is a lie about the ladder and
+    // it forced this assertion to carry a permanent exclusion. The floor is now [0, 0, 30], which
+    // always fits — which is exactly what a floor has to do.
+    //
+    // The assertion below is what makes the whole matrix trustworthy: without it, a matrix that
+    // only ever hit rung 0 would look like full coverage of the ladder.
+    const lastRungMaxRoots = EXPENSE_LADDER[EXPENSE_LADDER.length - 1]?.[2]
+    expect(lastRungMaxRoots).toBe(EXPENSE_NODE_BUDGET - 1)
 
-    // The assertion that makes all of the above trustworthy: without it, a matrix that only ever
-    // hit rung 0 would look like full coverage of the ladder.
-    const reachableRungIndices = new Set(EXPENSE_LADDER.map((_, i) => i).slice(0, -1))
+    const reachableRungIndices = new Set(EXPENSE_LADDER.map((_, i) => i))
     expect(observedRungs).toEqual(reachableRungIndices)
   })
 })

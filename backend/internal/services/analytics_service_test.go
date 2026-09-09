@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mockAnalyticsRepository is a mock implementation for testing
@@ -2211,4 +2213,53 @@ func TestAnalyticsService_GetBudgetVsActual(t *testing.T) {
 			t.Error("expected error from repository")
 		}
 	})
+}
+
+// TestAnalyticsService_GetSpendingByCategory_MidRefreshNameSurvives is #1626 in mild form, found by
+// the branch review.
+//
+// The SQL groups by (category, category_display), and effective_category_name is denormalised per
+// transaction and refreshed ASYNCHRONOUSLY after a rename — so mid-refresh one custom category
+// arrives as TWO rows, one carrying the name and one carrying NULL (which the repository scans as
+// ""). This read's hand-rolled merge added the totals and never revisited the survivor's display.
+// The SQL orders total DESC, so when the UN-named half is the larger one it wins the survivor slot
+// and the response says "Custom category" while the real name sat in the very next row — the UUID
+// defect one step removed. Both sibling reads (income sources, merchant breakdown) already guard
+// this, and mergeCategoryRows exists "so the two directions cannot drift apart". This was the drift.
+//
+// ⚠ The un-named half is deliberately the LARGER one; with the order reversed the test passes
+// against the unfixed code, because first-seen would already be the named row.
+func TestAnalyticsService_GetSpendingByCategory_MidRefreshNameSurvives(t *testing.T) {
+	ctx := context.Background()
+	const catKey = "custom:22222222-2222-2222-2222-222222222222"
+
+	mockRepo := &mockAnalyticsRepository{
+		getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+			return []domain.SpendingByCategory{
+				// A competing category, so a merge that forgets to re-sort or to recompute
+				// percentages from the merged total is also caught.
+				{Category: "SHOPPING", PFCPrimaryDisplay: "SHOPPING", Total: 100.0, TransactionCount: 1},
+				{Category: catKey, PFCPrimaryDisplay: "", Total: 70.0, TransactionCount: 4},
+				{Category: catKey, PFCPrimaryDisplay: "Therapy sessions", Total: 50.0, TransactionCount: 2},
+			}, nil
+		},
+	}
+	service := NewAnalyticsService(mockRepo)
+	result, err := service.GetSpendingByCategory(ctx, "user-123", domain.SpendingFilters{
+		StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Categories, 2, "the two names must merge into ONE category")
+
+	assert.Equal(t, catKey, result.Categories[0].Category,
+		"the merged 120 must outrank SHOPPING's 100 — a merge without a re-sort leaves SHOPPING first")
+	assert.Equal(t, "Therapy sessions", result.Categories[0].PFCPrimaryDisplay,
+		"the survivor arrived UN-named and the real name was in the next row. Keeping the placeholder "+
+			"shows the user \"Custom category\" for a category that has a name — the #1626 defect one "+
+			"step removed")
+	assert.InDelta(t, 120.0, result.Categories[0].Total, 0.0001)
+	assert.Equal(t, 6, result.Categories[0].TransactionCount)
+	assert.InDelta(t, 120.0/220.0*100, result.Categories[0].Percentage, 0.001,
+		"percentages must come from the MERGED total")
 }

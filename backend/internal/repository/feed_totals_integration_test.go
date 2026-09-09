@@ -6,9 +6,16 @@ package repository
 // describe.
 //
 // WHY THIS TEST IS THE POINT OF THE FEATURE. The reports Sankey claims that clicking a node lands
-// on a list whose total equals the node's amount. Before this work the response carried no total at
+// on a list that accounts for the node's amount. Before this work the response carried no total at
 // all, so that claim was not merely untested — it was unverifiable through the product, and the
 // verification step written for it could not be executed by anyone.
+//
+// ⚠ "ACCOUNTS FOR", not "equals". A hierarchy node's amount is COALESCE(SUM(ABS(t.amount)),0) — an
+// unsigned chart quantity — while total_amount is SUM(t.amount) under PFCv2 signs, so the property
+// is |node amount| == |total_amount|: equal for an expense node, off by a factor of −1 for an income
+// one. This file does NOT test that cross-surface property; it tests the aggregate against the rows
+// WITHIN the list, which is the half that can drift silently. Nothing yet compares a Sankey node to
+// a list total.
 //
 // WHY IT CANNOT BE A pgxmock TEST. The correctness argument for the aggregate is "it uses the same
 // predicate as the page query", and the two implementations honour that by reusing the page query's

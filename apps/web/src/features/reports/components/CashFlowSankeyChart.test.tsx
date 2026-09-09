@@ -147,13 +147,18 @@ describe('CashFlowSankeyChart', () => {
       expect(currentUrl()).not.toContain('/transactions')
     })
 
-    it('focusing a category is tracked, carrying the LEVEL and nothing identifying', () => {
+    // The depth must come from node.depth, NOT from splitting the node id on ':'. events.ts says so
+    // in as many words, and the sibling navigate event obeys it; this one derived 'l1' from the id.
+    // It happens to be right today because only expense nodes focus and their ids encode true
+    // depth — but the income fan is flattened to `in:l1:*`, so the moment anything in that fan can
+    // focus, the id would report a plausible-looking level that is simply wrong.
+    it('focusing a category is tracked with the node DEPTH and nothing identifying', () => {
       render(<CashFlowSankeyChart {...defaultProps} viewMode={{ kind: 'parents' }} />)
       fireEvent.click(screen.getByText(/Total Income → Food And Drink/))
 
       expect(mockTrackEvent).toHaveBeenCalledWith(
         ANALYTICS_EVENTS.REPORT_SANKEY_CATEGORY_FOCUSED,
-        { level: 'l1' },
+        { depth: 1 },
       )
       // Event properties are stored verbatim and are NOT covered by data-ph-mask, so a category's
       // name, id or amount must never appear in them.

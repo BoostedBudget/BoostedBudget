@@ -987,7 +987,7 @@ func TestTransactionListResponseJSON(t *testing.T) {
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
 			Transactions: []*domain.ActivityItem{domain.NewBankingActivityItem(tx)},
-			TotalCount:   1,
+			TotalCount:   ptrTo(1),
 			Limit:        50,
 			Offset:       0,
 			HasMore:      false,
