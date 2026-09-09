@@ -9846,19 +9846,25 @@
         {
           "name": "pfc_primaries",
           "in": "query",
-          "description": "Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL). OR-joined with pfc_detaileds and custom_category_ids: a transaction matches if ANY of the three matches.",
+          "description": "Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL). OR-joined with pfc_detaileds, custom_category_ids and uncategorized: a transaction matches if ANY of them matches.",
           "type": "string"
         },
         {
           "name": "pfc_detaileds",
           "in": "query",
-          "description": "Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). OR-joined with pfc_primaries and custom_category_ids.",
+          "description": "Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). OR-joined with pfc_primaries, custom_category_ids and uncategorized.",
           "type": "string"
         },
         {
           "name": "custom_category_ids",
           "in": "query",
-          "description": "Filter by custom category UUIDs (comma-separated). Each id also matches its child categories. OR-joined with pfc_primaries and pfc_detaileds — combining them returns the union, not the (always empty) intersection.",
+          "description": "Filter by custom category UUIDs (comma-separated). Each id also matches its child categories. OR-joined with pfc_primaries, pfc_detaileds and uncategorized — combining them returns the union, not the (always empty) intersection.",
+          "type": "string"
+        },
+        {
+          "name": "uncategorized",
+          "in": "query",
+          "description": "When true, also match transactions with NO category at all — the rows analytics reports as 'Uncategorized'. OR-joined with pfc_primaries, pfc_detaileds and custom_category_ids. Omitted or false adds no filter; it never means 'exclude uncategorized'. Issue #1626.",
           "type": "string"
         },
         {
@@ -9980,6 +9986,16 @@
         {
           "name": "next_cursor",
           "type": "string"
+        },
+        {
+          "name": "total_amount",
+          "type": "number",
+          "description": "Summed amount of the whole filtered set, same sign convention as the rows. First page only."
+        },
+        {
+          "name": "total_count",
+          "type": "integer",
+          "description": "Number of transactions in the whole filtered set. First page only."
         },
         {
           "name": "transactions",
