@@ -1,265 +1,194 @@
 import { describe, it, expect } from 'bun:test'
-import { buildSankeyData } from './buildSankeyData'
-import type { IncomeSourceItem, SpendingByCategory } from '@boostedbudget/api-client/models'
+import { buildSankeyData, EXPENSE_NODE_BUDGET, INCOME_NODE_BUDGET, TOTAL_NODE_BUDGET } from './buildSankeyData'
+import type { CategoryHierarchyNode } from '@boostedbudget/api-client/models'
 
-function makeIncome(category: string, display: string, total: number): IncomeSourceItem {
-  return { category, pfc_primary_display: display, total, percentage: 0, transaction_count: 1 }
+function node(
+  category: string,
+  display: string,
+  total: number,
+  directTotal = total,
+  children: CategoryHierarchyNode[] = [],
+): CategoryHierarchyNode {
+  return { category, display, total, direct_total: directTotal, percentage: 0, transaction_count: 1, children }
 }
 
-function makeExpense(category: string, display: string, total: number): SpendingByCategory {
-  return { category, pfc_primary_display: display, total, percentage: 0, transaction_count: 1 }
+/** A tree with every shape that matters: direct spend on a parent, a PFC child, a custom child, a grandchild. */
+function mixedExpenses(): CategoryHierarchyNode[] {
+  return [
+    node('TRANSPORTATION', 'Transportation', 500),
+    node('FOOD_AND_DRINK', 'Food And Drink', 225, 40, [
+      node('custom:eo', 'Eating Out', 125, 100, [node('custom:cf', 'Coffee Runs', 25)]),
+      node('FOOD_AND_DRINK_FAST_FOOD', 'Fast Food', 60),
+    ]),
+  ]
 }
 
-describe('buildSankeyData', () => {
-  describe('empty/zero cases', () => {
-    it('returns empty when both totals are zero', () => {
-      expect(buildSankeyData([], [], 0, 0)).toEqual({ nodes: [], links: [], hubTotal: 0 })
-    })
+const income = [node('INCOME_WAGES', 'Wages', 1000)]
 
-    it('returns empty when items exist but all totals are zero', () => {
-      const result = buildSankeyData(
-        [makeIncome('WAGES', 'Wages', 0)],
-        [makeExpense('FOOD', 'Food', 0)],
-        0, 0,
-      )
-      expect(result).toEqual({ nodes: [], links: [], hubTotal: 0 })
-    })
+/**
+ * Every node with RENDERED children must satisfy inflow == sum of outflows.
+ *
+ * Defined over RENDERED children, not underlying ones: a node whose children a degradation rung
+ * hid is a rendered LEAF — its inbound link is its whole total and it has no outflows, which is
+ * correct. Conflating the two makes the invariant unsatisfiable in the consolidated view.
+ */
+function expectConservation(data: ReturnType<typeof buildSankeyData>) {
+  const outflow = new Map<string, number>()
+  const inflow = new Map<string, number>()
+  for (const l of data.links) {
+    outflow.set(l.source, (outflow.get(l.source) ?? 0) + l.value)
+    inflow.set(l.target, (inflow.get(l.target) ?? 0) + l.value)
+  }
+  for (const n of data.nodes) {
+    const out = outflow.get(n.id)
+    if (out === undefined) continue // rendered leaf
+    const inn = inflow.get(n.id)
+    if (inn === undefined) continue // a source node (income root / deficit)
+    expect(out).toBeCloseTo(inn, 6)
+  }
+}
 
-    it('filters out income items with total <= 0', () => {
-      const result = buildSankeyData(
-        [makeIncome('WAGES', 'Wages', 5000), makeIncome('DIVIDENDS', 'Dividends', 0)],
-        [makeExpense('FOOD', 'Food', 2000)],
-        5000, 2000,
-      )
-      const ids = result.nodes.map(n => n.id)
-      expect(ids).toContain('in:WAGES')
-      expect(ids).not.toContain('in:DIVIDENDS')
-    })
+describe('buildSankeyData — hierarchy', () => {
+  it('consolidated view renders parents only, and each parent keeps its full roll-up', () => {
+    const data = buildSankeyData(income, mixedExpenses(), { kind: 'parents' })
 
-    it('filters out expense items with total <= 0', () => {
-      const result = buildSankeyData(
-        [makeIncome('WAGES', 'Wages', 5000)],
-        [makeExpense('FOOD', 'Food', 2000), makeExpense('TRANSPORT', 'Transport', 0)],
-        5000, 2000,
-      )
-      expect(result.nodes.map(n => n.id)).not.toContain('out:TRANSPORT')
-    })
+    const expenseNodes = data.nodes.filter(n => n.nodeKind === 'expense')
+    expect(expenseNodes.map(n => n.name).sort()).toEqual(['Food And Drink', 'Transportation'])
+
+    const fd = data.links.find(l => l.target === 'out:l1:FOOD_AND_DRINK')
+    expect(fd?.value).toBeCloseTo(225, 6)
+    expectConservation(data)
   })
 
-  describe('surplus case (income > expenses)', () => {
-    const income = [
-      makeIncome('WAGES', 'Wages', 5000),
-      makeIncome('DIVIDENDS', 'Dividends', 1250),
-    ]
-    const expenses = [
-      makeExpense('FOOD', 'Food & Drink', 800),
-      makeExpense('TRANSPORT', 'Transportation', 400),
-    ]
-    const totalIncome = 6250
-    const totalExpenses = 1200
+  it('a parent whose children are hidden is a rendered leaf but still FOCUSES, not navigates', () => {
+    const data = buildSankeyData(income, mixedExpenses(), { kind: 'parents' })
+    const fd = data.nodes.find(n => n.id === 'out:l1:FOOD_AND_DRINK')
+    expect(fd?.action).toEqual({ kind: 'focus', key: 'FOOD_AND_DRINK' })
 
-    it('creates a hub node that is non-navigable', () => {
-      const { nodes } = buildSankeyData(income, expenses, totalIncome, totalExpenses)
-      const hub = nodes.find(n => n.id === 'hub')
-      expect(hub).toBeDefined()
-      expect(hub?.navigable).toBe(false)
-    })
-
-    it('creates income nodes with in: prefix, correct name, navigable=true', () => {
-      const { nodes } = buildSankeyData(income, expenses, totalIncome, totalExpenses)
-      const wages = nodes.find(n => n.id === 'in:WAGES')
-      expect(wages).toBeDefined()
-      expect(wages?.name).toBe('Wages')
-      expect(wages?.navigable).toBe(true)
-      expect(wages?.nodeKind).toBe('income')
-      expect(wages?.category).toBe('WAGES')
-    })
-
-    it('creates expense nodes with out: prefix, correct name, navigable=true', () => {
-      const { nodes } = buildSankeyData(income, expenses, totalIncome, totalExpenses)
-      const food = nodes.find(n => n.id === 'out:FOOD')
-      expect(food).toBeDefined()
-      expect(food?.name).toBe('Food & Drink')
-      expect(food?.navigable).toBe(true)
-      expect(food?.nodeKind).toBe('expense')
-      expect(food?.category).toBe('FOOD')
-    })
-
-    it('creates a Savings node that is non-navigable', () => {
-      const { nodes } = buildSankeyData(income, expenses, totalIncome, totalExpenses)
-      const savings = nodes.find(n => n.id === 'savings')
-      expect(savings).toBeDefined()
-      expect(savings?.navigable).toBe(false)
-      expect(savings?.nodeKind).toBe('savings')
-    })
-
-    it('does NOT create a deficit node when in surplus', () => {
-      const { nodes } = buildSankeyData(income, expenses, totalIncome, totalExpenses)
-      expect(nodes.find(n => n.id === 'deficit')).toBeUndefined()
-    })
-
-    it('links each income source to hub with its exact total', () => {
-      const { links } = buildSankeyData(income, expenses, totalIncome, totalExpenses)
-      expect(links.find(l => l.source === 'in:WAGES' && l.target === 'hub')?.value).toBe(5000)
-      expect(links.find(l => l.source === 'in:DIVIDENDS' && l.target === 'hub')?.value).toBe(1250)
-    })
-
-    it('links hub to each expense with its exact total', () => {
-      const { links } = buildSankeyData(income, expenses, totalIncome, totalExpenses)
-      expect(links.find(l => l.source === 'hub' && l.target === 'out:FOOD')?.value).toBe(800)
-      expect(links.find(l => l.source === 'hub' && l.target === 'out:TRANSPORT')?.value).toBe(400)
-    })
-
-    it('links hub to Savings with surplus value (totalIncome - totalExpenses)', () => {
-      const { links } = buildSankeyData(income, expenses, totalIncome, totalExpenses)
-      const savingsLink = links.find(l => l.source === 'hub' && l.target === 'savings')
-      expect(savingsLink?.value).toBeCloseTo(6250 - 1200)
-    })
-
-    it('hub inflow equals hub outflow (invariant)', () => {
-      const { links } = buildSankeyData(income, expenses, totalIncome, totalExpenses)
-      const inflow = links.filter(l => l.target === 'hub').reduce((s, l) => s + l.value, 0)
-      const outflow = links.filter(l => l.source === 'hub').reduce((s, l) => s + l.value, 0)
-      expect(inflow).toBeCloseTo(outflow)
-    })
+    const transport = data.nodes.find(n => n.id === 'out:l1:TRANSPORTATION')
+    expect(transport?.action.kind).toBe('navigate')
   })
 
-  describe('deficit case (expenses > income)', () => {
-    const income = [makeIncome('WAGES', 'Wages', 1000)]
-    const expenses = [makeExpense('FOOD', 'Food', 1200), makeExpense('RENT', 'Rent', 800)]
-    const totalIncome = 1000
-    const totalExpenses = 2000
+  it('expanded view renders all three levels and a direct bucket for a parent with own spend', () => {
+    const data = buildSankeyData(income, mixedExpenses(), { kind: 'expanded' })
+    const ids = data.nodes.map(n => n.id)
 
-    it('creates a deficit node that is non-navigable', () => {
-      const { nodes } = buildSankeyData(income, expenses, totalIncome, totalExpenses)
-      const deficit = nodes.find(n => n.id === 'deficit')
-      expect(deficit).toBeDefined()
-      expect(deficit?.navigable).toBe(false)
-      expect(deficit?.nodeKind).toBe('deficit')
-    })
+    expect(ids).toContain('out:l2:FOOD_AND_DRINK|custom:eo')
+    expect(ids).toContain('out:l3:FOOD_AND_DRINK|custom:eo|custom:cf')
+    expect(ids).toContain('out:direct:FOOD_AND_DRINK')
 
-    it('does NOT create a savings node when in deficit', () => {
-      const { nodes } = buildSankeyData(income, expenses, totalIncome, totalExpenses)
-      expect(nodes.find(n => n.id === 'savings')).toBeUndefined()
-    })
-
-    it('links deficit to hub with the shortfall value', () => {
-      const { links } = buildSankeyData(income, expenses, totalIncome, totalExpenses)
-      const defLink = links.find(l => l.source === 'deficit' && l.target === 'hub')
-      expect(defLink?.value).toBe(1000)
-    })
-
-    it('hub inflow equals hub outflow (invariant)', () => {
-      const { links } = buildSankeyData(income, expenses, totalIncome, totalExpenses)
-      const inflow = links.filter(l => l.target === 'hub').reduce((s, l) => s + l.value, 0)
-      const outflow = links.filter(l => l.source === 'hub').reduce((s, l) => s + l.value, 0)
-      expect(inflow).toBeCloseTo(outflow)
-    })
+    const direct = data.links.find(l => l.target === 'out:direct:FOOD_AND_DRINK')
+    expect(direct?.value).toBeCloseTo(40, 6)
+    expectConservation(data)
   })
 
-  describe('exact-balance case (income === expenses)', () => {
-    it('creates neither savings nor deficit nodes', () => {
-      const { nodes } = buildSankeyData(
-        [makeIncome('WAGES', 'Wages', 2000)],
-        [makeExpense('FOOD', 'Food', 2000)],
-        2000, 2000,
-      )
-      expect(nodes.find(n => n.id === 'savings')).toBeUndefined()
-      expect(nodes.find(n => n.id === 'deficit')).toBeUndefined()
-    })
+  it('a direct bucket never claims to navigate — it has no expressible filter', () => {
+    const data = buildSankeyData(income, mixedExpenses(), { kind: 'expanded' })
+    for (const n of data.nodes.filter(x => x.nodeKind === 'direct' || x.nodeKind === 'other')) {
+      expect(n.action).toEqual({ kind: 'none' })
+    }
   })
 
-  describe('top-10 expense cap', () => {
-    const income = [makeIncome('WAGES', 'Wages', 100000)]
-    const manyExpenses = Array.from({ length: 15 }, (_, i) =>
-      makeExpense(`CAT_${i}`, `Category ${i}`, 500 + i * 100),
-    )
-    const totalExpenses = manyExpenses.reduce((s, e) => s + e.total, 0)
-
-    it('keeps exactly 10 expense nodes (the top 10 by total)', () => {
-      const { nodes } = buildSankeyData(income, manyExpenses, 100000, totalExpenses)
-      expect(nodes.filter(n => n.id.startsWith('out:')).length).toBe(10)
-    })
-
-    it('creates an "other" node with the correct count and non-navigable', () => {
-      const { nodes } = buildSankeyData(income, manyExpenses, 100000, totalExpenses)
-      const other = nodes.find(n => n.id === 'other')
-      expect(other?.name).toBe('Other Expenses (5 categories)')
-      expect(other?.navigable).toBe(false)
-      expect(other?.nodeKind).toBe('other')
-    })
-
-    it('other node link carries the summed total of collapsed expenses', () => {
-      const { links } = buildSankeyData(income, manyExpenses, 100000, totalExpenses)
-      // Smallest 5 expenses: index 0-4 → totals 500,600,700,800,900 = 3500
-      const expectedOtherValue = 500 + 600 + 700 + 800 + 900
-      const otherLink = links.find(l => l.target === 'other')
-      expect(otherLink?.value).toBe(expectedOtherValue)
-    })
-
-    it('does not create an other node when expenses are 10 or fewer', () => {
-      const tenExpenses = manyExpenses.slice(0, 10)
-      const tenTotal = tenExpenses.reduce((s, e) => s + e.total, 0)
-      const { nodes } = buildSankeyData(income, tenExpenses, 100000, tenTotal)
-      expect(nodes.find(n => n.id === 'other')).toBeUndefined()
-    })
+  it('a PFC detailed leaf navigates by pfc_detaileds only, never widened to its primary', () => {
+    const data = buildSankeyData(income, mixedExpenses(), { kind: 'expanded' })
+    const ff = data.nodes.find(n => n.id === 'out:l2:FOOD_AND_DRINK|FOOD_AND_DRINK_FAST_FOOD')
+    expect(ff?.action).toEqual({ kind: 'navigate', pfcDetaileds: ['FOOD_AND_DRINK_FAST_FOOD'] })
   })
 
-  describe('transfer category collision handling', () => {
-    it('in:/out: prefixes keep income and expense node ids disjoint', () => {
-      const inc = [makeIncome('TRANSFER_IN', 'Transfer In', 1000)]
-      const exp = [makeExpense('TRANSFER_OUT', 'Transfer Out', 800)]
-      const { nodes } = buildSankeyData(inc, exp, 1000, 800)
-      const ids = nodes.map(n => n.id)
-      expect(ids).toContain('in:TRANSFER_IN')
-      expect(ids).toContain('out:TRANSFER_OUT')
-    })
+  it('a custom leaf navigates by custom_category_ids with the token stripped', () => {
+    const data = buildSankeyData(income, mixedExpenses(), { kind: 'expanded' })
+    const coffee = data.nodes.find(n => n.id === 'out:l3:FOOD_AND_DRINK|custom:eo|custom:cf')
+    expect(coffee?.action).toEqual({ kind: 'navigate', customCategoryIds: ['cf'] })
   })
 
-  describe('hub invariant with mismatched passed-in totals (G5 — Codex fix #5 regression guard)', () => {
-    it('hub inflow equals hub outflow even when passed totalIncome/totalExpenses diverge from array sums', () => {
-      const income = [makeIncome('WAGES', 'Wages', 3000)]
-      const expenses = [makeExpense('FOOD', 'Food', 2000)]
-      // Pass intentionally wrong totals (simulates API total including filtered rows)
-      const { links } = buildSankeyData(income, expenses, /*wrong*/ 9999, /*wrong*/ 50)
-      const inflow = links.filter(l => l.target === 'hub').reduce((s, l) => s + l.value, 0)
-      const outflow = links.filter(l => l.source === 'hub').reduce((s, l) => s + l.value, 0)
-      expect(inflow).toBeCloseTo(outflow)
-    })
+  it('focus view keeps the ancestor path and collapses siblings exactly once', () => {
+    const data = buildSankeyData(income, mixedExpenses(), { kind: 'focus', key: 'custom:eo' })
+    const ids = data.nodes.map(n => n.id)
 
-    it('hubTotal in the result equals max of filtered array sums, not passed-in params', () => {
-      const income = [makeIncome('WAGES', 'Wages', 3000)]
-      const expenses = [makeExpense('FOOD', 'Food', 2000)]
-      // Correct hubTotal = max(3000, 2000) = 3000; wrong params should be ignored
-      const { hubTotal } = buildSankeyData(income, expenses, /*wrong*/ 9999, /*wrong*/ 50)
-      expect(hubTotal).toBe(3000)
-    })
+    expect(ids).toContain('out:l1:FOOD_AND_DRINK')
+    expect(ids).toContain('out:l2:FOOD_AND_DRINK|custom:eo')
+    expect(ids).toContain('out:l3:FOOD_AND_DRINK|custom:eo|custom:cf')
+
+    // The focused node's sibling collapses into ONE replacement, and traversal stops there —
+    // a collapsed subtree must not also contribute a deeper "other".
+    const others = data.nodes.filter(n => n.nodeKind === 'other')
+    expect(others.length).toBeLessThanOrEqual(2)
+    expect(new Set(others.map(o => o.id)).size).toBe(others.length)
+    expectConservation(data)
   })
 
-  describe('custom categories', () => {
-    it('marks custom category expense nodes with isCustom: true', () => {
-      const exp = [makeExpense('custom:uuid-abc', 'My Budget', 500)]
-      const { nodes } = buildSankeyData([makeIncome('WAGES', 'Wages', 1000)], exp, 1000, 500)
-      const node = nodes.find(n => n.id === 'out:custom:uuid-abc')
-      expect(node?.isCustom).toBe(true)
-      expect(node?.navigable).toBe(true)
-    })
+  it('a parentless custom category does not collide with its own direct bucket', () => {
+    // parent === child is reachable: a parentless custom category is its own L1.
+    const tree = [node('custom:solo', 'Solo', 90, 30, [node('custom:kid', 'Kid', 60)])]
+    const data = buildSankeyData(income, tree, { kind: 'expanded' })
+    expect(new Set(data.nodes.map(n => n.id)).size).toBe(data.nodes.length)
+    expectConservation(data)
+  })
+})
 
-    it('does not set isCustom on regular PFC expense nodes', () => {
-      const exp = [makeExpense('FOOD_AND_DRINK', 'Food', 500)]
-      const { nodes } = buildSankeyData([makeIncome('WAGES', 'Wages', 1000)], exp, 1000, 500)
-      const node = nodes.find(n => n.id === 'out:FOOD_AND_DRINK')
-      expect(node?.isCustom).toBeUndefined()
-    })
+describe('buildSankeyData — node budget', () => {
+  /** A deliberately hostile tree: many parents, many children, many grandchildren. */
+  function hugeTree(): CategoryHierarchyNode[] {
+    return Array.from({ length: 30 }, (_, i) =>
+      node(`P${i}`, `Parent ${i}`, 1000 - i, 1, Array.from({ length: 10 }, (_, j) =>
+        node(`custom:c${i}_${j}`, `Child ${i}.${j}`, 10, 1, Array.from({ length: 5 }, (_, k) =>
+          node(`custom:g${i}_${j}_${k}`, `Grand ${i}.${j}.${k}`, 1))))))
+  }
+
+  it('never exceeds the global budget, counting EVERY synthetic node', () => {
+    for (const mode of [{ kind: 'parents' as const }, { kind: 'expanded' as const }]) {
+      const data = buildSankeyData(income, hugeTree(), mode)
+      expect(data.nodes.length).toBeLessThanOrEqual(TOTAL_NODE_BUDGET)
+    }
   })
 
-  describe('node ids are unique', () => {
-    it('all node ids in the result are unique', () => {
-      const inc = [makeIncome('WAGES', 'Wages', 3000), makeIncome('OTHER', 'Other', 1000)]
-      const exp = [makeExpense('FOOD', 'Food', 2000), makeExpense('TRAVEL', 'Travel', 500)]
-      const { nodes } = buildSankeyData(inc, exp, 4000, 2500)
-      const ids = nodes.map(n => n.id)
-      expect(new Set(ids).size).toBe(ids.length)
-    })
+  it('consolidates the DEEPEST level first — depth shrinks before breadth', () => {
+    const data = buildSankeyData(income, hugeTree(), { kind: 'expanded' })
+    // With 30 parents x 10 children x 5 grandchildren there is no room for depth at all, so the
+    // ladder must have fallen all the way to the parents-only floor rather than truncating
+    // breadth while keeping a deep, mostly-hidden tree.
+    expect(data.nodes.some(n => n.id.startsWith('out:l3:'))).toBe(false)
+    expectConservation(data)
+  })
+
+  it('the income fan is capped in its own right, with its own overflow node', () => {
+    const manyIncome = Array.from({ length: 40 }, (_, i) => node(`INCOME_${i}`, `Source ${i}`, 100 - i))
+    const data = buildSankeyData(manyIncome, mixedExpenses(), { kind: 'parents' })
+
+    const incomeNodes = data.nodes.filter(n => n.nodeKind === 'income' || n.id === 'in:other')
+    expect(incomeNodes.length).toBeLessThanOrEqual(INCOME_NODE_BUDGET)
+    expect(data.nodes.some(n => n.id === 'in:other')).toBe(true)
+
+    // Truncation must COLLAPSE, never DROP: the hub's inflow still equals the full income total.
+    const hubIn = data.links.filter(l => l.target === 'hub').reduce((s, l) => s + l.value, 0)
+    expect(hubIn).toBeCloseTo(manyIncome.reduce((s, n) => s + n.total, 0), 6)
+  })
+
+  it('budgets are allocated so the floor is provable, not asserted', () => {
+    expect(INCOME_NODE_BUDGET + EXPENSE_NODE_BUDGET + 2).toBe(TOTAL_NODE_BUDGET)
+  })
+})
+
+describe('buildSankeyData — savings and deficit', () => {
+  it('savings is derived from the FULL row set, not the rendered subset', () => {
+    const manyIncome = Array.from({ length: 40 }, (_, i) => node(`INCOME_${i}`, `Source ${i}`, 100))
+    const data = buildSankeyData(manyIncome, [node('FOOD_AND_DRINK', 'Food And Drink', 1000)], { kind: 'parents' })
+
+    const savings = data.links.find(l => l.target === 'savings')
+    expect(savings?.value).toBeCloseTo(4000 - 1000, 6)
+    expectConservation(data)
+  })
+
+  it('deficit appears as a hub INFLOW when expenses exceed income', () => {
+    const data = buildSankeyData([node('INCOME', 'Income', 100)], [node('RENT_AND_UTILITIES', 'Rent', 300)], { kind: 'parents' })
+    const deficit = data.links.find(l => l.source === 'deficit')
+    expect(deficit?.value).toBeCloseTo(200, 6)
+    expectConservation(data)
+  })
+
+  it('empty input yields an empty chart rather than a phantom hub', () => {
+    const data = buildSankeyData([], [], { kind: 'parents' })
+    expect(data.nodes).toHaveLength(0)
+    expect(data.links).toHaveLength(0)
   })
 })
