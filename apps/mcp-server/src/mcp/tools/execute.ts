@@ -318,17 +318,22 @@ function buildHandlerCore(
     // Now one token covers the entire gated batch, and the challenge round executes NOTHING, so
     // a refused or abandoned confirmation can never leave a half-applied batch behind.
     if (opts.acceptsConfirmationToken && proxy.confirmBatch) {
-      const gated: Array<{ operationId: string; args: Record<string, unknown> }> = []
-      for (const call of calls) {
-        const capability = getCapability(call.operationId)
-        if (capability && !capability.excluded && capability.confirmationRequired) {
-          gated.push({ operationId: call.operationId, args: buildRequestArgs(call, specEntries) })
-        }
-      }
+      // Hand over the WHOLE batch. confirmBatch decides which calls are gated and hashes all of
+      // them, so the token is bound to the identical calls array the messages promise — an
+      // ungated read can no longer be swapped under a valid token. `gated` is still computed here,
+      // but only to shape the audit events.
+      const canonical = calls.map((call) => ({
+        operationId: call.operationId,
+        args: buildRequestArgs(call, specEntries),
+      }))
+      const gated = canonical.filter((c) => {
+        const capability = getCapability(c.operationId)
+        return Boolean(capability && !capability.excluded && capability.confirmationRequired)
+      })
 
       if (gated.length > 0) {
         try {
-          const decision = await proxy.confirmBatch(gated, confirmationToken)
+          const decision = await proxy.confirmBatch(canonical, confirmationToken)
           if (decision.needsConfirmation) {
             const plural = decision.count === 1 ? 'operation requires' : 'operations require'
             return {
