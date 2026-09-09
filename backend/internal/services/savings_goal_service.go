@@ -531,6 +531,20 @@ func (s *savingsGoalService) handleBasisSwitch(
 ) {
 	switch {
 	case priorBasis == domain.ProgressBasisManual && newBasis == domain.ProgressBasisContributions:
+		// #1625 Task 12: close out any PRIOR contributions period before seeding.
+		//
+		// Without this, a goal that was on the contributions basis earlier still has those rows
+		// live and confirmed; the seed below then adds a synthetic row for the same money and the
+		// sums report both (100 + 100 = 200). Archiving first is what makes the round-trip
+		// idempotent. It is a no-op for a goal that has never been on the contributions basis.
+		if err := s.basisSwitchRepo.ArchiveByGoal(ctx, goalID); err != nil {
+			s.logger.Warn("basis-switch archive before seed failed (non-fatal)",
+				slog.String("goal_id", goalID),
+				slog.String("user_id", userID),
+				slog.String("error", err.Error()),
+			)
+		}
+
 		// Seed: carry the existing manual balance as a confirmed contribution.
 		if priorAmount > 0 {
 			seed := &domain.SavingsGoalContribution{

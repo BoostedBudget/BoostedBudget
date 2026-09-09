@@ -1141,6 +1141,9 @@ func TestUpdateGoal_ManualToContributions_SeedsContribution(t *testing.T) {
 
 	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
 	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	// #1625 Task 12: any PRIOR contributions period is closed out BEFORE the seed goes in, so a
+	// goal that round-trips does not end up counting the old rows and the synthetic seed together.
+	mockContribRepo.On("ArchiveByGoal", ctx, goalID).Return(nil)
 	// manual → contributions: a seed contribution must be inserted with Amount = priorAmount.
 	mockContribRepo.On("Insert", ctx, userID, mock.MatchedBy(func(c *domain.SavingsGoalContribution) bool {
 		return c.SavingsGoalID == goalID &&
@@ -1283,6 +1286,8 @@ func TestUpdateGoal_BasisSwitch_SeedErrorIsNonFatal(t *testing.T) {
 	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
 	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
 	// Seed fails — UpdateGoal must still succeed (non-fatal, Codex C10).
+	// #1625 Task 12: the pre-seed archive runs first on this path too.
+	mockContribRepo.On("ArchiveByGoal", mock.Anything, mock.Anything).Return(nil)
 	mockContribRepo.On("Insert", ctx, userID, mock.AnythingOfType("*domain.SavingsGoalContribution")).
 		Return(errors.New("db: foreign key violation"))
 	mockAnalytics.On("Capture", userID, "savings_goal_progress_basis_changed", mock.Anything).Return()
