@@ -1177,3 +1177,61 @@ func TestSavingsContributionRepository_Integration_ConfirmRejectAreBoundToTheirG
 	require.NoError(t, err, "binding the goal must not break the legitimate call")
 	assert.Equal(t, "confirmed", confirmed.Status)
 }
+
+// TestDeleteContribution_Integration_IsBoundToItsGoal is Task 1 of #1625: the same cross-goal
+// bypass ConfirmContribution/RejectContribution had, but on the ONE hard delete of financial
+// history on this branch. A prior round bound goalID into Confirm and Reject and missed Delete —
+// the destructive path was the one left open.
+//
+// Before the fix, DeleteContribution looked the row up by c.id and g.user_id alone
+// (savings_contribution_repository.go, pre-#1625), so a same-user
+// DELETE /goals/{goalA}/contributions/{goalB's-contribution} permanently destroyed goal B's row —
+// not a stale recompute like the Confirm/Reject bypass, but an irreversible loss of financial
+// history with no restore path anywhere on this branch.
+func TestDeleteContribution_Integration_IsBoundToItsGoal(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalA := seedIntegrationGoal(t, pool, userID, accountID)
+	goalB := seedIntegrationGoal(t, pool, userID, accountID)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	// A confirmed contribution belonging to goal B — live, visible, destroyable data if named
+	// through ITS OWN goal.
+	contribID := uuid.New().String()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO savings_goal_contributions
+			(id, savings_goal_id, transaction_id, amount, source, status,
+			 managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at)
+		VALUES ($1, $2, NULL, 55.0, 'manual', 'confirmed', false, true, CURRENT_DATE, now(), now())
+	`, contribID, goalB)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM savings_goal_contributions WHERE id = $1`, contribID)
+	})
+
+	// Same user, but the contribution is not goal A's. Must refuse — and MUST NOT destroy the row.
+	err = repo.DeleteContribution(ctx, userID, goalA, contribID, nil)
+	require.ErrorIs(t, err, domain.ErrContributionNotFound,
+		"deleting another goal's contribution under goal A's id must not succeed — that is the "+
+			"cross-goal DELETE bypass (#1625)")
+
+	// The row must still exist — this is the one hard delete of financial history on this branch,
+	// so a bypass here is irreversible, unlike the Confirm/Reject bypass's stale recompute.
+	var status string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT status FROM savings_goal_contributions WHERE id = $1`, contribID).Scan(&status),
+		"the row must still exist after the refused cross-goal delete")
+	assert.Equal(t, "confirmed", status, "the mismatched call destroyed or mutated the row anyway")
+
+	// The correct goal still works: binding goalID must not break the legitimate delete.
+	require.NoError(t, repo.DeleteContribution(ctx, userID, goalB, contribID, nil),
+		"binding the goal must not break the legitimate call")
+
+	var stillThere int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM savings_goal_contributions WHERE id = $1`, contribID).Scan(&stillThere))
+	assert.Equal(t, 0, stillThere, "the correct goal's delete must still destroy the row")
+}

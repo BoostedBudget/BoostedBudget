@@ -106,12 +106,15 @@ type SavingsContributionRepository interface {
 	// DeleteContribution PERMANENTLY DESTROYS one contribution the user named. It is the single
 	// deliberate, user-facing hard delete of financial history on this branch — see the
 	// implementation's doc comment for the four ADR controls it carries and what they do not cover.
-	// userID is required for ownership verification.
+	// userID is required for ownership verification; goalID binds the delete to the goal the
+	// caller named in the URL (#1625), mirroring ConfirmContribution/RejectContribution — without
+	// it a same-user DELETE through goal A's URL could destroy goal B's contribution row.
 	// auditLog, when non-nil, writes a "savings_goal_contribution.history_purged" entry INSIDE the
 	// same transaction as the delete, mirroring PurgeAccount/PurgeLinkedItem/PurgeGoal.
-	// Returns ErrContributionNotFound if id does not exist, does not belong to userID, sits under a
-	// tombstoned goal, is itself tombstoned, or is a 'rejected' sticky tombstone.
-	DeleteContribution(ctx context.Context, userID, id string, auditLog AuditLogRepository) error
+	// Returns ErrContributionNotFound if id does not exist, does not belong to userID, does not
+	// belong to goalID, sits under a tombstoned goal, is itself tombstoned, or is a 'rejected'
+	// sticky tombstone.
+	DeleteContribution(ctx context.Context, userID, goalID, id string, auditLog AuditLogRepository) error
 
 	// DeleteManagedForTransaction TOMBSTONES managed_by_reconciliation rows for a transaction whose
 	// goal is still LIVE, so a removed transaction cannot leave phantom progress behind (Codex C4).
@@ -172,8 +175,9 @@ const contributionSelectColsJoined = `
 // contributionStatusRejected is the 'rejected' sticky-tombstone status (R3-7). It is bound as a
 // query PARAMETER rather than inlined as a literal in DeleteContribution's WHERE on purpose: the G2
 // predicate guard blanks SQL string literals before matching, so an inlined 'rejected' would be
-// invisible to the fragment it is supposed to pin, while `c.status <> $3` is not. Same precedent as
-// PurgeAccount's `status <> $3` (bound to 'active').
+// invisible to the fragment it is supposed to pin, while `c.status <> $4` is not (renumbered from
+// $3 by #1625's `c.savings_goal_id = $3` ownership leg). Same precedent as PurgeAccount's
+// `status <> $3` (bound to 'active').
 const contributionStatusRejected = "rejected"
 
 // savingsContributionRepository implements SavingsContributionRepository using PostgreSQL.
@@ -852,9 +856,18 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 	return updated, nil
 }
 
-// DeleteContribution permanently destroys one contribution row owned by userID.
-// Returns ErrContributionNotFound if the row does not exist, is not owned by userID, or is one of
-// the rows this path refuses (below).
+// DeleteContribution permanently destroys one contribution row owned by userID AND bound to
+// goalID.
+// Returns ErrContributionNotFound if the row does not exist, is not owned by userID, does not
+// belong to goalID, or is one of the rows this path refuses (below).
+//
+// #1625: goalID is bound into the WHERE for the same reason ConfirmContribution/
+// RejectContribution are — without it a same-user DELETE through goal A's URL destroyed goal B's
+// contribution row outright (the ONE hard delete on this branch, so the bypass was irreversible,
+// not just a wrong-goal recompute). Deliberately NOT paired with an `archived_at IS NULL` leg like
+// Confirm/Reject: their leg exists because acting on a closed period's STATUS is a no-op nothing
+// reads. A DELETE of a retained, archived row is not a no-op — it is the user destroying their own
+// data, which is exactly this endpoint's job — so archived rows stay deletable.
 //
 // THIS IS THE ONE DELIBERATE, USER-FACING HARD DELETE OF FINANCIAL HISTORY ON THIS BRANCH: the user
 // named this one contribution, in the UI, and asked for it to go away — the narrowest possible
@@ -888,7 +901,7 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 //     tombstoned by DeleteManagedForTransaction when Plaid reported the transaction as
 //     `removed` ("the provider is not the user") is invisible in every product surface, so the
 //     user cannot have seen it in a confirm dialog — yet its id was still reachable here.
-//     • `c.status <> $3` (bound to 'rejected') — a rejected row is a STICKY TOMBSTONE kept on
+//     • `c.status <> $4` (bound to 'rejected') — a rejected row is a STICKY TOMBSTONE kept on
 //     purpose so UpsertProposedFromTransaction cannot re-propose the same transfer-in (R3-7),
 //     and GoalContributionsSheet.tsx filters it out of the ledger. The endpoint's own
 //     description promises to destroy a contribution "(proposed or confirmed)"; rejected was
@@ -911,7 +924,12 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 // #1569 round 14 reversed itself over on PurgeGoal: a Go `if` is invisible to the guard, so an edit
 // could remove it while the guard stayed green. Here they are the only check, so there is no pair
 // that can disagree and no check-then-act window to race.
-func (r *savingsContributionRepository) DeleteContribution(ctx context.Context, userID, id string, auditLog AuditLogRepository) error {
+//
+// A FOURTH leg, `c.savings_goal_id = $3`, joined this WHERE in #1625: it is not one of the three
+// retirement legs above (it does not decide whether the row is still on a live surface), it is the
+// ownership fix — the caller named a goal in the URL and the delete must be scoped to it, exactly
+// as ConfirmContribution/RejectContribution already are. Its absence was the bug this task closed.
+func (r *savingsContributionRepository) DeleteContribution(ctx context.Context, userID, goalID, id string, auditLog AuditLogRepository) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -924,10 +942,11 @@ func (r *savingsContributionRepository) DeleteContribution(ctx context.Context, 
 		WHERE c.id = $1
 		  AND c.savings_goal_id = g.id
 		  AND g.user_id = $2
+		  AND c.savings_goal_id = $3
 		  AND g.deleted_at IS NULL
 		  AND c.deleted_at IS NULL
-		  AND c.status <> $3
-	`, id, userID, contributionStatusRejected)
+		  AND c.status <> $4
+	`, id, userID, goalID, contributionStatusRejected)
 	if err != nil {
 		return err
 	}
