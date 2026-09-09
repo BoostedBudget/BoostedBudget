@@ -84,15 +84,15 @@ type RuleCondition struct {
 	// Type is the legacy fused discriminator. On input it is an alias for a (Field, Operator)
 	// pair; on output it is DERIVED from that pair. Sending both is fine as long as they agree —
 	// a contradiction is ErrConditionShapeConflict rather than a silent choice between them.
-	Type ConditionType `json:"type,omitempty" enum:"merchant_contains,merchant_equals,merchant_starts_with,merchant_ends_with,amount_greater_than,amount_less_than,amount_equals,amount_range,account_id,account_type,payment_channel,date_range,existing_pfc_primary,existing_pfc_detailed,expression"`
+	Type ConditionType `json:"type,omitempty" enum:"merchant_contains,merchant_equals,merchant_starts_with,merchant_ends_with,amount_greater_than,amount_less_than,amount_equals,amount_range,account_id,account_type,payment_channel,date_range,existing_pfc_primary,existing_pfc_detailed,expression" doc:"Legacy fused condition name. Send this OR field+operator, not a contradicting pair. 'expression' is RESPONSE-ONLY — the server emits it for a field+operator combination that has no legacy name, and rejects it as input; send field+operator instead."`
 
 	// Field is the transaction attribute to match. See FieldSpecs for the field × operator matrix.
-	Field RuleConditionField `json:"field,omitempty" enum:"merchant,name,merchant_id,amount,signed_amount,direction,account_id,account_type,payment_channel,date,pfc_primary,pfc_detailed"`
+	Field RuleConditionField `json:"field,omitempty" enum:"merchant,name,merchant_id,amount,signed_amount,direction,account_id,account_type,payment_channel,date,pfc_primary,pfc_detailed" doc:"Transaction attribute to match. Not every operator is legal for every field — GET /api/v1/auto-categorization/condition-schema returns the full matrix, value shapes and semantics. Note 'amount' discards the sign; 'signed_amount' is POSITIVE for money leaving the account; 'direction' takes inflow|outflow."`
 
 	// Operator is the comparison to apply. Before #1625 this field was declared, serialized into
 	// the public schema, and then never validated or read by ANY evaluator — which is precisely
 	// why callers guessed at it. It is now load-bearing.
-	Operator string `json:"operator,omitempty" enum:"eq,neq,gt,gte,lt,lte,between,contains,starts_with,ends_with,in"`
+	Operator string `json:"operator,omitempty" enum:"eq,neq,gt,gte,lt,lte,between,contains,starts_with,ends_with,in" doc:"Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array."`
 
 	// Value is a string, an array of strings ("any of"), a number, or a bounded range object,
 	// depending on the field and operator. See FieldSpecs.
@@ -105,37 +105,37 @@ type RuleCondition struct {
 // CategorizationRule represents a user-defined rule for automatic transaction categorization.
 // Rules are subject to subscription tier limits (Issue #346).
 type CategorizationRule struct {
-	ID             string          `json:"id" db:"id"`
-	UserID         string          `json:"user_id" db:"user_id"`
-	Name           string          `json:"name" db:"name"`
-	Description    *string         `json:"description,omitempty" db:"description"`
-	Enabled        bool            `json:"enabled" db:"enabled"`
-	Priority       int             `json:"priority" db:"priority"` // Higher = evaluated first
-	Conditions     []RuleCondition `json:"conditions" db:"conditions"`
-	ConditionLogic string          `json:"condition_logic" db:"condition_logic"` // "AND" or "OR"
-	TargetKind              *string `json:"target_kind,omitempty" db:"target_kind"`
-	TargetPFCPrimary        *string `json:"target_pfc_primary,omitempty" db:"target_pfc_primary"`
-	TargetPFCDetailed       *string `json:"target_pfc_detailed,omitempty" db:"target_pfc_detailed"`
-	TargetCustomCategoryID  *string `json:"target_custom_category_id,omitempty" db:"target_custom_category_id"`
+	ID                     string          `json:"id" db:"id"`
+	UserID                 string          `json:"user_id" db:"user_id"`
+	Name                   string          `json:"name" db:"name"`
+	Description            *string         `json:"description,omitempty" db:"description"`
+	Enabled                bool            `json:"enabled" db:"enabled"`
+	Priority               int             `json:"priority" db:"priority"` // Higher = evaluated first
+	Conditions             []RuleCondition `json:"conditions" db:"conditions"`
+	ConditionLogic         string          `json:"condition_logic" db:"condition_logic"` // "AND" or "OR"
+	TargetKind             *string         `json:"target_kind,omitempty" db:"target_kind"`
+	TargetPFCPrimary       *string         `json:"target_pfc_primary,omitempty" db:"target_pfc_primary"`
+	TargetPFCDetailed      *string         `json:"target_pfc_detailed,omitempty" db:"target_pfc_detailed"`
+	TargetCustomCategoryID *string         `json:"target_custom_category_id,omitempty" db:"target_custom_category_id"`
 
 	// PFC display names (populated by PopulatePFCDisplay, not stored in DB)
 	TargetPFCPrimaryDisplay  *string `json:"target_pfc_primary_display,omitempty" db:"-"`
 	TargetPFCDetailedDisplay *string `json:"target_pfc_detailed_display,omitempty" db:"-"`
 	// Custom category display name (populated by service enrichment from custom_categories table, not stored in DB)
-	TargetCustomCategoryDisplay *string `json:"target_custom_category_display,omitempty" db:"-"`
-	TargetTags     []string        `json:"target_tags,omitempty" db:"target_tags"`
-	TagBehavior    string          `json:"tag_behavior" db:"tag_behavior"` // "add" or "replace"
-	Source         string          `json:"source" db:"source"`             // "manual", "ai", or "template"
-	MatchCount     int64           `json:"match_count" db:"match_count"`
-	OverrideCount  int64           `json:"override_count" db:"override_count"`
-	LastMatchedAt  *time.Time      `json:"last_matched_at,omitempty" db:"last_matched_at"`
-	CreatedAt      time.Time       `json:"created_at" db:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at" db:"updated_at"`
+	TargetCustomCategoryDisplay *string    `json:"target_custom_category_display,omitempty" db:"-"`
+	TargetTags                  []string   `json:"target_tags,omitempty" db:"target_tags"`
+	TagBehavior                 string     `json:"tag_behavior" db:"tag_behavior"` // "add" or "replace"
+	Source                      string     `json:"source" db:"source"`             // "manual", "ai", or "template"
+	MatchCount                  int64      `json:"match_count" db:"match_count"`
+	OverrideCount               int64      `json:"override_count" db:"override_count"`
+	LastMatchedAt               *time.Time `json:"last_matched_at,omitempty" db:"last_matched_at"`
+	CreatedAt                   time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt                   time.Time  `json:"updated_at" db:"updated_at"`
 }
 
 // pfcValidationSets holds the valid PFC enum sets built once from the curated registry.
 var (
-	pfcOnce          sync.Once
+	pfcOnce           sync.Once
 	validPFCPrimaries map[string]struct{}
 	validPFCDetaileds map[string]struct{}
 )
@@ -310,8 +310,8 @@ var (
 type RulePreviewResult struct {
 	// ScannedCount is how many recent transactions were examined — needed to read MatchCount
 	// honestly, since a preview is bounded rather than scanning all history.
-	ScannedCount int `json:"scanned_count"`
-	MatchCount   int `json:"match_count"`
+	ScannedCount int                `json:"scanned_count"`
+	MatchCount   int                `json:"match_count"`
 	Matches      []RulePreviewMatch `json:"matches"`
 }
 

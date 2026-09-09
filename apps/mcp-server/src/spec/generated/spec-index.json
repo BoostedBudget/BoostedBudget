@@ -2301,7 +2301,8 @@
             "date",
             "pfc_primary",
             "pfc_detailed"
-          ]
+          ],
+          "description": "Transaction attribute to match. Not every operator is legal for every field — GET /api/v1/auto-categorization/condition-schema returns the full matrix, value shapes and semantics. Note 'amount' discards the sign; 'signed_amount' is POSITIVE for money leaving the account; 'direction' takes inflow|outflow."
         },
         {
           "name": "conditions[].operator",
@@ -2318,7 +2319,8 @@
             "starts_with",
             "ends_with",
             "in"
-          ]
+          ],
+          "description": "Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array."
         },
         {
           "name": "conditions[].type",
@@ -2339,7 +2341,8 @@
             "existing_pfc_primary",
             "existing_pfc_detailed",
             "expression"
-          ]
+          ],
+          "description": "Legacy fused condition name. Send this OR field+operator, not a contradicting pair. 'expression' is RESPONSE-ONLY — the server emits it for a field+operator combination that has no legacy name, and rejects it as input; send field+operator instead."
         },
         {
           "name": "conditions[].value",
@@ -2496,6 +2499,25 @@
       ]
     },
     {
+      "operationId": "getConditionSchema",
+      "method": "GET",
+      "path": "/api/v1/auto-categorization/condition-schema",
+      "summary": "Get the condition matrix",
+      "tags": [
+        "Auto-Categorization"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns every condition field, the operators each accepts, the value shape each operator requires, closed value sets, and the semantics that cannot be inferred from a type — notably that signed_amount is POSITIVE for money leaving the account. Derived from the same matrix the validator enforces, so it cannot drift from it.",
+      "responseBody": [
+        {
+          "name": "fields",
+          "type": "array of object",
+          "required": true
+        }
+      ]
+    },
+    {
       "operationId": "previewRule",
       "method": "POST",
       "path": "/api/v1/auto-categorization/preview",
@@ -2532,7 +2554,8 @@
             "date",
             "pfc_primary",
             "pfc_detailed"
-          ]
+          ],
+          "description": "Transaction attribute to match. Not every operator is legal for every field — GET /api/v1/auto-categorization/condition-schema returns the full matrix, value shapes and semantics. Note 'amount' discards the sign; 'signed_amount' is POSITIVE for money leaving the account; 'direction' takes inflow|outflow."
         },
         {
           "name": "conditions[].operator",
@@ -2549,7 +2572,8 @@
             "starts_with",
             "ends_with",
             "in"
-          ]
+          ],
+          "description": "Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array."
         },
         {
           "name": "conditions[].type",
@@ -2570,7 +2594,8 @@
             "existing_pfc_primary",
             "existing_pfc_detailed",
             "expression"
-          ]
+          ],
+          "description": "Legacy fused condition name. Send this OR field+operator, not a contradicting pair. 'expression' is RESPONSE-ONLY — the server emits it for a field+operator combination that has no legacy name, and rejects it as input; send field+operator instead."
         },
         {
           "name": "conditions[].value",
@@ -2813,7 +2838,8 @@
             "date",
             "pfc_primary",
             "pfc_detailed"
-          ]
+          ],
+          "description": "Transaction attribute to match. Not every operator is legal for every field — GET /api/v1/auto-categorization/condition-schema returns the full matrix, value shapes and semantics. Note 'amount' discards the sign; 'signed_amount' is POSITIVE for money leaving the account; 'direction' takes inflow|outflow."
         },
         {
           "name": "conditions[].operator",
@@ -2830,7 +2856,8 @@
             "starts_with",
             "ends_with",
             "in"
-          ]
+          ],
+          "description": "Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array."
         },
         {
           "name": "conditions[].type",
@@ -2851,7 +2878,8 @@
             "existing_pfc_primary",
             "existing_pfc_detailed",
             "expression"
-          ]
+          ],
+          "description": "Legacy fused condition name. Send this OR field+operator, not a contradicting pair. 'expression' is RESPONSE-ONLY — the server emits it for a field+operator combination that has no legacy name, and rejects it as input; send field+operator instead."
         },
         {
           "name": "conditions[].value",

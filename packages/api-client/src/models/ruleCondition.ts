@@ -35,8 +35,11 @@ import type { RuleConditionOperator } from './ruleConditionOperator';
 import type { RuleConditionType } from './ruleConditionType';
 
 export interface RuleCondition {
+  /** Transaction attribute to match. Not every operator is legal for every field — GET /api/v1/auto-categorization/condition-schema returns the full matrix, value shapes and semantics. Note 'amount' discards the sign; 'signed_amount' is POSITIVE for money leaving the account; 'direction' takes inflow|outflow. */
   field?: RuleConditionField;
+  /** Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array. */
   operator?: RuleConditionOperator;
+  /** Legacy fused condition name. Send this OR field+operator, not a contradicting pair. 'expression' is RESPONSE-ONLY — the server emits it for a field+operator combination that has no legacy name, and rejects it as input; send field+operator instead. */
   type?: RuleConditionType;
   value: unknown;
   value_display?: string;

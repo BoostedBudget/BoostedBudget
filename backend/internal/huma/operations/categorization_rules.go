@@ -186,6 +186,29 @@ func (h *CategorizationRuleHandler) ToggleRule(ctx context.Context, input *Toggl
 	return &ToggleRuleOutput{Body: rule}, nil
 }
 
+// GetConditionSchemaInput takes nothing but the caller's identity.
+type GetConditionSchemaInput struct {
+	inputs.AuthenticatedInput
+}
+
+// GetConditionSchemaOutput is the published condition matrix.
+type GetConditionSchemaOutput struct {
+	Body domain.ConditionSchemaResponse
+}
+
+// GetConditionSchema handles GET /api/v1/auto-categorization/condition-schema.
+//
+// #1625 follow-up. The enum tags already make the VOCABULARY discoverable; they do not make the
+// MATRIX discoverable — which operators a field accepts, what shape each needs, which closed value
+// sets apply, or what the values MEAN. Two independent reviews found that an agent still could not
+// build the reporter's own rule ("a $1,000 Zelle outflow") without guessing the sign convention,
+// and a wrong guess validates silently and simply never matches.
+//
+// Static and user-independent: it is authenticated only because everything under /api/v1 is.
+func (h *CategorizationRuleHandler) GetConditionSchema(_ context.Context, _ *GetConditionSchemaInput) (*GetConditionSchemaOutput, error) {
+	return &GetConditionSchemaOutput{Body: domain.ConditionSchema()}, nil
+}
+
 // PreviewRule handles POST /api/v1/auto-categorization/preview.
 // Reports which recent transactions a candidate rule WOULD match, without saving anything.
 func (h *CategorizationRuleHandler) PreviewRule(ctx context.Context, input *PreviewRuleInput) (*PreviewRuleOutput, error) {
@@ -277,6 +300,23 @@ func RegisterCategorizationRuleRoutes(api huma.API, handler *CategorizationRuleH
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteRule)
+
+	// GET /api/v1/auto-categorization/condition-schema - the published condition matrix
+	//
+	// Registered before the {id} routes for the same reason preview is: humatest is
+	// registration-order sensitive where production's Echo router is not.
+	huma.Register(api, huma.Operation{
+		OperationID: "getConditionSchema",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/auto-categorization/condition-schema",
+		Summary:     "Get the condition matrix",
+		Description: "Returns every condition field, the operators each accepts, the value shape " +
+			"each operator requires, closed value sets, and the semantics that cannot be inferred " +
+			"from a type — notably that signed_amount is POSITIVE for money leaving the account. " +
+			"Derived from the same matrix the validator enforces, so it cannot drift from it.",
+		Tags:     []string{"Auto-Categorization"},
+		Security: []map[string][]string{{"clerk": {}}},
+	}, handler.GetConditionSchema)
 
 	// POST /api/v1/auto-categorization/preview - Dry-run a candidate rule
 	//

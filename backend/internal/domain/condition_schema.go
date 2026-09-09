@@ -475,3 +475,133 @@ func asFloat(v interface{}) (float64, bool) {
 		return 0, false
 	}
 }
+
+// ─── The published condition matrix (#1625 follow-up) ───────────────────────────────────────
+//
+// The enum tags make the VOCABULARY discoverable — which fields and which operators exist. They do
+// not make the MATRIX discoverable: which operators a given field accepts, what shape each needs,
+// which closed value sets apply, or what the values MEAN. Two independent reviews identified that
+// as the largest remaining gap in #1625, because the reporter's own workflow ("a $1,000 Zelle
+// outflow") still required guessing the sign convention, and a wrong guess VALIDATES SILENTLY and
+// simply never matches.
+//
+// This is DERIVED from FieldSpecs — the same map the validator and the evaluator registry both
+// read — so a published matrix cannot drift from the one the server enforces.
+
+// ConditionOperatorSchema describes one legal (field, operator) pair.
+type ConditionOperatorSchema struct {
+	Operator string `json:"operator"`
+	// ValueShape is one of: text, number, number_range, date, date_range.
+	ValueShape string `json:"value_shape"`
+	// Example is a well-formed value of that shape, so a caller can copy rather than infer.
+	Example interface{} `json:"example,omitempty"`
+}
+
+// ConditionFieldSchema describes one field and everything it accepts.
+type ConditionFieldSchema struct {
+	Field     string                    `json:"field"`
+	Operators []ConditionOperatorSchema `json:"operators"`
+	// Values is the closed set, when there is one. Absent means free-form.
+	Values []string `json:"values,omitempty"`
+	// Notes carries semantics that cannot be inferred from the type — chiefly sign conventions,
+	// which are the failure mode that validates silently.
+	Notes string `json:"notes,omitempty"`
+}
+
+// ConditionSchemaResponse is the published matrix.
+type ConditionSchemaResponse struct {
+	Fields []ConditionFieldSchema `json:"fields"`
+}
+
+// fieldNotes carries the semantics an agent cannot infer from a type or an enum.
+var fieldNotes = map[RuleConditionField]string{
+	FieldAmount: "Absolute magnitude — the sign is discarded, so this matches an inflow and an " +
+		"outflow of the same size equally. Use signed_amount or direction to distinguish them.",
+	FieldSignedAmount: "Signed: POSITIVE is money leaving the account (an outflow), negative is " +
+		"money arriving. A $1,000 payment out is 1000, not -1000.",
+	FieldDirection: "Derived from the sign of the amount. A zero amount matches neither value.",
+	FieldName: "The raw transaction description. Always present — unlike merchant, which is " +
+		"frequently absent (a Zelle transfer typically has no merchant name at all).",
+	FieldMerchantID: "An opaque provider identifier, matched exactly and case-SENSITIVELY.",
+	FieldMerchant: "The merchant name, matched case-insensitively. Frequently absent; prefer " +
+		"name when matching transfers.",
+}
+
+// exampleFor returns a well-formed value for a shape, so callers copy rather than guess.
+func exampleFor(shape ValueShape, field RuleConditionField) interface{} {
+	switch shape {
+	case ShapeNumber:
+		return 1000
+	case ShapeNumberRange:
+		return map[string]interface{}{"min": 100, "max": 500}
+	case ShapeDate:
+		return "2026-01-31"
+	case ShapeDateRange:
+		return map[string]interface{}{"start": "2026-01-01", "end": "2026-01-31"}
+	default:
+		if field == FieldDirection {
+			return DirectionOutflow
+		}
+		return "example text"
+	}
+}
+
+// closedValuesFor returns the legal values for fields that have a closed set.
+// FieldSpec.EnumFn is a VALIDATOR, not an enumerator, so these are stated explicitly — and
+// TestConditionSchema_ExposesTheSemanticsThatFailSilently pins that direction stays listed.
+func closedValuesFor(field RuleConditionField) []string {
+	switch field {
+	case FieldDirection:
+		return []string{DirectionInflow, DirectionOutflow}
+	default:
+		// PFC fields are a closed set too, but a large and separately-published one — the PFC
+		// enums already reach clients through their own schema, so duplicating ~120 values here
+		// would bloat every response for information callers already have.
+		return nil
+	}
+}
+
+// ConditionSchema builds the published matrix from FieldSpecs.
+func ConditionSchema() ConditionSchemaResponse {
+	fields := make([]ConditionFieldSchema, 0, len(FieldSpecs))
+	for _, field := range allConditionFieldsOrdered() {
+		spec, ok := FieldSpecs[field]
+		if !ok {
+			continue
+		}
+		ops := make([]ConditionOperatorSchema, 0, len(spec.Ops))
+		for _, op := range allConditionOperatorsOrdered() {
+			shape, allowed := spec.Ops[op]
+			if !allowed {
+				continue
+			}
+			ops = append(ops, ConditionOperatorSchema{
+				Operator:   string(op),
+				ValueShape: string(shape),
+				Example:    exampleFor(shape, field),
+			})
+		}
+		fields = append(fields, ConditionFieldSchema{
+			Field:     string(field),
+			Operators: ops,
+			Values:    closedValuesFor(field),
+			Notes:     fieldNotes[field],
+		})
+	}
+	return ConditionSchemaResponse{Fields: fields}
+}
+
+// Deterministic ordering, so the response and its generated artifacts are stable across builds.
+func allConditionFieldsOrdered() []RuleConditionField {
+	return []RuleConditionField{
+		FieldMerchant, FieldName, FieldMerchantID, FieldAmount, FieldSignedAmount, FieldDirection,
+		FieldAccountID, FieldAccountType, FieldPaymentChannel, FieldDate, FieldPFCPrimary, FieldPFCDetailed,
+	}
+}
+
+func allConditionOperatorsOrdered() []RuleConditionOperator {
+	return []RuleConditionOperator{
+		RuleOpEq, RuleOpNeq, RuleOpGt, RuleOpGte, RuleOpLt, RuleOpLte,
+		RuleOpBetween, RuleOpContains, RuleOpStartsWith, RuleOpEndsWith, RuleOpIn,
+	}
+}

@@ -389,6 +389,11 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // admitted by readExecute's method check, which requires a conventionally non-mutating verb —
   // see the SECURITY POINT in tools/execute.ts. It runs through writeExecute, where a `read`
   // class simply means no confirmation challenge.
+  // #1625 follow-up: the published condition matrix. A pure GET of static, user-independent
+  // data — and unlike previewRule it is genuinely reachable from readExecute, whose admission
+  // gate requires a non-mutating HTTP verb. This is the operation an agent should call FIRST,
+  // before guessing at field/operator combinations or the sign convention.
+  read('getConditionSchema'),
   read('previewRule'),
   write('createRule'),
   write('updateRule', { idempotent: true }),
