@@ -348,7 +348,22 @@ func TestSomething_RealPostgresNullMustNotError(t *testing.T) {
 // exact real-repo state this guard depends on being clean, so a future reader does not have to
 // re-derive it. It duplicates no logic — TestNoUndisclosedPgxmockNullToleranceClaim above is the
 // actual gate — but pins the count of pgxmock-importing test files under backend/internal at the
-// time of the #1626 Phase 2 sweep, so a large unexplained jump is visible in review.
+// time of the #1626 Phase 2 sweep, so a jump is visible in review.
+//
+// ⚠ IT REALLY PINS THE NUMBER NOW, and until the final whole-branch review (finding F3) it did
+// not: the body counted the files and then asserted `Greater(count, 0)`, which cannot fail while a
+// single pgxmock file exists and would have stayed green had the count gone 68 -> 400 or -> 1. That
+// is the FIFTH instance of the same vacuity on this branch, added by the very sweep whose subject
+// was vacuous tests, in the file whose own doc comment warns "do not declare the guard adequate
+// because it currently passes". A `Greater(..., 0)` under a comment claiming to pin a count is not
+// a weak test, it is a false comment — the defect class this branch exists to retire.
+//
+// pgxmockSweepFileCount is therefore the number that was actually swept, asserted with Equal.
+// Adding or removing a pgxmock-backed test file turns this red ON PURPOSE: update the constant in
+// the same commit that changes the set, and say in the commit message which files moved and that
+// each new one is clean under the gate above. That is the whole value of the pin — the gate proves
+// no file makes an undisclosed claim, and this proves nobody quietly changed WHICH files the gate
+// is looking at.
 func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 	root := repoInternalRoot(t)
 	count := 0
@@ -379,5 +394,18 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, walkErr)
-	assert.Greater(t, count, 0, "expected to find at least one pgxmock-backed test file under backend/internal")
+	assert.Equal(t, pgxmockSweepFileCount, count,
+		"the set of pgxmock-backed, non-integration test files under backend/internal changed: "+
+			"expected %d (the count swept by #1626 Phase 2 and re-derived by the final whole-branch "+
+			"review), found %d. This is not a failure to route around — update "+
+			"pgxmockSweepFileCount in the same commit that changes the set, and record which files "+
+			"were added or removed and that each new one is clean under "+
+			"TestNoUndisclosedPgxmockNullToleranceClaim above.",
+		pgxmockSweepFileCount, count)
 }
+
+// pgxmockSweepFileCount is the number of pgxmock-importing, non-integration `_test.go` files under
+// backend/internal. Re-derived for the final whole-branch review with the same walk the test
+// performs (skipping testdata/vendor/node_modules directories and any file carrying
+// `//go:build integration`).
+const pgxmockSweepFileCount = 68
