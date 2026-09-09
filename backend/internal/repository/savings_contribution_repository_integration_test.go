@@ -1355,3 +1355,77 @@ func TestDeleteContribution_Integration_IsBoundToItsGoal(t *testing.T) {
 		`SELECT count(*) FROM savings_goal_contributions WHERE id = $1`, contribID).Scan(&stillThere))
 	assert.Equal(t, 0, stillThere, "the correct goal's delete must still destroy the row")
 }
+
+// TestSavingsContributionRepository_Integration_ArchivedRowReleasesCapacity_CrossGoal is Task 7.
+//
+// Migration 000191 narrowed unique_contribution_per_goal_per_transaction's uniqueness slot to
+// `archived_at IS NULL`, but all three capacity checks (UpsertFromTransaction,
+// InsertManualFromTransaction, ConfirmContribution) still summed
+// `WHERE transaction_id = $1 AND status = 'confirmed' AND savings_goal_id != $2 AND deleted_at IS
+// NULL` with no `archived_at IS NULL` leg — so an archived row kept reserving capacity forever.
+//
+// The obvious same-goal scenario ("a goal re-records its own transaction after archiving") proves
+// nothing: every capacity query already carries `savings_goal_id != $2`, which excludes the goal
+// being written to regardless of archived_at. The real exposure is CROSS-GOAL: goal A's archived
+// row must not reserve capacity from goal B's fresh allocation of the SAME transaction.
+func TestSavingsContributionRepository_Integration_ArchivedRowReleasesCapacity_CrossGoal(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalA := seedIntegrationGoal(t, pool, userID, accountID)
+	goalB := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -100.0)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE savings_goal_id IN ($1, $2)`, goalA, goalB)
+	})
+
+	// Goal A allocates the full transaction amount.
+	_, err := repo.InsertManualFromTransaction(ctx, userID, goalA, txnID, 100.0, "2026-01-15")
+	require.NoError(t, err)
+
+	// Goal A's period closes — its row is archived, not deleted.
+	require.NoError(t, repo.ArchiveByGoal(ctx, goalA))
+
+	// Goal B now allocates the SAME transaction for the FULL amount. Goal A's archived row must
+	// not reserve any of that capacity — it is a closed period's history, not a live allocation.
+	second, err := repo.InsertManualFromTransaction(ctx, userID, goalB, txnID, 100.0, "2026-06-15")
+	require.NoError(t, err,
+		"goal A's ARCHIVED row still reserved capacity from goal B — the capacity slot was not "+
+			"released alongside the uniqueness slot 000191 freed (#1625 Task 7)")
+	require.NotNil(t, second)
+}
+
+// TestSavingsContributionRepository_Integration_LiveRowStillReservesCapacity_CrossGoal guards the
+// other direction of Task 7: adding `archived_at IS NULL` to the capacity queries must NOT disable
+// the over-allocation guard for the case it exists for. A LIVE (non-archived) confirmed row on
+// goal A must still block goal B from over-allocating the same transaction.
+func TestSavingsContributionRepository_Integration_LiveRowStillReservesCapacity_CrossGoal(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalA := seedIntegrationGoal(t, pool, userID, accountID)
+	goalB := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -100.0)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE savings_goal_id IN ($1, $2)`, goalA, goalB)
+	})
+
+	// Goal A allocates the full transaction amount and stays LIVE (never archived).
+	_, err := repo.InsertManualFromTransaction(ctx, userID, goalA, txnID, 100.0, "2026-01-15")
+	require.NoError(t, err)
+
+	// Goal B tries to allocate the same transaction for the full amount — must still be refused,
+	// because goal A's row is live, not archived.
+	_, err = repo.InsertManualFromTransaction(ctx, userID, goalB, txnID, 100.0, "2026-06-15")
+	require.ErrorIs(t, err, domain.ErrContributionOverAllocated,
+		"a LIVE cross-goal allocation must still be refused — the archived_at filter must not "+
+			"weaken the guard for the case it exists for")
+}

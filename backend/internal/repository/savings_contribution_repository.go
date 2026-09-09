@@ -312,6 +312,12 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 
 	// Step 2: Compute remaining capacity = |txn.amount| - SUM(confirmed, excluding this goal).
 	// Excluding this goal lets us update (upsert) an existing allocation.
+	//
+	// #1625 Task 7: `archived_at IS NULL` here mirrors migration 000191's narrowing of
+	// unique_contribution_per_goal_per_transaction to the same predicate. 000191 released the
+	// UNIQUENESS slot a closed period's row held; this releases the CAPACITY slot it also held —
+	// the two must be freed together, or an archived row still blocks a DIFFERENT goal from
+	// allocating the same transaction even though its own uniqueness slot is gone.
 	var allocatedElsewhere float64
 	capQuery := `
 		SELECT COALESCE(SUM(amount), 0)
@@ -320,6 +326,7 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 		  AND status = 'confirmed'
 		  AND savings_goal_id != $2
 		  AND deleted_at IS NULL
+		  AND archived_at IS NULL
 	`
 	if err = tx.QueryRow(ctx, capQuery, transactionID, goalID).Scan(&allocatedElsewhere); err != nil {
 		return err
@@ -448,6 +455,10 @@ func (r *savingsContributionRepository) InsertManualFromTransaction(
 	}
 
 	// Step 2: Compute remaining capacity = |txn.amount| - SUM(confirmed, excluding this goal).
+	//
+	// #1625 Task 7: `archived_at IS NULL` mirrors migration 000191's narrowing of
+	// unique_contribution_per_goal_per_transaction — see UpsertFromTransaction's comment above for
+	// why the uniqueness slot and the capacity slot must be released together.
 	var allocatedElsewhere float64
 	capQuery := `
 		SELECT COALESCE(SUM(amount), 0)
@@ -456,6 +467,7 @@ func (r *savingsContributionRepository) InsertManualFromTransaction(
 		  AND status = 'confirmed'
 		  AND savings_goal_id != $2
 		  AND deleted_at IS NULL
+		  AND archived_at IS NULL
 	`
 	if err = tx.QueryRow(ctx, capQuery, transactionID, goalID).Scan(&allocatedElsewhere); err != nil {
 		return nil, err
@@ -826,6 +838,9 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 			return nil, err
 		}
 
+		// #1625 Task 7: `archived_at IS NULL` mirrors migration 000191's narrowing of
+		// unique_contribution_per_goal_per_transaction — see UpsertFromTransaction's comment above
+		// for why the uniqueness slot and the capacity slot must be released together.
 		var allocatedElsewhere float64
 		capQuery := `
 			SELECT COALESCE(SUM(amount), 0)
@@ -834,6 +849,7 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 			  AND status = 'confirmed'
 			  AND savings_goal_id != $2
 			  AND deleted_at IS NULL
+			  AND archived_at IS NULL
 		`
 		if err = tx.QueryRow(ctx, capQuery, *contrib.TransactionID, contrib.SavingsGoalID).Scan(&allocatedElsewhere); err != nil {
 			return nil, err
