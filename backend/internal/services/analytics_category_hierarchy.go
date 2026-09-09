@@ -40,9 +40,19 @@ func newTreeNode(key, display string) *treeNode {
 }
 
 // upsert returns the child for key, creating it on first sight. Nodes are keyed by the STABLE key,
-// never by display: effective_category_name is refreshed asynchronously after a rename, so two rows
-// for the same category can briefly disagree on its name, and merging by display would split one
-// category into two nodes.
+// never by display.
+//
+// ⚠ The reason given here was WRONG until #1626 Phase 2, and the wrong reason mattered. It cited
+// the asynchronous `effective_category_name` refresh, which does let two transactions disagree
+// about a renamed category's name — but this read does not use that column. categoryPathExprs
+// resolves display from `cc.name` / `p.name`, joined live, so every row in one result set sees the
+// same current name and the split it described is unreachable here.
+//
+// Keying by the stable key stays, as defence in depth: the display is a formatted string chosen by
+// a CASE arm, and two distinct categories are free to share one (an empty name, a neutral
+// placeholder, or simply the same name under different parents). Merging by display would fuse
+// them. That is a real hazard; the async refresh was not. No test is added for the shape the old
+// comment described, because there is no way to produce it.
 func (n *treeNode) upsert(key, display string) *treeNode {
 	child, ok := n.children[key]
 	if !ok {
