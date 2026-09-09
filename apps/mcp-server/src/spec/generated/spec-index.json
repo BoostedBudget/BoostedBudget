@@ -2300,6 +2300,7 @@
           "type": "string",
           "enum": [
             "merchant",
+            "effective_merchant",
             "name",
             "merchant_id",
             "amount",
@@ -2563,6 +2564,7 @@
           "type": "string",
           "enum": [
             "merchant",
+            "effective_merchant",
             "name",
             "merchant_id",
             "amount",
@@ -2857,6 +2859,7 @@
           "type": "string",
           "enum": [
             "merchant",
+            "effective_merchant",
             "name",
             "merchant_id",
             "amount",

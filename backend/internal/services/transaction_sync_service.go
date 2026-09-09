@@ -1053,6 +1053,25 @@ func (s *transactionSyncService) processAddedTransactions(
 		}
 	}
 
+	// Issue #1163: Batch-upsert merchants and stamp merchant_id (one DB round-trip, best-effort).
+	//
+	// ⚠ MUST run BEFORE rule application (#1625 Task 11). These rows come straight from the Plaid
+	// mapper with no merchant_id, so a rule matching on effective_merchant could resolve nothing
+	// while the same rule previewed correctly against stored transactions — preview and sync
+	// disagreeing, which is the divergence this ticket already fixed once. Nothing in the merchant
+	// upsert depends on rule output: it reads MerchantName and writes MerchantID, neither of which
+	// rules touch.
+	merchantIDs := s.upsertMerchants(ctx, transactions)
+	if merchantIDs != nil {
+		for i := range transactions {
+			if transactions[i].MerchantName != nil {
+				if id, ok := merchantIDs[*transactions[i].MerchantName]; ok {
+					transactions[i].MerchantID = &id
+				}
+			}
+		}
+	}
+
 	// Issue #346: Apply categorization rules to transactions before storing.
 	// Rules are applied in-place.  Side-effects (analytics/match-count) are
 	// deferred to EmitBatchSideEffects after CreateBatch so they are gated on
@@ -1065,18 +1084,6 @@ func (s *transactionSyncService) processAddedTransactions(
 			s.logger.Warn("failed to apply categorization rules", "error", err)
 		} else {
 			ruleApplications = apps
-		}
-	}
-
-	// Issue #1163: Batch-upsert merchants and stamp merchant_id (one DB round-trip, best-effort)
-	merchantIDs := s.upsertMerchants(ctx, transactions)
-	if merchantIDs != nil {
-		for i := range transactions {
-			if transactions[i].MerchantName != nil {
-				if id, ok := merchantIDs[*transactions[i].MerchantName]; ok {
-					transactions[i].MerchantID = &id
-				}
-			}
 		}
 	}
 

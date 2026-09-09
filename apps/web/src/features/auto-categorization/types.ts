@@ -54,6 +54,7 @@ export const CONDITION_TYPE_LABELS: Record<ConditionType, string> = {
  */
 export type ConditionField =
   | 'merchant'
+  | 'effective_merchant'
   | 'name'
   | 'merchant_id'
   | 'amount'
@@ -80,7 +81,8 @@ export type ConditionOperator =
   | 'in'
 
 export const CONDITION_FIELD_LABELS: Record<ConditionField, string> = {
-  merchant: 'Merchant name',
+  merchant: 'Merchant name (as the bank sends it)',
+  effective_merchant: 'Merchant name (as you see it)',
   name: 'Description',
   merchant_id: 'Merchant ID',
   amount: 'Amount',
@@ -115,6 +117,7 @@ const NUMBER_OPERATORS: ConditionOperator[] = ['eq', 'neq', 'gt', 'gte', 'lt', '
 /** Which operators each field accepts. Mirrors `FieldSpecs` in condition_schema.go. */
 export const FIELD_OPERATORS: Record<ConditionField, ConditionOperator[]> = {
   merchant: TEXT_OPERATORS,
+  effective_merchant: TEXT_OPERATORS,
   name: TEXT_OPERATORS,
   account_type: TEXT_OPERATORS,
   payment_channel: TEXT_OPERATORS,

@@ -39,6 +39,7 @@ export type RuleConditionField = typeof RuleConditionField[keyof typeof RuleCond
 
 export const RuleConditionField = {
   merchant: 'merchant',
+  effective_merchant: 'effective_merchant',
   name: 'name',
   merchant_id: 'merchant_id',
   amount: 'amount',

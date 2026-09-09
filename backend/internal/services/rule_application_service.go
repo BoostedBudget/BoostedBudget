@@ -109,6 +109,17 @@ type ruleApplicationService struct {
 	// logger defaults to slog.Default() so every existing NewRuleApplicationService call site
 	// keeps compiling and shadow-mode quarantine still reports even where none is injected.
 	logger *slog.Logger
+	// merchantResolver enriches EffectiveMerchantName so a rule can match the name the USER sees
+	// (#1625 Task 11). Optional and FAIL-OPEN: nil, or an error, leaves EffectiveMerchantName
+	// unset and the evaluator falls back to the raw provider name. A merchant lookup must never
+	// stop a sync from categorising.
+	merchantResolver EffectiveMerchantResolver
+}
+
+// EffectiveMerchantResolver resolves merchant IDs to the per-user display name, in one query.
+// Satisfied by repository.TransactionRepository.
+type EffectiveMerchantResolver interface {
+	ResolveEffectiveMerchantNames(ctx context.Context, userID string, merchantIDs []string) (map[string]string, error)
 }
 
 // NewRuleApplicationService creates a new RuleApplicationService instance.
@@ -117,6 +128,60 @@ func NewRuleApplicationService(ruleRepo RuleApplicationRepository) *ruleApplicat
 		ruleRepo:   ruleRepo,
 		ruleEngine: rules.NewRuleEngine(),
 		logger:     slog.Default(),
+	}
+}
+
+// SetEffectiveMerchantResolver wires per-user merchant name resolution (#1625 Task 11).
+//
+// Setter injection, matching SetAnalytics/SetLogger, so every existing
+// NewRuleApplicationService call site keeps compiling. Unwired, effective_merchant conditions
+// simply fall back to the raw provider name rather than failing.
+func (s *ruleApplicationService) SetEffectiveMerchantResolver(r EffectiveMerchantResolver) {
+	s.merchantResolver = r
+}
+
+// enrichEffectiveMerchantNames fills EffectiveMerchantName on a batch in ONE query, so a rule
+// written against the name the user sees matches during sync exactly as it does in preview.
+//
+// Best-effort throughout: no resolver, no merchant ids, or a failed query all leave the field
+// unset, and the evaluator falls back to the raw name. Never returns an error — see the field
+// comment for why a merchant lookup must not be able to fail a sync.
+func (s *ruleApplicationService) enrichEffectiveMerchantNames(ctx context.Context, txns []domain.Transaction, userID string) {
+	if s.merchantResolver == nil {
+		return
+	}
+	seen := make(map[string]struct{}, len(txns))
+	ids := make([]string, 0, len(txns))
+	for i := range txns {
+		if txns[i].MerchantID == nil || *txns[i].MerchantID == "" {
+			continue
+		}
+		if _, dup := seen[*txns[i].MerchantID]; dup {
+			continue
+		}
+		seen[*txns[i].MerchantID] = struct{}{}
+		ids = append(ids, *txns[i].MerchantID)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	nameByID, err := s.merchantResolver.ResolveEffectiveMerchantNames(ctx, userID, ids)
+	if err != nil {
+		s.logger.WarnContext(ctx, "could not resolve effective merchant names; effective_merchant "+
+			"conditions will fall back to the raw provider name",
+			slog.String("user_id", userID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	for i := range txns {
+		if txns[i].MerchantID == nil {
+			continue
+		}
+		if name, ok := nameByID[*txns[i].MerchantID]; ok && name != "" {
+			n := name
+			txns[i].EffectiveMerchantName = &n
+		}
 	}
 }
 
@@ -239,6 +304,10 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 	if len(userRules) == 0 {
 		return nil, nil
 	}
+
+	// #1625 Task 11: resolve the merchant names the USER sees, once for the whole batch, before
+	// any rule runs. The sync path stamps MerchantID immediately before calling this.
+	s.enrichEffectiveMerchantNames(ctx, txns, userID)
 
 	// Indexed once for the audit trail: a record must carry the rule's name and definition AS THEY
 	// WERE at evaluation time, and the *domain.CategorizationRule holding them is only in scope

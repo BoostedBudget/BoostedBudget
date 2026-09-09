@@ -31,6 +31,15 @@ func evaluateField(tx *domain.Transaction, c domain.RuleCondition) (bool, error)
 	switch c.Field {
 	case domain.FieldMerchant:
 		return matchText(textOf(tx.MerchantName), op, c.Value), nil
+	case domain.FieldEffectiveMerchant:
+		// Falls back to the raw name when nothing enriched the transaction. Enrichment is
+		// best-effort (one extra query, never fatal), so an un-enriched transaction must still
+		// behave sensibly rather than silently disabling the rule.
+		effective := textOf(tx.EffectiveMerchantName)
+		if effective == "" {
+			effective = textOf(tx.MerchantName)
+		}
+		return matchText(effective, op, c.Value), nil
 	case domain.FieldName:
 		// tx.Name is NOT NULL and always populated — it is the raw description, and the only
 		// field that carries anything for a Zelle transfer, whose merchant_name is null.

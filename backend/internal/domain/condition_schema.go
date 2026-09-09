@@ -30,7 +30,16 @@ import (
 type RuleConditionField string
 
 const (
-	FieldMerchant   RuleConditionField = "merchant"
+	FieldMerchant RuleConditionField = "merchant"
+	// FieldEffectiveMerchant matches the merchant name the USER sees — their own rename, or the
+	// canonical name of a merchant they merged this one into — rather than the raw provider
+	// string. #1625 Task 11.
+	//
+	// A SEPARATE field rather than a change to FieldMerchant, deliberately: repointing `merchant`
+	// would silently change what every persisted rule matches whenever a normalization, merge or
+	// override changed a name, so a rule the user never edited would start or stop firing on its
+	// own. As a new field, old rows keep their exact meaning and no data migration is needed.
+	FieldEffectiveMerchant RuleConditionField = "effective_merchant"
 	FieldName       RuleConditionField = "name"
 	FieldMerchantID RuleConditionField = "merchant_id"
 	// FieldAmount is the ABSOLUTE magnitude, frozen at the pre-#1625 semantics.
@@ -123,7 +132,8 @@ var numberOps = map[RuleConditionOperator]ValueShape{
 
 // FieldSpecs is the authoritative field × operator × value-shape matrix.
 var FieldSpecs = map[RuleConditionField]FieldSpec{
-	FieldMerchant:       {Field: FieldMerchant, Ops: textOps},
+	FieldMerchant:          {Field: FieldMerchant, Ops: textOps},
+	FieldEffectiveMerchant: {Field: FieldEffectiveMerchant, Ops: textOps},
 	FieldName:           {Field: FieldName, Ops: textOps},
 	FieldMerchantID:     {Field: FieldMerchantID, Ops: idOps},
 	FieldAccountID:      {Field: FieldAccountID, Ops: idOps},
@@ -525,8 +535,12 @@ var fieldNotes = map[RuleConditionField]string{
 	FieldName: "The raw transaction description. Always present — unlike merchant, which is " +
 		"frequently absent (a Zelle transfer typically has no merchant name at all).",
 	FieldMerchantID: "An opaque provider identifier, matched exactly and case-SENSITIVELY.",
-	FieldMerchant: "The merchant name, matched case-insensitively. Frequently absent; prefer " +
-		"name when matching transfers.",
+	FieldMerchant: "The RAW provider merchant name, matched case-insensitively. Frequently absent; " +
+		"prefer name when matching transfers. This is NOT the name shown in the app if you have " +
+		"renamed or merged the merchant — use effective_merchant for that.",
+	FieldEffectiveMerchant: "The merchant name YOU see: your rename, or the canonical name of a " +
+		"merchant you merged this one into, falling back to the raw provider name when you have " +
+		"set neither. Match this when your rule is written against what the app displays.",
 }
 
 // exampleFor returns a well-formed value for a shape, so callers copy rather than guess.
@@ -618,8 +632,9 @@ func ConditionSchema() ConditionSchemaResponse {
 // Deterministic ordering, so the response and its generated artifacts are stable across builds.
 func allConditionFieldsOrdered() []RuleConditionField {
 	return []RuleConditionField{
-		FieldMerchant, FieldName, FieldMerchantID, FieldAmount, FieldSignedAmount, FieldDirection,
-		FieldAccountID, FieldAccountType, FieldPaymentChannel, FieldDate, FieldPFCPrimary, FieldPFCDetailed,
+		FieldMerchant, FieldEffectiveMerchant, FieldName, FieldMerchantID, FieldAmount,
+		FieldSignedAmount, FieldDirection, FieldAccountID, FieldAccountType, FieldPaymentChannel,
+		FieldDate, FieldPFCPrimary, FieldPFCDetailed,
 	}
 }
 
