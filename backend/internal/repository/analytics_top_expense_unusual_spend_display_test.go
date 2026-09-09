@@ -44,7 +44,16 @@ func TestGetTopExpense_ScansCategoryDisplay(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet(), "GetTopExpense takes exactly 3 args")
 	})
 
-	t.Run("NULL display scans to empty string, not an error", func(t *testing.T) {
+	// ⚠ RENAMED (#1626 Phase 2 pgxmock sweep): this subtest used to be named "NULL display scans to
+	// empty string, not an error" and read as proof that GetTopExpense's sql.NullString scan
+	// tolerates a NULL category_display. It is not: pgxmock scans a `nil` AddRow cell into a plain
+	// Go `string` WITHOUT error (mutation-confirmed — reverting GetTopExpense's `sql.NullString` to
+	// a plain `string` leaves this subtest green), so it cannot distinguish the current, correct
+	// scan from a reverted, broken one. What it still shows is real: a NULL display cell does not
+	// disturb the OTHER scanned fields (category, in particular). The genuine NULL-tolerance proof,
+	// against real Postgres, is TestAnalyticsReads_NullCategoryDisplay_ToleratedBySqlNullStringReads's
+	// "GetTopExpense" subtest (analytics_null_category_display_integration_test.go, integration tag).
+	t.Run("NULL display cell does not disturb the rest of the row (pgxmock cannot prove the scan itself tolerates NULL)", func(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
@@ -61,6 +70,7 @@ func TestGetTopExpense_ScansCategoryDisplay(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, row)
 		assert.Empty(t, row.CategoryDisplay)
+		assert.Equal(t, "custom:9f1c2b3a-0000-4000-8000-000000000002", row.Category)
 	})
 
 	t.Run("PFC row's raw enum is scanned verbatim, not resolved here", func(t *testing.T) {
@@ -140,7 +150,18 @@ func TestGetUnusualSpend_ScansCategoryDisplay(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet(), "GetUnusualSpend takes exactly 5 args")
 	})
 
-	t.Run("NULL display scans to empty string, not an error", func(t *testing.T) {
+	// ⚠ RENAMED (#1626 Phase 2 pgxmock sweep): this subtest used to be named "NULL display scans to
+	// empty string, not an error" and read as proof that GetUnusualSpend's sql.NullString scan
+	// tolerates a NULL category_display. It is not, and — unlike GetTopExpense's sibling subtest of
+	// the same former name above — this one has NO integration-test replacement: pgxmock scans a
+	// `nil` AddRow cell into a plain Go `string` WITHOUT error (mutation-confirmed — reverting
+	// GetUnusualSpend's `sql.NullString` to a plain `string` leaves this subtest green), and a real
+	// Postgres proof would need a >=3-row same-category baseline with a non-zero standard deviation
+	// PLUS a row far enough above the mean to clear sigmaThreshold before the NULL-display row is
+	// even reachable at all — a disproportionate fixture for what this subtest is actually able to
+	// verify. What it still shows, honestly: a NULL display cell does not disturb the OTHER scanned
+	// fields on the same row.
+	t.Run("NULL display cell does not disturb the rest of the row (pgxmock cannot prove the scan itself tolerates NULL)", func(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
@@ -155,6 +176,7 @@ func TestGetUnusualSpend_ScansCategoryDisplay(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, result, 1)
 		assert.Empty(t, result[0].CategoryDisplay)
+		assert.Equal(t, "custom:9f1c2b3a-0000-4000-8000-000000000002", result[0].Category)
 	})
 
 	t.Run("PFC row's raw enum is scanned verbatim, not resolved here", func(t *testing.T) {

@@ -1043,7 +1043,15 @@ func TestGetIncomeSourceBreakdown(t *testing.T) {
 		// #1626: the read now also selects effective_category_name AS category_display. The third
 		// row is the regression case — a custom-categorised income source, whose key is the
 		// synthetic `custom:<uuid>` token and whose only human-readable name is the display column.
-		// The fourth is the NULL case: the column is nullable and app-maintained asynchronously.
+		// The fourth row's category_display is nil: the column is nullable and app-maintained
+		// asynchronously, so the fourth AddRow's other three fields still get a real assertion
+		// below. ⚠ Its own CategoryDisplay assertion is NOT a NULL-scan proof — pgxmock scans a nil
+		// AddRow cell into a plain Go string WITHOUT error (mutation-confirmed: reverting
+		// GetIncomeSourceBreakdown's sql.NullString to a plain string leaves this subtest green), so
+		// it cannot tell a correct sql.NullString scan from a reverted, broken one. The real proof,
+		// against real Postgres, is TestAnalyticsReads_NullCategoryDisplay_ToleratedBySqlNullStringReads's
+		// "GetIncomeSourceBreakdown" subtest (analytics_null_category_display_integration_test.go,
+		// build tag integration; #1626 Phase 2 pgxmock sweep).
 		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "count"}).
 			AddRow("INCOME", "INCOME", 5000.0, 3).
 			AddRow("TRANSFER_IN", "TRANSFER_IN", 1000.0, 2).
@@ -1068,8 +1076,11 @@ func TestGetIncomeSourceBreakdown(t *testing.T) {
 				"title-cases the raw token and the Sankey renders a UUID (#1626)")
 
 		assert.Empty(t, result[3].CategoryDisplay,
-			"a NULL display must scan to the empty string, not error: the column is nullable and "+
-				"maintained asynchronously by the effective_category_refresh job (#1626)")
+			"a NULL display cell must not disturb this row's other fields; NOT a NULL-scan proof — "+
+				"pgxmock cannot provide one (#1626 Phase 2 pgxmock sweep)")
+		assert.Equal(t, "custom:9f1c2b3a-0000-4000-8000-000000000002", result[3].Category)
+		assert.InDelta(t, 250.0, result[3].Total, 0.001)
+		assert.Equal(t, 1, result[3].Count)
 	})
 
 	t.Run("returns empty slice when no data", func(t *testing.T) {

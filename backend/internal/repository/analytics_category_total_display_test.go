@@ -59,12 +59,22 @@ func TestGetCategoryTotalForPeriod_CustomCategory_ResolvesTheCurrentName(t *test
 			"parameter, not a substring cast inside the SQL")
 }
 
-// TestGetCategoryTotalForPeriod_CustomCategory_NullDisplayScansToEmptyString covers the other
-// reachable custom-token state: the category still exists (or the row is a tombstoned/gone
-// custom_categories id) but the scalar subquery has nothing to return, so category_display comes
-// back NULL. The repository must not error on that — it is scanned through sql.NullString and
-// normalised to "", leaving the placeholder decision to resolveCategoryDisplay in the service.
-func TestGetCategoryTotalForPeriod_CustomCategory_NullDisplayScansToEmptyString(t *testing.T) {
+// TestGetCategoryTotalForPeriod_CustomCategory_BindsFiveArgsWhenDisplayIsNull covers the custom-
+// token path with a NULL category_display cell (the scalar subquery having nothing to return).
+//
+// ⚠ RENAMED (#1626 Phase 2 pgxmock sweep): this test used to be named
+// ...NullDisplayScansToEmptyString and claimed to prove the sql.NullString scan tolerates NULL.
+// It does not, and cannot: pgxmock scans a `nil` AddRow cell into a plain Go `string` WITHOUT
+// error (confirmed by mutation — reverting GetCategoryTotalForPeriod's `sql.NullString` to a plain
+// `string` leaves this test green), so it cannot distinguish the current, correct scan from a
+// reverted, broken one. What it DOES prove, and the reason it survives rather than being deleted,
+// is real: pgxmock's WithArgs enforces arg COUNT, so require.NoError below only passes if the
+// custom-token branch bound exactly five args (the fifth being the bound uuid — see the
+// "custom-token form binds a FIFTH arg" test above). The genuine NULL-tolerance proof — that a real
+// Postgres NULL from this exact subquery shape does not 500 — lives in
+// TestAnalyticsReads_NullCategoryDisplay_ToleratedBySqlNullStringReads
+// (analytics_null_category_display_integration_test.go, build tag integration, real Postgres).
+func TestGetCategoryTotalForPeriod_CustomCategory_BindsFiveArgsWhenDisplayIsNull(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mock.Close()
@@ -81,17 +91,26 @@ func TestGetCategoryTotalForPeriod_CustomCategory_NullDisplayScansToEmptyString(
 			AddRow(250.0, 1, nil))
 
 	row, err := repo.GetCategoryTotalForPeriod(ctx, "user-1", "custom:"+catID, start, end)
-	require.NoError(t, err)
+	require.NoError(t, err, "the custom-token branch must bind exactly five args even when the "+
+		"scalar subquery's result is NULL — a fourth-arg-only call would fail this WithArgs match")
 	require.NotNil(t, row)
 	assert.Empty(t, row.CategoryDisplay)
 }
 
-// TestGetCategoryTotalForPeriod_PFCToken_TakesFourArgsAndNullDisplay is the PFC-token counterpart
-// to the custom-token test above: it exercises the actual repository call (not just the query
-// builder, which TestGetCategoryTotalForPeriodQuery_NeverUsesMaxOnADenormalizedName below already
-// pins), confirming a PFC token binds exactly 4 args — no fifth uuid arg, because there is no
-// custom_categories row to look up — and that its display column comes back NULL by construction.
-func TestGetCategoryTotalForPeriod_PFCToken_TakesFourArgsAndNullDisplay(t *testing.T) {
+// TestGetCategoryTotalForPeriod_PFCToken_TakesFourArgs is the PFC-token counterpart to the
+// custom-token test above: it exercises the actual repository call (not just the query builder,
+// which TestGetCategoryTotalForPeriodQuery_NeverUsesMaxOnADenormalizedName below already pins),
+// confirming a PFC token binds exactly 4 args — no fifth uuid arg, because there is no
+// custom_categories row to look up.
+//
+// ⚠ RENAMED (#1626 Phase 2 pgxmock sweep): dropped "AndNullDisplay" from the name. The
+// `assert.Empty(t, row.CategoryDisplay)` below is real (a mismatched arg count would already have
+// failed require.NoError via WithArgs), but it cannot prove NULL TOLERANCE any more than the test
+// above can — pgxmock never errors scanning a nil cell into a plain string, sql.NullString or not.
+// The real proof, against real Postgres, is
+// TestAnalyticsReads_NullCategoryDisplay_ToleratedBySqlNullStringReads's "PFC token" subtest
+// (analytics_null_category_display_integration_test.go).
+func TestGetCategoryTotalForPeriod_PFCToken_TakesFourArgs(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer mock.Close()
