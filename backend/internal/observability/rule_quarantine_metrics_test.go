@@ -79,3 +79,34 @@ func TestRecordRuleQuarantineCandidate_EveryDeclaredReasonRecordsAsItself(t *tes
 		}
 	}
 }
+
+// TestQuarantineMetric_SeriesExistBeforeAnythingIsRecorded is what makes shadow mode's whole
+// justification hold. A CounterVec label series does not appear in /metrics until it is first
+// incremented, so before this an empty scrape meant EITHER "no rules would be quarantined" OR
+// "this code path never ran" — indistinguishable. The deferral of enforcement rests entirely on
+// reading that inventory, so an unreadable inventory made the deferral unjustifiable.
+func TestQuarantineMetric_SeriesExistBeforeAnythingIsRecorded(t *testing.T) {
+	ruleQuarantineCandidates.Reset()
+	initQuarantineSeries()
+
+	// ⚠ COUNT FIRST, and do NOT touch WithLabelValues before counting.
+	//
+	// The first version of this test looped `testutil.ToFloat64(vec.WithLabelValues(r))` and was
+	// NOT falsifiable: WithLabelValues CREATES the series as a side effect of reading it, so the
+	// loop instantiated exactly the thing it was supposed to be verifying, and the count passed
+	// even with the pre-warm deleted. Caught by mutating initQuarantineSeries and seeing the test
+	// stay green.
+	want := len(AllQuarantineReasons()) + 1 // + "other"
+	if n := testutil.CollectAndCount(ruleQuarantineCandidates); n != want {
+		t.Fatalf("expected %d zero-valued series (one per reason plus \"other\") to exist before "+
+			"anything is recorded, got %d — an empty scrape would then be indistinguishable from "+
+			"code that never ran", want, n)
+	}
+
+	// Only now is it safe to read individual values.
+	for _, r := range AllQuarantineReasons() {
+		if got := testutil.ToFloat64(ruleQuarantineCandidates.WithLabelValues(string(r))); got != 0 {
+			t.Errorf("reason %q should start at an explicit 0, got %v", r, got)
+		}
+	}
+}
