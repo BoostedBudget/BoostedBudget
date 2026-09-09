@@ -3,6 +3,7 @@
 
 import { mock } from 'bun:test'
 import * as RealTransactionsModule from '@boostedbudget/api-client/endpoints/transactions/transactions'
+import type { GetTransactionsOutputBody } from '@boostedbudget/api-client'
 import type { InvestmentActivity } from '@/features/transactions/types'
 
 // === Investment activity fixture (#1299) ===
@@ -25,7 +26,16 @@ export const makeInvestmentActivityFixture = (id: string): InvestmentActivity =>
 })
 
 // === getTransactions (raw fetcher — used by useInfiniteTransactions) ===
-export const mockGetTransactions = mock(() => Promise.resolve({ transactions: [], limit: 50 }))
+//
+// ⚠ The return type is ANNOTATED rather than inferred. Left to inference, bun's mock() takes its
+// type from the empty default value — `{ transactions: never[]; limit: number }` — and then every
+// mockResolvedValue(<a real response fixture>) in every consuming test is a type error. That
+// accounted for most of useInfiniteTransactions.test.tsx's entries in the typecheck-tests
+// baseline: tests that pass at runtime while the compiler says the fixture cannot be what the
+// code receives, which is exactly the signal that baseline exists to surface (#1626 Phase 2).
+export const mockGetTransactions = mock(
+  (): Promise<GetTransactionsOutputBody> => Promise.resolve({ transactions: [], limit: 50 }),
+)
 
 // === useGetTransactions ===
 export const mockRefetchTransactions = mock(() => Promise.resolve({}))

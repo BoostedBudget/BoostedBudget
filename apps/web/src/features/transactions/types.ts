@@ -248,6 +248,17 @@ export interface TransactionFilters {
    * and off the wire).
    */
   include_reversed?: boolean
+  /**
+   * Issue #1626: ALSO match transactions with no category at all — the rows analytics reports as
+   * "Uncategorized". OR-joined server-side with pfc_primaries/pfc_detaileds/custom_category_ids,
+   * so it widens the result set and never means "exclude the uncategorized ones". Default false,
+   * serialized only when true (same canonicalization as include_reversed above).
+   *
+   * It exists because `UNCATEGORIZED` is a sentinel the analytics layer synthesises rather than a
+   * stored value, so the reports Sankey's Uncategorized node had no expressible filter and had to
+   * be inert.
+   */
+  uncategorized?: boolean
 }
 
 /**

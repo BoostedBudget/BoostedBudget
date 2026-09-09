@@ -87,6 +87,7 @@ export function TransactionsPage() {
     setStatusFilter,
     setIncludeInvestmentActivity,
     setIncludeReversed,
+    setUncategorized,
     setActivityTypes,
   } = useTransactionFilters()
 
@@ -227,6 +228,13 @@ export function TransactionsPage() {
     trackEvent(ANALYTICS_EVENTS.REVERSED_TRANSACTIONS_FILTER_TOGGLED, { enabled })
   }, [setIncludeReversed, trackEvent])
 
+  // Issue #1626. Only ever called with false: the pill is a way OUT of a filter the reports
+  // Sankey turned on, so the event records a clear, not a toggle.
+  const handleUncategorizedChange = useCallback((enabled: boolean) => {
+    setUncategorized(enabled)
+    trackEvent(ANALYTICS_EVENTS.UNCATEGORIZED_FILTER_CLEARED, { enabled })
+  }, [setUncategorized, trackEvent])
+
   const handleActivityTypesChange = useCallback((types: ActivityType[]) => {
     setActivityTypes(types)
     trackEvent(ANALYTICS_EVENTS.INVESTMENT_ACTIVITY_TYPE_FILTER_APPLIED, { count: types.length })
@@ -317,6 +325,7 @@ export function TransactionsPage() {
         onIncludeInvestmentActivityChange={handleIncludeInvestmentChange}
         onActivityTypesChange={handleActivityTypesChange}
         onIncludeReversedChange={handleIncludeReversedChange}
+        onUncategorizedChange={handleUncategorizedChange}
         onClearAll={clearAllFilters}
         disabled={isLoading}
       />
