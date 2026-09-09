@@ -332,3 +332,21 @@ func TestMapError_BasisSwitchPreconditionsAreNot500(t *testing.T) {
 		})
 	}
 }
+
+// TestMapError_RuleConcurrencyConflictIsNot500 pins #1625 Task 19's own precedent: the optimistic-
+// concurrency guard added to CategorizationRuleRepository.Update loses nothing (the WHERE clause
+// simply matches zero rows), but a caller who read a rule, then lost a race to write it, did
+// nothing wrong either — a 500 here would be the exact defect class issue #1625 was opened for,
+// same as the savings-goal basis conflict above. Nothing else pins this mapping: the mapper's
+// switch defaults to 500, so removing this case would silently reinstate that defect with every
+// other test still green.
+func TestMapError_RuleConcurrencyConflictIsNot500(t *testing.T) {
+	mapped := humaerrors.LoggingMapError(context.Background(), domain.ErrRuleConcurrentlyModified)
+	require.NotNil(t, mapped)
+
+	var statusErr interface{ GetStatus() int }
+	require.True(t, errors.As(mapped, &statusErr), "mapped error carries no HTTP status")
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
+	assert.NotEqual(t, http.StatusInternalServerError, statusErr.GetStatus(),
+		"a concurrent-write conflict must never be a server error — this IS issue #1625")
+}

@@ -178,6 +178,13 @@ func MapError(err error) error {
 	// this ticket was opened for, since the losing request did nothing wrong.
 	case errors.Is(err, domain.ErrSavingsGoalBasisConflict):
 		return huma.Error409Conflict("This savings goal's progress basis was changed by another request. Reload the goal and try again.")
+	// #1625 Task 19: UpdateRule/ToggleRule both read-modify-write the whole categorization rule
+	// row; this is the optimistic-concurrency guard's loser. A PRECONDITION, not a fault — the
+	// write did nothing wrong, the row just moved underneath it — so 409 with "reload and retry",
+	// same shape as ErrSavingsGoalBasisConflict just above. Mapping it to 500 would be the exact
+	// defect issue #1625 was opened for.
+	case errors.Is(err, domain.ErrRuleConcurrentlyModified):
+		return huma.Error409Conflict("This rule was changed by another request. Reload it and try again.")
 	// GAP AW: idempotency key reused for a different operation — RFC 7231 / Stripe semantics.
 	case errors.Is(err, repository.ErrIdempotencyKeyConflict):
 		return huma.Error409Conflict("This idempotency key was already used for a different operation. Use a new key to perform a different request.")

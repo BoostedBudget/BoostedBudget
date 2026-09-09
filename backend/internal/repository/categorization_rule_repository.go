@@ -332,8 +332,19 @@ func (r *categorizationRuleRepository) ListAllForQuarantineCensus(ctx context.Co
 }
 
 // Update updates an existing rule.
+//
+// #1625 Task 19: the WHERE clause is guarded by updated_at, not id alone. UpdateRule and
+// ToggleRule both read-modify-write the WHOLE row (every column, not just the field either caller
+// meant to change), so without this guard a toggle racing a repair could win the write and put
+// the repair's PRIOR, malformed conditions back — last-writer-wins across the entire row. rule
+// carries the updated_at value its caller observed via GetByID; if the stored value has since
+// moved, this UPDATE matches zero rows and the write is refused rather than silently overwriting
+// whatever changed it. The table also carries a BEFORE UPDATE trigger
+// (update_categorization_rules_updated_at) that stamps NEW.updated_at = NOW() on every successful
+// write regardless of what this query supplies for it, which is why the fresh value is read back
+// via RETURNING rather than assumed to be time.Now() from this process.
 func (r *categorizationRuleRepository) Update(ctx context.Context, rule *domain.CategorizationRule) error {
-	rule.UpdatedAt = time.Now()
+	expectedUpdatedAt := rule.UpdatedAt // observed by the caller's prior read; the concurrency guard
 
 	// Marshal JSON fields
 	conditionsJSON, err := json.Marshal(rule.Conditions)
@@ -352,11 +363,12 @@ func (r *categorizationRuleRepository) Update(ctx context.Context, rule *domain.
 			conditions = $5, condition_logic = $6,
 			target_kind = $7, target_pfc_primary = $8, target_pfc_detailed = $9,
 			target_custom_category_id = $10,
-			target_tags = $11, tag_behavior = $12, updated_at = $13
-		WHERE id = $14
+			target_tags = $11, tag_behavior = $12
+		WHERE id = $13 AND updated_at = $14
+		RETURNING updated_at
 	`
 
-	ct, err := r.db.Exec(ctx, query,
+	err = r.db.QueryRow(ctx, query,
 		rule.Name,
 		rule.Description,
 		rule.Enabled,
@@ -369,20 +381,31 @@ func (r *categorizationRuleRepository) Update(ctx context.Context, rule *domain.
 		rule.TargetCustomCategoryID,
 		tagsJSON,
 		rule.TagBehavior,
-		rule.UpdatedAt,
 		rule.ID,
-	)
+		expectedUpdatedAt,
+	).Scan(&rule.UpdatedAt)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Zero rows matched either because the id doesn't exist, or because it exists but
+			// updated_at moved underneath us. Those are different failures for the caller (404
+			// vs. 409), so a second, cheap lookup disambiguates rather than guessing.
+			var exists bool
+			if existsErr := r.db.QueryRow(ctx,
+				`SELECT EXISTS(SELECT 1 FROM categorization_rules WHERE id = $1)`, rule.ID,
+			).Scan(&exists); existsErr != nil {
+				return existsErr
+			}
+			if !exists {
+				return domain.ErrRuleNotFound
+			}
+			return domain.ErrRuleConcurrentlyModified
+		}
 		// Check for unique constraint violations
 		if strings.Contains(err.Error(), "unique_rule_name_per_user") ||
 			strings.Contains(err.Error(), "duplicate key") {
 			return domain.ErrRuleAlreadyExists
 		}
 		return err
-	}
-
-	if ct.RowsAffected() == 0 {
-		return domain.ErrRuleNotFound
 	}
 
 	return nil
