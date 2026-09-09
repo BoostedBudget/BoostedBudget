@@ -247,7 +247,7 @@ function renderExpenseFan(roots: CategoryHierarchyNode[], mode: SankeyViewMode) 
       ? [[0, 0, 10]]
       : [[2, 6, 30], [1, 6, 30], [1, 6, 10], [0, 0, 30], [0, 0, 10]]
 
-  let last = emitExpenses([])
+  let last: { nodes: SankeyNode[]; links: SankeyLink[] } = { nodes: [], links: [] }
   for (const [depth, maxChildren, maxRoots] of rungs) {
     const sorted = [...roots].sort((a, b) => b.total - a.total)
     const kept = sorted.slice(0, maxRoots).map(r => prune(r, depth, maxChildren))
@@ -269,8 +269,7 @@ function renderExpenseFan(roots: CategoryHierarchyNode[], mode: SankeyViewMode) 
 function renderIncomeFan(sources: CategoryHierarchyNode[]) {
   const nodes: SankeyNode[] = []
   const links: SankeyLink[] = []
-  const valid = sources.filter(s => s.total > 0)
-  const sorted = [...valid].sort((a, b) => b.total - a.total)
+  const sorted = [...sources].sort((a, b) => b.total - a.total)
   const kept = sorted.slice(0, MAX_INCOME_LEAVES)
   const dropped = sorted.slice(MAX_INCOME_LEAVES)
 

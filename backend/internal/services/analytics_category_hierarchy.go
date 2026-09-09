@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
@@ -117,7 +118,8 @@ func materialize(n *treeNode, grandTotal float64) []domain.CategoryHierarchyNode
 // sortCategoryHierarchyNodes orders siblings through the same comparator every category-shaped
 // response uses: total DESC, resolved display ASC, stable key ASC.
 func sortCategoryHierarchyNodes(nodes []domain.CategoryHierarchyNode) {
-	sortSliceStable(nodes, func(a, b domain.CategoryHierarchyNode) bool {
+	sort.SliceStable(nodes, func(i, j int) bool {
+		a, b := nodes[i], nodes[j]
 		return lessCategoryDisplay(
 			categoryDisplayRow{Key: a.Category, Display: a.Display, Total: a.Total},
 			categoryDisplayRow{Key: b.Category, Display: b.Display, Total: b.Total},
