@@ -974,3 +974,88 @@ func TestUpsertFromTransaction_Integration_StillOverwritesAMachineConfirmedRow(t
 	assert.InDelta(t, 35.0, amount, 0.001, "a machine-confirmed row must remain updatable by a later automatic pass")
 	assert.Equal(t, "boost_match", source)
 }
+
+// TestSavingsContributionRepository_Integration_BasisRoundTripDoesNotDoubleCount is the #1625
+// Task 12 regression test, written against real SQL because pgxmock cannot catch an aggregate
+// error — the defect here IS the aggregate.
+//
+// The sequence that was broken:
+//
+//	ledger totals 100 → switch to manual → switch back to contributions
+//	  → handleBasisSwitch seeds a synthetic 100
+//	  → SumConfirmedByGoal returns the ORIGINAL 100 plus the synthetic 100 = 200
+//
+// ArchiveByGoal only cleared managed_by_reconciliation, which left the rows live and confirmed
+// and — because user-entered rows already carry false — destroyed the only signal that could
+// have distinguished them afterwards. Both sums now exclude archived rows.
+func TestSavingsContributionRepository_Integration_BasisRoundTripDoesNotDoubleCount(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	insert := func(amount float64, managed bool) string {
+		id := uuid.New().String()
+		_, err := pool.Exec(ctx, `
+			INSERT INTO savings_goal_contributions
+				(id, savings_goal_id, transaction_id, amount, source, status,
+				 managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at)
+			VALUES ($1, $2, NULL, $3, 'manual', 'confirmed', $4, true, CURRENT_DATE, now(), now())
+		`, id, goalID, amount, managed)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_, _ = pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE id = $1`, id)
+		})
+		return id
+	}
+
+	// A closed contributions period: one reconciler row and one the user entered by hand. The
+	// user's row is the one the old flag-clearing approach could never account for.
+	insert(60, true)
+	insert(40, false)
+
+	total, err := repo.SumConfirmedByGoal(ctx, userID, goalID)
+	require.NoError(t, err)
+	require.Equal(t, 100.0, total, "precondition: the live ledger totals 100")
+
+	// Leaving the contributions basis closes the period.
+	require.NoError(t, repo.ArchiveByGoal(ctx, goalID))
+
+	total, err = repo.SumConfirmedByGoal(ctx, userID, goalID)
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, total,
+		"an archived period must not count — including the user's own manual row, which the "+
+			"managed_by_reconciliation flag never covered")
+
+	// Returning to the contributions basis seeds the carried-over balance.
+	insert(100, false)
+
+	total, err = repo.SumConfirmedByGoal(ctx, userID, goalID)
+	require.NoError(t, err)
+	assert.Equal(t, 100.0, total,
+		"the round-trip reported 200 before #1625: the archived period summed alongside its own seed")
+
+	// Both sums must agree, or the lifetime total and the period total describe one ledger
+	// differently.
+	periodTotal, err := repo.SumConfirmedByGoalInPeriod(ctx, userID, goalID,
+		time.Now().AddDate(0, 0, -1), time.Now().AddDate(0, 0, 1))
+	require.NoError(t, err)
+	assert.Equal(t, 100.0, periodTotal, "SumConfirmedByGoalInPeriod must exclude archived rows too")
+
+	// Archived rows are RETAINED, not destroyed — this is a retention system.
+	var retained int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM savings_goal_contributions
+		  WHERE savings_goal_id = $1 AND archived_at IS NOT NULL AND deleted_at IS NULL`,
+		goalID).Scan(&retained))
+	assert.Equal(t, 2, retained, "the closed period must still be readable, just not counted")
+
+	// Idempotent: archiving again must not disturb the live seed.
+	require.NoError(t, repo.ArchiveByGoal(ctx, goalID))
+	total, err = repo.SumConfirmedByGoal(ctx, userID, goalID)
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, total, "a second archive closes the new period too, and does not error")
+}

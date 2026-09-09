@@ -580,6 +580,9 @@ func (r *savingsContributionRepository) SumConfirmedByGoal(ctx context.Context, 
 		  AND g.user_id = $2
 		  AND c.status = 'confirmed'
 		  AND c.deleted_at IS NULL
+		  -- #1625: a row from a CLOSED contributions period is retained and readable but must not
+		  -- count, or a basis round-trip sums it alongside the synthetic seed that replaced it.
+		  AND c.archived_at IS NULL
 	`
 	var total float64
 	if err := r.db.QueryRow(ctx, query, goalID, userID).Scan(&total); err != nil {
@@ -599,6 +602,9 @@ func (r *savingsContributionRepository) SumConfirmedByGoalInPeriod(ctx context.C
 		  AND g.user_id = $2
 		  AND c.status = 'confirmed'
 		  AND c.deleted_at IS NULL
+		  -- #1625: see SumConfirmedByGoal. Both sums must agree about archived rows, or the
+		  -- period total and the lifetime total disagree about the same ledger.
+		  AND c.archived_at IS NULL
 		  AND c.occurred_on >= $3::date
 		  AND c.occurred_on <= $4::date
 	`
@@ -1016,14 +1022,28 @@ func (r *savingsContributionRepository) DeleteManagedForTransaction(ctx context.
 	return err
 }
 
-// ArchiveByGoal clears managed_by_reconciliation on all rows for a goal so they
-// become permanent historical records that the reconciler will not modify.
-// Called when switching a goal's progress_basis away from "contributions" (Codex C10).
+// ArchiveByGoal closes out a goal's contribution ledger: the rows become permanent historical
+// records that neither the reconciler modifies nor the progress sums count.
+// Called when a goal's progress_basis leaves — or re-enters — "contributions" (Codex C10).
+//
+// #1625 Task 12: this used to ONLY clear managed_by_reconciliation, which was not enough in two
+// ways. It left the rows live and confirmed, so a round-trip back to the contributions basis
+// double-counted them against the synthetic seed handleBasisSwitch inserts (100 + 100 = 200). And
+// clearing the flag made reconciler rows indistinguishable from user-entered rows, which already
+// carry false — destroying the only signal that could have told them apart afterwards.
+//
+// Note the WHERE no longer filters on managed_by_reconciliation: a closed period contains the
+// user's own manual contributions too, and leaving those live is exactly what double-counted.
+// Archiving is idempotent — an already-archived row keeps its original timestamp.
 func (r *savingsContributionRepository) ArchiveByGoal(ctx context.Context, goalID string) error {
 	query := `
 		UPDATE savings_goal_contributions
-		SET managed_by_reconciliation = false, updated_at = NOW()
-		WHERE savings_goal_id = $1 AND managed_by_reconciliation = true AND deleted_at IS NULL
+		SET managed_by_reconciliation = false,
+		    archived_at = COALESCE(archived_at, NOW()),
+		    updated_at = NOW()
+		WHERE savings_goal_id = $1
+		  AND deleted_at IS NULL
+		  AND (archived_at IS NULL OR managed_by_reconciliation = true)
 	`
 	_, err := r.db.Exec(ctx, query, goalID)
 	return err
