@@ -662,11 +662,11 @@ func TestRuleEngine_EvaluateRules_OneBrokenRuleDoesNotSuppressTheRest(t *testing
 			Conditions: []domain.RuleCondition{
 				{Type: domain.ConditionAmountGreaterThan, Value: "not-a-number"},
 			},
-			ConditionLogic: "AND",
-			TargetKind:     strPtr("pfc"),
+			ConditionLogic:   "AND",
+			TargetKind:       strPtr("pfc"),
 			TargetPFCPrimary: strPtr("RENT_AND_UTILITIES"),
-			TagBehavior:    "add",
-			Source:         "manual",
+			TagBehavior:      "add",
+			Source:           "manual",
 		},
 		{
 			ID:       "rule-good",
@@ -676,11 +676,11 @@ func TestRuleEngine_EvaluateRules_OneBrokenRuleDoesNotSuppressTheRest(t *testing
 			Conditions: []domain.RuleCondition{
 				{Type: domain.ConditionMerchantContains, Value: "starbucks"},
 			},
-			ConditionLogic: "AND",
-			TargetKind:     strPtr("pfc"),
+			ConditionLogic:   "AND",
+			TargetKind:       strPtr("pfc"),
 			TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
-			TagBehavior:    "add",
-			Source:         "manual",
+			TagBehavior:      "add",
+			Source:           "manual",
 		},
 	}
 

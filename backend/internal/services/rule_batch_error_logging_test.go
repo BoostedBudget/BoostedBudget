@@ -52,10 +52,10 @@ func TestApplyRulesToBatch_SkipsOnlyTheBrokenRuleAndLogsIt(t *testing.T) {
 		// fixtures have no merchant name, so such a rule would match nothing and the assertion
 		// below would pass vacuously for the wrong reason.
 		Conditions:     []domain.RuleCondition{{Type: domain.ConditionAmountGreaterThan, Value: 5}},
-		TargetKind:     strPtrSvc("pfc"),
+		TargetKind:       strPtrSvc("pfc"),
 		TargetPFCPrimary: strPtrSvc("FOOD_AND_DRINK"),
-		TagBehavior:    "add",
-		Source:         "manual",
+		TagBehavior:      "add",
+		Source:           "manual",
 	}
 
 	repo := &stubRuleApplicationRepo{rules: []*domain.CategorizationRule{brokenRule, workingRule}}
