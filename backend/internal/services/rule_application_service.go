@@ -120,7 +120,12 @@ func NewRuleApplicationService(ruleRepo RuleApplicationRepository) *ruleApplicat
 	}
 }
 
-// SetLogger overrides the default logger (setter injection, as with analytics and history).
+// SetLogger overrides the default logger.
+//
+// ⚠ TEST SEAM, not a production wiring gap. #1625 Task 9 checked: nothing in cmd/server calls
+// this, and nothing should — main.go:91 installs appLogger as slog.Default(), which the
+// constructor above already picks up, so the "default" is not a degraded fallback. Its only
+// callers capture log output to assert on it. Do not "fix" the missing main.go call.
 func (s *ruleApplicationService) SetLogger(logger *slog.Logger) {
 	if logger != nil {
 		s.logger = logger
