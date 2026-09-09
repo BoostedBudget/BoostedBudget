@@ -3,6 +3,7 @@ package rules
 import (
 	"os"
 	"sort"
+	"strconv"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
@@ -169,20 +170,58 @@ func (e *RuleEngine) EvaluateRules(tx *domain.Transaction, rules []*domain.Categ
 
 // enforceQuarantine gates every ENFORCED quarantine reason (#1625 Task 2).
 //
-// Default ON. Set RULE_QUARANTINE_ENFORCE=false to restore the pre-#1625 behaviour of running
-// every rule regardless of how broken it is — the same kill-switch convention as CACHE_ENABLED.
+// Default ON. Set RULE_QUARANTINE_ENFORCE to any false-y value (false, 0, f, FALSE, False) to
+// restore the pre-#1625 behaviour of running every rule regardless of how broken it is.
 // Package-level rather than threaded through config because the engine is constructed in several
-// places and a flag nobody can find is not a usable switch.
+// places and a flag nobody can find is not a usable switch. Documented in .env.example beside the
+// other kill switches, for the same reason.
+//
+// ⚠ #1625 final review I2: this was `os.Getenv(...) != "false"` while its own comment claimed
+// "the same kill-switch convention as CACHE_ENABLED". It was not: CACHE_ENABLED goes through
+// config.getEnvBool, i.e. strconv.ParseBool, which accepts 0/f/F/FALSE/False as well. So an
+// operator reaching for this switch DURING AN INCIDENT — the only time it is ever used — could
+// type `=0` and silently keep enforcement ON, with nothing to tell them. It now uses the same
+// ParseBool rule, and an UNPARSEABLE value fails SAFE (enforcement stays on) rather than being
+// read as "off".
 //
 // ⚠ It was RULE_QUARANTINE_ENFORCE_ZERO_CONDITIONS when zero-conditions was the only enforced
 // reason. Renamed rather than kept as an alias because the old name would now be a lie about its
 // own scope, and it has never shipped outside this branch. Pinned by
 // TestQuarantineEnforcementKillSwitchCoversEveryEnforcedReason, which drives every reason with
-// the switch off — an untested kill switch is not one.
+// the switch off, and by TestQuarantineEnforcementReadsTheEnvVarNotJustTheGoVar, which drives the
+// ENV VAR itself — a test that only assigns the Go variable proves nothing about the parsing, and
+// that is exactly the gap this defect lived in.
 //
 // It gates ENFORCEMENT only, never COERCION. Coercion repairs a value the engine would otherwise
 // read wrongly; turning it off would restore a defect rather than a behaviour.
-var enforceQuarantine = os.Getenv("RULE_QUARANTINE_ENFORCE") != "false"
+var enforceQuarantine = quarantineEnforcementFromEnv()
+
+// quarantineEnforceEnvVar is the switch's name in ONE place, so the code, the test that drives it
+// and any future documentation generator cannot disagree about it.
+const quarantineEnforceEnvVar = "RULE_QUARANTINE_ENFORCE"
+
+// quarantineEnforcementFromEnv mirrors config.getEnvBool(key, true): unset or unparseable means
+// the default (ON), anything ParseBool understands means what it says.
+func quarantineEnforcementFromEnv() bool {
+	if value := os.Getenv(quarantineEnforceEnvVar); value != "" {
+		if b, err := strconv.ParseBool(value); err == nil {
+			return b
+		}
+	}
+	return true
+}
+
+// QuarantineEnforced reports whether the engine is currently refusing quarantined rules.
+//
+// ⚠ #1625 final review I3: this exists because enforcement had THREE sources of truth. RuleMatches
+// gated on the kill switch; categorization_rule_service.annotateQuarantineStatus and
+// ruleApplicationService.reportQuarantineCandidates did not. With the switch off, the card said
+// "Not running" while the engine went on recategorising the user's ledger — the divergence
+// RuleMatches' own comment calls impossible. Every read model that reports "is this rule running"
+// must go through here, not through observability.QuarantineReasonStopsMatching alone: that
+// predicate answers "does this REASON stop a rule", which is only half the question while a kill
+// switch exists.
+func QuarantineEnforced() bool { return enforceQuarantine }
 
 // RuleMatches checks if a single rule matches a transaction.
 //
@@ -253,4 +292,17 @@ func (e *RuleEngine) evaluateOR(tx *domain.Transaction, conditions []domain.Rule
 		}
 	}
 	return false, nil
+}
+
+// SetQuarantineEnforcementForTest flips the kill switch and returns a restore function.
+//
+// Exported (rather than left to package-internal assignment) because #1625 final review I3's
+// divergence was BETWEEN packages: the read model lives in services and the switch lives here, so
+// the test that proves they agree has to be able to move the switch from outside. It is a test
+// seam and nothing in production calls it — enforcement itself is decided once, at init, from
+// quarantineEnforcementFromEnv.
+func SetQuarantineEnforcementForTest(enforcing bool) func() {
+	original := enforceQuarantine
+	enforceQuarantine = enforcing
+	return func() { enforceQuarantine = original }
 }

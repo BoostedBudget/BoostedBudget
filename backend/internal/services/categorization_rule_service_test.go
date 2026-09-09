@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
+	"github.com/maxnussbaum/BoostedBudget/internal/rules"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -852,4 +854,56 @@ func TestCategorizationRuleService_UpdateRule_StillRefusesANewlySuppliedBadShape
 	require.Error(t, err, "a condition the REQUEST supplied is new data and must be shape-checked")
 	assert.ErrorIs(t, err, domain.ErrInvalidConditionValue)
 	mockRepo.AssertNotCalled(t, "Update", ctx, mock.AnythingOfType("*domain.CategorizationRule"))
+}
+
+// TestCategorizationRuleService_QuarantineBadgeFollowsTheKillSwitch is #1625's final-review I3.
+//
+// Enforcement had THREE sources of truth: rules.RuleMatches gated on RULE_QUARANTINE_ENFORCE,
+// while annotateQuarantineStatus here and reportQuarantineCandidates in rule_application_service
+// consulted observability.QuarantineReasonStopsMatching alone. With the switch off the card said
+// "Not running" — the strongest claim the UI can make — while the engine went on recategorising
+// the user's ledger. RuleMatches' own doc comment calls that divergence impossible.
+//
+// ⚠ Driven through the SERVICE's public read path, not through annotateQuarantineStatus directly,
+// because the response object is what the user is shown. And both switch positions are asserted:
+// checking only the off position would pass against a function that always returned false.
+func TestCategorizationRuleService_QuarantineBadgeFollowsTheKillSwitch(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	ruleID := "rule-quarantined"
+
+	// no_conditions_matches_everything: enforced, unreachable through the API, and therefore the
+	// cleanest fixture for "the engine refuses this rule outright".
+	stopped := &domain.CategorizationRule{
+		ID:               ruleID,
+		UserID:           userID,
+		Name:             "Broken rule",
+		Enabled:          true,
+		Conditions:       nil,
+		ConditionLogic:   "AND",
+		TargetKind:       ptrStr("pfc"),
+		TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		TagBehavior:      "add",
+		Source:           "manual",
+	}
+
+	for _, enforcing := range []bool{true, false} {
+		t.Run(map[bool]string{true: "enforcing", false: "kill switch off"}[enforcing], func(t *testing.T) {
+			restore := rules.SetQuarantineEnforcementForTest(enforcing)
+			t.Cleanup(restore)
+
+			mockRepo := new(mockRuleRepository)
+			service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
+			mockRepo.On("GetByID", ctx, ruleID).Return(stopped, nil)
+
+			got, err := service.GetRuleByID(ctx, userID, ruleID)
+			require.NoError(t, err)
+
+			assert.Equal(t, string(observability.QuarantineNoConditions), got.QuarantineReason,
+				"the reason is reported in BOTH positions — the switch gates enforcement, not diagnosis")
+			assert.Equal(t, enforcing, got.Quarantined,
+				"`quarantined` is the claim \"this rule matches nothing\". With the kill switch off "+
+					"the engine runs the rule, so claiming it is not running is false.")
+		})
+	}
 }

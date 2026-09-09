@@ -448,3 +448,62 @@ func TestEvaluationNeverRewritesTheStoredCondition(t *testing.T) {
 		t.Error("evaluation normalized the live rule in place")
 	}
 }
+
+// TestQuarantineEnforcementReadsTheEnvVarNotJustTheGoVar is #1625's final-review I2.
+//
+// Every other kill-switch test above assigns `enforceQuarantine` directly, which proves the GATE
+// works and says nothing about how the variable is derived. The defect lived exactly there:
+// `os.Getenv("RULE_QUARANTINE_ENFORCE") != "false"` treated `0`, `f` and `False` as ON while the
+// comment beside it claimed "the same kill-switch convention as CACHE_ENABLED" — which parses all
+// three as OFF. An operator reaching for this switch is, by definition, mid-incident; the switch
+// silently not working is the worst possible time for it.
+//
+// ⚠ Drives the ENV VAR through the real parser. A table that set the Go var would be green under
+// the defect.
+func TestQuarantineEnforcementReadsTheEnvVarNotJustTheGoVar(t *testing.T) {
+	cases := []struct {
+		value string
+		want  bool
+		why   string
+	}{
+		{"", true, "unset means the default, which is ON"},
+		{"false", false, "the spelling the doc comment always promised"},
+		{"0", false, "ParseBool's numeric false — silently kept enforcement ON before I2"},
+		{"f", false, "ParseBool's short false — same"},
+		{"False", false, "ParseBool is case-sensitive only about these exact spellings"},
+		{"FALSE", false, "same"},
+		{"true", true, "explicitly on"},
+		{"1", true, "explicitly on"},
+		{"no", true, "NOT a ParseBool spelling: unparseable fails SAFE (enforcement stays on) " +
+			"rather than being read as off"},
+		{"disabled", true, "same — a typo must never silently disable enforcement"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.value, func(t *testing.T) {
+			t.Setenv(quarantineEnforceEnvVar, c.value)
+			if got := quarantineEnforcementFromEnv(); got != c.want {
+				t.Errorf("%s=%q parsed as enforcing=%v, want %v — %s",
+					quarantineEnforceEnvVar, c.value, got, c.want, c.why)
+			}
+		})
+	}
+}
+
+// TestQuarantineEnforcedIsTheOneAnswerTheReadModelUses is #1625's final-review I3.
+//
+// The exported accessor exists so the READ model (the "Not running" badge) and the ENGINE cannot
+// disagree while the kill switch is off. Asserted here on the accessor itself; the services-side
+// half is asserted in package services, which is where the divergence actually was.
+func TestQuarantineEnforcedIsTheOneAnswerTheReadModelUses(t *testing.T) {
+	original := enforceQuarantine
+	t.Cleanup(func() { enforceQuarantine = original })
+
+	for _, want := range []bool{true, false} {
+		enforceQuarantine = want
+		if got := QuarantineEnforced(); got != want {
+			t.Errorf("QuarantineEnforced() = %v while the engine's own gate is %v — the read model "+
+				"would describe a rule the engine treats differently", got, want)
+		}
+	}
+}

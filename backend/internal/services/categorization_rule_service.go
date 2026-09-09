@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
-	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -192,12 +191,21 @@ func annotateQuarantineStatus(r *domain.CategorizationRule) {
 		return
 	}
 	r.QuarantineReason = string(reason)
-	// Quarantined means "cannot match anything", NOT "has a problem". Measured, not assumed:
-	// invalid_condition_logic falls back to AND and keeps matching, and unnormalizable_condition
-	// keeps matching under OR because its junk condition returns (false, nil) and a valid sibling
-	// carries the rule. Reporting those as not-running would tell the user their rule is off while
-	// it quietly recategorises their transactions.
-	r.Quarantined = observability.QuarantineReasonStopsMatching(reason)
+	// Quarantined means "cannot match anything", NOT "has a problem".
+	//
+	// ⚠ #1625 final review I1: this comment used to explain why invalid_condition_logic and
+	// unnormalizable_condition are NOT reported as stopped — sitting on the line that reports them
+	// as stopped. Both are `true` in QuarantineReasonStopsMatching and have been since Task 2
+	// moved enforcement into RuleMatches; the comment described the behaviour of an earlier round
+	// and was falsified by a later commit on the same branch. The surviving distinction is
+	// invalid_condition_value_shape, which is REPAIRED at read time (domain.CoercedValue) and DOES
+	// still match, so reporting it as not-running would tell the user their rule is off while it
+	// quietly recategorises their transactions.
+	//
+	// ⚠ #1625 final review I3: this goes through quarantineStopsMatching, NOT
+	// QuarantineReasonStopsMatching directly, so the badge and the engine cannot disagree while the
+	// RULE_QUARANTINE_ENFORCE kill switch is off.
+	r.Quarantined = quarantineStopsMatching(reason)
 }
 
 // GetRuleByID retrieves a specific rule by ID.
