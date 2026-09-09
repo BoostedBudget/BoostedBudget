@@ -6,8 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/mockassert"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -72,6 +75,43 @@ func (m *MockSavingsGoalRepository) GetByName(ctx context.Context, userID, name 
 	return args.Get(0).(*domain.SavingsGoal), args.Error(1)
 }
 
+// fakeTx is a repository.Transaction double for the unit tests. It records commit/rollback and
+// nothing else: the SQL those methods would run is exercised against real Postgres in
+// savings_basis_switch_atomicity_integration_test.go, and what the unit tests need to observe is
+// the SEQUENCE — that a seed failure ends in Rollback and no Commit.
+type fakeTx struct {
+	committed  bool
+	rolledBack bool
+	commitErr  error
+}
+
+func (f *fakeTx) Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+func (f *fakeTx) Query(context.Context, string, ...interface{}) (pgx.Rows, error) { return nil, nil }
+func (f *fakeTx) QueryRow(context.Context, string, ...interface{}) pgx.Row        { return nil }
+func (f *fakeTx) Commit(context.Context) error {
+	f.committed = true
+	return f.commitErr
+}
+func (f *fakeTx) Rollback(context.Context) error {
+	f.rolledBack = true
+	return nil
+}
+
+func (m *MockSavingsGoalRepository) BeginTx(ctx context.Context) (repository.Transaction, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(repository.Transaction), args.Error(1)
+}
+
+func (m *MockSavingsGoalRepository) UpdateWithBasisGuardInTx(ctx context.Context, tx repository.Transaction, goal *domain.SavingsGoal, priorBasis string) error {
+	args := m.Called(ctx, tx, goal, priorBasis)
+	return args.Error(0)
+}
+
 func (m *MockSavingsGoalRepository) Update(ctx context.Context, goal *domain.SavingsGoal) error {
 	args := m.Called(ctx, goal)
 	return args.Error(0)
@@ -105,8 +145,8 @@ func (m *MockSavingsGoalRepository) GetByAccountID(ctx context.Context, accountI
 	return args.Get(0).([]*domain.SavingsGoal), args.Error(1)
 }
 
-func (m *MockSavingsGoalRepository) UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error {
-	args := m.Called(ctx, goalID, currentAmount, lastCalculatedAt, balanceAsOf)
+func (m *MockSavingsGoalRepository) UpdateCurrentAmount(ctx context.Context, goalID, basis string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error {
+	args := m.Called(ctx, goalID, basis, currentAmount, lastCalculatedAt, balanceAsOf)
 	return args.Error(0)
 }
 
@@ -1082,13 +1122,15 @@ type MockGoalBasisSwitchContribRepo struct {
 	mock.Mock
 }
 
-func (m *MockGoalBasisSwitchContribRepo) Insert(ctx context.Context, userID string, contrib *domain.SavingsGoalContribution) error {
-	args := m.Called(ctx, userID, contrib)
+// #1625: the InTx forms. `tx` is recorded so a test can assert the seed and the archive were
+// handed THE SAME transaction the goal update ran in — the whole point of the boundary.
+func (m *MockGoalBasisSwitchContribRepo) InsertInTx(ctx context.Context, tx repository.Transaction, userID string, contrib *domain.SavingsGoalContribution) error {
+	args := m.Called(ctx, tx, userID, contrib)
 	return args.Error(0)
 }
 
-func (m *MockGoalBasisSwitchContribRepo) ArchiveByGoal(ctx context.Context, goalID string) error {
-	args := m.Called(ctx, goalID)
+func (m *MockGoalBasisSwitchContribRepo) ArchiveByGoalInTx(ctx context.Context, tx repository.Transaction, goalID string) error {
+	args := m.Called(ctx, tx, goalID)
 	return args.Error(0)
 }
 
@@ -1139,13 +1181,18 @@ func TestUpdateGoal_ManualToContributions_SeedsContribution(t *testing.T) {
 	newBasis := domain.ProgressBasisContributions
 	req := &domain.UpdateSavingsGoalRequest{ProgressBasis: &newBasis}
 
+	tx := &fakeTx{}
 	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
-	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	// #1625: the switch runs in ONE transaction, behind a lock on the goal row, and the plain
+	// Update is NOT the path it takes.
+	mockGoalRepo.On("BeginTx", ctx).Return(tx, nil)
+	mockGoalRepo.On("UpdateWithBasisGuardInTx", ctx, repository.Transaction(tx),
+		mock.AnythingOfType("*domain.SavingsGoal"), domain.ProgressBasisManual).Return(nil)
 	// #1625 Task 12: any PRIOR contributions period is closed out BEFORE the seed goes in, so a
 	// goal that round-trips does not end up counting the old rows and the synthetic seed together.
-	mockContribRepo.On("ArchiveByGoal", ctx, goalID).Return(nil)
+	mockContribRepo.On("ArchiveByGoalInTx", ctx, repository.Transaction(tx), goalID).Return(nil)
 	// manual → contributions: a seed contribution must be inserted with Amount = priorAmount.
-	mockContribRepo.On("Insert", ctx, userID, mock.MatchedBy(func(c *domain.SavingsGoalContribution) bool {
+	mockContribRepo.On("InsertInTx", ctx, repository.Transaction(tx), userID, mock.MatchedBy(func(c *domain.SavingsGoalContribution) bool {
 		return c.SavingsGoalID == goalID &&
 			c.Amount == priorAmount &&
 			c.Source == "manual" &&
@@ -1163,6 +1210,8 @@ func TestUpdateGoal_ManualToContributions_SeedsContribution(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, goal)
 	assert.Equal(t, domain.ProgressBasisContributions, goal.ProgressBasis)
+	assert.True(t, tx.committed, "the basis, the archive and the seed must commit together")
+	mockGoalRepo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
 	mockContribRepo.AssertExpectations(t)
 	mockAnalytics.AssertExpectations(t)
 	mockProgress.AssertExpectations(t)
@@ -1198,10 +1247,13 @@ func TestUpdateGoal_ContributionsToBalance_ArchivesContributions(t *testing.T) {
 	newBasis := domain.ProgressBasisBalance
 	req := &domain.UpdateSavingsGoalRequest{ProgressBasis: &newBasis}
 
+	tx := &fakeTx{}
 	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
-	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
-	// contributions → balance: contributions archived (managed_by_reconciliation cleared).
-	mockContribRepo.On("ArchiveByGoal", ctx, goalID).Return(nil)
+	mockGoalRepo.On("BeginTx", ctx).Return(tx, nil)
+	mockGoalRepo.On("UpdateWithBasisGuardInTx", ctx, repository.Transaction(tx),
+		mock.AnythingOfType("*domain.SavingsGoal"), domain.ProgressBasisContributions).Return(nil)
+	// contributions → balance: the closing period is archived in the same transaction.
+	mockContribRepo.On("ArchiveByGoalInTx", ctx, repository.Transaction(tx), goalID).Return(nil)
 	// Analytics event fired for basis change.
 	mockAnalytics.On("Capture", userID, "savings_goal_progress_basis_changed", mock.Anything).Return()
 	// RecomputeGoal triggered.
@@ -1212,6 +1264,7 @@ func TestUpdateGoal_ContributionsToBalance_ArchivesContributions(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, goal)
 	assert.Equal(t, domain.ProgressBasisBalance, goal.ProgressBasis)
+	assert.True(t, tx.committed)
 	mockContribRepo.AssertExpectations(t)
 	mockAnalytics.AssertExpectations(t)
 	mockProgress.AssertExpectations(t)
@@ -1250,11 +1303,24 @@ func TestUpdateGoal_NoBasisChange_NoSeedNoArchive(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotNil(t, goal)
-	mockContribRepo.AssertNotCalled(t, "Insert")
-	mockContribRepo.AssertNotCalled(t, "ArchiveByGoal")
+	mockassert.NoCallTo(t, &mockContribRepo.Mock, "InsertInTx")
+	mockassert.NoCallTo(t, &mockContribRepo.Mock, "ArchiveByGoalInTx")
+	// No basis change means no transaction at all: the ordinary single-statement update.
+	mockassert.NoCallTo(t, &mockGoalRepo.Mock, "BeginTx")
 }
 
-func TestUpdateGoal_BasisSwitch_SeedErrorIsNonFatal(t *testing.T) {
+// TestUpdateGoal_BasisSwitch_SeedFailureRollsBackTheSwitch is the #1625 DATA-LOSS regression.
+//
+// This test previously asserted the OPPOSITE — that a failed seed was non-fatal and UpdateGoal
+// still returned 200. That was the defect, not the contract. The sequence it blessed:
+//
+//	manual goal holding $500 → new basis COMMITS → prior period archived → seed insert fails and
+//	is LOGGED → UpdateGoal returns success → RecomputeGoal sums a now-empty live ledger → $0
+//	persisted, permanently, with no restore path anywhere on this branch.
+//
+// The seed IS the money on a manual→contributions switch. There is no such thing as a switch that
+// half worked, so the whole thing rolls back and the caller is told.
+func TestUpdateGoal_BasisSwitch_SeedFailureRollsBackTheSwitch(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-seed-fail"
 	goalID := "goal-seed-fail"
@@ -1283,20 +1349,79 @@ func TestUpdateGoal_BasisSwitch_SeedErrorIsNonFatal(t *testing.T) {
 	newBasis := domain.ProgressBasisContributions
 	req := &domain.UpdateSavingsGoalRequest{ProgressBasis: &newBasis}
 
+	tx := &fakeTx{}
+	seedErr := errors.New("db: foreign key violation")
 	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
-	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
-	// Seed fails — UpdateGoal must still succeed (non-fatal, Codex C10).
-	// #1625 Task 12: the pre-seed archive runs first on this path too.
-	mockContribRepo.On("ArchiveByGoal", mock.Anything, mock.Anything).Return(nil)
-	mockContribRepo.On("Insert", ctx, userID, mock.AnythingOfType("*domain.SavingsGoalContribution")).
-		Return(errors.New("db: foreign key violation"))
-	mockAnalytics.On("Capture", userID, "savings_goal_progress_basis_changed", mock.Anything).Return()
-	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(0.0, nil)
+	mockGoalRepo.On("BeginTx", ctx).Return(tx, nil)
+	mockGoalRepo.On("UpdateWithBasisGuardInTx", ctx, repository.Transaction(tx),
+		mock.AnythingOfType("*domain.SavingsGoal"), domain.ProgressBasisManual).Return(nil)
+	mockContribRepo.On("ArchiveByGoalInTx", ctx, repository.Transaction(tx), goalID).Return(nil)
+	mockContribRepo.On("InsertInTx", ctx, repository.Transaction(tx), userID,
+		mock.AnythingOfType("*domain.SavingsGoalContribution")).Return(seedErr)
 
 	goal, err := service.UpdateGoal(ctx, userID, goalID, req)
 
-	require.NoError(t, err, "UpdateGoal must succeed even when seed contribution insert fails")
-	assert.NotNil(t, goal)
+	require.Error(t, err, "a failed seed must fail the switch, not be logged and swallowed")
+	assert.ErrorIs(t, err, seedErr)
+	assert.Nil(t, goal)
+	assert.False(t, tx.committed, "nothing about the switch may be committed")
+	assert.True(t, tx.rolledBack)
+
+	// The two calls that turned a failed seed into a persisted zero. Neither may run: the
+	// recompute would sum an empty ledger, and the analytics event would report a basis change
+	// that did not happen.
+	mockassert.NoCallTo(t, &mockProgress.Mock, "RecomputeGoal")
+	mockassert.NoCallTo(t, &mockAnalytics.Mock, "Capture")
+	mockassert.NoCallTo(t, &mockGoalRepo.Mock, "UpdateCurrentAmount")
+}
+
+// TestUpdateGoal_BasisSwitch_ConcurrentSwitchIsRefused pins the SERVICE half of the concurrency
+// fix: when the repository reports that the row already moved off the basis this switch was
+// planned from, UpdateGoal surfaces that instead of archiving and seeding a second time. The
+// database half — that the guard genuinely serialises two overlapping requests — is proved against
+// real Postgres in TestSavingsBasisSwitch_Integration_ConcurrentSwitchesSeedExactlyOnce.
+func TestUpdateGoal_BasisSwitch_ConcurrentSwitchIsRefused(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-basis-race"
+	goalID := "goal-basis-race"
+
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockProgress := new(MockGoalProgressRecomputer)
+	mockContribRepo := new(MockGoalBasisSwitchContribRepo)
+
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+	service.SetProgressService(mockProgress)
+	service.SetBasisSwitchContribRepo(mockContribRepo)
+
+	existing := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		Name:          "Car",
+		TargetAmount:  8000.0,
+		CurrentAmount: 100.0,
+		CurrencyCode:  "USD",
+		AccountID:     "account-car",
+		ProgressBasis: domain.ProgressBasisManual,
+	}
+	newBasis := domain.ProgressBasisContributions
+	req := &domain.UpdateSavingsGoalRequest{ProgressBasis: &newBasis}
+
+	tx := &fakeTx{}
+	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
+	mockGoalRepo.On("BeginTx", ctx).Return(tx, nil)
+	mockGoalRepo.On("UpdateWithBasisGuardInTx", ctx, repository.Transaction(tx),
+		mock.AnythingOfType("*domain.SavingsGoal"), domain.ProgressBasisManual).
+		Return(domain.ErrSavingsGoalBasisConflict)
+
+	_, err := service.UpdateGoal(ctx, userID, goalID, req)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrSavingsGoalBasisConflict,
+		"the loser of a basis-switch race must be refused, not allowed to seed a second time")
+	assert.False(t, tx.committed)
+	mockassert.NoCallTo(t, &mockContribRepo.Mock, "ArchiveByGoalInTx")
+	mockassert.NoCallTo(t, &mockContribRepo.Mock, "InsertInTx")
 }
 
 // ── #1569 Task 12 fix round 1 (I5) ────────────────────────────────────────────────────────────
@@ -1652,14 +1777,31 @@ func TestUpdateGoal_BasisSwitch_FailedArchiveSkipsTheSeed(t *testing.T) {
 	}
 	newBasis := domain.ProgressBasisContributions
 
+	tx := &fakeTx{}
+	archiveErr := errors.New("archive blew up")
 	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
-	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
-	mockContribRepo.On("ArchiveByGoal", ctx, goalID).Return(errors.New("archive blew up"))
-	mockAnalytics.On("Capture", userID, "savings_goal_progress_basis_changed", mock.Anything).Return()
-	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(0.0, nil)
+	mockGoalRepo.On("BeginTx", ctx).Return(tx, nil)
+	mockGoalRepo.On("UpdateWithBasisGuardInTx", ctx, repository.Transaction(tx),
+		mock.AnythingOfType("*domain.SavingsGoal"), domain.ProgressBasisManual).Return(nil)
+	mockContribRepo.On("ArchiveByGoalInTx", ctx, repository.Transaction(tx), goalID).Return(archiveErr)
 
 	_, err := service.UpdateGoal(ctx, userID, goalID, &domain.UpdateSavingsGoalRequest{ProgressBasis: &newBasis})
 
-	require.NoError(t, err, "the basis change itself is still non-fatal")
-	mockContribRepo.AssertNotCalled(t, "Insert", mock.Anything, mock.Anything, mock.Anything)
+	// THE ASSERTION THIS TEST EXISTS FOR, unchanged: no seed after a failed archive.
+	mockassert.NoCallTo(t, &mockContribRepo.Mock, "InsertInTx")
+
+	// ⚠ WHAT CHANGED, and why it is a strengthening rather than a contradiction. This used to
+	// assert require.NoError — "the basis change itself is still non-fatal" — because the basis
+	// UPDATE had already committed on its own and there was nothing left to undo. #1625 put the
+	// basis, the archive and the seed in ONE transaction, so a failed archive no longer leaves a
+	// half-applied switch to be lenient about: the goal stays on its prior basis, the prior
+	// period stays live, and the caller is told. The invariant the old comment defended (never a
+	// live prior period beside a synthetic seed) now holds by construction rather than by the
+	// service remembering to return early.
+	require.Error(t, err, "a failed archive fails the whole switch — see the comment above")
+	assert.ErrorIs(t, err, archiveErr)
+	assert.False(t, tx.committed, "no part of the switch may be committed")
+	assert.True(t, tx.rolledBack)
+	mockassert.NoCallTo(t, &mockProgress.Mock, "RecomputeGoal")
+	mockassert.NoCallTo(t, &mockAnalytics.Mock, "Capture")
 }

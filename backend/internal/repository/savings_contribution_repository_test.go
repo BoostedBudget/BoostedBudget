@@ -47,9 +47,12 @@ func TestSavingsContributionRepository_Insert_Basic(t *testing.T) {
 		OccurredOn:    "2024-01-15",
 	}
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+	// #1625: Insert is transactional and its ownership probe became a locked basis assertion —
+	// the handler's contributions-basis gate was a TOCTOU on its own.
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
 		WithArgs(goalID, userID).
-		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisContributions))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO savings_goal_contributions`)).
 		WithArgs(
 			pgxmock.AnyArg(), // id
@@ -64,6 +67,7 @@ func TestSavingsContributionRepository_Insert_Basic(t *testing.T) {
 			pgxmock.AnyArg(), // created_at
 			pgxmock.AnyArg(), // updated_at
 		).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
 
 	err := repo.Insert(ctx, userID, contrib)
 
@@ -90,9 +94,12 @@ func TestSavingsContributionRepository_Insert_IDPreserved(t *testing.T) {
 		OccurredOn:    "2024-02-01",
 	}
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+	// #1625: Insert is transactional and its ownership probe became a locked basis assertion —
+	// the handler's contributions-basis gate was a TOCTOU on its own.
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
 		WithArgs(goalID, userID).
-		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisContributions))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO savings_goal_contributions`)).
 		WithArgs(
 			existingID, // pre-set ID must be preserved
@@ -107,6 +114,7 @@ func TestSavingsContributionRepository_Insert_IDPreserved(t *testing.T) {
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
 		).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
 
 	err := repo.Insert(ctx, userID, contrib)
 	require.NoError(t, err)
@@ -130,9 +138,12 @@ func TestSavingsContributionRepository_Insert_DefaultStatusConfirmed(t *testing.
 		OccurredOn: "2024-03-01",
 	}
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+	// #1625: Insert is transactional and its ownership probe became a locked basis assertion —
+	// the handler's contributions-basis gate was a TOCTOU on its own.
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
 		WithArgs(goalID, userID).
-		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisContributions))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO savings_goal_contributions`)).
 		WithArgs(
 			pgxmock.AnyArg(),
@@ -147,6 +158,7 @@ func TestSavingsContributionRepository_Insert_DefaultStatusConfirmed(t *testing.
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
 		).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
 
 	err := repo.Insert(ctx, userID, contrib)
 	require.NoError(t, err)
@@ -680,11 +692,19 @@ func TestSavingsContributionRepository_RejectContribution_Success(t *testing.T) 
 
 	// The UPDATE … FROM savings_goals … RETURNING query. Three args since #1625: the goal is
 	// bound into the statement so a contribution from another goal cannot be rejected here.
+	// #1625: RejectContribution now opens a transaction and locks the goal row, asserting the
+	// ledger is still live, before touching the contribution — an `AND g.progress_basis = …` on
+	// the UPDATE … FROM would have been evaluated against a stale snapshot.
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisContributions))
 	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE savings_goal_contributions c`)).
 		WithArgs(contribID, userID, goalID).
 		WillReturnRows(pgxmock.NewRows(contributionColumns).
 			AddRow(contribID, goalID, nil, 100.0, "confirmed_transfer", "rejected",
 				true, false, "2026-06-14", time.Now(), time.Now(), nil))
+	mock.ExpectCommit()
 
 	result, err := repo.RejectContribution(ctx, userID, goalID, contribID)
 	require.NoError(t, err)
@@ -705,6 +725,13 @@ func TestSavingsContributionRepository_RejectContribution_NotFound(t *testing.T)
 	contribID := uuid.New().String()
 
 	// The UPDATE returns no rows (not found, wrong user, or a different goal).
+	// #1625: RejectContribution now opens a transaction and locks the goal row, asserting the
+	// ledger is still live, before touching the contribution — an `AND g.progress_basis = …` on
+	// the UPDATE … FROM would have been evaluated against a stale snapshot.
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisContributions))
 	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE savings_goal_contributions c`)).
 		WithArgs(contribID, userID, goalID).
 		WillReturnError(pgx.ErrNoRows)
@@ -731,6 +758,13 @@ func TestSavingsContributionRepository_RejectContribution_NotProposed(t *testing
 	contribID := uuid.New().String()
 
 	// The UPDATE returns no rows (status != 'proposed') but the row exists.
+	// #1625: RejectContribution now opens a transaction and locks the goal row, asserting the
+	// ledger is still live, before touching the contribution — an `AND g.progress_basis = …` on
+	// the UPDATE … FROM would have been evaluated against a stale snapshot.
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisContributions))
 	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE savings_goal_contributions c`)).
 		WithArgs(contribID, userID, goalID).
 		WillReturnError(pgx.ErrNoRows)

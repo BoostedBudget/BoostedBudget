@@ -111,6 +111,16 @@ func (m *mockSavingsContributionRepo) DeleteManagedForTransaction(ctx context.Co
 	return args.Error(0)
 }
 
+func (m *mockSavingsContributionRepo) ArchiveByGoalInTx(ctx context.Context, tx repository.Transaction, goalID string) error {
+	args := m.Called(ctx, tx, goalID)
+	return args.Error(0)
+}
+
+func (m *mockSavingsContributionRepo) InsertInTx(ctx context.Context, tx repository.Transaction, userID string, contrib *domain.SavingsGoalContribution) error {
+	args := m.Called(ctx, tx, userID, contrib)
+	return args.Error(0)
+}
+
 func (m *mockSavingsContributionRepo) ArchiveByGoal(ctx context.Context, goalID string) error {
 	args := m.Called(ctx, goalID)
 	return args.Error(0)

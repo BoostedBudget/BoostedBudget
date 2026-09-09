@@ -572,10 +572,11 @@ func TestSavingsGoalRepository_UpdateCurrentAmount(t *testing.T) {
 	now := time.Now()
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
-		WithArgs(newCurrentAmount, pgxmock.AnyArg(), pgxmock.AnyArg(), goalID).
+		WithArgs(newCurrentAmount, pgxmock.AnyArg(), pgxmock.AnyArg(), goalID,
+			domain.ProgressBasisContributions, domain.ProgressBasisManual).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	err := repo.UpdateCurrentAmount(ctx, goalID, newCurrentAmount, now, nil)
+	err := repo.UpdateCurrentAmount(ctx, goalID, domain.ProgressBasisContributions, newCurrentAmount, now, nil)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -591,10 +592,16 @@ func TestSavingsGoalRepository_UpdateCurrentAmount_NotFound(t *testing.T) {
 	now := time.Now()
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
-		WithArgs(2500.00, pgxmock.AnyArg(), pgxmock.AnyArg(), goalID).
+		WithArgs(2500.00, pgxmock.AnyArg(), pgxmock.AnyArg(), goalID,
+			domain.ProgressBasisContributions, domain.ProgressBasisManual).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	// #1625: zero rows is now ambiguous — gone, or moved to another basis. The repository probes
+	// to tell them apart, and a probe that finds nothing means genuinely not found.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(NULLIF(progress_basis, ''), $2) FROM savings_goals`)).
+		WithArgs(goalID, domain.ProgressBasisManual).
+		WillReturnError(pgx.ErrNoRows)
 
-	err := repo.UpdateCurrentAmount(ctx, goalID, 2500.00, now, nil)
+	err := repo.UpdateCurrentAmount(ctx, goalID, domain.ProgressBasisContributions, 2500.00, now, nil)
 
 	assert.Error(t, err)
 	assert.Equal(t, domain.ErrSavingsGoalNotFound, err)
