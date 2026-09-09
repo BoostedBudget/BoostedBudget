@@ -7,7 +7,7 @@
  */
 
 import { useMemo, useCallback } from 'react';
-import { historyDateKey, calendarDateRange } from '@/shared/dates';
+import { forwardFillByDay } from '@/shared/dates';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useGetBalanceSummary,
@@ -20,7 +20,6 @@ import {
 import type {
   BalanceSummary,
   BalanceHistory,
-  BalanceHistorySnapshot,
   AccountTypesResponse,
   DashboardFilters,
 } from '../types';
@@ -153,9 +152,14 @@ export function useDashboardData(filters?: DashboardFilters): UseDashboardDataRe
  * Fill gaps in balance history with forward-filled values
  *
  * Strategy:
- * - For each day in the range [start_date, end_date], ensure there's a snapshot
+ * - For each day from start_date up to the fill horizon, ensure there's a snapshot
  * - If a day is missing, use the previous day's balance (forward-fill)
  * - This creates a continuous time series for smooth chart rendering
+ *
+ * The horizon is min(newest real snapshot, today) — NOT end_date, which can be in the future
+ * and used to have the last real snapshot copied forward into days that had not happened yet
+ * (#1626 Phase 3, Defect 1). See forwardFillByDay for the full reasoning, including why "the
+ * array's last row" is not a sufficient cutoff on its own.
  *
  * @param history - Original balance history from API
  * @returns Balance history with filled gaps
@@ -163,39 +167,12 @@ export function useDashboardData(filters?: DashboardFilters): UseDashboardDataRe
 function fillBalanceHistoryGaps(history: BalanceHistory): BalanceHistory {
   const { start_date, end_date, snapshots } = history;
 
-  // Generate all calendar-date keys in range (UTC-safe, no TZ shift)
-  const allDays = calendarDateRange(start_date, end_date);
-
-  // Create a map of existing snapshots by UTC calendar date key
-  const snapshotMap = new Map<string, BalanceHistorySnapshot>();
-  snapshots.forEach((snapshot) => {
-    snapshotMap.set(historyDateKey(snapshot.date), snapshot);
-  });
-
-  // Fill gaps with forward-filled values
-  const filledSnapshots: BalanceHistorySnapshot[] = [];
-  let lastSnapshot: BalanceHistorySnapshot | null = null;
-
-  allDays.forEach((dateKey) => {
-    const existingSnapshot = snapshotMap.get(dateKey);
-
-    if (existingSnapshot) {
-      // Use actual snapshot
-      filledSnapshots.push(existingSnapshot);
-      lastSnapshot = existingSnapshot;
-    } else if (lastSnapshot) {
-      // Forward-fill from previous snapshot
-      filledSnapshots.push({
-        date: dateKey,
-        balance: lastSnapshot.balance,
-        by_type: lastSnapshot.by_type,
-      });
-    }
-    // If no previous snapshot exists, skip this day (shouldn't happen after first snapshot)
-  });
-
   return {
     ...history,
-    snapshots: filledSnapshots,
+    snapshots: forwardFillByDay(snapshots, start_date, end_date, (previous, dateKey) => ({
+      date: dateKey,
+      balance: previous.balance,
+      by_type: previous.by_type,
+    })),
   };
 }

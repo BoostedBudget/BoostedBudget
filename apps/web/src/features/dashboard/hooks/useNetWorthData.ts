@@ -3,7 +3,7 @@
  */
 
 import { useMemo, useCallback } from 'react';
-import { historyDateKey, calendarDateRange } from '@/shared/dates';
+import { forwardFillByDay } from '@/shared/dates';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useGetNetWorth,
@@ -14,7 +14,6 @@ import {
 import type {
   NetWorthSummary,
   NetWorthHistory,
-  NetWorthHistorySnapshot,
   DashboardFilters,
 } from '../types';
 
@@ -130,9 +129,13 @@ export function useNetWorthData(filters?: DashboardFilters): UseNetWorthDataResu
  * Fill gaps in net worth history with forward-filled values
  *
  * Strategy:
- * - For each day in the range [start_date, end_date], ensure there's a snapshot
+ * - For each day from start_date up to the fill horizon, ensure there's a snapshot
  * - If a day is missing, use the previous day's values (forward-fill)
  * - This creates a continuous time series for smooth chart rendering
+ *
+ * The horizon is min(newest real snapshot, today) — NOT end_date, which can be in the future
+ * and used to have the newest snapshot copied forward into days that had not happened yet
+ * (#1626 Phase 3, Defect 1). See forwardFillByDay for the full reasoning.
  *
  * @param history - Original net worth history from API
  * @returns Net worth history with filled gaps
@@ -140,40 +143,13 @@ export function useNetWorthData(filters?: DashboardFilters): UseNetWorthDataResu
 function fillNetWorthHistoryGaps(history: NetWorthHistory): NetWorthHistory {
   const { start_date, end_date, snapshots } = history;
 
-  // Generate all calendar-date keys in range (UTC-safe, no TZ shift)
-  const allDays = calendarDateRange(start_date, end_date);
-
-  // Create a map of existing snapshots by UTC calendar date key
-  const snapshotMap = new Map<string, NetWorthHistorySnapshot>();
-  snapshots.forEach((snapshot) => {
-    snapshotMap.set(historyDateKey(snapshot.date), snapshot);
-  });
-
-  // Fill gaps with forward-filled values
-  const filledSnapshots: NetWorthHistorySnapshot[] = [];
-  let lastSnapshot: NetWorthHistorySnapshot | null = null;
-
-  allDays.forEach((dateKey) => {
-    const existingSnapshot = snapshotMap.get(dateKey);
-
-    if (existingSnapshot) {
-      // Use actual snapshot
-      filledSnapshots.push(existingSnapshot);
-      lastSnapshot = existingSnapshot;
-    } else if (lastSnapshot) {
-      // Forward-fill from previous snapshot
-      filledSnapshots.push({
-        date: dateKey,
-        net_worth: lastSnapshot.net_worth,
-        total_assets: lastSnapshot.total_assets,
-        total_liabilities: lastSnapshot.total_liabilities,
-      });
-    }
-    // If no previous snapshot exists, skip this day
-  });
-
   return {
     ...history,
-    snapshots: filledSnapshots,
+    snapshots: forwardFillByDay(snapshots, start_date, end_date, (previous, dateKey) => ({
+      date: dateKey,
+      net_worth: previous.net_worth,
+      total_assets: previous.total_assets,
+      total_liabilities: previous.total_liabilities,
+    })),
   };
 }
