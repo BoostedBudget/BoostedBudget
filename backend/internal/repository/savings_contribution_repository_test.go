@@ -27,6 +27,8 @@ func setupContributionMockDB(t *testing.T) (pgxmock.PgxPoolIface, SavingsContrib
 var contributionColumns = []string{
 	"id", "savings_goal_id", "transaction_id", "amount", "source", "status",
 	"managed_by_reconciliation", "confirmed_by_user", "occurred_on", "created_at", "updated_at",
+	// #1625 migration 000190: marks a row as belonging to a CLOSED contributions period.
+	"archived_at",
 }
 
 // TestSavingsContributionRepository_Insert_Basic tests a simple contribution insert.
@@ -425,11 +427,11 @@ func TestSavingsContributionRepository_ListByGoal(t *testing.T) {
 	rows := pgxmock.NewRows(contributionColumns).
 		AddRow(
 			uuid.New().String(), goalID, &txnID1, 500.00, "confirmed_transfer", "confirmed",
-			true, false, "2024-01-15", now, now,
+			true, false, "2024-01-15", now, now, nil,
 		).
 		AddRow(
 			uuid.New().String(), goalID, nil, 200.00, "manual", "confirmed",
-			false, true, "2024-01-20", now, now,
+			false, true, "2024-01-20", now, now, nil,
 		)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -681,7 +683,7 @@ func TestSavingsContributionRepository_RejectContribution_Success(t *testing.T) 
 		WithArgs(contribID, userID).
 		WillReturnRows(pgxmock.NewRows(contributionColumns).
 			AddRow(contribID, goalID, nil, 100.0, "confirmed_transfer", "rejected",
-				true, false, "2026-06-14", time.Now(), time.Now()))
+				true, false, "2026-06-14", time.Now(), time.Now(), nil))
 
 	result, err := repo.RejectContribution(ctx, userID, contribID)
 	require.NoError(t, err)

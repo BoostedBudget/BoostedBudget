@@ -144,7 +144,8 @@ type SavingsContributionRepository interface {
 // contributionSelectCols is the canonical column list for contribution rows.
 const contributionSelectCols = `
 	id, savings_goal_id, transaction_id, amount, source, status,
-	managed_by_reconciliation, confirmed_by_user, occurred_on::text, created_at, updated_at
+	managed_by_reconciliation, confirmed_by_user, occurred_on::text, created_at, updated_at,
+	archived_at
 `
 
 // contributionSelectColsJoined is contributionSelectCols for queries that JOIN savings_goals.
@@ -164,7 +165,8 @@ const contributionSelectCols = `
 // TestSavingsContributionRepository_Integration_*_RejectsTombstoned.
 const contributionSelectColsJoined = `
 	c.id, c.savings_goal_id, c.transaction_id, c.amount, c.source, c.status,
-	c.managed_by_reconciliation, c.confirmed_by_user, c.occurred_on::text, c.created_at, c.updated_at
+	c.managed_by_reconciliation, c.confirmed_by_user, c.occurred_on::text, c.created_at, c.updated_at,
+	c.archived_at
 `
 
 // contributionStatusRejected is the 'rejected' sticky-tombstone status (R3-7). It is bound as a
@@ -630,6 +632,7 @@ func scanContribution(row scannable) (*domain.SavingsGoalContribution, error) {
 		&c.OccurredOn,
 		&c.CreatedAt,
 		&c.UpdatedAt,
+		&c.ArchivedAt,
 	)
 	return c, err
 }
@@ -772,7 +775,7 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 		&contrib.ID, &contrib.SavingsGoalID, &contrib.TransactionID,
 		&contrib.Amount, &contrib.Source, &contrib.Status,
 		&contrib.ManagedByReconciliation, &contrib.ConfirmedByUser,
-		&contrib.OccurredOn, &contrib.CreatedAt, &contrib.UpdatedAt,
+		&contrib.OccurredOn, &contrib.CreatedAt, &contrib.UpdatedAt, &contrib.ArchivedAt,
 	); scanErr != nil {
 		if scanErr == pgx.ErrNoRows {
 			err = domain.ErrContributionNotFound
@@ -949,13 +952,13 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 		  AND c.deleted_at IS NULL
 		RETURNING c.id, c.savings_goal_id, c.transaction_id, c.amount, c.source, c.status,
 			c.managed_by_reconciliation, c.confirmed_by_user,
-			to_char(c.occurred_on, 'YYYY-MM-DD'), c.created_at, c.updated_at`
+			to_char(c.occurred_on, 'YYYY-MM-DD'), c.created_at, c.updated_at, c.archived_at`
 	contrib := &domain.SavingsGoalContribution{}
 	err := r.db.QueryRow(ctx, query, id, userID).Scan(
 		&contrib.ID, &contrib.SavingsGoalID, &contrib.TransactionID,
 		&contrib.Amount, &contrib.Source, &contrib.Status,
 		&contrib.ManagedByReconciliation, &contrib.ConfirmedByUser,
-		&contrib.OccurredOn, &contrib.CreatedAt, &contrib.UpdatedAt,
+		&contrib.OccurredOn, &contrib.CreatedAt, &contrib.UpdatedAt, &contrib.ArchivedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
