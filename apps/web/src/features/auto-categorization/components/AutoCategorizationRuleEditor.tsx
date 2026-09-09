@@ -241,9 +241,15 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
   // at read time from a `data-ph-mask`'d sr-only span's TEXT (matches IncomeSourceItem.tsx).
   const removeTagLabelId = useId()
 
-  // Lazy-load detailed categories for pfc_detailed conditions or pfc-kind targets
+  // Lazy-load detailed categories for pfc_detailed conditions or pfc-kind targets.
+  //
+  // ⚠ #1625 final review B4: BOTH shapes, not just the legacy fused type. A condition is either a
+  // fused `type` or a {field, operator} pair, and selectConditionChoice writes `type: undefined`
+  // for every pair choice — so keying this on `type` alone left `pfc_detailed:neq` (an option the
+  // picker offers) with plaidDetailed = [], rendering its primary select disabled with zero
+  // options. The user could say "PFC Detailed is not" and then had no way to say what it is not.
   const needsPlaidDetailed = useMemo(
-    () => conditions.some(c => c.type === 'existing_pfc_detailed') || targetKind === 'pfc',
+    () => conditions.some(c => c.type === 'existing_pfc_detailed' || c.field === 'pfc_detailed') || targetKind === 'pfc',
     [conditions, targetKind]
   )
   const { data: plaidDetailedData } = useGetPlaidDetailedCategories({ query: { enabled: needsPlaidDetailed } })
