@@ -94,7 +94,14 @@ func (s *stubMerchantResolver) ResolveEffectiveMerchantNames(_ context.Context, 
 // The field, the evaluator case and the resolver can all be correct while nothing connects them —
 // which is what "all-or-nothing" meant: enriching only the repo read paths would make a rule match
 // in preview and not during sync, the same preview/reality divergence this ticket already fixed
-// once. This drives the whole path.
+// once.
+//
+// ⚠ SCOPE, stated honestly because the commit message overstated it. This starts at
+// ApplyRulesToBatch with MerchantID already populated. It proves resolver -> enrichment ->
+// evaluator, and nothing more. It does NOT exercise processAddedTransactions, upsertMerchants, or
+// the ordering between them — that ordering is argued from the code and from the fact that the
+// merchant upsert reads MerchantName and writes MerchantID while rules touch neither, not
+// demonstrated here.
 func TestApplyRulesToBatch_MatchesOnTheMerchantNameTheUserSees(t *testing.T) {
 	merchantID := "m-1"
 	raw := "SQ *BLUE BOTTLE 1234"

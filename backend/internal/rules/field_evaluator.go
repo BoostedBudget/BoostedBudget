@@ -22,9 +22,15 @@ import (
 // Direction lives in the separate FieldSignedAmount / FieldDirection fields, which no legacy row
 // can normalize to.
 
-// evaluateField evaluates a normalized condition. Returns (false, nil) for an unknown field,
-// preserving the pre-#1625 fail-quiet behaviour: EvaluateRules aborts a transaction's whole rule
-// set on an error, so a single junk condition must not take the others down with it.
+// evaluateField evaluates a normalized condition. Returns (false, nil) for an unknown field.
+//
+// ⚠ The ORIGINAL justification no longer holds and this comment used to still assert it:
+// EvaluateRules aborted a transaction's whole rule set on an error until #1625 A8 made errors
+// rule-local. Fail-quiet is kept for a different reason — under OR logic an error skips the entire
+// rule, where a non-match lets the rule's other conditions decide. That difference is observable:
+// TestQuarantineEnforcementMatchesTheAdvertisedSet pins that an unnormalizable condition under OR
+// still lets a valid sibling match, which is why such a rule is reported as "still running"
+// rather than as quarantined.
 func evaluateField(tx *domain.Transaction, c domain.RuleCondition) (bool, error) {
 	op := domain.RuleConditionOperator(c.Operator)
 

@@ -1002,10 +1002,12 @@ func TestLogContribution_BasisMismatchMessageNamesTheRemedy(t *testing.T) {
 // current_amount did not, and the caller was told it worked. A silent no-op reported as success
 // is the exact defect shape #1625 opened with.
 //
-// ⚠ DeleteContribution deliberately does NOT get this guard. ArchiveByGoal is precisely the
-// basis-switch path that leaves rows behind on a now-manual goal, so refusing there would make
-// those rows PERMANENTLY undeletable — a worse outcome than the no-op, and one the user could not
-// escape. Destroying a row you own is meaningful whatever the goal's basis is.
+// ⚠ DeleteContribution deliberately does NOT get this guard. Not because the rows would be
+// "permanently undeletable" — an adversarial review correctly pointed out that a user could switch
+// the goal back to the contributions basis and delete them then. The real reason is narrower:
+// gating Delete would make removing your own row require an unrelated, side-effecting change to
+// the goal's configuration first. Confirm and Reject genuinely cannot take effect on a manual
+// goal; a delete always does exactly what it says it does.
 // TestDeleteContribution_IsNotBlockedByBasis pins that.
 func TestConfirmContribution_RefusesOnANonContributionsBasis(t *testing.T) {
 	goalID, userID := "goal-manual", "user-1"

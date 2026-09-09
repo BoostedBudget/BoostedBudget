@@ -232,7 +232,12 @@ func (s *ruleApplicationService) ApplyRulesToTransaction(ctx context.Context, tx
 
 	s.reportQuarantineCandidates(ctx, tx.UserID, userRules)
 
-	// Evaluate rules against transaction
+	// Evaluate rules against transaction.
+	//
+	// ⚠ EvaluateRules cannot currently return a non-nil error at all — #1625 A8 made every
+	// evaluator failure rule-local, and the failures now arrive in result.FailedRuleIDs below.
+	// The check is retained as a guard on the SIGNATURE, not as a live path: it is what catches a
+	// future change that reintroduces a fatal error, rather than letting one be dropped silently.
 	result, err := s.ruleEngine.EvaluateRules(tx, userRules)
 	if err != nil {
 		return err
