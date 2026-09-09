@@ -21,7 +21,7 @@ func newTestTransaction(merchantName string, amount float64, paymentChannel stri
 // ============================================================================
 
 func TestMerchantContainsEvaluator_Evaluate(t *testing.T) {
-	evaluator := &MerchantContainsEvaluator{}
+	evaluator := NewConditionRegistry()
 
 	tests := []struct {
 		name         string
@@ -84,7 +84,7 @@ func TestMerchantContainsEvaluator_Evaluate(t *testing.T) {
 }
 
 func TestMerchantEqualsEvaluator_Evaluate(t *testing.T) {
-	evaluator := &MerchantEqualsEvaluator{}
+	evaluator := NewConditionRegistry()
 
 	tests := []struct {
 		name         string
@@ -118,7 +118,7 @@ func TestMerchantEqualsEvaluator_Evaluate(t *testing.T) {
 }
 
 func TestMerchantStartsWithEvaluator_Evaluate(t *testing.T) {
-	evaluator := &MerchantStartsWithEvaluator{}
+	evaluator := NewConditionRegistry()
 
 	tests := []struct {
 		name         string
@@ -152,7 +152,7 @@ func TestMerchantStartsWithEvaluator_Evaluate(t *testing.T) {
 }
 
 func TestMerchantEndsWithEvaluator_Evaluate(t *testing.T) {
-	evaluator := &MerchantEndsWithEvaluator{}
+	evaluator := NewConditionRegistry()
 
 	tests := []struct {
 		name         string
@@ -190,7 +190,7 @@ func TestMerchantEndsWithEvaluator_Evaluate(t *testing.T) {
 // ============================================================================
 
 func TestAmountGreaterThanEvaluator_Evaluate(t *testing.T) {
-	evaluator := &AmountGreaterThanEvaluator{}
+	evaluator := NewConditionRegistry()
 
 	tests := []struct {
 		name      string
@@ -230,7 +230,7 @@ func TestAmountGreaterThanEvaluator_Evaluate(t *testing.T) {
 }
 
 func TestAmountLessThanEvaluator_Evaluate(t *testing.T) {
-	evaluator := &AmountLessThanEvaluator{}
+	evaluator := NewConditionRegistry()
 
 	tests := []struct {
 		name      string
@@ -270,7 +270,7 @@ func TestAmountLessThanEvaluator_Evaluate(t *testing.T) {
 }
 
 func TestAmountRangeEvaluator_Evaluate(t *testing.T) {
-	evaluator := &AmountRangeEvaluator{}
+	evaluator := NewConditionRegistry()
 
 	tests := []struct {
 		name      string
@@ -341,7 +341,7 @@ func TestAmountRangeEvaluator_Evaluate(t *testing.T) {
 // ============================================================================
 
 func TestPaymentChannelEvaluator_Evaluate(t *testing.T) {
-	evaluator := &PaymentChannelEvaluator{}
+	evaluator := NewConditionRegistry()
 
 	tests := []struct {
 		name           string
@@ -448,7 +448,7 @@ func TestConditionRegistry_UnknownType_ReturnsFalse(t *testing.T) {
 // ============================================================================
 
 func TestAccountIDEvaluator_Evaluate(t *testing.T) {
-	evaluator := &AccountIDEvaluator{}
+	evaluator := NewConditionRegistry()
 
 	uaid := "user-acct-xxx"
 	tests := []struct {
@@ -511,7 +511,7 @@ func TestAccountIDEvaluator_Evaluate(t *testing.T) {
 // for Issue #1306 P2: stale rules (created before migration 000072, storing raw account_id)
 // must still match after UserAccountID is backfilled, via the fallback path.
 func TestAccountIDEvaluator_FallsBackToAccountID_WhenUserAccountIDSet(t *testing.T) {
-	e := &AccountIDEvaluator{}
+	e := NewConditionRegistry()
 	uaid := "11111111-1111-1111-1111-111111111111"
 	acctID := "22222222-2222-2222-2222-222222222222"
 	tx := newTestTransaction("M", 1.0, "online", nil)
@@ -533,7 +533,7 @@ func TestAccountIDEvaluator_FallsBackToAccountID_WhenUserAccountIDSet(t *testing
 // See TestExistingPFCPrimaryEvaluator_* tests below.
 
 func TestDateRangeEvaluator_Evaluate(t *testing.T) {
-	evaluator := &DateRangeEvaluator{}
+	evaluator := NewConditionRegistry()
 
 	tests := []struct {
 		name      string
@@ -624,7 +624,7 @@ func TestDateRangeEvaluator_Evaluate(t *testing.T) {
 }
 
 func TestAccountTypeEvaluator_Evaluate(t *testing.T) {
-	evaluator := &AccountTypeEvaluator{}
+	evaluator := NewConditionRegistry()
 
 	tests := []struct {
 		name        string
@@ -695,7 +695,7 @@ func TestAccountTypeEvaluator_Evaluate(t *testing.T) {
 }
 
 func TestAmountEqualsEvaluator_Evaluate(t *testing.T) {
-	evaluator := &AmountEqualsEvaluator{}
+	evaluator := NewConditionRegistry()
 
 	tests := []struct {
 		name      string
@@ -739,7 +739,7 @@ func TestAmountEqualsEvaluator_Evaluate(t *testing.T) {
 // ============================================================================
 
 func TestExistingPFCPrimaryEvaluator_Match(t *testing.T) {
-	evaluator := &ExistingPFCPrimaryEvaluator{}
+	evaluator := NewConditionRegistry()
 
 	tx := &domain.Transaction{
 		PFCPrimary:  strPtr("FOOD_AND_DRINK"),
@@ -759,7 +759,7 @@ func TestExistingPFCPrimaryEvaluator_Match(t *testing.T) {
 }
 
 func TestExistingPFCPrimaryEvaluator_CaseInsensitive(t *testing.T) {
-	evaluator := &ExistingPFCPrimaryEvaluator{}
+	evaluator := NewConditionRegistry()
 	tx := &domain.Transaction{PFCPrimary: strPtr("FOOD_AND_DRINK")}
 
 	got, _ := evaluator.Evaluate(tx, domain.RuleCondition{
@@ -772,7 +772,7 @@ func TestExistingPFCPrimaryEvaluator_CaseInsensitive(t *testing.T) {
 }
 
 func TestExistingPFCPrimaryEvaluator_NoMatch(t *testing.T) {
-	evaluator := &ExistingPFCPrimaryEvaluator{}
+	evaluator := NewConditionRegistry()
 	tx := &domain.Transaction{PFCPrimary: strPtr("TRANSPORTATION")}
 
 	got, _ := evaluator.Evaluate(tx, domain.RuleCondition{
@@ -785,7 +785,7 @@ func TestExistingPFCPrimaryEvaluator_NoMatch(t *testing.T) {
 }
 
 func TestExistingPFCPrimaryEvaluator_NilPFC(t *testing.T) {
-	evaluator := &ExistingPFCPrimaryEvaluator{}
+	evaluator := NewConditionRegistry()
 	tx := &domain.Transaction{}
 
 	got, err := evaluator.Evaluate(tx, domain.RuleCondition{
@@ -801,7 +801,7 @@ func TestExistingPFCPrimaryEvaluator_NilPFC(t *testing.T) {
 }
 
 func TestExistingPFCDetailedEvaluator_Match(t *testing.T) {
-	evaluator := &ExistingPFCDetailedEvaluator{}
+	evaluator := NewConditionRegistry()
 	tx := &domain.Transaction{
 		PFCPrimary:  strPtr("FOOD_AND_DRINK"),
 		PFCDetailed: strPtr("FOOD_AND_DRINK_FAST_FOOD"),
@@ -820,7 +820,7 @@ func TestExistingPFCDetailedEvaluator_Match(t *testing.T) {
 }
 
 func TestExistingPFCDetailedEvaluator_NoMatch(t *testing.T) {
-	evaluator := &ExistingPFCDetailedEvaluator{}
+	evaluator := NewConditionRegistry()
 	tx := &domain.Transaction{
 		PFCPrimary:  strPtr("FOOD_AND_DRINK"),
 		PFCDetailed: strPtr("FOOD_AND_DRINK_FAST_FOOD"),

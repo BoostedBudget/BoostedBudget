@@ -128,6 +128,12 @@ func matchExactCaseSensitive(subject string, op domain.RuleConditionOperator, va
 // matchAccountID keeps the #1109/#1306 chain-aware behaviour verbatim: prefer the stable
 // UserAccountID when set, then FALL THROUGH to the raw AccountID rather than returning early,
 // because a rule whose value migration 000072 skipped still stores a raw account_id.
+//
+// Known limitation, carried over from the AccountIDEvaluator this replaced (#1625 removed it):
+// accounts.id and user_accounts.id are both server-generated v4 UUIDs, so a rule storing account
+// B's user_account_id could in principle match a transaction whose raw AccountID happens to equal
+// that UUID. ~1 in 2^122 per pair, not practically exploitable. Documented by
+// TestAccountIDMatching_ChainAware_KnownLimitation_UUIDCollision.
 func matchAccountID(tx *domain.Transaction, op domain.RuleConditionOperator, value interface{}) bool {
 	values := matching.ExtractStringValues(value)
 	if len(values) == 0 {
