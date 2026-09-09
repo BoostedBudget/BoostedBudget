@@ -415,3 +415,120 @@ func TestHouseholdAggregatedHistoryCarry_WindowStart_InheritsABalanceFromBeforeT
 		"day 3 must inherit the member's day-0 balance even though day 0 is outside the window — "+
 			"bounding the OBSERVATIONS below would erase that account from the whole chart")
 }
+
+// TestHouseholdAggregatedHistoryCarry_TerminalOnlyHistory_DoesNotCarryPastItsOwnSnapshot is the
+// exact shape the personal read's carry leg was WRONG about before #1626 Phase 2's X1 fix, stated
+// in household scope so the household half cannot regress into it independently.
+//
+// ⚠ ADDED BY MUTATION. Deleting `AND a_carry.status = 'active'` from the missing-history leg was
+// killed only by the structural pin test, never behaviourally, because
+// TestHouseholdAggregatedHistoryCarry_RemovedAccount_IsNotCarriedPastItsRemoval CLOSES the account's
+// 'active' interval rather than removing it — so `NOT EXISTS(active interval)` is false there and
+// the leg never fires at all, with or without the status term. Migration 000152's removed branch
+// DELIBERATELY writes a terminal-only history when removed_at is NULL or <= created_at, and that is
+// the shape in which the leg reads as unconditional permission to carry: without the status term a
+// closed account's last retained balance lands on every later observed day, forever.
+func TestHouseholdAggregatedHistoryCarry_TerminalOnlyHistory_DoesNotCarryPastItsOwnSnapshot(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+	c := newHouseholdCarryClock()
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ownerAcct := setupHouseholdMemberAccount(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+	backdateHouseholdAccountActive(t, pool, ownerAcct.AccountID, c.day(-20))
+
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, nil, domain.ShareVisibilityShared, c.at(-5, 8, 0))
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, nil, domain.ShareVisibilityShared, c.at(-5, 8, 0))
+
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 307.89, c.at(0, 10, 33))
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 1000.11, c.at(0, 9, 17))
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 1100.22, c.at(2, 9, 17))
+
+	_, err := pool.Exec(ctx, `
+		UPDATE accounts SET status = 'removed', removed_at = $2, removed_reason = 'user_disconnect'
+		WHERE id = $1`, memberAcct.AccountID, c.at(1, 6, 0))
+	require.NoError(t, err)
+	// THE SHAPE: a terminal-only history, exactly as migration 000152's removed branch writes it.
+	tag, err := pool.Exec(ctx, `
+		DELETE FROM account_status_history WHERE account_id = $1 AND status = 'active'`,
+		memberAcct.AccountID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), tag.RowsAffected(),
+		"the fixture must actually leave a terminal-only history — if no 'active' row was there to "+
+			"delete, this test is asserting nothing about the leg it exists for")
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, c.day(-1), c.day(10), nil)
+	require.NoError(t, err)
+
+	requireTotalOn(t, points, c.day(0), 1308.00,
+		"the account's OWN snapshot day is provider truth and stays retained (#1569)")
+	requireTotalOn(t, points, c.day(2), 1100.22,
+		"'this account has no recorded active interval' is NOT permission to carry — it is true "+
+			"FOREVER for migration 000152's terminal-only shape, which is how a closed account came "+
+			"to be counted in net worth on every later day")
+}
+
+// TestHouseholdAggregatedHistoryCarry_OrphanedSnapshot_KeepsItsOwnDay is why carry_key is a rendered
+// text key rather than the (user_account_id, account_id) pair.
+//
+// ⚠ ADDED BY MUTATION. Replacing the NULL-safe key with a bare `bs.account_id::text` was killed only
+// by the structural pin test. An ORPHANED snapshot (account_id IS NULL after migration 000150's ON
+// DELETE SET NULL) then has a NULL carry_key, the grid's equi-join never matches it, and it loses
+// even its OWN observed row on the way back out — so the fill would have DELETED retained history
+// rather than merely failing to extend it. That is a worse failure than the one the fill fixes.
+//
+// It must also not be CARRIED: an orphan has no accounts row for either liveness leg to find, so
+// nobody is confirming it exists, which is the same ruling the personal statement records.
+func TestHouseholdAggregatedHistoryCarry_OrphanedSnapshot_KeepsItsOwnDay(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+	c := newHouseholdCarryClock()
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ownerAcct := setupHouseholdMemberAccount(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+	backdateHouseholdAccountActive(t, pool, ownerAcct.AccountID, c.day(-20))
+
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, nil, domain.ShareVisibilityShared, c.at(-5, 8, 0))
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, nil, domain.ShareVisibilityShared, c.at(-5, 8, 0))
+
+	// The orphan: account_id IS NULL, user_account_id intact — which is exactly what the chain
+	// pointer is for, and it is what keeps the row inside the household's universe.
+	_, err := pool.Exec(ctx, `
+		INSERT INTO balance_snapshots (account_id, user_account_id, user_id, current_balance,
+		                               currency_code, snapshot_at, source)
+		VALUES (NULL, $1, $2, 42.42, 'USD', $3, 'manual')`,
+		memberAcct.UserAccountID, member, c.at(0, 10, 33))
+	require.NoError(t, err, "seed orphaned snapshot")
+
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 1000.11, c.at(0, 9, 17))
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 1100.22, c.at(2, 9, 17))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, c.day(-1), c.day(10), nil)
+	require.NoError(t, err)
+
+	requireTotalOn(t, points, c.day(0), 1042.53,
+		"an orphaned snapshot must survive the grid round-trip and still reach its own day's total")
+	requireTotalOn(t, points, c.day(2), 1100.22,
+		"but it must not be carried: an orphan has no accounts row, so nobody is confirming it exists")
+
+	day0, ok := totalOn(points, c.day(0))
+	require.True(t, ok)
+	assert.InDelta(t, 1042.53, day0, 0.001)
+	for i := range points {
+		if points[i].Date.UTC().Format("2006-01-02") == c.day(0).UTC().Format("2006-01-02") {
+			assert.InDelta(t, 42.42, points[i].UntypedBalance, 0.001,
+				"and it lands in the UNTYPED bucket, not silently in a typed one — net-worth "+
+					"history is reconstructed from ByType plus UntypedBalance")
+		}
+	}
+}
