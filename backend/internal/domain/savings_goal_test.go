@@ -886,3 +886,21 @@ func TestLogContributionRequest_DoesNotAdvertiseNotes(t *testing.T) {
 		t.Errorf("LogContributionRequest still carries a notes field: %s", raw)
 	}
 }
+
+// Codex gap analysis C2: `format:"date"` is enforced by Huma at parse time, but a non-HTTP
+// caller reaches Validate() directly. Before #1625 a malformed date passed BOTH layers and only
+// failed at the Postgres DATE column, surfacing as a bare 500 that named no field.
+func TestLogContributionRequest_RejectsMalformedDates(t *testing.T) {
+	malformed := []string{"09/08/2026", "2026-13-01", "2026-9-8", "yesterday", "2026-09-08T00:00:00Z"}
+	for _, d := range malformed {
+		req := LogContributionRequest{Amount: 10, OccurredOn: d}
+		if err := req.Validate(); err == nil {
+			t.Errorf("occurred_on %q was accepted; it would fail at the DATE column as a 500", d)
+		}
+	}
+
+	valid := LogContributionRequest{Amount: 10, OccurredOn: "2026-09-08"}
+	if err := valid.Validate(); err != nil {
+		t.Errorf("a well-formed YYYY-MM-DD date must be accepted: %v", err)
+	}
+}
