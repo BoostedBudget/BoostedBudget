@@ -271,3 +271,190 @@ func TestSpendingTrendsResolvesDisplayLikeEveryOtherRead(t *testing.T) {
 		assert.NotContains(t, display, "9f1c2b3a-0000-4000-8000")
 	}
 }
+
+// TestCategoryTotalForPeriod_ResolvesDisplayForProductionShapedRows closes one of the five #1626
+// Phase 2 gap-item-1 reads: GetCategoryTotalForPeriod returns exactly ONE row (a single-category
+// aggregate over a date range), so unlike GetSpendingByCategory/GetIncomeSourceBreakdown above it
+// cannot be exercised by a single 3-row fixture — three SEPARATE calls are needed, one per shape.
+func TestCategoryTotalForPeriod_ResolvesDisplayForProductionShapedRows(t *testing.T) {
+	ctx := context.Background()
+	start := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC)
+
+	t.Run("PFC token resolves through the registry, not the stored raw enum", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getCategoryTotalForPeriodFn: func(context.Context, string, string, time.Time, time.Time) (*domain.CategoryTotalRow, error) {
+				// Production shape: CategoryDisplay carries the RAW enum for a PFC row.
+				return &domain.CategoryTotalRow{Total: 450.0, TransactionCount: 18, CategoryDisplay: "FOOD_AND_DRINK"}, nil
+			},
+		}
+		result, err := NewAnalyticsService(mockRepo).GetCategoryTotalForPeriod(ctx, "user-1", "FOOD_AND_DRINK", start, end)
+		require.NoError(t, err)
+		assert.Equal(t, "Food And Drink", result.PFCPrimaryDisplay)
+	})
+
+	t.Run("named custom token resolves to its stored name", func(t *testing.T) {
+		const customKey = "custom:9f1c2b3a-0000-4000-8000-000000000001"
+		mockRepo := &mockAnalyticsRepository{
+			getCategoryTotalForPeriodFn: func(context.Context, string, string, time.Time, time.Time) (*domain.CategoryTotalRow, error) {
+				return &domain.CategoryTotalRow{Total: 750.0, TransactionCount: 4, CategoryDisplay: "Side hustle"}, nil
+			},
+		}
+		result, err := NewAnalyticsService(mockRepo).GetCategoryTotalForPeriod(ctx, "user-1", customKey, start, end)
+		require.NoError(t, err)
+		assert.Equal(t, "Side hustle", result.PFCPrimaryDisplay)
+	})
+
+	t.Run("unnamed custom token never leaks the UUID", func(t *testing.T) {
+		const customKey = "custom:9f1c2b3a-0000-4000-8000-000000000002"
+		mockRepo := &mockAnalyticsRepository{
+			getCategoryTotalForPeriodFn: func(context.Context, string, string, time.Time, time.Time) (*domain.CategoryTotalRow, error) {
+				// CategoryDisplay is NULL in production until effective_category_refresh runs; the
+				// repository normalises that to "" (analytics_repository.go GetCategoryTotalForPeriod).
+				return &domain.CategoryTotalRow{Total: 250.0, TransactionCount: 1, CategoryDisplay: ""}, nil
+			},
+		}
+		result, err := NewAnalyticsService(mockRepo).GetCategoryTotalForPeriod(ctx, "user-1", customKey, start, end)
+		require.NoError(t, err)
+		assert.Equal(t, unnamedCustomCategoryLabel, result.PFCPrimaryDisplay)
+		assert.NotContains(t, result.PFCPrimaryDisplay, "9f1c2b3a-0000-4000-8000")
+	})
+}
+
+// TestGetTopExpense_ResolvesDisplayForProductionShapedRows closes another of the five: GetTopExpense
+// returns a single item too, so it gets the same three-separate-cases treatment as
+// GetCategoryTotalForPeriod above rather than one shared fixture.
+func TestGetTopExpense_ResolvesDisplayForProductionShapedRows(t *testing.T) {
+	ctx := context.Background()
+	start := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC)
+	txDate := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
+
+	t.Run("PFC token resolves through the registry, not the stored raw enum", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getTopExpenseFn: func(context.Context, string, time.Time, time.Time) (*domain.TopExpenseRow, error) {
+				return &domain.TopExpenseRow{
+					TransactionID: "txn-abc", MerchantName: "Amazon", Amount: 299.99,
+					Category: "GENERAL_MERCHANDISE", CategoryDisplay: "GENERAL_MERCHANDISE", Date: txDate,
+				}, nil
+			},
+		}
+		result, err := NewAnalyticsService(mockRepo).GetTopExpense(ctx, "user-1", start, end)
+		require.NoError(t, err)
+		assert.Equal(t, "General Merchandise", result.PFCPrimaryDisplay)
+	})
+
+	t.Run("named custom token resolves to its stored name", func(t *testing.T) {
+		const customKey = "custom:9f1c2b3a-0000-4000-8000-000000000001"
+		mockRepo := &mockAnalyticsRepository{
+			getTopExpenseFn: func(context.Context, string, time.Time, time.Time) (*domain.TopExpenseRow, error) {
+				return &domain.TopExpenseRow{
+					TransactionID: "txn-def", MerchantName: "Blue Bottle", Amount: 42.50,
+					Category: customKey, CategoryDisplay: "Coffee runs", Date: txDate,
+				}, nil
+			},
+		}
+		result, err := NewAnalyticsService(mockRepo).GetTopExpense(ctx, "user-1", start, end)
+		require.NoError(t, err)
+		assert.Equal(t, "Coffee runs", result.PFCPrimaryDisplay)
+	})
+
+	t.Run("unnamed custom token never leaks the UUID", func(t *testing.T) {
+		const customKey = "custom:9f1c2b3a-0000-4000-8000-000000000002"
+		mockRepo := &mockAnalyticsRepository{
+			getTopExpenseFn: func(context.Context, string, time.Time, time.Time) (*domain.TopExpenseRow, error) {
+				return &domain.TopExpenseRow{
+					TransactionID: "txn-ghi", MerchantName: "Unknown", Amount: 10.0,
+					Category: customKey, CategoryDisplay: "", Date: txDate,
+				}, nil
+			},
+		}
+		result, err := NewAnalyticsService(mockRepo).GetTopExpense(ctx, "user-1", start, end)
+		require.NoError(t, err)
+		assert.Equal(t, unnamedCustomCategoryLabel, result.PFCPrimaryDisplay)
+		assert.NotContains(t, result.PFCPrimaryDisplay, "9f1c2b3a-0000-4000-8000")
+	})
+}
+
+// TestGetUnusualSpend_ResolvesDisplayForProductionShapedRows closes another of the five: unlike the
+// two single-item reads above, GetUnusualSpend returns a slice, so one 3-row fixture (mirroring the
+// expense/income pattern already in this file) covers all three shapes.
+func TestGetUnusualSpend_ResolvesDisplayForProductionShapedRows(t *testing.T) {
+	ctx := context.Background()
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC)
+	txDate := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+	const namedCustomKey = "custom:9f1c2b3a-0000-4000-8000-000000000001"
+	const unnamedCustomKey = "custom:9f1c2b3a-0000-4000-8000-000000000002"
+
+	mockRepo := &mockAnalyticsRepository{
+		getUnusualSpendFn: func(context.Context, string, time.Time, time.Time, time.Time, float64) ([]domain.UnusualSpendRow, error) {
+			return []domain.UnusualSpendRow{
+				// Production shape: CategoryDisplay carries the RAW enum for a PFC row.
+				{TransactionID: "txn-1", MerchantName: "Whole Foods", Amount: 300, Category: "FOOD_AND_DRINK", CategoryDisplay: "FOOD_AND_DRINK", Date: txDate, BaselineAvg: 100, SigmaAbove: 4},
+				{TransactionID: "txn-2", MerchantName: "Therapist", Amount: 200, Category: namedCustomKey, CategoryDisplay: "Therapy", Date: txDate, BaselineAvg: 50, SigmaAbove: 3},
+				{TransactionID: "txn-3", MerchantName: "Unknown", Amount: 100, Category: unnamedCustomKey, CategoryDisplay: "", Date: txDate, BaselineAvg: 20, SigmaAbove: 2},
+			}, nil
+		},
+	}
+
+	result, err := NewAnalyticsService(mockRepo).GetUnusualSpend(ctx, "user-1", start, end)
+	require.NoError(t, err)
+	require.Len(t, result.Items, 3)
+
+	assert.Equal(t, "Food And Drink", result.Items[0].PFCPrimaryDisplay,
+		"a PFC row must be resolved through the registry, not echoed back as its raw enum")
+	assert.Equal(t, "Therapy", result.Items[1].PFCPrimaryDisplay)
+	assert.Equal(t, unnamedCustomCategoryLabel, result.Items[2].PFCPrimaryDisplay,
+		"a custom row whose name has not reached effective_category_name yet must not render as a UUID")
+
+	for _, item := range result.Items {
+		assert.NotContains(t, item.PFCPrimaryDisplay, "custom:")
+		assert.NotContains(t, item.PFCPrimaryDisplay, "9f1c2b3a-0000-4000-8000")
+	}
+}
+
+// TestGetCategoryBreakdownForMerchant_ResolvesDisplayForProductionShapedRows closes the last of the
+// five. TestAnalyticsService_GetCategoryBreakdownForMerchant (analytics_service_test.go) already
+// covers the merge-by-key behaviour for a NAMED custom category; this covers the PFC and
+// UNNAMED-custom shapes that test does not, using three distinct keys so nothing merges.
+func TestGetCategoryBreakdownForMerchant_ResolvesDisplayForProductionShapedRows(t *testing.T) {
+	ctx := context.Background()
+	merchantID := "550e8400-e29b-41d4-a716-446655440000"
+	filters := domain.SpendingFilters{
+		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+	}
+	const namedCustomKey = "custom:9f1c2b3a-0000-4000-8000-000000000001"
+	const unnamedCustomKey = "custom:9f1c2b3a-0000-4000-8000-000000000002"
+
+	mockRepo := &mockAnalyticsRepository{
+		getCategoryBreakdownForMerchantFn: func(context.Context, string, string, domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
+			return []domain.CategoryBreakdownForMerchantRow{
+				// Production shape: CategoryDisplay carries the RAW enum for a PFC row.
+				{Category: "GENERAL_MERCHANDISE", CategoryDisplay: "GENERAL_MERCHANDISE", Total: 400, Count: 5},
+				{Category: namedCustomKey, CategoryDisplay: "Gifts", Total: 200, Count: 3},
+				{Category: unnamedCustomKey, CategoryDisplay: "", Total: 100, Count: 2},
+			}, nil
+		},
+	}
+
+	result, err := NewAnalyticsService(mockRepo).GetCategoryBreakdownForMerchant(ctx, "user-123", merchantID, filters)
+	require.NoError(t, err)
+	require.Len(t, result.Categories, 3)
+
+	byKey := map[string]string{}
+	for _, c := range result.Categories {
+		byKey[c.Category] = c.PFCPrimaryDisplay
+	}
+	assert.Equal(t, "General Merchandise", byKey["GENERAL_MERCHANDISE"],
+		"a PFC row must be resolved through the registry, not echoed back as its raw enum")
+	assert.Equal(t, "Gifts", byKey[namedCustomKey])
+	assert.Equal(t, unnamedCustomCategoryLabel, byKey[unnamedCustomKey],
+		"a custom row whose name has not reached effective_category_name yet must not render as a UUID")
+
+	for _, display := range byKey {
+		assert.NotContains(t, display, "custom:")
+		assert.NotContains(t, display, "9f1c2b3a-0000-4000-8000")
+	}
+}
