@@ -401,9 +401,64 @@ const goalBasisLockQuery = `
 		FOR UPDATE
 	`
 
-// Update updates an existing savings goal.
+// ErrUnguardedBasisChange is returned by Update when the goal it was handed carries a different
+// progress_basis from the row on disk.
+//
+// #1625 Task 17, fix round 1. The basis switch is atomic and serialisable only along ONE path —
+// UpdateWithBasisGuardInTx, inside the transaction that also archives the closing period and seeds
+// the carry-over contribution. The service chose that path only when its OPTIONAL basis-switch
+// ledger repo had been wired by a setter, so a construction site that forgot the setter sent a
+// basis change through the plain Update instead: no row lock, no version predicate, no archive, no
+// seed — the exact pre-#1625 behaviour, reinstated silently, with every test still green.
+//
+// Refusing here rather than in the service is what makes the bypass UNREPRESENTABLE instead of
+// merely tested against. No caller — service, handler, worker, or one written next year — can move
+// a progress_basis except through the guarded path, whatever it forgot to wire.
+//
+// It is deliberately NOT mapped to a 4xx in internal/huma/errors/mapper.go. It is unreachable from
+// any correct wiring, so it is a genuine server fault and a 500 with a Sentry event is the honest
+// answer. That is the opposite call from ErrSavingsGoalBasisConflict, which a user CAN hit by
+// losing a race and which must therefore be a 409.
+var ErrUnguardedBasisChange = errors.New(
+	"savings goal progress_basis cannot be changed through Update: use UpdateWithBasisGuardInTx, " +
+		"which takes the goal row lock and archives/seeds the contribution ledger in the same transaction")
+
+// Update updates an existing savings goal, refusing any change to progress_basis.
+//
+// The refusal is not incidental — see ErrUnguardedBasisChange. Every other field is unaffected: a
+// rename, a new target, a recompute-adjacent write all behave exactly as before. Only a basis
+// CHANGE is refused, and a blank stored column counts as manual, the same normalisation every
+// other write path here applies, so a legacy row does not become unwritable.
+//
+// This became transactional to hold that check honestly: the basis is read under the same
+// `SELECT … FOR UPDATE` the switch takes, so the row cannot move between the check and the write.
 func (r *savingsGoalRepository) Update(ctx context.Context, goal *domain.SavingsGoal) error {
-	return r.update(ctx, r.db, goal)
+	if goal.ProgressBasis == "" {
+		goal.ProgressBasis = domain.ProgressBasisManual
+	}
+
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
+
+	var stored string
+	if err := tx.QueryRow(ctx, goalBasisLockQuery, goal.ID, goal.UserID).Scan(&stored); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrSavingsGoalNotFound
+		}
+		return err
+	}
+	if normaliseBasis(stored) != normaliseBasis(goal.ProgressBasis) {
+		return fmt.Errorf("%w (goal %s is on %q, this write carries %q)",
+			ErrUnguardedBasisChange, goal.ID, normaliseBasis(stored), normaliseBasis(goal.ProgressBasis))
+	}
+
+	if err := r.update(ctx, tx, goal); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // BeginTx implements SavingsGoalRepository.BeginTx — see that method's doc comment.

@@ -858,7 +858,13 @@ func TestSavingsGoalService_UpdateGoal_SetsProgressBasis(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mockGoalRepo := new(MockSavingsGoalRepository)
 			mockAccountRepo := new(MockAccountRepository)
+			mockContribRepo := new(MockGoalBasisSwitchContribRepo)
 			service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+			// #1625 Task 17: a basis change goes through the guarded transaction, and a service
+			// with no ledger repo wired REFUSES one outright rather than taking the old unlocked
+			// path. This test is about which FIELDS the switch writes, so it wires the collaborator
+			// a real caller has.
+			service.SetBasisSwitchContribRepo(mockContribRepo)
 
 			ctx := context.Background()
 			userID := "user-123"
@@ -867,10 +873,16 @@ func TestSavingsGoalService_UpdateGoal_SetsProgressBasis(t *testing.T) {
 			existingGoal := createTestSavingsGoal(userID)
 			existingGoal.ProgressBasis = "manual"
 
+			tx := &fakeTx{}
 			mockGoalRepo.On("GetByID", ctx, goalID).Return(existingGoal, nil)
-			mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).
+			mockGoalRepo.On("BeginTx", ctx).Return(tx, nil)
+			mockContribRepo.On("ArchiveByGoalInTx", ctx, repository.Transaction(tx), goalID).Return(nil).Maybe()
+			mockContribRepo.On("InsertInTx", ctx, repository.Transaction(tx), userID,
+				mock.AnythingOfType("*domain.SavingsGoalContribution")).Return(nil).Maybe()
+			mockGoalRepo.On("UpdateWithBasisGuardInTx", ctx, repository.Transaction(tx),
+				mock.AnythingOfType("*domain.SavingsGoal"), domain.ProgressBasisManual).
 				Run(func(args mock.Arguments) {
-					saved := args.Get(1).(*domain.SavingsGoal)
+					saved := args.Get(2).(*domain.SavingsGoal)
 					assert.Equal(t, tt.wantBasis, saved.ProgressBasis)
 					if tt.wantPct == nil {
 						assert.Nil(t, saved.AccountPercentage)
@@ -1642,15 +1654,28 @@ func TestUpdateGoal_RefusesCurrentAmountOnADerivedBasis(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mockGoalRepo := new(MockSavingsGoalRepository)
 			mockAccountRepo := new(MockAccountRepository)
+			mockContribRepo := new(MockGoalBasisSwitchContribRepo)
 			service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+			// #1625 Task 17: one row here DOES change the basis (the manual escape hatch), and an
+			// unwired service now refuses that outright. Wire the ledger so this table keeps
+			// testing what it is about — which current_amount writes are refused — rather than
+			// accidentally testing the wiring guard.
+			service.SetBasisSwitchContribRepo(mockContribRepo)
 
 			ctx := context.Background()
 			userID := "user-123"
 			existing := createTestSavingsGoal(userID)
 			existing.ProgressBasis = tt.goalBasis
 
+			tx := &fakeTx{}
 			mockGoalRepo.On("GetByID", ctx, existing.ID).Return(existing, nil)
 			mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil).Maybe()
+			mockGoalRepo.On("BeginTx", ctx).Return(tx, nil).Maybe()
+			mockGoalRepo.On("UpdateWithBasisGuardInTx", ctx, repository.Transaction(tx),
+				mock.AnythingOfType("*domain.SavingsGoal"), mock.AnythingOfType("string")).Return(nil).Maybe()
+			mockContribRepo.On("ArchiveByGoalInTx", ctx, repository.Transaction(tx), existing.ID).Return(nil).Maybe()
+			mockContribRepo.On("InsertInTx", ctx, repository.Transaction(tx), userID,
+				mock.AnythingOfType("*domain.SavingsGoalContribution")).Return(nil).Maybe()
 			mockAccountRepo.On("GetByUserID", ctx, userID).Return(
 				[]domain.Account{createTestAccountForGoal(userID)}, nil).Maybe()
 
@@ -1804,4 +1829,74 @@ func TestUpdateGoal_BasisSwitch_FailedArchiveSkipsTheSeed(t *testing.T) {
 	assert.True(t, tx.rolledBack)
 	mockassert.NoCallTo(t, &mockProgress.Mock, "RecomputeGoal")
 	mockassert.NoCallTo(t, &mockAnalytics.Mock, "Capture")
+}
+
+// TestUpdateGoal_BasisChangeWithoutTheLedgerRepoIsRefused is the service half of closing the
+// unguarded-path bypass (#1625 Task 17, fix round 1).
+//
+// basisSwitchRepo is wired by a SETTER, so it is optional by construction. UpdateGoal used to fall
+// through to the plain goalRepo.Update when it was nil — meaning a basis change on a
+// half-constructed service took no lock, checked no predicate, archived nothing and seeded
+// nothing, exactly as before this ticket. Every test stayed green because every test that cared
+// wired the repo.
+//
+// It is now refused. The refusal is belt to the repository's braces: Update itself would also
+// refuse (TestSavingsGoalRepository_Update_RefusesABasisChange), but catching it here means the
+// error names the service-level cause instead of surfacing as a mystery from two layers down.
+func TestUpdateGoal_BasisChangeWithoutTheLedgerRepoIsRefused(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-unwired"
+	goalID := "goal-unwired"
+
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	// Deliberately NOT calling SetBasisSwitchContribRepo — that is the whole scenario.
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+
+	existing := &domain.SavingsGoal{
+		ID: goalID, UserID: userID, Name: "Boat", TargetAmount: 4000.0,
+		CurrentAmount: 900.0, CurrencyCode: "USD", AccountID: "account-boat",
+		ProgressBasis: domain.ProgressBasisManual,
+	}
+	newBasis := domain.ProgressBasisContributions
+	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
+
+	goal, err := service.UpdateGoal(ctx, userID, goalID,
+		&domain.UpdateSavingsGoalRequest{ProgressBasis: &newBasis})
+
+	require.Error(t, err, "an unwired service must refuse a basis change, not perform an unguarded one")
+	assert.ErrorIs(t, err, repository.ErrUnguardedBasisChange)
+	assert.Nil(t, goal)
+	mockassert.NoCallTo(t, &mockGoalRepo.Mock, "Update")
+	mockassert.NoCallTo(t, &mockGoalRepo.Mock, "BeginTx")
+}
+
+// TestUpdateGoal_NonBasisChangeStillTakesThePlainUpdate keeps the refusal above narrow. Renaming a
+// goal on a service with no ledger repo wired must still work — the guard is about the BASIS, and
+// a guard that refused every update on an optional dependency would be a regression of its own.
+func TestUpdateGoal_NonBasisChangeStillTakesThePlainUpdate(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-unwired-rename"
+	goalID := "goal-unwired-rename"
+
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+
+	existing := &domain.SavingsGoal{
+		ID: goalID, UserID: userID, Name: "Boat", TargetAmount: 4000.0,
+		CurrentAmount: 900.0, CurrencyCode: "USD", AccountID: "account-boat",
+		ProgressBasis: domain.ProgressBasisManual,
+	}
+	newName := "Bigger Boat"
+	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
+	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+	goal, err := service.UpdateGoal(ctx, userID, goalID,
+		&domain.UpdateSavingsGoalRequest{Name: &newName})
+
+	require.NoError(t, err)
+	assert.Equal(t, "Bigger Boat", goal.Name)
+	mockGoalRepo.AssertExpectations(t)
 }

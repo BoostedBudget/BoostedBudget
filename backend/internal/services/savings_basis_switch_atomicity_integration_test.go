@@ -528,3 +528,77 @@ func TestSavingsBasisSwitch_Integration_StaleRecomputeCannotOverwriteANewerBasis
 	err = f.goalRepo.UpdateCurrentAmount(ctx, uuid.New().String(), domain.ProgressBasisManual, 1.0, time.Now(), nil)
 	assert.ErrorIs(t, err, domain.ErrSavingsGoalNotFound)
 }
+
+// =============================================================================
+// The bypass — a basis change must be unrepresentable outside the guarded path
+// =============================================================================
+
+// TestSavingsBasisSwitch_Integration_PlainUpdateCannotChangeTheBasis is the live-Postgres proof
+// that the last route around the guarded switch is closed (#1625 Task 17, fix round 1).
+//
+// Everything this task built hangs off the service choosing UpdateWithBasisGuardInTx — and the
+// service chose it only when an OPTIONAL, setter-injected ledger repo was non-nil. A construction
+// site that forgot the setter (two existed) went through the plain Update instead: no row lock, no
+// version predicate, no archive, no seed. All the tests above would still have passed.
+//
+// The repository now refuses it, so no caller can perform the unguarded switch whatever it forgot
+// to wire. Asserted here rather than only against pgxmock because the refusal reads the stored
+// basis under a real `SELECT … FOR UPDATE`, and pgxmock replays canned rows: it would pass a query
+// that never locked anything.
+func TestSavingsBasisSwitch_Integration_PlainUpdateCannotChangeTheBasis(t *testing.T) {
+	f := setupBasisSwitchFixture(t, domain.ProgressBasisManual, 250.0)
+	ctx := context.Background()
+
+	goal, err := f.goalRepo.GetByIDForUser(ctx, f.goalID, f.userID)
+	require.NoError(t, err)
+
+	// The rename alone is fine — the guard is about the BASIS, not about updates.
+	goal.Name = "Renamed but still manual"
+	require.NoError(t, f.goalRepo.Update(ctx, goal))
+
+	// The same call carrying a different basis is refused outright.
+	goal.ProgressBasis = domain.ProgressBasisContributions
+	err = f.goalRepo.Update(ctx, goal)
+	require.Error(t, err, "the unguarded path must not be able to move a progress_basis")
+	assert.ErrorIs(t, err, repository.ErrUnguardedBasisChange)
+
+	basis, amount := f.goalRow(t)
+	assert.Equal(t, domain.ProgressBasisManual, basis, "the row must not have moved")
+	assert.Equal(t, 250.0, amount)
+
+	var contributions int
+	require.NoError(t, f.pool.QueryRow(ctx,
+		`SELECT count(*) FROM savings_goal_contributions WHERE savings_goal_id = $1`,
+		f.goalID).Scan(&contributions))
+	assert.Equal(t, 0, contributions, "and nothing may have been archived or seeded behind it")
+
+	// The refusal must not have swallowed the earlier legitimate write.
+	var name string
+	require.NoError(t, f.pool.QueryRow(ctx,
+		`SELECT name FROM savings_goals WHERE id = $1`, f.goalID).Scan(&name))
+	assert.Equal(t, "Renamed but still manual", name)
+}
+
+// TestSavingsBasisSwitch_Integration_UnwiredServiceRefusesTheSwitch is the same property one layer
+// up, end to end: a service constructed WITHOUT the basis-switch ledger — the exact shape two
+// production call sites had — refuses a basis change instead of performing an unguarded one.
+func TestSavingsBasisSwitch_Integration_UnwiredServiceRefusesTheSwitch(t *testing.T) {
+	f := setupBasisSwitchFixture(t, domain.ProgressBasisManual, 250.0)
+	ctx := context.Background()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError + 1}))
+	unwired := NewSavingsGoalService(f.goalRepo, nil, logger)
+	unwired.SetProgressService(NewSavingsProgressService(f.goalRepo, f.contribRepo, nil, nil, logger))
+	// Deliberately no SetBasisSwitchContribRepo.
+
+	newBasis := domain.ProgressBasisContributions
+	_, err := unwired.UpdateGoal(ctx, f.userID, f.goalID,
+		&domain.UpdateSavingsGoalRequest{ProgressBasis: &newBasis})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, repository.ErrUnguardedBasisChange)
+
+	basis, amount := f.goalRow(t)
+	assert.Equal(t, domain.ProgressBasisManual, basis)
+	assert.Equal(t, 250.0, amount, "an unwired switch must not touch the balance either")
+}

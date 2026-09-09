@@ -480,7 +480,29 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 	// #1625: a basis switch takes a DIFFERENT path — one transaction covering the new basis, the
 	// archive of the closing period and the carry-over seed, behind a lock on the goal row. See
 	// applyBasisSwitch. Everything else is the ordinary single-statement update.
-	if basisChanged && s.basisSwitchRepo != nil {
+	switch {
+	case basisChanged && s.basisSwitchRepo == nil:
+		// #1625 Task 17, fix round 1. This used to fall through to the plain Update below, which
+		// takes no lock and checks no predicate — so a service whose OPTIONAL ledger repo was never
+		// wired performed exactly the unguarded switch this ticket exists to remove, silently, with
+		// every test green. Refused instead.
+		//
+		// The repository refuses it too (repository.ErrUnguardedBasisChange, raised inside Update
+		// itself), which is what makes the bypass unrepresentable rather than merely tested
+		// against. This branch exists so the error names the actual cause — an unwired service —
+		// instead of arriving as a mystery from two layers down. Which production sites must wire
+		// it is pinned by TestEverySavingsGoalServiceConstructionWiresTheBasisSwitchLedger.
+		err := fmt.Errorf("%w: savings goal service has no basis-switch contribution repository wired, "+
+			"so the progress_basis change on goal %s cannot archive the closing period or seed the "+
+			"carry-over contribution", repository.ErrUnguardedBasisChange, goalID)
+		s.logger.Error("refusing an unguarded progress_basis change",
+			slog.String("goal_id", goalID),
+			slog.String("prior_basis", priorBasis),
+			slog.String("new_basis", goal.ProgressBasis),
+		)
+		return nil, err
+
+	case basisChanged:
 		if err := s.applyBasisSwitch(ctx, userID, goal, priorBasis, priorAmount); err != nil {
 			s.logger.Error("failed to switch savings goal progress_basis",
 				slog.String("goal_id", goalID),
@@ -490,12 +512,15 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 			)
 			return nil, err
 		}
-	} else if err := s.goalRepo.Update(ctx, goal); err != nil {
-		s.logger.Error("failed to update savings goal",
-			slog.String("goal_id", goalID),
-			slog.String("error", err.Error()),
-		)
-		return nil, err
+
+	default:
+		if err := s.goalRepo.Update(ctx, goal); err != nil {
+			s.logger.Error("failed to update savings goal",
+				slog.String("goal_id", goalID),
+				slog.String("error", err.Error()),
+			)
+			return nil, err
+		}
 	}
 
 	// Emit analytics event for the basis change (best-effort).
