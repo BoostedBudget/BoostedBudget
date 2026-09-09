@@ -85,6 +85,14 @@ export interface SankeyData {
   expenseRungIndex?: number
 }
 
+/**
+ * A synthetic node with no place in the category hierarchy (hub, deficit, savings): inert
+ * (`action: { kind: 'none' }`) and depth 0, since it names no category.
+ */
+function syntheticNode(id: string, name: string, color: string, nodeKind: SankeyNodeKind): SankeyNode {
+  return { id, name, itemStyle: { color }, nodeKind, action: { kind: 'none' }, depth: 0 }
+}
+
 const isCustom = (key: string) => key.startsWith(CUSTOM_TOKEN)
 const stripToken = (key: string) => key.slice(CUSTOM_TOKEN.length)
 const isPFCDetailed = (key: string, parentKey: string) => key.startsWith(`${parentKey}_`)
@@ -121,6 +129,15 @@ interface Rendered {
 }
 
 /**
+ * An "Other (N)" overflow bucket: a leaf standing in for whatever a degradation rung collapsed.
+ * total === direct always — an overflow bucket never has rendered children of its own to owe money
+ * to, so the whole collapsed amount is its own direct spend.
+ */
+function overflowNode(key: string, count: number, amount: number): Rendered {
+  return { key, display: `Other (${count})`, total: amount, direct: amount, children: [], hadChildren: false }
+}
+
+/**
  * prune renders a subtree to at most `depth` further levels, keeping at most `maxChildren` children
  * per node. Anything not rendered is COLLAPSED into an ancestor rather than dropped — truncation
  * must never lose money, or the hub stops balancing.
@@ -148,14 +165,7 @@ function prune(n: CategoryHierarchyNode, depth: number, maxChildren: number): Re
   base.children = kept.map(k => prune(k, depth - 1, maxChildren))
   if (dropped.length > 0) {
     const overflow = dropped.reduce((s, d) => s + d.total, 0)
-    base.children.push({
-      key: `__other__:${n.category}`,
-      display: `Other (${dropped.length})`,
-      total: overflow,
-      direct: overflow,
-      children: [],
-      hadChildren: false,
-    })
+    base.children.push(overflowNode(`__other__:${n.category}`, dropped.length, overflow))
   }
   return base
 }
@@ -191,11 +201,7 @@ function pruneForFocus(roots: CategoryHierarchyNode[], focusKey: string, depth: 
       }
     }
     if (collapsedCount > 0) {
-      out.push({
-        key: `__other__:level${level}`,
-        display: `Other (${collapsedCount})`,
-        total: collapsed, direct: collapsed, children: [], hadChildren: false,
-      })
+      out.push(overflowNode(`__other__:level${level}`, collapsedCount, collapsed))
     }
     return out
   }
@@ -318,10 +324,7 @@ function renderExpenseFan(roots: CategoryHierarchyNode[], mode: SankeyViewMode):
     const dropped = sorted.slice(maxRoots)
     if (dropped.length > 0) {
       const overflow = dropped.reduce((s, d) => s + d.total, 0)
-      kept.push({
-        key: '__other__:roots', display: `Other (${dropped.length})`,
-        total: overflow, direct: overflow, children: [], hadChildren: false,
-      })
+      kept.push(overflowNode('__other__:roots', dropped.length, overflow))
     }
     last = emitExpenses(kept)
     lastIndex = i
@@ -430,15 +433,7 @@ export function buildSankeyData(
   const expenseSum = validExpenses.reduce((s, e) => s + e.total, 0)
   const surplus = incomeSum - expenseSum
 
-  const nodes: SankeyNode[] = [{
-    id: 'hub',
-    name: 'Total Income',
-    itemStyle: { color: CASH_FLOW_COLORS.income },
-    nodeKind: 'hub',
-    action: { kind: 'none' },
-    // Synthetic: not a category, so it has no place in the hierarchy.
-    depth: 0,
-  }]
+  const nodes: SankeyNode[] = [syntheticNode('hub', 'Total Income', CASH_FLOW_COLORS.income, 'hub')]
   const links: SankeyLink[] = []
 
   const inFan = renderIncomeFan(validIncome)
@@ -446,15 +441,7 @@ export function buildSankeyData(
   links.push(...inFan.links)
 
   if (surplus < 0) {
-    nodes.push({
-      id: 'deficit',
-      name: 'Drawn from Savings / Credit',
-      itemStyle: { color: CASH_FLOW_COLORS.netNegative },
-      nodeKind: 'deficit',
-      action: { kind: 'none' },
-      // Synthetic: not a category, so it has no place in the hierarchy.
-      depth: 0,
-    })
+    nodes.push(syntheticNode('deficit', 'Drawn from Savings / Credit', CASH_FLOW_COLORS.netNegative, 'deficit'))
     links.push({ source: 'deficit', target: 'hub', value: -surplus })
   }
 
@@ -467,15 +454,7 @@ export function buildSankeyData(
   const expenseRungIndex = outFan.rungIndex
 
   if (surplus > 0) {
-    nodes.push({
-      id: 'savings',
-      name: 'Savings',
-      itemStyle: { color: CASH_FLOW_COLORS.netPositive },
-      nodeKind: 'savings',
-      action: { kind: 'none' },
-      // Synthetic: not a category, so it has no place in the hierarchy.
-      depth: 0,
-    })
+    nodes.push(syntheticNode('savings', 'Savings', CASH_FLOW_COLORS.netPositive, 'savings'))
     links.push({ source: 'hub', target: 'savings', value: surplus })
   }
 
