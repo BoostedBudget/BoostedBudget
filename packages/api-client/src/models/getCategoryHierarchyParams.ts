@@ -43,7 +43,7 @@ start_date: string;
  */
 end_date: string;
 /**
- * Which side of the ledger to aggregate. Income defaults to a deeper view than expense: income's useful distinction (wages, dividends, rental) lives one level down, while expenses read best at the primary level.
+ * Which side of the ledger to aggregate: income is amount < 0, expense is amount > 0. Both directions return the SAME full tree — this parameter selects which transactions are aggregated, not how deep the result goes. How many levels to SHOW is a presentation choice: the reports Sankey renders income at leaf depth, because income's useful distinction (wages, dividends, rental) lives one level down, and expenses at primary depth, because they read better consolidated.
  */
 direction?: GetCategoryHierarchyDirection;
 /**
