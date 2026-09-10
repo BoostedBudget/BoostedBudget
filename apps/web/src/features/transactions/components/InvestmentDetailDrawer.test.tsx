@@ -138,16 +138,19 @@ describe('InvestmentDetailDrawer', () => {
     expect(screen.getByTestId('date-value').textContent).toContain('Oct 25, 2025')
   })
 
-  it('shows "—" for fees when investment_fees is 0', () => {
+  // #1631: fees is 0.00 on all 1,192 production rows — this institution never populates it.
+  // Rendering "Fees: —" unconditionally implies "we confirmed no fee was charged" when the truth
+  // is "we don't know", so the row is hidden entirely rather than shown with a placeholder.
+  it('hides the Fees row entirely when investment_fees is 0', () => {
     renderDrawer({ ...baseActivity, investment_fees: 0 }, true)
-    const feesEl = screen.getByTestId('fees-value')
-    expect(feesEl.textContent).toBe('—')
+    expect(screen.queryByTestId('fees-value')).toBeNull()
+    expect(screen.queryByText('Fees')).toBeNull()
   })
 
-  it('shows "—" for fees when investment_fees is null or undefined', () => {
+  it('hides the Fees row entirely when investment_fees is null or undefined', () => {
     renderDrawer({ ...baseActivity, investment_fees: null }, true)
-    const feesEl = screen.getByTestId('fees-value')
-    expect(feesEl.textContent).toBe('—')
+    expect(screen.queryByTestId('fees-value')).toBeNull()
+    expect(screen.queryByText('Fees')).toBeNull()
   })
 
   it('shows formatted fees when non-zero', () => {
@@ -210,7 +213,9 @@ describe('InvestmentDetailDrawer', () => {
   })
 
   it('applies data-ph-mask to fees element', () => {
-    renderDrawer(baseActivity, true)
+    // baseActivity.investment_fees is 0, and #1631 hides the Fees row when zero/absent — use a
+    // non-zero value so the row (and its data-ph-mask attribute) actually renders.
+    renderDrawer({ ...baseActivity, investment_fees: 4.99 }, true)
     expect(screen.getByTestId('fees-value').hasAttribute('data-ph-mask')).toBe(true)
   })
 

@@ -58,7 +58,7 @@ func TestSecurityRepository_UpsertBatch_InsertNew(t *testing.T) {
 		AddRow(sec.PlaidSecurityID, returnedID)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO securities`)).
-		WithArgs(anyArgs(12)...).
+		WithArgs(anyArgs(14)...).
 		WillReturnRows(rows)
 
 	mapping, err := repo.UpsertBatch(ctx, []domain.Security{sec})
@@ -82,7 +82,7 @@ func TestSecurityRepository_UpsertBatch_UpdateExisting(t *testing.T) {
 		AddRow(sec.PlaidSecurityID, existingID)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO securities`)).
-		WithArgs(anyArgs(12)...).
+		WithArgs(anyArgs(14)...).
 		WillReturnRows(rows)
 
 	mapping, err := repo.UpsertBatch(ctx, []domain.Security{sec})
@@ -114,7 +114,7 @@ func TestSecurityRepository_UpsertBatch_MultipleSec(t *testing.T) {
 		rows := pgxmock.NewRows([]string{"plaid_security_id", "id"}).
 			AddRow(pid, returnedIDs[i])
 		mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO securities`)).
-			WithArgs(anyArgs(12)...).
+			WithArgs(anyArgs(14)...).
 			WillReturnRows(rows)
 	}
 
@@ -125,6 +125,42 @@ func TestSecurityRepository_UpsertBatch_MultipleSec(t *testing.T) {
 	for i, pid := range plaidIDs {
 		assert.Equal(t, returnedIDs[i], mapping[pid])
 	}
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSecurityRepository_UpsertBatch_StoresConsolidationIdentifiers verifies InstitutionSecurityID
+// and ProxySecurityID (#1631) are threaded through to the INSERT ... ON CONFLICT DO UPDATE query
+// rather than silently dropped, and that the DO UPDATE clause overwrites them like the other
+// identity-metadata columns (ticker_symbol, type, isin, cusip) rather than COALESCE-preserving them
+// like the price columns.
+func TestSecurityRepository_UpsertBatch_StoresConsolidationIdentifiers(t *testing.T) {
+	mock, repo := setupSecurityMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	sec := makeTestSecurity("sec-001", "Apple Inc.")
+	instID := "inst-sec-abc"
+	proxyID := "proxy-sec-xyz"
+	sec.InstitutionSecurityID = &instID
+	sec.ProxySecurityID = &proxyID
+
+	returnedID := uuid.New().String()
+	rows := pgxmock.NewRows([]string{"plaid_security_id", "id"}).
+		AddRow(sec.PlaidSecurityID, returnedID)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO securities`)).
+		WithArgs(
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			&instID, &proxyID,
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		).
+		WillReturnRows(rows)
+
+	mapping, err := repo.UpsertBatch(ctx, []domain.Security{sec})
+
+	require.NoError(t, err)
+	assert.Equal(t, returnedID, mapping[sec.PlaidSecurityID])
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
