@@ -110,6 +110,62 @@ describe('redactError', () => {
     expect(result.message).not.toContain('9999.99')
   })
 
+  it('#1630 fixwave: redacts the reviewer\'s exact escaping example (integer balance, email, hyphenated account)', () => {
+    const result = redactError({
+      message: 'Balance is 50000 for alice@example.com, account 1234-5678-9012',
+    })
+    expect(result.message).not.toContain('50000')
+    expect(result.message).not.toContain('alice@example.com')
+    expect(result.message).not.toContain('1234-5678-9012')
+  })
+
+  it('#1630 fixwave: redacts a bare integer balance with no currency sign or decimal', () => {
+    const result = redactError({ message: 'Balance is 50000' })
+    expect(result.message).not.toContain('50000')
+  })
+
+  it('#1630 fixwave: redacts a comma-grouped amount with no $ sign', () => {
+    const result = redactError({ message: 'Amount 50,000 exceeds the limit' })
+    expect(result.message).not.toContain('50,000')
+  })
+
+  it('#1630 fixwave: redacts a one-decimal-digit amount', () => {
+    const result = redactError({ message: 'Fee is 9.5 percent' })
+    expect(result.message).not.toContain('9.5')
+  })
+
+  it('#1630 fixwave: redacts an email address', () => {
+    const result = redactError({ message: 'Contact user123@example.com for details' })
+    expect(result.message).not.toContain('user123@example.com')
+  })
+
+  it('#1630 fixwave: redacts a UUID', () => {
+    const result = redactError({
+      message: 'Account 123e4567-e89b-12d3-a456-426614174000 not found',
+    })
+    expect(result.message).not.toContain('123e4567-e89b-12d3-a456-426614174000')
+  })
+
+  it('#1630 fixwave: only surfaces body.detail for a 4xx status — a 5xx body is never surfaced', () => {
+    const result = redactError({
+      message: 'API error 500',
+      status: 500,
+      body: { detail: 'Balance is 50000 for alice@example.com' },
+    })
+    expect(result.message).not.toContain('50000')
+    expect(result.message).not.toContain('alice@example.com')
+    expect(result.message).not.toContain('Balance')
+  })
+
+  it('#1630 fixwave: still surfaces body.detail for a 4xx status after the 5xx restriction', () => {
+    const result = redactError({
+      message: 'API error 400',
+      status: 400,
+      body: { detail: 'invalid budget: name is required' },
+    })
+    expect(result.message).toContain('name is required')
+  })
+
   it('never includes raw financial data in output', () => {
     const sensitiveError = {
       message: 'Transaction amount 9999.99 exceeded limit',
