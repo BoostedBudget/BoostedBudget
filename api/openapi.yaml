@@ -1986,13 +1986,17 @@ components:
       additionalProperties: false
       properties:
         category_id:
+          description: UUID of the nested custom category this breakdown entry covers.
           type: string
         category_name:
+          description: Display name of the nested custom category this breakdown entry covers.
           type: string
         total_amount:
+          description: Amount of matching transactions filed under this nested custom category, already included in the parent CategoryPreviewResponse's total_amount.
           format: double
           type: number
         transaction_count:
+          description: Count of matching transactions filed under this nested custom category, already included in the parent CategoryPreviewResponse's transaction_count.
           format: int64
           type: integer
       required:
@@ -2054,21 +2058,26 @@ components:
           readOnly: true
           type: string
         children:
+          description: Breaks the rolled-up transaction_count/total_amount down by each nested custom category that actually matched. Empty/nil when the targeted category cannot roll up (a leaf category), or no nested child matched anything.
           items:
             $ref: "#/components/schemas/CategoryPreviewBreakdownItem"
           type:
             - array
             - "null"
         direct_amount:
+          description: Amount of matching transactions filed directly under the targeted category itself, excluding any nested custom category. Populated only when children is non-empty; zero-valued for a leaf category with nothing to disclose.
           format: double
           type: number
         direct_transaction_count:
+          description: Count of matching transactions filed directly under the targeted category itself, excluding any nested custom category. Populated only when children is non-empty; zero-valued for a leaf category with nothing to disclose.
           format: int64
           type: integer
         total_amount:
+          description: Total matching transaction amount. When the targeted category is a pfc_primary or parent custom category, this INCLUDES transactions filed under its nested custom categories — see direct_amount and children to break the total down.
           format: double
           type: number
         transaction_count:
+          description: Total matching transaction count. When the targeted category is a pfc_primary or parent custom category, this INCLUDES transactions filed under its nested custom categories — see direct_transaction_count and children to break the total down.
           format: int64
           type: integer
       required:
@@ -2443,6 +2452,7 @@ components:
         pfc_detailed:
           type: string
         pfc_primary:
+          description: PFC primary category. When set with pfc_detailed omitted, this row is a pfc_primary category whose own spend total rolls up transactions filed under any custom category nested under it, in addition to its own direct matches.
           type: string
         savings_goal_id:
           type: string
@@ -11748,7 +11758,7 @@ paths:
         - Budgets
   /api/v1/budgets/categories/preview:
     post:
-      description: Returns the count and total amount of transactions matching the given category configuration within the date range.
+      description: Returns the count and total amount of transactions matching the given category configuration within the date range. When the targeted category is a pfc_primary (a pfc category with pfc_primary set and pfc_detailed omitted) or a parent custom category, transaction_count/total_amount INCLUDE transactions filed under custom categories nested under it — direct_transaction_count/direct_amount report only what was filed directly under the targeted category itself, and children breaks the rolled-up total down by each nested custom category.
       operationId: previewCategoryMatches
       requestBody:
         content:

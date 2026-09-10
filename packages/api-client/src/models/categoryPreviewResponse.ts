@@ -35,10 +35,17 @@ import type { CategoryPreviewBreakdownItem } from './categoryPreviewBreakdownIte
 export interface CategoryPreviewResponse {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
-  /** @nullable */
+  /**
+     * Breaks the rolled-up transaction_count/total_amount down by each nested custom category that actually matched. Empty/nil when the targeted category cannot roll up (a leaf category), or no nested child matched anything.
+     * @nullable
+     */
   children?: CategoryPreviewBreakdownItem[] | null;
+  /** Amount of matching transactions filed directly under the targeted category itself, excluding any nested custom category. Populated only when children is non-empty; zero-valued for a leaf category with nothing to disclose. */
   direct_amount?: number;
+  /** Count of matching transactions filed directly under the targeted category itself, excluding any nested custom category. Populated only when children is non-empty; zero-valued for a leaf category with nothing to disclose. */
   direct_transaction_count?: number;
+  /** Total matching transaction amount. When the targeted category is a pfc_primary or parent custom category, this INCLUDES transactions filed under its nested custom categories — see direct_amount and children to break the total down. */
   total_amount: number;
+  /** Total matching transaction count. When the targeted category is a pfc_primary or parent custom category, this INCLUDES transactions filed under its nested custom categories — see direct_transaction_count and children to break the total down. */
   transaction_count: number;
 }

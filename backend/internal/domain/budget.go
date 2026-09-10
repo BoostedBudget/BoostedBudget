@@ -625,8 +625,15 @@ type CreateBudgetRequest struct {
 
 // CreateBudgetCategoryRequest represents a category allocation in a budget creation request.
 type CreateBudgetCategoryRequest struct {
-	CategoryKind     string  `json:"category_kind" validate:"required,oneof=pfc custom savings"`
-	PFCPrimary       *string `json:"pfc_primary,omitempty"`
+	CategoryKind string `json:"category_kind" validate:"required,oneof=pfc custom savings"`
+	// PFCPrimary set with PFCDetailed omitted makes this a pfc_primary category. A pfc_primary
+	// category's own spend total ROLLS UP every transaction filed under a custom category
+	// nested under it (parent_pfc_primary), in addition to its own directly-matched
+	// transactions — the same roll-up previewCategoryMatches discloses via
+	// direct_transaction_count/direct_amount/children. See EscapedNestedChild /
+	// ErrEscapedNestedChild for the match_logic constraint a nested child must satisfy to stay
+	// correctly excluded from double-counting against this roll-up.
+	PFCPrimary       *string `json:"pfc_primary,omitempty" doc:"PFC primary category. When set with pfc_detailed omitted, this row is a pfc_primary category whose own spend total rolls up transactions filed under any custom category nested under it, in addition to its own direct matches."`
 	PFCDetailed      *string `json:"pfc_detailed,omitempty"`
 	CustomCategoryID *string `json:"custom_category_id,omitempty" validate:"omitempty,uuid"`
 	// SavingsGoalID is required when CategoryKind = "savings" (Issue #1300).
@@ -700,26 +707,26 @@ type CategoryPreviewRequest struct {
 // TotalAmount remain the single rolled-up figure every existing caller already relies on;
 // this is additive.
 type CategoryPreviewResponse struct {
-	TransactionCount int     `json:"transaction_count"`
-	TotalAmount      float64 `json:"total_amount"`
+	TransactionCount int     `json:"transaction_count" doc:"Total matching transaction count. When the targeted category is a pfc_primary or parent custom category, this INCLUDES transactions filed under its nested custom categories — see direct_transaction_count and children to break the total down."`
+	TotalAmount      float64 `json:"total_amount" doc:"Total matching transaction amount. When the targeted category is a pfc_primary or parent custom category, this INCLUDES transactions filed under its nested custom categories — see direct_amount and children to break the total down."`
 
 	// DirectTransactionCount/DirectAmount cover only transactions filed directly under the
 	// targeted category (not a nested child). Populated only when Children is non-empty.
-	DirectTransactionCount int     `json:"direct_transaction_count,omitempty"`
-	DirectAmount           float64 `json:"direct_amount,omitempty"`
+	DirectTransactionCount int     `json:"direct_transaction_count,omitempty" doc:"Count of matching transactions filed directly under the targeted category itself, excluding any nested custom category. Populated only when children is non-empty; zero-valued for a leaf category with nothing to disclose."`
+	DirectAmount           float64 `json:"direct_amount,omitempty" doc:"Amount of matching transactions filed directly under the targeted category itself, excluding any nested custom category. Populated only when children is non-empty; zero-valued for a leaf category with nothing to disclose."`
 
 	// Children breaks the rolled-up total down by nested custom category. Empty/nil when
 	// the category kind cannot roll up, or no nested child actually matched.
-	Children []CategoryPreviewBreakdownItem `json:"children,omitempty"`
+	Children []CategoryPreviewBreakdownItem `json:"children,omitempty" doc:"Breaks the rolled-up transaction_count/total_amount down by each nested custom category that actually matched. Empty/nil when the targeted category cannot roll up (a leaf category), or no nested child matched anything."`
 }
 
 // CategoryPreviewBreakdownItem is one nested child's contribution to a rolled-up
 // CategoryPreviewResponse total. Issue #1630 Task 5.
 type CategoryPreviewBreakdownItem struct {
-	CategoryID       string  `json:"category_id"`
-	CategoryName     string  `json:"category_name"`
-	TransactionCount int     `json:"transaction_count"`
-	TotalAmount      float64 `json:"total_amount"`
+	CategoryID       string  `json:"category_id" doc:"UUID of the nested custom category this breakdown entry covers."`
+	CategoryName     string  `json:"category_name" doc:"Display name of the nested custom category this breakdown entry covers."`
+	TransactionCount int     `json:"transaction_count" doc:"Count of matching transactions filed under this nested custom category, already included in the parent CategoryPreviewResponse's transaction_count."`
+	TotalAmount      float64 `json:"total_amount" doc:"Amount of matching transactions filed under this nested custom category, already included in the parent CategoryPreviewResponse's total_amount."`
 }
 
 // CategoryTransactionsResponse represents the paginated response with transactions matching a budget category.

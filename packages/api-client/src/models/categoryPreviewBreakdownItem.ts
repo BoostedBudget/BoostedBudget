@@ -32,8 +32,12 @@
  */
 
 export interface CategoryPreviewBreakdownItem {
+  /** UUID of the nested custom category this breakdown entry covers. */
   category_id: string;
+  /** Display name of the nested custom category this breakdown entry covers. */
   category_name: string;
+  /** Amount of matching transactions filed under this nested custom category, already included in the parent CategoryPreviewResponse's total_amount. */
   total_amount: number;
+  /** Count of matching transactions filed under this nested custom category, already included in the parent CategoryPreviewResponse's transaction_count. */
   transaction_count: number;
 }
