@@ -414,7 +414,9 @@ func (r *holdingRepository) GetByUserIDWithSecurities(ctx context.Context, userI
 	for rows.Next() {
 		h := domain.Holding{}
 		sec := domain.Security{}
-		var secClosePriceAsOf *string
+		// *time.Time, not *string: close_price_as_of is a DATE column and pgx has no binary-format
+		// plan for date → string (#1631).
+		var secClosePriceAsOf *time.Time
 		if err := rows.Scan(
 			&h.ID, &h.UserID, &h.AccountID, &h.UserAccountID, &h.SecurityID,
 			&h.Quantity, &h.CostBasis, &h.InstitutionValue, &h.InstitutionPrice,
