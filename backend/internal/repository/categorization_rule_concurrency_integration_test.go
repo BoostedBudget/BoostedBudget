@@ -69,15 +69,22 @@ func TestCategorizationRuleRepository_ConcurrentRepairAndToggle_Integration(t *t
 		pool.Exec(context.Background(), `DELETE FROM categorization_rules WHERE id = $1`, ruleID) //nolint:errcheck
 	})
 
-	// Two independent reads of the SAME pre-race row, each carrying its own copy of the
-	// updated_at this write believes is current — exactly what UpdateRule and ToggleRule each do
-	// today (GetByID, mutate the in-memory copy, Update). Fetching both BEFORE either writer
-	// starts is what makes the race genuine: neither writer has seen the other's change.
+	// Two independent reads of the SAME pre-race row, each carrying its own copy of the VERSION
+	// this write believes is current — exactly what UpdateRule and ToggleRule each do today
+	// (GetByID, mutate the in-memory copy, Update). Fetching both BEFORE either writer starts is
+	// what makes the race genuine: neither writer has seen the other's change.
+	//
+	// ⚠ #1625 second fix wave L7: this comment said updated_at and this assertion compared
+	// UpdatedAt, both left over from Task 19. Final review B2 moved the guard to `version`, so
+	// equal UpdatedAt was no longer the precondition this race needs — two reads could agree on
+	// updated_at and the test would still say nothing about the token Update actually compares.
 	repairReader, err := repo.GetByID(ctx, ruleID)
 	require.NoError(t, err)
 	toggleReader, err := repo.GetByID(ctx, ruleID)
 	require.NoError(t, err)
-	require.Equal(t, repairReader.UpdatedAt, toggleReader.UpdatedAt, "both readers must observe the same pre-race version")
+	require.Equal(t, repairReader.Version, toggleReader.Version,
+		"both readers must observe the same pre-race version — `version` is what Update's WHERE clause compares")
+	require.NotZero(t, repairReader.Version, "a stored rule must carry a version; 0 would make the guard vacuous")
 
 	// The "repair" write: fixes the conditions, leaves enabled untouched.
 	repairReader.Conditions = repairedConditions

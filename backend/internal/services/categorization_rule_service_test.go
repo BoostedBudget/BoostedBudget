@@ -818,8 +818,15 @@ func TestCategorizationRuleService_UpdateRule_RenamesALegacyStringValuedRule(t *
 	require.NoError(t, err, "renaming a rule whose stored conditions the server itself repairs at "+
 		"read time must not 422 — the rule is running, and the UI tells the user to edit it")
 	assert.Equal(t, newName, rule.Name)
+	// ⚠ #1625 second fix wave L7: this assertion used to claim the condition is persisted
+	// "byte-identical" while checking only Value. It is not, and could not be checked here: the
+	// repository NORMALIZES what it loads (normalizeLoadedConditions, categorization_rule_
+	// repository.go), so a legacy row's canonical Field/Operator can be filled in on the way out
+	// and written back on the way in. What this test actually pins — and all it needs to pin — is
+	// that the VALUE the request never mentioned is not rewritten, which is what a silent repair
+	// would look like to the user.
 	assert.Equal(t, "1000", rule.Conditions[0].Value,
-		"the untouched condition must be persisted byte-identical; rewriting it here would be a "+
+		"the untouched condition's VALUE must survive verbatim; rewriting it here would be a "+
 			"silent write the user did not ask for")
 	mockRepo.AssertExpectations(t)
 }

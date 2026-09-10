@@ -340,7 +340,9 @@ func (r *categorizationRuleRepository) ListAllForQuarantineCensus(ctx context.Co
 
 // Update updates an existing rule.
 //
-// #1625 Task 19: the WHERE clause is guarded by updated_at, not id alone. UpdateRule and
+// #1625 Task 19: the WHERE clause is guarded by a VERSION token, not id alone. (It said
+// "guarded by updated_at" until #1625 second fix wave L7 — directly above the `version` predicate
+// that final review B2 replaced it with.) UpdateRule and
 // ToggleRule both read-modify-write the WHOLE row (every column, not just the field either caller
 // meant to change), so without this guard a toggle racing a repair could win the write and put
 // the repair's PRIOR, malformed conditions back — last-writer-wins across the entire row. rule

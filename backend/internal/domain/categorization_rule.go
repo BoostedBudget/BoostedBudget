@@ -227,10 +227,18 @@ func (r *CategorizationRule) Validate() error { return r.validate(true) }
 //
 // ⚠ This is NOT "the update path is lenient". A condition the request SUPPLIES is new data and is
 // checked exactly as strictly as on create — `conditionsSupplied` is the caller's `req.Conditions
-// != nil`, the same expression that gates the merge. A user submitting a bad shape is still
-// refused; a user renaming a rule is not asked to first repair data the server wrote for them.
-// Everything else (name, logic, actions, targets) is validated in both modes, because those ARE
-// re-derived from the merged rule on every update.
+// != nil`, the same expression that gates the merge. A user renaming a rule is not asked to first
+// repair data the server wrote for them. Everything else (name, logic, actions, targets) is
+// validated in both modes, because those ARE re-derived from the merged rule on every update.
+//
+// ⚠ "As strictly as on create" is exact, and #1625 second fix wave L7 corrected the stronger
+// claim that used to sit here ("a user submitting a bad shape is still refused"). CREATE is not
+// total either: condition_schema.go's textValues accepts a MIXED array and silently drops its
+// non-string members, so `["uber", 42]` is accepted on both paths and evaluates as `["uber"]`.
+// That hole is deliberate and documented at textValues — it mirrors
+// matching.ExtractStringValues, which is what actually runs — but it means the guarantee here is
+// "the update path is no weaker than the create path", not "malformed conditions cannot be
+// written".
 //
 // Normalize is skipped with the shape check rather than kept, deliberately: an unnormalizable
 // stored condition is the same class of un-editable rule, and the repository already normalizes
