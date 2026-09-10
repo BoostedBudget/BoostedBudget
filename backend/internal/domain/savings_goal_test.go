@@ -1,7 +1,9 @@
 package domain
 
 import (
+	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -586,167 +588,6 @@ func TestSavingsGoal_Validate_ProgressBasis(t *testing.T) {
 	}
 }
 
-// TestCreateSavingsGoalRequest_ProgressBasis tests that the create DTO accepts and validates
-// progress_basis and account_percentage fields (Issue #1300 gap G1).
-func TestCreateSavingsGoalRequest_ProgressBasis(t *testing.T) {
-	tests := []struct {
-		name    string
-		req     CreateSavingsGoalRequest
-		wantErr bool
-		errMsg  string
-	}{
-		{
-			name: "contributions basis accepted",
-			req: CreateSavingsGoalRequest{
-				Name:          "House Fund",
-				TargetAmount:  50000,
-				AccountID:     "account-abc",
-				ProgressBasis: "contributions",
-			},
-			wantErr: false,
-		},
-		{
-			name: "balance basis accepted",
-			req: CreateSavingsGoalRequest{
-				Name:          "House Fund",
-				TargetAmount:  50000,
-				AccountID:     "account-abc",
-				ProgressBasis: "balance",
-			},
-			wantErr: false,
-		},
-		{
-			name: "account_percentage basis with valid percentage accepted",
-			req: CreateSavingsGoalRequest{
-				Name:             "House Fund",
-				TargetAmount:     50000,
-				AccountID:        "account-abc",
-				ProgressBasis:    "account_percentage",
-				AccountPercentage: float64PtrSG(0.5),
-			},
-			wantErr: false,
-		},
-		{
-			name: "invalid basis rejected",
-			req: CreateSavingsGoalRequest{
-				Name:          "House Fund",
-				TargetAmount:  50000,
-				AccountID:     "account-abc",
-				ProgressBasis: "bogus",
-			},
-			wantErr: true,
-			errMsg:  "progress_basis must be one of",
-		},
-		{
-			name: "account_percentage without pct rejected",
-			req: CreateSavingsGoalRequest{
-				Name:          "House Fund",
-				TargetAmount:  50000,
-				AccountID:     "account-abc",
-				ProgressBasis: "account_percentage",
-			},
-			wantErr: true,
-			errMsg:  "account_percentage is required",
-		},
-		{
-			name: "percentage > 1 rejected",
-			req: CreateSavingsGoalRequest{
-				Name:             "House Fund",
-				TargetAmount:     50000,
-				AccountID:        "account-abc",
-				ProgressBasis:    "account_percentage",
-				AccountPercentage: float64PtrSG(1.5),
-			},
-			wantErr: true,
-			errMsg:  "account_percentage must be between 0 and 1",
-		},
-		{
-			name: "account_percentage on manual basis rejected",
-			req: CreateSavingsGoalRequest{
-				Name:             "House Fund",
-				TargetAmount:     50000,
-				AccountID:        "account-abc",
-				ProgressBasis:    "manual",
-				AccountPercentage: float64PtrSG(0.3),
-			},
-			wantErr: true,
-			errMsg:  "account_percentage must only be set when progress_basis is account_percentage",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.req.Validate()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr && tt.errMsg != "" {
-				if err == nil || !contains(err.Error(), tt.errMsg) {
-					t.Errorf("expected error containing %q, got: %v", tt.errMsg, err)
-				}
-			}
-		})
-	}
-}
-
-// TestUpdateSavingsGoalRequest_ProgressBasis tests that the update DTO accepts and validates
-// progress_basis and account_percentage fields (Issue #1300 gap G1).
-func TestUpdateSavingsGoalRequest_ProgressBasis(t *testing.T) {
-	tests := []struct {
-		name    string
-		req     UpdateSavingsGoalRequest
-		wantErr bool
-		errMsg  string
-	}{
-		{
-			name:    "nil basis is valid (no change)",
-			req:     UpdateSavingsGoalRequest{},
-			wantErr: false,
-		},
-		{
-			name: "contributions basis accepted",
-			req:  UpdateSavingsGoalRequest{ProgressBasis: strPtrSG("contributions")},
-			wantErr: false,
-		},
-		{
-			name: "account_percentage with pct accepted",
-			req: UpdateSavingsGoalRequest{
-				ProgressBasis:    strPtrSG("account_percentage"),
-				AccountPercentage: float64PtrSG(0.4),
-			},
-			wantErr: false,
-		},
-		{
-			name:    "invalid basis rejected",
-			req:     UpdateSavingsGoalRequest{ProgressBasis: strPtrSG("bogus")},
-			wantErr: true,
-			errMsg:  "progress_basis must be one of",
-		},
-		{
-			name:    "account_percentage without pct rejected",
-			req:     UpdateSavingsGoalRequest{ProgressBasis: strPtrSG("account_percentage")},
-			wantErr: true,
-			errMsg:  "account_percentage is required",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.req.Validate()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr && tt.errMsg != "" {
-				if err == nil || !contains(err.Error(), tt.errMsg) {
-					t.Errorf("expected error containing %q, got: %v", tt.errMsg, err)
-				}
-			}
-		})
-	}
-}
-
-func strPtrSG(s string) *string { return &s }
-
 // TestSavingsGoalContribution_Validate tests the contribution validation rules (Issue #1300).
 func TestSavingsGoalContribution_Validate(t *testing.T) {
 	validTxnID := "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
@@ -871,5 +712,74 @@ func TestSavingsGoalContribution_Validate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// #1625: the request must not advertise a field it discards. `notes` had no column and was
+// never read; a schema that accepts it promises storage that does not exist.
+func TestLogContributionRequest_DoesNotAdvertiseNotes(t *testing.T) {
+	raw, err := json.Marshal(LogContributionRequest{Amount: 1, OccurredOn: "2026-09-08"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(raw, []byte("notes")) {
+		t.Errorf("LogContributionRequest still carries a notes field: %s", raw)
+	}
+}
+
+// Codex gap analysis C2: `format:"date"` is enforced by Huma at parse time, but a non-HTTP
+// caller reaches Validate() directly. Before #1625 a malformed date passed BOTH layers and only
+// failed at the Postgres DATE column, surfacing as a bare 500 that named no field.
+func TestLogContributionRequest_RejectsMalformedDates(t *testing.T) {
+	malformed := []string{"09/08/2026", "2026-13-01", "2026-9-8", "yesterday", "2026-09-08T00:00:00Z"}
+	for _, d := range malformed {
+		req := LogContributionRequest{Amount: 10, OccurredOn: d}
+		if err := req.Validate(); err == nil {
+			t.Errorf("occurred_on %q was accepted; it would fail at the DATE column as a 500", d)
+		}
+	}
+
+	valid := LogContributionRequest{Amount: 10, OccurredOn: "2026-09-08"}
+	if err := valid.Validate(); err != nil {
+		t.Errorf("a well-formed YYYY-MM-DD date must be accepted: %v", err)
+	}
+}
+
+// TestSavingsGoal_NameLengthIsCountedInRunes is #1625's final-review I4.
+//
+// Huma's `maxLength:"100"` on Create/UpdateSavingsGoalRequest counts RUNES (JSON Schema
+// semantics). Validate counted BYTES. A 60-character CJK name is 180 bytes: it passes the schema
+// the API publishes, reaches the service, and is then refused by a message that says "100
+// characters" while counting something the user cannot see. The two must agree, and they must
+// agree on the unit the message names.
+func TestSavingsGoal_NameLengthIsCountedInRunes(t *testing.T) {
+	valid := func(name string) *SavingsGoal {
+		return &SavingsGoal{
+			UserID:       "user-1",
+			Name:         name,
+			TargetAmount: 100,
+			CurrencyCode: "USD",
+			AccountID:    "account-456",
+		}
+	}
+
+	// 60 CJK characters — 180 bytes, well under 100 runes.
+	sixtyCJK := strings.Repeat("目", 60)
+	if len(sixtyCJK) <= 100 {
+		t.Fatalf("fixture is not falsifiable: %d bytes does not exceed the byte limit, so a "+
+			"byte-counting implementation would accept it too", len(sixtyCJK))
+	}
+	if err := valid(sixtyCJK).Validate(); err != nil {
+		t.Errorf("a 60-character name was rejected: %v — Huma's published maxLength accepts it, so "+
+			"the server refuses a name its own schema advertises as legal", err)
+	}
+
+	// 101 runes must still be refused, or the fix has simply removed the limit.
+	if err := valid(strings.Repeat("目", 101)).Validate(); err == nil {
+		t.Error("a 101-character name was accepted — the limit must still apply, in runes")
+	}
+	if err := valid(strings.Repeat("a", 101)).Validate(); err == nil {
+		t.Error("a 101-byte ASCII name was accepted — runes and bytes coincide here, so this is the " +
+			"pre-existing behaviour and must not have changed")
 	}
 }

@@ -49,6 +49,24 @@ The denylist itself (`PII_PROPERTY_DENYLIST` in `piiScrubbing.ts`) currently inc
 - User-authored transaction tags
 - Custom rule descriptions
 - **Staff-authored free text about a user** — e.g. the orphaned-Plaid-Item operator resolution note (`PlaidOrphanedItemsPage`). Nothing prevents an operator typing a name into it, and in that table the subject has already been erased. Masked on the note element, **not** via `maskedColumnIds`: masking the whole `<td>` would hide the attesting staff id and make the attestation anonymous, which is what the feature exists to prevent. Round 15 in `pii-coverage.test.tsx` enforces both directions.
+- **Rule dry-run results** — `RulePreviewPanel` (#1625) renders RAW transactions: the merchant,
+  the description, the amount and the current category of every row a candidate rule would match.
+  It is as sensitive as the transactions table itself, and more concentrated — the rows shown are
+  precisely the ones the user is about to act on. Masked per-cell via `data-ph-mask` on every
+  `<td>`, never on the table, so the column headers and the fixed field/operator vocabulary stay
+  legible in replay while the contents do not. TWO paths render user content and both are
+  masked: the match rows, and the VALIDATION ERROR line — the mapper returns the domain error
+  verbatim and several of those quote the user's own value back (a malformed date is echoed;
+  an unknown-field message names what was sent), so the error is not a fixed string.
+  Coverage is uneven by design and worth knowing: the match rows are enforced twice (a local
+  assertion in `RulePreviewPanel.test.tsx` and a sentinel sweep in `pii-coverage.test.tsx`),
+  the error line only by the local test, because the central sweep drives a SUCCESSFUL
+  response. Codex review found the error path unmasked after this entry already claimed
+  coverage.
+  ⚠ Its `RULE_PREVIEWED` / `RULE_SAVED` analytics carry counts, booleans and the field/operator
+  vocabulary ONLY — never a condition value, which is user-typed financial detail. None of those
+  property names is an `isPiiKey` match (verified, not assumed), so scrubbing is not what keeps
+  them safe; the choice of what to send is.
 - **Verbatim vendor payloads** — the Paddle webhook `payload` block (`WebhookDetailModal`) is shown precisely because nobody knows in advance what is in it; it routinely carries customer email and billed totals. Masked on the `<pre>`, matching `DeadLetterDetailModal`'s raw-args and error blocks.
 - **Security / holding names** — ticker symbols (e.g. `AAPL`), full security names (e.g. "Apple Inc."), and fund names reveal portfolio composition. The hand-built holdings table in `PortfolioHoldingsWidget` masks these per-cell via `data-ph-mask`; the `PortfolioHoldingsWidget` PII regression (Round 14 in `pii-coverage.test.tsx`) enforces this with a named sentinel (`SENTINEL_SECURITY_NAME`).
 

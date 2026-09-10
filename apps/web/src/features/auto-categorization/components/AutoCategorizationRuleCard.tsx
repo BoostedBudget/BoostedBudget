@@ -3,10 +3,11 @@ import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import type { CategorizationRule } from '../types'
-import { CONDITION_TYPE_LABELS } from '../types'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { formatPFCEnum } from '@/shared/categories/formatPfc'
+import { conditionLabel } from '../utils/conditionLabel'
 import { formatConditionValue } from '../utils/formatConditionValue'
+import { quarantineSentence } from '../utils/quarantineSentence'
 
 export interface AutoCategorizationRuleCardProps {
   rule: CategorizationRule
@@ -46,10 +47,58 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
           <h3 className="m-0 text-lg font-semibold text-foreground">
             <span data-ph-mask>{rule.name}</span>
           </h3>
-          <Badge variant={rule.enabled ? 'success' : 'secondary'} className="uppercase">
-            {rule.enabled ? 'Active' : 'Disabled'}
+          <Badge
+            variant={
+              !rule.enabled
+                ? 'secondary'
+                : rule.quarantined
+                  ? 'destructive'
+                  : rule.quarantine_reason
+                    ? 'warning'
+                    : 'success'
+            }
+            className="uppercase"
+          >
+            {/* #1625 Task 10: RuleMatches (backend/internal/rules/engine.go) checks
+                !rule.Enabled BEFORE quarantine, so a disabled rule never runs regardless of
+                quarantine_reason -- "Disabled" must win over "Not running"/"Needs attention",
+                not the reverse. Previously quarantine_reason was checked first, so a disabled
+                malformed rule read "Needs attention" and implied it was still executing: two
+                false statements about the same rule at once. */}
+            {!rule.enabled
+              ? 'Disabled'
+              : rule.quarantined
+                ? 'Not running'
+                : rule.quarantine_reason
+                  ? 'Needs attention'
+                  : 'Active'}
           </Badge>
         </div>
+        {rule.quarantine_reason && (
+          // #1625: a rule that cannot be evaluated used to just stop matching, with the reason
+          // visible only in a metric the user cannot see. The reason is a fixed backend
+          // vocabulary and never user content, so it stays OUTSIDE data-ph-mask -- masking it
+          // would hide the diagnostic without protecting anything.
+          //
+          // ⚠ THREE DIFFERENT STATES, and every conflation of them has shipped at least once.
+          // The run status comes from `enabled` and `quarantined` ONLY -- see quarantineSentence
+          // above for why reading it off the reason is false whenever the RULE_QUARANTINE_ENFORCE
+          // kill switch is off. The reason is still SURFACED in all three states (a user deciding
+          // whether to re-enable a rule needs to know it has an outstanding issue); it just never
+          // decides what the card says about running.
+          <p
+            className={
+              !rule.enabled
+                ? 'mt-2 text-sm text-muted-foreground'
+                : rule.quarantined
+                  ? 'mt-2 text-sm text-destructive'
+                  : 'mt-2 text-sm text-warning-foreground'
+            }
+            role="status"
+          >
+            {quarantineSentence(rule.enabled, Boolean(rule.quarantined), rule.quarantine_reason)}
+          </p>
+        )}
         {rule.description && (
           <p className="mt-2 text-sm text-muted-foreground"><span data-ph-mask>{rule.description}</span></p>
         )}
@@ -65,7 +114,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
             {rule.conditions.map((condition, index) => (
               <li key={index} className="flex items-center gap-1 bg-muted px-2 py-1 rounded text-[0.8125rem]">
                 <span className="text-muted-foreground">
-                  {CONDITION_TYPE_LABELS[condition.type] || condition.type}
+                  {conditionLabel(condition)}
                 </span>
                 <span className="text-foreground font-medium" data-ph-mask>
                   {formatConditionValue(condition)}

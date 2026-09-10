@@ -199,3 +199,86 @@ describe('TriageDetailView', () => {
     })
   })
 })
+
+// ─── Issue #1625 D: the recategorize panel must seed from the transaction ─────
+//
+// The panel used to open with an empty `pendingCategory`, so CategoryEditor rendered
+// "Uncategorized" for a transaction that already had a perfectly good Plaid PFC — and
+// because handleSaveCategory treats an empty selection as { kind: 'clear' }, pressing
+// Apply without touching the category DESTROYED that category. These pin both halves.
+describe('#1625 recategorize panel seeding', () => {
+  const pfcTx: Transaction = {
+    ...mockTx,
+    pfc_primary: 'FOOD_AND_DRINK',
+    pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
+    pfc_primary_display: 'Food and Drink',
+    pfc_detailed_display: 'Coffee',
+  }
+
+  const plaidPrimaries = [{ enum: 'FOOD_AND_DRINK', display: 'Food and Drink' }] as never
+
+  function openPanel(overrides?: Partial<Parameters<typeof TriageDetailView>[0]>) {
+    const r = renderTriage(overrides)
+    fireEvent.click(screen.getByRole('button', { name: /recategorize transaction/i }))
+    return r
+  }
+
+  it('shows the existing PFC category, not "Uncategorized"', () => {
+    openPanel({ transaction: pfcTx, plaidPrimaries })
+    expect(screen.queryByText('Uncategorized')).not.toBeInTheDocument()
+    expect(screen.getByText('Food and Drink')).toBeInTheDocument()
+  })
+
+  it('does NOT clear the category when Apply is pressed without touching it', () => {
+    const { props } = openPanel({ transaction: pfcTx, plaidPrimaries })
+    fireEvent.click(screen.getByRole('button', { name: /apply/i }))
+
+    expect(props.onRecategorize).toHaveBeenCalledTimes(1)
+    const req = (props.onRecategorize as ReturnType<typeof mock>).mock.calls[0][0]
+    expect(req.kind).not.toBe('clear')
+    expect(req).toEqual({
+      kind: 'pfc',
+      pfc_primary: 'FOOD_AND_DRINK',
+      pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
+    })
+  })
+
+  it('round-trips an untouched CUSTOM category as custom, not as a PFC enum', () => {
+    const customTx: Transaction = {
+      ...mockTx,
+      category_override_kind: 'custom',
+      custom_category_override_id: 'cat-99',
+    }
+    const { props } = openPanel({
+      transaction: customTx,
+      availableCategories: [{ id: 'cat-99', name: 'Coffee Budget', color: '#fff' }] as never,
+    })
+    fireEvent.click(screen.getByRole('button', { name: /apply/i }))
+
+    const req = (props.onRecategorize as ReturnType<typeof mock>).mock.calls[0][0]
+    expect(req).toEqual({ kind: 'custom', custom_category_id: 'cat-99' })
+  })
+
+  it('still clears when the user explicitly clears the category', () => {
+    const { props } = openPanel({ transaction: pfcTx, plaidPrimaries })
+    fireEvent.click(screen.getByRole('button', { name: /clear category/i }))
+    fireEvent.click(screen.getByRole('button', { name: /apply/i }))
+
+    expect((props.onRecategorize as ReturnType<typeof mock>).mock.calls[0][0]).toEqual({ kind: 'clear' })
+  })
+
+  it('re-seeds when the transaction changes underneath an open panel', () => {
+    const { rerender, props } = openPanel({ transaction: pfcTx, plaidPrimaries })
+    const nextTx: Transaction = {
+      ...mockTx,
+      id: 'tx-2',
+      pfc_primary: 'TRANSPORTATION',
+      pfc_primary_display: 'Transportation',
+    }
+    rerender(<TriageDetailView {...props} transaction={nextTx} plaidPrimaries={plaidPrimaries} />)
+    fireEvent.click(screen.getByRole('button', { name: /apply/i }))
+
+    const req = (props.onRecategorize as ReturnType<typeof mock>).mock.calls[0][0]
+    expect(req).toEqual({ kind: 'pfc', pfc_primary: 'TRANSPORTATION', pfc_detailed: undefined })
+  })
+})

@@ -2211,6 +2211,16 @@
           "required": true
         },
         {
+          "name": "quarantine_reason",
+          "type": "string",
+          "description": "Why the rule is broken. Fixed vocabulary, never user content. Four values are in the ENFORCEMENT CLASS — the rule cannot be evaluated honestly as written, and while quarantine enforcement is on (RULE_QUARANTINE_ENFORCE, default on) the server refuses it and quarantined is true: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. With enforcement OFF those same rules RUN and quarantined is false — nothing about them was repaired. The fifth, invalid_condition_value_shape, is never enforced in either state: a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only, so the rule keeps running. Read quarantined, not this field, for whether the server is currently stopping the rule — and read enabled too, which both fields ignore entirely. The stored rule is never rewritten; edit it to make the repair permanent."
+        },
+        {
+          "name": "quarantined",
+          "type": "boolean",
+          "description": "True when the server is CURRENTLY preventing this rule from matching anything: it is refused before any condition is evaluated, so it applies to nothing. This is a statement about right now, not about the rule's shape. It is FALSE whenever quarantine enforcement is disabled server-wide (RULE_QUARANTINE_ENFORCE, default on), because the engine then runs the rule despite its problem. So false WITH a quarantine_reason does NOT mean the rule is healthy or that the server repaired it — it means quarantine is not what is stopping it: either the problem is one the server repairs at read time (a wrong-typed condition value with one honest reading is coerced), or enforcement is off and the rule is running exactly as written, in which case a rule with no conditions matches EVERY transaction. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is the server letting this rule run — which is not the same as is it matching, because a condition the engine cannot evaluate still fails at evaluation time. Computed per request; never persisted."
+        },
+        {
           "name": "source",
           "type": "string",
           "required": true
@@ -2261,6 +2271,12 @@
           "name": "user_id",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "required": true,
+          "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
         }
       ]
     },
@@ -2286,13 +2302,64 @@
           "required": true
         },
         {
+          "name": "conditions[].field",
+          "type": "string",
+          "enum": [
+            "merchant",
+            "effective_merchant",
+            "name",
+            "merchant_id",
+            "amount",
+            "signed_amount",
+            "direction",
+            "account_id",
+            "account_type",
+            "payment_channel",
+            "date",
+            "pfc_primary",
+            "pfc_detailed"
+          ],
+          "description": "Transaction attribute to match. Not every operator is legal for every field — GET /api/v1/auto-categorization/condition-schema returns the full matrix, value shapes and semantics. Note 'amount' discards the sign; 'signed_amount' is POSITIVE for money leaving the account; 'direction' takes inflow|outflow."
+        },
+        {
           "name": "conditions[].operator",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "eq",
+            "neq",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
+            "between",
+            "contains",
+            "starts_with",
+            "ends_with",
+            "in"
+          ],
+          "description": "Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array, or a single string as a one-element shorthand."
         },
         {
           "name": "conditions[].type",
           "type": "string",
-          "required": true
+          "enum": [
+            "merchant_contains",
+            "merchant_equals",
+            "merchant_starts_with",
+            "merchant_ends_with",
+            "amount_greater_than",
+            "amount_less_than",
+            "amount_equals",
+            "amount_range",
+            "account_id",
+            "account_type",
+            "payment_channel",
+            "date_range",
+            "existing_pfc_primary",
+            "existing_pfc_detailed",
+            "expression"
+          ],
+          "description": "Legacy fused condition name. Send this OR field+operator, not a contradicting pair. 'expression' is RESPONSE-ONLY — the server emits it for a field+operator combination that has no legacy name, and rejects it as input; send field+operator instead."
         },
         {
           "name": "conditions[].value",
@@ -2395,6 +2462,16 @@
           "required": true
         },
         {
+          "name": "quarantine_reason",
+          "type": "string",
+          "description": "Why the rule is broken. Fixed vocabulary, never user content. Four values are in the ENFORCEMENT CLASS — the rule cannot be evaluated honestly as written, and while quarantine enforcement is on (RULE_QUARANTINE_ENFORCE, default on) the server refuses it and quarantined is true: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. With enforcement OFF those same rules RUN and quarantined is false — nothing about them was repaired. The fifth, invalid_condition_value_shape, is never enforced in either state: a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only, so the rule keeps running. Read quarantined, not this field, for whether the server is currently stopping the rule — and read enabled too, which both fields ignore entirely. The stored rule is never rewritten; edit it to make the repair permanent."
+        },
+        {
+          "name": "quarantined",
+          "type": "boolean",
+          "description": "True when the server is CURRENTLY preventing this rule from matching anything: it is refused before any condition is evaluated, so it applies to nothing. This is a statement about right now, not about the rule's shape. It is FALSE whenever quarantine enforcement is disabled server-wide (RULE_QUARANTINE_ENFORCE, default on), because the engine then runs the rule despite its problem. So false WITH a quarantine_reason does NOT mean the rule is healthy or that the server repaired it — it means quarantine is not what is stopping it: either the problem is one the server repairs at read time (a wrong-typed condition value with one honest reading is coerced), or enforcement is off and the rule is running exactly as written, in which case a rule with no conditions matches EVERY transaction. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is the server letting this rule run — which is not the same as is it matching, because a condition the engine cannot evaluate still fails at evaluation time. Computed per request; never persisted."
+        },
+        {
           "name": "source",
           "type": "string",
           "required": true
@@ -2444,6 +2521,180 @@
         {
           "name": "user_id",
           "type": "string",
+          "required": true
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "required": true,
+          "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
+        }
+      ]
+    },
+    {
+      "operationId": "getConditionSchema",
+      "method": "GET",
+      "path": "/api/v1/auto-categorization/condition-schema",
+      "summary": "Get the condition matrix",
+      "tags": [
+        "Auto-Categorization"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns every condition field, the operators each accepts, the value shape each operator requires, closed value sets inlined where practical, and the semantics that cannot be inferred from a type — notably that signed_amount is POSITIVE for money leaving the account. The two PFC fields (pfc_primary, pfc_detailed) have closed sets too, but each field's own notes name the endpoint that publishes it instead of duplicating ~120 values here. Derived from the same matrix the validator enforces, so it cannot drift from it.",
+      "responseBody": [
+        {
+          "name": "fields",
+          "type": "array of object",
+          "required": true
+        }
+      ]
+    },
+    {
+      "operationId": "previewRule",
+      "method": "POST",
+      "path": "/api/v1/auto-categorization/preview",
+      "summary": "Preview a categorization rule",
+      "tags": [
+        "Auto-Categorization"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Reports which of your recent transactions a candidate rule would match, WITHOUT saving the rule. Condition, shape and target-category validation is identical to createRule. Two things preview cannot check, because they depend on state at the moment of the write: rule names must be unique per user, and the target category must still exist when you save.",
+      "requestBody": [
+        {
+          "name": "condition_logic",
+          "type": "string"
+        },
+        {
+          "name": "conditions",
+          "type": "array of object",
+          "required": true
+        },
+        {
+          "name": "conditions[].field",
+          "type": "string",
+          "enum": [
+            "merchant",
+            "effective_merchant",
+            "name",
+            "merchant_id",
+            "amount",
+            "signed_amount",
+            "direction",
+            "account_id",
+            "account_type",
+            "payment_channel",
+            "date",
+            "pfc_primary",
+            "pfc_detailed"
+          ],
+          "description": "Transaction attribute to match. Not every operator is legal for every field — GET /api/v1/auto-categorization/condition-schema returns the full matrix, value shapes and semantics. Note 'amount' discards the sign; 'signed_amount' is POSITIVE for money leaving the account; 'direction' takes inflow|outflow."
+        },
+        {
+          "name": "conditions[].operator",
+          "type": "string",
+          "enum": [
+            "eq",
+            "neq",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
+            "between",
+            "contains",
+            "starts_with",
+            "ends_with",
+            "in"
+          ],
+          "description": "Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array, or a single string as a one-element shorthand."
+        },
+        {
+          "name": "conditions[].type",
+          "type": "string",
+          "enum": [
+            "merchant_contains",
+            "merchant_equals",
+            "merchant_starts_with",
+            "merchant_ends_with",
+            "amount_greater_than",
+            "amount_less_than",
+            "amount_equals",
+            "amount_range",
+            "account_id",
+            "account_type",
+            "payment_channel",
+            "date_range",
+            "existing_pfc_primary",
+            "existing_pfc_detailed",
+            "expression"
+          ],
+          "description": "Legacy fused condition name. Send this OR field+operator, not a contradicting pair. 'expression' is RESPONSE-ONLY — the server emits it for a field+operator combination that has no legacy name, and rejects it as input; send field+operator instead."
+        },
+        {
+          "name": "conditions[].value",
+          "required": true
+        },
+        {
+          "name": "conditions[].value_display",
+          "type": "string"
+        },
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "type": "integer"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "priority",
+          "type": "integer"
+        },
+        {
+          "name": "tag_behavior",
+          "type": "string"
+        },
+        {
+          "name": "target_custom_category_id",
+          "type": "string"
+        },
+        {
+          "name": "target_kind",
+          "type": "string"
+        },
+        {
+          "name": "target_pfc_detailed",
+          "type": "string"
+        },
+        {
+          "name": "target_pfc_primary",
+          "type": "string"
+        },
+        {
+          "name": "target_tags",
+          "type": "array of string"
+        }
+      ],
+      "responseBody": [
+        {
+          "name": "match_count",
+          "type": "integer",
+          "required": true
+        },
+        {
+          "name": "matches",
+          "type": "array of object",
+          "required": true
+        },
+        {
+          "name": "scanned_count",
+          "type": "integer",
           "required": true
         }
       ]
@@ -2523,6 +2774,16 @@
           "required": true
         },
         {
+          "name": "quarantine_reason",
+          "type": "string",
+          "description": "Why the rule is broken. Fixed vocabulary, never user content. Four values are in the ENFORCEMENT CLASS — the rule cannot be evaluated honestly as written, and while quarantine enforcement is on (RULE_QUARANTINE_ENFORCE, default on) the server refuses it and quarantined is true: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. With enforcement OFF those same rules RUN and quarantined is false — nothing about them was repaired. The fifth, invalid_condition_value_shape, is never enforced in either state: a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only, so the rule keeps running. Read quarantined, not this field, for whether the server is currently stopping the rule — and read enabled too, which both fields ignore entirely. The stored rule is never rewritten; edit it to make the repair permanent."
+        },
+        {
+          "name": "quarantined",
+          "type": "boolean",
+          "description": "True when the server is CURRENTLY preventing this rule from matching anything: it is refused before any condition is evaluated, so it applies to nothing. This is a statement about right now, not about the rule's shape. It is FALSE whenever quarantine enforcement is disabled server-wide (RULE_QUARANTINE_ENFORCE, default on), because the engine then runs the rule despite its problem. So false WITH a quarantine_reason does NOT mean the rule is healthy or that the server repaired it — it means quarantine is not what is stopping it: either the problem is one the server repairs at read time (a wrong-typed condition value with one honest reading is coerced), or enforcement is off and the rule is running exactly as written, in which case a rule with no conditions matches EVERY transaction. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is the server letting this rule run — which is not the same as is it matching, because a condition the engine cannot evaluate still fails at evaluation time. Computed per request; never persisted."
+        },
+        {
           "name": "source",
           "type": "string",
           "required": true
@@ -2573,6 +2834,12 @@
           "name": "user_id",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "required": true,
+          "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
         }
       ]
     },
@@ -2606,13 +2873,64 @@
           "type": "array of object"
         },
         {
+          "name": "conditions[].field",
+          "type": "string",
+          "enum": [
+            "merchant",
+            "effective_merchant",
+            "name",
+            "merchant_id",
+            "amount",
+            "signed_amount",
+            "direction",
+            "account_id",
+            "account_type",
+            "payment_channel",
+            "date",
+            "pfc_primary",
+            "pfc_detailed"
+          ],
+          "description": "Transaction attribute to match. Not every operator is legal for every field — GET /api/v1/auto-categorization/condition-schema returns the full matrix, value shapes and semantics. Note 'amount' discards the sign; 'signed_amount' is POSITIVE for money leaving the account; 'direction' takes inflow|outflow."
+        },
+        {
           "name": "conditions[].operator",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "eq",
+            "neq",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
+            "between",
+            "contains",
+            "starts_with",
+            "ends_with",
+            "in"
+          ],
+          "description": "Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array, or a single string as a one-element shorthand."
         },
         {
           "name": "conditions[].type",
           "type": "string",
-          "required": true
+          "enum": [
+            "merchant_contains",
+            "merchant_equals",
+            "merchant_starts_with",
+            "merchant_ends_with",
+            "amount_greater_than",
+            "amount_less_than",
+            "amount_equals",
+            "amount_range",
+            "account_id",
+            "account_type",
+            "payment_channel",
+            "date_range",
+            "existing_pfc_primary",
+            "existing_pfc_detailed",
+            "expression"
+          ],
+          "description": "Legacy fused condition name. Send this OR field+operator, not a contradicting pair. 'expression' is RESPONSE-ONLY — the server emits it for a field+operator combination that has no legacy name, and rejects it as input; send field+operator instead."
         },
         {
           "name": "conditions[].value",
@@ -2718,6 +3036,16 @@
           "required": true
         },
         {
+          "name": "quarantine_reason",
+          "type": "string",
+          "description": "Why the rule is broken. Fixed vocabulary, never user content. Four values are in the ENFORCEMENT CLASS — the rule cannot be evaluated honestly as written, and while quarantine enforcement is on (RULE_QUARANTINE_ENFORCE, default on) the server refuses it and quarantined is true: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. With enforcement OFF those same rules RUN and quarantined is false — nothing about them was repaired. The fifth, invalid_condition_value_shape, is never enforced in either state: a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only, so the rule keeps running. Read quarantined, not this field, for whether the server is currently stopping the rule — and read enabled too, which both fields ignore entirely. The stored rule is never rewritten; edit it to make the repair permanent."
+        },
+        {
+          "name": "quarantined",
+          "type": "boolean",
+          "description": "True when the server is CURRENTLY preventing this rule from matching anything: it is refused before any condition is evaluated, so it applies to nothing. This is a statement about right now, not about the rule's shape. It is FALSE whenever quarantine enforcement is disabled server-wide (RULE_QUARANTINE_ENFORCE, default on), because the engine then runs the rule despite its problem. So false WITH a quarantine_reason does NOT mean the rule is healthy or that the server repaired it — it means quarantine is not what is stopping it: either the problem is one the server repairs at read time (a wrong-typed condition value with one honest reading is coerced), or enforcement is off and the rule is running exactly as written, in which case a rule with no conditions matches EVERY transaction. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is the server letting this rule run — which is not the same as is it matching, because a condition the engine cannot evaluate still fails at evaluation time. Computed per request; never persisted."
+        },
+        {
           "name": "source",
           "type": "string",
           "required": true
@@ -2768,6 +3096,12 @@
           "name": "user_id",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "required": true,
+          "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
         }
       ]
     },
@@ -2874,6 +3208,16 @@
           "required": true
         },
         {
+          "name": "quarantine_reason",
+          "type": "string",
+          "description": "Why the rule is broken. Fixed vocabulary, never user content. Four values are in the ENFORCEMENT CLASS — the rule cannot be evaluated honestly as written, and while quarantine enforcement is on (RULE_QUARANTINE_ENFORCE, default on) the server refuses it and quarantined is true: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. With enforcement OFF those same rules RUN and quarantined is false — nothing about them was repaired. The fifth, invalid_condition_value_shape, is never enforced in either state: a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only, so the rule keeps running. Read quarantined, not this field, for whether the server is currently stopping the rule — and read enabled too, which both fields ignore entirely. The stored rule is never rewritten; edit it to make the repair permanent."
+        },
+        {
+          "name": "quarantined",
+          "type": "boolean",
+          "description": "True when the server is CURRENTLY preventing this rule from matching anything: it is refused before any condition is evaluated, so it applies to nothing. This is a statement about right now, not about the rule's shape. It is FALSE whenever quarantine enforcement is disabled server-wide (RULE_QUARANTINE_ENFORCE, default on), because the engine then runs the rule despite its problem. So false WITH a quarantine_reason does NOT mean the rule is healthy or that the server repaired it — it means quarantine is not what is stopping it: either the problem is one the server repairs at read time (a wrong-typed condition value with one honest reading is coerced), or enforcement is off and the rule is running exactly as written, in which case a rule with no conditions matches EVERY transaction. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is the server letting this rule run — which is not the same as is it matching, because a condition the engine cannot evaluate still fails at evaluation time. Computed per request; never persisted."
+        },
+        {
           "name": "source",
           "type": "string",
           "required": true
@@ -2924,6 +3268,12 @@
           "name": "user_id",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "required": true,
+          "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
         }
       ]
     },
@@ -7973,16 +8323,25 @@
         {
           "name": "name",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "Goal name (1-100 characters, counted in Unicode code points)."
         },
         {
           "name": "progress_basis",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "manual",
+            "contributions",
+            "balance",
+            "account_percentage"
+          ],
+          "description": "How current_amount is derived. ⚠ BREAKING (#1625): omitting this now means \"contributions\", NOT \"manual\". A goal created without it derives progress from its contribution ledger, and a later PUT setting current_amount directly is refused with a 400. Pass \"manual\" explicitly if you intend to manage current_amount yourself."
         },
         {
           "name": "target_amount",
           "type": "number",
-          "required": true
+          "required": true,
+          "description": "Target amount to save. Must be positive."
         }
       ],
       "responseBody": [
@@ -8381,7 +8740,7 @@
       ],
       "manifestClass": "read",
       "excluded": false,
-      "description": "Returns all confirmed and proposed contributions for a savings goal, newest first. Returns an empty list for a goal the user has DELETED — the contributions still logged against it are retained and are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).",
+      "description": "Returns all confirmed and proposed contributions for a savings goal, newest first. Includes archived contributions (closed periods) which do not count toward the goal's progress. Returns an empty list for a goal the user has DELETED — the contributions still logged against it are retained and are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).",
       "parameters": [
         {
           "name": "goalID",
@@ -8396,6 +8755,11 @@
           "name": "amount",
           "type": "number",
           "required": true
+        },
+        {
+          "name": "archived_at",
+          "type": "string",
+          "description": "Set when this contribution belongs to a closed contributions period. Such rows are retained and listed but do NOT count toward the goal's current_amount."
         },
         {
           "name": "confirmed_by_user",
@@ -8459,7 +8823,7 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation.",
+      "description": "Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation. Requires the goal's progress_basis to be \"contributions\". ⚠ BREAKING (#1625): the request body rejects unknown fields, and the phantom \"notes\" field was removed — a client that previously sent it was silently ignored and now gets a 422. Drop the field; contribution notes were never stored.",
       "parameters": [
         {
           "name": "goalID",
@@ -8476,10 +8840,6 @@
           "required": true
         },
         {
-          "name": "notes",
-          "type": "string"
-        },
-        {
           "name": "occurred_on",
           "type": "string",
           "required": true
@@ -8494,6 +8854,11 @@
           "name": "amount",
           "type": "number",
           "required": true
+        },
+        {
+          "name": "archived_at",
+          "type": "string",
+          "description": "Set when this contribution belongs to a closed contributions period. Such rows are retained and listed but do NOT count toward the goal's current_amount."
         },
         {
           "name": "confirmed_by_user",
@@ -8610,6 +8975,11 @@
           "required": true
         },
         {
+          "name": "archived_at",
+          "type": "string",
+          "description": "Set when this contribution belongs to a closed contributions period. Such rows are retained and listed but do NOT count toward the goal's current_amount."
+        },
+        {
           "name": "confirmed_by_user",
           "type": "boolean",
           "required": true
@@ -8693,6 +9063,11 @@
           "name": "amount",
           "type": "number",
           "required": true
+        },
+        {
+          "name": "archived_at",
+          "type": "string",
+          "description": "Set when this contribution belongs to a closed contributions period. Such rows are retained and listed but do NOT count toward the goal's current_amount."
         },
         {
           "name": "confirmed_by_user",
@@ -8890,7 +9265,8 @@
         },
         {
           "name": "current_amount",
-          "type": "number"
+          "type": "number",
+          "description": "Only settable when progress_basis is 'manual'. Contributions-based goals derive this from their contribution ledger (POST /savings-goals/{goalID}/contributions); balance-based goals track their account. Sending this for any non-manual basis returns 400."
         },
         {
           "name": "deadline",
@@ -8902,7 +9278,8 @@
         },
         {
           "name": "name",
-          "type": "string"
+          "type": "string",
+          "description": "Goal name (1-100 characters, counted in Unicode code points). Omit to leave unchanged; an empty string is refused, not treated as omitted."
         },
         {
           "name": "progress_basis",
@@ -8910,7 +9287,8 @@
         },
         {
           "name": "target_amount",
-          "type": "number"
+          "type": "number",
+          "description": "Target amount to save. Must be positive."
         }
       ],
       "responseBody": [

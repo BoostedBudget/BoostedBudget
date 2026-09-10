@@ -95,7 +95,6 @@ var noMatcherBaseline = map[string]int{
 	"backend/internal/services/plaid_item_cleanup_service_test.go":                         3,
 	"backend/internal/services/privacy_service_test.go":                                    2,
 	"backend/internal/services/registration_service_test.go":                               24,
-	"backend/internal/services/savings_goal_service_test.go":                               2,
 	"backend/internal/services/savings_progress_service_test.go":                           9,
 	"backend/internal/services/transaction_monitor_chain_test.go":                          3,
 	"backend/internal/services/transaction_sync_service_test.go":                           10,

@@ -92,6 +92,31 @@ describe('recipe.run', () => {
     expect(result.content[0]?.type).toBe('text')
     expect(result.content[0]?.text).toContain('getCashFlowSummary')
   })
+
+  // Cluster B's twin (#1625). execute.ts was fixed structurally for the 204 -> undefined case;
+  // this path was not. `as Record<string, unknown>` is a compile-time assertion with no runtime
+  // effect, so an undefined body reached `result['calls']`, threw a TypeError, and was caught by
+  // the generic handler and reported as "Failed to run recipe" -- a misleading error for a
+  // response that simply had no body.
+  it('reports an empty response as such, not as a generic failure', async () => {
+    for (const empty of [undefined, null]) {
+      const proxy = { invoke: mock(() => Promise.resolve(empty)) }
+      const tools = buildRecipeTools(proxy)
+      const result = await tools.run({ id: 'r1' })
+
+      const text = result.content[0]?.text ?? ''
+      expect(text).not.toContain('Failed to run recipe')
+      expect(text).toContain('no calls')
+    }
+  })
+
+  it('does not crash when calls is present but not an array', async () => {
+    const proxy = { invoke: mock(() => Promise.resolve({ name: 'x', calls: 'not-an-array' })) }
+    const tools = buildRecipeTools(proxy)
+    const result = await tools.run({ id: 'r1' })
+
+    expect(result.content[0]?.text ?? '').not.toContain('Failed to run recipe')
+  })
 })
 
 describe('recipe.templates', () => {

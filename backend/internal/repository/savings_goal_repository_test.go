@@ -389,6 +389,12 @@ func TestSavingsGoalRepository_Update(t *testing.T) {
 	goal.UserAccountID = &uaID
 
 	// user_account_id must be bound as $11, preceding progress_basis ($12)…balance_as_of ($15), id ($16) and user_id ($17).
+	// #1625 Task 17: Update is transactional and reads the stored progress_basis under
+	// SELECT … FOR UPDATE first, so an unguarded basis change can be refused before any write.
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
+		WithArgs(goal.ID, goal.UserID).
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(goal.ProgressBasis))
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
 		WithArgs(
 			goal.Name,
@@ -409,6 +415,7 @@ func TestSavingsGoalRepository_Update(t *testing.T) {
 			goal.ID,
 			goal.UserID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
 	err := repo.Update(ctx, goal)
 
@@ -431,6 +438,12 @@ func TestSavingsGoalRepository_Update_UserAccountIDPersisted(t *testing.T) {
 	// Simulate account change: update UserAccountID to chain B.
 	goal.UserAccountID = &uaIDB
 
+	// #1625 Task 17: Update is transactional and reads the stored progress_basis under
+	// SELECT … FOR UPDATE first, so an unguarded basis change can be refused before any write.
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
+		WithArgs(goal.ID, goal.UserID).
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(goal.ProgressBasis))
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
 		WithArgs(
 			pgxmock.AnyArg(),
@@ -451,6 +464,7 @@ func TestSavingsGoalRepository_Update_UserAccountIDPersisted(t *testing.T) {
 			goal.ID,
 			goal.UserID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
 	err := repo.Update(ctx, goal)
 	assert.NoError(t, err)
@@ -466,6 +480,12 @@ func TestSavingsGoalRepository_Update_NotFound(t *testing.T) {
 	goal := createTestSavingsGoal(uuid.New().String(), uuid.New().String())
 	goal.ID = uuid.New().String()
 
+	// #1625 Task 17: Update is transactional and reads the stored progress_basis under
+	// SELECT … FOR UPDATE first, so an unguarded basis change can be refused before any write.
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
+		WithArgs(goal.ID, goal.UserID).
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(goal.ProgressBasis))
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
 		WithArgs(
 			pgxmock.AnyArg(),
@@ -486,6 +506,7 @@ func TestSavingsGoalRepository_Update_NotFound(t *testing.T) {
 			goal.ID,
 			goal.UserID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
 
 	err := repo.Update(ctx, goal)
 
@@ -572,10 +593,11 @@ func TestSavingsGoalRepository_UpdateCurrentAmount(t *testing.T) {
 	now := time.Now()
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
-		WithArgs(newCurrentAmount, pgxmock.AnyArg(), pgxmock.AnyArg(), goalID).
+		WithArgs(newCurrentAmount, pgxmock.AnyArg(), pgxmock.AnyArg(), goalID,
+			domain.ProgressBasisContributions, domain.ProgressBasisManual).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	err := repo.UpdateCurrentAmount(ctx, goalID, newCurrentAmount, now, nil)
+	err := repo.UpdateCurrentAmount(ctx, goalID, domain.ProgressBasisContributions, newCurrentAmount, now, nil)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -591,10 +613,16 @@ func TestSavingsGoalRepository_UpdateCurrentAmount_NotFound(t *testing.T) {
 	now := time.Now()
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
-		WithArgs(2500.00, pgxmock.AnyArg(), pgxmock.AnyArg(), goalID).
+		WithArgs(2500.00, pgxmock.AnyArg(), pgxmock.AnyArg(), goalID,
+			domain.ProgressBasisContributions, domain.ProgressBasisManual).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	// #1625: zero rows is now ambiguous — gone, or moved to another basis. The repository probes
+	// to tell them apart, and a probe that finds nothing means genuinely not found.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(NULLIF(progress_basis, ''), $2) FROM savings_goals`)).
+		WithArgs(goalID, domain.ProgressBasisManual).
+		WillReturnError(pgx.ErrNoRows)
 
-	err := repo.UpdateCurrentAmount(ctx, goalID, 2500.00, now, nil)
+	err := repo.UpdateCurrentAmount(ctx, goalID, domain.ProgressBasisContributions, 2500.00, now, nil)
 
 	assert.Error(t, err)
 	assert.Equal(t, domain.ErrSavingsGoalNotFound, err)
@@ -690,4 +718,78 @@ func TestSavingsGoalRepository_GetByAccountID_ChainExpand(t *testing.T) {
 	require.Len(t, goals, 1, "pre-relink goal must be returned when filtering by active account_id")
 	assert.Equal(t, replacedAccountID, goals[0].AccountID)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSavingsGoalRepository_Update_RefusesABasisChange closes the LAST bypass around #1625's
+// basis-switch transaction, at the layer where it cannot be routed around.
+//
+// Task 17 put the switch behind a lock and a predicate in UpdateWithBasisGuardInTx, but the
+// service only took that path when its optional basis-switch ledger repo had been wired by a
+// setter. A construction site that forgot the setter — and two existed — sent a basis change
+// straight through the plain Update: no lock, no predicate, no archive, no seed. A runtime hook
+// protecting a compile-time property, silently degrading to the pre-#1625 behaviour with every
+// test green.
+//
+// The remedy is here rather than in the service because here it is UNREPRESENTABLE: Update reads
+// the stored basis under the SAME `SELECT … FOR UPDATE` the switch takes, and refuses outright if
+// the goal it was handed disagrees. No caller — service, handler, worker, one written next year —
+// can change a progress_basis except through the guarded path.
+//
+// ErrUnguardedBasisChange is deliberately NOT mapped to a 4xx: it is unreachable from any correct
+// wiring, so it is a genuine fault and a 500 with a Sentry event is the honest answer. That is the
+// opposite call from ErrSavingsGoalBasisConflict, which IS a precondition a user can hit.
+func TestSavingsGoalRepository_Update_RefusesABasisChange(t *testing.T) {
+	mock, repo := setupSavingsGoalMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	goal := createTestSavingsGoal(uuid.New().String(), uuid.New().String())
+	goal.ID = uuid.New().String()
+	goal.ProgressBasis = domain.ProgressBasisContributions
+
+	mock.ExpectBegin()
+	// The row is still manual; the caller is trying to write "contributions" through the
+	// unguarded path.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
+		WithArgs(goal.ID, goal.UserID).
+		WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(domain.ProgressBasisManual))
+	mock.ExpectRollback()
+
+	err := repo.Update(ctx, goal)
+
+	require.Error(t, err, "a basis change through Update must be refused, not silently applied")
+	assert.ErrorIs(t, err, ErrUnguardedBasisChange)
+	assert.Contains(t, err.Error(), "UpdateWithBasisGuardInTx",
+		"the error must name the path the caller should have taken")
+	assert.NoError(t, mock.ExpectationsWereMet(),
+		"no UPDATE may have been issued — the refusal happens before the write")
+}
+
+// TestSavingsGoalRepository_Update_AllowsAnUnchangedBasis is the other half: the guard must refuse
+// a CHANGE, not every update. A blank stored column counts as manual, the same normalisation every
+// other write path in this repository applies, or a legacy row would become unwritable.
+func TestSavingsGoalRepository_Update_AllowsAnUnchangedBasis(t *testing.T) {
+	for _, stored := range []string{domain.ProgressBasisManual, ""} {
+		t.Run("stored="+stored, func(t *testing.T) {
+			mock, repo := setupSavingsGoalMockDB(t)
+			defer mock.Close()
+
+			ctx := context.Background()
+			goal := createTestSavingsGoal(uuid.New().String(), uuid.New().String())
+			goal.ID = uuid.New().String()
+			goal.ProgressBasis = domain.ProgressBasisManual
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(regexp.QuoteMeta(`SELECT progress_basis`)).
+				WithArgs(goal.ID, goal.UserID).
+				WillReturnRows(pgxmock.NewRows([]string{"progress_basis"}).AddRow(stored))
+			mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
+				WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+				WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+			mock.ExpectCommit()
+
+			require.NoError(t, repo.Update(ctx, goal))
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }

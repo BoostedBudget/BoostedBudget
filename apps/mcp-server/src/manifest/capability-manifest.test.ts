@@ -371,7 +371,7 @@ describe('completeness', () => {
     //   either one out. They shipped in the spec before being classified, which broke
     //   check:manifest and the spec-index build until this entry — the same failure mode Task 16
     //   records above.
-    expect(ALL_OPERATION_IDS.length).toBe(208)
+    expect(ALL_OPERATION_IDS.length).toBe(210)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified
