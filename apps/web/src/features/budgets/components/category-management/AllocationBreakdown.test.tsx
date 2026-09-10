@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { AllocationBreakdown } from './AllocationBreakdown'
 import type { BudgetCategory } from '../../types'
 import type { CustomCategoryMap } from '../../utils/groupBudgetCategoriesByPrimary'
@@ -420,6 +420,68 @@ describe('AllocationBreakdown', () => {
       // Should show over-allocated warning
       const overElements = screen.getAllByText(/over-allocated.*\$200/i);
       expect(overElements.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('Sub-allocation dedup and nesting (#1630)', () => {
+    it('excludes a sub-allocation child from the total/percentage (Task 0.5 dedup)', () => {
+      const parent = createMockCategory({
+        id: 'parent',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+      });
+      const child = createMockCategory({
+        id: 'child',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD',
+        allocated_amount: 200,
+      });
+
+      render(
+        <AllocationBreakdown
+          categories={[parent, child]}
+          totalIncome={1000}
+          unallocated={500}
+        />
+      );
+
+      // Total/percent must count the parent's own $500 once — not $700 (parent + child).
+      expect(screen.getAllByText('$500.00').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText(/50%.*Allocated/i).length).toBeGreaterThanOrEqual(1);
+      expect(screen.queryByText('$700.00')).not.toBeInTheDocument();
+    });
+
+    it("renders the child's segment nested inside its parent's segment, not as a sibling", () => {
+      const parent = createMockCategory({
+        id: 'parent',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+      });
+      const child = createMockCategory({
+        id: 'child',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD',
+        allocated_amount: 200,
+      });
+
+      render(
+        <AllocationBreakdown
+          categories={[parent, child]}
+          totalIncome={1000}
+          unallocated={500}
+        />
+      );
+
+      const parentSegment = screen.getByTestId('segment-parent');
+      // A DOM-nested query scoped to the parent segment must find the child segment —
+      // if the child were rendered as a sibling in the outer bar instead, this throws.
+      expect(within(parentSegment).getByTestId('segment-child')).toBeInTheDocument();
     });
   });
 

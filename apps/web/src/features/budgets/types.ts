@@ -48,15 +48,41 @@ export interface BudgetCategory {
 }
 
 /**
+ * Reports whether a PARENT's match_logic still contains the plain category match — i.e.
+ * its matched-transaction set is a superset of "category only" (Issue #1630). '' / undefined
+ * is treated as 'category_only' (the domain/column default). Mirrors backend
+ * isContainingMatchLogic in domain/budget.go.
+ */
+function isContainingMatchLogic(ml: MatchLogic | undefined | ''): boolean {
+  return ml === undefined || ml === '' || ml === 'category_only' || ml === 'or';
+}
+
+/**
+ * Reports whether a CHILD's match_logic keeps it inside the plain category match — i.e. it
+ * cannot escape the category clause via tags (Issue #1630). '' / undefined is treated as
+ * 'category_only'. Mirrors backend isContainedMatchLogic in domain/budget.go.
+ */
+function isContainedMatchLogic(ml: MatchLogic | undefined | ''): boolean {
+  return ml === undefined || ml === '' || ml === 'category_only' || ml === 'and';
+}
+
+/**
  * Reports whether `cat` is a sub-allocation within a parent that is also budgeted
  * (#1203). Mirrors the backend Budget.IsSubAllocationWithin — such rows are excluded
  * from budget totals because their amount/spend is already inside the parent.
+ *
+ * Hierarchy alone is not sufficient (Issue #1630): exclusion is sound only when this
+ * CHILD's own matched-transaction set is contained within the PARENT's.
+ * budgetedPfcPrimaries/budgetedCustomIds already carry the parent-side containment test
+ * (see filterTopLevel/buildBudgetedParentSets), so this function only needs to additionally
+ * gate on the CHILD's own match_logic.
  */
 export function isSubAllocationWithin(
   cat: BudgetCategory,
   budgetedPfcPrimaries: Set<string>,
   budgetedCustomIds: Set<string>
 ): boolean {
+  if (!isContainedMatchLogic(cat.match_logic)) return false;
   if (cat.category_kind === 'pfc') {
     return !!(cat.pfc_detailed && cat.pfc_primary && budgetedPfcPrimaries.has(cat.pfc_primary));
   }
@@ -66,6 +92,42 @@ export function isSubAllocationWithin(
       return true;
   }
   return false;
+}
+
+/**
+ * Builds lookup sets of the PFC primaries and custom category IDs that are budgeted as
+ * top-level rows AND eligible to adopt children — i.e. the row's own match_logic still
+ * contains the plain category match (Issue #1630). A 'tag_only' or 'and' parent has no
+ * envelope a plain-category child could fall inside, so it is deliberately excluded.
+ */
+function buildBudgetedParentSets(
+  categories: BudgetCategory[]
+): { budgetedPfcPrimaries: Set<string>; budgetedCustomIds: Set<string> } {
+  const budgetedPfcPrimaries = new Set<string>();
+  const budgetedCustomIds = new Set<string>();
+  for (const cat of categories) {
+    if (!isContainingMatchLogic(cat.match_logic)) continue;
+    if (cat.category_kind === 'pfc' && cat.pfc_primary && !cat.pfc_detailed) {
+      budgetedPfcPrimaries.add(cat.pfc_primary);
+    }
+    if (cat.category_kind === 'custom' && cat.custom_category_id) {
+      budgetedCustomIds.add(cat.custom_category_id);
+    }
+  }
+  return { budgetedPfcPrimaries, budgetedCustomIds };
+}
+
+/**
+ * Filters `categories` down to top-level rows only — excludes any row that is a
+ * sub-allocation within a budgeted parent (#1203, #1630). Every allocation/spend total
+ * in the budgets feature must be computed from this filtered list rather than the raw
+ * array, or a nested child double-counts dollars its parent's own amount already covers.
+ */
+export function filterTopLevel(categories: BudgetCategory[]): BudgetCategory[] {
+  const { budgetedPfcPrimaries, budgetedCustomIds } = buildBudgetedParentSets(categories);
+  return categories.filter(
+    (cat) => !isSubAllocationWithin(cat, budgetedPfcPrimaries, budgetedCustomIds)
+  );
 }
 
 export interface Budget {
@@ -150,19 +212,7 @@ export function computeBudgetMetrics(budget: Budget): BudgetWithMetrics {
   // Totals sum TOP-LEVEL categories only — a parent's spend already rolls up its
   // children, and a sub-allocation's amount is within its parent (#1203). This
   // mirrors the backend Budget.TotalAllocated/TotalSpent.
-  const budgetedPfcPrimaries = new Set<string>();
-  const budgetedCustomIds = new Set<string>();
-  for (const cat of categories) {
-    if (cat.category_kind === 'pfc' && cat.pfc_primary && !cat.pfc_detailed) {
-      budgetedPfcPrimaries.add(cat.pfc_primary);
-    }
-    if (cat.category_kind === 'custom' && cat.custom_category_id) {
-      budgetedCustomIds.add(cat.custom_category_id);
-    }
-  }
-  const topLevel = categories.filter(
-    (cat) => !isSubAllocationWithin(cat, budgetedPfcPrimaries, budgetedCustomIds)
-  );
+  const topLevel = filterTopLevel(categories);
   const total_allocated = topLevel.reduce((sum, cat) => sum + cat.allocated_amount, 0);
   const total_spent = topLevel.reduce((sum, cat) => sum + cat.spent_amount, 0);
   const spendingBasis = budget.expected_income ?? budget.amount;

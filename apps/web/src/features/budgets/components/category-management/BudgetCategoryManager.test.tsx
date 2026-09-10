@@ -215,6 +215,44 @@ describe('BudgetCategoryManager', () => {
     // which is complex and better suited for integration tests
   })
 
+  it("excludes a sub-allocation child from totalAllocatedExcludingCurrent, so editing the parent doesn't false-warn (#1630)", async () => {
+    const user = userEvent.setup({ delay: null })
+    const categories = [
+      createMockCategory({
+        id: 'parent',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+      }),
+      createMockCategory({
+        id: 'child',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD',
+        allocated_amount: 200,
+      }),
+    ]
+    // Correct: totalAllocatedExcludingCurrent excludes both the current row (parent) AND
+    // the sub-allocation child (its $200 is already inside the parent's own amount), so it
+    // is 0. 0 + 240 = 240 <= 250 income — no warning. The bug summed the child in
+    // unconditionally (200), producing a false 200 + 240 = 440 > 250 warning.
+    renderManager({ categories, totalIncome: 250 })
+
+    const editButtons = screen.getAllByRole('button', { name: /^Edit category$/i })
+    await user.click(editButtons[0])
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    const amountInput = screen.getByLabelText('Amount') as HTMLInputElement
+    await user.clear(amountInput)
+    await user.type(amountInput, '240')
+
+    expect(screen.queryByText(/exceed.*expected income/i)).not.toBeInTheDocument()
+  })
+
   it('should show confirmation dialog when delete button clicked', async () => {
     const user = userEvent.setup({ delay: null })
     const categories = [createMockCategory({ id: 'cat-1' })]
@@ -306,6 +344,31 @@ describe('BudgetCategoryManager', () => {
     expect(within(breakdown).getByTestId('breakdown-total-income')).toHaveTextContent('3000')
     expect(within(breakdown).getByTestId('breakdown-unallocated')).toHaveTextContent('1500')
     expect(within(breakdown).getByTestId('breakdown-category-count')).toHaveTextContent('2')
+  })
+
+  it('excludes a sub-allocation child from unallocatedFunds (#1630)', () => {
+    // Parent 'utilities' budgeted at 500; a detailed child nested under it at 200. The
+    // child's dollars are already inside the parent's, so unallocated must be computed off
+    // the parent's amount alone (3000 - 500 = 2500), not the naive sum (3000 - 700 = 2300).
+    const categories = [
+      createMockCategory({
+        id: 'parent',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+      }),
+      createMockCategory({
+        id: 'child',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD',
+        allocated_amount: 200,
+      }),
+    ]
+    renderManager({ categories })
+    const breakdown = screen.getByTestId('allocation-breakdown')
+    expect(within(breakdown).getByTestId('breakdown-unallocated')).toHaveTextContent('2500')
   })
 
   it('should have role="list" on category list container', () => {

@@ -26,7 +26,7 @@ import type {
   CreateBudgetCategoryRequest,
   UpdateBudgetCategoryRequest,
 } from '../../types';
-import { formatBudgetCategoryLabel } from '../../types';
+import { formatBudgetCategoryLabel, filterTopLevel } from '../../types';
 import type { UserTag } from '@/features/tags/types';
 import { BudgetCategoryCard } from './BudgetCategoryCard';
 import { BudgetCategoryForm } from './BudgetCategoryForm';
@@ -112,9 +112,14 @@ export function BudgetCategoryManager({
     [userCategories]
   );
 
-  // Calculate unallocated funds
+  // Calculate unallocated funds — top-level categories only (#1203/#1630): a
+  // sub-allocation's amount is already inside its parent's, so summing every row
+  // double-counts.
   const unallocatedFunds = useMemo(() => {
-    const totalAllocated = categories.reduce((sum, cat) => sum + cat.allocated_amount, 0);
+    const totalAllocated = filterTopLevel(categories).reduce(
+      (sum, cat) => sum + cat.allocated_amount,
+      0
+    );
     return totalIncome - totalAllocated;
   }, [categories, totalIncome]);
 
@@ -233,11 +238,14 @@ export function BudgetCategoryManager({
 
   const hasCategories = categories.length > 0;
 
+  // Top-level categories only (#1203/#1630) — otherwise a sub-allocation child summed
+  // alongside its already-inclusive parent falsely trips the form's over-allocation warning.
   const totalAllocatedExcludingCurrent = useMemo(() => {
+    const topLevel = filterTopLevel(categories);
     if (formDialog.mode === 'create' || !formDialog.category) {
-      return categories.reduce((sum, c) => sum + c.allocated_amount, 0);
+      return topLevel.reduce((sum, c) => sum + c.allocated_amount, 0);
     }
-    return categories
+    return topLevel
       .filter((c) => c.id !== formDialog.category!.id)
       .reduce((sum, c) => sum + c.allocated_amount, 0);
   }, [formDialog.mode, formDialog.category, categories])

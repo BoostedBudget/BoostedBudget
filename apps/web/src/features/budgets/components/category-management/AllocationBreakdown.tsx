@@ -9,7 +9,7 @@ import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import type { BudgetCategory } from '../../types';
 import { Alert } from '@/components/ui/alert';
-import { formatBudgetCategoryLabel } from '../../types';
+import { formatBudgetCategoryLabel, filterTopLevel } from '../../types';
 import type { CustomCategoryMap } from '../../utils/groupBudgetCategoriesByPrimary';
 
 export interface AllocationBreakdownProps {
@@ -50,6 +50,39 @@ function formatCurrency(amount: number): string {
 }
 
 /**
+ * Reports whether `child` is the specific sub-allocation nested under `parent` (as opposed
+ * to merely "some" budgeted parent — see isSubAllocationWithin in types.ts). Used only to
+ * decide which top-level segment a child's nested segment renders inside; the match_logic
+ * containment gating (#1630) has already happened by the time a category reaches this
+ * function — it is only ever called with `child` drawn from the non-top-level remainder of
+ * `filterTopLevel`, so re-checking match_logic here would be redundant.
+ */
+function isNestedUnder(child: BudgetCategory, parent: BudgetCategory): boolean {
+  if (child.category_kind === 'pfc') {
+    return !!(
+      child.pfc_detailed &&
+      child.pfc_primary &&
+      parent.category_kind === 'pfc' &&
+      !parent.pfc_detailed &&
+      parent.pfc_primary === child.pfc_primary
+    );
+  }
+  if (child.category_kind === 'custom') {
+    if (child.custom_parent_id) {
+      return parent.category_kind === 'custom' && parent.custom_category_id === child.custom_parent_id;
+    }
+    if (child.custom_parent_pfc_primary) {
+      return (
+        parent.category_kind === 'pfc' &&
+        !parent.pfc_detailed &&
+        parent.pfc_primary === child.custom_parent_pfc_primary
+      );
+    }
+  }
+  return false;
+}
+
+/**
  * Generates a color based on index for category segments
  */
 function getCategoryColor(index: number): string {
@@ -72,20 +105,30 @@ export function AllocationBreakdown({
   unallocated,
   customCategoryMap,
 }: AllocationBreakdownProps) {
+  // Top-level categories only (#1203/#1630) — a sub-allocation's amount is already inside
+  // its parent's, so summing every row (including nested children) double-counts.
+  const topLevel = useMemo(() => filterTopLevel(categories), [categories]);
+
   // Calculate totals
   const { totalAllocated, percentAllocated, isOverAllocated } = useMemo(() => {
-    const total = categories.reduce((sum, cat) => sum + cat.allocated_amount, 0);
+    const total = topLevel.reduce((sum, cat) => sum + cat.allocated_amount, 0);
     const percent = totalIncome > 0 ? Math.round((total / totalIncome) * 100) : 0;
     return {
       totalAllocated: total,
       percentAllocated: percent,
       isOverAllocated: total > totalIncome,
     };
-  }, [categories, totalIncome]);
+  }, [topLevel, totalIncome]);
 
-  // Generate segments for the bar
+  // Generate segments for the bar. The OUTER bar renders one segment per top-level
+  // category, sized against totalIncome — this is the dedup'd total (#1630). Any category
+  // that is a sub-allocation of that top-level row is rendered as a NESTED inner segment
+  // sized against its parent's own allocation, rather than as a sibling that would inflate
+  // the outer bar's total width. One number, two levels of bar.
   const segments = useMemo(() => {
     if (totalIncome <= 0) return [];
+
+    const nonTopLevel = categories.filter((cat) => !topLevel.includes(cat));
 
     const result: Array<{
       id: string;
@@ -94,17 +137,35 @@ export function AllocationBreakdown({
       percent: number;
       color: string;
       isUnallocated?: boolean;
+      children: Array<{
+        id: string;
+        name: string;
+        amount: number;
+        percent: number;
+      }>;
     }> = [];
 
-    // Add category segments
-    categories.forEach((cat, index) => {
+    // Add category segments (top-level only)
+    topLevel.forEach((cat, index) => {
       const percent = (cat.allocated_amount / totalIncome) * 100;
+      const children = nonTopLevel
+        .filter((child) => isNestedUnder(child, cat))
+        .map((child) => ({
+          id: child.id,
+          name: resolveCategoryLabel(child, customCategoryMap),
+          amount: child.allocated_amount,
+          percent:
+            cat.allocated_amount > 0
+              ? Math.min((child.allocated_amount / cat.allocated_amount) * 100, 100)
+              : 0,
+        }));
       result.push({
         id: cat.id,
         name: resolveCategoryLabel(cat, customCategoryMap),
         amount: cat.allocated_amount,
         percent: Math.min(percent, 100), // Cap at 100%
         color: getCategoryColor(index),
+        children,
       });
     });
 
@@ -118,11 +179,12 @@ export function AllocationBreakdown({
         percent,
         color: 'var(--color-border)', // adapts to dark mode
         isUnallocated: true,
+        children: [],
       });
     }
 
     return result;
-  }, [categories, totalIncome, unallocated, isOverAllocated, customCategoryMap]);
+  }, [categories, topLevel, totalIncome, unallocated, isOverAllocated, customCategoryMap]);
 
   return (
     <div className="bg-muted border border-border rounded-lg p-4 flex flex-col gap-3">
@@ -167,7 +229,7 @@ export function AllocationBreakdown({
             key={segment.id}
             data-testid={`segment-${segment.id}`}
             className={cn(
-              'h-full min-w-[2px] transition-[width] duration-300',
+              'h-full min-w-[2px] transition-[width] duration-300 flex',
               segment.isUnallocated && 'opacity-50'
             )}
             style={{
@@ -175,7 +237,23 @@ export function AllocationBreakdown({
               backgroundColor: segment.color,
             }}
             aria-label={`${Math.round(segment.percent)}% of budget`}
-          />
+          >
+            {/* Nested sub-allocation segments (#1630) — drawn inside their parent's
+                segment rather than as siblings, so the outer bar's total width stays
+                the dedup'd total while still surfacing every category. */}
+            {segment.children.map((child) => (
+              <div
+                key={child.id}
+                data-testid={`segment-${child.id}`}
+                className="h-full min-w-[1px] border-l border-black/20"
+                style={{
+                  width: `${child.percent}%`,
+                  backgroundColor: 'rgba(0, 0, 0, 0.25)',
+                }}
+                aria-label={`${Math.round(child.percent)}% of parent allocation`}
+              />
+            ))}
+          </div>
         ))}
         {segments.length === 0 && totalIncome === 0 && (
           <div
