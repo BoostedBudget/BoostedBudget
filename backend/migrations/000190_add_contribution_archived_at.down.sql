@@ -14,7 +14,18 @@
 -- That was false, and it was found by adversarial review, not by a guard.
 --
 -- Same shape as 000180's refusal on the SAME table while any row carries deleted_at, and as the
--- seventeen other reversible-guard downs in this tree.
+-- other reversible-guard downs in this tree. Re-derive that set rather than trusting a number in
+-- prose:
+--
+--   /usr/bin/grep -l "refusing to roll back" backend/migrations/*.down.sql
+--
+-- ⚠ #1625 third fix wave F5: this line carried a count, and the count was wrong. It said
+-- "seventeen other" while naming 000180 separately, so it claimed 19 guarded downs including this
+-- one; the phrase matches 18 files, i.e. SIXTEEN other than 000180 and this one. Two separate
+-- verifications confirmed the wrong number because both counted RAISE EXCEPTION (20 files,
+-- including unguarded downs that raise for other reasons) instead of the guard phrase the
+-- sentence is about. The number is gone rather than corrected: it goes stale on the next guarded
+-- down, and nothing executes it.
 --
 -- To roll back deliberately: decide, per goal, whether the archived rows should count, then clear
 -- archived_at (or delete the rows) yourself. There is no correct automatic answer -- see 000190's
