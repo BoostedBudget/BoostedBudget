@@ -35,7 +35,6 @@ export interface LogContributionRequest {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   amount: number;
-  notes?: string;
   occurred_on: string;
   transaction_id?: string;
 }

@@ -1802,6 +1802,12 @@ components:
         priority:
           format: int64
           type: integer
+        quarantine_reason:
+          description: "Why the rule is broken. Fixed vocabulary, never user content. Four values are in the ENFORCEMENT CLASS — the rule cannot be evaluated honestly as written, and while quarantine enforcement is on (RULE_QUARANTINE_ENFORCE, default on) the server refuses it and quarantined is true: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. With enforcement OFF those same rules RUN and quarantined is false — nothing about them was repaired. The fifth, invalid_condition_value_shape, is never enforced in either state: a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only, so the rule keeps running. Read quarantined, not this field, for whether the server is currently stopping the rule — and read enabled too, which both fields ignore entirely. The stored rule is never rewritten; edit it to make the repair permanent."
+          type: string
+        quarantined:
+          description: "True when the server is CURRENTLY preventing this rule from matching anything: it is refused before any condition is evaluated, so it applies to nothing. This is a statement about right now, not about the rule's shape. It is FALSE whenever quarantine enforcement is disabled server-wide (RULE_QUARANTINE_ENFORCE, default on), because the engine then runs the rule despite its problem. So false WITH a quarantine_reason does NOT mean the rule is healthy or that the server repaired it — it means quarantine is not what is stopping it: either the problem is one the server repairs at read time (a wrong-typed condition value with one honest reading is coerced), or enforcement is off and the rule is running exactly as written, in which case a rule with no conditions matches EVERY transaction. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is the server letting this rule run — which is not the same as is it matching, because a condition the engine cannot evaluate still fails at evaluation time. Computed per request; never persisted."
+          type: boolean
         source:
           type: string
         tag_behavior:
@@ -1831,6 +1837,10 @@ components:
           type: string
         user_id:
           type: string
+        version:
+          description: Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict.
+          format: int64
+          type: integer
       required:
         - id
         - user_id
@@ -1845,6 +1855,7 @@ components:
         - override_count
         - created_at
         - updated_at
+        - version
       type: object
     CategoryBreakdownForMerchantResponse:
       additionalProperties: false
@@ -2211,6 +2222,60 @@ components:
         - value
         - actual
         - met
+      type: object
+    ConditionFieldSchema:
+      additionalProperties: false
+      properties:
+        field:
+          type: string
+        notes:
+          type: string
+        operators:
+          items:
+            $ref: "#/components/schemas/ConditionOperatorSchema"
+          type:
+            - array
+            - "null"
+        values:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - field
+        - operators
+      type: object
+    ConditionOperatorSchema:
+      additionalProperties: false
+      properties:
+        example: {}
+        operator:
+          type: string
+        value_shape:
+          type: string
+      required:
+        - operator
+        - value_shape
+      type: object
+    ConditionSchemaResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ConditionSchemaResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        fields:
+          items:
+            $ref: "#/components/schemas/ConditionFieldSchema"
+          type:
+            - array
+            - "null"
+      required:
+        - fields
       type: object
     ConfirmMatchBody:
       additionalProperties: false
@@ -2634,10 +2699,21 @@ components:
         description:
           type: string
         name:
+          description: Goal name (1-100 characters, counted in Unicode code points).
+          maxLength: 100
+          minLength: 1
           type: string
         progress_basis:
+          description: "How current_amount is derived. ⚠ BREAKING (#1625): omitting this now means \"contributions\", NOT \"manual\". A goal created without it derives progress from its contribution ledger, and a later PUT setting current_amount directly is refused with a 400. Pass \"manual\" explicitly if you intend to manage current_amount yourself."
+          enum:
+            - manual
+            - contributions
+            - balance
+            - account_percentage
           type: string
         target_amount:
+          description: Target amount to save. Must be positive.
+          exclusiveMinimum: 0
           format: double
           type: number
       required:
@@ -4371,11 +4447,13 @@ components:
         amount:
           format: double
           type: number
-        notes:
-          type: string
         occurred_on:
+          examples:
+            - "2026-09-08"
+          format: date
           type: string
         transaction_id:
+          format: uuid
           type: string
       required:
         - amount
@@ -5212,6 +5290,56 @@ components:
         - day_change_pct
         - holdings_count
       type: object
+    PreviewRuleBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/PreviewRuleBody.json
+          format: uri
+          readOnly: true
+          type: string
+        condition_logic:
+          type: string
+        conditions:
+          items:
+            $ref: "#/components/schemas/RuleCondition"
+          type:
+            - array
+            - "null"
+        description:
+          type: string
+        limit:
+          format: int64
+          maximum: 500
+          minimum: 1
+          type: integer
+        name:
+          type: string
+        priority:
+          format: int64
+          type: integer
+        tag_behavior:
+          type: string
+        target_custom_category_id:
+          type: string
+        target_kind:
+          type: string
+        target_pfc_detailed:
+          type: string
+        target_pfc_primary:
+          type: string
+        target_tags:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - name
+        - conditions
+      type: object
     PreviewUpdateInputBody:
       additionalProperties: false
       properties:
@@ -5885,15 +6013,61 @@ components:
     RuleCondition:
       additionalProperties: false
       properties:
+        field:
+          description: Transaction attribute to match. Not every operator is legal for every field — GET /api/v1/auto-categorization/condition-schema returns the full matrix, value shapes and semantics. Note 'amount' discards the sign; 'signed_amount' is POSITIVE for money leaving the account; 'direction' takes inflow|outflow.
+          enum:
+            - merchant
+            - effective_merchant
+            - name
+            - merchant_id
+            - amount
+            - signed_amount
+            - direction
+            - account_id
+            - account_type
+            - payment_channel
+            - date
+            - pfc_primary
+            - pfc_detailed
+          type: string
         operator:
+          description: Comparison to apply. Legal operators depend on the field — see GET /api/v1/auto-categorization/condition-schema. 'between' takes an object ({min,max} for numbers, {start,end} for dates); 'in' takes an array, or a single string as a one-element shorthand.
+          enum:
+            - eq
+            - neq
+            - gt
+            - gte
+            - lt
+            - lte
+            - between
+            - contains
+            - starts_with
+            - ends_with
+            - in
           type: string
         type:
+          description: Legacy fused condition name. Send this OR field+operator, not a contradicting pair. 'expression' is RESPONSE-ONLY — the server emits it for a field+operator combination that has no legacy name, and rejects it as input; send field+operator instead.
+          enum:
+            - merchant_contains
+            - merchant_equals
+            - merchant_starts_with
+            - merchant_ends_with
+            - amount_greater_than
+            - amount_less_than
+            - amount_equals
+            - amount_range
+            - account_id
+            - account_type
+            - payment_channel
+            - date_range
+            - existing_pfc_primary
+            - existing_pfc_detailed
+            - expression
           type: string
         value: {}
         value_display:
           type: string
       required:
-        - type
         - value
       type: object
     RuleExecution:
@@ -5960,6 +6134,63 @@ components:
         - total
         - limit
         - offset
+      type: object
+    RulePreviewMatch:
+      additionalProperties: false
+      properties:
+        amount:
+          format: double
+          type: number
+        current_category:
+          type: string
+        date:
+          format: date-time
+          type: string
+        merchant_name:
+          type: string
+        name:
+          type: string
+        transaction_id:
+          type: string
+        would_add_tags:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - transaction_id
+        - date
+        - name
+        - amount
+        - current_category
+      type: object
+    RulePreviewResult:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RulePreviewResult.json
+          format: uri
+          readOnly: true
+          type: string
+        match_count:
+          format: int64
+          type: integer
+        matches:
+          items:
+            $ref: "#/components/schemas/RulePreviewMatch"
+          type:
+            - array
+            - "null"
+        scanned_count:
+          format: int64
+          type: integer
+      required:
+        - scanned_count
+        - match_count
+        - matches
       type: object
     SaveDashboardPreferencesInputBody:
       additionalProperties: false
@@ -6063,6 +6294,10 @@ components:
         amount:
           format: double
           type: number
+        archived_at:
+          description: Set when this contribution belongs to a closed contributions period. Such rows are retained and listed but do NOT count toward the goal's current_amount.
+          format: date-time
+          type: string
         confirmed_by_user:
           type: boolean
         created_at:
@@ -7628,6 +7863,7 @@ components:
           format: double
           type: number
         current_amount:
+          description: Only settable when progress_basis is 'manual'. Contributions-based goals derive this from their contribution ledger (POST /savings-goals/{goalID}/contributions); balance-based goals track their account. Sending this for any non-manual basis returns 400.
           format: double
           type: number
         deadline:
@@ -7636,10 +7872,15 @@ components:
         description:
           type: string
         name:
+          description: Goal name (1-100 characters, counted in Unicode code points). Omit to leave unchanged; an empty string is refused, not treated as omitted.
+          maxLength: 100
+          minLength: 1
           type: string
         progress_basis:
           type: string
         target_amount:
+          description: Target amount to save. Must be positive.
+          exclusiveMinimum: 0
           format: double
           type: number
       type: object
@@ -10718,6 +10959,56 @@ paths:
       security:
         - clerk: []
       summary: Create a new categorization rule
+      tags:
+        - Auto-Categorization
+  /api/v1/auto-categorization/condition-schema:
+    get:
+      description: Returns every condition field, the operators each accepts, the value shape each operator requires, closed value sets inlined where practical, and the semantics that cannot be inferred from a type — notably that signed_amount is POSITIVE for money leaving the account. The two PFC fields (pfc_primary, pfc_detailed) have closed sets too, but each field's own notes name the endpoint that publishes it instead of duplicating ~120 values here. Derived from the same matrix the validator enforces, so it cannot drift from it.
+      operationId: getConditionSchema
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConditionSchemaResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get the condition matrix
+      tags:
+        - Auto-Categorization
+  /api/v1/auto-categorization/preview:
+    post:
+      description: "Reports which of your recent transactions a candidate rule would match, WITHOUT saving the rule. Condition, shape and target-category validation is identical to createRule. Two things preview cannot check, because they depend on state at the moment of the write: rule names must be unique per user, and the target category must still exist when you save."
+      operationId: previewRule
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreviewRuleBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RulePreviewResult"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Preview a categorization rule
       tags:
         - Auto-Categorization
   /api/v1/auto-categorization/{id}:
@@ -14046,7 +14337,7 @@ paths:
         - Analytics
   /api/v1/savings-goals/{goalID}/contributions:
     get:
-      description: Returns all confirmed and proposed contributions for a savings goal, newest first. Returns an empty list for a goal the user has DELETED — the contributions still logged against it are retained and are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).
+      description: Returns all confirmed and proposed contributions for a savings goal, newest first. Includes archived contributions (closed periods) which do not count toward the goal's progress. Returns an empty list for a goal the user has DELETED — the contributions still logged against it are retained and are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).
       operationId: listSavingsGoalContributions
       parameters:
         - description: Savings goal ID
@@ -14080,7 +14371,7 @@ paths:
         - Savings Goals
         - Contributions
     post:
-      description: Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation.
+      description: "Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation. Requires the goal's progress_basis to be \"contributions\". ⚠ BREAKING (#1625): the request body rejects unknown fields, and the phantom \"notes\" field was removed — a client that previously sent it was silently ignored and now gets a 422. Drop the field; contribution notes were never stored."
       operationId: logSavingsGoalContribution
       parameters:
         - description: Savings goal ID

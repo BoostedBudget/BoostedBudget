@@ -110,9 +110,17 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
     // total and excluded move — reconnecting a bank needs a human in Plaid Link, so neither is a
     // capability an agent could ever exercise.
     // #1626 added getCategoryHierarchy, a read: +1 total, +1 allowed, +1 read.
-    expect(fresh.totalOperations).toBe(209)
-    expect(fresh.allowedOperations).toBe(140)
-    expect(fresh.readOperations).toBe(95)
+    // #1628's rule-engine rework (staging) added getConditionSchema and previewRule, BOTH
+    // read-class (previewRule is a dry run — it returns candidate matches and persists nothing):
+    // +2 total, +2 allowed, +2 read.
+    // ⚠ These three additions are INDEPENDENT and both sides' numbers were correct for their own
+    // branch (209/140/95 here, 210/141/96 on staging, from a shared 208/139/94). The merged totals
+    // are the sum: 211/142/97. `write`, `excluded` and `destructive` are untouched by all three,
+    // which is what the two closure assertions below re-derive. The generators are the authority —
+    // `bun run scripts/generate-mcp-capability-summary.ts` prints exactly this breakdown.
+    expect(fresh.totalOperations).toBe(211)
+    expect(fresh.allowedOperations).toBe(142)
+    expect(fresh.readOperations).toBe(97)
     expect(fresh.writeOperations).toBe(45)
     expect(fresh.excludedOperations).toBe(69)
     expect(fresh.destructiveWriteOperations).toBe(4)
@@ -166,6 +174,11 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
    */
   const NON_MUTATING_POSTS = new Set([
     'previewCategoryMatches', // POST /budgets/categories/preview — returns matches, writes nothing
+    // #1625: POST /auto-categorization/preview — a dry run of a CANDIDATE rule. It persists
+    // nothing, bumps no match count and writes no execution history; the service is exercised
+    // with a nil rule repository in TestPreviewRule_HasNoWriteSideEffects, so a write would
+    // nil-panic rather than pass. Same shape as previewCategoryMatches above.
+    'previewRule',
     'runMCPRecipe' // v1 recipes compose read-class ops only (see the manifest's own note)
   ])
 

@@ -71,14 +71,43 @@ const pendingConfirmations = new Map<
   {
     userId: string
     grantId: string
-    operationId: string
-    argsHash: string
     issuedAt: number
-    idempotencyKey: string
+    /**
+     * #1625: hash of the ENTIRE gated batch, in order. A token authorises one specific batch,
+     * not one specific call — which is what the user is actually confirming ("create this budget
+     * with these categories"), and what makes a multi-write batch completable at all.
+     */
+    batchHash: string
+    /**
+     * One slot per gated call, keyed `${operationId}:${argsHash}`, valued with the
+     * idempotencyKey minted for it at challenge time. Each slot is consumable exactly once;
+     * when the last one is consumed the token is deleted, so a batch cannot be replayed.
+     *
+     * A Map (not a Set) because two identical calls in one batch are legitimate, so the
+     * value carries a per-slot use count.
+     */
+    slots: Map<string, { idempotencyKey: string; uses: number }>
   }
 >()
 
 const CONFIRMATION_TTL_MS = 5 * 60 * 1000 // 5 minutes
+
+/**
+ * Validates that a token entry exists and belongs to this user/grant within TTL.
+ * Extracted to eliminate duplication between validateBatchConfirmation and consumeConfirmationSlot.
+ */
+function isTokenEntryValid(
+  entry: ReturnType<typeof pendingConfirmations.get> | undefined,
+  userId: string,
+  grantId: string,
+  getNow: () => number,
+): boolean {
+  if (!entry) return false
+  if (entry.userId !== userId) return false
+  if (entry.grantId !== grantId) return false
+  if (getNow() - entry.issuedAt > CONFIRMATION_TTL_MS) return false
+  return true
+}
 
 /**
  * Recursively stable-stringify for use in crypto hash — handles nested objects
@@ -98,16 +127,36 @@ async function hashArgs(args: Record<string, unknown>): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-async function issueConfirmationToken(
+/** Stable key identifying one gated call within a batch. */
+async function slotKey(operationId: string, args: Record<string, unknown>): Promise<string> {
+  return `${operationId}:${await hashArgs(args)}`
+}
+
+/**
+ * Hash of the WHOLE batch, order-sensitive — binds a token to one exact calls array.
+ *
+ * #1625: this hashed only the confirmation-GATED subset while both the challenge message and the
+ * invalid-token message told the agent to replay "the IDENTICAL calls array". An ungated read
+ * could therefore be swapped, added or removed and the token still validated. The promise was
+ * wider than the guarantee; now the guarantee matches the promise.
+ */
+async function hashBatch(calls: Array<{ operationId: string; args: Record<string, unknown> }>): Promise<string> {
+  const keys: string[] = []
+  for (const c of calls) keys.push(await slotKey(c.operationId, c.args))
+  const bytes = new TextEncoder().encode(keys.join('|'))
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+async function issueBatchConfirmationToken(
   userId: string,
   grantId: string,
-  operationId: string,
-  args: Record<string, unknown>,
+  calls: Array<{ operationId: string; args: Record<string, unknown> }>,
+  gated: Array<{ operationId: string; args: Record<string, unknown> }>,
   getNow: () => number,
 ): Promise<string> {
   // Opportunistic sweep: evict expired entries before inserting a new one.
   // Challenged-but-never-confirmed tokens accumulate until isolate recycle without this.
-  // No timer needed — each new challenge cleans up at most a handful of stale entries.
   const now = getNow()
   for (const [tok, entry] of pendingConfirmations) {
     if (now - entry.issuedAt > CONFIRMATION_TTL_MS) {
@@ -115,30 +164,72 @@ async function issueConfirmationToken(
     }
   }
 
+  const slots = new Map<string, { idempotencyKey: string; uses: number }>()
+  for (const g of gated) {
+    const key = await slotKey(g.operationId, g.args)
+    const existing = slots.get(key)
+    if (existing) {
+      existing.uses += 1
+    } else {
+      // idempotencyKey is minted at challenge time and forwarded on the confirmed write so the
+      // backend can deduplicate network retries of the same logical MCP write.
+      slots.set(key, { idempotencyKey: crypto.randomUUID(), uses: 1 })
+    }
+  }
+
   const token = crypto.randomUUID()
-  // idempotencyKey is generated once at challenge time and forwarded on the confirmed write
-  // so the backend can deduplicate network retries of the same logical MCP write.
-  const idempotencyKey = crypto.randomUUID()
   pendingConfirmations.set(token, {
     userId,
     grantId,
-    operationId,
-    argsHash: await hashArgs(args),
     issuedAt: now,
-    idempotencyKey,
+    // Hash covers the whole batch; SLOTS stay gated-only. Widening slots would make an ungated
+    // read consume a use and fail the second time it appeared.
+    batchHash: await hashBatch(calls),
+    slots,
   })
   return token
 }
 
 /**
- * Returns the idempotency key that was minted at challenge time, or null if invalid.
+ * The message an agent sees when a token does not validate.
  *
- * The token is burned (deleted from the Map) BEFORE any async work so that two
- * concurrent confirmed calls with the same token cannot both read the same entry
- * and both succeed. Burning an invalid concurrent attempt is preferable to
- * authorising two writes.
+ * #1625: this used to omit args-mismatch entirely, so an agent whose replayed payload differed
+ * by a single field had no way to work out why, and would retry forever. Naming the cause and
+ * the remedy is the whole fix for that loop.
  */
-async function consumeConfirmationToken(
+const INVALID_CONFIRMATION_MESSAGE =
+  'Confirmation token is invalid, expired, already used, issued for a different user/grant, ' +
+  'or the calls do not match the batch it was issued for. ' +
+  'Re-invoke with NO confirmationToken to get a fresh one, then replay the IDENTICAL calls array with it.'
+
+/**
+ * Validates that `token` authorises exactly this batch. Does NOT consume the slots — each call
+ * consumes its own slot inside invoke(), so a batch that fails mid-flight cannot silently
+ * re-authorise itself.
+ *
+ * Returns true on success. The token is left in place; it is deleted when its last slot is used.
+ */
+async function validateBatchConfirmation(
+  token: string,
+  userId: string,
+  grantId: string,
+  calls: Array<{ operationId: string; args: Record<string, unknown> }>,
+  getNow: () => number,
+): Promise<boolean> {
+  const entry = pendingConfirmations.get(token)
+  if (!isTokenEntryValid(entry, userId, grantId, getNow)) return false
+  return entry!.batchHash === (await hashBatch(calls))
+}
+
+/**
+ * Consumes one slot for a single confirmed call. Returns its idempotency key, or null.
+ *
+ * Burn-before-validate is retained from the original single-token design: the slot's use count
+ * is decremented SYNCHRONOUSLY, before any await, so two concurrent confirmed calls cannot both
+ * read the same slot and both succeed. Unlike the original, a miss does NOT destroy the other
+ * slots — doing so would recreate the very loop #1625 fixes.
+ */
+async function consumeConfirmationSlot(
   token: string,
   userId: string,
   grantId: string,
@@ -146,18 +237,18 @@ async function consumeConfirmationToken(
   args: Record<string, unknown>,
   getNow: () => number,
 ): Promise<{ idempotencyKey: string } | null> {
-  // Capture and immediately burn — one-time use enforced before any async work.
   const entry = pendingConfirmations.get(token)
-  if (!entry) return null
-  pendingConfirmations.delete(token) // burn first; sync, before any await
+  if (!isTokenEntryValid(entry, userId, grantId, getNow)) return null
 
-  // Binding checks: reject cross-user, cross-grant, wrong-op, expired, and args-mismatch.
-  if (entry.userId !== userId) return null
-  if (entry.grantId !== grantId) return null
-  if (entry.operationId !== operationId) return null
-  if (getNow() - entry.issuedAt > CONFIRMATION_TTL_MS) return null
-  if (entry.argsHash !== await hashArgs(args)) return null // TOCTOU: args must match exactly
-  return { idempotencyKey: entry.idempotencyKey }
+  const key = await slotKey(operationId, args)
+  const slot = entry!.slots.get(key)
+  if (!slot || slot.uses <= 0) return null
+
+  slot.uses -= 1
+  if (slot.uses === 0) entry!.slots.delete(key)
+  if (entry!.slots.size === 0) pendingConfirmations.delete(token)
+
+  return { idempotencyKey: slot.idempotencyKey }
 }
 
 export function createHostProxy(config: HostProxyConfig) {
@@ -171,6 +262,38 @@ export function createHostProxy(config: HostProxyConfig) {
   } = config
 
   return {
+    /**
+     * #1625: batch confirmation gate. Called by writeExecute BEFORE any call runs.
+     *
+     * With no token it mints ONE token covering every gated call and reports how many there are;
+     * the caller must execute nothing and hand the token back. With a token it validates that the
+     * token was issued for exactly this batch. Slots are consumed later, per call, inside invoke().
+     *
+     * Returns `needsConfirmation: false` when the batch contains no gated call at all.
+     */
+    async confirmBatch(
+      calls: Array<{ operationId: string; args: Record<string, unknown> }>,
+      token?: string,
+    ): Promise<{ needsConfirmation: boolean; token?: string; count: number }> {
+      // `calls` is the WHOLE batch. Which of them are gated is decided HERE, from the capability
+      // manifest, rather than by the caller — one place makes that judgement, so the set that is
+      // hashed and the set that gets slots cannot drift apart the way they did in #1625.
+      const gated = calls.filter((c) => {
+        const cap = getCapability(c.operationId)
+        return Boolean(cap && !cap.excluded && cap.confirmationRequired)
+      })
+      if (gated.length === 0) return { needsConfirmation: false, count: 0 }
+      if (!token) {
+        const issued = await issueBatchConfirmationToken(userId, grantId, calls, gated, getNow)
+        return { needsConfirmation: true, token: issued, count: gated.length }
+      }
+      const ok = await validateBatchConfirmation(token, userId, grantId, calls, getNow)
+      if (!ok) {
+        throw new HostProxyError('invalid_confirmation', INVALID_CONFIRMATION_MESSAGE)
+      }
+      return { needsConfirmation: false, count: gated.length }
+    },
+
     async invoke(operationId: string, args: Record<string, unknown>, opts: InvokeOptions = {}): Promise<unknown> {
       // Rate limit check (before manifest gate — saves DB lookups on abusive callers)
       try {
@@ -193,22 +316,31 @@ export function createHostProxy(config: HostProxyConfig) {
       let confirmedIdempotencyKey: string | undefined
       if (entry.confirmationRequired) {
         if (!opts.confirmationToken) {
-          // Token is bound to this userId+grantId — prevents cross-user and cross-grant replay.
-          // The idempotency key is minted here and forwarded on the confirmed call so the backend
-          // can deduplicate retries.
-          const token = await issueConfirmationToken(userId, grantId, operationId, args, getNow)
+          // A single-call challenge is just the batch-of-one case, so it goes through the same
+          // path — that keeps one code path for both and stops the two drifting apart.
+          // Batch-of-one: the full batch and the gated set are the same single call, so the two
+          // hash spaces coincide and a self-issued token stays redeemable through confirmBatch
+          // for that exact one-call array (and, correctly, not as part of a larger one).
+          const token = await issueBatchConfirmationToken(
+            userId, grantId, [{ operationId, args }], [{ operationId, args }], getNow,
+          )
           throw new HostProxyError(
             'confirmation_required',
-            `Write operation '${operationId}' requires confirmation. Re-invoke with the provided confirmationToken.`,
+            `Write operation '${operationId}' requires confirmation. ` +
+              'Re-invoke with the IDENTICAL calls array plus the provided confirmationToken.',
             token,
           )
         }
-        const consumed = await consumeConfirmationToken(opts.confirmationToken, userId, grantId, operationId, args, getNow)
+        const consumed = await consumeConfirmationSlot(
+          opts.confirmationToken,
+          userId,
+          grantId,
+          operationId,
+          args,
+          getNow,
+        )
         if (!consumed) {
-          throw new HostProxyError(
-            'invalid_confirmation',
-            'Confirmation token is invalid, expired, already used, or issued for a different user/grant.',
-          )
+          throw new HostProxyError('invalid_confirmation', INVALID_CONFIRMATION_MESSAGE)
         }
         confirmedIdempotencyKey = consumed.idempotencyKey
       }

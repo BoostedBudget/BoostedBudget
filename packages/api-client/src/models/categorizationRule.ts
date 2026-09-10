@@ -47,6 +47,10 @@ export interface CategorizationRule {
   name: string;
   override_count: number;
   priority: number;
+  /** Why the rule is broken. Fixed vocabulary, never user content. Four values are in the ENFORCEMENT CLASS — the rule cannot be evaluated honestly as written, and while quarantine enforcement is on (RULE_QUARANTINE_ENFORCE, default on) the server refuses it and quarantined is true: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. With enforcement OFF those same rules RUN and quarantined is false — nothing about them was repaired. The fifth, invalid_condition_value_shape, is never enforced in either state: a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only, so the rule keeps running. Read quarantined, not this field, for whether the server is currently stopping the rule — and read enabled too, which both fields ignore entirely. The stored rule is never rewritten; edit it to make the repair permanent. */
+  quarantine_reason?: string;
+  /** True when the server is CURRENTLY preventing this rule from matching anything: it is refused before any condition is evaluated, so it applies to nothing. This is a statement about right now, not about the rule's shape. It is FALSE whenever quarantine enforcement is disabled server-wide (RULE_QUARANTINE_ENFORCE, default on), because the engine then runs the rule despite its problem. So false WITH a quarantine_reason does NOT mean the rule is healthy or that the server repaired it — it means quarantine is not what is stopping it: either the problem is one the server repairs at read time (a wrong-typed condition value with one honest reading is coerced), or enforcement is off and the rule is running exactly as written, in which case a rule with no conditions matches EVERY transaction. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is the server letting this rule run — which is not the same as is it matching, because a condition the engine cannot evaluate still fails at evaluation time. Computed per request; never persisted. */
+  quarantined?: boolean;
   source: string;
   tag_behavior: string;
   target_custom_category_display?: string;
@@ -60,4 +64,6 @@ export interface CategorizationRule {
   target_tags?: string[] | null;
   updated_at: string;
   user_id: string;
+  /** Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict. */
+  version: number;
 }

@@ -231,7 +231,7 @@ func (w *BalanceSnapshotDispatchWorker) SetJobQueue(jq queue.JobQueue) { w.jobQu
 // backfill to repair the ones a bail-out would skip.
 //
 // The run DOES return an error when any enqueue failed, so River retries — the capture jobs that
-// were already enqueued are idempotent (the cohort skip makes a re-run cheap and migration 000191's
+// were already enqueued are idempotent (the cohort skip makes a re-run cheap and migration 000194's
 // unique index makes a duplicate write a no-op), so a retry of the whole dispatch is safe.
 //
 // ⚠ WHAT THE PERSISTED CURSOR CHANGES ABOUT THAT RETRY, stated because it is not nothing. Finish
@@ -642,7 +642,7 @@ func BalanceSnapshotDispatchInsertOpts() *river.InsertOpts {
 // RunOnStart: true is wanted — a deploy then fills the current day immediately instead of waiting for
 // the next 21:00 window — and it is safe because BalanceSnapshotDispatchInsertOpts carries a real
 // dedup guarantee AND the work itself is idempotent (the cohort skip makes a redundant run cheap and
-// migration 000191's unique index makes a redundant write a no-op).
+// migration 000194's unique index makes a redundant write a no-op).
 func BalanceSnapshotDispatchPeriodicOpts() *river.PeriodicJobOpts {
 	return &river.PeriodicJobOpts{RunOnStart: true, ID: BalanceSnapshotDispatchArgs{}.Kind()}
 }

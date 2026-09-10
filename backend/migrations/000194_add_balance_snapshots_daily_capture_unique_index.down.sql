@@ -1,4 +1,4 @@
--- Rollback for 000191. Drops only the index; balance_snapshots and its rows are untouched — this
+-- Rollback for 000194. Drops only the index; balance_snapshots and its rows are untouched — this
 -- migration adds no rows and removes none, in either direction.
 --
 -- After this, two concurrent capture jobs for one item can each insert a daily_capture row for the

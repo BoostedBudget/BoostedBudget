@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -178,7 +179,7 @@ func TestCategorizationRule_Validate(t *testing.T) {
 				Source:         "manual",
 			},
 			wantErr: true,
-			errMsg:  "invalid condition type",
+			errMsg:  `unknown condition type "invalid_type"`,
 		},
 	}
 
@@ -606,3 +607,85 @@ func TestValidate_RejectsRuleWithMismatchedPFCPrimaryAndDetailed(t *testing.T) {
 		t.Fatalf("individually valid enums should not be rejected even when mismatched: %s", err.Error())
 	}
 }
+
+// TestValidate_ErrorsAreSentinelWrapped is what makes the 4xx mapping real. Before #1625 every
+// Validate() failure was a bare errors.New, so the Huma handler exact-string-matched three of
+// them to 400 and let everything else fall through to a 500 (which also fired
+// sentry.CaptureException, logging user input mistakes as server errors). The mapper now
+// classifies on these sentinels, so a failure that is not wrapped silently becomes a 500 again.
+func TestValidate_ErrorsAreSentinelWrapped(t *testing.T) {
+	base := func() *CategorizationRule {
+		return &CategorizationRule{
+			UserID:         "u1",
+			Name:           "r",
+			Conditions:     []RuleCondition{{Type: ConditionMerchantContains, Value: "amazon"}},
+			ConditionLogic: "AND",
+			TargetKind:     strPtr("clear"),
+			TagBehavior:    "add",
+			Source:         "manual",
+		}
+	}
+
+	tests := []struct {
+		name          string
+		mutate        func(*CategorizationRule)
+		wantCondition bool // also wraps ErrInvalidCondition
+	}{
+		{"missing user_id", func(r *CategorizationRule) { r.UserID = "" }, false},
+		{"missing name", func(r *CategorizationRule) { r.Name = "" }, false},
+		{"name too long", func(r *CategorizationRule) { r.Name = string(make([]byte, 101)) }, false},
+		{"no conditions", func(r *CategorizationRule) { r.Conditions = nil }, false},
+		{"bad condition_logic", func(r *CategorizationRule) { r.ConditionLogic = "XOR" }, false},
+		{"bad tag_behavior", func(r *CategorizationRule) { r.TagBehavior = "nope" }, false},
+		{"bad source", func(r *CategorizationRule) { r.Source = "nope" }, false},
+		{"bad target_kind", func(r *CategorizationRule) { r.TargetKind = strPtr("nope") }, false},
+		{
+			"unknown condition type",
+			func(r *CategorizationRule) { r.Conditions = []RuleCondition{{Type: "nope", Value: "x"}} },
+			true,
+		},
+		{
+			"unsupported operator for field",
+			func(r *CategorizationRule) {
+				r.Conditions = []RuleCondition{{Field: FieldMerchant, Operator: "gt", Value: 5}}
+			},
+			true,
+		},
+		{
+			"wrong value shape",
+			func(r *CategorizationRule) {
+				r.Conditions = []RuleCondition{{Field: FieldAmount, Operator: "gt", Value: "not-a-number"}}
+			},
+			true,
+		},
+		{
+			"type contradicts field+operator",
+			func(r *CategorizationRule) {
+				r.Conditions = []RuleCondition{
+					{Type: ConditionAmountEquals, Field: FieldMerchant, Operator: "contains", Value: "x"},
+				}
+			},
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := base()
+			tt.mutate(r)
+
+			err := r.Validate()
+			if err == nil {
+				t.Fatalf("expected a validation error")
+			}
+			if !errorsIs(err, ErrInvalidRule) {
+				t.Errorf("every Validate() failure must wrap ErrInvalidRule, or the mapper returns 500; got: %v", err)
+			}
+			if tt.wantCondition && !errorsIs(err, ErrInvalidCondition) {
+				t.Errorf("condition failures must also wrap ErrInvalidCondition (mapped to 422); got: %v", err)
+			}
+		})
+	}
+}
+
+func errorsIs(err, target error) bool { return errors.Is(err, target) }

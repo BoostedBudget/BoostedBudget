@@ -14,12 +14,12 @@ import "github.com/maxnussbaum/BoostedBudget/internal/queue"
 // with the evidence recorded next to it, rather than something derived at runtime, for the same reason
 // queue.MirroredJobArgsShapes is declared: the derivation is the thing that has to be checkable.
 //
-//	17 periodic kinds — item_cleanup_check, scheduled_deletion_check, retention_cleanup_check,
+//	18 periodic kinds — item_cleanup_check, scheduled_deletion_check, retention_cleanup_check,
 //	  trial_expiration_check, past_due_check, paddle_reconciliation,
 //	  manual_tier_override_expiry_check, household_member_cleanup_check,
 //	  household_over_capacity_check, budget_period_close_check, savings_stats, portfolio_snapshot,
-//	  dlq_cleanup_check, idempotency_cleanup, plaid_orphan_retry, plaid_orphan_token_purge,
-//	  balance_snapshot_dispatch:
+//	  rule_quarantine_census, dlq_cleanup_check, idempotency_cleanup, plaid_orphan_retry,
+//	  plaid_orphan_token_purge, balance_snapshot_dispatch:
 //	  registered from cmd/server/periodic_jobs.go via each kind's *InsertOpts(), which is
 //	  riverInsertOptsFromUnique(queue, <Kind>UniqueOpts()) — see periodic_job_opts.go. Uniqueness IS
 //	  passed. (This is what Issue #1448 wired; before it, these hand-wrote bare InsertOpts.)
@@ -95,6 +95,10 @@ var uniqueOptsByKind = map[string]func() *queue.UniqueOpts{
 	"budget_period_close_check": BudgetPeriodCloseCheckUniqueOpts,
 	"savings_stats":             SavingsStatsUniqueOpts,
 	"portfolio_snapshot":        PortfolioSnapshotUniqueOpts,
+	// #1625 Task 18 fix round 1: periodic-only kind registered from cmd/server/periodic_jobs.go
+	// via RuleQuarantineCensusInsertOpts(), same shape as its siblings above.
+	"rule_quarantine_census": RuleQuarantineCensusUniqueOpts,
+
 	// Issue #1626 Phase 3, Defect 3. Producers audited, one each, and BOTH pass uniqueness — so a
 	// replay must too:
 	//

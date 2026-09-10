@@ -93,8 +93,13 @@ export function formatConditionValue(
 
   if (typeof value === 'object' && value !== null) {
     const obj = value as Record<string, unknown>
-    if ('min' in obj && 'max' in obj) {
-      return `${obj.min} - ${obj.max}`
+    // #1625: a numeric range requires BOTH bounds server-side, but a snapshot written before
+    // that check could hold only one — render what is there rather than falling through to the
+    // date branch and then to '[object Object]'.
+    if ('min' in obj || 'max' in obj) {
+      if ('min' in obj && 'max' in obj) return `${obj.min} - ${obj.max}`
+      if ('min' in obj) return `at least ${obj.min}`
+      return `at most ${obj.max}`
     }
     if ('start' in obj || 'end' in obj) {
       const parts: string[] = []

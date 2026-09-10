@@ -113,7 +113,7 @@ type BalanceSnapshotRepository interface {
 	//  1. Conflict handling. This is the ONE provenance for which per-(account, UTC day)
 	//     uniqueness is safe — the gap-filler is once-daily by construction and every read
 	//     collapses to latest-per-account-per-day, so a second same-day row from it could not
-	//     surface anywhere. Migration 000191's partial unique index says exactly that, and this
+	//     surface anywhere. Migration 000194's partial unique index says exactly that, and this
 	//     statement's ON CONFLICT names that index's key AND its predicate, so it can never
 	//     silently swallow any other conflict (a duplicate primary key included). Create keeps its
 	//     plain INSERT, so webhook history keeps the several-rows-per-day freedom migration 000017
@@ -129,7 +129,7 @@ type BalanceSnapshotRepository interface {
 	// swallowed individual insert failures while reporting success, which is exactly how a partial
 	// cohort came to commit with River recording success.
 	//
-	// ⚠ SQLSTATE 42P10 here means migration 000191's index is missing, not that the caller did
+	// ⚠ SQLSTATE 42P10 here means migration 000194's index is missing, not that the caller did
 	// anything wrong. That is deliberate: a missing idempotency key should be loud.
 	CreateDailyCapture(ctx context.Context, snapshot *domain.BalanceSnapshot) (bool, error)
 
@@ -151,7 +151,7 @@ type BalanceSnapshotRepository interface {
 	//     daily and the "zero calls for actively-syncing users" property would never hold.
 	//
 	// The day is a UTC CALENDAR day, compared with the same `(snapshot_at AT TIME ZONE 'UTC')::date`
-	// expression every aggregated read groups by and migration 000191's index is built on. Any
+	// expression every aggregated read groups by and migration 000194's index is built on. Any
 	// instant within the intended day may be passed.
 	AccountsMissingDailySnapshot(ctx context.Context, linkedItemID string, day time.Time) ([]string, error)
 }
@@ -202,7 +202,7 @@ func (r *balanceSnapshotRepository) Create(ctx context.Context, snapshot *domain
 
 // createDailyCaptureSQL is CreateDailyCapture's statement.
 //
-// The ON CONFLICT target spells out BOTH halves of migration 000191's index — the (account_id, UTC
+// The ON CONFLICT target spells out BOTH halves of migration 000194's index — the (account_id, UTC
 // day) key and the `WHERE source = 'daily_capture'` predicate — because Postgres infers an arbiter
 // index by matching them. Two consequences, both wanted:
 //
@@ -267,7 +267,7 @@ func (r *balanceSnapshotRepository) CreateDailyCapture(ctx context.Context, snap
 //
 // The date comparison is on the account's snapshots, not on a range of instants, and it uses the
 // same `(snapshot_at AT TIME ZONE 'UTC')::date` expression as migration 000017's
-// idx_balance_snapshots_date_trunc and 000191's uniqueness key — one notion of "the day a snapshot
+// idx_balance_snapshots_date_trunc and 000194's uniqueness key — one notion of "the day a snapshot
 // belongs to" across the schema. Comparing instants here would reintroduce the bug #1626 Phase 3
 // step 1f fixed on the read side, where a snapshot written today at any hour fell outside a range
 // ending "today".

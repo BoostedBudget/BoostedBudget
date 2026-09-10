@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { CreateSavingsGoalRequestProgressBasis } from './createSavingsGoalRequestProgressBasis';
 
 export interface CreateSavingsGoalRequest {
   /** A URL to the JSON Schema for this object. */
@@ -40,7 +41,17 @@ export interface CreateSavingsGoalRequest {
   current_amount?: number;
   deadline?: string;
   description?: string;
+  /**
+     * Goal name (1-100 characters, counted in Unicode code points).
+     * @minLength 1
+     * @maxLength 100
+     */
   name: string;
-  progress_basis?: string;
+  /** How current_amount is derived. ⚠ BREAKING (#1625): omitting this now means "contributions", NOT "manual". A goal created without it derives progress from its contribution ledger, and a later PUT setting current_amount directly is refused with a 400. Pass "manual" explicitly if you intend to manage current_amount yourself. */
+  progress_basis?: CreateSavingsGoalRequestProgressBasis;
+  /**
+     * Target amount to save. Must be positive.
+     * @exclusiveMinimum 0
+     */
   target_amount: number;
 }

@@ -142,7 +142,7 @@ func TestCategorizationRuleRepository_GetByID(t *testing.T) {
 		"conditions", "condition_logic",
 		"target_kind", "target_pfc_primary", "target_pfc_detailed", "target_custom_category_id",
 		"target_tags", "tag_behavior", "source", "match_count", "override_count",
-		"last_matched_at", "created_at", "updated_at",
+		"last_matched_at", "created_at", "updated_at", "version",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -168,6 +168,7 @@ func TestCategorizationRuleRepository_GetByID(t *testing.T) {
 			&now,
 			now,
 			now,
+			int64(1),
 		))
 
 	rule, err := repo.GetByID(ctx, ruleID)
@@ -220,7 +221,7 @@ func TestCategorizationRuleRepository_GetByUserID(t *testing.T) {
 		"conditions", "condition_logic",
 		"target_kind", "target_pfc_primary", "target_pfc_detailed", "target_custom_category_id",
 		"target_tags", "tag_behavior", "source", "match_count", "override_count",
-		"last_matched_at", "created_at", "updated_at",
+		"last_matched_at", "created_at", "updated_at", "version",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -247,6 +248,7 @@ func TestCategorizationRuleRepository_GetByUserID(t *testing.T) {
 				nil,
 				now,
 				now,
+				int64(1),
 			).
 			AddRow(
 				uuid.New().String(),
@@ -269,6 +271,7 @@ func TestCategorizationRuleRepository_GetByUserID(t *testing.T) {
 				nil,
 				now,
 				now,
+				int64(1),
 			))
 
 	rules, err := repo.GetByUserID(ctx, userID)
@@ -297,7 +300,7 @@ func TestCategorizationRuleRepository_GetEnabledByUserID(t *testing.T) {
 		"conditions", "condition_logic",
 		"target_kind", "target_pfc_primary", "target_pfc_detailed", "target_custom_category_id",
 		"target_tags", "tag_behavior", "source", "match_count", "override_count",
-		"last_matched_at", "created_at", "updated_at",
+		"last_matched_at", "created_at", "updated_at", "version",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -323,6 +326,7 @@ func TestCategorizationRuleRepository_GetEnabledByUserID(t *testing.T) {
 			nil,
 			now,
 			now,
+			int64(1),
 		))
 
 	rules, err := repo.GetEnabledByUserID(ctx, userID)
@@ -330,6 +334,40 @@ func TestCategorizationRuleRepository_GetEnabledByUserID(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, rules, 1)
 	assert.True(t, rules[0].Enabled)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCategorizationRuleRepository_ListAllForQuarantineCensus tests the #1625 Task 18 census
+// query: it must scan the WHOLE table (no user_id filter — this is the point, a per-user view
+// cannot deduplicate a rule seen across many users' syncs), and it must populate only the three
+// columns the classifier needs.
+func TestCategorizationRuleRepository_ListAllForQuarantineCensus(t *testing.T) {
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	id1, id2 := uuid.New().String(), uuid.New().String()
+	columns := []string{"id", "conditions", "condition_logic"}
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, conditions, condition_logic FROM categorization_rules`)).
+		WillReturnRows(pgxmock.NewRows(columns).
+			AddRow(id1, `[]`, "AND").
+			AddRow(id2, `[{"type":"merchant_contains","value":"starbucks"}]`, "OR"))
+
+	rules, err := repo.ListAllForQuarantineCensus(ctx)
+
+	assert.NoError(t, err)
+	require.Len(t, rules, 2)
+	assert.Equal(t, id1, rules[0].ID)
+	assert.Empty(t, rules[0].Conditions)
+	assert.Equal(t, "AND", rules[0].ConditionLogic)
+	assert.Equal(t, id2, rules[1].ID)
+	require.Len(t, rules[1].Conditions, 1)
+	assert.Equal(t, "OR", rules[1].ConditionLogic)
+	// Fields the classifier never reads must be left at the zero value, not silently populated —
+	// a caller must not be tempted to use this result for anything but classification.
+	assert.Empty(t, rules[0].UserID)
+	assert.Empty(t, rules[0].Name)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -342,8 +380,11 @@ func TestCategorizationRuleRepository_Update(t *testing.T) {
 	rule := createTestRule(uuid.New().String())
 	rule.ID = uuid.New().String()
 	rule.Name = "Updated Name"
+	rule.UpdatedAt = time.Now().Add(-time.Hour)
+	rule.Version = 7 // the version observed by the caller's prior read; the concurrency predicate
 
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE categorization_rules`)).
+	returnedUpdatedAt := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE categorization_rules`)).
 		WithArgs(
 			rule.Name,
 			pgxmock.AnyArg(), // description
@@ -357,17 +398,24 @@ func TestCategorizationRuleRepository_Update(t *testing.T) {
 			pgxmock.AnyArg(), // target_custom_category_id
 			pgxmock.AnyArg(), // target_tags JSON
 			pgxmock.AnyArg(), // tag_behavior
-			pgxmock.AnyArg(), // updated_at
 			rule.ID,
-		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+			// ⚠ #1625 final review B2: the predicate is `version`, NOT `updated_at`. A BEFORE
+			// UPDATE trigger stamps updated_at on every write including IncrementMatchCount, so
+			// keying on it made an ordinary sync look like a competing edit.
+			int64(7),
+		).WillReturnRows(pgxmock.NewRows([]string{"updated_at", "version"}).AddRow(returnedUpdatedAt, int64(8)))
 
 	err := repo.Update(ctx, rule)
 
 	assert.NoError(t, err)
+	assert.Equal(t, returnedUpdatedAt, rule.UpdatedAt, "the trigger-stamped value must be read back, not assumed")
+	assert.Equal(t, int64(8), rule.Version, "the bumped version must be read back so a second save from the same object works")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestCategorizationRuleRepository_Update_NotFound tests update of non-existent rule
+// TestCategorizationRuleRepository_Update_NotFound tests update of non-existent rule: zero rows
+// matched because the id itself does not exist, disambiguated from a concurrency conflict below
+// by the follow-up EXISTS check (#1625 Task 19).
 func TestCategorizationRuleRepository_Update_NotFound(t *testing.T) {
 	mock, repo := setupRuleMockDB(t)
 	defer mock.Close()
@@ -376,7 +424,7 @@ func TestCategorizationRuleRepository_Update_NotFound(t *testing.T) {
 	rule := createTestRule(uuid.New().String())
 	rule.ID = uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE categorization_rules`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE categorization_rules`)).
 		WithArgs(
 			pgxmock.AnyArg(), // name
 			pgxmock.AnyArg(), // description
@@ -390,14 +438,57 @@ func TestCategorizationRuleRepository_Update_NotFound(t *testing.T) {
 			pgxmock.AnyArg(), // target_custom_category_id
 			pgxmock.AnyArg(), // target_tags JSON
 			pgxmock.AnyArg(), // tag_behavior
-			pgxmock.AnyArg(), // updated_at
 			rule.ID,
-		).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+			rule.Version,
+		).WillReturnError(pgx.ErrNoRows)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT EXISTS(SELECT 1 FROM categorization_rules WHERE id = $1)`)).
+		WithArgs(rule.ID).
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(false))
 
 	err := repo.Update(ctx, rule)
 
 	assert.Error(t, err)
 	assert.Equal(t, domain.ErrRuleNotFound, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCategorizationRuleRepository_Update_ConcurrentModification tests the other zero-rows case:
+// the id exists but `version` moved underneath this write — the optimistic-concurrency conflict
+// #1625 Task 19 exists to catch, distinguished from Update_NotFound by the follow-up EXISTS check.
+func TestCategorizationRuleRepository_Update_ConcurrentModification(t *testing.T) {
+	mock, repo := setupRuleMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	rule := createTestRule(uuid.New().String())
+	rule.ID = uuid.New().String()
+	rule.Version = 3 // stale — another USER edit already moved the row on
+
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE categorization_rules`)).
+		WithArgs(
+			pgxmock.AnyArg(), // name
+			pgxmock.AnyArg(), // description
+			pgxmock.AnyArg(), // enabled
+			pgxmock.AnyArg(), // priority
+			pgxmock.AnyArg(), // conditions JSON
+			pgxmock.AnyArg(), // condition_logic
+			pgxmock.AnyArg(), // target_kind
+			pgxmock.AnyArg(), // target_pfc_primary
+			pgxmock.AnyArg(), // target_pfc_detailed
+			pgxmock.AnyArg(), // target_custom_category_id
+			pgxmock.AnyArg(), // target_tags JSON
+			pgxmock.AnyArg(), // tag_behavior
+			rule.ID,
+			rule.Version,
+		).WillReturnError(pgx.ErrNoRows)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT EXISTS(SELECT 1 FROM categorization_rules WHERE id = $1)`)).
+		WithArgs(rule.ID).
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
+
+	err := repo.Update(ctx, rule)
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrRuleConcurrentlyModified)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

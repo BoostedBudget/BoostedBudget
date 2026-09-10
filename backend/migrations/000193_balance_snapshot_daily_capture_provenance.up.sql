@@ -1,10 +1,10 @@
 -- #1626 Phase 3, Defect 3 (Task G) — first half of a two-file index addition, plus the column
--- comment that documents the new provenance value. 000191 builds the index.
+-- comment that documents the new provenance value. 000194 builds the index.
 --
 -- WHAT THIS FILE DOES, AND WHY THE TWO THINGS SHARE IT: both statements are plain, idempotent and
--- transaction-safe, so they can live together; the index build in 000191 can share a file with
+-- transaction-safe, so they can live together; the index build in 000194 can share a file with
 -- NOTHING (see below). Keeping the count at two files rather than three keeps the interrupted-run
--- repair a single `force 189`.
+-- repair a single `force 192`.
 --
 -- 1. THE COLUMN COMMENT. Migration 000016 documented the source value set inline
 --    ("Values: 'plaid_webhook', 'migration', 'manual'") and again as a COMMENT ON COLUMN. The
@@ -13,7 +13,7 @@
 --    (000186, 000188 do exactly this and nothing else). The 000016 FILE is history and is not
 --    edited; the database's comment is what a DBA actually reads.
 --
--- 2. THE CONDITIONAL DROP OF AN INVALID LEFTOVER. 000191 creates its index CONCURRENTLY, and
+-- 2. THE CONDITIONAL DROP OF AN INVALID LEFTOVER. 000194 creates its index CONCURRENTLY, and
 --    CREATE INDEX CONCURRENTLY does not roll away on failure: a deadlock, a cancelled statement or
 --    a killed backend leaves a catalogue entry with pg_index.indisvalid = false, maintained on
 --    every write and used by no query. The trap is the RETRY — `IF NOT EXISTS` matches on the NAME,
@@ -23,13 +23,16 @@
 --    on idx_accounts_user_account_backfill). This file is that ordering, and it is a clean no-op on
 --    every database where the index is absent or valid — which is every database today.
 --
---    ⚠ THE RE-RUN IS NOT AUTOMATIC. An interrupted 000191 also leaves golang-migrate's version
---    DIRTY at 191, and backend/scripts/docker-entrypoint.sh only retries `migrate up`, which
---    refuses to run while dirty. The repair is an operator action and it must go back to 189, NOT
---    190 — forcing to 190 re-runs only 000191, whose IF NOT EXISTS matches the name and would leave
---    the invalid index in place reporting success:
+--    ⚠ THE RE-RUN IS NOT AUTOMATIC. An interrupted 000194 also leaves golang-migrate's version
+--    DIRTY at 194, and backend/scripts/docker-entrypoint.sh only retries `migrate up`, which
+--    refuses to run while dirty. The repair is an operator action, and the version it forces to is
+--    determined by a principle, not by a constant: force to the version IMMEDIATELY BEFORE THIS
+--    PAIR, so that `migrate up` replays THIS file's conditional drop first and only then lets
+--    000194 rebuild. This pair is 000193/000194, so the version before it is 192 — NOT 193.
+--    Forcing to 193 would re-run only 000194, whose IF NOT EXISTS matches on the NAME and not on
+--    validity, so the build would report success and leave the invalid index in place:
 --
---        migrate -database "$DATABASE_URL" -path migrations force 189
+--        migrate -database "$DATABASE_URL" -path migrations force 192
 --        migrate -database "$DATABASE_URL" -path migrations up
 --
 --    A plain DROP INDEX is correct rather than DROP INDEX CONCURRENTLY: the target is invalid, so

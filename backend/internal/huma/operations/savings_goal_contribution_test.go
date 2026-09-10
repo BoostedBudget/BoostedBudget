@@ -85,29 +85,39 @@ func (m *mockSavingsContributionRepo) SumConfirmedByDeletedGoal(ctx context.Cont
 	return args.Get(0).(float64), args.Error(1)
 }
 
-func (m *mockSavingsContributionRepo) ConfirmContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error) {
-	args := m.Called(ctx, userID, id)
+func (m *mockSavingsContributionRepo) ConfirmContribution(ctx context.Context, userID, goalID, id string) (*domain.SavingsGoalContribution, error) {
+	args := m.Called(ctx, userID, goalID, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.SavingsGoalContribution), args.Error(1)
 }
 
-func (m *mockSavingsContributionRepo) RejectContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error) {
-	args := m.Called(ctx, userID, id)
+func (m *mockSavingsContributionRepo) RejectContribution(ctx context.Context, userID, goalID, id string) (*domain.SavingsGoalContribution, error) {
+	args := m.Called(ctx, userID, goalID, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.SavingsGoalContribution), args.Error(1)
 }
 
-func (m *mockSavingsContributionRepo) DeleteContribution(ctx context.Context, userID, id string, auditLog repository.AuditLogRepository) error {
-	args := m.Called(ctx, userID, id, auditLog)
+func (m *mockSavingsContributionRepo) DeleteContribution(ctx context.Context, userID, goalID, id string, auditLog repository.AuditLogRepository) error {
+	args := m.Called(ctx, userID, goalID, id, auditLog)
 	return args.Error(0)
 }
 
 func (m *mockSavingsContributionRepo) DeleteManagedForTransaction(ctx context.Context, transactionID string) error {
 	args := m.Called(ctx, transactionID)
+	return args.Error(0)
+}
+
+func (m *mockSavingsContributionRepo) ArchiveByGoalInTx(ctx context.Context, tx repository.Transaction, goalID string) error {
+	args := m.Called(ctx, tx, goalID)
+	return args.Error(0)
+}
+
+func (m *mockSavingsContributionRepo) InsertInTx(ctx context.Context, tx repository.Transaction, userID string, contrib *domain.SavingsGoalContribution) error {
+	args := m.Called(ctx, tx, userID, contrib)
 	return args.Error(0)
 }
 
@@ -236,6 +246,69 @@ func TestListContributions_ReturnsGoalContributions(t *testing.T) {
 	contribRepo.AssertExpectations(t)
 }
 
+// TestListContributions_ArchivedAtReachesTheAPIResponse (#1625 Task 13) proves ArchivedAt
+// survives all the way to the JSON huma actually writes on the wire.
+//
+// Before this test, ArchivedAt was exercised only at the repository layer (its NULL/non-NULL
+// scan) -- nothing verified it was still there once wrapped in ListContributionsOutput.Body and
+// marshaled the way huma marshals every handler response. output.Body is exactly what huma's
+// runtime writes back to the caller, so json.Marshal on it here is not a stand-in for the wire
+// format -- it IS the wire format. Both directions are asserted: a closed-period row (created by
+// #1625 migration 000190/191) must carry a present, correctly-valued "archived_at", and an
+// ordinary in-progress row must have the key OMITTED (omitempty) rather than present as null --
+// a caller that only checks for the KEY's presence would otherwise misread a null-but-present
+// key on every row as "this row is archived".
+func TestListContributions_ArchivedAtReachesTheAPIResponse(t *testing.T) {
+	goalID := "goal-archived-1"
+	userID := "user-archived-1"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	handler := NewContributionHandler(contribRepo, nil, nil)
+
+	archivedAt := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	archived := makeTestContribution(goalID)
+	archived.ID = "contrib-archived"
+	archived.ArchivedAt = &archivedAt
+
+	live := makeTestContribution(goalID)
+	live.ID = "contrib-live"
+	live.ArchivedAt = nil
+
+	contribRepo.On("ListByGoal", mock.Anything, userID, goalID).
+		Return([]*domain.SavingsGoalContribution{archived, live}, nil)
+
+	ctx := context.Background()
+	input := &ListContributionsInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+	}
+
+	output, err := handler.ListContributions(ctx, input)
+	require.NoError(t, err)
+	require.Len(t, output.Body, 2)
+
+	wire, err := json.Marshal(output.Body)
+	require.NoError(t, err)
+
+	var parsed []map[string]interface{}
+	require.NoError(t, json.Unmarshal(wire, &parsed))
+	require.Len(t, parsed, 2)
+
+	archivedJSON := parsed[0]
+	liveJSON := parsed[1]
+
+	rawArchivedAt, present := archivedJSON["archived_at"]
+	require.True(t, present, "archived_at must reach the response for a closed-period row")
+	parsedTime, err := time.Parse(time.RFC3339, rawArchivedAt.(string))
+	require.NoError(t, err)
+	assert.True(t, archivedAt.Equal(parsedTime), "archived_at value must round-trip through JSON")
+
+	_, present = liveJSON["archived_at"]
+	assert.False(t, present, "archived_at must be OMITTED (not null) for a row still in the live ledger")
+
+	contribRepo.AssertExpectations(t)
+}
+
 // =============================================================================
 // Tests — LogContribution (POST)
 // =============================================================================
@@ -360,7 +433,7 @@ func TestConfirmContribution_Success(t *testing.T) {
 	confirmed.Status = "confirmed"
 	confirmed.ConfirmedByUser = true
 
-	contribRepo.On("ConfirmContribution", mock.Anything, userID, contribID).
+	contribRepo.On("ConfirmContribution", mock.Anything, userID, goalID, contribID).
 		Return(confirmed, nil)
 	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
 
@@ -389,7 +462,7 @@ func TestConfirmContribution_NotFound_Returns404(t *testing.T) {
 	contribRepo := new(mockSavingsContributionRepo)
 	handler := NewContributionHandler(contribRepo, nil, nil)
 
-	contribRepo.On("ConfirmContribution", mock.Anything, userID, contribID).
+	contribRepo.On("ConfirmContribution", mock.Anything, userID, goalID, contribID).
 		Return(nil, domain.ErrContributionNotFound)
 
 	ctx := context.Background()
@@ -412,7 +485,7 @@ func TestConfirmContribution_AlreadyConfirmed_Returns409(t *testing.T) {
 	contribRepo := new(mockSavingsContributionRepo)
 	handler := NewContributionHandler(contribRepo, nil, nil)
 
-	contribRepo.On("ConfirmContribution", mock.Anything, userID, contribID).
+	contribRepo.On("ConfirmContribution", mock.Anything, userID, goalID, contribID).
 		Return(nil, domain.ErrContributionAlreadyConfirmed)
 
 	ctx := context.Background()
@@ -424,6 +497,40 @@ func TestConfirmContribution_AlreadyConfirmed_Returns409(t *testing.T) {
 
 	_, err := handler.ConfirmContribution(ctx, input)
 	require.Error(t, err)
+
+	var statusErr huma.StatusError
+	require.ErrorAs(t, err, &statusErr, "expected a huma.StatusError, got %T: %v", err, err)
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
+}
+
+// TestConfirmContribution_AlreadyRejected_Returns409 verifies #1625 Task 9: confirming a
+// contribution the user already rejected (a sticky tombstone, R3-7) must surface as a 409, not
+// fall through to the default LoggingMapError branch (which would 500 — the exact defect class
+// this ticket was opened to close).
+func TestConfirmContribution_AlreadyRejected_Returns409(t *testing.T) {
+	goalID := "goal-rejected"
+	userID := "user-rejected"
+	contribID := "contrib-rejected"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	handler := NewContributionHandler(contribRepo, nil, nil)
+
+	contribRepo.On("ConfirmContribution", mock.Anything, userID, goalID, contribID).
+		Return(nil, domain.ErrContributionAlreadyRejected)
+
+	ctx := context.Background()
+	input := &ConfirmContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		ID:                 contribID,
+	}
+
+	_, err := handler.ConfirmContribution(ctx, input)
+	require.Error(t, err)
+
+	var statusErr huma.StatusError
+	require.ErrorAs(t, err, &statusErr, "expected a huma.StatusError, got %T: %v", err, err)
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
 }
 
 // TestConfirmContribution_OverAllocated_Returns422 verifies ErrContributionOverAllocated → 422.
@@ -435,7 +542,7 @@ func TestConfirmContribution_OverAllocated_Returns422(t *testing.T) {
 	contribRepo := new(mockSavingsContributionRepo)
 	handler := NewContributionHandler(contribRepo, nil, nil)
 
-	contribRepo.On("ConfirmContribution", mock.Anything, userID, contribID).
+	contribRepo.On("ConfirmContribution", mock.Anything, userID, goalID, contribID).
 		Return(nil, domain.ErrContributionOverAllocated)
 
 	ctx := context.Background()
@@ -467,7 +574,7 @@ func TestDeleteContribution_Success(t *testing.T) {
 	// success path must wire one. See TestDeleteContribution_RefusesWithoutAuditSink.
 	handler.SetAuditLogRepository(&stubAuditLogRepository{})
 
-	contribRepo.On("DeleteContribution", mock.Anything, userID, contribID, mock.Anything).
+	contribRepo.On("DeleteContribution", mock.Anything, userID, goalID, contribID, mock.Anything).
 		Return(nil)
 	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
 
@@ -496,7 +603,7 @@ func TestDeleteContribution_NotFound_Returns404(t *testing.T) {
 	handler := NewContributionHandler(contribRepo, nil, nil)
 	handler.SetAuditLogRepository(&stubAuditLogRepository{})
 
-	contribRepo.On("DeleteContribution", mock.Anything, userID, contribID, mock.Anything).
+	contribRepo.On("DeleteContribution", mock.Anything, userID, goalID, contribID, mock.Anything).
 		Return(domain.ErrContributionNotFound)
 
 	ctx := context.Background()
@@ -855,7 +962,7 @@ func TestRejectContribution_Success(t *testing.T) {
 	rejected.ID = contribID
 	rejected.Status = "rejected"
 
-	contribRepo.On("RejectContribution", mock.Anything, userID, contribID).
+	contribRepo.On("RejectContribution", mock.Anything, userID, goalID, contribID).
 		Return(rejected, nil)
 	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
 
@@ -883,7 +990,7 @@ func TestRejectContribution_NotFound_Returns404(t *testing.T) {
 	contribRepo := new(mockSavingsContributionRepo)
 	handler := NewContributionHandler(contribRepo, nil, nil)
 
-	contribRepo.On("RejectContribution", mock.Anything, userID, contribID).
+	contribRepo.On("RejectContribution", mock.Anything, userID, goalID, contribID).
 		Return(nil, domain.ErrContributionNotFound)
 
 	ctx := context.Background()
@@ -909,7 +1016,7 @@ func TestRejectContribution_NotProposed_Returns409(t *testing.T) {
 	contribRepo := new(mockSavingsContributionRepo)
 	handler := NewContributionHandler(contribRepo, nil, nil)
 
-	contribRepo.On("RejectContribution", mock.Anything, userID, contribID).
+	contribRepo.On("RejectContribution", mock.Anything, userID, goalID, contribID).
 		Return(nil, domain.ErrContributionNotProposed)
 
 	ctx := context.Background()
@@ -962,4 +1069,122 @@ func TestDeleteContribution_RefusesWithoutAuditSink(t *testing.T) {
 
 	require.Error(t, err)
 	mockassert.NoCallTo(t, &contribRepo.Mock, "DeleteContribution")
+}
+
+// Codex gap analysis C3: the existing test asserts the 422 status only, which would still pass
+// with the old bare "basis mismatch" string. That message named neither the offending value nor
+// the remedy, so an agent hitting it on a brand-new goal had no way to proceed — which is how
+// #1625 was reported in the first place. This pins the CONTENT.
+func TestLogContribution_BasisMismatchMessageNamesTheRemedy(t *testing.T) {
+	goalID := "goal-remedy"
+	userID := "user-remedy"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, nil, goalReader)
+
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(&domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		ProgressBasis: domain.ProgressBasisManual,
+	}, nil)
+
+	_, err := handler.LogContribution(context.Background(), &LogContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		Body:               domain.LogContributionRequest{Amount: 100, OccurredOn: "2026-06-14"},
+	})
+
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, domain.ProgressBasisManual, "the message must name the goal's CURRENT basis")
+	assert.Contains(t, msg, domain.ProgressBasisContributions, "and the basis it needs")
+	assert.Contains(t, msg, goalID, "and the goal to change, so the fix is a copyable call")
+}
+
+// #1625 Task 10: Confirm and Reject need the basis gate that LogContribution has.
+//
+// On a goal switched off the contributions basis they returned 200 while RecomputeGoalByID
+// early-returned (savings_progress_service.go) — the row changed status, the goal's
+// current_amount did not, and the caller was told it worked. A silent no-op reported as success
+// is the exact defect shape #1625 opened with.
+//
+// ⚠ DeleteContribution deliberately does NOT get this guard. Not because the rows would be
+// "permanently undeletable" — an adversarial review correctly pointed out that a user could switch
+// the goal back to the contributions basis and delete them then. The real reason is narrower:
+// gating Delete would make removing your own row require an unrelated, side-effecting change to
+// the goal's configuration first. Confirm and Reject genuinely cannot take effect on a manual
+// goal; a delete does not have that failure mode. (⚠ "always does exactly what it says" was
+// FALSIFIED by the cross-goal DELETE bug #1625 fixed — see savings_goal_contribution.go's
+// assertLedgerIsLive comment.)
+// TestDeleteContribution_IsNotBlockedByBasis pins that.
+func TestConfirmContribution_RefusesOnANonContributionsBasis(t *testing.T) {
+	goalID, userID := "goal-manual", "user-1"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, nil, goalReader)
+
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(&domain.SavingsGoal{
+		ID: goalID, UserID: userID, ProgressBasis: domain.ProgressBasisManual,
+	}, nil)
+
+	_, err := handler.ConfirmContribution(context.Background(), &ConfirmContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		ID:                 "contrib-1",
+	})
+
+	require.Error(t, err, "a confirm that cannot change the goal must not report success")
+	assert.Contains(t, err.Error(), domain.ProgressBasisContributions,
+		"the message must name the remedy, as LogContribution's does")
+	contribRepo.AssertNotCalled(t, "ConfirmContribution", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestRejectContribution_RefusesOnANonContributionsBasis(t *testing.T) {
+	goalID, userID := "goal-manual", "user-1"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, nil, goalReader)
+
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(&domain.SavingsGoal{
+		ID: goalID, UserID: userID, ProgressBasis: domain.ProgressBasisManual,
+	}, nil)
+
+	_, err := handler.RejectContribution(context.Background(), &RejectContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		ID:                 "contrib-1",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), domain.ProgressBasisContributions)
+	contribRepo.AssertNotCalled(t, "RejectContribution", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// The deliberate asymmetry. A contribution on a goal that has since moved to the manual basis must
+// still be destroyable, or the basis switch becomes a one-way trap for the rows it leaves behind.
+func TestDeleteContribution_IsNotBlockedByBasis(t *testing.T) {
+	goalID, userID := "goal-manual", "user-1"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, nil, goalReader)
+	handler.SetAuditLogRepository(&stubAuditLogRepository{})
+
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(&domain.SavingsGoal{
+		ID: goalID, UserID: userID, ProgressBasis: domain.ProgressBasisManual,
+	}, nil)
+	contribRepo.On("DeleteContribution", mock.Anything, userID, goalID, "contrib-1", mock.Anything).Return(nil)
+
+	_, err := handler.DeleteContribution(context.Background(), &DeleteContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		ID:                 "contrib-1",
+	})
+
+	require.NoError(t, err,
+		"a row left behind by a basis switch must stay deletable, or the switch traps it forever")
+	contribRepo.AssertCalled(t, "DeleteContribution", mock.Anything, userID, goalID, "contrib-1", mock.Anything)
 }
