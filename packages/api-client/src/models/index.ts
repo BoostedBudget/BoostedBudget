@@ -159,6 +159,7 @@ export * from './exchangePublicTokenOutputBody';
 export * from './financialSummaryResponse';
 export * from './fireWebhookRequestBody';
 export * from './fireWebhookResponseBody';
+export * from './forkedSecurityIdentityMetrics';
 export * from './gainLossSummary';
 export * from './getAccountBalanceHistoryParams';
 export * from './getAccountHoldingsHistoryParams';
