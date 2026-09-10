@@ -24,7 +24,7 @@ type mockInvestmentService struct {
 	holdingsErr    error
 	summary        *domain.PortfolioSummary
 	summaryErr     error
-	history        []domain.PortfolioHistoryPoint
+	history        *domain.PortfolioHistory
 	historyErr     error
 	txns           []domain.InvestmentTransaction
 	txnsNextCursor *string
@@ -37,7 +37,7 @@ func (m *mockInvestmentService) ListHoldings(_ context.Context, _ string, _ *str
 func (m *mockInvestmentService) GetPortfolioSummary(_ context.Context, _ string) (*domain.PortfolioSummary, error) {
 	return m.summary, m.summaryErr
 }
-func (m *mockInvestmentService) GetPortfolioHistory(_ context.Context, _ string, _, _ time.Time) ([]domain.PortfolioHistoryPoint, error) {
+func (m *mockInvestmentService) GetPortfolioHistory(_ context.Context, _ string, _, _ time.Time) (*domain.PortfolioHistory, error) {
 	return m.history, m.historyErr
 }
 func (m *mockInvestmentService) ListInvestmentTransactions(_ context.Context, _ string, _ domain.InvestmentTransactionFilters, _ *domain.InvestmentTransactionCursor, _ int) ([]domain.InvestmentTransaction, *string, error) {
@@ -183,9 +183,13 @@ func TestInvestmentHandler_GetPortfolioSummary_NilDayChange(t *testing.T) {
 // ============================================================================
 
 func TestInvestmentHandler_GetPortfolioHistory_Success(t *testing.T) {
-	pts := []domain.PortfolioHistoryPoint{
-		{Date: "2025-01-01", TotalValue: 1000.0},
-		{Date: "2025-01-31", TotalValue: 1100.0},
+	usd := "USD"
+	pts := &domain.PortfolioHistory{
+		Points: []domain.PortfolioHistoryPoint{
+			{Date: "2025-01-01", TotalValue: 1000.0},
+			{Date: "2025-01-31", TotalValue: 1100.0},
+		},
+		CurrencyCode: &usd,
 	}
 	svc := &mockInvestmentService{history: pts}
 	handler := NewInvestmentHandler(svc, &mockInvestmentAnalyticsService{})
@@ -204,6 +208,12 @@ func TestInvestmentHandler_GetPortfolioHistory_Success(t *testing.T) {
 	// #1631: date must be the plain calendar-day string, not a timestamp. Asserting equality
 	// (not Contains) so a regression back to "2025-01-01T00:00:00Z" actually fails this test.
 	assert.Equal(t, "2025-01-01", out.Body.History[0].Date)
+	// #1631 M8a fix round 2 (I-2): the series says which currency it is plotted in. The `history`
+	// key itself is unchanged — PortfolioHistory.Points carries that json tag — so the response
+	// shape is purely additive.
+	require.NotNil(t, out.Body.CurrencyCode)
+	assert.Equal(t, "USD", *out.Body.CurrencyCode)
+	assert.False(t, out.Body.IsMixedCurrency)
 }
 
 func TestInvestmentHandler_GetPortfolioHistory_MissingDates(t *testing.T) {

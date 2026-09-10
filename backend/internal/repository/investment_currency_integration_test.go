@@ -129,6 +129,12 @@ func TestInvestmentAnalytics_CurrencyAwareAggregates_Integration(t *testing.T) {
 				require.NotNil(t, snap.CurrencyCode)
 				assert.Equal(t, *tt.wantCcy, *snap.CurrencyCode)
 			}
+			// #1631 M8a fix round 2 (I-1): and the snapshot must record WHICH kind of unlabelled
+			// it is. A NULL currency_code alone cannot tell "mixed" from "nobody stated one", and
+			// GetPortfolioSummary needs them apart — it refuses a day change against the first
+			// and must keep computing one against the second.
+			assert.Equal(t, tt.wantMixed, snap.IsMixedCurrency,
+				"the snapshot must say whether its totals are a currency-blind sum")
 		})
 	}
 }
@@ -295,4 +301,56 @@ func TestInvestmentAnalytics_AllocationCurrency_AllFourShapes_Integration(t *tes
 			}
 		})
 	}
+}
+
+// #1631 M8a fix round 2 (I-1), end to end over real SQL: the pair of columns that splits
+// portfolio_snapshots.currency_code's overloaded NULL must round-trip through the two readers
+// GetPortfolioSummary actually uses. A test that only checked Upsert's RETURNING would pass even
+// if GetLatestBefore forgot the column — and GetLatestBefore is the one the day-change guard
+// calls.
+func TestPortfolioSnapshot_MixedCurrencyVerdict_RoundTripsThroughEveryReader_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, _ := seedInvestmentFixture(ctx, t, tx, "ccy-mixedsnap")
+	seedCurrencyHolding(ctx, t, tx, userID, accountID, "USDH", 100, ccyPtr("USD"), ccyPtr("USD"), nil)
+	seedCurrencyHolding(ctx, t, tx, userID, accountID, "GBPH", 50, ccyPtr("GBP"), ccyPtr("GBP"), nil)
+
+	repo := NewPortfolioSnapshotRepository(tx)
+	// TODAY, not a back-dated day: Upsert's live CTE only counts accounts that were live on the
+	// snapshot date, and the fixture account is created inside this transaction, so a back-dated
+	// snapshot legitimately aggregates nothing and the assertions below would pass vacuously.
+	// GetLatestBefore is exercised with a cutoff of tomorrow instead, which is what makes today's
+	// row the "prior" one.
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	written, err := repo.Upsert(ctx, userID.String(), today)
+	require.NoError(t, err)
+	assert.True(t, written.IsMixedCurrency, "USD + GBP is a currency-blind sum")
+	assert.Nil(t, written.CurrencyCode, "and it must not be labelled with either currency")
+
+	prior, err := repo.GetLatestBefore(ctx, userID.String(), today.AddDate(0, 0, 1))
+	require.NoError(t, err)
+	require.NotNil(t, prior)
+	assert.True(t, prior.IsMixedCurrency,
+		"GetLatestBefore feeds the day-change guard; dropping this column re-opens the defect")
+
+	ranged, err := repo.GetByUserDateRange(ctx, userID.String(), today, today)
+	require.NoError(t, err)
+	require.Len(t, ranged, 1)
+	assert.True(t, ranged[0].IsMixedCurrency,
+		"GetByUserDateRange feeds the history series, which resolves its currency over these rows")
+
+	// Selling the GBP sleeve makes the LIVE portfolio single-currency again. Re-upserting the same
+	// day must clear the verdict rather than leave a stale TRUE — the ON CONFLICT path is a
+	// separate branch from the INSERT and has its own SET list to get wrong.
+	_, err = tx.Exec(ctx, `DELETE FROM holdings WHERE user_id = $1 AND currency_code = 'GBP'`, userID)
+	require.NoError(t, err)
+	reWritten, err := repo.Upsert(ctx, userID.String(), today)
+	require.NoError(t, err)
+	assert.False(t, reWritten.IsMixedCurrency, "the conflict path must rewrite the verdict too")
+	require.NotNil(t, reWritten.CurrencyCode)
+	assert.Equal(t, "USD", *reWritten.CurrencyCode)
 }

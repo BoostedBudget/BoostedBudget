@@ -204,7 +204,12 @@ rebuilt AS (
                WHEN COUNT(DISTINCT UPPER(TRIM(hs.currency_code))) = 1
                THEN MAX(UPPER(TRIM(hs.currency_code)))
                ELSE NULL
-           END AS currency_code
+           END AS currency_code,
+           -- SEVENTH column (#1631 M8a fix round 2 / migration 000198), and it must be rebuilt
+           -- with the rest or a repair leaves a stale mixedness verdict beside a corrected total
+           -- -- the same defect the fifth and sixth columns exist to avoid. > 1, not <> 1: zero
+           -- distinct currencies is UNKNOWN, not mixed.
+           COUNT(DISTINCT UPPER(TRIM(hs.currency_code))) > 1 AS is_mixed_currency
     FROM live l
     JOIN holding_snapshots hs
       ON hs.account_id = l.account_id
@@ -232,6 +237,7 @@ decided AS (
            rb.total_gain_loss_pct AS new_total_gain_loss_pct,
            COALESCE(rb.total_value_investment_only, 0) AS new_total_value_investment_only,
            rb.currency_code AS new_currency_code,
+           COALESCE(rb.is_mixed_currency, FALSE) AS new_is_mixed_currency,
            -- F2: rows can exist for a day and still be excluded by liveness, which is a DIFFERENT
            -- fact from "this day was never captured" and must not be reported as the same one.
            -- Deliberately NOT restricted to live accounts — that is the whole point of it.
@@ -267,7 +273,14 @@ updated AS (
         -- already-correct days as "repaired" in the audit ledger. And leaving it out costs
         -- nothing: it comes from the same reconstruction as the other five, so only a repair of
         -- those can make it stale, and such a repair passes the predicate and writes both.
-        currency_code = d.new_currency_code
+        currency_code = d.new_currency_code,
+        -- Same placement rule as the two columns above: in the SET list, NOT in the
+        -- IS DISTINCT FROM tuple below. Every row written before migration 000198 has FALSE by
+        -- column default, so a genuinely mixed historical day would otherwise flip the tuple and
+        -- relabel an already-correct day as "repaired" in the audit ledger. And it cannot go
+        -- stale alone: it is rebuilt from the same reconstruction as the other six, so only a
+        -- repair of those can move it, and such a repair passes the predicate and writes both.
+        is_mixed_currency = d.new_is_mixed_currency
     FROM decided d
     WHERE ps.user_id = d.user_id
       AND ps.snapshot_date = d.snapshot_date

@@ -28,7 +28,7 @@ type InvestmentService interface {
 
 	// GetPortfolioHistory returns portfolio value history between start and end (inclusive),
 	// ordered by date ascending. Each point is one portfolio_snapshots row.
-	GetPortfolioHistory(ctx context.Context, userID string, start, end time.Time) ([]domain.PortfolioHistoryPoint, error)
+	GetPortfolioHistory(ctx context.Context, userID string, start, end time.Time) (*domain.PortfolioHistory, error)
 
 	// ListInvestmentTransactions retrieves investment transactions using keyset pagination.
 	// Returns the transactions and an encoded next-cursor string (nil = end of list).
@@ -169,7 +169,14 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 		// An UNKNOWN currency on either side does not refuse — every snapshot written before
 		// migration 000197 has none, and refusing on those would blank the day change for the
 		// whole existing user base.
-		if !domain.CurrenciesConflict(prior.CurrencyCode, currencyCode) {
+		// ⚠ TWO conditions, and the second is not implied by the first (#1631 M8a fix round 2,
+		// I-1). CurrenciesConflict deliberately reads an UNKNOWN currency as no conflict, and a
+		// MIXED snapshot also presents a nil CurrencyCode — so before prior.IsMixedCurrency
+		// existed, a currency-blind prior total sailed past this guard and was subtracted from a
+		// single-currency live total, unflagged. A currency-blind sum is not a quantity of money;
+		// it cannot be an operand here whatever today's currency turns out to be, including when
+		// today is mixed too (the composition of the mix can change between the two days).
+		if !prior.IsMixedCurrency && !domain.CurrenciesConflict(prior.CurrencyCode, currencyCode) {
 			dc := totalValue - priorGated
 			dayChange = &dc
 			if priorGated != 0 {
@@ -194,20 +201,51 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 
 // GetPortfolioHistory returns portfolio value snapshots between start and end (inclusive).
 // Each PortfolioHistoryPoint has the snapshot_date and total_value from portfolio_snapshots.
-func (s *investmentService) GetPortfolioHistory(ctx context.Context, userID string, start, end time.Time) ([]domain.PortfolioHistoryPoint, error) {
+//
+// #1631 M8a fix round 2 (I-2): it also states the currency the SERIES is plotted in, which it
+// previously read from each snapshot and discarded — so a chart could mix currency-blind sums with
+// single-currency totals and say nothing. See domain.PortfolioHistory for why the verdict is
+// range-level rather than per-point.
+func (s *investmentService) GetPortfolioHistory(ctx context.Context, userID string, start, end time.Time) (*domain.PortfolioHistory, error) {
 	snaps, err := s.snapshotRepo.GetByUserDateRange(ctx, userID, start, end)
 	if err != nil {
 		return nil, fmt.Errorf("GetPortfolioHistory: %w", err)
 	}
 
 	pts := make([]domain.PortfolioHistoryPoint, len(snaps))
-	for i, s := range snaps {
+	// A series is unplottable as one unit for EITHER of two reasons, and the second is not
+	// reducible to the first: two days can disagree with each other, or one single day can itself
+	// have been a currency-blind sum. The second is only expressible because migration 000198
+	// split portfolio_snapshots.currency_code's overloaded NULL — before it, such a day looked
+	// identical to a day that simply never stated a currency.
+	codes := make([]string, 0, len(snaps))
+	anyDayWasItselfMixed := false
+	for i, snap := range snaps {
 		pts[i] = domain.PortfolioHistoryPoint{
-			Date:       s.SnapshotDate.Format("2006-01-02"),
-			TotalValue: s.TotalValue,
+			Date:       snap.SnapshotDate.Format("2006-01-02"),
+			TotalValue: snap.TotalValue,
 		}
+		if snap.IsMixedCurrency {
+			anyDayWasItselfMixed = true
+		}
+		codes = append(codes, domain.NormalizeCurrencyCode(snap.CurrencyCode))
 	}
-	return pts, nil
+
+	currencyCode, isMixed := domain.ResolveCurrencyCodes(codes)
+	if anyDayWasItselfMixed {
+		// The series cannot be labelled with a currency it is only partly in. Dropping the code
+		// as well as raising the flag is the same rule ResolveCurrencyCodes follows for a
+		// disagreement: naming one of the currencies would invite a caller to label the whole
+		// series with it.
+		currencyCode = nil
+		isMixed = true
+	}
+
+	return &domain.PortfolioHistory{
+		Points:          pts,
+		CurrencyCode:    currencyCode,
+		IsMixedCurrency: isMixed,
+	}, nil
 }
 
 // ListInvestmentTransactions retrieves investment transactions using keyset pagination.
