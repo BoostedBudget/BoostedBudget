@@ -563,12 +563,15 @@ func BuildCategoryEventData(categories []BudgetCategory) map[string]map[string]f
 
 // CreateBudgetRequest represents the request to create a new budget.
 type CreateBudgetRequest struct {
-	Name         string                        `json:"name" validate:"required,max=100"`
-	Description  *string                       `json:"description,omitempty"`
-	Period       BudgetPeriod                  `json:"period" validate:"required"`
-	StartDate    time.Time                     `json:"start_date" validate:"required"`
-	EndDate      *time.Time                    `json:"end_date,omitempty"`
-	Amount       float64                       `json:"amount" validate:"required,gt=0"`
+	Name        string       `json:"name" validate:"required,max=100"`
+	Description *string      `json:"description,omitempty"`
+	Period      BudgetPeriod `json:"period" validate:"required"`
+	StartDate   time.Time    `json:"start_date" validate:"required"`
+	EndDate     *time.Time   `json:"end_date,omitempty" doc:"Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error."`
+	// Amount is overwritten to mirror expected_income when expected_income is set and > 0
+	// (Issue #1048) — declined the alternative of making this read-only, since amount is
+	// still the authoritative field when expected_income is absent.
+	Amount       float64                       `json:"amount" validate:"required,gt=0" doc:"Budget amount. If expected_income is also set and > 0, expected_income wins and this field is overwritten to mirror it — set expected_income instead if you want it to be authoritative."`
 	CurrencyCode string                        `json:"currency_code,omitempty"`
 	Categories   []CreateBudgetCategoryRequest `json:"categories,omitempty"`
 
@@ -577,7 +580,7 @@ type CreateBudgetRequest struct {
 	IncomeSources []IncomeSource `json:"income_sources,omitempty"`
 
 	// ExpectedIncome is optional; when nil the service falls back to Amount (Issue #1048).
-	ExpectedIncome *float64 `json:"expected_income,omitempty" validate:"omitempty,gt=0"`
+	ExpectedIncome *float64 `json:"expected_income,omitempty" validate:"omitempty,gt=0" doc:"Planned income for the period. When set and > 0, this wins over amount — amount is overwritten to mirror this value. Leave unset to have amount remain authoritative."`
 
 	// FromBudgetID, when set, causes the new budget to inherit the ancestor's SeriesID
 	// so savings-goal detach tombstones (keyed by series_id) persist across budget periods
@@ -606,16 +609,19 @@ type UpdateBudgetRequest struct {
 	Description *string       `json:"description,omitempty"`
 	Period      *BudgetPeriod `json:"period,omitempty"`
 	StartDate   *time.Time    `json:"start_date,omitempty"`
-	EndDate     *time.Time    `json:"end_date,omitempty"`
-	Amount      *float64      `json:"amount,omitempty" validate:"omitempty,gt=0"`
-	IsActive    *bool         `json:"is_active,omitempty"`
+	EndDate     *time.Time    `json:"end_date,omitempty" doc:"Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error."`
+	// Amount is overwritten to mirror expected_income when expected_income is set and > 0
+	// (Issue #1048) — declined the alternative of making this read-only, since amount is
+	// still the authoritative field when expected_income is absent.
+	Amount   *float64 `json:"amount,omitempty" validate:"omitempty,gt=0" doc:"Budget amount. If expected_income is also set and > 0 in this same request, expected_income wins and this field is overwritten to mirror it — set expected_income instead if you want it to be authoritative."`
+	IsActive *bool    `json:"is_active,omitempty"`
 
 	// Envelope budgeting fields (Issue #491)
 	IncomeAmount  *float64        `json:"income_amount,omitempty" validate:"omitempty,gte=0"`
 	IncomeSources *[]IncomeSource `json:"income_sources,omitempty"`
 
 	// ExpectedIncome is optional; when nil the service leaves the existing value unchanged (Issue #1048).
-	ExpectedIncome *float64 `json:"expected_income,omitempty" validate:"omitempty,gt=0"`
+	ExpectedIncome *float64 `json:"expected_income,omitempty" validate:"omitempty,gt=0" doc:"Planned income for the period. When set and > 0, this wins over amount in this same request — amount is overwritten to mirror this value. Leave unset to have amount remain authoritative."`
 }
 
 // UpdateBudgetCategoryRequest represents the request to update a budget category.
