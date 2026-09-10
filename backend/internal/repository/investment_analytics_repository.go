@@ -644,32 +644,59 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 	// Income subtypes (dividends, interest, reinvestments) are cash credits, so Plaid
 	// stores them as NEGATIVE amounts. Negate before SUM so callers receive a positive
 	// income magnitude. COALESCE guards the edge case where all amounts in a group are NULL.
+	// #1631: the subtype allowlist is no longer the whole universe.
+	//
+	// This brokerage reports a dividend as `cash/deposit` against the ETF and never emits a
+	// dividend subtype, so 211 production rows worth $6,249.43 were excluded OUTRIGHT — not
+	// mislabelled, absent — and reported income was a third of the truth.
+	//
+	// ⚠ Only the DEPOSIT (credit) leg is admitted. Its paired `cash/withdrawal` reinvestment is the
+	// same economic dollar spent on shares: a −$100 deposit with a +$100 withdrawal is $100 of
+	// income, not $0 (both counted under the negation below) and not $200 (both counted with
+	// corrected signs). The purchase leg was excluded before this change and must stay excluded.
+	// The rule, stated once: a subtype-literal reinvestment CREDIT is income; a structural
+	// reinvestment DEBIT is a purchase.
+	//
+	// The structural condition is domain.SecurityIsStructuralSQL, shared verbatim with
+	// TradeTypeToSQLPredicate so the income total and the feed's labels cannot drift apart — the
+	// exact failure #1631 was filed for.
+	structural := domain.SecurityIsStructuralSQL("sec")
+	normSub := domain.NormalizedSubtypeSQL("it.subtype")
+	structuralIncome := fmt.Sprintf("(%s = 'deposit' AND %s)", normSub, structural)
+
 	query := fmt.Sprintf(`
 		SELECT
 			CASE
-				WHEN it.subtype IN ('dividend', 'qualified dividend', 'non-qualified dividend')
+				WHEN %[6]s IN ('dividend', 'qualified dividend', 'non-qualified dividend')
 				     THEN 'dividend'
-				WHEN it.subtype IN ('interest', 'interest receivable')
+				WHEN %[6]s IN ('interest', 'interest receivable')
 				     THEN 'interest'
-				WHEN it.subtype = 'dividend reinvestment'
+				WHEN %[6]s IN ('long-term capital gain', 'short-term capital gain', 'unqualified gain')
+				     THEN 'capital_gain'
+				WHEN %[6]s = 'dividend reinvestment'
 				     THEN 'dividend_reinvestment'
-				WHEN it.subtype = 'interest reinvestment'
+				WHEN %[6]s = 'interest reinvestment'
 				     THEN 'interest_reinvestment'
+				-- A structural credit against a real security IS a dividend; the ETF distribution
+				-- this institution never labels.
+				WHEN %[5]s THEN 'dividend'
 				ELSE 'other_income'
 			END                          AS income_type,
 			COUNT(*)                     AS count,
 			COALESCE(-SUM(it.amount), 0) AS total_amount
 		FROM investment_transactions it
 		JOIN accounts a ON a.id = it.account_id
+		LEFT JOIN securities sec ON sec.id = it.security_id
 		WHERE it.user_id = $1
-		  AND (a.status = 'active'%s)
+		  AND (a.status = 'active'%[1]s)
 		  AND it.date >= $2::date
 		  AND it.date <= $3::date
-		  AND it.subtype IN (%s)
-		%s
+		  AND (%[6]s IN (%[2]s) OR %[5]s)
+		%[3]s
 		GROUP BY income_type
 		ORDER BY total_amount DESC
-	`, retainedAccountVisibilityLegs("it", "it.date"), inClause, investmentSyncExclusionCondition("it"))
+	`, retainedAccountVisibilityLegs("it", "it.date"), inClause,
+		investmentSyncExclusionCondition("it"), "", structuralIncome, normSub)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
