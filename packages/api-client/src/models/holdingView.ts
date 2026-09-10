@@ -35,6 +35,8 @@ export interface HoldingView {
   account_id: string;
   cost_basis?: number;
   day_change?: number;
+  day_change_as_of?: string;
+  day_change_is_stale?: boolean;
   day_change_pct?: number;
   gain_loss?: number;
   gain_loss_pct?: number;

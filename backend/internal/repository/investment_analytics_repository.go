@@ -394,9 +394,16 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 				sec.ticker_symbol,
 				sec.name                                                                      AS security_name,
 				h.quantity * (h.institution_price - sec.close_price)                         AS day_change,
+				-- #1631: measured against the PRIOR close value (quantity x close_price), not the
+				-- current institution_value. The two differ by the day change itself, so the old
+				-- form understated every gain and overstated every loss by exactly that amount —
+				-- a true +5% day read 4.76%, and a doubling read 50%. Mirrors
+				-- domain.Holding.DayChangePct, which is pinned by
+				-- TestHolding_DayChangePct_IsMeasuredAgainstThePriorClose.
 				CASE
-					WHEN h.institution_value IS NOT NULL AND h.institution_value != 0
-					THEN h.quantity * (h.institution_price - sec.close_price) / h.institution_value * 100
+					WHEN h.quantity * sec.close_price != 0
+					THEN h.quantity * (h.institution_price - sec.close_price)
+					     / (h.quantity * sec.close_price) * 100
 					ELSE NULL
 				END                                                                           AS day_change_pct,
 				CASE
