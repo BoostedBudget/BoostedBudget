@@ -138,7 +138,7 @@ type CategorizationRule struct {
 	// it: `quarantined` means "the server is CURRENTLY preventing this rule from matching
 	// anything". It is deliberately switch-dependent — with RULE_QUARANTINE_ENFORCE off the
 	// engine runs enforcement-class rules, so reporting quarantined=true would be a false claim
-	// about the user's own ledger. See internal/rules/quarantine_published_contract_test.go for
+	// about the user's own ledger. See internal/services/quarantine_published_contract_test.go for
 	// the rejected alternative and why.
 	//
 	// The cost of that choice, and the reason the previous version of this comment was WRONG:

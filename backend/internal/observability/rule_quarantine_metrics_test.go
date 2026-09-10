@@ -207,7 +207,7 @@ func TestMain(m *testing.M) {
 // reading this metric during the exact incident the switch exists for was being told the
 // opposite of what was happening.
 //
-// The chosen semantics (see internal/rules/quarantine_published_contract_test.go) is that
+// The chosen semantics (see internal/services/quarantine_published_contract_test.go) is that
 // "stopped right now" is switch-dependent, so no surface may assert it from the reason alone.
 // This help string therefore describes CLASSIFICATION and names the switch that decides refusal.
 func TestQuarantineMetricHelpDoesNotAssertRefusal(t *testing.T) {
