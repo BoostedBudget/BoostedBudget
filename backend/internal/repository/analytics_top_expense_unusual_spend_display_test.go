@@ -152,15 +152,18 @@ func TestGetUnusualSpend_ScansCategoryDisplay(t *testing.T) {
 
 	// ⚠ RENAMED (#1626 Phase 2 pgxmock sweep): this subtest used to be named "NULL display scans to
 	// empty string, not an error" and read as proof that GetUnusualSpend's sql.NullString scan
-	// tolerates a NULL category_display. It is not, and — unlike GetTopExpense's sibling subtest of
-	// the same former name above — this one has NO integration-test replacement: pgxmock scans a
-	// `nil` AddRow cell into a plain Go `string` WITHOUT error (mutation-confirmed — reverting
-	// GetUnusualSpend's `sql.NullString` to a plain `string` leaves this subtest green), and a real
-	// Postgres proof would need a >=3-row same-category baseline with a non-zero standard deviation
-	// PLUS a row far enough above the mean to clear sigmaThreshold before the NULL-display row is
-	// even reachable at all — a disproportionate fixture for what this subtest is actually able to
-	// verify. What it still shows, honestly: a NULL display cell does not disturb the OTHER scanned
-	// fields on the same row.
+	// tolerates a NULL category_display. It is not: pgxmock scans a `nil` AddRow cell into a plain
+	// Go `string` WITHOUT error (mutation-confirmed — reverting GetUnusualSpend's `sql.NullString`
+	// to a plain `string` leaves this subtest green).
+	//
+	// ⚠ IT NOW HAS AN INTEGRATION-TEST REPLACEMENT, and the sentence claiming otherwise was
+	// retracted by #1626 gap G6. A real Postgres proof does need a >=3-row same-category baseline
+	// with a non-zero standard deviation plus a row far enough above the mean to clear
+	// sigmaThreshold — that fixture was judged disproportionate and is in fact four rows:
+	// TestGetUnusualSpend_NullCategoryDisplay_ToleratedAgainstRealPostgres
+	// (analytics_null_category_display_integration_test.go) is where the scan is proven. What THIS
+	// subtest still shows, honestly: a NULL display cell does not disturb the OTHER scanned fields
+	// on the same row.
 	t.Run("NULL display cell does not disturb the rest of the row (pgxmock cannot prove the scan itself tolerates NULL)", func(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()

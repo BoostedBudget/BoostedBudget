@@ -75,14 +75,23 @@ export interface SankeyData {
   /** Max of the FULL income and expense sums — the true hub throughput, before any truncation. */
   hubTotal: number
   /**
-   * Which rung of `EXPENSE_LADDER` rendered the expense fan, when the root ladder ran (undefined
-   * for an empty chart, and also when the focus-specific ladder in `renderExpenseFan` rendered the
-   * fan instead). DIAGNOSTIC ONLY (#1626 Phase 2, item 3): it exists so a test can name the rung
-   * that ran without inferring it from output shape — several rungs can produce output consistent
-   * with a small tree, so inference can silently "cover" a rung that never actually ran. No
-   * production code may branch on this value.
+   * Which rung rendered the expense fan — an index into `EXPENSE_LADDER` or into `FOCUS_LADDER`,
+   * disambiguated by `expenseRungLadder`. Undefined only for an empty chart, which renders no fan
+   * at all.
+   *
+   * ⚠ The previous version of this comment said the field was "undefined ... when the
+   * focus-specific ladder rendered the fan instead". It never was: `buildSankeyData` assigns
+   * `outFan.rungIndex` unconditionally, so a focus render reported its own ladder's index here with
+   * nothing to say so. That ambiguity is what `expenseRungLadder` now removes (#1626 gap G10).
+   *
+   * DIAGNOSTIC ONLY (#1626 Phase 2, item 3): both fields exist so a test can name the rung that ran
+   * without inferring it from output shape — several rungs can produce output consistent with a
+   * small tree, so inference can silently "cover" a rung that never actually ran. No production
+   * code may branch on either value.
    */
   expenseRungIndex?: number
+  /** Which ladder `expenseRungIndex` indexes. DIAGNOSTIC ONLY, see above. */
+  expenseRungLadder?: 'root' | 'focus'
 }
 
 /**
@@ -294,16 +303,56 @@ function emitExpenses(forest: Rendered[]): { nodes: SankeyNode[]; links: SankeyL
 export const EXPENSE_LADDER: Array<[depth: number, maxChildren: number, maxRoots: number]> =
   [[2, 6, 30], [1, 6, 30], [1, 6, 10], [0, 0, 30]]
 
+/**
+ * The FOCUS ladder — the rungs a focus view degrades through, `[depth, maxChildren]` for the
+ * focused node's own subtree. It has no `maxRoots`: a focus view renders the ancestor path and
+ * collapses every sibling to one node per level (see `pruneForFocus`), so the root count is not a
+ * dimension it can trade away.
+ *
+ * EXPORTED for the same reason `EXPENSE_LADDER` is (#1626 gap G10): a test must be able to sweep the
+ * ladder and assert it exercised EVERY rung without hand-typing a rung index — an index typed into
+ * a test is a claim about the table that stops being true the moment the table changes, and several
+ * rungs produce output consistent with a small tree, so the rung that ran cannot be inferred from
+ * the shape of the result. Pair it with `SankeyData.expenseRungLadder`, which says which of the two
+ * ladders the index belongs to.
+ *
+ * ⚠ IT HAD TWO MORE RUNGS, `[1, 3]` and `[0, 0]`, AND NEITHER COULD EVER RUN — deleted by #1626 gap
+ * G10 for the same reason EXPENSE_LADDER's fifth rung was (see its comment): a documented
+ * degradation step that cannot happen is a lie about the ladder, and keeping it would force the
+ * coverage sweep to carry a permanent exclusion, which is what let the root ladder's dead rung
+ * survive unnoticed. The arithmetic: `[1, 6]` renders the focused node, at most 6 children plus one
+ * overflow node, and one `(direct)` node — at most 9 — and each ancestor LEVEL above it adds the
+ * on-path node, one collapsed-siblings node and at most one `(direct)` node. The API's tree is
+ * three levels deep (`custom_category_single_parent` plus
+ * `enforce_custom_category_two_levels`; see analytics_category_path.go), so the whole focus view
+ * is at most ~18 nodes against an EXPENSE_NODE_BUDGET of 31: `[1, 6]` always fits and nothing after
+ * it is reachable. `pruneForFocus` collapses siblings to ONE node per level, so no amount of
+ * breadth changes that — only depth would, and depth is capped in the schema.
+ *
+ * ⚠ If EXPENSE_NODE_BUDGET shrinks, or the tree gets a fourth level, `[1, 6]` stops being a
+ * guaranteed floor and a focus view that overflows falls through to EXPENSE_LADDER instead. That is
+ * safe (it still returns a conserved graph) but it is no longer a focus view — add a real floor
+ * rung then, and the sweep in buildSankeyData.test.ts will require it to be reachable.
+ */
+export const FOCUS_LADDER: Array<[depth: number, maxChildren: number]> =
+  [[2, 6], [1, 6]]
+
 interface ExpenseFanResult {
   nodes: SankeyNode[]
   links: SankeyLink[]
   /**
-   * Index into `EXPENSE_LADDER` when that ladder rendered the fan (root-mode: 'parents' or
-   * 'expanded', or a focus view's fallback). Index into the focus-specific ladder below when a
-   * focus view rendered directly. DIAGNOSTIC ONLY, see `SankeyData.expenseRungIndex` — no
-   * production code may branch on this.
+   * Index into `EXPENSE_LADDER` when `rungLadder` is 'root' (mode 'parents' or 'expanded', or a
+   * focus view that fell through), and into `FOCUS_LADDER` when it is 'focus'. DIAGNOSTIC ONLY, see
+   * `SankeyData.expenseRungIndex` — no production code may branch on either field.
    */
   rungIndex: number
+  /**
+   * Which ladder `rungIndex` indexes. Without it the index is ambiguous in focus mode — a focus
+   * view can render from `FOCUS_LADDER` or fall through to `EXPENSE_LADDER`, and both report small
+   * integers — so a sweep collecting indices could credit a focus rung for a fall-through and
+   * report coverage it does not have.
+   */
+  rungLadder: 'root' | 'focus'
 }
 
 /**
@@ -312,13 +361,14 @@ interface ExpenseFanResult {
  */
 function renderExpenseFan(roots: CategoryHierarchyNode[], mode: SankeyViewMode): ExpenseFanResult {
   if (mode.kind === 'focus') {
-    const focusLadder = [[2, 6], [1, 6], [1, 3], [0, 0]] as const
-    for (let i = 0; i < focusLadder.length; i++) {
-      const [depth, maxChildren] = focusLadder[i]
+    for (let i = 0; i < FOCUS_LADDER.length; i++) {
+      const [depth, maxChildren] = FOCUS_LADDER[i]
       const forest = pruneForFocus(roots, mode.key, depth, maxChildren)
       if (!forest) break // focused key no longer exists — fall through to the consolidated view
       const emitted = emitExpenses(forest)
-      if (emitted.nodes.length <= EXPENSE_NODE_BUDGET) return { ...emitted, rungIndex: i }
+      if (emitted.nodes.length <= EXPENSE_NODE_BUDGET) {
+        return { ...emitted, rungIndex: i, rungLadder: 'focus' }
+      }
     }
   }
 
@@ -338,9 +388,9 @@ function renderExpenseFan(roots: CategoryHierarchyNode[], mode: SankeyViewMode):
     }
     last = emitExpenses(kept)
     lastIndex = i
-    if (last.nodes.length <= EXPENSE_NODE_BUDGET) return { ...last, rungIndex: i }
+    if (last.nodes.length <= EXPENSE_NODE_BUDGET) return { ...last, rungIndex: i, rungLadder: 'root' }
   }
-  return { ...last, rungIndex: lastIndex }
+  return { ...last, rungIndex: lastIndex, rungLadder: 'root' }
 }
 
 /**
@@ -458,15 +508,16 @@ export function buildSankeyData(
   const outFan = renderExpenseFan(validExpenses, mode)
   nodes.push(...outFan.nodes)
   links.push(...outFan.links)
-  // Root-mode ladder index only (see ExpenseFanResult) — a focus view that rendered directly
-  // (rather than falling through to the root ladder) reports an index into its OWN, different
-  // ladder here, which is why this field is diagnostic-only rather than something to branch on.
+  // The index and the ladder it belongs to travel TOGETHER (see ExpenseFanResult): a focus view
+  // that rendered directly reports an index into FOCUS_LADDER, and one that fell through reports an
+  // index into EXPENSE_LADDER. Both are diagnostic-only rather than something to branch on.
   const expenseRungIndex = outFan.rungIndex
+  const expenseRungLadder = outFan.rungLadder
 
   if (surplus > 0) {
     nodes.push(syntheticNode('savings', 'Savings', CASH_FLOW_COLORS.netPositive, 'savings'))
     links.push({ source: 'hub', target: 'savings', value: surplus })
   }
 
-  return { nodes, links, hubTotal: Math.max(incomeSum, expenseSum), expenseRungIndex }
+  return { nodes, links, hubTotal: Math.max(incomeSum, expenseSum), expenseRungIndex, expenseRungLadder }
 }

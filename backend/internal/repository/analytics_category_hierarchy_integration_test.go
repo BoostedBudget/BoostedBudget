@@ -143,19 +143,139 @@ func TestGetCategoryHierarchy_Integration(t *testing.T) {
 		assert.InDelta(t, 500.0, rows[0].Total, 0.001, "the largest leaf comes first")
 	})
 
-	t.Run("household scope runs and is a strict subset", func(t *testing.T) {
-		// Nothing is shared into a household here, so the household read must return no rows at
-		// all. The point of the case is that the twin EXECUTES — its CTE, its join and its
-		// placeholder numbering are different from the personal read's, and that is where a
-		// personal/household pair has silently diverged before.
+	t.Run("household scope returns the household's shared tree", func(t *testing.T) {
+		// ⚠ THIS CASE USED TO ASSERT ONLY THAT THE SQL EXECUTES (#1626 gap G15). Its fixture shared
+		// nothing into any household, so the read returned zero rows and every claim about the
+		// household twin's CTE, its inner JOIN, its grant predicate and its placeholder numbering
+		// rested on "it did not error". A twin that dropped its grant predicate — or one that never
+		// admitted another member's rows at all — passed it unchanged.
+		//
+		// The fixture now has a second member with their OWN user_account, their own custom
+		// category, and one account that is deliberately NOT shared, so the read has to include,
+		// exclude and label rows rather than merely run.
+		householdID := uuid.New().String()
+		memberID := uuid.New().String()
+		memberUserAccountID := uuid.New().String()
+		memberPrivateUserAccountID := uuid.New().String()
+		memberLinkedItemID := uuid.New().String()
+		memberAccountID := uuid.New().String()
+		memberPrivateAccountID := uuid.New().String()
+		memberCatID := uuid.New().String()
+
+		mustExec("household", `
+			INSERT INTO households (id, owner_user_id, name) VALUES ($1,$2,'Hier Household')`,
+			householdID, userID)
+		mustExec("member user", `
+			INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+			VALUES ($1,$2,$3,'premium','active','iad')`,
+			memberID, "test|hier-member-"+memberID, "hier-member-"+memberID+"@example.com")
+		mustExec("member user_account", `
+			INSERT INTO user_accounts (id, user_id, institution_id, primary_type)
+			VALUES ($1,$2,'ins-hier-member','depository')`, memberUserAccountID, memberID)
+		mustExec("member private user_account", `
+			INSERT INTO user_accounts (id, user_id, institution_id, primary_type)
+			VALUES ($1,$2,'ins-hier-member-private','depository')`, memberPrivateUserAccountID, memberID)
+		mustExec("member linked_item", `
+			INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+			VALUES ($1,$2,$3,'enc-test-token')`, memberLinkedItemID, memberID, "hier-member-item-"+memberLinkedItemID)
+		mustExec("member account", `
+			INSERT INTO accounts (id, linked_item_id, user_id, user_account_id, plaid_account_id, name, type, status)
+			VALUES ($1,$2,$3,$4,$5,'Member Shared','depository','active')`,
+			memberAccountID, memberLinkedItemID, memberID, memberUserAccountID, "plaid-acc-hm-"+memberAccountID)
+		mustExec("member private account", `
+			INSERT INTO accounts (id, linked_item_id, user_id, user_account_id, plaid_account_id, name, type, status)
+			VALUES ($1,$2,$3,$4,$5,'Member Private','depository','active')`,
+			memberPrivateAccountID, memberLinkedItemID, memberID, memberPrivateUserAccountID, "plaid-acc-hmp-"+memberPrivateAccountID)
+
+		// Both the requesting user's account and the member's SHARED one are granted, from well
+		// before the transactions' date. The member's private user_account gets no grant at all.
+		grantedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		mustExec("share (requesting user)", `
+			INSERT INTO household_account_shares (household_id, user_account_id, visibility, shared_at)
+			VALUES ($1,$2,'shared',$3)`, householdID, userAccountID, grantedAt)
+		mustExec("share (member)", `
+			INSERT INTO household_account_shares (household_id, user_account_id, visibility, shared_at)
+			VALUES ($1,$2,'shared',$3)`, householdID, memberUserAccountID, grantedAt)
+
+		// The member's own custom category. categoryPathExprs joins on cc.user_id = t.user_id — the
+		// TRANSACTION's owner, not the requester — so this label is only resolvable if that is
+		// honoured; a join written against the requesting user would emit a NULL display here.
+		mustExec("member custom category", `
+			INSERT INTO custom_categories (id,user_id,name,parent_pfc_primary)
+			VALUES ($1,$2,'Date Nights M','FOOD_AND_DRINK')`, memberCatID, memberID)
+
+		seedMemberTxn := func(tag string, accountID, memberUserAcct string, amount float64, primary, kind, customID *string) {
+			mustExec("member txn "+tag, `
+				INSERT INTO transactions
+				  (id,user_id,account_id,user_account_id,external_transaction_id,name,amount,date,pending,source,
+				   pfc_primary,category_override_kind,custom_category_override_id)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,'2026-02-16',false,'plaid',$8,$9,$10)`,
+				uuid.New().String(), memberID, accountID, memberUserAcct,
+				"plaid-txn-hm-"+uuid.New().String(), "member txn "+tag, amount,
+				primary, kind, customID)
+		}
+		seedMemberTxn("fd-direct", memberAccountID, memberUserAccountID, 70, sp("FOOD_AND_DRINK"), nil, nil)
+		seedMemberTxn("date-nights", memberAccountID, memberUserAccountID, 15, nil, sp("custom"), &memberCatID)
+		// On the UNSHARED account. A read that admitted "any member's rows" instead of "rows on a
+		// granted account" would fold this into the tree, and 999 is large enough that it would also
+		// take first place in the total-descending order.
+		seedMemberTxn("private", memberPrivateAccountID, memberPrivateUserAccountID, 999, sp("TRAVEL"), nil, nil)
+
 		hh := filters
 		hh.HouseholdScope = &domain.HouseholdScope{
-			HouseholdID:   uuid.New().String(),
-			MemberUserIDs: []string{userID},
+			HouseholdID:   householdID,
+			MemberUserIDs: []string{userID, memberID},
 		}
 		rows, err := repo.GetCategoryHierarchy(ctx, userID, hh, domain.CategoryDirectionExpense)
 		require.NoError(t, err, "the household twin must be executable, not just compilable")
-		assert.Empty(t, rows, "nothing is shared into this household")
+		require.NotEmpty(t, rows, "the household read must return the shared tree, not nothing")
+
+		type key struct{ l1, l2, l3 string }
+		byPath := map[key]domain.CategoryHierarchyRow{}
+		var total float64
+		var fdRollUp float64
+		var fdCount int
+		for _, r := range rows {
+			byPath[key{r.L1Key, r.L2Key, r.L3Key}] = r
+			total += r.Total
+			if r.L1Key == "FOOD_AND_DRINK" {
+				fdRollUp += r.Total
+				fdCount += r.TransactionCount
+			}
+		}
+
+		// 725 is the personal expense total asserted above; the household adds the member's two
+		// shared rows and nothing else.
+		assert.InDelta(t, 725.0+70.0+15.0, total, 0.001,
+			"the household tree is the requesting user's rows plus the member's SHARED rows")
+		assert.InDelta(t, 40.0+60.0+100.0+25.0+70.0+15.0, fdRollUp, 0.001,
+			"both members' FOOD_AND_DRINK spend must roll up to the one L1 node")
+		assert.Equal(t, 6, fdCount, "and the node must count both members' transactions")
+
+		memberLeaf, ok := byPath[key{"FOOD_AND_DRINK", "custom:" + memberCatID, ""}]
+		require.True(t, ok,
+			"a member's custom category must appear at L2 of the PFC primary it is nested under")
+		assert.InDelta(t, 15.0, memberLeaf.Total, 0.001)
+		assert.Equal(t, "Date Nights M", memberLeaf.L2Display,
+			"the label comes from the TRANSACTION owner's custom_categories row (cc.user_id = t.user_id)")
+
+		_, sawPrivate := byPath[key{"TRAVEL", "", ""}]
+		assert.False(t, sawPrivate,
+			"a member's account with no household grant must not enter the household tree")
+
+		// And the personal read over the same window must still exclude the member entirely: the
+		// two scopes are different questions, and the household total above is only meaningful if
+		// the personal one did not already contain those rows.
+		personalRows, err := repo.GetCategoryHierarchy(ctx, userID, filters, domain.CategoryDirectionExpense)
+		require.NoError(t, err)
+		var personalTotal float64
+		for _, r := range personalRows {
+			personalTotal += r.Total
+			assert.NotEqual(t, "custom:"+memberCatID, r.L2Key,
+				"the member's category must not appear in the requesting user's personal tree")
+		}
+		assert.InDelta(t, 725.0, personalTotal, 0.001,
+			"personal scope is unchanged by the household fixture")
 	})
 
 	t.Run("custom_category_ids narrows the tree to custom rows", func(t *testing.T) {

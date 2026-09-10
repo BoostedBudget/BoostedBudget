@@ -2,6 +2,7 @@ import { describe, it, expect } from 'bun:test'
 import {
   buildSankeyData,
   EXPENSE_LADDER,
+  FOCUS_LADDER,
   EXPENSE_NODE_BUDGET,
   INCOME_NODE_BUDGET,
   TOTAL_NODE_BUDGET,
@@ -543,5 +544,82 @@ describe('buildSankeyData — terminal collapse vs recursive rendering (#1626 Ph
     const hubIn = data.links.filter(l => l.target === 'hub').reduce((s, l) => s + l.value, 0)
     expect(hubOut).toBeCloseTo(hubIn, 6)
     expectConservation(data)
+  })
+})
+
+describe('buildSankeyData — focus ladder coverage (#1626 gap G10)', () => {
+  /**
+   * The FOCUS mirror of the root-ladder sweep above. The root ladder is exported specifically so a
+   * test cannot hand-type a rung index, and it has a sweep asserting every rung was exercised;
+   * `FOCUS_LADDER` had neither until this suite — it was a function-local const, so the only way to
+   * name a focus rung was to type the integer, and nothing said whether the matrix had reached it.
+   *
+   * ⚠ `expenseRungLadder === 'focus'` IS THE LOAD-BEARING PART. A focus view can also FALL THROUGH
+   * to the root ladder (when the focused key is absent, or when no focus rung fits), and that
+   * reports a small integer here too. Collecting `expenseRungIndex` alone would credit the focus
+   * ladder for a root-ladder render and claim coverage the sweep does not have.
+   */
+  function focusTree(roots: number, children: number, grandchildren: number): CategoryHierarchyNode[] {
+    const grandTotal = 1
+    const childDirect = 1
+    const childTotal = childDirect + grandchildren * grandTotal
+    const rootDirect = 1
+    const rootTotal = rootDirect + children * childTotal
+    return Array.from({ length: roots }, (_, i) =>
+      node(`P${i}`, `Parent ${i}`, rootTotal, rootDirect, Array.from({ length: children }, (_, j) =>
+        node(`C${i}_${j}`, `Child ${i}.${j}`, childTotal, childDirect, Array.from({ length: grandchildren }, (_, k) =>
+          node(`G${i}_${j}_${k}`, `Grand ${i}.${j}.${k}`, grandTotal))))))
+  }
+
+  // Scaled from EXPENSE_NODE_BUDGET rather than hand-picked, exactly like the root sweep: no entry
+  // is chosen to land on a particular rung. Both focus depths are swept — an L1 root and an L2
+  // child — because pruneForFocus renders the ancestor PATH, so the level the focused key sits at
+  // changes the node count independently of its subtree.
+  const rootCounts = [1, 2, Math.round(EXPENSE_NODE_BUDGET / 3), EXPENSE_NODE_BUDGET]
+  const childCounts = [0, 1, 2, 6, Math.round(EXPENSE_NODE_BUDGET / 2), EXPENSE_NODE_BUDGET]
+  const grandchildCounts = [0, 1, 3, 6, Math.round(EXPENSE_NODE_BUDGET / 2), EXPENSE_NODE_BUDGET]
+
+  const shapes = rootCounts.flatMap(roots =>
+    childCounts.flatMap(children =>
+      grandchildCounts.flatMap(grandchildren =>
+        // Focusing C0_0 is only meaningful when it exists.
+        (children > 0 ? ['P0', 'C0_0'] : ['P0']).map(focusKey =>
+          ({ roots, children, grandchildren, focusKey })))))
+
+  it('conserves flow and respects both budgets at every focused shape, and exercises every focus rung', () => {
+    const observedRungs = new Set<number>()
+
+    for (const { roots, children, grandchildren, focusKey } of shapes) {
+      const expenses = focusTree(roots, children, grandchildren)
+      const data = buildSankeyData(income, expenses, { kind: 'focus', key: focusKey })
+      const shapeLabel = `roots=${roots} children=${children} grandchildren=${grandchildren} focus=${focusKey}`
+
+      const hubOut = data.links.filter(l => l.source === 'hub').reduce((s, l) => s + l.value, 0)
+      const hubIn = data.links.filter(l => l.target === 'hub').reduce((s, l) => s + l.value, 0)
+      expect(hubOut, shapeLabel).toBeCloseTo(hubIn, 6)
+      expectConservation(data)
+
+      const expenseNodes = data.nodes.filter(n => n.id.startsWith('out:') || n.nodeKind === 'direct')
+      expect(expenseNodes.length, shapeLabel).toBeLessThanOrEqual(EXPENSE_NODE_BUDGET)
+      expect(data.nodes.length, shapeLabel).toBeLessThanOrEqual(TOTAL_NODE_BUDGET)
+
+      expect(data.expenseRungIndex, shapeLabel).toBeDefined()
+      // The FLOOR property, asserted per shape: FOCUS_LADDER's last rung always fits for a
+      // production-depth tree, so a focus view whose key exists must never fall through to the root
+      // ladder. This is the assertion that would fail first if a fourth tree level appeared or
+      // EXPENSE_NODE_BUDGET shrank — the two things FOCUS_LADDER's comment names as invalidating
+      // its floor.
+      expect(data.expenseRungLadder, shapeLabel).toBe('focus')
+      observedRungs.add(data.expenseRungIndex as number)
+    }
+
+    // EVERY rung of FOCUS_LADDER, no exclusions — the same standard the root ladder is held to,
+    // where an unreachable fifth rung was DELETED rather than excluded. This sweep found the same
+    // thing on this ladder: rungs [1, 3] and [0, 0] were unreachable for every shape here and were
+    // deleted, which is why the set below is exactly {0, 1}. Without this assertion, a matrix that
+    // only ever hit rung 0 would look like full coverage.
+    const reachableRungIndices = new Set(FOCUS_LADDER.map((_, i) => i))
+    expect(observedRungs).toEqual(reachableRungIndices)
+    expect(reachableRungIndices).toEqual(new Set([0, 1]))
   })
 })
