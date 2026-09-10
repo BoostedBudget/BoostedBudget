@@ -535,3 +535,144 @@ func TestCaptureItemBalances_SendsTheDecryptedAccessToken(t *testing.T) {
 		"the DECRYPTED access token must reach Plaid — the encrypted column would fail with "+
 			"INVALID_ACCESS_TOKEN and be retried daily forever")
 }
+
+// ── G8: an active account the provider did not report ─────────────────────────────────────────
+
+// TestCaptureItemBalances_ActiveAccountAbsentFromTheRosterFailsTheItem is #1626 gap G8.
+//
+// THE DEFECT. writeBalanceCohort walks the PROVIDER's roster and looks up internal accounts, so an
+// account that exists internally, is ACTIVE, and is simply not named in /accounts/get is never
+// visited at all. It accrued no snapshot, contributed to no counter, and the run returned success —
+// the same permanent-absence shape as G13, one layer down. The only trace was the difference between
+// the `gaps_found` and `written` fields of an INFO line, which nothing compares.
+//
+// THE DECISION, and it is a decision rather than an obvious fix. Three options were on the table:
+//
+//   - CARRY FORWARD the last known balance. REJECTED, and not narrowly: this file's own header rules
+//     out manufacturing an observation, and the accounts.current_balance fallback was removed for
+//     exactly this reason. Every read takes the latest snapshot_at, so a fabricated same-day row
+//     would BEAT a genuine earlier webhook row. A gap is recoverable information; an invented
+//     observation that outranks a real one is not.
+//   - COUNT IT AND RETURN SUCCESS. Rejected as insufficient on its own. It makes the condition
+//     visible to someone reading logs and leaves the job reporting success — which is precisely the
+//     "healthy job, absent data" shape this whole phase exists to remove.
+//   - COUNT IT AND FAIL THE ITEM. Chosen. It is the SAME policy this service already applies to a
+//     partially-written cohort, for the same stated reason: "a job whose entire remit is 'every
+//     account has a row for today' must not report success having written some of them". An account
+//     the provider did not report IS a partial cohort; the only difference is where the gap came
+//     from. Nothing is fabricated, the rows that DID write stay written (each insert commits
+//     individually), River retries within the day in case the omission was transient, and an
+//     omission that is permanent dead-letters loudly instead of accruing silence.
+//
+// ⚠ WHY THIS DOES NOT MAKE THE SYNC PATH FAIL TOO, even though both paths share
+// writeBalanceCohort: the check lives in CaptureItemBalances, not in the shared writer.
+// createBalanceSnapshots runs reconcileRemovedAccounts BEFORE its cohort write, which soft-removes
+// exactly the accounts a roster proves absent, so it has already ACTED on the condition by the time
+// the writer runs. The gap-filler performs no reconciliation, deliberately (see this service's
+// header), so it is the path that needs the check.
+//
+// ⚠ AND IT IS SCOPED TO THE ACCOUNTS THE COHORT CHECK ASKED ABOUT. An absent account that ALREADY
+// has today's row is not a gap and must not fail the item — otherwise a bank that stops reporting a
+// closed account would fail this job every day for the rest of time even though the day's data is
+// complete. TestCaptureItemBalances_AbsentAccountThatAlreadyHasTodaysRowIsNotAFailure pins that.
+func TestCaptureItemBalances_ActiveAccountAbsentFromTheRosterFailsTheItem(t *testing.T) {
+	// Plaid reports ONE of the item's two active accounts. `acct-b` is live per our own records and
+	// is one of the two the cohort check just named as missing today's row.
+	h := newCaptureHarness(t, liveItem(), []map[string]any{
+		captureAccountJSON("plaid-a", 100.0, 100.0),
+	})
+	internal := []domain.Account{
+		activeAccount("acct-a", "plaid-a"),
+		activeAccount("acct-b", "plaid-b"),
+	}
+	h.snapshots.On("AccountsMissingDailySnapshot", mock.Anything, "item-1", mock.Anything).
+		Return([]string{"acct-a", "acct-b"}, nil).Once()
+	h.accounts.On("GetByLinkedItemIDIncludingRetained", mock.Anything, "item-1").Return(internal, nil).Once()
+	h.snapshots.On("GetLatestByAccountID", mock.Anything, mock.Anything).Return(nil, nil)
+	h.snapshots.On("CreateDailyCapture", mock.Anything, mock.Anything).Return(true, nil)
+
+	out, err := h.svc.CaptureItemBalances(context.Background(), "item-1", "user-1")
+
+	require.Error(t, err,
+		"an ACTIVE internal account that the provider did not report, and that has no row for today, "+
+			"must fail the item. Returning success here is the silent permanent absence this phase "+
+			"exists to remove: no row is written, no retry happens, and the day is lost with nothing "+
+			"but a log line to say so")
+	assert.ErrorIs(t, err, ErrBalanceCaptureAccountAbsent,
+		"the failure must be identifiable, not just any error — the worker logs it and an operator "+
+			"has to be able to tell it apart from a provider outage")
+	assert.Contains(t, err.Error(), "acct-b",
+		"the error must NAME the account, or the condition is undiagnosable from the dead letter")
+
+	assert.Equal(t, 1, out.ProviderAbsent,
+		"exactly one account was absent; the count is what makes the condition measurable in "+
+			"production rather than only visible in prose")
+	assert.Equal(t, 1, out.Written,
+		"the account the provider DID report must still get its row — the failure must not discard "+
+			"the work that succeeded, because there is no backfill to redo it")
+	// Nothing is invented for the absent account.
+	h.snapshots.AssertNumberOfCalls(t, "CreateDailyCapture", 1)
+}
+
+// TestCaptureItemBalances_AbsentAccountThatAlreadyHasTodaysRowIsNotAFailure is the control that
+// keeps G8's fix from becoming "any roster mismatch fails forever".
+//
+// A bank that closes an account simply stops returning it. If a webhook already captured that
+// account's row earlier today, the DAY IS COMPLETE for it — there is no gap, nothing is missing, and
+// failing the item would dead-letter this job every single day until the sync path's reconciliation
+// happened to run. So the check is scoped to the accounts AccountsMissingDailySnapshot actually
+// named, and this fixture puts an absent account OUTSIDE that set.
+func TestCaptureItemBalances_AbsentAccountThatAlreadyHasTodaysRowIsNotAFailure(t *testing.T) {
+	h := newCaptureHarness(t, liveItem(), []map[string]any{
+		captureAccountJSON("plaid-a", 100.0, 100.0),
+	})
+	internal := []domain.Account{
+		activeAccount("acct-a", "plaid-a"),
+		activeAccount("acct-b", "plaid-b"), // absent from the roster, but NOT in the missing set
+	}
+	h.snapshots.On("AccountsMissingDailySnapshot", mock.Anything, "item-1", mock.Anything).
+		Return([]string{"acct-a"}, nil).Once()
+	h.accounts.On("GetByLinkedItemIDIncludingRetained", mock.Anything, "item-1").Return(internal, nil).Once()
+	h.snapshots.On("GetLatestByAccountID", mock.Anything, mock.Anything).Return(nil, nil)
+	h.snapshots.On("CreateDailyCapture", mock.Anything, mock.Anything).Return(true, nil)
+
+	out, err := h.svc.CaptureItemBalances(context.Background(), "item-1", "user-1")
+	require.NoError(t, err,
+		"an absent account that already has today's row is not a gap. Failing here would make this "+
+			"job dead-letter every day for an item whose data is actually complete")
+	assert.Zero(t, out.ProviderAbsent,
+		"and it must not be counted either — the counter measures MISSING data, not roster drift")
+	assert.Equal(t, 1, out.Written)
+}
+
+// TestCaptureItemBalances_ARemovedAccountAbsentFromTheRosterIsNotAFailure is the second control, and
+// it protects a rule this codebase enforces elsewhere at some length: a removed account must accrue
+// NO balance snapshots, so its absence from the provider's roster is the EXPECTED state and cannot
+// be a failure. Without this, a user disconnecting one account would make the daily job fail for
+// that item indefinitely.
+func TestCaptureItemBalances_ARemovedAccountAbsentFromTheRosterIsNotAFailure(t *testing.T) {
+	reason := string(domain.RemovalReasonUserDisconnect)
+	gone := activeAccount("acct-gone", "plaid-gone")
+	gone.Status = domain.AccountStatusRemoved
+	gone.RemovedReason = &reason
+
+	h := newCaptureHarness(t, liveItem(), []map[string]any{
+		captureAccountJSON("plaid-a", 100.0, 100.0),
+	})
+	internal := []domain.Account{activeAccount("acct-a", "plaid-a"), gone}
+	// A stale cohort answer that still names the removed account: the strongest form of this case,
+	// because it means the check cannot lean on the cohort query having filtered it out.
+	h.snapshots.On("AccountsMissingDailySnapshot", mock.Anything, "item-1", mock.Anything).
+		Return([]string{"acct-a", "acct-gone"}, nil).Once()
+	h.accounts.On("GetByLinkedItemIDIncludingRetained", mock.Anything, "item-1").Return(internal, nil).Once()
+	h.snapshots.On("GetLatestByAccountID", mock.Anything, mock.Anything).Return(nil, nil)
+	h.snapshots.On("CreateDailyCapture", mock.Anything, mock.Anything).Return(true, nil)
+
+	out, err := h.svc.CaptureItemBalances(context.Background(), "item-1", "user-1")
+	require.NoError(t, err,
+		"a REMOVED account is meant to accrue no snapshots, so its absence from the roster is the "+
+			"expected state. Failing on it would break the daily job for every item a user has ever "+
+			"partially disconnected")
+	assert.Zero(t, out.ProviderAbsent)
+	assert.Equal(t, 1, out.Written)
+}

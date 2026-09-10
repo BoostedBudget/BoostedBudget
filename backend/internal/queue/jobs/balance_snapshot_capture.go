@@ -492,8 +492,13 @@ func (w *BalanceSnapshotCaptureWorker) Work(ctx context.Context, job *river.Job[
 		// Returned so River retries. A partial capture reaches here as an error too, which is the
 		// whole point: the writer this replaced logged its per-account failures and returned
 		// success, so a partial cohort committed while River recorded the item as done.
+		// provider_absent is logged here specifically because it is the one failure cause that is
+		// NOT a transient the retry will fix: it says our records and the provider's disagree about
+		// which accounts exist, and the resolution is the sync path's reconciliation rather than
+		// anything this job can do. See services.ErrBalanceCaptureAccountAbsent.
 		w.logger.Error("balance snapshot capture failed",
-			"job_id", job.ID, "item_id", args.ItemID, "written", outcome.Written, "error", err)
+			"job_id", job.ID, "item_id", args.ItemID, "written", outcome.Written,
+			"provider_absent", outcome.ProviderAbsent, "error", err)
 		return err
 	}
 
@@ -510,7 +515,28 @@ func (w *BalanceSnapshotCaptureWorker) Work(ctx context.Context, job *river.Job[
 	// The condition is safe because it is exactly "did this job change the data a cached read would
 	// see". AlreadyPresent is excluded on purpose: that row was written by the capture that WON the
 	// race, and that capture did its own bump.
-	if outcome.Written > 0 {
+	//
+	// ⚠ AND `|| job.Attempt > 1` CLOSES A CRASH WINDOW THAT THE `Written > 0` CONDITION MADE WORSE
+	// (#1626 gap G16). The snapshot rows commit inside CaptureItemBalances; the bump is a separate
+	// Redis round trip after it. A crash, a River shutdown or a job timeout landing BETWEEN the two
+	// leaves the rows committed and the generation unchanged, so every cached analytics read keeps
+	// serving the pre-capture value. On its own that is an ordinary window bounded by the namespace
+	// TTL — but the retry that exists to repair it could not, because by the time it runs the cohort
+	// is COMPLETE, so Written is 0 and the condition above skipped the bump on the retry too.
+	//
+	// A retry happens only after an attempt failed to report success, which is exactly the set of
+	// runs that could have died inside the window. So a retry bumps unconditionally: the repair
+	// costs one extra invalidation per retried job and NOTHING on the daily no-op path the
+	// `Written > 0` condition exists to protect (that path succeeds on attempt 1 and never retries).
+	//
+	// ⚠ IT IS A REPAIR, NOT A PREVENTION, and the residual is stated rather than implied: a job that
+	// dies in the window and is NEVER retried is still bounded by TTL alone. In practice River's
+	// rescuer reclaims a job whose worker died mid-run and makes it retryable, so a process death
+	// does produce a further attempt; a job that has exhausted its retry budget does not. Closing
+	// that fully would mean making the bump part of the snapshot transaction — a Redis write inside a
+	// Postgres commit, which is not a thing — or persisting a bump intent alongside the rows, which
+	// is a new durable outbox for a window whose only cost is stale reads for one TTL.
+	if outcome.Written > 0 || job.Attempt > 1 {
 		w.bumpCacheForUser(ctx, args.UserID)
 	}
 

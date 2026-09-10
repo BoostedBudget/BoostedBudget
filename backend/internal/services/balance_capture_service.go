@@ -51,6 +51,11 @@ import (
 //	CohortComplete — every active account already had today's row; no provider call was made.
 //	Ineligible     — the item is in a needs-reauth or terminal state, or is not this user's.
 //	Written == 0 with neither of the above — the roster produced no usable balance at all.
+//
+// ⚠ ProviderAbsent is the FOURTH, and unlike the three above it is never a "nothing happened" case
+// that returns success: a non-zero ProviderAbsent always accompanies ErrBalanceCaptureAccountAbsent.
+// It is on this struct so the condition is COUNTABLE rather than only present in an error string
+// (#1626 gap G8).
 type BalanceCaptureOutcome struct {
 	// Day is the UTC calendar day this run was about, carried so the caller logs the same day the
 	// cohort question was asked about rather than re-deriving it from its own clock.
@@ -75,7 +80,29 @@ type BalanceCaptureOutcome struct {
 	// Deduped counts accounts skipped because an identical snapshot already exists inside the shared
 	// deduplication window.
 	Deduped int
+	// ProviderAbsent counts ACTIVE internal accounts that had no row for the day AND were not named
+	// in the provider's roster at all (#1626 gap G8).
+	//
+	// It is the inverse of Unmatched: that one counts provider accounts with no active internal row,
+	// this one counts active internal accounts with no provider entry. The second direction used to
+	// be invisible — writeBalanceCohort walks the provider's roster, so an internal account the
+	// provider did not report was never visited and produced no row, no counter and no error.
+	//
+	// A non-zero value ALWAYS accompanies an error from CaptureItemBalances; it is counted rather
+	// than merely reported so the condition is measurable in production instead of only being
+	// inferable from the gap between the gaps_found and written log fields.
+	ProviderAbsent int
 }
+
+// ErrBalanceCaptureAccountAbsent is returned when at least one ACTIVE internal account had no
+// snapshot for the day and the provider's /accounts/get response did not name it (#1626 gap G8).
+//
+// Its own error, not a generic one, because the worker logs it and an operator has to be able to
+// tell it apart from a provider outage: an outage is a transient the retry will fix, whereas this
+// says our records and the provider's disagree about which accounts exist, and the resolution is the
+// SYNC path's reconciliation (which soft-removes what a roster proves absent) rather than anything
+// this job can do.
+var ErrBalanceCaptureAccountAbsent = errors.New("balance capture: active account absent from the provider roster")
 
 // BalanceCaptureService fills the current UTC day's balance-snapshot gap for ONE linked item.
 //
@@ -230,6 +257,17 @@ func (s *balanceCaptureService) CaptureItemBalances(ctx context.Context, itemID,
 		// A response naming no accounts is the outermost of this codebase's three guards against a
 		// zero-account sweep. Nothing downstream runs on it. Not an error: an item can legitimately
 		// have had every account closed, and failing here would retry daily forever.
+		//
+		// ⚠ THE G8 ABSENCE CHECK BELOW DELIBERATELY DOES NOT COVER THIS BRANCH, and the boundary is
+		// the same one the three zero-account guards draw. G8 concludes "the provider says this
+		// account is gone" from a roster that named OTHER accounts — a roster this codebase treats
+		// as reliable. A roster that names NOTHING is the shape PlaidAccountRosterFrom marks
+		// INCOMPLETE and reconcileRemovedAccounts refuses to act on, precisely because it cannot be
+		// distinguished from a provider-side fault. Drawing an absence conclusion from it would be
+		// exactly what those guards exist to forbid. So this path stays a logged non-error, and the
+		// accounts the cohort check named stay uncaptured for the day — a residual, recorded here
+		// rather than closed, because closing it would mean trusting a response the rest of this
+		// tree does not trust.
 		s.logger.Info("balance capture: provider returned no accounts, nothing to snapshot", "item_id", itemID)
 		return out, nil
 	}
@@ -269,6 +307,12 @@ func (s *balanceCaptureService) CaptureItemBalances(ctx context.Context, itemID,
 		return out, fmt.Errorf("balance capture: item %s: %w", itemID, writeErr)
 	}
 
+	// #1626 gap G8. Every account in `missing` is one the cohort check just said has no row for the
+	// day; `absent` is the subset the provider did not report at all, so writeBalanceCohort never
+	// visited them and they end the run with no row, no counter and — until this check — no error.
+	absent := activeAccountsAbsentFromRoster(missing, all, plaidAccounts)
+	out.ProviderAbsent = len(absent)
+
 	s.logger.Info("balance capture complete",
 		"item_id", itemID,
 		"day", now.Format("2006-01-02"),
@@ -278,8 +322,80 @@ func (s *balanceCaptureService) CaptureItemBalances(ctx context.Context, itemID,
 		"deduped", out.Deduped,
 		"unmatched", out.Unmatched,
 		"no_balance", out.NoBalance,
+		"provider_absent", out.ProviderAbsent,
 	)
+
+	if len(absent) > 0 {
+		// FAILS THE ITEM, and it is the same policy this service already applies to a partially
+		// written cohort — for the same reason, stated there: a job whose entire remit is "every
+		// active account has a row for today" must not report success having covered some of them.
+		// An account the provider did not report is a partial cohort; only the origin of the gap
+		// differs.
+		//
+		// The rows that DID write stay written (each insert commits individually), so the failure
+		// costs no completed work. What it buys is that a permanent disagreement between our records
+		// and the provider's dead-letters loudly instead of accruing silence — and the resolution is
+		// the sync path's reconcileRemovedAccounts, which soft-removes what a roster proves absent,
+		// after which the account is no longer active and no longer part of this cohort.
+		//
+		// NOTHING IS FABRICATED for the absent accounts. Carrying forward a last-known balance was
+		// considered and rejected on this file's own standing rule: every read takes the latest
+		// snapshot_at, so an invented same-day row would OUTRANK a genuine earlier webhook row.
+		s.logger.Error("balance capture: active accounts missing from the provider roster; failing the item",
+			"item_id", itemID, "day", now.Format("2006-01-02"), "account_ids", absent, "written", out.Written)
+		return out, fmt.Errorf("%w: item %s, accounts %v", ErrBalanceCaptureAccountAbsent, itemID, absent)
+	}
+
 	return out, nil
+}
+
+// activeAccountsAbsentFromRoster returns the ids of accounts that are (a) named by the cohort check
+// as having no snapshot for the day, (b) ACTIVE in our own records, and (c) absent from the
+// provider's roster.
+//
+// All three conditions are load-bearing, and dropping any one of them turns this into a check that
+// fails healthy items:
+//
+//   - (a) scopes it to actual GAPS. An absent account that already has today's row is not missing
+//     data — a bank that closed an account simply stops returning it, and failing on that would
+//     dead-letter this job every day for an item whose day is complete.
+//   - (b) excludes REMOVED accounts, which are meant to accrue no snapshots at all. Their absence
+//     from the roster is the expected state, so treating it as a fault would break the daily job for
+//     every item a user has ever partially disconnected. It reads `accounts` rather than trusting
+//     the cohort query to have filtered them, because the two reads are separate statements and a
+//     removal landing between them would otherwise produce a spurious failure.
+//   - (c) is the condition itself.
+//
+// An id in `missing` with no matching row in `accounts` is IGNORED: the account was deleted between
+// the two reads, so there is nothing to snapshot and nothing a failure could recover.
+func activeAccountsAbsentFromRoster(missing []string, accounts []domain.Account, roster []plaid.AccountBase) []string {
+	if len(missing) == 0 {
+		return nil
+	}
+	reported := make(map[string]bool, len(roster))
+	for _, plaidAccount := range roster {
+		reported[plaidAccount.GetAccountId()] = true
+	}
+	byID := make(map[string]domain.Account, len(accounts))
+	for _, account := range accounts {
+		byID[account.ID] = account
+	}
+
+	var absent []string
+	for _, id := range missing {
+		account, exists := byID[id]
+		switch {
+		case !exists:
+			continue
+		case account.Status != domain.AccountStatusActive:
+			continue
+		case reported[account.PlaidAccountID]:
+			continue
+		default:
+			absent = append(absent, id)
+		}
+	}
+	return absent
 }
 
 // ─── the shared cohort writer ──────────────────────────────────────────────────────────────────

@@ -3,9 +3,11 @@ package repository
 import (
 	"context"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -152,4 +154,136 @@ func TestGetCategoryTotalForPeriodQuery_NeverUsesMaxOnADenormalizedName(t *testi
 	assert.NotRegexp(t, ccNameSubqRe, pfc,
 		"a PFC token has no custom_categories row; emitting the subquery would force a uuid cast "+
 			"on a value that is not a uuid")
+}
+
+// TestCustomCategoryIDFromToken_RejectsAMalformedSuffix is #1626 gap G9.
+//
+// THE FOOTGUN, and it is a footgun rather than a live failure — recorded that way because the
+// standing instruction on this branch is to action rather than defer. categoryTotalQuery(true)
+// emits `cc.id = $5::uuid`, so the token's suffix is CAST by Postgres rather than compared as text,
+// and an unparseable one fails the whole statement — which MapError classifies as a 500.
+//
+// It is not reachable from the API today: services.validateCategoryToken gates the one live caller
+// with the same uuid.Parse and answers 400. But that gate protects the SERVICE, not the CAST. Any
+// future repository caller — another analytics method, a job, a test helper — reaches
+// GetCategoryTotalForPeriod directly and gets the 500 back, and nothing about the query's own shape
+// says so. Parsing here makes the repository safe BY CONSTRUCTION: a malformed suffix is not a
+// custom token, so the uuid subquery is never emitted and no uuid is ever bound.
+//
+// ⚠ WHAT IT MUST NOT DO is reject a VALID uuid naming a category that does not exist. That is a
+// legitimate request answered by a zero total and the "Custom category" fallback label (see
+// validateCategoryToken's own note). Only the SHAPE is checked, exactly as at the service layer, and
+// with the SAME parser — uuid.Parse, not a regexp — so the gate cannot admit a spelling Postgres
+// would then reject, nor reject one it would accept.
+func TestCustomCategoryIDFromToken_RejectsAMalformedSuffix(t *testing.T) {
+	valid := uuid.NewString()
+
+	cases := []struct {
+		name   string
+		token  string
+		wantID string
+		wantOK bool
+		why    string
+	}{
+		{
+			name:   "a well-formed uuid suffix is a custom token",
+			token:  "custom:" + valid,
+			wantID: valid,
+			wantOK: true,
+			why:    "the whole point of the token; a valid uuid must still bind as $5",
+		},
+		{
+			name:   "a uuid naming no existing row is STILL a custom token",
+			token:  "custom:00000000-0000-4000-8000-000000000000",
+			wantID: "00000000-0000-4000-8000-000000000000",
+			wantOK: true,
+			why: "existence is not this function's question — a tombstoned or absent category answers " +
+				"with a zero total and the fallback label, which requires the uuid to be bound",
+		},
+		{
+			name:   "an uppercase uuid is accepted, because Postgres accepts it",
+			token:  "custom:" + strings.ToUpper(valid),
+			wantID: strings.ToUpper(valid),
+			wantOK: true,
+			why:    "uuid.Parse is the same parser the ::uuid cast applies; rejecting here would 404 a valid id",
+		},
+		{
+			name:   "a non-uuid suffix is NOT a custom token",
+			token:  "custom:not-a-uuid",
+			wantOK: false,
+			why: "this is the gap: it used to be returned as a custom id and cast with $5::uuid, and " +
+				"`invalid input syntax for type uuid` fails the whole statement as a 500",
+		},
+		{
+			name:   "a suffix that is a uuid PREFIX is not a uuid",
+			token:  "custom:" + valid[:8],
+			wantOK: false,
+			why:    "a truncated uuid is the shape a hand-built or truncated query parameter actually takes",
+		},
+		{
+			name:   "a SQL-ish suffix is not a uuid",
+			token:  "custom:1;DROP TABLE transactions",
+			wantOK: false,
+			why: "the suffix reaches the query only as a BOUND parameter, so this was never injection — " +
+				"it was a 500. Rejecting it keeps the failure mode from being either",
+		},
+		{
+			name:   "an empty suffix is not a custom token",
+			token:  "custom:",
+			wantOK: false,
+			why:    "unchanged behaviour, pinned so the added parse cannot be read as having replaced it",
+		},
+		{
+			name:   "a PFC enum is left entirely alone",
+			token:  "FOOD_AND_DRINK",
+			wantOK: false,
+			why:    "no prefix, no parse, no uuid subquery — a PFC token is not a uuid and must not be judged as one",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotID, gotOK := customCategoryIDFromToken(tc.token)
+			assert.Equal(t, tc.wantOK, gotOK, tc.why)
+			assert.Equal(t, tc.wantID, gotID, tc.why)
+		})
+	}
+}
+
+// TestGetCategoryTotalForPeriod_MalformedCustomTokenBindsNoUUID is the behavioural half: it proves
+// the repository METHOD, not just the helper, stops emitting the uuid cast and stops binding a
+// fifth argument.
+//
+// ⚠ Asserted through the bound-argument COUNT rather than by inspecting the SQL, deliberately. A
+// text assertion that the query lacks `$5::uuid` would be killed by the same mutation but would say
+// nothing about what actually reaches Postgres — and four such text-only pins on this branch each
+// turned out to be hiding a fixture gap. Four args means no uuid was bound; five means one was.
+func TestGetCategoryTotalForPeriod_MalformedCustomTokenBindsNoUUID(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewAnalyticsRepository(mock)
+	ctx := context.Background()
+	start := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery(`(?is)FROM transactions t`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"total", "transaction_count", "category_display"}).
+			AddRow(0.0, 0, nil))
+
+	row, err := repo.GetCategoryTotalForPeriod(ctx, "user-1", "custom:not-a-uuid", start, end)
+	require.NoError(t, err,
+		"a malformed custom token must not reach Postgres as a uuid cast. It used to, and "+
+			"`invalid input syntax for type uuid` failed the whole statement — a 500 for a "+
+			"malformed input, from any repository caller that does not happen to sit behind "+
+			"services.validateCategoryToken")
+	require.NotNil(t, row)
+	assert.InDelta(t, 0.0, row.Total, 0.001,
+		"the token matches no transaction, so the ungrouped aggregate answers zero — the same answer "+
+			"a text comparison against a nonexistent category always gave")
+	require.NoError(t, mock.ExpectationsWereMet(),
+		"exactly 4 bound args. A fifth would mean the uuid subquery was emitted and a malformed "+
+			"value was bound to `cc.id = $5::uuid`")
 }
