@@ -271,6 +271,16 @@ func TestSomething_NullDisplayCellDoesNotDisturbTheRest(t *testing.T) {
 	assert.Empty(t, violations, "a claim paired with the pgxmock-cannot-prove disclaimer must not be flagged")
 }
 
+// TestPgxmockNullToleranceClaimGuard_IgnoresUnrelatedNullText proves the CLAIM regex, not the
+// scope gate, is what exonerates ordinary "IS NULL" SQL-shape prose. Until the final #1626 gap
+// analysis this fixture's only AddRow was AddRow("value"), so the scanner returned at the
+// addRowNilRe scope gate before nullToleranceClaimRe was ever consulted — the false-positive
+// property this test's name asserts was never evaluated, and widening the claim regex to match any
+// "NULL" text left it green. The fixture therefore now carries a nil AddRow cell (in scope), the
+// word "scan" (past scanWordRe), and no disclaimer, so only nullToleranceClaimRe declining to match
+// the IS NULL prose keeps the violation list empty. Mutation-confirmed: replacing
+// nullToleranceClaimRe with a bare `(?is)\bnull\b` makes THIS test fail while the disclosed-claim
+// meta-test stays green.
 func TestPgxmockNullToleranceClaimGuard_IgnoresUnrelatedNullText(t *testing.T) {
 	src := []byte(`package repository
 
@@ -280,18 +290,23 @@ import (
 	"github.com/pashagolub/pgxmock/v4"
 )
 
-// Ordinary SQL-shape assertions mention NULL constantly (WHERE x IS NULL) without ever claiming a
-// scan tolerates it — these must not trip the guard.
+// Ordinary SQL-shape assertions mention NULL constantly (WHERE x IS NULL) as a predicate the query
+// must carry, never as a statement about what a scan does with a NULL cell — these must not trip
+// the guard. The nil AddRow cell below keeps this fixture IN the guard's scope on purpose.
 func TestSomething_QueryUsesIsNullPredicate(t *testing.T) {
 	mock, _ := pgxmock.NewPool()
-	rows := pgxmock.NewRows([]string{"a"}).AddRow("value")
+	rows := pgxmock.NewRows([]string{"a"}).AddRow(nil)
 	_ = rows
 	_ = mock
+	// The scan under test here asserts only the SQL shape: the query filters WHERE x IS NULL and
+	// orders by x NULLS LAST, exactly as the repository spells it.
 	// mock.ExpectQuery("WHERE x IS NULL")
 }
 `)
 	violations := scanFileForUndisclosedNullToleranceClaims("fake_test.go", src)
-	assert.Empty(t, violations, "a file with no nil AddRow cell is out of this guard's scope entirely")
+	assert.Empty(t, violations,
+		"an ordinary IS NULL SQL-shape assertion beside a nil AddRow cell is in scope but is not a "+
+			"NULL-tolerance claim, and must not be flagged")
 }
 
 func TestPgxmockNullToleranceClaimGuard_IgnoresNullColumnAssignmentUpdates(t *testing.T) {
