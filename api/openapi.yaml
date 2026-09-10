@@ -883,12 +883,17 @@ components:
           type:
             - array
             - "null"
+        currency_code:
+          type: string
+        is_mixed_currency:
+          type: boolean
         total_value:
           format: double
           type: number
       required:
         - buckets
         - total_value
+        - is_mixed_currency
       type: object
     AllocationItem:
       additionalProperties: false
@@ -3395,6 +3400,10 @@ components:
           type:
             - array
             - "null"
+        currency_code:
+          type: string
+        is_mixed_currency:
+          type: boolean
         realized_gain_loss_supported:
           type: boolean
         total_cost_basis:
@@ -3415,6 +3424,7 @@ components:
         - total_value
         - realized_gain_loss_supported
         - by_account
+        - is_mixed_currency
       type: object
     GetAccountsOutputBody:
       additionalProperties: false
@@ -3770,6 +3780,10 @@ components:
           type:
             - array
             - "null"
+        currency_code:
+          type: string
+        is_mixed_currency:
+          type: boolean
         positions:
           items:
             $ref: "#/components/schemas/HoldingSnapshotView"
@@ -3783,6 +3797,7 @@ components:
         - account_id
         - available_dates
         - positions
+        - is_mixed_currency
       type: object
     HoldingSnapshotView:
       additionalProperties: false
@@ -3793,6 +3808,8 @@ components:
         cost_basis:
           format: double
           type: number
+        currency_code:
+          type: string
         gain_loss:
           format: double
           type: number
@@ -3829,6 +3846,8 @@ components:
         cost_basis:
           format: double
           type: number
+        currency_code:
+          type: string
         day_change:
           format: double
           type: number
@@ -3839,6 +3858,10 @@ components:
         day_change_pct:
           format: double
           type: number
+        day_change_unavailable_reason:
+          enum:
+            - currency_mismatch
+          type: string
         gain_loss:
           format: double
           type: number
@@ -4182,9 +4205,13 @@ components:
           type:
             - array
             - "null"
+        currency_code:
+          type: string
         end_date:
           format: date-time
           type: string
+        is_mixed_currency:
+          type: boolean
         start_date:
           format: date-time
           type: string
@@ -4196,6 +4223,7 @@ components:
         - by_type
         - start_date
         - end_date
+        - is_mixed_currency
       type: object
     InvestmentTransaction:
       additionalProperties: false
@@ -4209,6 +4237,8 @@ components:
           type: number
         created_at:
           format: date-time
+          type: string
+        currency_code:
           type: string
         date:
           description: UTC calendar day (YYYY-MM-DD) of the transaction
@@ -5263,6 +5293,8 @@ components:
           format: uri
           readOnly: true
           type: string
+        currency_code:
+          type: string
         day_change:
           format: double
           type:
@@ -5276,6 +5308,8 @@ components:
         holdings_count:
           format: int64
           type: integer
+        is_mixed_currency:
+          type: boolean
         total_cost_basis:
           format: double
           type: number
@@ -5295,6 +5329,7 @@ components:
         - day_change
         - day_change_pct
         - holdings_count
+        - is_mixed_currency
       type: object
     PreviewRuleBody:
       additionalProperties: false
@@ -7040,6 +7075,8 @@ components:
       additionalProperties: false
       properties:
         account_id:
+          type: string
+        currency_code:
           type: string
         day_change:
           format: double

@@ -36,6 +36,7 @@ export interface InvestmentTransaction {
   activity_type?: string;
   amount: number;
   created_at: string;
+  currency_code?: string;
   /** UTC calendar day (YYYY-MM-DD) of the transaction */
   date: string;
   fees?: number;

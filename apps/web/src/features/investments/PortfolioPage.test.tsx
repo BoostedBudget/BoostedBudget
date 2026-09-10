@@ -45,6 +45,9 @@ const mockSummary: PortfolioSummary = {
   day_change: 230.15,
   day_change_pct: 0.44,
   holdings_count: 12,
+  // #1631 M8a: a single-currency portfolio, stated rather than assumed.
+  currency_code: 'USD',
+  is_mixed_currency: false,
 }
 
 const mockHistory: GetPortfolioHistoryOutputBody = {

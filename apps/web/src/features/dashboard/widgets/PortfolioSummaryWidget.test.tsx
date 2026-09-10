@@ -32,6 +32,11 @@ describe('PortfolioSummaryWidget', () => {
     day_change: 230.15,
     day_change_pct: 0.44,
     holdings_count: 5,
+    // #1631 M8a: the API now states which currency these totals are in, and whether they are a
+    // currency-blind sum. Both are required on the response type, so a fixture that omits them
+    // describes a response the server cannot produce. This one is a single-currency portfolio.
+    currency_code: 'USD',
+    is_mixed_currency: false,
   }
 
   const defaultQueryState = {
