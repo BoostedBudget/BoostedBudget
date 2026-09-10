@@ -4391,6 +4391,18 @@
       ],
       "responseBody": [
         {
+          "name": "children",
+          "type": "array of object"
+        },
+        {
+          "name": "direct_amount",
+          "type": "number"
+        },
+        {
+          "name": "direct_transaction_count",
+          "type": "integer"
+        },
+        {
           "name": "total_amount",
           "type": "number",
           "required": true
