@@ -168,9 +168,17 @@ type deliberatelyUnguardedDestructiveDownMigration struct {
 // deliberatelyUnguardedDestructiveDownMigrations is #1569 round 14 finding 3's checked exception
 // list — the discovery-mechanism analogue of allowedMigrationHistoryDeletes and
 // allowedHistoryCascades. An entry here does not mean "safe"; it means "found, looked at, and not
-// silently decided" — the report for #1569 round 14 task 5 says so explicitly, and these four
-// entries are flagged there as needing a human decision, not endorsed as correct by this guard's
-// existence.
+// silently decided" — the report for #1569 round 14 task 5 says so explicitly of the entries it
+// found, and nothing in this map is endorsed as correct by this guard's existence.
+//
+// ⚠ DO NOT WRITE THE NUMBER OF ENTRIES INTO THIS COMMENT. It said "four" while the map held five
+// (#1625 added 000149 and removed 000154/000156/000158/000159), making it the third hand-maintained
+// count in this ticket to go stale — the same failure 000190's down was fixed for. State the
+// membership PREDICATE, which cannot rot, and let a reader re-derive the roster from the map
+// itself: an entry is a down migration this file's scanner finds destructive (DROP TABLE, DELETE
+// FROM, or a DROP COLUMN of a lifecycle column) that carries no runtime
+// `RAISE EXCEPTION ... refusing to roll back <N>`, and that a named round looked at and chose not
+// to guard.
 //
 // ⚠ #1569 round 14 task 6, finding 5 — PRECISELY WHAT THIS KEY DOES AND DOES NOT COVER. The map is
 // keyed by FILENAME ONLY, not by which tables/statements were found destructive in it. The
@@ -189,7 +197,7 @@ type deliberatelyUnguardedDestructiveDownMigration struct {
 // This was deliberately NOT tightened to key by file+tables (e.g. "file|sorted,table,list") in this
 // round: migration files are immutable by convention in this repo (a shipped migration is not
 // edited after the fact — a schema change ships as a NEW migration), so the scenario above requires
-// someone to violate that convention on one of exactly four already-flagged files. Widening the key
+// someone to violate that convention on a file this map already flags. Widening the key
 // right after fixing a scanner that has already blinded itself once this task (see
 // blankSQLCommentsAndLiterals's doc comment) trades a low-probability, convention-guarded gap for
 // real new surface area in the very mechanism just repaired. If migration immutability ever stops
