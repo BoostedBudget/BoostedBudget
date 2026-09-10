@@ -171,13 +171,27 @@ func TestIsRedundantSnapshot_NeverDedupsAcrossAUTCDayBoundary(t *testing.T) {
 		sameDayLater, window),
 		"a changed balance on the same day is still not redundant")
 
-	// The day is UTC, not the process's local zone. A non-UTC `now` naming the same UTC instant must
-	// give the same answer — otherwise the gate would disagree with AccountsMissingDailySnapshot and
-	// with migration 000191, both of which are spelled UTC.
+	// The day is UTC, not the wall-clock day of whatever zone the instants happen to carry.
+	//
+	// ⚠ BOTH operands are re-expressed in UTC+13, and that is the only shape that falsifies the
+	// choice. In UTC+13 these two instants read 12:58 and 13:02 on the SAME local date (the 25th),
+	// while their UTC dates are the 24th and the 25th. So a comparison that dropped the .UTC()
+	// conversion would call them the same day and dedup — losing the row for UTC's 25th, which is
+	// the day AccountsMissingDailySnapshot asked about and the day migration 000191's index is keyed
+	// on. Converting only ONE operand does NOT falsify it: a UTC `latest` against a UTC+13 `now`
+	// still differs by local date, so that fixture passes with or without the conversion. It was
+	// written that way first and a mutation dropping both .UTC() calls survived it.
 	plusThirteen := time.FixedZone("UTC+13", 13*3600)
-	assert.False(t, isRedundantSnapshot(latest, next, justAfterMidnight.In(plusThirteen), window),
-		"the day comparison must be in UTC. In UTC+13 both instants fall on the 25th LOCALLY, so a "+
-			"local-zone comparison would dedup and lose the row for UTC's 25th")
+	localLatest := &domain.BalanceSnapshot{
+		SnapshotAt: lateYesterday.In(plusThirteen), CurrentBalance: f(100), AvailableBalance: f(90),
+	}
+	require.Equal(t, justAfterMidnight.In(plusThirteen).Day(), localLatest.SnapshotAt.Day(),
+		"fixture guard: in this zone both instants must fall on the SAME local date, or the test "+
+			"would pass on the local comparison too and prove nothing about UTC")
+	assert.False(t, isRedundantSnapshot(localLatest, next, justAfterMidnight.In(plusThirteen), window),
+		"the day comparison must be in UTC. These two instants share a LOCAL date in UTC+13 but "+
+			"straddle UTC midnight, so a local-zone comparison would dedup and lose the row for "+
+			"UTC's 25th — the day the cohort check asked about")
 }
 
 func TestSameBalance_NilIsAValueNotAWildcard(t *testing.T) {
