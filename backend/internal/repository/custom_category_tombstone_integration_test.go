@@ -13,6 +13,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -904,4 +905,68 @@ func TestCategoryTombstone_BudgetLineUnderATombstonedBudgetIsStillReached_Integr
 		`SELECT COUNT(*) FROM budget_categories WHERE id = $1 AND deleted_at IS NOT NULL`, f.budgetCatID),
 		"a live budget line under a TOMBSTONED budget was skipped — the ownership subquery must "+
 			"scope by owner, not by the budget's own liveness")
+}
+
+// ---------------------------------------------------------------------------------------------
+// H1 (#1625 second fix wave): the disable in step 2 is a WRITE THE USER CAN SEE, so it must move
+// the optimistic-concurrency token.
+//
+// B2 keyed Update's guard on `version` and justified it as "version moves only on user edits, so
+// competing VISIBLE changes still conflict and invisible bookkeeping does not". This statement
+// was false for exactly one writer: DeleteWithReassignment's `UPDATE categorization_rules SET
+// enabled = false` is user-triggered (they deleted the category), it is visible (the card flips
+// to "Disabled" and the engine stops firing the rule), and it left `version` alone.
+//
+// The lost update that produced: a user opens the rule editor, deletes the category in another
+// tab, then saves a NAME change. UpdateRule's live-category recheck does not fire — the request
+// supplies neither `enabled` nor `target_custom_category_id` (categorization_rule_service.go's
+// two gates) — so the stale row is written back WHOLE, restoring `enabled = true` on a rule
+// pointing at a tombstoned category. That is precisely the "keeps firing at something the user
+// cannot see" failure the disable exists to prevent, reintroduced by the guard that was supposed
+// to stop lost updates.
+//
+// Asserted on the REFUSAL, not merely on the final `enabled`: an assertion that only read the
+// column back would also pass against a repository that silently re-ran the disable.
+func TestCategoryTombstone_DisablingRulesMovesTheConcurrencyToken_Integration(t *testing.T) {
+	f := seedCategoryTombstoneFixture(t)
+	ctx := context.Background()
+
+	// The user opens the rule editor. This read carries the version the eventual save will claim.
+	editing, err := f.ruleRepo.GetByID(ctx, f.categoryOnlyRuleID)
+	require.NoError(t, err)
+	require.True(t, editing.Enabled, "the fixture rule must be enabled going in, or this test proves nothing")
+	versionAtRead := editing.Version
+	require.NotZero(t, versionAtRead, "a stored rule must carry a version; 0 would make the guard vacuous")
+
+	// In another tab, they delete the category. Step 2 disables this rule.
+	require.NoError(t, f.catRepo.DeleteWithReassignment(ctx, f.userID, f.coffeeID, f.auditRepo))
+
+	// Falsifiability: the disable really did land, and it really is invisible to a guard keyed on
+	// anything that did not move.
+	var enabledAfterDisable bool
+	var versionAfterDisable int64
+	require.NoError(t, f.tx.QueryRow(ctx,
+		`SELECT enabled, version FROM categorization_rules WHERE id = $1`, f.categoryOnlyRuleID,
+	).Scan(&enabledAfterDisable, &versionAfterDisable))
+	require.False(t, enabledAfterDisable, "step 2 did not disable the rule; the rest of this test is meaningless")
+	assert.Greater(t, versionAfterDisable, versionAtRead,
+		"a user-visible disable must move `version`; leaving it means a stale editor write is "+
+			"accepted and silently re-enables a rule pointing at a tombstoned category")
+
+	// The save the user had in flight: a NAME change only. Neither of UpdateRule's live-category
+	// gates fires for it, so the repository guard is the only thing standing between this write
+	// and a resurrected rule.
+	editing.Name = "Renamed while the category was being deleted"
+	err = f.ruleRepo.Update(ctx, editing)
+	require.Error(t, err, "the stale whole-row write must be refused")
+	assert.True(t, errors.Is(err, domain.ErrRuleConcurrentlyModified),
+		"the stale write must report the concurrency conflict, got: %v", err)
+
+	var enabledFinal bool
+	require.NoError(t, f.tx.QueryRow(ctx,
+		`SELECT enabled FROM categorization_rules WHERE id = $1`, f.categoryOnlyRuleID,
+	).Scan(&enabledFinal))
+	assert.False(t, enabledFinal,
+		"the rule was re-enabled by a rename — it still targets a tombstoned category, which is "+
+			"the exact state the disable exists to prevent")
 }
