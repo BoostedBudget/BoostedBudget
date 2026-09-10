@@ -217,7 +217,7 @@ func TestBackfillObligation_PendingReturnsOnlyOwingChains(t *testing.T) {
 	owedAt := time.Now().Add(-time.Hour).UTC().Truncate(time.Millisecond)
 	f.markObligation(t, ctx, owing, owedAt)
 
-	pending, err := f.repo.PendingInvestmentBackfills(ctx, []string{owing, quiet})
+	pending, err := f.repo.PendingInvestmentBackfills(ctx, []string{owing, quiet}, f.userID.String())
 	require.NoError(t, err)
 
 	require.Len(t, pending, 1)
@@ -234,11 +234,11 @@ func TestBackfillObligation_PendingReturnsOnlyOwingChains(t *testing.T) {
 func TestBackfillObligation_PendingWithNoIDsIsNotAQuery(t *testing.T) {
 	f, ctx := newBackfillObligationFixture(t)
 
-	pending, err := f.repo.PendingInvestmentBackfills(ctx, nil)
+	pending, err := f.repo.PendingInvestmentBackfills(ctx, nil, f.userID.String())
 	require.NoError(t, err)
 	assert.Empty(t, pending)
 
-	assert.NoError(t, f.repo.ClearInvestmentBackfillRequests(ctx, nil, time.Now()))
+	assert.NoError(t, f.repo.ClearInvestmentBackfillRequests(ctx, nil, f.userID.String(), time.Now()))
 }
 
 // TestBackfillObligation_ClearDischargesTheMarkerItObserved is the ordinary success path: the sync
@@ -250,7 +250,7 @@ func TestBackfillObligation_ClearDischargesTheMarkerItObserved(t *testing.T) {
 	owedAt := time.Now().Add(-time.Hour).UTC()
 	f.markObligation(t, ctx, id, owedAt)
 
-	require.NoError(t, f.repo.ClearInvestmentBackfillRequests(ctx, []string{id}, owedAt))
+	require.NoError(t, f.repo.ClearInvestmentBackfillRequests(ctx, []string{id}, f.userID.String(), owedAt))
 
 	assert.Nil(t, f.obligation(t, ctx, id))
 }
@@ -268,7 +268,7 @@ func TestBackfillObligation_ClearLeavesAMarkerNewerThanTheOneObserved(t *testing
 	requestedAgainMidRun := time.Now().UTC().Truncate(time.Millisecond)
 	f.markObligation(t, ctx, id, requestedAgainMidRun)
 
-	require.NoError(t, f.repo.ClearInvestmentBackfillRequests(ctx, []string{id}, observed))
+	require.NoError(t, f.repo.ClearInvestmentBackfillRequests(ctx, []string{id}, f.userID.String(), observed))
 
 	at := f.obligation(t, ctx, id)
 	require.NotNil(t, at, "a marker recorded after the sync chose its window must survive the clear")
@@ -286,8 +286,8 @@ func TestBackfillObligation_ClearIsIdempotent(t *testing.T) {
 	owedAt := time.Now().UTC()
 	f.markObligation(t, ctx, id, owedAt)
 
-	require.NoError(t, f.repo.ClearInvestmentBackfillRequests(ctx, []string{id}, owedAt))
-	require.NoError(t, f.repo.ClearInvestmentBackfillRequests(ctx, []string{id}, owedAt),
+	require.NoError(t, f.repo.ClearInvestmentBackfillRequests(ctx, []string{id}, f.userID.String(), owedAt))
+	require.NoError(t, f.repo.ClearInvestmentBackfillRequests(ctx, []string{id}, f.userID.String(), owedAt),
 		"clearing an already-discharged obligation must not be an error")
 
 	assert.Nil(t, f.obligation(t, ctx, id))
@@ -312,11 +312,11 @@ func TestBackfillObligation_ARoundTripIsIdempotent(t *testing.T) {
 		ua.ExcludeInvestmentSync = false
 		require.NoError(t, f.repo.Update(ctx, ua))
 
-		pending, err := f.repo.PendingInvestmentBackfills(ctx, []string{id})
+		pending, err := f.repo.PendingInvestmentBackfills(ctx, []string{id}, f.userID.String())
 		require.NoError(t, err)
 		require.Len(t, pending, 1, "cycle %d: exactly one obligation, never two", cycle)
 
-		require.NoError(t, f.repo.ClearInvestmentBackfillRequests(ctx, []string{id}, pending[id]))
+		require.NoError(t, f.repo.ClearInvestmentBackfillRequests(ctx, []string{id}, f.userID.String(), pending[id]))
 		require.Nil(t, f.obligation(t, ctx, id), "cycle %d: discharged", cycle)
 	}
 }

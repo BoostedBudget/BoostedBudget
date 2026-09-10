@@ -76,16 +76,16 @@ func (m *MockUserAccountRepository) ClearHidden(ctx context.Context, id, userID 
 	return args.Error(0)
 }
 
-func (m *MockUserAccountRepository) PendingInvestmentBackfills(ctx context.Context, userAccountIDs []string) (map[string]time.Time, error) {
-	args := m.Called(ctx, userAccountIDs)
+func (m *MockUserAccountRepository) PendingInvestmentBackfills(ctx context.Context, userAccountIDs []string, userID string) (map[string]time.Time, error) {
+	args := m.Called(ctx, userAccountIDs, userID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(map[string]time.Time), args.Error(1)
 }
 
-func (m *MockUserAccountRepository) ClearInvestmentBackfillRequests(ctx context.Context, userAccountIDs []string, notAfter time.Time) error {
-	args := m.Called(ctx, userAccountIDs, notAfter)
+func (m *MockUserAccountRepository) ClearInvestmentBackfillRequests(ctx context.Context, userAccountIDs []string, userID string, notAfter time.Time) error {
+	args := m.Called(ctx, userAccountIDs, userID, notAfter)
 	return args.Error(0)
 }
 

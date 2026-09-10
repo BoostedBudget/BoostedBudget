@@ -576,7 +576,13 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 	// ⚠ This also resolves, without having to choose, which linked item a backfill belongs to. A
 	// chain spans re-links, so user_account → linked_item is not one-to-one; because the obligation
 	// lives on the chain row, whichever live item currently carries that account discharges it.
-	pendingBackfills, err := s.userAccountRepo.PendingInvestmentBackfills(ctx, includedChainIDs)
+	//
+	// ⚠ linkedItem.UserID is passed so the SQL, not this loop, enforces the tenant boundary. The
+	// account-owner guard above checks each ACCOUNT's user_id and says nothing about the owner of
+	// the CHAIN it points at, so one mis-assigned accounts.user_account_id would otherwise let this
+	// sync read — and, worse, discharge below — another user's obligation. A discharged obligation
+	// is invisible to every read, so it is the one failure here nothing downstream would reveal.
+	pendingBackfills, err := s.userAccountRepo.PendingInvestmentBackfills(ctx, includedChainIDs, linkedItem.UserID)
 	if err != nil {
 		// Non-fatal, and deliberately so: an unreadable marker must not stop the ordinary
 		// incremental sync for every OTHER account on this item. The obligation is durable on the
@@ -732,7 +738,7 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 		// survive for the next run. That is also what makes the obligation recoverable across a
 		// crash: nothing but a clean run clears it.
 		if len(backfillChainIDs) > 0 {
-			if err := s.userAccountRepo.ClearInvestmentBackfillRequests(ctx, backfillChainIDs, newestBackfillMarker); err != nil {
+			if err := s.userAccountRepo.ClearInvestmentBackfillRequests(ctx, backfillChainIDs, linkedItem.UserID, newestBackfillMarker); err != nil {
 				// Non-fatal: the backfill itself succeeded and its rows are committed. The
 				// surviving marker costs one more full-lookback re-fetch, whose upserts are
 				// idempotent — strictly better than the alternative failure mode of clearing an

@@ -177,15 +177,56 @@ func (w *InvestmentTransactionsSyncWorker) Work(ctx context.Context, job *river.
 	observability.InvestmentTransactionsSynced.WithLabelValues("inserted").Add(float64(result.TransactionsInserted))
 	observability.InvestmentTransactionsSynced.WithLabelValues("skipped").Add(float64(result.TransactionsSkipped))
 
+	// #1631 M4: the drop counters have to reach the metrics, not just the service's own log line.
+	//
+	// ⚠ THIS IS THE ONLY SIGNAL FOR A PINNED CURSOR. A dropped row makes the sync decline to
+	// advance investments_last_synced_date, deliberately, so the next run re-fetches the same
+	// window and can store what it missed. If the cause is permanent (a date Plaid will always send
+	// malformed, a security it will never return) the item re-fetches its whole window forever — and
+	// from this worker's perspective that is a SUCCESS: err is nil, we return nil, and the job is
+	// green. Nothing else in the system would ever report it. Alert on a sustained non-zero rate.
+	//
+	// "excluded" is emitted too but means the opposite thing: the owner asked us not to store those
+	// rows, the window was fully processed, and the watermark advanced normally. It is here to be
+	// countable, not to be alerted on.
+	observability.InvestmentTransactionsSynced.WithLabelValues("excluded").Add(float64(result.TransactionsExcluded))
+	observability.InvestmentTransactionsSynced.WithLabelValues("dropped_unmapped_account").Add(float64(result.TransactionsDroppedUnmappedAccount))
+	observability.InvestmentTransactionsSynced.WithLabelValues("dropped_unparsable_date").Add(float64(result.TransactionsDroppedUnparsableDate))
+	observability.InvestmentTransactionsSynced.WithLabelValues("dropped_unresolved_security").Add(float64(result.TransactionsDroppedUnresolvedSecurity))
+
 	w.logger.Info("investment transactions sync completed",
 		"job_id", job.ID,
 		"item_id", args.ItemID,
 		"pages_processed", result.PagesProcessed,
 		"transactions_inserted", result.TransactionsInserted,
 		"transactions_skipped", result.TransactionsSkipped,
+		"transactions_excluded", result.TransactionsExcluded,
+		"backfilled_chains", result.BackfilledChains,
+		"transactions_dropped_unmapped_account", result.TransactionsDroppedUnmappedAccount,
+		"transactions_dropped_unparsable_date", result.TransactionsDroppedUnparsableDate,
+		"transactions_dropped_unresolved_security", result.TransactionsDroppedUnresolvedSecurity,
+		// watermark_advanced makes the consequence legible without the reader having to know that
+		// any drop pins the cursor. A "completed" line with watermark_advanced=false is the shape
+		// to grep for when an item's history stops moving.
+		"watermark_advanced", !result.AnyTransactionDropped(),
 		"securities_upserted", result.SecuritiesUpserted,
 		"duration_ms", time.Since(startTime).Milliseconds(),
 	)
+
+	if result.AnyTransactionDropped() {
+		// A second line at WARN, because the Info above is the one nobody reads. The sync service
+		// logs the same fact at its own layer; this one is what a job-level alert or a dashboard
+		// filtered to this worker will actually see.
+		w.logger.Warn("investment transactions sync completed with DROPPED rows; "+
+			"investments_last_synced_date was NOT advanced, so this item will re-fetch the same "+
+			"window until the cause is fixed",
+			"job_id", job.ID,
+			"item_id", args.ItemID,
+			"dropped_unmapped_account", result.TransactionsDroppedUnmappedAccount,
+			"dropped_unparsable_date", result.TransactionsDroppedUnparsableDate,
+			"dropped_unresolved_security", result.TransactionsDroppedUnresolvedSecurity,
+		)
+	}
 
 	return nil
 }

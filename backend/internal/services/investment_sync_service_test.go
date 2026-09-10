@@ -387,7 +387,7 @@ func setupInvestmentSyncService(t *testing.T) (InvestmentSyncService, investment
 	// the specific one is never consulted — which silently turns a backfill test into an
 	// incremental-sync test. Use newSyncServiceWithUserAccountRepo (investment_sync_exclusion_test.go)
 	// to swap in a fresh mock instead.
-	deps.userAccountRepo.On("PendingInvestmentBackfills", mock.Anything, mock.Anything).
+	deps.userAccountRepo.On("PendingInvestmentBackfills", mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]time.Time{}, nil).Maybe()
 	// Default permissive expectation for snapshot upsert.
 	// Tests that need to verify snapshot behavior set up specific expectations instead.

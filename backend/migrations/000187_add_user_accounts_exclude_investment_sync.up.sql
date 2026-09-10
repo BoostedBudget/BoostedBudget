@@ -14,6 +14,28 @@
 -- lands once in `transactions` and once in `investment_transactions`, and the unified activity
 -- feed UNION ALLs them into two rows.
 --
+-- ⚠⚠ SUPERSEDED BY #1631 (M4), 2026-09-10. READ THIS BEFORE TRUSTING THE PARAGRAPH BELOW. ⚠⚠
+--
+-- This column is NO LONGER a read filter only. As of #1631 the investment sync also declines to
+-- PERSIST new investment_transactions for a chain whose owner has set the flag, and clearing the
+-- flag records a backfill obligation in user_accounts.investment_backfill_requested_at
+-- (migration 000196) that the sync honours over a 2-year lookback. The consequence the paragraph
+-- below correctly predicted has been accepted deliberately: a chain excluded for longer than that
+-- lookback permanently loses its earliest excluded period, because those rows were never stored and
+-- Plaid no longer serves them.
+--
+-- The retention ADR was AMENDED to authorise this, under three narrow scope tests — see
+-- docs/decisions/2026-08-24-financial-history-retained-by-default.md
+-- § "AMENDMENT (#1631): a fourth category — never ingesting a row". The argument is that never
+-- ingesting a row is not destroying a retained one, and the row in question is a duplicate of one
+-- /transactions/sync stores anyway. Hard-deleting and tombstoning remain forbidden, exactly as
+-- stated below.
+--
+-- The original reasoning is kept verbatim rather than rewritten, because it is the record of what
+-- was decided in #1609 and why, and because its second bullet is a correct statement of the cost
+-- #1631 chose to pay. Read it as history, not as current behaviour:
+--
+-- ── #1609, superseded ──────────────────────────────────────────────────────────────────────────
 -- The fix is at the READ layer and this column is its switch. It is deliberately NOT an ingestion
 -- filter and deliberately NOT a delete:
 --
@@ -28,6 +50,12 @@
 --
 -- The sync code already agrees: it explicitly stores retained rows and states that visibility
 -- belongs in feed reads, not ingestion.
+-- ── end #1609 ─────────────────────────────────────────────────────────────────────────────────
+--
+-- ⚠ Editing this file's prose does NOT correct any database: 000187 has already run everywhere, so
+-- the COMMENT ON COLUMN below is still the stale text in every live schema. Migration 000196
+-- re-issues that COMMENT with the corrected wording — which is why the one below is left as it was
+-- rather than edited into a lie about what the deployed comment says.
 --
 -- =============================================================================
 -- WHY user_accounts AND NOT accounts

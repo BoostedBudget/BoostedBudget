@@ -920,6 +920,48 @@ describe('AccountCustomizationModal', () => {
       expect(toggle).toHaveAttribute('aria-checked', 'false')
     })
 
+    // #1631 M4 — THE COPY IS A CONDITION OF THE AUTHORISATION, SO IT IS PINNED HERE.
+    //
+    // The retention ADR permits this flag to suppress INGESTION (rather than merely filter reads)
+    // only under three scope tests, and one of them is that the user is told the cost in the
+    // control itself before they commit — see
+    // docs/decisions/2026-08-24-financial-history-retained-by-default.md
+    // § "AMENDMENT (#1631): a fourth category — never ingesting a row". The cost is that clearing
+    // the flag backfills at most 2 years (Plaid's limit on /investments/transactions/get), so an
+    // account excluded for longer permanently loses its earliest excluded period.
+    //
+    // Without this test, "shortening the copy is a defect" was an assertion in a code comment that
+    // nothing could check, and a future copy pass tidying the sentence away would silently revoke
+    // the ADR's authorisation for the whole feature. These assertions are deliberately loose about
+    // wording and strict about the two facts that carry the warning: that we stop saving, and the
+    // 2-year bound.
+    it('warns that exclusion stops saving activity and that the backfill reaches only 2 years', async () => {
+      const user = userEvent.setup()
+      const chained: Account = { ...mockAccount, user_account_id: 'ua-chained-1631' }
+
+      renderModal(
+        <AccountCustomizationModal
+          account={chained}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await openAdvancedSection(user)
+
+      const toggle = screen.getByRole('switch', { name: /investment activity/i })
+      const description = toggle.closest('div.flex')?.querySelector('p')
+      expect(description).not.toBeNull()
+      const copy = description?.textContent ?? ''
+
+      expect(copy).toMatch(/2 years/)
+      expect(copy).toMatch(/stop saving/i)
+      // The de-duplication promise must survive too — it is the REASON the user reaches for the
+      // toggle, and a warning with no stated benefit is not a usable control.
+      expect(copy).toMatch(/twice/i)
+    })
+
     // ⚠ #1618b review finding: these two MUST use a CHAINED account. exclude_investment_sync is a
     // column on `user_accounts`, so an account with no user_account_id has nowhere to store it and
     // the toggle is deliberately disabled for it. Running these against the unchained `mockAccount`

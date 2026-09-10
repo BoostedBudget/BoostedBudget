@@ -388,7 +388,13 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
                   permanently loses its earliest excluded period. This toggle is the only place the
                   user is told that before they commit, which is a condition of the retention ADR's
                   #1631 amendment permitting non-ingestion at all — so a shorter, friendlier
-                  de-duplication-only promise here is a defect, not a copy improvement. */}
+                  de-duplication-only promise here is a defect, not a copy improvement.
+
+                  That is CHECKABLE, not just asserted: AccountCustomizationModal.test.tsx's
+                  "warns that exclusion stops saving activity and that the backfill reaches only 2
+                  years" fails if the /2 years/ or /stop saving/ wording is dropped. It matches on
+                  those two facts rather than the whole sentence, so the copy can still be reworded
+                  — it just cannot lose the warning. */}
               <div className="flex items-center justify-between rounded-lg border p-3">
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-2 text-sm font-medium">

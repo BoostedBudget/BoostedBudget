@@ -200,7 +200,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_BackfillMarkerWidensWi
 	}, nil)
 
 	requestedAt := time.Now().UTC().Add(-time.Hour)
-	uaRepo.On("PendingInvestmentBackfills", ctx, []string{f.includedChainID}).
+	uaRepo.On("PendingInvestmentBackfills", ctx, []string{f.includedChainID}, f.userID).
 		Return(map[string]time.Time{f.includedChainID: requestedAt}, nil)
 
 	fullLookbackStart := time.Now().UTC().AddDate(-investmentTxnLookbackYears, 0, 0).Format("2006-01-02")
@@ -217,7 +217,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_BackfillMarkerWidensWi
 
 	// Cleared with the timestamp the sync READ, not "now": a marker set again while this run was
 	// in flight covers a window this run did not fetch and must survive.
-	uaRepo.On("ClearInvestmentBackfillRequests", ctx, []string{f.includedChainID}, requestedAt).
+	uaRepo.On("ClearInvestmentBackfillRequests", ctx, []string{f.includedChainID}, f.userID, requestedAt).
 		Return(nil).Times(1)
 
 	result, err := svc.SyncInvestmentTransactions(ctx, f.linkedItem)
@@ -246,7 +246,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_BackfillMarkerSurvives
 			UserAccountID: &f.includedChainID, ExcludeInvestmentSync: false,
 		},
 	}, nil)
-	uaRepo.On("PendingInvestmentBackfills", ctx, []string{f.includedChainID}).
+	uaRepo.On("PendingInvestmentBackfills", ctx, []string{f.includedChainID}, f.userID).
 		Return(map[string]time.Time{f.includedChainID: time.Now().UTC()}, nil)
 
 	// One good row and one with an unparsable date → the run is lossy.
@@ -268,7 +268,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_BackfillMarkerSurvives
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.TransactionsDroppedUnparsableDate)
 	uaRepo.AssertNotCalled(t, "ClearInvestmentBackfillRequests",
-		mock.Anything, mock.Anything, mock.Anything)
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	deps.linkedItemRepo.AssertNotCalled(t, "UpdateInvestmentsLastSyncedDate",
 		mock.Anything, mock.Anything, mock.Anything)
 }
@@ -386,9 +386,9 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_BackfillIsIdempotentAc
 
 	// Run 1 owes a backfill and discharges it; run 2 finds nothing owed, because the discharge is
 	// what makes re-running safe.
-	uaRepo.On("PendingInvestmentBackfills", ctx, []string{f.includedChainID}).
+	uaRepo.On("PendingInvestmentBackfills", ctx, []string{f.includedChainID}, f.userID).
 		Return(map[string]time.Time{f.includedChainID: requestedAt}, nil).Once()
-	uaRepo.On("ClearInvestmentBackfillRequests", ctx, []string{f.includedChainID}, requestedAt).
+	uaRepo.On("ClearInvestmentBackfillRequests", ctx, []string{f.includedChainID}, f.userID, requestedAt).
 		Return(nil).Once()
 	deps.invTxnRepo.On("UpsertBatch", ctx, mock.Anything).Return(1, nil).Once()
 
@@ -397,7 +397,7 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_BackfillIsIdempotentAc
 	require.Equal(t, 1, first.BackfilledChains)
 	require.Equal(t, 1, first.TransactionsInserted)
 
-	uaRepo.On("PendingInvestmentBackfills", ctx, []string{f.includedChainID}).
+	uaRepo.On("PendingInvestmentBackfills", ctx, []string{f.includedChainID}, f.userID).
 		Return(map[string]time.Time{}, nil).Once()
 	// The same row again: the upsert reports zero inserted, and the sync reports it as skipped
 	// ("already present"), never as a second insert and never as a drop.
