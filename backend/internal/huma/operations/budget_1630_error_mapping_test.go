@@ -87,7 +87,7 @@ func TestCreateBudget_InvalidIncomeSourceType_Returns400WithLegalValues(t *testi
 }
 
 // TestAddCategory_InvalidMatchLogicCombination_Returns400WithFieldName is the RED half of Task 7
-// for P6 (task 0's TestClaim1630_P6_MatchLogicAnd_EmptyTags_Is500NotStruct400): match_logic="and"
+// for P6 (task 0's TestClaim1630_P6_MatchLogicAnd_EmptyTags_Is400AfterErrInvalidBudget): match_logic="and"
 // with no tags is a legal-looking value combined into an illegal state, and used to 500.
 func TestAddCategory_InvalidMatchLogicCombination_Returns400WithFieldName(t *testing.T) {
 	category := &domain.BudgetCategory{
