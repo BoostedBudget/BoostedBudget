@@ -152,14 +152,30 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 	// can reconstruct it. Day-change is then UNAVAILABLE — never computed from the ungated column
 	// and never coerced to zero. One day without a day-change is the accepted cost of not showing
 	// a fabricated one. The guard covers the percentage too: it divides by the same prior total.
+	// #1631 M8a: name the currency these totals are in, or declare that they are a
+	// currency-blind sum. There is no FX rate source in this system, so the sum above cannot be
+	// corrected — but an unlabelled wrong number is the actual defect, and a label fixes that.
+	currencyCode, isMixedCurrency := domain.ResolveHoldingsCurrency(holdings)
+
 	var dayChange, dayChangePct *float64
 	if prior != nil && prior.TotalValueInvestmentOnly != nil {
 		priorGated := *prior.TotalValueInvestmentOnly
-		dc := totalValue - priorGated
-		dayChange = &dc
-		if priorGated != 0 {
-			pct := dc / priorGated * 100
-			dayChangePct = &pct
+		// #1631 M8a: and the two sides must also be in the same CURRENCY, not merely over the
+		// same account universe. A prior total recorded in USD minus a live total in GBP is not a
+		// quantity of money, and there is nothing here to convert with. Refused rather than
+		// computed, on the same reasoning as the type-gate guard above: one missing day-change is
+		// cheaper than a fabricated one.
+		//
+		// An UNKNOWN currency on either side does not refuse — every snapshot written before
+		// migration 000197 has none, and refusing on those would blank the day change for the
+		// whole existing user base.
+		if !domain.CurrenciesConflict(prior.CurrencyCode, currencyCode) {
+			dc := totalValue - priorGated
+			dayChange = &dc
+			if priorGated != 0 {
+				pct := dc / priorGated * 100
+				dayChangePct = &pct
+			}
 		}
 	}
 
@@ -171,6 +187,8 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 		DayChange:        dayChange,
 		DayChangePct:     dayChangePct,
 		HoldingsCount:    len(holdings),
+		CurrencyCode:     currencyCode,
+		IsMixedCurrency:  isMixedCurrency,
 	}, nil
 }
 

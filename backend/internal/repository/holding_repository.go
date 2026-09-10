@@ -172,8 +172,8 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 			INSERT INTO holdings (
 				id, user_id, account_id, user_account_id, security_id,
 				quantity, cost_basis, institution_value, institution_price,
-				created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+				currency_code, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		`
 		if _, err := tx.Exec(ctx, insertQuery,
 			h.ID,
@@ -185,6 +185,7 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 			h.CostBasis,
 			h.InstitutionValue,
 			h.InstitutionPrice,
+			h.CurrencyCode,
 			h.CreatedAt,
 			h.UpdatedAt,
 		); err != nil {
@@ -221,7 +222,7 @@ func (r *holdingRepository) GetByUserID(ctx context.Context, userID string) ([]d
 	query := `
 		SELECT holdings.id, holdings.user_id, holdings.account_id, holdings.user_account_id, holdings.security_id,
 			holdings.quantity, holdings.cost_basis, holdings.institution_value, holdings.institution_price,
-			holdings.created_at, holdings.updated_at
+			holdings.currency_code, holdings.created_at, holdings.updated_at
 		FROM holdings
 		JOIN accounts a ON a.id = holdings.account_id
 		WHERE holdings.user_id = $1
@@ -249,6 +250,7 @@ func (r *holdingRepository) GetByUserID(ctx context.Context, userID string) ([]d
 			&h.CostBasis,
 			&h.InstitutionValue,
 			&h.InstitutionPrice,
+			&h.CurrencyCode,
 			&h.CreatedAt,
 			&h.UpdatedAt,
 		); err != nil {
@@ -265,7 +267,7 @@ func (r *holdingRepository) GetByUserID(ctx context.Context, userID string) ([]d
 func (r *holdingRepository) GetByAccountID(ctx context.Context, accountID string) ([]domain.Holding, error) {
 	query := `
 		SELECT id, user_id, account_id, security_id,
-			quantity, cost_basis, institution_value, institution_price,
+			quantity, cost_basis, institution_value, institution_price, currency_code,
 			created_at, updated_at
 		FROM holdings
 		WHERE (account_id = $1 AND user_account_id IS NULL)
@@ -291,6 +293,7 @@ func (r *holdingRepository) GetByAccountID(ctx context.Context, accountID string
 			&h.CostBasis,
 			&h.InstitutionValue,
 			&h.InstitutionPrice,
+			&h.CurrencyCode,
 			&h.CreatedAt,
 			&h.UpdatedAt,
 		); err != nil {
@@ -313,7 +316,7 @@ func (r *holdingRepository) GetByUserAccountID(ctx context.Context, userAccountI
 	// This covers all physical account_ids in a re-link chain.
 	query := `
 		SELECT id, user_id, account_id, user_account_id, security_id,
-			quantity, cost_basis, institution_value, institution_price,
+			quantity, cost_basis, institution_value, institution_price, currency_code,
 			created_at, updated_at
 		FROM holdings
 		WHERE user_account_id = $1
@@ -339,6 +342,7 @@ func (r *holdingRepository) GetByUserAccountID(ctx context.Context, userAccountI
 			&h.CostBasis,
 			&h.InstitutionValue,
 			&h.InstitutionPrice,
+			&h.CurrencyCode,
 			&h.CreatedAt,
 			&h.UpdatedAt,
 		); err != nil {
@@ -385,11 +389,15 @@ func (r *holdingRepository) GetByUserIDWithSecurities(ctx context.Context, userI
 		SELECT
 			h.id, h.user_id, h.account_id, h.user_account_id, h.security_id,
 			h.quantity, h.cost_basis, h.institution_value, h.institution_price,
-			h.created_at, h.updated_at,
+			h.currency_code, h.created_at, h.updated_at,
 			-- security metadata
 			sec.id, sec.plaid_security_id, sec.ticker_symbol, sec.name, sec.type,
 			sec.institution_price, sec.institution_price_as_of,
-			sec.close_price, sec.close_price_as_of
+			sec.close_price, sec.close_price_as_of,
+			-- #1631 M8a: BOTH currencies are read, and they are not the same fact. sec.currency_code
+			-- is the unit of close_price; h.currency_code is the unit of the position. When they
+			-- disagree the day change is refused rather than converted (Holding.DayChange).
+			sec.currency_code
 		FROM holdings h
 		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
 		-- a.type = 'investment' (#1569 T8 / Issue #1616): matches the gate already applied to
@@ -420,10 +428,10 @@ func (r *holdingRepository) GetByUserIDWithSecurities(ctx context.Context, userI
 		if err := rows.Scan(
 			&h.ID, &h.UserID, &h.AccountID, &h.UserAccountID, &h.SecurityID,
 			&h.Quantity, &h.CostBasis, &h.InstitutionValue, &h.InstitutionPrice,
-			&h.CreatedAt, &h.UpdatedAt,
+			&h.CurrencyCode, &h.CreatedAt, &h.UpdatedAt,
 			&sec.ID, &sec.PlaidSecurityID, &sec.TickerSymbol, &sec.Name, &sec.Type,
 			&sec.InstitutionPrice, &sec.InstitutionPriceAsOf,
-			&sec.ClosePrice, &secClosePriceAsOf,
+			&sec.ClosePrice, &secClosePriceAsOf, &sec.CurrencyCode,
 		); err != nil {
 			return nil, err
 		}

@@ -66,6 +66,22 @@ func NewInvestmentAnalyticsRepository(db DB) InvestmentAnalyticsRepository {
 //
 // Single DB round-trip: the UNION is inlined so the DB engine sees one query.
 // Scoped strictly to user_id (IDOR-safe).
+// distinctCurrencyCodesSQL renders an aggregate collecting the DISTINCT, normalised, non-blank
+// currency codes contributing to one grouped row (#1631 M8a).
+//
+// An array rather than a single value, and it is resolved in Go rather than in SQL, because the
+// SQL side cannot express the answer: a scalar would have to collapse "mixed" and "nobody stated
+// one" into the same NULL, and those two cases require OPPOSITE handling — one labels the total,
+// the other declares it a currency-blind sum. Returning the set keeps the distinction alive as
+// far as domain.ResolveCurrencyCodes, which is the one place the rule is written down.
+//
+// NULLs and blanks are filtered out before aggregating: unknown is not a currency (see
+// domain/investment_currency.go), so it must not be able to make a set look mixed.
+func distinctCurrencyCodesSQL(column string) string {
+	return "COALESCE(array_agg(DISTINCT UPPER(TRIM(" + column + "))) FILTER (WHERE " +
+		column + " IS NOT NULL AND TRIM(" + column + ") <> ''), '{}')"
+}
+
 func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context, userID string, opts domain.AllocationOptions) (*domain.AllocationBreakdown, error) {
 	// group_by=account uses a per-account SQL shape — dispatch to a dedicated method.
 	if opts.EffectiveGroupBy() == domain.AllocationGroupByAccount {
@@ -88,7 +104,8 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 		SELECT
 			COALESCE(sec.type, 'unknown')          AS security_type,
 			COUNT(*)                               AS holding_count,
-			COALESCE(SUM(h.institution_value), 0)  AS total_value
+			COALESCE(SUM(h.institution_value), 0)  AS total_value,
+			` + distinctCurrencyCodesSQL("h.currency_code") + `  AS currency_codes
 		FROM holdings h
 		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
 		JOIN accounts a ON a.id = h.account_id AND ` + currentStateAccountLeg("a") + `
@@ -106,7 +123,14 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 		SELECT
 			'cash'                                         AS security_type,
 			COUNT(*)                                       AS holding_count,
-			COALESCE(SUM(GREATEST(a.current_balance, 0)), 0) AS total_value
+			COALESCE(SUM(GREATEST(a.current_balance, 0)), 0) AS total_value,
+			-- The cash branch sums ACCOUNT balances, so its currency is accounts.currency_code.
+			-- ⚠ That column carries DEFAULT 'USD' (migration 000007), so an account whose currency
+			-- Plaid never stated reports USD rather than NULL. Included anyway, deliberately:
+			-- omitting it would let a EUR bank balance be added into a USD-labelled total and the
+			-- result confidently named "USD", which is worse than an occasional over-eager mixed
+			-- flag on an account whose currency we guessed. The flag warns; it refuses nothing.
+			` + distinctCurrencyCodesSQL("a.currency_code") + `   AS currency_codes
 		FROM accounts a
 		WHERE a.user_id = $1
 		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
@@ -123,7 +147,8 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 		SELECT
 			'liabilities'                          AS security_type,
 			COUNT(*)                               AS holding_count,
-			COALESCE(SUM(ABS(a.current_balance)), 0) AS total_value
+			COALESCE(SUM(ABS(a.current_balance)), 0) AS total_value,
+			` + distinctCurrencyCodesSQL("a.currency_code") + ` AS currency_codes
 		FROM accounts a
 		WHERE a.user_id = $1
 		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
@@ -133,7 +158,7 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 
 	// Wrap in a CTE so we can ORDER BY total_value across the full union.
 	query = `WITH combined AS (` + query + `)
-		SELECT security_type, holding_count, total_value
+		SELECT security_type, holding_count, total_value, currency_codes
 		FROM combined
 		ORDER BY total_value DESC`
 
@@ -145,11 +170,14 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 
 	var buckets []domain.AllocationItem
 	var grandTotal float64
+	var currencyCodes []string
 	for rows.Next() {
 		var item domain.AllocationItem
-		if err := rows.Scan(&item.SecurityType, &item.HoldingCount, &item.TotalValue); err != nil {
+		var rowCurrencies []string
+		if err := rows.Scan(&item.SecurityType, &item.HoldingCount, &item.TotalValue, &rowCurrencies); err != nil {
 			return nil, fmt.Errorf("AllocationBreakdown scan: %w", err)
 		}
+		currencyCodes = append(currencyCodes, rowCurrencies...)
 		grandTotal += item.TotalValue
 		buckets = append(buckets, item)
 	}
@@ -182,7 +210,16 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 	if buckets == nil {
 		buckets = []domain.AllocationItem{}
 	}
-	return &domain.AllocationBreakdown{Buckets: buckets, TotalValue: grandTotal}, nil
+	// #1631 M8a: the buckets and the grand total are summed across every branch above, so the
+	// verdict is taken over the UNION of what they contributed — a USD holdings bucket beside a
+	// EUR cash bucket is a mixed total even though neither bucket is mixed on its own.
+	currencyCode, isMixed := domain.ResolveCurrencyCodes(currencyCodes)
+	return &domain.AllocationBreakdown{
+		Buckets:         buckets,
+		TotalValue:      grandTotal,
+		CurrencyCode:    currencyCode,
+		IsMixedCurrency: isMixed,
+	}, nil
 }
 
 // allocationBreakdownByAccount handles group_by=account: one bucket per active account,
@@ -202,7 +239,8 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 			a.name                                AS security_type,
 			'investment'                          AS asset_class,
 			COUNT(*)                              AS holding_count,
-			COALESCE(SUM(h.institution_value), 0) AS total_value
+			COALESCE(SUM(h.institution_value), 0) AS total_value,
+			` + distinctCurrencyCodesSQL("h.currency_code") + ` AS currency_codes
 		FROM holdings h
 		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
 		JOIN accounts a ON a.id = h.account_id AND ` + currentStateAccountLeg("a") + `
@@ -220,7 +258,10 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 			a.name                                AS security_type,
 			'depository'                          AS asset_class,
 			1                                     AS holding_count,
-			GREATEST(COALESCE(a.current_balance, 0), 0) AS total_value
+			GREATEST(COALESCE(a.current_balance, 0), 0) AS total_value,
+			-- One row per account here, so this is that account's own currency rather than an
+			-- aggregate. Same DEFAULT 'USD' caveat as the grouped shape above.
+			ARRAY[UPPER(TRIM(COALESCE(a.currency_code, '')))] AS currency_codes
 		FROM accounts a
 		WHERE a.user_id = $1
 		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
@@ -236,7 +277,8 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 			a.name                                AS security_type,
 			a.type                                AS asset_class,
 			1                                     AS holding_count,
-			COALESCE(ABS(a.current_balance), 0)   AS total_value
+			COALESCE(ABS(a.current_balance), 0)   AS total_value,
+			ARRAY[UPPER(TRIM(COALESCE(a.currency_code, '')))] AS currency_codes
 		FROM accounts a
 		WHERE a.user_id = $1
 		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
@@ -245,7 +287,7 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 	}
 
 	query = `WITH combined AS (` + query + `)
-		SELECT security_type, asset_class, holding_count, total_value
+		SELECT security_type, asset_class, holding_count, total_value, currency_codes
 		FROM combined
 		ORDER BY total_value DESC`
 
@@ -257,11 +299,15 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 
 	var buckets []domain.AllocationItem
 	var grandTotal float64
+	var currencyCodes []string
 	for rows.Next() {
 		var item domain.AllocationItem
-		if err := rows.Scan(&item.SecurityType, &item.AssetClass, &item.HoldingCount, &item.TotalValue); err != nil {
+		var rowCurrencies []string
+		if err := rows.Scan(&item.SecurityType, &item.AssetClass, &item.HoldingCount, &item.TotalValue,
+			&rowCurrencies); err != nil {
 			return nil, fmt.Errorf("allocationBreakdownByAccount scan: %w", err)
 		}
+		currencyCodes = append(currencyCodes, rowCurrencies...)
 		grandTotal += item.TotalValue
 		buckets = append(buckets, item)
 	}
@@ -284,7 +330,13 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 	if buckets == nil {
 		buckets = []domain.AllocationItem{}
 	}
-	return &domain.AllocationBreakdown{Buckets: buckets, TotalValue: grandTotal}, nil
+	currencyCode, isMixed := domain.ResolveCurrencyCodes(currencyCodes)
+	return &domain.AllocationBreakdown{
+		Buckets:         buckets,
+		TotalValue:      grandTotal,
+		CurrencyCode:    currencyCode,
+		IsMixedCurrency: isMixed,
+	}, nil
 }
 
 // applyNetBasis removes liability buckets from the slice and returns (asset-only buckets,
@@ -330,7 +382,16 @@ func applyNetBasis(buckets []domain.AllocationItem) ([]domain.AllocationItem, fl
 
 // securityTypeToAssetClass maps a raw security_type string to a high-level asset class label.
 // "liabilities" and "cash" (from UNION branches) are already the right class.
-// All investment security types (stock, etf, bond, crypto, mutual fund, etc.) → "investments".
+// Everything else → "investments". ⚠ #1631: the values reaching this function are PLAID's
+// security-type enum — cash, cryptocurrency, derivative, equity, etf, fixed income, loan,
+// mutual fund, other — plus the synthetic "unknown" (COALESCEd for a NULL securities.type) and
+// "liabilities". This line previously advertised "stock", "bond" and "crypto", none of which
+// Plaid ever sends; the default arm is what makes that misdescription harmless rather than a bug,
+// but a reader adding a case for "stock" would have added dead code.
+//
+// ⚠ Note "cash" is BOTH a Plaid security type and this file's own synthetic label for the
+// depository UNION branch, so the first case arm catches two different things that happen to
+// deserve the same class.
 func securityTypeToAssetClass(secType string) string {
 	switch secType {
 	case "cash", "liabilities":
@@ -394,6 +455,7 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 				sec.ticker_symbol,
 				sec.name                                                                      AS security_name,
 				h.quantity * (h.institution_price - sec.close_price)                         AS day_change,
+				h.currency_code                                                               AS currency_code,
 				-- #1631: measured against the PRIOR close value (quantity x close_price), not the
 				-- current institution_value. The two differ by the day change itself, so the old
 				-- form understated every gain and overstated every loss by exactly that amount —
@@ -419,10 +481,29 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 			  AND a.type = 'investment' -- #1616 T2c: holdings-based surfaces are governed by accounts.type
 			  AND h.institution_price IS NOT NULL
 			  AND sec.close_price IS NOT NULL
+			  -- #1631 M8a: this day change is computed in SQL rather than through
+			  -- domain.Holding.DayChange, so that method's currency refusal has to be repeated
+			  -- here or the two surfaces disagree about the same holding — the holdings table
+			  -- showing no day change while this widget ranks the position by one.
+			  --
+			  -- The holding is EXCLUDED rather than returned with a NULL day change, matching how
+			  -- this query already treats a missing close price: a top-MOVERS list ranks by the
+			  -- movement, so a row whose movement has no defined value has nothing to be ranked
+			  -- on. (See TopMoverItem's doc comment, which spells out that exclusion-not-nil is
+			  -- this surface's rule.)
+			  --
+			  -- Both codes must be KNOWN and DIFFERENT to exclude. An unstated currency on either
+			  -- side is not a conflict — that is every row written before migration 000197, and
+			  -- treating it as one would empty this widget for the entire existing user base.
+			  AND NOT (
+			      h.currency_code IS NOT NULL AND TRIM(h.currency_code) <> ''
+			      AND sec.currency_code IS NOT NULL AND TRIM(sec.currency_code) <> ''
+			      AND UPPER(TRIM(h.currency_code)) <> UPPER(TRIM(sec.currency_code))
+			  )
 		),
 		gainers AS (
 			SELECT holding_id, account_id, ticker_symbol, security_name,
-			       day_change, day_change_pct, total_gain_loss, 'gainer' AS mover_type
+			       day_change, day_change_pct, total_gain_loss, currency_code, 'gainer' AS mover_type
 			FROM movers
 			WHERE day_change > 0
 			ORDER BY day_change DESC
@@ -430,7 +511,7 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 		),
 		losers AS (
 			SELECT holding_id, account_id, ticker_symbol, security_name,
-			       day_change, day_change_pct, total_gain_loss, 'loser' AS mover_type
+			       day_change, day_change_pct, total_gain_loss, currency_code, 'loser' AS mover_type
 			FROM movers
 			WHERE day_change < 0
 			ORDER BY day_change ASC
@@ -438,15 +519,15 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 		),
 		combined AS (
 			SELECT holding_id::text, account_id::text, ticker_symbol, security_name,
-			       day_change, day_change_pct, total_gain_loss, mover_type
+			       day_change, day_change_pct, total_gain_loss, currency_code, mover_type
 			FROM gainers
 			UNION ALL
 			SELECT holding_id::text, account_id::text, ticker_symbol, security_name,
-			       day_change, day_change_pct, total_gain_loss, mover_type
+			       day_change, day_change_pct, total_gain_loss, currency_code, mover_type
 			FROM losers
 		)
 		SELECT holding_id, account_id, ticker_symbol, security_name,
-		       day_change, day_change_pct, total_gain_loss, mover_type
+		       day_change, day_change_pct, total_gain_loss, currency_code, mover_type
 		FROM combined
 		ORDER BY mover_type ASC, CASE WHEN mover_type = 'gainer' THEN day_change ELSE -day_change END DESC
 	`
@@ -468,6 +549,7 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 			&item.HoldingID, &item.AccountID,
 			&item.TickerSymbol, &item.SecurityName,
 			&item.DayChange, &item.DayChangePct, &item.TotalGainLoss,
+			&item.CurrencyCode,
 			&moverType,
 		); err != nil {
 			return nil, fmt.Errorf("TopMovers scan: %w", err)
@@ -525,7 +607,10 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 			COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL), 0) AS cost_basis_known_pair,
 			-- cost_basis_all: all non-nil cost_basis, exposed as the API CostBasis field.
 			-- Matches GetPortfolioSummary totalCostBasis and snapshot Upsert total_cost_basis.
-			COALESCE(SUM(h.cost_basis), 0) AS cost_basis_all
+			COALESCE(SUM(h.cost_basis), 0) AS cost_basis_all,
+			-- #1631 M8a. Per-account, then resolved across accounts in Go: a portfolio of a USD
+			-- account and a EUR account is mixed even though neither account is mixed alone.
+			` + distinctCurrencyCodesSQL("h.currency_code") + ` AS currency_codes
 		FROM holdings h
 		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
 		JOIN accounts a ON a.id = h.account_id AND ` + currentStateAccountLeg("a") + `
@@ -542,9 +627,11 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 
 	var byAccount []domain.AccountGainLoss
 	var totalValue, totalCostBasis, totalKnownPairCost, totalGL float64
+	var currencyCodes []string
 	for rows.Next() {
 		var ag domain.AccountGainLoss
 		var costBasisKnownPair float64
+		var rowCurrencies []string
 		if err := rows.Scan(
 			&ag.AccountID,
 			&ag.Value,
@@ -552,6 +639,7 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 			&ag.UnrealizedGainLossPct,
 			&costBasisKnownPair,
 			&ag.CostBasis, // cost_basis_all: all-non-nil, exposed in API response
+			&rowCurrencies,
 		); err != nil {
 			return nil, fmt.Errorf("UnrealizedGainLoss scan: %w", err)
 		}
@@ -562,6 +650,7 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 		// recomputing totalValue - totalCostBasis, which would mix all-holdings value
 		// with known-basis-only cost and produce phantom gains for NULL-basis holdings.
 		totalGL += ag.UnrealizedGainLoss
+		currencyCodes = append(currencyCodes, rowCurrencies...)
 		byAccount = append(byAccount, ag)
 	}
 	if rows.Err() != nil {
@@ -579,6 +668,7 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 	if byAccount == nil {
 		byAccount = []domain.AccountGainLoss{}
 	}
+	currencyCode, isMixed := domain.ResolveCurrencyCodes(currencyCodes)
 	return &domain.GainLossSummary{
 		TotalUnrealizedGainLoss:    totalGL,
 		TotalUnrealizedGainLossPct: totalGLPct,
@@ -586,6 +676,8 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 		TotalValue:                 totalValue,
 		RealizedGainLossSupported:  false,
 		ByAccount:                  byAccount,
+		CurrencyCode:               currencyCode,
+		IsMixedCurrency:            isMixed,
 	}, nil
 }
 
@@ -690,7 +782,12 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 				ELSE 'other_income'
 			END                          AS income_type,
 			COUNT(*)                     AS count,
-			COALESCE(-SUM(it.amount), 0) AS total_amount
+			COALESCE(-SUM(it.amount), 0) AS total_amount,
+			-- #1631 M8a: income is summed over investment_transactions.amount, so the currency
+			-- comes from the TRANSACTION rather than from the holding. Per income_type here, then
+			-- resolved across types in Go — a USD dividend and a EUR dividend make the TOTAL
+			-- mixed even if each bucket is internally consistent.
+			%[7]s AS currency_codes
 		FROM investment_transactions it
 		JOIN accounts a ON a.id = it.account_id
 		LEFT JOIN securities sec ON sec.id = it.security_id
@@ -703,7 +800,8 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 		GROUP BY income_type
 		ORDER BY total_amount DESC
 	`, retainedAccountVisibilityLegs("it", "it.date"), inClause,
-		investmentSyncExclusionCondition("it"), "", structuralIncome, normSub)
+		investmentSyncExclusionCondition("it"), "", structuralIncome, normSub,
+		distinctCurrencyCodesSQL("it.currency_code"))
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -713,11 +811,14 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 
 	var byType []domain.IncomeByType
 	var totalIncome float64
+	var currencyCodes []string
 	for rows.Next() {
 		var bt domain.IncomeByType
-		if err := rows.Scan(&bt.IncomeType, &bt.Count, &bt.TotalAmount); err != nil {
+		var rowCurrencies []string
+		if err := rows.Scan(&bt.IncomeType, &bt.Count, &bt.TotalAmount, &rowCurrencies); err != nil {
 			return nil, fmt.Errorf("IncomeSummary scan: %w", err)
 		}
+		currencyCodes = append(currencyCodes, rowCurrencies...)
 		totalIncome += bt.TotalAmount
 		byType = append(byType, bt)
 	}
@@ -728,10 +829,13 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 	if byType == nil {
 		byType = []domain.IncomeByType{}
 	}
+	currencyCode, isMixed := domain.ResolveCurrencyCodes(currencyCodes)
 	return &domain.IncomeSummary{
-		TotalIncome: totalIncome,
-		ByType:      byType,
-		StartDate:   start,
-		EndDate:     end,
+		TotalIncome:     totalIncome,
+		ByType:          byType,
+		StartDate:       start,
+		EndDate:         end,
+		CurrencyCode:    currencyCode,
+		IsMixedCurrency: isMixed,
 	}, nil
 }

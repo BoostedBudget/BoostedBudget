@@ -382,6 +382,11 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 			h.InstitutionValue = &instValue
 			instPrice := ph.InstitutionPrice
 			h.InstitutionPrice = &instPrice
+			// #1631 M8a: the currency of the three figures just assigned. Read from the HOLDING,
+			// not from the security: Plaid prices a foreign-currency security in USD while the
+			// institution reports the position in its own currency, so these are two different
+			// facts and conflating them would hide the exact mismatch this records.
+			h.CurrencyCode = plaidCurrencyCode(ph.IsoCurrencyCode.Get(), ph.UnofficialCurrencyCode.Get())
 
 			if cb := ph.CostBasis.Get(); cb != nil {
 				val := *cb
@@ -805,6 +810,7 @@ func mapPlaidSecuritiesToDomain(plaidSecs []plaid.Security) []domain.Security {
 		sec.ProxySecurityID = ps.ProxySecurityId.Get()
 		sec.ClosePrice = ps.ClosePrice.Get()
 		sec.ClosePriceAsOf = parsePlaidDate(ps.ClosePriceAsOf.Get())
+		sec.CurrencyCode = plaidCurrencyCode(ps.IsoCurrencyCode.Get(), ps.UnofficialCurrencyCode.Get())
 		sec.Name = synthesizeSecurityName(sec.Name, sec.TickerSymbol, ps.SecurityId)
 		result = append(result, sec)
 	}
@@ -833,6 +839,34 @@ func synthesizeSecurityName(name string, tickerSymbol *string, plaidSecurityID s
 		}
 	}
 	return "Security " + plaidSecurityID
+}
+
+// plaidCurrencyCode collapses Plaid's two currency fields into the one column this schema keeps
+// (#1631 M8a).
+//
+// Plaid guarantees exactly one of them is non-null: iso_currency_code carries an ISO-4217 code,
+// and unofficial_currency_code carries a code for a currency that HAS no ISO code —
+// cryptocurrencies and the currencies of certain countries. Both answer the same question ("what
+// unit is this figure in"), and an aggregate only needs the currency IDENTITY to compare, so
+// storing them in two columns would double the threading for no reader.
+//
+// ⚠ The unofficial code is taken rather than dropped, which is where this departs from
+// accounts.currency_code (account_service.go reads iso_currency_code only). Dropping it would
+// record a crypto position as having NO currency, and NULL is defined to mean "unknown, does not
+// conflict with anything" — so a Bitcoin holding would have silently joined a USD portfolio's sum
+// as though it were dollars. That is the precise failure this whole task exists to stop.
+//
+// Returns nil when Plaid sends neither, or sends a blank one: absent is recorded as absent.
+func plaidCurrencyCode(iso, unofficial *string) *string {
+	for _, candidate := range []*string{iso, unofficial} {
+		if candidate == nil {
+			continue
+		}
+		if trimmed := strings.TrimSpace(*candidate); trimmed != "" {
+			return &trimmed
+		}
+	}
+	return nil
 }
 
 // parsePlaidDate converts a Plaid date-only string ("YYYY-MM-DD") into a *time.Time, returning nil
@@ -971,6 +1005,7 @@ func mapPlaidInvestmentTransactions(
 		txn.Quantity = &pt.Quantity
 		txn.Price = &pt.Price
 		txn.Fees = pt.Fees.Get()
+		txn.CurrencyCode = plaidCurrencyCode(pt.IsoCurrencyCode.Get(), pt.UnofficialCurrencyCode.Get())
 
 		result = append(result, txn)
 	}

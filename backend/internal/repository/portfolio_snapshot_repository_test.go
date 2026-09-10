@@ -45,12 +45,12 @@ func TestPortfolioSnapshot_Upsert_InsertsAndReturns(t *testing.T) {
 		"id", "user_id", "snapshot_date",
 		"total_value", "total_cost_basis",
 		"total_gain_loss", "total_gain_loss_pct", "total_value_investment_only",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	}).AddRow(
 		snapID, userID, snapshotDate,
 		5000.0, 4000.0,
 		1000.0, &gainLossPct, &gatedTotal,
-		now, now,
+		(*string)(nil), now, now,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO portfolio_snapshots`)).
@@ -98,17 +98,17 @@ func TestPortfolioSnapshot_GetByUserDateRange_ReturnsOrdered(t *testing.T) {
 		"id", "user_id", "snapshot_date",
 		"total_value", "total_cost_basis",
 		"total_gain_loss", "total_gain_loss_pct", "total_value_investment_only",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	}).
-		AddRow(uuid.New().String(), userID, date1, 4000.0, 3600.0, 400.0, &pct1, &gated1, now, now).
+		AddRow(uuid.New().String(), userID, date1, 4000.0, 3600.0, 400.0, &pct1, &gated1, (*string)(nil), now, now).
 		// The second row's type-gated total is NULL on purpose: a snapshot written before
 		// migration 000189 has no gated total and none can be reconstructed. The reader must
 		// carry that NULL through as nil rather than failing to scan it.
-		AddRow(uuid.New().String(), userID, date2, 4500.0, 4000.0, 500.0, &pct2, nil, now, now)
+		AddRow(uuid.New().String(), userID, date2, 4500.0, 4000.0, 500.0, &pct2, nil, (*string)(nil), now, now)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, snapshot_date, total_value, total_cost_basis,
 			       total_gain_loss, total_gain_loss_pct, total_value_investment_only,
-			       created_at, updated_at
+			       currency_code, created_at, updated_at
 			FROM portfolio_snapshots
 			WHERE user_id = $1
 			  AND snapshot_date >= $2::date
@@ -145,12 +145,12 @@ func TestPortfolioSnapshot_GetByUserDateRange_Empty(t *testing.T) {
 		"id", "user_id", "snapshot_date",
 		"total_value", "total_cost_basis",
 		"total_gain_loss", "total_gain_loss_pct", "total_value_investment_only",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, snapshot_date, total_value, total_cost_basis,
 			       total_gain_loss, total_gain_loss_pct, total_value_investment_only,
-			       created_at, updated_at
+			       currency_code, created_at, updated_at
 			FROM portfolio_snapshots
 			WHERE user_id = $1
 			  AND snapshot_date >= $2::date
@@ -185,16 +185,16 @@ func TestPortfolioSnapshot_GetLatestBefore_Found(t *testing.T) {
 		"id", "user_id", "snapshot_date",
 		"total_value", "total_cost_basis",
 		"total_gain_loss", "total_gain_loss_pct", "total_value_investment_only",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, snapshotDate,
 		3000.0, 2750.0, 250.0, &pct, &gated,
-		now, now,
+		(*string)(nil), now, now,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, snapshot_date, total_value, total_cost_basis,
 			       total_gain_loss, total_gain_loss_pct, total_value_investment_only,
-			       created_at, updated_at
+			       currency_code, created_at, updated_at
 			FROM portfolio_snapshots
 			WHERE user_id = $1
 			  AND snapshot_date < $2::date
@@ -229,12 +229,12 @@ func TestPortfolioSnapshot_GetLatestBefore_NoRows(t *testing.T) {
 		"id", "user_id", "snapshot_date",
 		"total_value", "total_cost_basis",
 		"total_gain_loss", "total_gain_loss_pct", "total_value_investment_only",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, snapshot_date, total_value, total_cost_basis,
 			       total_gain_loss, total_gain_loss_pct, total_value_investment_only,
-			       created_at, updated_at
+			       currency_code, created_at, updated_at
 			FROM portfolio_snapshots
 			WHERE user_id = $1
 			  AND snapshot_date < $2::date

@@ -54,6 +54,17 @@ type Security struct {
 	// modeled with a publicly traded security" (Plaid docs). Stored for future use; nothing reads
 	// it yet.
 	ProxySecurityID *string `json:"proxy_security_id,omitempty" db:"proxy_security_id"`
+	// CurrencyCode is the currency of this row's PRICE columns — close_price above all — from
+	// Plaid's iso_currency_code, falling back to unofficial_currency_code (#1631 M8a). NULL means
+	// unknown: Plaid sent neither, or the row predates the mapper that reads them.
+	//
+	// ⚠ This is NOT interchangeable with Holding.CurrencyCode, and the difference is the whole
+	// reason both exist. Plaid documents close_price as being "priced in USD" when the security
+	// is a foreign currency, while a holding's institution_price is "the last price given by the
+	// institution" — so for such a security the two are quoted in different units, and
+	// subtracting them (which is what a day change does) is a unit error rather than a small
+	// inaccuracy. See domain/investment_currency.go for how that is handled.
+	CurrencyCode *string `json:"currency_code,omitempty" db:"currency_code"`
 
 	// Institutional pricing (overnight updates, not real-time)
 	InstitutionPrice     *float64   `json:"institution_price,omitempty" db:"institution_price"`
@@ -89,6 +100,14 @@ type Holding struct {
 	CostBasis        *float64 `json:"cost_basis,omitempty" db:"cost_basis"`
 	InstitutionValue *float64 `json:"institution_value,omitempty" db:"institution_value"`
 	InstitutionPrice *float64 `json:"institution_price,omitempty" db:"institution_price"`
+	// CurrencyCode is the currency of CostBasis, InstitutionValue and InstitutionPrice on this
+	// row, from Plaid's iso_currency_code falling back to unofficial_currency_code (#1631 M8a).
+	// NULL means unknown, which is the state of every row written before that change.
+	//
+	// Not summable across differing values: there is no FX rate source in this system, so an
+	// aggregate over a mixed set is declared as such rather than converted. See
+	// domain/investment_currency.go.
+	CurrencyCode *string `json:"currency_code,omitempty" db:"currency_code"`
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
@@ -142,6 +161,14 @@ func (h *Holding) DayChange() *float64 {
 		return nil
 	}
 	if h.Security == nil || h.Security.ClosePrice == nil {
+		return nil
+	}
+	// #1631 M8a: refuse the subtraction outright when the two operands are quoted in different
+	// currencies. Plaid prices a foreign-currency security's close_price in USD while the
+	// institution reports the position in its own currency, so this is a unit error and its
+	// result was being rendered as money. There is no FX rate source here to convert with, and
+	// an invented rate would produce a number nobody could tell from a correct one.
+	if h.HasCurrencyMismatch() {
 		return nil
 	}
 	v := h.Quantity * (*h.InstitutionPrice - *h.Security.ClosePrice)
@@ -198,6 +225,10 @@ type InvestmentTransaction struct {
 	Amount                       float64  `json:"amount" db:"amount"`
 	Price                        *float64 `json:"price,omitempty" db:"price"`
 	Fees                         *float64 `json:"fees,omitempty" db:"fees"`
+	// CurrencyCode is the currency of Amount, Price and Fees on this row, from Plaid's
+	// iso_currency_code falling back to unofficial_currency_code (#1631 M8a). NULL means unknown
+	// — the state of every row written before that change.
+	CurrencyCode *string `json:"currency_code,omitempty" db:"currency_code"`
 	// Date is the UTC calendar day of the trade/dividend/fee, over a DATE column
 	// (investment_transactions.date). Kept as time.Time — NOT serialized — because it is also the
 	// SQL bind param on insert and the source of InvestmentTransactionCursor.SVT for keyset
