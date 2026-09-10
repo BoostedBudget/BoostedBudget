@@ -565,10 +565,15 @@ func TestAnalyticsService_GetSpendingByCategory(t *testing.T) {
 	t.Run("returns categories with percentages and display names", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
 			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				// PFCPrimaryDisplay is populated with the raw PFC enum, exactly like
+				// effective_category_name does in production (effectiveCategoryDisplayExpr()) —
+				// left empty here would make this fixture unable to tell the fixed
+				// resolveCategoryDisplay path from the old stored-display-else-pfcDisplayName
+				// bug, since an empty stored value falls through to the same lookup either way.
 				return []domain.SpendingByCategory{
-					{Category: "FOOD_AND_DRINK", Total: 300.0, TransactionCount: 20},
-					{Category: "TRANSPORTATION", Total: 100.0, TransactionCount: 8},
-					{Category: "ENTERTAINMENT", Total: 100.0, TransactionCount: 5},
+					{Category: "FOOD_AND_DRINK", PFCPrimaryDisplay: "FOOD_AND_DRINK", Total: 300.0, TransactionCount: 20},
+					{Category: "TRANSPORTATION", PFCPrimaryDisplay: "TRANSPORTATION", Total: 100.0, TransactionCount: 8},
+					{Category: "ENTERTAINMENT", PFCPrimaryDisplay: "ENTERTAINMENT", Total: 100.0, TransactionCount: 5},
 				}, nil
 			},
 		}
@@ -655,8 +660,11 @@ func TestAnalyticsService_GetSpendingByCategory(t *testing.T) {
 	t.Run("primary enum gets PrimaryDisplayName", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
 			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				// PFCPrimaryDisplay populated with the raw enum, as production always does —
+				// left empty this cannot distinguish the fixed resolveCategoryDisplay path from
+				// the old stored-display-else-pfcDisplayName bug (see fixture note above).
 				return []domain.SpendingByCategory{
-					{Category: "FOOD_AND_DRINK", Total: 200.0, TransactionCount: 10},
+					{Category: "FOOD_AND_DRINK", PFCPrimaryDisplay: "FOOD_AND_DRINK", Total: 200.0, TransactionCount: 10},
 				}, nil
 			},
 		}
@@ -686,10 +694,18 @@ func TestAnalyticsService_GetSpendingByCategory(t *testing.T) {
 	t.Run("detailed enum drill-down gets DetailedDisplayName not PrimaryDisplayName", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
 			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
-				// Drill-down: repository returns detailed-level enums
+				// Drill-down: repository returns detailed-level enums. PFCPrimaryDisplay is set
+				// to the PRIMARY enum ("FOOD_AND_DRINK"), matching what
+				// effective_category_name actually stores for a PFC row in production (#1626)
+				// — the key is the detailed enum but the stored display is always the primary.
+				// Leaving this field empty would make the test unable to tell the fixed
+				// resolveCategoryDisplay path from the old stored-display-else-pfcDisplayName
+				// bug: an empty stored value falls through to pfcDisplayName either way, so
+				// both implementations would produce "Fast Food" and the test would pass
+				// against the broken code too.
 				return []domain.SpendingByCategory{
-					{Category: "FOOD_AND_DRINK_FAST_FOOD", Total: 120.0, TransactionCount: 8},
-					{Category: "FOOD_AND_DRINK_COFFEE", Total: 80.0, TransactionCount: 5},
+					{Category: "FOOD_AND_DRINK_FAST_FOOD", PFCPrimaryDisplay: "FOOD_AND_DRINK", Total: 120.0, TransactionCount: 8},
+					{Category: "FOOD_AND_DRINK_COFFEE", PFCPrimaryDisplay: "FOOD_AND_DRINK", Total: 80.0, TransactionCount: 5},
 				}, nil
 			},
 		}
@@ -723,6 +739,21 @@ func TestAnalyticsService_GetSpendingByCategory(t *testing.T) {
 		// Detailed enum should use DetailedDisplayName: "Fast Food", NOT the primary "Food And Drink"
 		if fastFood.PFCPrimaryDisplay != "Fast Food" {
 			t.Errorf("detailed enum: expected PFCPrimaryDisplay 'Fast Food', got %q", fastFood.PFCPrimaryDisplay)
+		}
+
+		// Find FOOD_AND_DRINK_COFFEE
+		var coffee *domain.SpendingByCategory
+		for i := range result.Categories {
+			if result.Categories[i].Category == "FOOD_AND_DRINK_COFFEE" {
+				coffee = &result.Categories[i]
+			}
+		}
+		if coffee == nil {
+			t.Fatal("FOOD_AND_DRINK_COFFEE not found in results")
+		}
+		// Detailed enum should use DetailedDisplayName: "Coffee", NOT the primary "Food And Drink"
+		if coffee.PFCPrimaryDisplay != "Coffee" {
+			t.Errorf("detailed enum: expected PFCPrimaryDisplay 'Coffee', got %q", coffee.PFCPrimaryDisplay)
 		}
 	})
 }
