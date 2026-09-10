@@ -29,9 +29,10 @@ import (
 //
 // ⚠ WHAT "DESTRUCTIVE" MEANS HERE, PRECISELY — because a static text scanner has to draw the line
 // somewhere and this guard does not claim to catch everything a down migration could do wrong.
-// Two shapes, chosen because they are exactly the two the existing roster was built to guard
-// against (read every entry in downGuardCases and the three named tests: every one is one or the
-// other):
+// THREE shapes today. The first two are exactly what the existing roster was built to guard
+// against (read every entry in downGuardCases and the three named tests: every one is one of
+// them); the third was added by #1625 final review B3, and this paragraph said "two shapes" while
+// listing three until #1625 second fix wave M5 corrected it:
 //
 //  1. `DROP TABLE` naming a history-bearing table — total, unconditional loss of everything in it.
 //  2. An `ALTER TABLE <history-bearing table> ... ON DELETE CASCADE` — re-arming a cascade that a
@@ -47,13 +48,13 @@ import (
 //     same table, and 000190 shipped unguarded WITH a comment asserting the opposite — found by
 //     adversarial review, because nothing scanned for it.
 //
-// A THIRD shape — an unconditional or unqualified `DELETE FROM`/`TRUNCATE` of a history-bearing
+// A FOURTH shape — an unconditional or unqualified `DELETE FROM`/`TRUNCATE` of a history-bearing
 // table — is NOT re-derived here. It already has its own EXHAUSTIVE, checked guard:
 // TestNoUnallowlistedMigrationHistoryDelete (G4, history_delete_sql_guard_test.go) scans every
 // migration file, up and down, and requires an allowlist entry for exactly this shape. Re-deriving
 // it a second time here would be two independently-maintained copies of the same rule, which is the
 // failure mode #1569 round 14 task 2 already spent an effort closing elsewhere in this package.
-// This file's job is the two shapes G4 explicitly disclaims ("a DROP TABLE in a down migration is
+// This file's job is the three shapes G4 explicitly disclaims ("a DROP TABLE in a down migration is
 // out of scope here and is G1's business (the schema half) plus review" — history_delete_sql_guard_
 // test.go) and that G1 ALSO does not cover, because G1 (history_cascade_guard_test.go) queries the
 // LIVE, currently-migrated-up schema, never a down migration's text — a cascade that only exists
@@ -137,8 +138,14 @@ var lifecycleStateColumns = map[string]struct{}{
 var migrationNumberRegexp = regexp.MustCompile(`^(\d+)_`)
 
 // downMigrationDestruction is what the discovery scan found for one `.down.sql`: which
-// history-bearing tables it destroys (by DROP TABLE or by re-arming ON DELETE CASCADE onto one),
-// and whether the file's OWN text carries a runtime refusal naming its own migration number.
+// history-bearing tables it destroys — by DROP TABLE, by re-arming ON DELETE CASCADE onto one, or
+// by dropping a lifecycleStateColumns column off one — and whether the file's OWN text carries a
+// runtime refusal naming its own migration number.
+//
+// ⚠ #1625 second fix wave M5: this comment, scanDownMigrationDestruction's, and the failure
+// message below all still described only the first two shapes after B3 added the third, so a
+// reader trusting any of them would have concluded a DROP COLUMN was out of scope for a scanner
+// that has been flagging them since B3.
 type downMigrationDestruction struct {
 	file    string // basename
 	tables  []string
@@ -238,24 +245,42 @@ var deliberatelyUnguardedDestructiveDownMigrations = map[string]deliberatelyUngu
 	// review B3, 000190 (savings_goal_contributions.archived_at) DO refuse, on the same hazard and
 	// the same table. Whoever settles this should settle it in one direction for all seven.
 	"000149_add_accounts_removed_status.down.sql": {
-		reason: "drops accounts.removed_at with no runtime refusal. removed_at is half of the " +
-			"account tombstone; without it a removed account is indistinguishable from a live one " +
-			"and its balance re-enters every current-state total. Recorded 2026-09-09 (#1625 final " +
-			"review B3) by the DROP COLUMN scan's first run — NOT endorsed as safe.",
+		reason: "drops accounts.removed_at with no runtime refusal — but the DROP COLUMN is " +
+			"UNREACHABLE whenever there is anything to lose, and THIS ENTRY SAID THE OPPOSITE " +
+			"until #1625 second fix wave M5 re-derived it. The retracted claim was 'without it a " +
+			"removed account is indistinguishable from a live one and its balance re-enters every " +
+			"current-state total'. Re-derivation, from the file's own bytes: Step 2 re-adds " +
+			"accounts_valid_status as CHECK (status IN ('active','replaced','expired')), and " +
+			"Postgres VALIDATES a newly added CHECK against existing rows, so the rollback ABORTS " +
+			"on the first account with status='removed' — before Step 3's DROP COLUMN is reached " +
+			"at all. 000149's own Step 3 constraint (accounts_removed_at_consistency) makes " +
+			"status='removed' imply removed_at IS NOT NULL, so any account that would lose a " +
+			"meaningful removed_at is exactly an account that trips the CHECK first. The real " +
+			"hazard is therefore a HARD FAILURE partway through a `down -all`, reported as a " +
+			"constraint violation that says nothing about retention — not silent resurrection. " +
+			"Recorded rather than guarded because the abort already IS a refusal, just an " +
+			"unhelpfully worded one; a `RAISE EXCEPTION` here would only improve the message. " +
+			"Re-derived 2026-09-09 (#1625 second fix wave M5) — NOT endorsed as safe.",
 	},
 	"000154_add_accounts_removed_reason.down.sql": {
 		reason: "drops accounts.removed_reason with no runtime refusal. The file's own header " +
 			"already reasons about the loss and argues it fails SAFE (an account stays removed " +
 			"rather than being wrongly resurrected), which is why this is recorded rather than " +
 			"changed. It is still the only queryable record of WHY an account was removed, which " +
-			"RestoreProviderRemovedAccount reads. Recorded 2026-09-09 (#1625 final review B3).",
+			"RestoreProviderRemovedAccount reads. Recorded 2026-09-09 (#1625 final review B3). " +
+			"RE-DERIVED #1625 second fix wave M5 and it STANDS, unlike 000149's: this file drops " +
+			"a constraint and a column and re-adds NOTHING, so nothing is validated against " +
+			"existing rows and the drop always proceeds. The loss is reachable.",
 	},
 	"000156_add_transactions_tombstone.down.sql": {
 		reason: "drops transactions.deleted_at/deleted_reason/deleted_by with no runtime refusal. " +
 			"The file's own header states the consequence precisely — settled pendings and " +
 			"retained reversals become indistinguishable from live rows and every total that spans " +
 			"them DOUBLE-COUNTS — and states it is lossy by design. Comment-only, no refusal. " +
-			"Recorded 2026-09-09 (#1625 final review B3) — NOT endorsed as safe.",
+			"Recorded 2026-09-09 (#1625 final review B3) — NOT endorsed as safe. RE-DERIVED " +
+			"#1625 second fix wave M5 and it STANDS: the file drops an index, two constraints and " +
+			"three columns and re-adds nothing, so nothing validates against existing rows and " +
+			"the resurrection is reachable on any database holding a tombstoned transaction.",
 	},
 	"000158_soft_delete_config_parents.down.sql": {
 		reason: "drops deleted_at from savings_goals/boosts/budgets/budget_categories with no " +
@@ -263,12 +288,20 @@ var deliberatelyUnguardedDestructiveDownMigrations = map[string]deliberatelyUngu
 			"the reasoning into the file's header, asking a future round for a mechanism that " +
 			"refuses on `deleted_at IS NOT NULL` rather than on a row count. This scan is that " +
 			"mechanism; flipping the documented decision for a shipped migration is a separate " +
-			"call. Recorded 2026-09-09 (#1625 final review B3).",
+			"call. Recorded 2026-09-09 (#1625 final review B3). RE-DERIVED #1625 second fix wave " +
+			"M5, with one finding the earlier text missed: this file DOES re-add three " +
+			"unconditional UNIQUE (user_id, name) constraints before the drops, so it aborts — " +
+			"like 000149 — whenever a live and a tombstoned row share a name. That is a PARTIAL, " +
+			"collision-dependent refusal, not a general one: a tombstoned goal, boost or budget " +
+			"whose name is unique is still resurrected silently, which is why the entry stands.",
 	},
 	"000159_soft_delete_custom_categories.down.sql": {
 		reason: "drops custom_categories.deleted_at with no runtime refusal. Same class, same " +
 			"deliberate #1569 round 12 task 4 decision, same header reasoning as 000158. Recorded " +
-			"2026-09-09 (#1625 final review B3).",
+			"2026-09-09 (#1625 final review B3). RE-DERIVED #1625 second fix wave M5: same partial, " +
+			"collision-dependent abort as 000158 (it re-adds unique_user_category_name before the " +
+			"drops), and the same conclusion — a tombstoned category with a unique name is " +
+			"resurrected silently, so the entry stands.",
 	},
 	"000018_add_transaction_categories_and_tags.down.sql": {
 		reason: "unconditional `DROP TABLE custom_categories CASCADE`, no runtime refusal, no " +
@@ -282,8 +315,9 @@ var deliberatelyUnguardedDestructiveDownMigrations = map[string]deliberatelyUngu
 }
 
 // scanDownMigrationDestruction reads every `.down.sql` under backend/migrations and reports, per
-// file, which history-bearing tables it destroys (DROP TABLE or an ON DELETE CASCADE re-arm) and
-// whether the file's own text refuses for itself.
+// file, which history-bearing tables it destroys (DROP TABLE, an ON DELETE CASCADE re-arm, or a
+// DROP COLUMN of a lifecycleStateColumns column) and whether the file's own text refuses for
+// itself.
 func scanDownMigrationDestruction(t *testing.T) []downMigrationDestruction {
 	t.Helper()
 	dir := filepath.Join(backendDirRoot(t), "migrations")
@@ -438,8 +472,9 @@ func TestNoUndiscoveredDestructiveDownMigration(t *testing.T) {
 	if len(unaccounted) > 0 {
 		t.Errorf("%d destructive down migration(s) are neither guarded nor an explicit, checked "+
 			"exception (#1569 round 14 finding 3).\n"+
-			"A down migration that DROPs a history-bearing table, or re-arms ON DELETE CASCADE onto "+
-			"one, destroys data a live system may since have created. Either give the migration a "+
+			"A down migration that DROPs a history-bearing table, re-arms ON DELETE CASCADE onto "+
+			"one, or drops the lifecycle column that says which universe its retained rows belong "+
+			"to, destroys or resurrects data a live system may since have created. Either give the migration a "+
 			"runtime refusal that names its own number (`RAISE EXCEPTION '... refusing to roll back "+
 			"<NNNNNN>: ...'`, conditioned on the rows actually existing — see 000151.down.sql for the "+
 			"pattern), or add it to deliberatelyUnguardedDestructiveDownMigrations with a reason you "+
@@ -585,10 +620,15 @@ func TestDownMigrationDestructionDiscovery_CommentMentionIsNotAGuard(t *testing.
 }
 
 // TestDownMigrationDestructionDiscovery_RealTreeSample is a light integration-free sanity check
-// against the ACTUAL migrations tree: every migration this round confirmed as guarded (by hand, via
-// grep, before this scanner existed) must still be classified guarded, and the three this round
-// found unguarded must still require their exception entry. If either flips, re-derive before
-// trusting the scan.
+// against the ACTUAL migrations tree: every migration confirmed as guarded (by hand, via grep,
+// before this scanner existed) must still be classified guarded, and every migration recorded as
+// unguarded must still be classified unguarded. If either flips, re-derive before trusting the
+// scan.
+//
+// ⚠ #1625 second fix wave M5: this said "the three this round found unguarded" after B3 brought
+// the roster to nine. The number is no longer written down at all — the hand-derived `unguarded`
+// slice below is now cross-checked against deliberatelyUnguardedDestructiveDownMigrations's keys,
+// so the two lists cannot silently diverge and neither can a sentence counting them.
 func TestDownMigrationDestructionDiscovery_RealTreeSample(t *testing.T) {
 	found := scanDownMigrationDestruction(t)
 	byFile := map[string]downMigrationDestruction{}
@@ -641,6 +681,34 @@ func TestDownMigrationDestructionDiscovery_RealTreeSample(t *testing.T) {
 		"000158_soft_delete_config_parents.down.sql",
 		"000159_soft_delete_custom_categories.down.sql",
 	}
+	// The hand-derived sample and the checked-exception map must be the SAME set. Two
+	// independently maintained lists of the same thing is how the previous docstring came to
+	// count three of nine.
+	if len(unguarded) != len(deliberatelyUnguardedDestructiveDownMigrations) {
+		t.Errorf("the hand-derived unguarded sample has %d entries but "+
+			"deliberatelyUnguardedDestructiveDownMigrations has %d — one of them was updated "+
+			"without the other", len(unguarded), len(deliberatelyUnguardedDestructiveDownMigrations))
+	}
+	for _, f := range unguarded {
+		if _, ok := deliberatelyUnguardedDestructiveDownMigrations[f]; !ok {
+			t.Errorf("%s is in the hand-derived unguarded sample but has no checked-exception "+
+				"entry", f)
+		}
+	}
+	for f := range deliberatelyUnguardedDestructiveDownMigrations {
+		found := false
+		for _, g := range unguarded {
+			if g == f {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s has a checked-exception entry but is missing from the hand-derived "+
+				"unguarded sample", f)
+		}
+	}
+
 	for _, f := range unguarded {
 		d, ok := byFile[f]
 		if !ok {

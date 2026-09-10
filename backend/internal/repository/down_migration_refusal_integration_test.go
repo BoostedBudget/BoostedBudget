@@ -687,3 +687,56 @@ func TestDownMigration000190_RefusalIsNotTOCTOURacy_Integration(t *testing.T) {
 	assert.Contains(t, err.Error(), "lock timeout",
 		"the write must fail by waiting on the guard's lock, not for some other reason: %v", err)
 }
+
+// TestDownMigration000149_AbortsBeforeItCanDropRemovedAt_Integration is #1625 second fix wave M5.
+//
+// down_migration_destruction_discovery_test.go carries 000149 as a CHECKED EXCEPTION: a down
+// migration that drops a lifecycle column (accounts.removed_at) with no `RAISE EXCEPTION` refusal.
+// Its recorded reason said dropping the column makes a removed account indistinguishable from a
+// live one, so its balance re-enters every current-state total.
+//
+// That reason was FALSE, and nothing in this repo checks that an allowlist reason is true — which
+// is why this test exists rather than a third revision of the prose. Step 2 of 000149's down
+// re-adds accounts_valid_status as CHECK (status IN ('active','replaced','expired')), and Postgres
+// validates a newly added CHECK against existing rows. So on any database holding a removed
+// account the rollback ABORTS at Step 2, and Step 3's DROP COLUMN is never reached. The hazard is
+// a hard failure partway through a `down -all` with a message that says nothing about retention —
+// not silent resurrection.
+//
+// Two assertions, because the abort alone would also be produced by an unrelated failure: the
+// error must name accounts_valid_status, and removed_at must still be there afterwards.
+func TestDownMigration000149_AbortsBeforeItCanDropRemovedAt_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	down := readDownMigration(t, "000149_add_accounts_removed_status.down.sql")
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck // always rolled back
+
+	_, _, accountID := seedDownProbeFixture(t, ctx, tx, "000149-abort")
+	_, err = tx.Exec(ctx,
+		`UPDATE accounts SET status = 'removed', removed_at = now(), removed_reason = 'user_disconnect' WHERE id = $1`,
+		accountID)
+	require.NoError(t, err, "seed a REMOVED account — the state whose loss the exception reason is about")
+
+	_, err = tx.Exec(ctx, down)
+	require.Error(t, err,
+		"000149's down completed with a removed account present. If that is now true, the checked "+
+			"exception's re-derived reason is wrong again and the column really is being dropped.")
+	assert.Contains(t, err.Error(), "accounts_valid_status",
+		"the rollback must abort on the narrowed status CHECK (Step 2), which is what makes Step "+
+			"3's DROP COLUMN unreachable: %v", err)
+
+	// The transaction is aborted, so the column check needs its own.
+	probe, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer probe.Rollback(ctx) //nolint:errcheck // always rolled back
+	var exists bool
+	require.NoError(t, probe.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = 'accounts' AND column_name = 'removed_at')
+	`).Scan(&exists))
+	assert.True(t, exists, "accounts.removed_at must survive: the rollback never reached its DROP COLUMN")
+}
