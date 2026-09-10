@@ -9,7 +9,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Issue #1477 — the persisted cross-run resume position for the FOUR capped periodic sweeps.
+// Issue #1477 — the persisted cross-run resume position for the capped periodic sweeps. FOUR at
+// #1477; FIVE since #1626 Phase 3 added SweepCursorBalanceCapture (see that constant's ⚠, and the ⚠
+// on SweepCursorName for the sixth row in the table, which is not one of these sweeps).
 //
 // THE DEFECT. scheduled_deletion_check, retention_cleanup_check's deleteExpiredAccounts,
 // item_cleanup_check and the plaid orphan retry (services.PlaidOrphanRetryService.Sweep) all page
@@ -31,9 +33,12 @@ import (
 // WHERE THE CURSOR LIVES, AND WHY. A dedicated sweep_cursors table (migration 000140), one row per
 // sweep, holding ONLY the sort-key TIMESTAMPS of the position — never a row identity.
 //
-//   - Not a column on the swept table. There is no row that survives to carry it: two of the four
-//     sweeps hard-delete the users they walk (DeleteUserCascade's `DELETE FROM users`), and the
-//     other two stamp rows OUT of their own candidate sets.
+//   - Not a column on the swept table. For four of the five sweeps there is no row that survives to
+//     carry it: two hard-delete the users they walk (DeleteUserCascade's `DELETE FROM users`), and
+//     two stamp rows OUT of their own candidate sets. balance_capture is the exception — its
+//     linked_items rows do survive, and never leave the candidate set at all — but a SWEEP position
+//     is one value per sweep, not per row, so on that table it would have no row to belong to
+//     either.
 //   - No user_id and no foreign key, deliberately, mirroring plaid_orphaned_items (migration
 //     000134) — the established precedent in this schema for a table that must outlive erasure. An
 //     FK into users would either cascade the cursor away in the middle of the sweep that is doing
@@ -42,7 +47,7 @@ import (
 //   - Storing only timestamps costs nothing in precision. A watermark of "the timestamp key where
 //     the last run stopped" is turned back into an EXACT keyset cursor by pairing it with a
 //     synthesized min/max UUID sentinel (MinSweepSentinelID / MaxSweepSentinelID below), because
-//     every one of the four sweeps breaks ties on a `uuid` column and PostgreSQL orders uuid by
+//     every one of the five sweeps breaks ties on a `uuid` column and PostgreSQL orders uuid by
 //     its 16 raw bytes. `(ts, id) > (T, 00000000-…-000000000000)` is precisely "ts >= T", and
 //     `(ts, id) > (T, ffffffff-…-ffffffffffff)` is precisely "ts > T". So the sweeps' existing
 //     page-query signatures and their existing keyset predicates are used UNCHANGED; nothing about
@@ -150,7 +155,7 @@ import (
 //	    The alternative to the exclusive advance is also worse than the residual: without it, such a
 //	    group stalls the sweep entirely and NOTHING behind it is ever reached.
 //
-// Compare what was true BEFORE, for all four sweeps: above the cap, rows past it were reached
+// Compare what was true BEFORE, for all five sweeps: above the cap, rows past it were reached
 // NEVER, tie group or not, for as long as the head kept failing. The change is from "never" to
 // "within one cycle", not to "always promptly" and not to "always".
 
@@ -342,8 +347,9 @@ func NextPosition(start *SweepPosition, reached SweepPosition) SweepPosition {
 // design, the reset rules and the bounded starvation guarantee.
 //
 // Deliberately NOT folded into ProfileRepository or LinkedItemRepository: the mechanism is shared
-// by four sweeps across three different tables, and it is the one piece of state here that must NOT
-// be user-scoped.
+// by five sweeps across three different tables — users (scheduled_deletion, expired_retention),
+// linked_items (item_cleanup, balance_capture_dispatch) and plaid_orphaned_items
+// (plaid_orphan_retry) — and it is the one piece of state here that must NOT be user-scoped.
 type SweepCursorRepository interface {
 	// Load returns the stored resume position for a sweep, or (nil, nil) when there is none —
 	// which means "start from the beginning". Absence, not a sentinel value, is the encoding,

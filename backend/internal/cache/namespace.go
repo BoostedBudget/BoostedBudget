@@ -169,6 +169,16 @@ var namespaceRegistry = map[Namespace]namespaceConfig{
 	// TotalBalance alone — never ByType or UntypedBalance. So neither F1 nor F5 changes the bytes
 	// GetNetWorthTrend returns for identical arguments, and the bump does not need them: F2 alone
 	// is sufficient and is the only reason recorded here.
+	//
+	// ⚠ NOT BUMPED to 9 for the final gate's finding F6, and that is a decision rather than an
+	// oversight. F6 made GetNetWorthTrend's bounds `time.Now().UTC()` instead of `time.Now()`
+	// (analytics_service.go), which is the SAME INSTANT with a different Location — so the response
+	// bytes change only where that Location is read, i.e. only on a host whose local calendar day
+	// differs from UTC's. Every deployed environment runs UTC, where the pre-fix and post-fix bytes
+	// are identical for identical arguments, and a bump's cost (a cold cache for every user on
+	// every method in this namespace) buys nothing. On a non-UTC DEVELOPER machine a pre-fix entry
+	// could serve the old local-day bound for up to the 120s TTL; that is not an environment this
+	// cache's correctness is claimed for.
 	NamespaceAnalytics: {
 		TTL: 120 * time.Second, SchemaVersion: 8, ScopeKind: ScopeUser, DefaultEnabled: true,
 	},

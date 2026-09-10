@@ -91,7 +91,22 @@ const BalanceSnapshotDispatchHourUTC = 21
 // It is now CURSOR-RESUMABLE across runs (repository.SweepCursorBalanceCapture), so the cap bounds
 // one run's fan-out and nothing else: a run that stops on the cap persists where it stopped, the
 // next run continues there, and a run whose persisted position is past the end wraps to the
-// beginning WITHIN that run. No item can be starved indefinitely.
+// beginning WITHIN that run.
+//
+// ⚠ THE REACHABILITY CLAIM IS BOUNDED, NOT ABSOLUTE, and it used to be stated absolutely ("No item
+// can be starved indefinitely") — which is flatly false for one documented shape. Every item is
+// reached within ceil(N/(cap-1)) + 1 runs EXCEPT the members of an OVER-CAP `created_at` TIE GROUP
+// past the first cap-worth: sweep_cursors persists the timestamp half of the position only, so a run
+// that spends its whole cap inside one `created_at` advances no timestamp and NextPosition
+// (repository/sweep_cursor_repository.go) must go Exclusive to make forward progress at all — which
+// steps the watermark past the rows it never looked at, on every run and after every wrap. That
+// residual is documented for all five sweeps in that file's header, along with why the fix
+// (sweep_cursors.ts1_offset, migration 000183, which resumes INSIDE a group without persisting a row
+// identity) is #1477's work and not adopted here yet.
+//
+// ⚠ Reaching it needs more than `cap` linked_items sharing ONE `created_at` — more than 5,000 here
+// — which is not what ordinary sign-ups produce but IS what a single-transaction backfill produces,
+// since now() is transaction-constant in Postgres.
 //
 // ⚠ WHAT THE CAP NOW COSTS IS CADENCE, NOT COVERAGE, and that is the difference from every other
 // sweep that shares this mechanism. Their candidate sets SHRINK as they work (a marked item leaves
@@ -306,12 +321,19 @@ func (w *BalanceSnapshotDispatchWorker) Work(ctx context.Context, job *river.Job
 		// (fetchedCount < pageSize means it had nothing left to give, regardless of the cap).
 		fetchedCount := len(targets)
 
+		// truncated records whether the CAP — not the repository — decided where this page ended.
+		// It is what separates "the cap stopped us mid-page" from "the repository ran out", and the
+		// two are NOT mutually exclusive: a short final page can also be over-cap. See the
+		// `truncated || !exhausted` guard below for why conflating them cleared the cursor on a run
+		// that had genuinely stopped early.
+		truncated := false
 		if remaining := w.maxItemsPerRun - seen; fetchedCount >= remaining {
 			// remaining <= 0 is unreachable given the break at the bottom of this loop, but
 			// targets[:remaining] would panic on a negative length, so it is guarded explicitly.
 			if remaining <= 0 {
 				break
 			}
+			truncated = fetchedCount > remaining
 			targets = targets[:remaining]
 		}
 
@@ -355,7 +377,14 @@ func (w *BalanceSnapshotDispatchWorker) Work(ctx context.Context, job *river.Job
 		// REPOSITORY said, even on a page that also happens to trip the cap.
 		exhausted := fetchedCount < w.pageSize
 
-		if seen >= w.maxItemsPerRun && !exhausted {
+		// ⚠ `truncated ||` IS LOAD-BEARING AND WAS MISSING. A short final page that the cap ALSO
+		// truncates is both exhausted and over-cap; with only `!exhausted` here the run skipped
+		// cappedStop, broke on exhausted, and Finish CLEARED the cursor — recording "we reached the
+		// end" for a run that had left up to pageSize-1 rows undispatched, which the next run then
+		// truncated away again from the same starting point. Asking "did the cap decide where this
+		// page ended?" is the question that actually distinguishes the two.
+		// Pinned by TestBalanceSnapshotDispatch_CapHitInsideAShortFinalPageStillPersistsItsPosition.
+		if seen >= w.maxItemsPerRun && (truncated || !exhausted) {
 			// cap_reached, as a WARN rather than a field on the completion line, because it now
 			// means something an operator should act on: the whole active set no longer fits in one
 			// run, so every item's capture cadence has degraded below daily. It is NOT permanent

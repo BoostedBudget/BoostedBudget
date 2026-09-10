@@ -13,6 +13,13 @@
  * the account it names — the rule row and its execution history are both retained — so narrowing
  * this to active accounts would put the neutral placeholder in front of a name we hold.
  * The account SELECTION path (the editor's dropdown) correctly stays on the active list.
+ *
+ * ⚠ `include_hidden: 'true'` IS AS LOAD-BEARING AS `useAllAccounts` ITSELF, and it was missing.
+ * HIDDEN is a separate axis from STATUS: `status: 'all_statuses'` widens active/replaced/expired/
+ * removed, while hiding is a per-account flag the backend filters on independently — without the
+ * param, `account_repository.go` appends `is_hidden = FALSE` to the list read. So a rule naming an
+ * account the user later HID rendered "Unknown account" even though the name is retained, which is
+ * precisely the failure this hook exists to prevent, one axis over.
  */
 
 import { useMemo } from 'react'
@@ -20,6 +27,6 @@ import { useAllAccounts } from '@/features/accounts/hooks'
 import { buildAccountLabelIndex } from '../utils/formatConditionValue'
 
 export function useRuleAccountLabels(): Readonly<Record<string, string>> {
-  const { accounts } = useAllAccounts()
+  const { accounts } = useAllAccounts({ include_hidden: 'true' })
   return useMemo(() => buildAccountLabelIndex(accounts ?? []), [accounts])
 }

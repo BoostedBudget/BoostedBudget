@@ -115,7 +115,7 @@ func TestIsRedundantSnapshot(t *testing.T) {
 //
 // THE DEFECT. The window is five minutes of ELAPSED TIME and knows nothing about the UTC day, but
 // the gap-filler's entire unit of work IS the UTC day: balanceCaptureService.CaptureItemBalances
-// asks AccountsMissingDailySnapshot whether TODAY's cohort is complete, and migration 000191's
+// asks AccountsMissingDailySnapshot whether TODAY's cohort is complete, and migration 000194's
 // partial unique index is keyed on the UTC date. So a capture landing in the 00:00–00:05 UTC
 // window — a RunOnStart deploy just after midnight, or River retrying a 23:5x attempt that failed —
 // saw the account as missing today's row, deduped against YESTERDAY's 23:58 identical row, wrote
@@ -147,7 +147,7 @@ func TestIsRedundantSnapshot_NeverDedupsAcrossAUTCDayBoundary(t *testing.T) {
 
 	assert.False(t, isRedundantSnapshot(latest, next, justAfterMidnight, window),
 		"an identical snapshot from YESTERDAY must never suppress today's row. The gap-filler's unit "+
-			"of work is the UTC day (AccountsMissingDailySnapshot, migration 000191's date-keyed "+
+			"of work is the UTC day (AccountsMissingDailySnapshot, migration 000194's date-keyed "+
 			"index), so suppressing here writes nothing for a day the cohort check just reported as "+
 			"missing — and returns success while doing it")
 
@@ -177,7 +177,7 @@ func TestIsRedundantSnapshot_NeverDedupsAcrossAUTCDayBoundary(t *testing.T) {
 	// choice. In UTC+13 these two instants read 12:58 and 13:02 on the SAME local date (the 25th),
 	// while their UTC dates are the 24th and the 25th. So a comparison that dropped the .UTC()
 	// conversion would call them the same day and dedup — losing the row for UTC's 25th, which is
-	// the day AccountsMissingDailySnapshot asked about and the day migration 000191's index is keyed
+	// the day AccountsMissingDailySnapshot asked about and the day migration 000194's index is keyed
 	// on. Converting only ONE operand does NOT falsify it: a UTC `latest` against a UTC+13 `now`
 	// still differs by local date, so that fixture passes with or without the conversion. It was
 	// written that way first and a mutation dropping both .UTC() calls survived it.
