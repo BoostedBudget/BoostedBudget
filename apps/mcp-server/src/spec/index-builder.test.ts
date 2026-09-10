@@ -566,13 +566,14 @@ describe('issue #1610a: spec-index.json byte budget', () => {
   it('stays under a generous ceiling — regression guard against depth-2 response schemas, not a precision pin', () => {
     const raw = readFileSync(COMMITTED_INDEX_PATH, 'utf-8')
     const bytes = Buffer.byteLength(raw, 'utf-8')
-    // ~350 KB: headroom above the ~332 KB measured at depth 1 + allowed-only, comfortably below
+    // ~380 KB: headroom above the ~363 KB measured at depth 1 + allowed-only, comfortably below
     // the ~467-487 KB a depth-2 (with-or-without-descriptions) response schema would produce.
-    // Raised from 330 KB in this round: effective_merchant condition, uncoercible_condition_value
-    // quarantine reason, quarantine reason→behaviour mappings in doc tags, PFC closed-set endpoint
-    // pointers, and minimum/maxLength constraints on savings-goal request schemas. This guard exists
-    // to catch a depth-2 explosion, not to pin the index to the byte, so the headroom is restored
-    // rather than the entry cut.
-    expect(bytes).toBeLessThan(350_000)
+    // Raised from 350 KB in this round (#1630 Task 12a): every request AND response body field
+    // that carries an OpenAPI `format` (dates, uuids, doubles, int64s, etc.) now emits a `format`
+    // key — this is a real, permanent, and desired size increase (the whole point of the fix:
+    // date fields must announce themselves), not a leak. This guard exists to catch a depth-2
+    // explosion, not to pin the index to the byte, so the headroom is restored rather than the
+    // entry cut.
+    expect(bytes).toBeLessThan(380_000)
   })
 })
