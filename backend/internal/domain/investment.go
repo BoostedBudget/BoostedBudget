@@ -137,14 +137,20 @@ func (h *Holding) DayChangePct() *float64 {
 // InvestmentTransaction represents a trade, dividend, fee, or other investment activity.
 // Investment transactions are immutable once posted by Plaid.
 type InvestmentTransaction struct {
-	ID                           string    `json:"id" db:"id"`
-	UserID                       string    `json:"user_id" db:"user_id"`
-	AccountID                    string    `json:"account_id" db:"account_id"`
-	UserAccountID                *string   `json:"user_account_id,omitempty" db:"user_account_id"` // Stable reference across Plaid re-links (Issue #1109)
-	SecurityID                   *string   `json:"security_id,omitempty" db:"security_id"`         // NULL for cash transactions
-	PlaidSecurityID              string    `json:"plaid_security_id,omitempty" db:"-"`             // transient: used during sync only
-	TickerSymbol                 *string   `json:"ticker_symbol,omitempty" db:"-"`                 // from LEFT JOIN securities in GetByUserIDKeyset; nil for cash
-	SecurityName                 *string   `json:"security_name,omitempty" db:"-"`                 // from LEFT JOIN securities in GetByUserIDKeyset; nil for cash
+	ID              string  `json:"id" db:"id"`
+	UserID          string  `json:"user_id" db:"user_id"`
+	AccountID       string  `json:"account_id" db:"account_id"`
+	UserAccountID   *string `json:"user_account_id,omitempty" db:"user_account_id"` // Stable reference across Plaid re-links (Issue #1109)
+	SecurityID      *string `json:"security_id,omitempty" db:"security_id"`         // NULL for cash transactions
+	PlaidSecurityID string  `json:"plaid_security_id,omitempty" db:"-"`             // transient: used during sync only
+	TickerSymbol    *string `json:"ticker_symbol,omitempty" db:"-"`                 // from LEFT JOIN securities in GetByUserIDKeyset; nil for cash
+	SecurityName    *string `json:"security_name,omitempty" db:"-"`                 // from LEFT JOIN securities in GetByUserIDKeyset; nil for cash
+	// ActivityType is the NORMALIZED display bucket (buy/sell/dividend/reinvest/interest/fee/
+	// transfer/cash/other), derived at read time by domain.NormalizeTradeType. Transient like the
+	// two fields above. Added by #1631: the investments page was passing the RAW Plaid `type` to
+	// the same chip the transactions feed feeds normalized, so the two screens disagreed about the
+	// same row and the investments page could never show Dividend or Reinvest at all.
+	ActivityType                 *string   `json:"activity_type,omitempty" db:"-"`
 	PlaidInvestmentTransactionID string    `json:"plaid_investment_transaction_id" db:"plaid_investment_transaction_id"`
 	Type                         string    `json:"type" db:"type"` // buy, sell, dividend, cash, fee, transfer, etc.
 	Subtype                      *string   `json:"subtype,omitempty" db:"subtype"`
@@ -216,7 +222,8 @@ type InvestmentTransactionFilters struct {
 	// AccountID filters to a specific account (chain-expanded via user_account_id).
 	AccountID  *string
 	SecurityID string
-	// ActivityTypes filters by normalized trade type (buy/sell/dividend/reinvest/fee/cash/other).
+	// ActivityTypes filters by normalized trade type
+	// (buy/sell/dividend/reinvest/interest/fee/transfer/cash/other).
 	// Applied as a SQL WHERE via domain.TradeTypeToSQLPredicate; never post-fetch.
 	ActivityTypes []string
 	StartDate     *time.Time

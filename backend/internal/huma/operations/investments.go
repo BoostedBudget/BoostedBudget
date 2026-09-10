@@ -89,7 +89,7 @@ type GetInvestmentTransactionsInput struct {
 	inputs.CursorPaginationInput
 	AccountID     string `query:"account_id" doc:"Filter by account ID (chain-expanded)"`
 	SecurityID    string `query:"security_id" doc:"Filter by security ID"`
-	ActivityTypes string `query:"activity_types" doc:"Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other)"`
+	ActivityTypes string `query:"activity_types" doc:"Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,interest,fee,transfer,cash,other)"`
 	StartDate     string `query:"start_date" doc:"Filter transactions on or after this date (YYYY-MM-DD)"`
 	EndDate       string `query:"end_date" doc:"Filter transactions on or before this date (YYYY-MM-DD)"`
 }
@@ -510,4 +510,3 @@ Single DB round-trip; designed as an AI-tool-callable function.`,
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetInvestmentIncomeSummary)
 }
-

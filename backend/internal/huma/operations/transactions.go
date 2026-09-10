@@ -81,8 +81,9 @@ type GetTransactionsInput struct {
 	IncludeInvestmentActivity string `query:"include_investment_activity" doc:"Merge investment transactions into feed (true/false, default true). When omitted with a non-date sort, silently degrades to false. Explicit true with non-date sort returns 400. Requires sort_by=date for explicit merge."`
 
 	// ActivityTypes filters investment activity by normalized trade type when
-	// include_investment_activity=true. Values: buy, sell, dividend, reinvest, fee, cash, other.
-	ActivityTypes string `query:"activity_types" doc:"Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true."`
+	// include_investment_activity=true. Values: buy, sell, dividend, reinvest, interest, fee,
+	// transfer, cash, other. #1631 added interest and transfer.
+	ActivityTypes string `query:"activity_types" doc:"Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,interest,fee,transfer,cash,other). Only used when include_investment_activity=true."`
 
 	// Scope must never be "household" — members must never drill into another member's
 	// raw transactions (Issue #1369 decision #5). Rejected with 400 in the handler.

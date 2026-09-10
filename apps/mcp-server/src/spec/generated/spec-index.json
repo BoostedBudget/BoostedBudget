@@ -6787,7 +6787,7 @@
         {
           "name": "activity_types",
           "in": "query",
-          "description": "Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other)",
+          "description": "Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,interest,fee,transfer,cash,other)",
           "type": "string"
         },
         {
@@ -10346,7 +10346,7 @@
         {
           "name": "activity_types",
           "in": "query",
-          "description": "Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true.",
+          "description": "Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,interest,fee,transfer,cash,other). Only used when include_investment_activity=true.",
           "type": "string"
         },
         {

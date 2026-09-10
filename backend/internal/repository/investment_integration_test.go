@@ -933,36 +933,106 @@ func TestInvestment_TradeTypePartition_RoundTrip_Integration(t *testing.T) {
 	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "inv-r43")
 	userIDStr := userID.String()
 
-	// Each entry represents one bucket — one representative (type, subtype) that
-	// NormalizeTradeType maps to the expected display value.
+	// #1631 rewrote this test, and the rewrite is the point. It used to attach ONE security to all
+	// eight cases and assert that cash/deposit → "cash" — which is exactly the row the structural
+	// rule now classifies as a dividend. Extending the table would have left this test asserting
+	// the pre-#1631 behaviour, so the fixture had to grow instead: THREE securities, one per state
+	// of securities.is_cash_equivalent, and every case names which it attaches to.
+	//
+	// The third security (flag NULL) is not decoration. A nullable flag is reachable from Plaid
+	// (NullableBool), and a bare `NOT sec.is_cash_equivalent` on a NULL is NULL — which would drop
+	// the row out of BOTH the dividend bucket and the cash bucket, a partition hole no amount of
+	// per-bucket testing would reveal.
+	cashEquivSecID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO securities (id, plaid_security_id, name, ticker_symbol, type, is_cash_equivalent)
+		VALUES ($1, $2, 'US Dollar', 'CUR:USD', 'cash', true)
+	`, cashEquivSecID, "r43-sec-cash-"+cashEquivSecID.String())
+	require.NoError(t, err, "seed cash-equivalent security")
+
+	nullFlagSecID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO securities (id, plaid_security_id, name, ticker_symbol, type, is_cash_equivalent)
+		VALUES ($1, $2, 'Unflagged Fund', 'UNFLG', 'mutual fund', NULL)
+	`, nullFlagSecID, "r43-sec-null-"+nullFlagSecID.String())
+	require.NoError(t, err, "seed security with a NULL is_cash_equivalent")
+
+	// secID from the fixture is a real, non-cash-equivalent security (is_cash_equivalent defaults
+	// to FALSE), which is what makes it the structural-rule carrier.
 	type bucketCase struct {
 		plaidID  string
 		sqlType  string
-		sqlSub   *string // nil → no subtype column
-		expected string  // display value = NormalizeTradeType result = filter bucket
+		sqlSub   *string   // nil → no subtype column
+		security uuid.UUID // which of the three securities this row references
+		expected string    // display value = NormalizeTradeType result = filter bucket
 	}
 	subPtr := func(s string) *string { return &s }
 	cases := []bucketCase{
-		{plaidID: "r43-buy", sqlType: "buy", sqlSub: nil, expected: "buy"},
-		{plaidID: "r43-sell", sqlType: "sell", sqlSub: nil, expected: "sell"},
-		{plaidID: "r43-div", sqlType: "cash", sqlSub: subPtr("dividend"), expected: "dividend"},
-		{plaidID: "r43-reinv", sqlType: "cash", sqlSub: subPtr("dividend reinvestment"), expected: "reinvest"},
-		{plaidID: "r43-fee-type", sqlType: "fee", sqlSub: nil, expected: "fee"},
-		{plaidID: "r43-fee-sub", sqlType: "cash", sqlSub: subPtr("management fee"), expected: "fee"},
-		{plaidID: "r43-cash", sqlType: "cash", sqlSub: subPtr("deposit"), expected: "cash"},
-		{plaidID: "r43-transfer", sqlType: "transfer", sqlSub: nil, expected: "other"},
+		{plaidID: "r43-buy", sqlType: "buy", sqlSub: nil, security: secID, expected: "buy"},
+		{plaidID: "r43-sell", sqlType: "sell", sqlSub: nil, security: secID, expected: "sell"},
+		{plaidID: "r43-div", sqlType: "cash", sqlSub: subPtr("dividend"), security: secID, expected: "dividend"},
+		{plaidID: "r43-reinv", sqlType: "cash", sqlSub: subPtr("dividend reinvestment"), security: secID, expected: "reinvest"},
+		{plaidID: "r43-fee-type", sqlType: "fee", sqlSub: nil, security: secID, expected: "fee"},
+		{plaidID: "r43-fee-sub", sqlType: "cash", sqlSub: subPtr("management fee"), security: secID, expected: "fee"},
+		{plaidID: "r43-interest", sqlType: "cash", sqlSub: subPtr("interest"), security: secID, expected: "interest"},
+		{plaidID: "r43-capgain", sqlType: "cash", sqlSub: subPtr("long-term capital gain"), security: secID, expected: "dividend"},
+		{plaidID: "r43-transfer", sqlType: "transfer", sqlSub: subPtr("transfer"), security: secID, expected: "transfer"},
+		{plaidID: "r43-split", sqlType: "transfer", sqlSub: subPtr("split"), security: secID, expected: "other"},
+		{plaidID: "r43-contrib", sqlType: "cash", sqlSub: subPtr("contribution"), security: cashEquivSecID, expected: "transfer"},
+
+		// The structural pair — the #1631 production shape. Same subtypes, opposite classification,
+		// decided solely by the joined security.
+		{plaidID: "r43-struct-div", sqlType: "cash", sqlSub: subPtr("deposit"), security: secID, expected: "dividend"},
+		{plaidID: "r43-struct-reinv", sqlType: "cash", sqlSub: subPtr("withdrawal"), security: secID, expected: "reinvest"},
+		{plaidID: "r43-cash-dep", sqlType: "cash", sqlSub: subPtr("deposit"), security: cashEquivSecID, expected: "cash"},
+		{plaidID: "r43-cash-wdl", sqlType: "cash", sqlSub: subPtr("withdrawal"), security: cashEquivSecID, expected: "cash"},
+
+		// A NULL flag must behave as "not affirmatively cash-equivalent" on BOTH sides. The Go rule
+		// receives the COALESCEd false, so these land on Cash — and the SQL cash bucket must claim
+		// them rather than letting three-valued logic drop them.
+		{plaidID: "r43-nullflag-dep", sqlType: "cash", sqlSub: subPtr("deposit"), security: nullFlagSecID, expected: "cash"},
+		{plaidID: "r43-nullflag-wdl", sqlType: "cash", sqlSub: subPtr("withdrawal"), security: nullFlagSecID, expected: "cash"},
+
+		// A cash row with NO subtype at all: the other NULL that a bare NOT IN would swallow.
+		{plaidID: "r43-nosub", sqlType: "cash", sqlSub: nil, security: cashEquivSecID, expected: "cash"},
 	}
 
-	// Verify NormalizeTradeType agrees with each case, and seed the transaction.
-	for _, c := range cases {
-		// Confirm NormalizeTradeType returns the expected display value (display side).
-		got := domain.NormalizeTradeType(c.sqlType, c.sqlSub)
-		require.Equal(t, c.expected, got,
-			"NormalizeTradeType(%q, %v) must return %q (display side of partition)",
-			c.sqlType, c.sqlSub, c.expected)
+	// wantByBucket records which plaid ids each bucket must return — so the filter side is asserted
+	// by EXACT SET MEMBERSHIP. The pre-#1631 version asserted only require.NotEmpty, which would
+	// pass for a predicate that returned the wrong rows entirely.
+	wantByBucket := map[string]map[string]bool{}
+	plaidIDByCase := map[string]string{}
 
-		// Seed the transaction.
+	for _, c := range cases {
+		// Display side. is_cash_equivalent is TRUE only for the cash-equivalent security; the
+		// NULL-flag security COALESCEs to false, exactly as the SQL does.
+		attached := true
+		// The NULL-flag security carries a genuine nil, not a false — the same value the SELECT
+		// hands the production path — so these cases exercise the "unknown flag" branch.
+		var isCashEq *bool
+		switch c.security {
+		case cashEquivSecID:
+			v := true
+			isCashEq = &v
+		case nullFlagSecID:
+			isCashEq = nil
+		default:
+			v := false
+			isCashEq = &v
+		}
+		got := domain.NormalizeTradeType(c.sqlType, c.sqlSub, attached, isCashEq)
+		require.Equal(t, c.expected, got,
+			"NormalizeTradeType(%q, %v, attached=%v, cashEquiv=%v) must return %q (display side of partition)",
+			c.sqlType, c.sqlSub, attached, isCashEq, c.expected)
+
 		txnID := uuid.New()
+		fullPlaidID := c.plaidID + "-" + txnID.String()
+		plaidIDByCase[c.plaidID] = fullPlaidID
+		if wantByBucket[c.expected] == nil {
+			wantByBucket[c.expected] = map[string]bool{}
+		}
+		wantByBucket[c.expected][fullPlaidID] = true
+
 		var seedErr error
 		if c.sqlSub != nil {
 			_, seedErr = tx.Exec(ctx, `
@@ -970,7 +1040,7 @@ func TestInvestment_TradeTypePartition_RoundTrip_Integration(t *testing.T) {
 					(id, user_id, account_id, security_id, plaid_investment_transaction_id,
 					 type, subtype, name, amount, date)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 100.00, '2024-08-01')
-			`, txnID, userID, accountID, secID, c.plaidID+"-"+txnID.String(),
+			`, txnID, userID, accountID, c.security, fullPlaidID,
 				c.sqlType, *c.sqlSub, "R43 "+c.plaidID)
 		} else {
 			_, seedErr = tx.Exec(ctx, `
@@ -978,7 +1048,7 @@ func TestInvestment_TradeTypePartition_RoundTrip_Integration(t *testing.T) {
 					(id, user_id, account_id, security_id, plaid_investment_transaction_id,
 					 type, name, amount, date)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, 100.00, '2024-08-01')
-			`, txnID, userID, accountID, secID, c.plaidID+"-"+txnID.String(),
+			`, txnID, userID, accountID, c.security, fullPlaidID,
 				c.sqlType, "R43 "+c.plaidID)
 		}
 		require.NoError(t, seedErr, "seed %s transaction", c.plaidID)
@@ -986,28 +1056,32 @@ func TestInvestment_TradeTypePartition_RoundTrip_Integration(t *testing.T) {
 
 	repo := NewInvestmentTransactionRepository(tx)
 
-	// For each unique bucket, call GetByUserIDKeyset with [bucket] and verify the
-	// representative row(s) are returned (filter side of partition). Uniquify to avoid
-	// running "fee" twice (it has two representatives: fee-type and fee-sub).
-	seen := make(map[string]bool)
-	for _, c := range cases {
-		if seen[c.expected] {
-			continue
-		}
-		seen[c.expected] = true
+	// Filter side, asserted as an exact partition: every bucket returns precisely the rows the
+	// display side labelled with it — no more (which would double-count) and no fewer (which would
+	// make a visible label unreachable).
+	for bucket, want := range wantByBucket {
+		filters := domain.InvestmentTransactionFilters{ActivityTypes: []string{bucket}}
+		txns, _, filterErr := repo.GetByUserIDKeyset(ctx, userIDStr, filters, nil, 100)
+		require.NoError(t, filterErr, "GetByUserIDKeyset with activity_types=[%s] must not error", bucket)
 
-		filters := domain.InvestmentTransactionFilters{
-			ActivityTypes: []string{c.expected},
+		got := map[string]bool{}
+		for _, txn := range txns {
+			got[txn.PlaidInvestmentTransactionID] = true
 		}
-		txns, _, filterErr := repo.GetByUserIDKeyset(ctx, userIDStr, filters, nil, 20)
-		require.NoError(t, filterErr, "GetByUserIDKeyset with activity_types=[%s] must not error", c.expected)
+		require.Equal(t, want, got,
+			"activity_types=[%s] must return EXACTLY the rows NormalizeTradeType labels %q — "+
+				"a mismatch means the Go and SQL halves of the partition have desynced (#1631)",
+			bucket, bucket)
+	}
 
-		// Assert at least one row was returned — specifically that the row whose
-		// NormalizeTradeType maps to this bucket is reachable by the filter.
-		require.NotEmpty(t, txns,
-			"activity_types=[%s] must return at least the %s-representative row "+
-				"(partition round-trip: NormalizeTradeType agreed but SQL filter excludes it — regression of R3-1)",
-			c.expected, c.plaidID)
+	// Every row must also carry the normalized activity_type on the way out, so the investments
+	// page cannot fall back to the raw Plaid type and disagree with the unified feed (#1631).
+	all, _, err := repo.GetByUserIDKeyset(ctx, userIDStr, domain.InvestmentTransactionFilters{}, nil, 100)
+	require.NoError(t, err)
+	require.Len(t, all, len(cases), "every seeded row must come back unfiltered")
+	for _, txn := range all {
+		require.NotNil(t, txn.ActivityType,
+			"row %s must carry a normalized activity_type", txn.PlaidInvestmentTransactionID)
 	}
 }
 
