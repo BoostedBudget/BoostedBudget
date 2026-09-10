@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -1400,6 +1402,24 @@ func (r *analyticsRepository) getSpendingTrendsHousehold(ctx context.Context, re
 // rather than shared: effectiveCategoryExpr's token format is an implementation detail of these
 // reads, and a widely-imported helper would invite parsing the token in places that should be
 // handling display through resolveCategoryDisplay instead (#1626).
+//
+// ⚠ IT PARSES THE SUFFIX AS A UUID, AND THAT IS WHAT MAKES THE REPOSITORY SAFE BY CONSTRUCTION
+// (#1626 gap G9). categoryTotalQuery(true) emits `cc.id = $5::uuid`, so the suffix is CAST by
+// Postgres rather than compared as text, and an unparseable one fails the whole statement — which
+// MapError classifies as a 500. services.validateCategoryToken already rejects that shape with a
+// 400, but it guards the SERVICE, not the cast: any other repository caller reaching
+// GetCategoryTotalForPeriod directly would get the 500 back, with nothing in the query's shape to
+// warn them. Returning false here means the uuid subquery is never emitted and no uuid is ever
+// bound, so a malformed token degrades to the plain text comparison it had before that subquery
+// existed — it matches no transaction and answers zero.
+//
+// ⚠ IT SAYS NOTHING ABOUT WHETHER THE CATEGORY EXISTS, and must not: a valid uuid naming a
+// tombstoned or absent custom category is a legitimate request that answers with a zero total and
+// resolveCategoryDisplay's "Custom category" label. Only the SHAPE is checked.
+//
+// ⚠ uuid.Parse, not a regexp, and the SAME call the service layer makes: it is the parser the
+// ::uuid cast will apply, so this gate can neither admit a spelling Postgres would reject nor
+// reject one it would accept.
 func customCategoryIDFromToken(category string) (string, bool) {
 	const tok = "custom:"
 	if !strings.HasPrefix(category, tok) {
@@ -1407,6 +1427,9 @@ func customCategoryIDFromToken(category string) (string, bool) {
 	}
 	id := strings.TrimPrefix(category, tok)
 	if id == "" {
+		return "", false
+	}
+	if _, err := uuid.Parse(id); err != nil {
 		return "", false
 	}
 	return id, true

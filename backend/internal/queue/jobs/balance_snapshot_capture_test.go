@@ -147,8 +147,15 @@ func captureDispatchJob() *river.Job[BalanceSnapshotDispatchArgs] {
 }
 
 func captureCaptureJob(args BalanceSnapshotCaptureArgs) *river.Job[BalanceSnapshotCaptureArgs] {
+	return captureCaptureJobAttempt(args, 1)
+}
+
+// captureCaptureJobAttempt is captureCaptureJob with the ATTEMPT NUMBER under the caller's control.
+// The attempt is not decoration: it is what the worker uses to close the crash window between a
+// committed snapshot and its cache-generation bump (see the bump condition in Work).
+func captureCaptureJobAttempt(args BalanceSnapshotCaptureArgs, attempt int) *river.Job[BalanceSnapshotCaptureArgs] {
 	return &river.Job[BalanceSnapshotCaptureArgs]{
-		JobRow: &rivertype.JobRow{ID: 2, Attempt: 1, Queue: queue.QueueLow},
+		JobRow: &rivertype.JobRow{ID: 2, Attempt: attempt, Queue: queue.QueueLow},
 		Args:   args,
 	}
 }
@@ -829,4 +836,98 @@ func TestBalanceSnapshotDispatch_UnwiredCursorStoreStillDispatches(t *testing.T)
 	require.Equal(t, q.calls[0].args.ItemID, q.calls[2].args.ItemID,
 		"with no cursor store every run restarts from the oldest item; that is precisely the "+
 			"starvation main.go's SweepCursors wiring exists to prevent")
+}
+
+// ─── G16: the crash window between the snapshot commit and the cache bump ─────────────────────
+
+// TestBalanceSnapshotCapture_ARetryBumpsEvenWhenItWroteNothing is #1626 gap G16.
+//
+// THE WINDOW. The snapshot rows commit inside CaptureItemBalances; the generation bump happens
+// afterwards, in this worker, on a separate Redis round trip. A crash (or a River shutdown, or a job
+// timeout) between the two leaves the rows committed and the cache generation unchanged — every
+// cached analytics read keeps serving the pre-capture value until the namespace TTL expires. The
+// retry then makes it WORSE than a plain race, because by the time it runs the cohort is complete,
+// so Written is 0 and the deliberate `Written > 0` condition means the retry does not bump either.
+// The stale window was therefore bounded only by TTL, not by the retry that exists to repair it.
+//
+// THE FIX, AND WHY IT IS THE ATTEMPT NUMBER. A retry happens only after an attempt did not report
+// success, which is exactly the set of runs that could have died inside the window. So attempt > 1
+// bumps unconditionally: it repairs every crash-window case, and its cost is confined to retried
+// jobs rather than to the daily no-op path the `Written > 0` condition exists to protect. It is a
+// REPAIR rather than a prevention — a one-attempt job that dies in the window and is never retried
+// is still bounded by TTL, and River's rescuer is what turns a process death into an attempt.
+func TestBalanceSnapshotCapture_ARetryBumpsEvenWhenItWroteNothing(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.NewString()
+	householdID := uuid.NewString()
+
+	// The retry's view of the world: the rows a previous attempt committed are already there, so the
+	// cohort is complete and this attempt writes nothing. That is precisely the state a crash between
+	// the commit and the bump leaves behind.
+	svc := &captureFakeService{outcomes: map[string]services.BalanceCaptureOutcome{
+		"item-1": {Day: time.Now().UTC(), CohortComplete: true},
+	}}
+	w := NewBalanceSnapshotCaptureWorker(BalanceSnapshotCaptureWorkerDeps{
+		CaptureService: svc, Logger: captureQuietLogger(),
+	})
+	c := cache.NewCache(cache.Options{Client: redisclient.NewFake("cache")})
+	w.SetCacheInvalidation(c.Generations(), &captureFakeHouseholdLookup{householdID: householdID})
+
+	userBefore, err := c.Generations().Get(ctx, cache.ScopeUser, userID)
+	require.NoError(t, err)
+	householdBefore, err := c.Generations().Get(ctx, cache.ScopeHousehold, householdID)
+	require.NoError(t, err)
+
+	require.NoError(t, w.Work(ctx,
+		captureCaptureJobAttempt(BalanceSnapshotCaptureArgs{ItemID: "item-1", UserID: userID}, 2)))
+
+	userAfter, err := c.Generations().Get(ctx, cache.ScopeUser, userID)
+	require.NoError(t, err)
+	assert.NotEqual(t, userBefore, userAfter,
+		"a RETRY that finds the cohort already complete must bump anyway. The previous attempt may "+
+			"have committed those rows and died before its own bump, and Written is 0 on this attempt, "+
+			"so if this attempt does not bump either the rows stay invisible to every cached read "+
+			"until the namespace TTL expires")
+
+	householdAfter, err := c.Generations().Get(ctx, cache.ScopeHousehold, householdID)
+	require.NoError(t, err)
+	assert.NotEqual(t, householdBefore, householdAfter,
+		"and the household scope too, for the same reason the write path bumps both")
+}
+
+// TestBalanceSnapshotCapture_FirstAttemptStillDoesNotBumpOnANoOp is the control that keeps the G16
+// repair from becoming the unconditional bump the design deliberately rejected.
+//
+// The gap-filler runs for EVERY item EVERY day and its overwhelmingly common outcome is "already
+// covered". If attempt 1 bumped on that, the job would discard every active user's cached analytics
+// once a day for a run that wrote nothing. The repair is scoped to retries because only a retry
+// implies a previous attempt that did not report success.
+//
+// ⚠ Stated as its own test rather than left to TestBalanceSnapshotCapture_DoesNotBumpWhen
+// TheCohortWasAlreadyComplete: that test passes attempt 1 through a helper default, so it pins the
+// no-bump behaviour without pinning that the ATTEMPT is what distinguishes the two cases. Together
+// this pair is what makes the condition's shape falsifiable in both directions.
+func TestBalanceSnapshotCapture_FirstAttemptStillDoesNotBumpOnANoOp(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.NewString()
+
+	svc := &captureFakeService{outcomes: map[string]services.BalanceCaptureOutcome{
+		"item-1": {Day: time.Now().UTC(), CohortComplete: true},
+	}}
+	w := NewBalanceSnapshotCaptureWorker(BalanceSnapshotCaptureWorkerDeps{
+		CaptureService: svc, Logger: captureQuietLogger(),
+	})
+	c := cache.NewCache(cache.Options{Client: redisclient.NewFake("cache")})
+	w.SetCacheInvalidation(c.Generations(), nil)
+
+	before, err := c.Generations().Get(ctx, cache.ScopeUser, userID)
+	require.NoError(t, err)
+	require.NoError(t, w.Work(ctx,
+		captureCaptureJobAttempt(BalanceSnapshotCaptureArgs{ItemID: "item-1", UserID: userID}, 1)))
+	after, err := c.Generations().Get(ctx, cache.ScopeUser, userID)
+	require.NoError(t, err)
+	assert.Equal(t, before, after,
+		"on a FIRST attempt a no-op must still bump nothing. Bumping here would be a guaranteed "+
+			"daily cache miss on the dashboard for the entire user base, which is why the crash-window "+
+			"repair is scoped to attempt > 1 rather than made unconditional")
 }

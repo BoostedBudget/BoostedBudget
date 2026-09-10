@@ -1779,6 +1779,30 @@ func activeAccounts(accounts []domain.Account) []domain.Account {
 // computes with nor rounds — it is copied from the response into the row — so two syncs reporting
 // the same figure produce bit-identical values, and an epsilon would only widen the set of real
 // changes that get dropped.
+//
+// ⚠ THREE CONDITIONS, NOT TWO, AND THE THIRD CLOSED A SILENT DATA LOSS (#1626 gap G7). The window
+// is five minutes of ELAPSED TIME and says nothing about the UTC DAY — but the daily gap-filler's
+// entire unit of work IS the UTC day: balanceCaptureService.CaptureItemBalances asks
+// AccountsMissingDailySnapshot whether TODAY's cohort is complete, and migration 000191's partial
+// unique index is keyed on the UTC date. So a capture landing in the 00:00–00:05 UTC window — a
+// RunOnStart deploy just after midnight, or River retrying a 23:5x attempt that failed — saw the
+// account as missing today's row, deduped against yesterday's 23:58 IDENTICAL row, wrote nothing,
+// and returned SUCCESS. The day it was asked to fill stayed empty permanently: there is no backfill
+// on this path, and nothing in the outcome counters distinguished it from a routine skip.
+//
+// Gating on the UTC calendar day of latestSnapshot.SnapshotAt versus `now` makes "says nothing new"
+// mean what the writers around it already mean by it. It costs at most ONE extra row per account per
+// day, in the specific case where the previous row is both identical and on the previous day — which
+// is the row the day-keyed index exists to hold.
+//
+// ⚠ IT APPLIES TO THE WEBHOOK PATH TOO, deliberately rather than incidentally: this function is
+// shared by writeBalanceCohort's two provenances, and a webhook arriving at 00:02 with yesterday's
+// figures is making the same statement about a new day that the gap-filler would. Suppressing it
+// there would leave the same hole one path over.
+//
+// ⚠ UTC EXPLICITLY, on BOTH sides. Comparing in the process's local zone would put the day boundary
+// somewhere neither AccountsMissingDailySnapshot nor migration 000191 puts it, which is the class of
+// silently-ambiguous day boundary every other date decision on this path is spelled UTC to avoid.
 func isRedundantSnapshot(latest, next *domain.BalanceSnapshot, now time.Time, window time.Duration) bool {
 	if latest == nil || next == nil {
 		return false
@@ -1786,8 +1810,23 @@ func isRedundantSnapshot(latest, next *domain.BalanceSnapshot, now time.Time, wi
 	if now.Sub(latest.SnapshotAt) >= window {
 		return false
 	}
+	if !sameUTCDay(latest.SnapshotAt, now) {
+		return false
+	}
 	return sameBalance(latest.CurrentBalance, next.CurrentBalance) &&
 		sameBalance(latest.AvailableBalance, next.AvailableBalance)
+}
+
+// sameUTCDay reports whether two instants fall on the same UTC calendar day.
+//
+// Both operands are converted with .UTC() rather than assumed to be in UTC already: every producer
+// on this path passes a UTC instant today, but a caller passing a local-zone time would otherwise
+// silently move the boundary, and this is the one comparison whose whole point is where the boundary
+// is.
+func sameUTCDay(a, b time.Time) bool {
+	ay, am, ad := a.UTC().Date()
+	by, bm, bd := b.UTC().Date()
+	return ay == by && am == bm && ad == bd
 }
 
 // sameBalance compares two optional balances, treating NULL as a distinct value rather than as a
@@ -1798,4 +1837,3 @@ func sameBalance(a, b *float64) bool {
 	}
 	return *a == *b
 }
-
