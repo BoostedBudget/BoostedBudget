@@ -3384,6 +3384,18 @@ components:
         - item_id
         - webhook_code
       type: object
+    ForkedSecurityIdentityMetrics:
+      additionalProperties: false
+      properties:
+        available:
+          type: boolean
+        group_count:
+          format: int64
+          type: integer
+      required:
+        - group_count
+        - available
+      type: object
     GainLossSummary:
       additionalProperties: false
       properties:
@@ -6945,6 +6957,8 @@ components:
           $ref: "#/components/schemas/DeadLetterMetrics"
         deletion_residue:
           $ref: "#/components/schemas/DeletionResidueMetrics"
+        forked_security_identities:
+          $ref: "#/components/schemas/ForkedSecurityIdentityMetrics"
         job_backlog:
           $ref: "#/components/schemas/JobBacklogMetrics"
         job_queues:
@@ -6978,6 +6992,7 @@ components:
         - plaid_orphaned_items
         - deletion_residue
         - rejected_webhook_attempts_24h
+        - forked_security_identities
         - cache_enabled
       type: object
     TagSource:
