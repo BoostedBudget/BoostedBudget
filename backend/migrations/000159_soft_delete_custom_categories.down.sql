@@ -32,6 +32,33 @@
 --
 -- Idempotent: IF EXISTS on every statement, pg_constraint guard on the constraint restore.
 
+-- ⚠ #1625 — the mechanism warning 1 asked for now EXISTS, and this file uses it. See the same
+-- note at the top of 000158's down for the shared reasoning; this is the custom_categories half.
+--
+-- Reachability was established by EXECUTION. Against a freshly rebuilt `freshcheck` migrated to
+-- 192, holding one custom_category with deleted_at IS NOT NULL and a name no live row shared:
+--     migrate -path backend/migrations -database $FRESHCHECK goto 158
+-- ran 192/d ... 159/d without stopping -- no later down refuses on a category tombstone. Observed
+-- afterwards: custom_categories.deleted_at gone from information_schema.columns and the tombstoned
+-- category still in custom_categories, back in every picker. Warning 3's unique-constraint abort
+-- did not fire, because the name did not collide, which is exactly why it was never a control.
+--
+-- LOCK before COUNT, same transaction, for the reason recorded on 000190's down.
+DO $$
+DECLARE
+    n INTEGER;
+BEGIN
+    LOCK TABLE custom_categories IN ACCESS EXCLUSIVE MODE;
+    SELECT COUNT(*) INTO n FROM custom_categories WHERE deleted_at IS NOT NULL;
+    IF n > 0 THEN
+        RAISE EXCEPTION
+            'refusing to roll back 000159: % custom_categories row(s) are tombstoned '
+            '(deleted_at IS NOT NULL). Dropping deleted_at retains those rows but makes them '
+            'indistinguishable from live ones, so a category the user deleted reappears in every '
+            'picker.', n;
+    END IF;
+END $$;
+
 DROP INDEX IF EXISTS idx_custom_categories_tombstoned;
 
 -- Restore the unconditional uniqueness. The partial unique index is dropped first so its name is

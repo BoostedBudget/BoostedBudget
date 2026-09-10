@@ -22,6 +22,38 @@
 --
 -- Idempotent: IF EXISTS on every statement.
 
+-- ⚠ #1625 — this file now REFUSES rather than only warning.
+--
+-- Everything above stays true; what changed is that it is enforced. The header told an operator to
+-- dump the tombstones first and then let the rollback proceed, which is a control only if someone
+-- reads it.
+--
+-- Reachability was established by EXECUTION. Against a freshly rebuilt `freshcheck` migrated to
+-- 192, holding one transaction with deleted_at IS NOT NULL:
+--     migrate -path backend/migrations -database $FRESHCHECK goto 155
+-- ran 192/d ... 156/d without stopping; no later down refuses on a transaction tombstone.
+-- Observed afterwards: zero of deleted_at/deleted_reason/deleted_by left in
+-- information_schema.columns, and the tombstoned row still in `transactions`, now
+-- indistinguishable from a live one -- the double-count described above, reproduced.
+--
+-- LOCK before COUNT, same transaction: without it a concurrent sync tombstoning a `removed` entry
+-- (ROW EXCLUSIVE) does not conflict with the count's ACCESS SHARE and can land in the window
+-- before the DROP COLUMN. Same finding as 000190's.
+DO $$
+DECLARE
+    n INTEGER;
+BEGIN
+    LOCK TABLE transactions IN ACCESS EXCLUSIVE MODE;
+    SELECT COUNT(*) INTO n FROM transactions WHERE deleted_at IS NOT NULL;
+    IF n > 0 THEN
+        RAISE EXCEPTION
+            'refusing to roll back 000156: % transactions row(s) are tombstoned '
+            '(deleted_at IS NOT NULL). Dropping deleted_at retains those rows but makes them '
+            'indistinguishable from live ones, so every settled pending and retained reversal '
+            'is counted twice by cash flow, spending, budgets and the transactions list.', n;
+    END IF;
+END $$;
+
 DROP INDEX IF EXISTS idx_transactions_tombstoned;
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_deleted_reason_valid;
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_tombstone_consistency;

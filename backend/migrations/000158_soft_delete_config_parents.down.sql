@@ -39,6 +39,51 @@
 --
 -- Idempotent: IF EXISTS on every statement, pg_constraint guards on the constraint restores.
 
+-- ⚠ #1625 — the mechanism warning 1 asked for now EXISTS, and this file uses it.
+--
+-- The note above deferred instrumentation to "a future round" and specified what it should be: a
+-- refusal on `deleted_at IS NOT NULL` rather than on a row count. That is what follows. The
+-- collision-dependent abort described in warning 3 is real but PARTIAL -- it only fires when a
+-- live and a tombstoned row happen to share a name -- so it was never the control the header
+-- implied.
+--
+-- Reachability was established by EXECUTION, not by reading this file. Against a freshly rebuilt
+-- `freshcheck` migrated to 192, holding one savings_goal with deleted_at IS NOT NULL and a name
+-- no live row shared:
+--     migrate -path backend/migrations -database $FRESHCHECK goto 157
+-- ran 158/d without stopping. Observed afterwards: savings_goals.deleted_at gone from
+-- information_schema.columns and the tombstoned goal still in savings_goals -- resurrected.
+--
+-- LOCK before COUNT, in this same DO block and transaction, on every table counted: a delete
+-- committing between the counts and the DROP COLUMNs below would otherwise be dropped anyway.
+-- Same finding as 000190's. The tables are locked in the same order they are counted.
+DO $$
+DECLARE
+    n_goals   INTEGER;
+    n_boosts  INTEGER;
+    n_budgets INTEGER;
+    n_cats    INTEGER;
+BEGIN
+    LOCK TABLE savings_goals IN ACCESS EXCLUSIVE MODE;
+    LOCK TABLE boosts IN ACCESS EXCLUSIVE MODE;
+    LOCK TABLE budgets IN ACCESS EXCLUSIVE MODE;
+    LOCK TABLE budget_categories IN ACCESS EXCLUSIVE MODE;
+
+    SELECT COUNT(*) INTO n_goals   FROM savings_goals      WHERE deleted_at IS NOT NULL;
+    SELECT COUNT(*) INTO n_boosts  FROM boosts             WHERE deleted_at IS NOT NULL;
+    SELECT COUNT(*) INTO n_budgets FROM budgets            WHERE deleted_at IS NOT NULL;
+    SELECT COUNT(*) INTO n_cats    FROM budget_categories  WHERE deleted_at IS NOT NULL;
+
+    IF n_goals + n_boosts + n_budgets + n_cats > 0 THEN
+        RAISE EXCEPTION
+            'refusing to roll back 000158: % savings_goals, % boosts, % budgets and % '
+            'budget_categories row(s) are tombstoned (deleted_at IS NOT NULL). Dropping '
+            'deleted_at retains every one of them but makes it indistinguishable from a live '
+            'row, so config a user deleted reappears and its contributions count again.',
+            n_goals, n_boosts, n_budgets, n_cats;
+    END IF;
+END $$;
+
 DROP INDEX IF EXISTS idx_savings_goals_tombstoned;
 DROP INDEX IF EXISTS idx_boosts_tombstoned;
 DROP INDEX IF EXISTS idx_budgets_tombstoned;
