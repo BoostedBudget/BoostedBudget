@@ -39,6 +39,13 @@ type InvestmentAnalyticsRepository interface {
 	// The income set is wider than the display "dividend" bucket — it includes reinvested
 	// income because economically that is still income.
 	IncomeSummary(ctx context.Context, userID string, start, end time.Time) (*domain.IncomeSummary, error)
+
+	// PositionReconciliation is a DIAGNOSTIC, never a correction (#1631 M8b): it compares each
+	// active investment holding's quantity against the net share delta domain.TradeTypeToSQLPredicate's
+	// buy/sell/reinvest partition implies from investment_transactions, and reports the mismatches
+	// worth an operator's attention. See domain.PositionReconciliationReport's doc comment for the
+	// 2-year-lookback suppression rule that keeps this from flagging every long-held position.
+	PositionReconciliation(ctx context.Context, userID string) (*domain.PositionReconciliationReport, error)
 }
 
 type investmentAnalyticsRepository struct {
@@ -838,4 +845,96 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 		CurrencyCode:    currencyCode,
 		IsMixedCurrency: isMixed,
 	}, nil
+}
+
+// PositionReconciliation compares each active holding's quantity against the net share delta
+// implied by the trade ledger, and reports the drifts — see domain.PositionReconciliationReport's
+// doc comment for the arithmetic, the 2-year-lookback suppression rule, and why this never writes
+// anything.
+//
+// ONE ROUND TRIP: the ledger aggregate (per account+security net quantity, and whether it
+// contains an opening buy) is computed in a CTE and LEFT JOINed onto the live holdings, rather
+// than fetched with a second query — a holding with NO matching ledger CTE row (no transactions
+// at all for that security/account) still needs to be evaluated, which COALESCE below handles as
+// a ledger quantity of 0 with no buy observed — exactly the "cannot evaluate, presumed
+// pre-window" case.
+func (r *investmentAnalyticsRepository) PositionReconciliation(ctx context.Context, userID string) (*domain.PositionReconciliationReport, error) {
+	// The buy/sell/reinvest partition is domain.TradeTypeToSQLPredicate's, not re-derived here —
+	// see the file-level comment on domain/investment_reconciliation.go for why a second copy of
+	// "which rows count" is exactly the failure class #1631 exists to close.
+	predicate, predArgs := domain.TradeTypeToSQLPredicate(
+		[]string{domain.TradeTypeBuy, domain.TradeTypeSell, domain.TradeTypeReinvest}, "it", "sec")
+
+	// userID is bound AFTER the predicate's own placeholders so TradeTypeToSQLPredicate's internal
+	// numbering (which always starts at $1) does not collide with it.
+	userIdx := len(predArgs) + 1
+	args := append(append([]any{}, predArgs...), userID)
+
+	query := fmt.Sprintf(`
+		WITH ledger AS (
+			SELECT
+				it.account_id,
+				it.security_id,
+				SUM(it.quantity) FILTER (WHERE %[1]s) AS ledger_quantity,
+				BOOL_OR(it.type = 'buy') AS has_buy
+			FROM investment_transactions it
+			LEFT JOIN securities sec ON sec.id = it.security_id
+			WHERE it.user_id = $%[2]d
+			  AND it.security_id IS NOT NULL
+			  AND it.quantity IS NOT NULL
+			GROUP BY it.account_id, it.security_id
+		)
+		SELECT
+			h.account_id::text,
+			h.security_id::text,
+			sec.plaid_security_id,
+			sec.ticker_symbol,
+			sec.name,
+			h.quantity,
+			COALESCE(ledger.ledger_quantity, 0),
+			COALESCE(ledger.has_buy, false)
+		FROM holdings h
+		-- CURRENT-STATE universe (#1569 T12) and the a.type='investment' gate (#1616 T2c), matching
+		-- every other holdings-based analytics surface in this file.
+		JOIN accounts a ON a.id = h.account_id AND `+currentStateAccountLeg("a")+` AND a.type = 'investment'
+		JOIN securities sec ON sec.id = h.security_id
+		LEFT JOIN ledger ON ledger.account_id = h.account_id AND ledger.security_id = h.security_id
+		WHERE h.user_id = $%[2]d
+		  AND h.quantity <> 0
+	`, predicate, userIdx)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("PositionReconciliation: %w", err)
+	}
+	defer rows.Close()
+
+	report := &domain.PositionReconciliationReport{
+		Drifts: []domain.PositionReconciliationMember{},
+	}
+	for rows.Next() {
+		var m domain.PositionReconciliationMember
+		var hasBuy bool
+		if err := rows.Scan(
+			&m.AccountID, &m.SecurityID, &m.PlaidSecurityID, &m.TickerSymbol, &m.SecurityName,
+			&m.HoldingQuantity, &m.LedgerQuantity, &hasBuy,
+		); err != nil {
+			return nil, fmt.Errorf("PositionReconciliation scan: %w", err)
+		}
+		m.Delta = m.HoldingQuantity - m.LedgerQuantity
+		report.TotalPositionsChecked++
+
+		isDrift, isSuppressed := domain.ClassifyPositionReconciliationMember(m.Delta, hasBuy)
+		switch {
+		case isDrift:
+			report.Drifts = append(report.Drifts, m)
+		case isSuppressed:
+			report.SuppressedPreWindowCount++
+		}
+	}
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("PositionReconciliation rows: %w", rows.Err())
+	}
+
+	return report, nil
 }

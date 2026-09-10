@@ -83,6 +83,18 @@ type systemHealthService struct {
 	// an unwired cacheStatus reports "disabled" — see CacheStatusReader's doc comment for why that
 	// is not ambiguous the way the other optional collaborators' Available flags are.
 	cacheStatus CacheStatusReader
+	// forkedIdentityRepo backs SystemHealthResponse.ForkedSecurityIdentities (#1631 M8b). Optional/
+	// nil-safe: an unwired repo reports "unavailable", never a confident zero — same convention as
+	// plaidOrphanRepo and invalidWebhookAttemptRepo above.
+	forkedIdentityRepo ForkedSecurityIdentityCounter
+}
+
+// ForkedSecurityIdentityCounter is the ONE verb the health derivation needs from
+// repository.SecurityRepository, narrowed the same way PlaidOrphanedItemLister and
+// InvalidWebhookAttemptStatsReader narrow their repositories above: a read-only health surface
+// gains no ability to touch `securities` just because it needs a count.
+type ForkedSecurityIdentityCounter interface {
+	CountForkedIdentityGroups(ctx context.Context) (int64, error)
 }
 
 // CacheStatusReader is the ONE verb the health derivation needs from cache.Cache — matches the
@@ -149,6 +161,7 @@ func NewSystemHealthService(
 	invalidWebhookAttemptRepo InvalidWebhookAttemptStatsReader,
 	healthChecks SharedHealthChecks,
 	cacheStatus CacheStatusReader,
+	forkedIdentityRepo ForkedSecurityIdentityCounter,
 ) SystemHealthService {
 	return &systemHealthService{
 		healthRepo:                healthRepo,
@@ -160,6 +173,7 @@ func NewSystemHealthService(
 		invalidWebhookAttemptRepo: invalidWebhookAttemptRepo,
 		healthChecks:              healthChecks,
 		cacheStatus:               cacheStatus,
+		forkedIdentityRepo:        forkedIdentityRepo,
 	}
 }
 
@@ -272,6 +286,21 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 		response.RejectedWebhookAttempts24h = domain.RejectedWebhookAttemptMetrics{}
 	} else {
 		response.RejectedWebhookAttempts24h = rejectedWebhookMetrics
+	}
+
+	// Forked security identities (#1631 M8b) — a Plaid corporate action can reissue
+	// plaid_security_id, silently forking one real instrument's identity into multiple `securities`
+	// rows with separate transaction/holding histories. Same "unknown is not zero" convention as
+	// every gauge above, and deliberately NOT fed into calculateOverallStatus: whether a non-zero
+	// count should degrade overall health is a product decision this task never asked for, only
+	// making it VISIBLE is in scope.
+	forkedIdentityMetrics, err := s.getForkedSecurityIdentityMetrics(ctx)
+	if err != nil {
+		slog.Error("could not count forked security identities for /admin/health; reported as unavailable rather than as zero",
+			"error", err)
+		response.ForkedSecurityIdentities = domain.ForkedSecurityIdentityMetrics{}
+	} else {
+		response.ForkedSecurityIdentities = forkedIdentityMetrics
 	}
 
 	// Cache status (Issue #1531 Task 11e) — deliberately NOT fed into calculateOverallStatus below,
@@ -686,6 +715,30 @@ func (s *systemHealthService) getRejectedWebhookAttemptMetrics(ctx context.Conte
 		ByProvider:   byProvider,
 		MostRecentAt: mostRecentAt,
 		Available:    true,
+	}, nil
+}
+
+// getForkedSecurityIdentityMetrics derives the /admin/health forked-identity drift count (#1631
+// M8b). A single indexed COUNT suffices — unlike getPlaidOrphanedItemMetrics, no part of the
+// forked-identity condition depends on anything this process alone can see (no decryption, no
+// in-memory state), so the whole derivation is expressible in SQL and there is nothing here that
+// needs a bounded full read the way that gauge does.
+//
+// Nil-safe, matching every other optional gauge in this service: an unwired repo is "unknown",
+// never "zero".
+func (s *systemHealthService) getForkedSecurityIdentityMetrics(ctx context.Context) (domain.ForkedSecurityIdentityMetrics, error) {
+	if s.forkedIdentityRepo == nil {
+		return domain.ForkedSecurityIdentityMetrics{}, nil
+	}
+
+	count, err := s.forkedIdentityRepo.CountForkedIdentityGroups(ctx)
+	if err != nil {
+		return domain.ForkedSecurityIdentityMetrics{}, fmt.Errorf("count forked security identity groups: %w", err)
+	}
+	return domain.ForkedSecurityIdentityMetrics{
+		GroupCount: count,
+		// The query succeeded — this is a VERIFIED count, possibly a real (and welcome) zero.
+		Available: true,
 	}, nil
 }
 

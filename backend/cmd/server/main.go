@@ -2237,6 +2237,11 @@ func main() {
 			// always reports false), so /admin/health's cache_enabled field has a live signal to
 			// report regardless of whether caching is actually turned on for this deployment.
 			cacheInstance,
+			// #1631 M8b: backs the "forked security identities" drift count on /admin/health. The
+			// SAME repository investment sync uses, narrowed at the interface
+			// (services.ForkedSecurityIdentityCounter) to CountForkedIdentityGroups alone, same
+			// discipline as plaidOrphanedItemRepo and invalidWebhookAttemptRepo above.
+			securityRepo,
 		)
 
 		// Issue #633: Dead letter queue admin service.

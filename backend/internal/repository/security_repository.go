@@ -14,6 +14,18 @@ type SecurityRepository interface {
 	// Returns a map of plaid_security_id -> internal UUID for use in building holdings
 	// and investment transactions that reference these securities.
 	UpsertBatch(ctx context.Context, securities []domain.Security) (map[string]string, error)
+
+	// FindForkedIdentities returns every GROUP of securities rows sharing a non-blank
+	// institution_security_id under more than one plaid_security_id — the shape a Plaid
+	// corporate-action reissue of plaid_security_id forks one real instrument into (#1631 M8b).
+	// Global across all users: securities is not user-scoped. Detection only; see
+	// domain.ForkedSecurityIdentity's doc comment.
+	FindForkedIdentities(ctx context.Context) ([]domain.ForkedSecurityIdentity, error)
+
+	// CountForkedIdentityGroups is the SAME predicate as FindForkedIdentities, as a single
+	// COUNT — used by SystemHealthService so /admin/health does not pay for the full group
+	// listing just to render a number.
+	CountForkedIdentityGroups(ctx context.Context) (int64, error)
 }
 
 type securityRepository struct {
@@ -128,4 +140,70 @@ func (r *securityRepository) UpsertBatch(ctx context.Context, securities []domai
 	}
 
 	return mapping, nil
+}
+
+// forkedIdentityGroupsSQL is the shared predicate behind both FindForkedIdentities and
+// CountForkedIdentityGroups: a non-blank institution_security_id spanning 2+ distinct
+// plaid_security_id values. One definition, so a future tweak (e.g. tightening what counts as
+// "blank") cannot desync the listing from the count the way #1631 exists to avoid elsewhere.
+const forkedIdentityGroupsSQL = `
+	SELECT institution_security_id
+	FROM securities
+	WHERE institution_security_id IS NOT NULL AND btrim(institution_security_id) <> ''
+	GROUP BY institution_security_id
+	HAVING COUNT(DISTINCT plaid_security_id) > 1
+`
+
+// FindForkedIdentities returns the full member listing for every forked-identity group. See
+// domain.ForkedSecurityIdentity's doc comment for what a group means and why merging is out of
+// scope.
+func (r *securityRepository) FindForkedIdentities(ctx context.Context) ([]domain.ForkedSecurityIdentity, error) {
+	query := `
+		SELECT sec.institution_security_id, sec.id, sec.plaid_security_id, sec.name, sec.ticker_symbol
+		FROM securities sec
+		WHERE sec.institution_security_id IN (` + forkedIdentityGroupsSQL + `)
+		ORDER BY sec.institution_security_id, sec.plaid_security_id
+	`
+
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var groups []domain.ForkedSecurityIdentity
+	byInstitutionID := make(map[string]int) // institution_security_id -> index into groups
+	for rows.Next() {
+		var instID string
+		var member domain.ForkedSecurityIdentityMember
+		if err := rows.Scan(&instID, &member.SecurityID, &member.PlaidSecurityID, &member.Name, &member.TickerSymbol); err != nil {
+			return nil, err
+		}
+		idx, ok := byInstitutionID[instID]
+		if !ok {
+			groups = append(groups, domain.ForkedSecurityIdentity{InstitutionSecurityID: instID})
+			idx = len(groups) - 1
+			byInstitutionID[instID] = idx
+		}
+		groups[idx].Members = append(groups[idx].Members, member)
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	if groups == nil {
+		groups = []domain.ForkedSecurityIdentity{}
+	}
+	return groups, nil
+}
+
+// CountForkedIdentityGroups returns the number of forked-identity groups without materializing
+// their members — the query GetForkedSecurityIdentityMetrics needs for /admin/health.
+func (r *securityRepository) CountForkedIdentityGroups(ctx context.Context) (int64, error) {
+	query := `SELECT COUNT(*) FROM (` + forkedIdentityGroupsSQL + `) grouped`
+
+	var count int64
+	if err := r.db.QueryRow(ctx, query).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }

@@ -37,6 +37,13 @@ type InvestmentAnalyticsService interface {
 	// The income set is wider than the display "dividend" bucket — reinvested income is
 	// economically income.
 	GetIncomeSummary(ctx context.Context, userID string, start, end time.Time) (*domain.IncomeSummary, error)
+
+	// GetPositionReconciliation is a DIAGNOSTIC (#1631 M8b): it compares each active holding's
+	// quantity against the net share delta the trade ledger implies, and reports the mismatches.
+	// It NEVER corrects a holding — Plaid's snapshot stays the position of record. See
+	// domain.PositionReconciliationReport for the report shape and the 2-year-lookback
+	// suppression rule.
+	GetPositionReconciliation(ctx context.Context, userID string) (*domain.PositionReconciliationReport, error)
 }
 
 type investmentAnalyticsService struct {
@@ -84,6 +91,17 @@ func (s *investmentAnalyticsService) GetIncomeSummary(ctx context.Context, userI
 	result, err := s.repo.IncomeSummary(ctx, userID, start, end)
 	if err != nil {
 		return nil, fmt.Errorf("GetIncomeSummary: %w", err)
+	}
+	return result, nil
+}
+
+// GetPositionReconciliation delegates to the repository's trade-vs-position diagnostic query.
+// See domain.PositionReconciliationReport for what a result means and NewInvestmentAnalyticsService's
+// interface comment for the "diagnostic, never a correction" guarantee.
+func (s *investmentAnalyticsService) GetPositionReconciliation(ctx context.Context, userID string) (*domain.PositionReconciliationReport, error) {
+	result, err := s.repo.PositionReconciliation(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("GetPositionReconciliation: %w", err)
 	}
 	return result, nil
 }
