@@ -145,7 +145,7 @@ func TestClaim1630_P5_MonthlyWithoutEndDate_DoesNotReproduce(t *testing.T) {
 // match_logic is "tag_only" or "and". At the time task 0 wrote this test, that failure was a
 // bare errors.New with no sentinel, which internal/huma/errors/mapper.go's switch did not
 // recognize -> fell through to huma.Error500InternalServerError, so this test originally
-// pinned 500 (see TestClaim1630_P6_MatchLogicAnd_EmptyTags_Is500NotStruct400 in git history).
+// pinned 500. It is renamed rather than left asserting a status the code no longer returns.
 // Task 7 (#1630) introduced domain.ErrInvalidBudget, which every Validate() failure in
 // domain/budget.go now wraps, and mapper.go now maps it to 400 — so the claimed status code
 // is now CORRECT, even though the issue's premise about WHY (tags required) was right and the
