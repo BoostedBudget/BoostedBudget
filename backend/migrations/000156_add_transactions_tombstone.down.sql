@@ -16,9 +16,28 @@
 --      silently skipping. Roll the application back first, or not at all.
 --
 -- There is no reversal that preserves the distinction: the information lives only in these columns.
--- If a rollback is genuinely required, dump `SELECT id, deleted_at, deleted_reason, deleted_by FROM
--- transactions WHERE deleted_at IS NOT NULL` first, so the classification can be restored on the
--- way back up.
+--
+-- HOW TO ACTUALLY PROCEED, if a rollback is genuinely required. ⚠ This used to say only "dump the
+-- tombstones first", which is step 1 of 3 and, on its own, an instruction that CANNOT WORK: the DO
+-- block below refuses while a single tombstone exists, so a dump leaves the rollback exactly as
+-- blocked as it was. The steps that do work:
+--
+--   1. Dump the classification, so step 2 stays reversible:
+--        \copy (SELECT id, deleted_at, deleted_reason, deleted_by FROM transactions
+--               WHERE deleted_at IS NOT NULL) TO 'transactions_tombstones.csv' CSV HEADER
+--   2. Empty the predicate the guard refuses on. This is a DESTRUCTION-or-RESURRECTION decision a
+--      human makes per row, not a command to run reflexively; there are exactly two ways and both
+--      lose something:
+--        (a) DELETE FROM transactions WHERE deleted_at IS NOT NULL;
+--            destroys the retained rows. For a SETTLED PENDING that is the right answer -- the
+--            posted twin of the same spend is still in the table -- and for a RETAINED REVERSAL it
+--            is not. Step 1's dump is the only surviving record of which was which.
+--        (b) UPDATE transactions SET deleted_at = NULL, deleted_reason = NULL, deleted_by = NULL
+--            WHERE deleted_at IS NOT NULL;
+--            keeps every row but makes all of them LIVE, which is the double-count in warning 1.
+--            Only correct if you intend to re-triage them by hand under the old binary.
+--   3. Re-run the rollback. The guard now finds nothing and proceeds, and step 1's dump is what
+--      restores the classification on the way back up.
 --
 -- Idempotent: IF EXISTS on every statement.
 
