@@ -563,11 +563,11 @@ func BuildCategoryEventData(categories []BudgetCategory) map[string]map[string]f
 
 // CreateBudgetRequest represents the request to create a new budget.
 type CreateBudgetRequest struct {
-	Name        string       `json:"name" validate:"required,max=100"`
-	Description *string      `json:"description,omitempty"`
-	Period      BudgetPeriod `json:"period" validate:"required"`
-	StartDate   time.Time    `json:"start_date" validate:"required"`
-	EndDate     *time.Time   `json:"end_date,omitempty" doc:"Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error."`
+	Name        string        `json:"name" validate:"required,max=100"`
+	Description *string       `json:"description,omitempty"`
+	Period      BudgetPeriod  `json:"period" validate:"required"`
+	StartDate   FlexibleDate  `json:"start_date" validate:"required" doc:"Budget start date. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp."`
+	EndDate     *FlexibleDate `json:"end_date,omitempty" doc:"Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error. Accepts YYYY-MM-DD or a full RFC3339 timestamp."`
 	// Amount is overwritten to mirror expected_income when expected_income is set and > 0
 	// (Issue #1048) — declined the alternative of making this read-only, since amount is
 	// still the authoritative field when expected_income is absent.

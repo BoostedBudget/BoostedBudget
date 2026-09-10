@@ -42,7 +42,7 @@ export interface CreateBudgetRequest {
   categories?: CreateBudgetCategoryRequest[] | null;
   currency_code?: string;
   description?: string;
-  /** Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error. */
+  /** Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error. Accepts YYYY-MM-DD or a full RFC3339 timestamp. */
   end_date?: string;
   /** Planned income for the period. When set and > 0, this wins over amount — amount is overwritten to mirror this value. Leave unset to have amount remain authoritative. */
   expected_income?: number;
@@ -52,5 +52,6 @@ export interface CreateBudgetRequest {
   income_sources?: IncomeSource[] | null;
   name: string;
   period: string;
+  /** Budget start date. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp. */
   start_date: string;
 }
