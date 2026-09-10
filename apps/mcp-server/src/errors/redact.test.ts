@@ -60,6 +60,56 @@ describe('redactError', () => {
     expect(serialized).not.toContain('accountBalance')
   })
 
+  it('Issue #1630 Task 11: surfaces a backend error body detail field into the message', () => {
+    const result = redactError({
+      message: 'API error 400',
+      status: 400,
+      body: { title: 'Bad Request', status: 400, detail: 'invalid budget: name is required' },
+    })
+    expect(result.message).toContain('name is required')
+    expect(result.status).toBe(400)
+  })
+
+  it('Issue #1630 Task 11: surfaces Huma structured errors[] location/message from the body', () => {
+    const result = redactError({
+      message: 'API error 422',
+      status: 422,
+      body: {
+        title: 'Unprocessable Entity',
+        status: 422,
+        detail: 'validation failed',
+        errors: [{ message: 'expected string', location: 'body.start_date' }],
+      },
+    })
+    expect(result.message).toContain('body.start_date')
+    expect(result.message).toContain('expected string')
+  })
+
+  it('Issue #1630 Task 11: redacts a currency amount surfaced via body.detail — regression guard', () => {
+    const result = redactError({
+      message: 'API error 400',
+      status: 400,
+      body: { detail: 'amount must be positive, got $1,234.56' },
+    })
+    expect(result.message).toContain('amount must be positive')
+    expect(result.message).not.toContain('1,234.56')
+    expect(result.message).not.toContain('$')
+  })
+
+  it('Issue #1630 Task 11: body.errors[].value is never surfaced — it can echo raw user input', () => {
+    // Huma's ErrorDetail.Value echoes the offending value back for debugging; it is not a
+    // human-readable field name/message and may carry raw financial values or PII, so it must
+    // never reach the sandbox even redacted-in-place — the extraction only reads message/location.
+    const result = redactError({
+      message: 'API error 422',
+      status: 422,
+      body: {
+        errors: [{ message: 'must be positive', location: 'body.amount', value: 9999.99 }],
+      },
+    })
+    expect(result.message).not.toContain('9999.99')
+  })
+
   it('never includes raw financial data in output', () => {
     const sensitiveError = {
       message: 'Transaction amount 9999.99 exceeded limit',
