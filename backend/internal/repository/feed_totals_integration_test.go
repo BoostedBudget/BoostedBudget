@@ -54,6 +54,12 @@ func TestFeedTotals_AgreeWithTheRowsTheyDescribe_Integration(t *testing.T) {
 
 	userID := uuid.New()
 	userAccountID := uuid.New()
+	// ⚠ THE TERMINAL-ONLY ACCOUNT NEEDS ITS OWN CHAIN KEY, and it did not have one until #1626 gap
+	// G4's mutation testing. Sharing userAccountID with the ACTIVE account made
+	// activeChainSiblingLeg admit its rows — that leg fires whenever any active account shares the
+	// row's user_account_id — so the comment below claiming they are visible "only through
+	// accountWithNoActiveIntervalLeg" was false, and DELETING that leg left this file green.
+	terminalUserAccountID := uuid.New()
 	linkedItemID := uuid.New()
 	activeAcct := uuid.New()
 	terminalOnly := uuid.New()
@@ -70,6 +76,9 @@ func TestFeedTotals_AgreeWithTheRowsTheyDescribe_Integration(t *testing.T) {
 	mustExec("user_account", `
 		INSERT INTO user_accounts (id, user_id, institution_id, primary_type)
 		VALUES ($1,$2,'ins-totals-1626','depository')`, userAccountID, userID)
+	mustExec("terminal user_account", `
+		INSERT INTO user_accounts (id, user_id, institution_id, primary_type)
+		VALUES ($1,$2,'ins-totals-1626-terminal','depository')`, terminalUserAccountID, userID)
 	mustExec("linked_item", `
 		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
 		VALUES ($1,$2,$3,'enc-test-token')`, linkedItemID, userID, "totals-item-"+linkedItemID.String())
@@ -79,14 +88,27 @@ func TestFeedTotals_AgreeWithTheRowsTheyDescribe_Integration(t *testing.T) {
 		VALUES ($1,$2,$3,$4,$5,'Active','depository','active')`,
 		activeAcct, linkedItemID, userID, userAccountID, "plaid-"+activeAcct.String())
 	// The gap-1 shape. The insert trigger writes one OPEN 'removed' interval and no 'active' row,
-	// so this account is visible only through accountWithNoActiveIntervalLeg.
+	// and it is on its OWN chain key with no active sibling, so its rows satisfy neither
+	// activeChainSiblingLeg nor retainedAccountNoLiveSuccessorLeg (which needs an 'active' history
+	// row): accountWithNoActiveIntervalLeg is the only thing that admits them. Verified by deleting
+	// that leg, which now reddens this file.
 	mustExec("account terminal-only", `
 		INSERT INTO accounts (id, linked_item_id, user_id, user_account_id, plaid_account_id, name, type, status, removed_at, removed_reason)
 		VALUES ($1,$2,$3,$4,$5,'Terminal Only','depository','removed', now(), 'user_disconnect')`,
-		terminalOnly, linkedItemID, userID, userAccountID, "plaid-"+terminalOnly.String())
+		terminalOnly, linkedItemID, userID, terminalUserAccountID, "plaid-"+terminalOnly.String())
 
 	// Amounts are distinct and non-round so a total assembled from the wrong subset cannot coincide
 	// with the right one, and PFCv2 signs are mixed so a SUM that lost its sign would show up.
+	// chainKeyOf pairs a row with its own account's chain key. A row carrying the ACTIVE account's
+	// user_account_id would be admitted by activeChainSiblingLeg regardless of its own account's
+	// status, which is exactly how this fixture used to pass with the retained leg deleted.
+	chainKeyOf := func(accountID uuid.UUID) uuid.UUID {
+		if accountID == terminalOnly {
+			return terminalUserAccountID
+		}
+		return userAccountID
+	}
+
 	seed := func(accountID uuid.UUID, amount float64, uncategorized bool, name string) {
 		id := uuid.New()
 		pfc := "FOOD_AND_DRINK"
@@ -100,7 +122,7 @@ func TestFeedTotals_AgreeWithTheRowsTheyDescribe_Integration(t *testing.T) {
 				 external_transaction_id, external_transaction_id_blind_idx,
 				 amount, date, name, pending, pfc_primary, created_at, updated_at)
 			VALUES ($1,$2,$3,$4,$5,'plaid',$6,$7,$8, CURRENT_DATE - 1, $9, false, $10, now(), now())`,
-			id, userID, accountID, userAccountID, linkedItemID,
+			id, userID, accountID, chainKeyOf(accountID), linkedItemID,
 			"ext-"+id.String(), "blind-"+id.String(), amount, name, pfcArg)
 	}
 
@@ -132,7 +154,7 @@ func TestFeedTotals_AgreeWithTheRowsTheyDescribe_Integration(t *testing.T) {
 				(id, user_id, account_id, user_account_id, plaid_investment_transaction_id,
 				 type, name, amount, date)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8, CURRENT_DATE - 1)`,
-			id, userID, accountID, userAccountID, "plaid-inv-"+id.String(), tradeType, name, amount)
+			id, userID, accountID, chainKeyOf(accountID), "plaid-inv-"+id.String(), tradeType, name, amount)
 	}
 	// The third row sits on the terminal-only account, so the investment arm's own copy of
 	// retainedAccountVisibilityLegs has to admit it — the arm carries the legs separately from the

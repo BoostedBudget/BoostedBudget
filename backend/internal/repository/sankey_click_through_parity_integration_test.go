@@ -74,6 +74,13 @@ func TestSankeyClickThrough_NodeAmountAndListTotalDescribeTheSameSet_Integration
 
 	userID := uuid.New()
 	userAccountID := uuid.New()
+	// ⚠ THE TERMINAL-ONLY ACCOUNT GETS ITS OWN CHAIN KEY, and this is the difference between
+	// exercising the retained leg and only appearing to. activeChainSiblingLeg admits any row whose
+	// user_account_id is shared by SOME active account, so a terminal-only account sitting on the
+	// active account's chain key is visible through that leg instead — deleting
+	// accountWithNoActiveIntervalLeg then leaves this test green (mutation-verified: it did, before
+	// this split).
+	terminalUserAccountID := uuid.New()
 	linkedItemID := uuid.New()
 	activeAcct := uuid.New()
 	terminalOnly := uuid.New()
@@ -91,6 +98,9 @@ func TestSankeyClickThrough_NodeAmountAndListTotalDescribeTheSameSet_Integration
 	mustExec("user_account", `
 		INSERT INTO user_accounts (id, user_id, institution_id, primary_type)
 		VALUES ($1,$2,'ins-sankey-1626','depository')`, userAccountID, userID)
+	mustExec("terminal user_account", `
+		INSERT INTO user_accounts (id, user_id, institution_id, primary_type)
+		VALUES ($1,$2,'ins-sankey-1626-terminal','depository')`, terminalUserAccountID, userID)
 	mustExec("linked_item", `
 		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
 		VALUES ($1,$2,$3,'enc-test-token')`, linkedItemID, userID, "sankey-item-"+linkedItemID.String())
@@ -99,12 +109,13 @@ func TestSankeyClickThrough_NodeAmountAndListTotalDescribeTheSameSet_Integration
 		VALUES ($1,$2,$3,$4,$5,'Sankey Active','depository','active')`,
 		activeAcct, linkedItemID, userID, userAccountID, "plaid-sankey-a-"+activeAcct.String())
 	// The retained shape: the insert trigger writes one OPEN 'removed' interval and no 'active'
-	// row, so this account's transactions reach the list ONLY through
+	// row, and with its own chain key there is no active sibling and no 'active' history row, so
+	// neither of the other two legs fires: its transactions reach the list ONLY through
 	// accountWithNoActiveIntervalLeg. The hierarchy read admits them unconditionally.
 	mustExec("account terminal-only", `
 		INSERT INTO accounts (id, linked_item_id, user_id, user_account_id, plaid_account_id, name, type, status, removed_at, removed_reason)
 		VALUES ($1,$2,$3,$4,$5,'Sankey Terminal Only','depository','removed', now(), 'user_disconnect')`,
-		terminalOnly, linkedItemID, userID, userAccountID, "plaid-sankey-t-"+terminalOnly.String())
+		terminalOnly, linkedItemID, userID, terminalUserAccountID, "plaid-sankey-t-"+terminalOnly.String())
 
 	// seedTxn writes one settled banking row. accountID nil means a fully orphaned row
 	// (account_id NULL, migration 000035's ON DELETE SET NULL residue), which also carries a NULL
@@ -114,7 +125,12 @@ func TestSankeyClickThrough_NodeAmountAndListTotalDescribeTheSameSet_Integration
 		id := uuid.New()
 		var acctArg, userAcctArg any
 		if accountID != nil {
-			acctArg, userAcctArg = *accountID, userAccountID
+			// Each row carries its OWN account's chain key — see terminalUserAccountID above.
+			acctArg = *accountID
+			userAcctArg = userAccountID
+			if *accountID == terminalOnly {
+				userAcctArg = terminalUserAccountID
+			}
 		}
 		mustExec("txn "+tag, `
 			INSERT INTO transactions
