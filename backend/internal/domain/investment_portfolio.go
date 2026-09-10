@@ -56,9 +56,16 @@ type PortfolioSummary struct {
 }
 
 // PortfolioHistoryPoint is one data point in a portfolio value chart.
+//
+// Date is a UTC calendar day (YYYY-MM-DD), formatted at the DB edge from
+// portfolio_snapshots.snapshot_date (a DATE column) by investmentService.GetPortfolioHistory.
+// Deliberately a plain string rather than time.Time, following HoldingSnapshotView's precedent
+// (#1631): unlike InvestmentTransaction, this type is never bound as a SQL param or compared as a
+// time.Time after construction, so there is no reason to carry the timestamp shift a DATE column
+// serialized through time.Time inflicts on any client west of UTC.
 type PortfolioHistoryPoint struct {
-	Date       time.Time `json:"date" db:"snapshot_date"`
-	TotalValue float64   `json:"total_value" db:"total_value"`
+	Date       string  `json:"date" doc:"UTC calendar day (YYYY-MM-DD) this snapshot was captured"`
+	TotalValue float64 `json:"total_value"`
 }
 
 // HoldingView is the API view of a holding, joining security metadata and

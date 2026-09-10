@@ -20,15 +20,15 @@ import (
 // ============================================================================
 
 type mockInvestmentService struct {
-	holdings         []*domain.HoldingView
-	holdingsErr      error
-	summary          *domain.PortfolioSummary
-	summaryErr       error
-	history          []domain.PortfolioHistoryPoint
-	historyErr       error
-	txns             []domain.InvestmentTransaction
-	txnsNextCursor   *string
-	txnsErr          error
+	holdings       []*domain.HoldingView
+	holdingsErr    error
+	summary        *domain.PortfolioSummary
+	summaryErr     error
+	history        []domain.PortfolioHistoryPoint
+	historyErr     error
+	txns           []domain.InvestmentTransaction
+	txnsNextCursor *string
+	txnsErr        error
 }
 
 func (m *mockInvestmentService) ListHoldings(_ context.Context, _ string, _ *string) ([]*domain.HoldingView, error) {
@@ -137,11 +137,11 @@ func TestInvestmentHandler_GetHoldings_Unauthorized(t *testing.T) {
 func TestInvestmentHandler_GetPortfolioSummary_Success(t *testing.T) {
 	dc := 100.0
 	summary := &domain.PortfolioSummary{
-		TotalValue:    5000.0,
+		TotalValue:     5000.0,
 		TotalCostBasis: 4000.0,
-		TotalGainLoss: 1000.0,
-		DayChange:     &dc,
-		HoldingsCount: 3,
+		TotalGainLoss:  1000.0,
+		DayChange:      &dc,
+		HoldingsCount:  3,
 	}
 	svc := &mockInvestmentService{summary: summary}
 	handler := NewInvestmentHandler(svc, &mockInvestmentAnalyticsService{})
@@ -184,8 +184,8 @@ func TestInvestmentHandler_GetPortfolioSummary_NilDayChange(t *testing.T) {
 
 func TestInvestmentHandler_GetPortfolioHistory_Success(t *testing.T) {
 	pts := []domain.PortfolioHistoryPoint{
-		{Date: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), TotalValue: 1000.0},
-		{Date: time.Date(2025, 1, 31, 0, 0, 0, 0, time.UTC), TotalValue: 1100.0},
+		{Date: "2025-01-01", TotalValue: 1000.0},
+		{Date: "2025-01-31", TotalValue: 1100.0},
 	}
 	svc := &mockInvestmentService{history: pts}
 	handler := NewInvestmentHandler(svc, &mockInvestmentAnalyticsService{})
@@ -201,6 +201,9 @@ func TestInvestmentHandler_GetPortfolioHistory_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, out.Body.History, 2)
 	assert.Equal(t, 1000.0, out.Body.History[0].TotalValue)
+	// #1631: date must be the plain calendar-day string, not a timestamp. Asserting equality
+	// (not Contains) so a regression back to "2025-01-01T00:00:00Z" actually fails this test.
+	assert.Equal(t, "2025-01-01", out.Body.History[0].Date)
 }
 
 func TestInvestmentHandler_GetPortfolioHistory_MissingDates(t *testing.T) {
@@ -228,7 +231,7 @@ func TestInvestmentHandler_GetInvestmentTransactions_FirstPage(t *testing.T) {
 	handler := NewInvestmentHandler(svc, &mockInvestmentAnalyticsService{})
 
 	input := &GetInvestmentTransactionsInput{
-		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: "user-1"},
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: "user-1"},
 		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
 	}
 
@@ -245,7 +248,7 @@ func TestInvestmentHandler_GetInvestmentTransactions_LastPage(t *testing.T) {
 	handler := NewInvestmentHandler(svc, &mockInvestmentAnalyticsService{})
 
 	input := &GetInvestmentTransactionsInput{
-		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: "user-1"},
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: "user-1"},
 		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
 	}
 

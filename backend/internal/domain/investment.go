@@ -189,16 +189,29 @@ type InvestmentTransaction struct {
 	// two fields above. Added by #1631: the investments page was passing the RAW Plaid `type` to
 	// the same chip the transactions feed feeds normalized, so the two screens disagreed about the
 	// same row and the investments page could never show Dividend or Reinvest at all.
-	ActivityType                 *string   `json:"activity_type,omitempty" db:"-"`
-	PlaidInvestmentTransactionID string    `json:"plaid_investment_transaction_id" db:"plaid_investment_transaction_id"`
-	Type                         string    `json:"type" db:"type"` // buy, sell, dividend, cash, fee, transfer, etc.
-	Subtype                      *string   `json:"subtype,omitempty" db:"subtype"`
-	Name                         string    `json:"name" db:"name"`
-	Quantity                     *float64  `json:"quantity,omitempty" db:"quantity"`
-	Amount                       float64   `json:"amount" db:"amount"`
-	Price                        *float64  `json:"price,omitempty" db:"price"`
-	Fees                         *float64  `json:"fees,omitempty" db:"fees"`
-	Date                         time.Time `json:"date" db:"date"`
+	ActivityType                 *string  `json:"activity_type,omitempty" db:"-"`
+	PlaidInvestmentTransactionID string   `json:"plaid_investment_transaction_id" db:"plaid_investment_transaction_id"`
+	Type                         string   `json:"type" db:"type"` // buy, sell, dividend, cash, fee, transfer, etc.
+	Subtype                      *string  `json:"subtype,omitempty" db:"subtype"`
+	Name                         string   `json:"name" db:"name"`
+	Quantity                     *float64 `json:"quantity,omitempty" db:"quantity"`
+	Amount                       float64  `json:"amount" db:"amount"`
+	Price                        *float64 `json:"price,omitempty" db:"price"`
+	Fees                         *float64 `json:"fees,omitempty" db:"fees"`
+	// Date is the UTC calendar day of the trade/dividend/fee, over a DATE column
+	// (investment_transactions.date). Kept as time.Time — NOT serialized — because it is also the
+	// SQL bind param on insert and the source of InvestmentTransactionCursor.SVT for keyset
+	// pagination, both of which need a real time.Time rather than a formatted string.
+	Date time.Time `json:"-" db:"date"`
+	// DateDisplay is Date formatted as a UTC calendar day (YYYY-MM-DD), populated at the DB edge
+	// by the repository — the same transient-field pattern as TickerSymbol/SecurityName/
+	// ActivityType above. This is what actually reaches clients as "date".
+	//
+	// Added by #1631: Date used to carry `json:"date"` directly, so a DATE column serialized as
+	// a full timestamp (`2026-01-02T00:00:00Z`), which renders a day early for any client west of
+	// UTC that parses it in local time — the same defect class HoldingSnapshotView's AsOfDate
+	// documents and fixes for holding_snapshots.
+	DateDisplay string `json:"date" db:"-" doc:"UTC calendar day (YYYY-MM-DD) of the transaction"`
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 }
