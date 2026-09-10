@@ -249,6 +249,7 @@ export * from './grantTrialResponseBody';
 export * from './holdingSnapshotHistory';
 export * from './holdingSnapshotView';
 export * from './holdingView';
+export * from './holdingViewDayChangeUnavailableReason';
 export * from './household';
 export * from './householdAccountShare';
 export * from './householdEntitlementSummary';

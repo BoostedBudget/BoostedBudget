@@ -590,6 +590,8 @@ describe('HoldingsTable', () => {
       available_dates: string[]
       positions: HoldingSnapshotView[]
       total_value: number
+      currency_code: string
+      is_mixed_currency: boolean
     }> = {}) {
       mockUseGetAccountHoldingsHistory.mockReturnValue({
         data: {
@@ -598,6 +600,11 @@ describe('HoldingsTable', () => {
           available_dates: ['2026-03-04'],
           positions: [position()],
           total_value: 5000,
+          // #1631 M8a: total_value is a currency-blind sum, so the response states the currency
+          // it is in and whether the day's positions disagreed. Required on the response type,
+          // so omitting them describes a response the server cannot produce.
+          currency_code: 'USD',
+          is_mixed_currency: false,
           ...overrides,
         },
         isLoading: false,
@@ -618,7 +625,12 @@ describe('HoldingsTable', () => {
         isError: false,
       })
       mockUseGetAccountHoldingsHistory.mockReturnValue({
-        data: { account_id: 'acct-closed', available_dates: [], positions: [] },
+        data: {
+          account_id: 'acct-closed',
+          available_dates: [],
+          positions: [],
+          is_mixed_currency: false,
+        },
         isLoading: false,
         isError: false,
       })
@@ -718,6 +730,8 @@ describe('HoldingsTable', () => {
           as_of_date: '2026-03-04',
           available_dates: ['2026-03-04'],
           positions: [position({ institution_value: undefined, cost_basis: undefined })],
+          // No position carries a value, so there is no total AND no currency to state one in.
+          is_mixed_currency: false,
         },
         isLoading: false,
         isError: false,

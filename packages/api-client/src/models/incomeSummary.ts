@@ -37,7 +37,9 @@ export interface IncomeSummary {
   readonly $schema?: string;
   /** @nullable */
   by_type: IncomeByType[] | null;
+  currency_code?: string;
   end_date: string;
+  is_mixed_currency: boolean;
   start_date: string;
   total_income: number;
 }

@@ -6738,6 +6738,15 @@
           "description": "Every UTC day (YYYY-MM-DD) with retained positions, newest first"
         },
         {
+          "name": "currency_code",
+          "type": "string"
+        },
+        {
+          "name": "is_mixed_currency",
+          "type": "boolean",
+          "required": true
+        },
+        {
           "name": "positions",
           "type": "array of object",
           "required": true
@@ -6867,6 +6876,15 @@
           "required": true
         },
         {
+          "name": "currency_code",
+          "type": "string"
+        },
+        {
+          "name": "is_mixed_currency",
+          "type": "boolean",
+          "required": true
+        },
+        {
           "name": "total_value",
           "type": "number",
           "required": true
@@ -6888,6 +6906,15 @@
         {
           "name": "by_account",
           "type": "array of object",
+          "required": true
+        },
+        {
+          "name": "currency_code",
+          "type": "string"
+        },
+        {
+          "name": "is_mixed_currency",
+          "type": "boolean",
           "required": true
         },
         {
@@ -6985,8 +7012,17 @@
           "required": true
         },
         {
+          "name": "currency_code",
+          "type": "string"
+        },
+        {
           "name": "end_date",
           "type": "string",
+          "required": true
+        },
+        {
+          "name": "is_mixed_currency",
+          "type": "boolean",
           "required": true
         },
         {
@@ -7014,6 +7050,10 @@
       "description": "Returns live portfolio totals (value, cost basis, unrealized gain/loss) computed from current holdings. day_change is derived from the most recent prior portfolio snapshot; null when no prior snapshot exists.",
       "responseBody": [
         {
+          "name": "currency_code",
+          "type": "string"
+        },
+        {
           "name": "day_change",
           "type": "number",
           "required": true
@@ -7026,6 +7066,11 @@
         {
           "name": "holdings_count",
           "type": "integer",
+          "required": true
+        },
+        {
+          "name": "is_mixed_currency",
+          "type": "boolean",
           "required": true
         },
         {

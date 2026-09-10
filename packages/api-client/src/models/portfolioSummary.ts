@@ -34,11 +34,13 @@
 export interface PortfolioSummary {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  currency_code?: string;
   /** @nullable */
   day_change: number | null;
   /** @nullable */
   day_change_pct: number | null;
   holdings_count: number;
+  is_mixed_currency: boolean;
   total_cost_basis: number;
   total_gain_loss: number;
   total_gain_loss_pct?: number;

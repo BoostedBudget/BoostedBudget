@@ -43,6 +43,8 @@ export interface HoldingSnapshotHistory {
      * @nullable
      */
   available_dates: string[] | null;
+  currency_code?: string;
+  is_mixed_currency: boolean;
   /** @nullable */
   positions: HoldingSnapshotView[] | null;
   total_value?: number;
