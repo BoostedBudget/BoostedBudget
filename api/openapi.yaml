@@ -4211,7 +4211,7 @@ components:
           format: date-time
           type: string
         date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) of the transaction
           type: string
         fees:
           format: double
@@ -5244,7 +5244,7 @@ components:
       additionalProperties: false
       properties:
         date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this snapshot was captured
           type: string
         total_value:
           format: double
