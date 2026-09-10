@@ -106,6 +106,19 @@ func sweepConcurrencyBudgets() []sweepConcurrencyBudget {
 			why: "the loop body is a synchronous Plaid /item/remove round trip plus one write-back; " +
 				"30s covers a slow call and the client's own retries",
 		},
+		{
+			sweep:        "balance_snapshot_dispatch",
+			cursor:       repository.SweepCursorBalanceCapture,
+			unique:       BalanceSnapshotDispatchUniqueOpts(),
+			cap:          balanceCaptureItemsPerRun,
+			perRowBudget: 50 * time.Millisecond,
+			why: "the loop body is ONE River enqueue — the Plaid /accounts/get and the snapshot " +
+				"writes happen later, in BalanceSnapshotCaptureWorker — amortised over pages of " +
+				"balanceCaptureDispatchPageSize; 50ms matches scheduled_deletion_check, whose loop " +
+				"body is the same single insert. ⚠ Note the WithScheduledAt stagger does NOT enter " +
+				"this budget: it delays when a capture job becomes AVAILABLE, not how long the " +
+				"enqueue itself takes, so the dispatch run does not wait for it",
+		},
 	}
 }
 

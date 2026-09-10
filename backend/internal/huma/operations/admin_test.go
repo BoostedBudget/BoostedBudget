@@ -632,3 +632,10 @@ func TestGetSystemHealth_ServiceError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Internal server error")
 }
+
+// #1626 Phase 3, Defect 3: the periodic balance-capture dispatcher's global item enumeration.
+// Nothing in this test file's subject reaches it; the method exists so the mock still satisfies
+// repository.LinkedItemRepository.
+func (m *mockLinkedItemRepo) GetItemsForBalanceCapturePage(context.Context, *repository.BalanceCaptureSweepCursor, int) ([]domain.BalanceCaptureTarget, error) {
+	return nil, nil
+}

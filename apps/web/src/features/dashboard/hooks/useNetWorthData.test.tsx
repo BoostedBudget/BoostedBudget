@@ -196,6 +196,67 @@ describe('useNetWorthData', () => {
         '2025-11-15',
       ])
     })
+
+    // ─── #1626 Phase 3, Defect 1 ─────────────────────────────────────────────────────────
+    // The fill ran to end_date, so a future end date had the newest snapshot copied forward
+    // into days that had not happened. It now stops at min(newest snapshot, today in UTC).
+    describe('Future-Date Clamping', () => {
+      const dayKey = (offsetDays: number) => {
+        const d = new Date()
+        d.setUTCDate(d.getUTCDate() + offsetDays)
+        return d.toISOString().slice(0, 10)
+      }
+
+      it('does not fill past the last real snapshot when end_date is in the future', async () => {
+        configureQueries({
+          summary: { data: mockSummary },
+          history: {
+            data: {
+              start_date: dayKey(-3),
+              end_date: dayKey(14),
+              granularity: 'daily',
+              snapshots: [
+                { date: dayKey(-3), net_worth: 10, total_assets: 20, total_liabilities: 10 },
+                { date: dayKey(-1), net_worth: 30, total_assets: 40, total_liabilities: 10 },
+              ],
+            },
+          },
+        })
+
+        const { result } = renderHook(() => useNetWorthData(), { wrapper: createWrapper() })
+        await waitFor(() => expect(result.current.loading).toBe(false))
+
+        const snapshots = result.current.history?.snapshots ?? []
+        expect(snapshots.map((s) => s.date)).toEqual([dayKey(-3), dayKey(-2), dayKey(-1)])
+        expect(snapshots.find((s) => s.date === dayKey(-2))?.net_worth).toBe(10)
+      })
+
+      it('stops at today when a snapshot is itself dated in the future', async () => {
+        configureQueries({
+          summary: { data: mockSummary },
+          history: {
+            data: {
+              start_date: dayKey(-1),
+              end_date: dayKey(14),
+              granularity: 'daily',
+              snapshots: [
+                { date: dayKey(-1), net_worth: 10, total_assets: 20, total_liabilities: 10 },
+                { date: dayKey(4), net_worth: 99, total_assets: 99, total_liabilities: 0 },
+              ],
+            },
+          },
+        })
+
+        const { result } = renderHook(() => useNetWorthData(), { wrapper: createWrapper() })
+        await waitFor(() => expect(result.current.loading).toBe(false))
+
+        const snapshots = result.current.history?.snapshots ?? []
+        // Today is filled from yesterday; the days between today and the real future row are
+        // not invented; and that row is kept rather than deleted.
+        expect(snapshots.map((s) => s.date)).toEqual([dayKey(-1), dayKey(0), dayKey(4)])
+        expect(snapshots.find((s) => s.date === dayKey(4))?.net_worth).toBe(99)
+      })
+    })
   })
 
   describe('Refetch Function', () => {

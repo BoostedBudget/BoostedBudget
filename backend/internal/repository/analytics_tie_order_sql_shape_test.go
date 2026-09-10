@@ -81,7 +81,9 @@ func TestSpendingReads_OrderByCarriesTheDocumentedTiebreaker(t *testing.T) {
 
 	merchantKey := squashWS(merchantGroupKeyExpr)
 
-	// All six spending reads, each with the ORDER BY it must produce. Personal and household are
+	// All eight spending reads, each with the ORDER BY it must produce. The income pair joined this
+	// universe in #1626: it previously ordered by ABS(SUM(t.amount)) with no tiebreaker at all, so
+	// the alias-based guard below could not see it. Personal and household are
 	// listed separately and spelled out in full on purpose: a divergence between the two members of
 	// a pair is how a defect hid on this branch before, so the expectations are not shared.
 	cases := []struct {
@@ -105,6 +107,24 @@ func TestSpendingReads_OrderByCarriesTheDocumentedTiebreaker(t *testing.T) {
 			nargs: 5,
 			call: func(r AnalyticsRepository) error {
 				_, err := r.GetSpendingByCategory(ctx, userID, household)
+				return err
+			},
+			wantOrderBy: "total DESC, category_display ASC",
+		},
+		{
+			name:  "GetIncomeSourceBreakdown personal",
+			nargs: 3,
+			call: func(r AnalyticsRepository) error {
+				_, err := r.GetIncomeSourceBreakdown(ctx, userID, personal)
+				return err
+			},
+			wantOrderBy: "total DESC, category_display ASC",
+		},
+		{
+			name:  "getIncomeSourceBreakdownHousehold",
+			nargs: 5,
+			call: func(r AnalyticsRepository) error {
+				_, err := r.GetIncomeSourceBreakdown(ctx, userID, household)
 				return err
 			},
 			wantOrderBy: "total DESC, category_display ASC",
@@ -250,19 +270,33 @@ var tiebreakerLegRe = regexp.MustCompile(`\b(category_display|merchant_name)\s+A
 
 // spendingOrderByTotalClauses folds analytics_repository.go and returns every ORDER BY clause in it
 // that sorts on `total`, each prefixed with the source line the query starts on.
+// analyticsSQLFiles are the files whose SQL this guard reads.
+//
+// #1626 added the second entry, and the reason is a hole this guard had: it parsed exactly one
+// file, so a new spending read that landed in ANY other file escaped the inventory silently — no
+// count change, no failure, no tiebreaker enforced. The hierarchy read is in its own file precisely
+// because it is a self-contained subject, and it would have slipped straight past.
+var analyticsSQLFiles = []string{
+	"analytics_repository.go",
+	"analytics_category_path.go",
+}
+
 func spendingOrderByTotalClauses(t *testing.T) []string {
 	t.Helper()
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "analytics_repository.go", nil, 0)
-	require.NoError(t, err, "parse analytics_repository.go")
 
 	var found []string
-	for _, expr := range sqlStringExprs(file) {
-		for _, clause := range orderByClauses(expr.SQL) {
-			if orderByTotalRe.MatchString(clause) {
-				found = append(found,
-					"analytics_repository.go:"+strconv.Itoa(fset.Position(expr.Pos).Line)+
-						"  ORDER BY "+clause)
+	for _, name := range analyticsSQLFiles {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		require.NoError(t, err, "parse %s", name)
+
+		for _, expr := range sqlStringExprs(file) {
+			for _, clause := range orderByClauses(expr.SQL) {
+				if orderByTotalRe.MatchString(clause) {
+					found = append(found,
+						name+":"+strconv.Itoa(fset.Position(expr.Pos).Line)+
+							"  ORDER BY "+clause)
+				}
 			}
 		}
 	}
@@ -282,8 +316,11 @@ func spendingOrderByTotalClauses(t *testing.T) []string {
 func TestNoSpendingReadOrdersByTotalWithoutATiebreaker(t *testing.T) {
 	found := spendingOrderByTotalClauses(t)
 
-	assert.Len(t, found, 6,
-		"expected the six spending reads #1585 fixed; if a read was added or removed, extend "+
+	assert.Len(t, found, 9,
+		"expected the six spending reads #1585 fixed, plus the income pair #1626 brought into scope, "+
+			"plus the ONE literal the hierarchy pair shares (both its personal and household reads "+
+			"order through categoryHierarchyGroupAndOrder, so one clause covers two reads and they "+
+			"cannot drift apart); if a read was added or removed, extend "+
 			"TestSpendingReads_OrderByCarriesTheDocumentedTiebreaker to name it explicitly. Found:\n%s",
 		strings.Join(found, "\n"))
 
@@ -292,5 +329,63 @@ func TestNoSpendingReadOrdersByTotalWithoutATiebreaker(t *testing.T) {
 			"an ORDER BY on `total` with no tiebreaker returns equal-total rows in plan-dependent "+
 				"order (#1585). Add the alphabetical leg — and, for a merchant-shaped read, the "+
 				"grouped merchant key after it. Offending clause: %s", clause)
+	}
+}
+
+// TestIncomeReadsSelectTheCategoryDisplayColumn is the structural half of #1626 bug A.
+//
+// GetIncomeSourceBreakdown used to select ONLY the grouping key. For a custom-categorised income
+// row that key is the synthetic token `custom:<uuid>`, and the service then ran it through
+// PFCPrimaryDisplayName, which misses the registry map and title-cases the raw token — so the
+// Sankey rendered a UUID as an income source's name. The expense sibling never had the bug because
+// it selects effectiveCategoryDisplayExpr() alongside the key.
+//
+// This is pinned structurally rather than behaviourally because the defect is an ABSENT column:
+// a semantic test can assert the name that comes back, but only the SQL shape can assert that the
+// read asks for a display at all, which is what regressed.
+func TestIncomeReadsSelectTheCategoryDisplayColumn(t *testing.T) {
+	ctx := context.Background()
+	const userID = "11111111-1111-1111-1111-111111111111"
+
+	personal := domain.SpendingFilters{
+		StartDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2026, 3, 31, 0, 0, 0, 0, time.UTC),
+	}
+	household := personal
+	household.HouseholdScope = &domain.HouseholdScope{
+		HouseholdID:   "22222222-2222-2222-2222-222222222222",
+		MemberUserIDs: []string{userID},
+	}
+
+	cases := []struct {
+		name  string
+		args  domain.SpendingFilters
+		nargs int
+	}{
+		{name: "GetIncomeSourceBreakdown personal", args: personal, nargs: 3},
+		{name: "getIncomeSourceBreakdownHousehold", args: household, nargs: 5},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock, repo, captured := setupAnalyticsMockDBCapturingSQL(t)
+			defer mock.Close()
+			anyArgs := make([]interface{}, tc.nargs)
+			for i := range anyArgs {
+				anyArgs[i] = pgxmock.AnyArg()
+			}
+			mock.ExpectQuery(`SELECT`).WithArgs(anyArgs...).WillReturnRows(pgxmock.NewRows([]string{"a"}))
+
+			_, err := repo.GetIncomeSourceBreakdown(ctx, userID, tc.args)
+			require.NoError(t, err)
+			require.Len(t, *captured, 1, "expected exactly one statement to be issued")
+			sql := squashWS((*captured)[0])
+
+			require.Contains(t, sql, effectiveCategoryDisplayExpr()+" AS category_display",
+				"%s must select the display column beside the grouping key, or a custom income "+
+					"category reaches the API as the raw `custom:<uuid>` token (#1626)", tc.name)
+			require.Contains(t, finalGroupBy(t, (*captured)[0]), "category_display",
+				"%s must GROUP BY the display it selects", tc.name)
+		})
 	}
 }

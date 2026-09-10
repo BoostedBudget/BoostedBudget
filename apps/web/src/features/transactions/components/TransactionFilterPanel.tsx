@@ -39,6 +39,10 @@ interface TransactionFilterPanelProps {
   /** Issue #1569 T12: opt in to bank-reversed transactions. Optional so existing callers and
    *  tests that do not offer the control keep compiling; when absent the control is not shown. */
   onIncludeReversedChange?: (val: boolean) => void
+  /** Issue #1626: clear the uncategorized-only filter. Optional for the same reason as
+   *  onIncludeReversedChange — when absent the pill is not offered. There is deliberately no
+   *  way to turn it ON from here: the reports Sankey is that affordance. */
+  onUncategorizedChange?: (val: boolean) => void
   onClearAll?: () => void
   disabled?: boolean
 }
@@ -50,11 +54,13 @@ interface FilterPillsSectionProps {
   investmentDisplayValue: string | null
   activityTypesDisplayValue: string | null
   reversedDisplayValue: string | null
+  uncategorizedDisplayValue: string | null
   onDatePresetChange: (preset: DatePreset) => void
   onStatusFilterChange: (status: StatusFilter) => void
   onIncludeInvestmentActivityChange: (val: boolean) => void
   onActivityTypesChange: (types: ActivityType[]) => void
   onIncludeReversedChange?: (val: boolean) => void
+  onUncategorizedChange?: (val: boolean) => void
 }
 
 // Extracted module-level component for filter pills
@@ -64,11 +70,13 @@ function FilterPillsSection({
   investmentDisplayValue,
   activityTypesDisplayValue,
   reversedDisplayValue,
+  uncategorizedDisplayValue,
   onDatePresetChange,
   onStatusFilterChange,
   onIncludeInvestmentActivityChange,
   onActivityTypesChange,
   onIncludeReversedChange,
+  onUncategorizedChange,
 }: FilterPillsSectionProps) {
   const pills: Array<{ show: string | null, label: string, value: string | null, onRemove: () => void }> = [
     { show: dateDisplayValue, label: 'Date', value: dateDisplayValue, onRemove: () => onDatePresetChange('all') },
@@ -76,6 +84,9 @@ function FilterPillsSection({
     { show: investmentDisplayValue, label: 'Investments', value: investmentDisplayValue, onRemove: () => onIncludeInvestmentActivityChange(true) },
     { show: activityTypesDisplayValue, label: 'Activity', value: activityTypesDisplayValue, onRemove: () => onActivityTypesChange([]) },
     { show: reversedDisplayValue, label: 'Reversed', value: reversedDisplayValue, onRemove: () => onIncludeReversedChange?.(false) },
+    // Issue #1626. "Included" rather than "Only": the server ORs this with the three category
+    // filters, so it ADDS the uncategorized rows to whatever else is selected.
+    { show: uncategorizedDisplayValue, label: 'Uncategorized', value: uncategorizedDisplayValue, onRemove: () => onUncategorizedChange?.(false) },
   ]
 
   return (
@@ -113,6 +124,7 @@ export function TransactionFilterPanel({
   onIncludeInvestmentActivityChange,
   onActivityTypesChange,
   onIncludeReversedChange,
+  onUncategorizedChange,
   onClearAll,
   disabled,
 }: TransactionFilterPanelProps) {
@@ -125,6 +137,8 @@ export function TransactionFilterPanel({
   // Issue #1569 T12. `?? false` mirrors the API default, so a URL that never mentions the flag
   // and one that says false are the same state here.
   const includeReversed = filters.include_reversed ?? false
+  // Issue #1626: same `?? false` normalisation — absent and explicitly-false are one state.
+  const uncategorized = filters.uncategorized ?? false
 
   // Consolidated clear all handler — use atomic onClearAll (single setSearchParams) when
   // provided to avoid the multi-call race where the last setSearchParams overwrites earlier
@@ -139,6 +153,7 @@ export function TransactionFilterPanel({
     onIncludeInvestmentActivityChange(true)
     onActivityTypesChange([])
     onIncludeReversedChange?.(false)
+    onUncategorizedChange?.(false)
   }
 
   const filterPillsProps = useMemo<FilterPillsSectionProps>(() => {
@@ -174,17 +189,22 @@ export function TransactionFilterPanel({
       investmentDisplayValue: getInvestmentDisplayValue(),
       activityTypesDisplayValue: getActivityTypesDisplayValue(),
       reversedDisplayValue: includeReversed ? 'Shown' : null,
+      uncategorizedDisplayValue: uncategorized ? 'Included' : null,
       onDatePresetChange,
       onStatusFilterChange,
       onIncludeInvestmentActivityChange,
       onActivityTypesChange,
       onIncludeReversedChange,
+      onUncategorizedChange,
     }
-  }, [datePreset, filters.start_date, filters.end_date, filters.activity_types, statusFilter, includeInvestmentActivity, includeReversed, onDatePresetChange, onStatusFilterChange, onIncludeInvestmentActivityChange, onActivityTypesChange, onIncludeReversedChange])
+  }, [datePreset, filters.start_date, filters.end_date, filters.activity_types, statusFilter, includeInvestmentActivity, includeReversed, uncategorized, onDatePresetChange, onStatusFilterChange, onIncludeInvestmentActivityChange, onActivityTypesChange, onIncludeReversedChange, onUncategorizedChange])
 
   // Calculate active count for date/status/investment filters
   const investmentActiveCount = (!includeInvestmentActivity ? 1 : 0) + (activityTypes.length > 0 ? 1 : 0)
-  const dateStatusActiveCount = (datePreset !== 'all' ? 1 : 0) + (statusFilter !== 'all' ? 1 : 0) + investmentActiveCount + (includeReversed ? 1 : 0)
+  // ⚠ uncategorized belongs in this count and not only in the badge: hasDateStatusFilters gates
+  // whether the pills section renders at all, so leaving it out would mean arriving from the
+  // Sankey with only this filter set renders no pill and no way to clear it (#1626).
+  const dateStatusActiveCount = (datePreset !== 'all' ? 1 : 0) + (statusFilter !== 'all' ? 1 : 0) + investmentActiveCount + (includeReversed ? 1 : 0) + (uncategorized ? 1 : 0)
   const hasDateStatusFilters = dateStatusActiveCount > 0
 
   // Mobile: Bottom sheet

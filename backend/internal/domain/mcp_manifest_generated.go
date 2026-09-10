@@ -88,6 +88,7 @@ var MCPOperationManifest = map[string]MCPOperationClass{
 	"getCashFlowSummary":                             MCPClassRead,
 	"getCategoryBreakdownForMerchant":                MCPClassRead,
 	"getCategoryByID":                                MCPClassRead,
+	"getCategoryHierarchy":                           MCPClassRead,
 	"getCategoryTotalForPeriod":                      MCPClassRead,
 	"getCategoryTransactions":                        MCPClassRead,
 	"getCategoryUsage":                               MCPClassRead,

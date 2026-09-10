@@ -1,0 +1,14 @@
+-- Rollback for 000194. Drops only the index; balance_snapshots and its rows are untouched — this
+-- migration adds no rows and removes none, in either direction.
+--
+-- After this, two concurrent capture jobs for one item can each insert a daily_capture row for the
+-- same account and day again. No read reports a wrong balance as a result (every aggregated read
+-- collapses to latest-per-account-per-day), but the row count grows and
+-- CreateDailyCapture's ON CONFLICT clause loses its arbiter — so it will start erroring with
+-- SQLSTATE 42P10 ("there is no unique or exclusion constraint matching the ON CONFLICT
+-- specification") rather than silently doing nothing. That is deliberate: a missing idempotency key
+-- should be loud, not invisible.
+--
+-- CONCURRENTLY, as the file's sole statement, for the same transaction-block reason as the up
+-- migration.
+DROP INDEX CONCURRENTLY IF EXISTS uq_balance_snapshots_daily_capture;

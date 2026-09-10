@@ -123,13 +123,13 @@ type Transaction struct {
 	ExternalMetadata *string `json:"external_metadata,omitempty" db:"external_metadata"`
 
 	// Core transaction fields (standardized across all providers)
-	Amount         float64    `json:"amount" db:"amount"` // Positive=outflow, Negative=inflow (Plaid PFCv2)
-	Date           time.Time  `json:"date" db:"date"`
-	AuthorizedDate *time.Time `json:"authorized_date,omitempty" db:"authorized_date"`
-	Name           string     `json:"name" db:"name"`
-	MerchantName          *string `json:"merchant_name,omitempty" db:"merchant_name"`
-	MerchantID            *string `json:"merchant_id,omitempty" db:"merchant_id"`
-	EffectiveMerchantName *string `json:"effective_merchant_name,omitempty" db:"-"`
+	Amount                float64    `json:"amount" db:"amount"` // Positive=outflow, Negative=inflow (Plaid PFCv2)
+	Date                  time.Time  `json:"date" db:"date"`
+	AuthorizedDate        *time.Time `json:"authorized_date,omitempty" db:"authorized_date"`
+	Name                  string     `json:"name" db:"name"`
+	MerchantName          *string    `json:"merchant_name,omitempty" db:"merchant_name"`
+	MerchantID            *string    `json:"merchant_id,omitempty" db:"merchant_id"`
+	EffectiveMerchantName *string    `json:"effective_merchant_name,omitempty" db:"-"`
 
 	// PFCv2 source columns (from Plaid)
 	PFCPrimary         *string `json:"pfc_primary,omitempty" db:"pfc_primary"`
@@ -398,8 +398,24 @@ type TransactionFilters struct {
 	// EndDate filters transactions on or before this date (inclusive)
 	EndDate *time.Time
 
-	// PFCPrimaries filters by effective PFC primary enum(s) (OR logic within).
+	// Uncategorized selects transactions with NO category at all — the rows the analytics layer
+	// reports under its synthesised 'UNCATEGORIZED' sentinel (#1626 Phase 2). It exists because
+	// that sentinel is not a value any column holds, so `pfc_primaries=UNCATEGORIZED` matches
+	// nothing and the Sankey's Uncategorized node had no way to be clickable.
+	//
+	// A plain bool, like IncludeReversed below: this is a positive-only opt-in, so false and absent
+	// both mean "no predicate". Absence is expressed at the handler boundary, not in the type.
+	// It joins the OR group with the three fields below — see categoryFilterGroup.
+	Uncategorized bool
+
+	// PFCPrimaries filters by effective PFC primary enum(s).
 	// Matches the effective category: override if set, else source pfc_primary.
+	//
+	// #1626: PFCPrimaries, PFCDetaileds and CustomCategoryIDs are ONE OR-joined group — a
+	// transaction matches if any of them matches. They used to be separate AND-ed conditions,
+	// which returned zero rows whenever a PFC and a custom filter were combined: a row is either
+	// pfc-kind or custom-kind (effective_pfc_primary is NULL on custom rows), so the conjunction
+	// of the two selected disjoint sets. See categoryFilterGroup.
 	PFCPrimaries []string
 
 	// PFCDetaileds filters by effective PFC detailed sub-category enum(s) (OR logic within).
@@ -492,4 +508,27 @@ func (t *Transaction) Reversed() bool {
 	return t.DeletedAt != nil &&
 		t.DeletedReason != nil &&
 		*t.DeletedReason == TxnDeletedProviderRemovedPosted
+}
+
+// FeedTotals carries whole-result-set aggregates for a transaction feed page (#1626 Phase 2).
+//
+// WHY IT EXISTS. The cursor-paginated feed returned only a page of rows, so nothing in the product
+// could answer "how much does this filtered set come to". That made the reports Sankey's
+// click-through unverifiable: a node showed an amount, the list showed rows, and no one could tell
+// whether they agreed. They now can.
+//
+// ⚠ WHAT "AGREED" MEANS, exactly. Amount is SIGNED, following the rows (PFCv2: expenses positive,
+// inflows negative). A category-hierarchy node's amount is COALESCE(SUM(ABS(t.amount)),0), an
+// unsigned chart quantity. The property that holds over the same filtered set is therefore
+// |node amount| == |Amount| — equal outright for an expense node, off by a factor of −1 for an
+// income one. Five comments on this feature asserted plain equality before review caught it; both
+// SQL expressions are correct for their own consumer (a chart wants magnitudes, a ledger total
+// wants signs), so the sentence is what needed fixing, not the queries.
+//
+// ⚠ Populated ONLY for the FIRST page (no cursor supplied). Computing it on every page would put a
+// full aggregate over the filtered set on the busiest list in the app, for a number that does not
+// change as the user pages. A nil pointer means "not computed", never "zero".
+type FeedTotals struct {
+	Count  int     `json:"count"`
+	Amount float64 `json:"amount"`
 }

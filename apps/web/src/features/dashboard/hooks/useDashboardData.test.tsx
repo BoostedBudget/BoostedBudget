@@ -372,6 +372,109 @@ describe('useDashboardData', () => {
       expect(nov13?.balance).toBe(14500.0)
     })
 
+    // ─── #1626 Phase 3, Defect 1 ─────────────────────────────────────────────────────────
+    // The fill used to run to end_date, so a range whose end lies in the future had the last
+    // real snapshot copied forward into every day that had not happened yet — the Balance
+    // History chart plotted a flat line out to Sep 29 while the newest snapshot was Sep 8.
+    // The fill now stops at min(last real snapshot, today in UTC).
+    describe('Future-Date Clamping', () => {
+      const dayKey = (offsetDays: number) => {
+        const d = new Date()
+        d.setUTCDate(d.getUTCDate() + offsetDays)
+        return d.toISOString().slice(0, 10)
+      }
+
+      it('does not fill past the last real snapshot when end_date is in the future', async () => {
+        const history: BalanceHistory = {
+          start_date: dayKey(-4),
+          end_date: dayKey(20),
+          granularity: 'daily',
+          snapshots: [
+            { date: dayKey(-4), balance: 100, by_type: { depository: 100 } },
+            { date: dayKey(-1), balance: 250, by_type: { depository: 250 } },
+          ],
+        }
+        configureQueries({
+          summary: { data: mockBalanceSummary },
+          history: { data: history },
+          types: { data: mockAccountTypes },
+        })
+
+        const { result } = renderHook(() => useDashboardData(), {
+          wrapper: createWrapper(),
+        })
+        await waitFor(() => {
+          expect(result.current.loading).toBe(false)
+        })
+
+        const dates = (result.current.history?.snapshots ?? []).map((s) => s.date)
+        expect(dates).toEqual([dayKey(-4), dayKey(-3), dayKey(-2), dayKey(-1)])
+        // The two intermediate days are still forward-filled — the fix removes the future,
+        // not the gap-filling.
+        const filled = result.current.history?.snapshots.find((s) => s.date === dayKey(-3))
+        expect(filled?.balance).toBe(100)
+      })
+
+      it('stops at today when the snapshots themselves run into the future', async () => {
+        // A future-dated snapshot row would survive a naive "stop at the array's last row"
+        // cutoff and take the fill with it, so the cutoff is the EARLIER of the two.
+        const history: BalanceHistory = {
+          start_date: dayKey(-2),
+          end_date: dayKey(20),
+          granularity: 'daily',
+          snapshots: [
+            { date: dayKey(-2), balance: 100, by_type: { depository: 100 } },
+            { date: dayKey(3), balance: 900, by_type: { depository: 900 } },
+          ],
+        }
+        configureQueries({
+          summary: { data: mockBalanceSummary },
+          history: { data: history },
+          types: { data: mockAccountTypes },
+        })
+
+        const { result } = renderHook(() => useDashboardData(), {
+          wrapper: createWrapper(),
+        })
+        await waitFor(() => {
+          expect(result.current.loading).toBe(false)
+        })
+
+        const snapshots = result.current.history?.snapshots ?? []
+        const dates = snapshots.map((s) => s.date)
+        expect(dates.slice(0, 3)).toEqual([dayKey(-2), dayKey(-1), dayKey(0)])
+        // Nothing between today and the real future row is invented...
+        expect(dates).not.toContain(dayKey(1))
+        expect(dates).not.toContain(dayKey(2))
+        // ...and the real row itself is not deleted, only left standing alone.
+        expect(snapshots.find((s) => s.date === dayKey(3))?.balance).toBe(900)
+        expect(dates).toEqual([dayKey(-2), dayKey(-1), dayKey(0), dayKey(3)])
+      })
+
+      it('still skips days before the first snapshot', async () => {
+        const history: BalanceHistory = {
+          start_date: dayKey(-6),
+          end_date: dayKey(10),
+          granularity: 'daily',
+          snapshots: [{ date: dayKey(-2), balance: 100, by_type: { depository: 100 } }],
+        }
+        configureQueries({
+          summary: { data: mockBalanceSummary },
+          history: { data: history },
+          types: { data: mockAccountTypes },
+        })
+
+        const { result } = renderHook(() => useDashboardData(), {
+          wrapper: createWrapper(),
+        })
+        await waitFor(() => {
+          expect(result.current.loading).toBe(false)
+        })
+
+        expect((result.current.history?.snapshots ?? []).map((s) => s.date)).toEqual([dayKey(-2)])
+      })
+    })
+
     it('should handle empty snapshots array', async () => {
       configureQueries({
         summary: { data: mockBalanceSummary },

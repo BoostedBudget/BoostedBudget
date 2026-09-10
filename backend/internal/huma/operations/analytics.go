@@ -114,6 +114,27 @@ type GetSpendingByCategoryOutput struct {
 	Body *domain.SpendingByCategoryResponse
 }
 
+// GetCategoryHierarchyInput represents the input for the category-hierarchy endpoint (#1626).
+//
+// Deliberately does NOT carry `category`: that param means "drill into exactly one primary", which
+// is meaningless for a read that returns the whole tree.
+type GetCategoryHierarchyInput struct {
+	inputs.AuthenticatedInput
+	StartDate         string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
+	EndDate           string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
+	Direction         string `query:"direction" enum:"income,expense" default:"expense" doc:"Which side of the ledger to aggregate: income is amount < 0, expense is amount > 0. Both directions return the SAME full tree — this parameter selects which transactions are aggregated, not how deep the result goes. How many levels to SHOW is a presentation choice: the reports Sankey renders income at leaf depth, because income's useful distinction (wages, dividends, rental) lives one level down, and expenses at primary depth, because they read better consolidated."`
+	AccountTypes      string `query:"account_types" doc:"Comma-separated account types to filter"`
+	IncludeTransfers  string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
+	CustomCategoryIDs string `query:"custom_category_ids" doc:"Comma-separated custom category UUIDs to scope the report. NOTE: supplying any value narrows the WHOLE tree to custom-categorised transactions, so no PFC branches are returned — that is what scoping a report to specific custom categories means, and it matches the reports page's existing custom-category filter."`
+	RollUp            string `query:"roll_up" doc:"When true, a parent custom category also includes its children (default true)"`
+	Scope             string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope: personal (default) or household (requires active household membership). Custom category scoping always resolves to the requester's own categories, never a household member's."`
+}
+
+// GetCategoryHierarchyOutput represents the response for the category-hierarchy endpoint.
+type GetCategoryHierarchyOutput struct {
+	Body *domain.CategoryHierarchyResponse
+}
+
 // GetSpendingByMerchantInput represents the input for the spending-by-merchant endpoint.
 type GetSpendingByMerchantInput struct {
 	inputs.AuthenticatedInput
@@ -276,6 +297,39 @@ func validateLimit(limit, defaultLimit, maxLimit int) int {
 		return maxLimit
 	}
 	return limit
+}
+
+// GetCategoryHierarchy handles GET /api/v1/analytics/category-hierarchy requests.
+// Returns the category tree (up to three levels) for one flow direction, with roll-up totals and
+// each node's own direct spend.
+func (h *AnalyticsHandler) GetCategoryHierarchy(ctx context.Context, input *GetCategoryHierarchyInput) (*GetCategoryHierarchyOutput, error) {
+	filters, err := parseSpendingFilters(input.StartDate, input.EndDate, input.AccountTypes, input.IncludeTransfers)
+	if err != nil {
+		return nil, err
+	}
+	if filters.HouseholdScope, err = resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope); err != nil {
+		return nil, err
+	}
+
+	if input.CustomCategoryIDs != "" {
+		for _, p := range strings.Split(input.CustomCategoryIDs, ",") {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				filters.CustomCategoryIDs = append(filters.CustomCategoryIDs, trimmed)
+			}
+		}
+	}
+	filters.RollUpChildren = input.RollUp != "false"
+
+	direction := domain.CategoryDirection(input.Direction)
+	if !direction.IsValid() {
+		direction = domain.CategoryDirectionExpense
+	}
+
+	response, err := h.service.GetCategoryHierarchy(ctx, input.UserID, *filters, direction)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	return &GetCategoryHierarchyOutput{Body: response}, nil
 }
 
 // GetSpendingByMerchant handles GET /api/v1/analytics/spending-by-merchant requests.
@@ -814,6 +868,17 @@ func RegisterAnalyticsRoutes(api huma.API, handler *AnalyticsHandler) {
 		Tags:        []string{"Analytics"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetSpendingByCategory)
+
+	// GET /api/v1/analytics/category-hierarchy - Category tree for one flow direction
+	huma.Register(api, huma.Operation{
+		OperationID: "getCategoryHierarchy",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/analytics/category-hierarchy",
+		Summary:     "Get the category hierarchy",
+		Description: "Returns the category tree for one flow direction (income or expense), up to three levels deep: PFC primary, then its detailed categories or custom categories nested under it, then custom categories nested under those. Each node carries a roll-up total, its own direct total, and a transaction count. Levels are ragged — a branch ends where its data ends.",
+		Tags:        []string{"Analytics"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetCategoryHierarchy)
 
 	// GET /api/v1/analytics/spending-by-merchant - Get top merchants by spending
 	huma.Register(api, huma.Operation{

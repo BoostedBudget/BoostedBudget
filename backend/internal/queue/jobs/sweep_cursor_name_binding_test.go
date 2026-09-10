@@ -1,25 +1,25 @@
 package jobs
 
-// sweep_cursor_name_binding_test.go — Issue #1477 follow-up: the ONE thing keeping the four
+// sweep_cursor_name_binding_test.go — Issue #1477 follow-up: the ONE thing keeping the five
 // persisted sweep cursors apart is a string, and until this file nothing tested it.
 //
-// THE HAZARD, stated exactly. All four sweeps share one position type (repository.SweepPosition),
+// THE HAZARD, stated exactly. All five sweeps share one position type (repository.SweepPosition),
 // one repository, and one table (sweep_cursors). What makes scheduled_deletion's watermark
 // scheduled_deletion's is the repository.SweepCursorName handed to newSweepResume — and every one
-// of the four constants has the same TYPE, so writing
+// of the five constants has the same TYPE, so writing
 //
 //	resume := newSweepResume(ctx, w.sweepCursors, repository.SweepCursorItemCleanup, ...)
 //
 // at scheduled_deletion_check.go's call site COMPILES CLEANLY. It would feed the item-cleanup
 // watermark — a (last_error_at, last_synced_at) pair from a different table — into the deletion
 // sweep's keyset predicate, and start the sweep that erases users at an arbitrary point in its
-// candidate set. The four call sites were correct by convention only.
+// candidate set. The call sites were correct by convention only.
 //
-// WHAT THIS FILE ASSERTS, and why it is not a "the four constants exist" test. Each worker is RUN,
+// WHAT THIS FILE ASSERTS, and why it is not a "the constants exist" test. Each worker is RUN,
 // through the same entry point production uses, with a store that records every name it is asked
 // about. The assertion is that the run touched EXACTLY ONE name and that it was that sweep's own.
-// Swap any two of the four call sites and two cases here fail; point two sweeps at one name and two
-// fail; add a fifth sweep without a case and TestSweepCursorNames_EveryDeclaredNameHasBoundWorker
+// Swap any two of the call sites and two cases here fail; point two sweeps at one name and two
+// fail; add a new sweep without a case and TestSweepCursorNames_EveryDeclaredNameHasBoundWorker
 // fails (the name is spelled exactly as the func below declares it, so it works as a `-run` pattern;
 // it previously read "…HasABoundWorker", which matched nothing).
 // The name never appears as a literal in the arrange half of a case — it is read back from
@@ -145,9 +145,18 @@ type neverCalledOrphanRemover struct{}
 
 func (neverCalledOrphanRemover) RemoveItem(context.Context, string) error { return nil }
 
+// emptyPageBalanceCaptureItemRepo backs the balance-snapshot dispatcher. Empty first page, for the
+// same reason as its siblings: this test is about which cursor row the run touches, not about what
+// it would dispatch.
+type emptyPageBalanceCaptureItemRepo struct{}
+
+func (emptyPageBalanceCaptureItemRepo) GetItemsForBalanceCapturePage(context.Context, *repository.BalanceCaptureSweepCursor, int) ([]domain.BalanceCaptureTarget, error) {
+	return nil, nil
+}
+
 func bindingTestLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-// --- the four bindings --------------------------------------------------------------------------
+// --- the bindings ----------------------------------------------------------------------------
 
 // sweepCursorNameBindings is the mapping under test: one entry per sweep, each running that sweep's
 // real entry point against a recording store.
@@ -223,6 +232,20 @@ func sweepCursorNameBindings() []struct {
 				}))
 			},
 		},
+		{
+			sweep: "BalanceSnapshotDispatchWorker",
+			want:  repository.SweepCursorBalanceCapture,
+			run: func(t *testing.T, store repository.SweepCursorRepository) {
+				t.Helper()
+				w := NewBalanceSnapshotDispatchWorker(BalanceSnapshotDispatchWorkerDeps{
+					ItemRepo:     emptyPageBalanceCaptureItemRepo{},
+					JobQueue:     &captureRecordingQueue{},
+					Logger:       bindingTestLogger(),
+					SweepCursors: store,
+				})
+				require.NoError(t, w.Work(context.Background(), captureDispatchJob()))
+			},
+		},
 	}
 }
 
@@ -237,7 +260,7 @@ func TestSweepCursorName_EachWorkerTouchesOnlyItsOwnCursorRow(t *testing.T) {
 			// rows would be reading one sweep's watermark into another's predicate, which is the
 			// whole failure this test exists for.
 			require.Equal(t, []repository.SweepCursorName{tc.want}, store.observed(),
-				"%s must persist its resume position under %q and under NO other name. All four sweeps "+
+				"%s must persist its resume position under %q and under NO other name. All five sweeps "+
 					"share one SweepPosition type and one sweep_cursors table, so passing a sibling's "+
 					"SweepCursorName at this worker's newSweepResume call site compiles cleanly and would "+
 					"feed a foreign watermark into this sweep's keyset predicate — starting a sweep that "+
@@ -250,7 +273,7 @@ func TestSweepCursorName_EachWorkerTouchesOnlyItsOwnCursorRow(t *testing.T) {
 // TestSweepCursorNames_EveryDeclaredNameHasBoundWorker closes the enumeration in both directions:
 // no declared cursor name is left without a worker bound to it, and no two workers share one.
 //
-// The list below is the complete set of repository.SweepCursorName constants. A fifth sweep that
+// The list below is the complete set of repository.SweepCursorName constants. A new sweep that
 // adds a constant without adding a binding above fails here rather than shipping unbound.
 func TestSweepCursorNames_EveryDeclaredNameHasBoundWorker(t *testing.T) {
 	declared := []repository.SweepCursorName{
@@ -258,6 +281,7 @@ func TestSweepCursorNames_EveryDeclaredNameHasBoundWorker(t *testing.T) {
 		repository.SweepCursorExpiredRetention,
 		repository.SweepCursorItemCleanup,
 		repository.SweepCursorOrphanRetry,
+		repository.SweepCursorBalanceCapture,
 	}
 
 	bound := map[repository.SweepCursorName]string{}

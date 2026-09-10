@@ -6,6 +6,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Issue #1569 Task 20 (S8). createBalanceSnapshots' deduplication was purely time-based: if ANY
@@ -108,6 +109,89 @@ func TestIsRedundantSnapshot(t *testing.T) {
 			assert.Equal(t, tc.want, isRedundantSnapshot(tc.latest, tc.next, now, window), tc.why)
 		})
 	}
+}
+
+// TestIsRedundantSnapshot_NeverDedupsAcrossAUTCDayBoundary is #1626 gap G7.
+//
+// THE DEFECT. The window is five minutes of ELAPSED TIME and knows nothing about the UTC day, but
+// the gap-filler's entire unit of work IS the UTC day: balanceCaptureService.CaptureItemBalances
+// asks AccountsMissingDailySnapshot whether TODAY's cohort is complete, and migration 000194's
+// partial unique index is keyed on the UTC date. So a capture landing in the 00:00–00:05 UTC
+// window — a RunOnStart deploy just after midnight, or River retrying a 23:5x attempt that failed —
+// saw the account as missing today's row, deduped against YESTERDAY's 23:58 identical row, wrote
+// nothing, and returned success. The day it was asked to fill stayed empty, permanently, with no
+// backfill and nothing in the outcome counters but a Deduped++.
+//
+// ⚠ WHY THE EXISTING TABLE ABOVE COULD NOT CATCH IT: every one of its fixtures sits at 12:00 UTC
+// with offsets of minutes, so `now` and `latest.SnapshotAt` are always the same calendar day. The
+// defect is unreachable without a fixture that straddles midnight, which is exactly why it survived.
+//
+// ⚠ AND THE FIXTURES BELOW ARE DELIBERATELY NOT ON THE BOUNDARY THE CODE WOULD GENERATE ANYWAY. A
+// pair at 23:59:59 / 00:00:00 is one second apart AND on different days, so it would be killed by
+// the day gate and by nothing else — but it would also pass if the implementation used any
+// second-resolution proxy for "different day". The pair used here is 23:58 / 00:02, four minutes
+// apart: comfortably INSIDE the five-minute window (so the elapsed-time test says "redundant") and
+// on different UTC days (so the day gate must override it). Only a real day comparison satisfies it.
+func TestIsRedundantSnapshot_NeverDedupsAcrossAUTCDayBoundary(t *testing.T) {
+	const window = 5 * time.Minute
+
+	// 00:02 UTC on the 25th, against an identical row written at 23:58 UTC on the 24th.
+	justAfterMidnight := time.Date(2026, 8, 25, 0, 2, 0, 0, time.UTC)
+	lateYesterday := time.Date(2026, 8, 24, 23, 58, 0, 0, time.UTC)
+	require.Less(t, justAfterMidnight.Sub(lateYesterday), window,
+		"fixture guard: the two instants must be INSIDE the dedup window, or this test would pass "+
+			"on the elapsed-time test alone and prove nothing about the day gate")
+
+	latest := &domain.BalanceSnapshot{SnapshotAt: lateYesterday, CurrentBalance: f(100), AvailableBalance: f(90)}
+	next := &domain.BalanceSnapshot{SnapshotAt: justAfterMidnight, CurrentBalance: f(100), AvailableBalance: f(90)}
+
+	assert.False(t, isRedundantSnapshot(latest, next, justAfterMidnight, window),
+		"an identical snapshot from YESTERDAY must never suppress today's row. The gap-filler's unit "+
+			"of work is the UTC day (AccountsMissingDailySnapshot, migration 000194's date-keyed "+
+			"index), so suppressing here writes nothing for a day the cohort check just reported as "+
+			"missing — and returns success while doing it")
+
+	// The control that stops the fix from being "never dedup near midnight": the SAME clock times,
+	// both on the new day, must still dedup. Without this, a mutation that simply disabled the
+	// window whenever the hour was small would pass the assertion above.
+	sameDayEarly := time.Date(2026, 8, 25, 0, 1, 0, 0, time.UTC)
+	sameDayLater := time.Date(2026, 8, 25, 0, 4, 0, 0, time.UTC)
+	assert.True(t, isRedundantSnapshot(
+		&domain.BalanceSnapshot{SnapshotAt: sameDayEarly, CurrentBalance: f(100), AvailableBalance: f(90)},
+		&domain.BalanceSnapshot{SnapshotAt: sameDayLater, CurrentBalance: f(100), AvailableBalance: f(90)},
+		sameDayLater, window),
+		"two identical snapshots minutes apart on the SAME UTC day must still dedup — the day gate "+
+			"must be a day comparison, not a 'near midnight' exemption")
+
+	// And the day gate must not resurrect a dedup the VALUE test already refused: a changed balance
+	// on the same day stays non-redundant. This pins that the two conditions compose as AND.
+	assert.False(t, isRedundantSnapshot(
+		&domain.BalanceSnapshot{SnapshotAt: sameDayEarly, CurrentBalance: f(100)},
+		&domain.BalanceSnapshot{SnapshotAt: sameDayLater, CurrentBalance: f(2100)},
+		sameDayLater, window),
+		"a changed balance on the same day is still not redundant")
+
+	// The day is UTC, not the wall-clock day of whatever zone the instants happen to carry.
+	//
+	// ⚠ BOTH operands are re-expressed in UTC+13, and that is the only shape that falsifies the
+	// choice. In UTC+13 these two instants read 12:58 and 13:02 on the SAME local date (the 25th),
+	// while their UTC dates are the 24th and the 25th. So a comparison that dropped the .UTC()
+	// conversion would call them the same day and dedup — losing the row for UTC's 25th, which is
+	// the day AccountsMissingDailySnapshot asked about and the day migration 000194's index is keyed
+	// on. Converting only ONE operand does NOT falsify it: a UTC `latest` against a UTC+13 `now`
+	// still differs by local date, so that fixture passes with or without the conversion. It was
+	// written that way first and a mutation dropping both .UTC() calls survived it.
+	plusThirteen := time.FixedZone("UTC+13", 13*3600)
+	localLatest := &domain.BalanceSnapshot{
+		SnapshotAt: lateYesterday.In(plusThirteen), CurrentBalance: f(100), AvailableBalance: f(90),
+	}
+	require.Equal(t, justAfterMidnight.In(plusThirteen).Day(), localLatest.SnapshotAt.Day(),
+		"fixture guard: in this zone both instants must fall on the SAME local date, or the test "+
+			"would pass on the local comparison too and prove nothing about UTC")
+	assert.False(t, isRedundantSnapshot(localLatest, next, justAfterMidnight.In(plusThirteen), window),
+		"the day comparison must be in UTC. These two instants share a LOCAL date in UTC+13 but "+
+			"straddle UTC midnight, so a local-zone comparison would dedup and lose the row for "+
+			"UTC's 25th — the day the cohort check asked about")
 }
 
 func TestSameBalance_NilIsAValueNotAWildcard(t *testing.T) {

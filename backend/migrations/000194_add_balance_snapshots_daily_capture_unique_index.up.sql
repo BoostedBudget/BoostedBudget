@@ -1,0 +1,75 @@
+-- #1626 Phase 3, Defect 3 (Task G) — the partial UNIQUE index that makes the periodic
+-- balance-snapshot gap-filler idempotent within a UTC day. Second half of a two-file addition; see
+-- 000193 for the column comment and for why the conditional drop of an invalid leftover cannot
+-- share this file.
+--
+-- WHAT IT CONSTRAINS. One row per (account_id, UTC calendar day) for source = 'daily_capture', and
+-- for nothing else.
+--
+-- WHY PARTIAL, AND WHY THAT IS NOT A DETAIL. Migration 000017 DROPPED
+-- UNIQUE(account_id, snapshot_date) deliberately (its step 1), because a high-frequency webhook
+-- sync may legitimately record several rows for one account in one day and per-day uniqueness would
+-- discard real history — a balance that changed twice between two webhooks is information, and this
+-- table is the only place it is ever recorded (see isRedundantSnapshot in
+-- internal/services/transaction_sync_service.go, which is why the 5-minute dedup window also tests
+-- the VALUE and not just the age). Re-adding a generic per-day key would reintroduce exactly that
+-- loss. What makes the constraint safe HERE is that the gap-filler is once-daily BY CONSTRUCTION:
+-- it exists to guarantee a row for today, and every read collapses to latest-per-account-per-day,
+-- so a second same-day row from it could not be surfaced by any query even if it were written.
+--
+-- WHY IT IS WANTED AT ALL, given the job already skips an item whose full account cohort has
+-- today's row. The skip removes the ordinary duplicate pressure but not the concurrent case: the
+-- cohort check and the insert are separate statements and the capture job takes no per-item lock,
+-- so two capture jobs for one item (a retry racing its own timed-out predecessor, or a
+-- deploy-time RunOnStart run racing the scheduled one) can both see a gap and both insert. This
+-- index is what makes that race produce ONE row instead of two, and it is paired with
+-- `ON CONFLICT ... DO NOTHING` in BalanceSnapshotRepository.CreateDailyCapture so the loser is a
+-- no-op rather than an error. Before this, a duplicate key was warn-and-skip inside a loop that
+-- returned success, which reads as failure in logs and as success to River.
+--
+-- WHY THE EXPRESSION IS SPELLED THIS WAY. `(snapshot_at AT TIME ZONE 'UTC')::date` is the same
+-- expression migration 000017 step 6 used for idx_balance_snapshots_date_trunc and the same one
+-- every aggregated read groups by, so there is ONE notion of "the day a snapshot belongs to" in
+-- this schema. snapshot_at is TIMESTAMPTZ (000017 step 4); `timestamptz AT TIME ZONE 'UTC'` yields
+-- a TIMESTAMP and is IMMUTABLE, which is what makes the cast indexable at all — a bare
+-- `snapshot_at::date` is STABLE (it depends on the session TimeZone) and Postgres would refuse it.
+--
+-- ⚠ account_id IS NULLABLE and NULLs do not conflict under a plain UNIQUE, so an ORPHANED snapshot
+-- (accounts row gone, account_id SET NULL) is outside this constraint. That is correct and not a
+-- hole: the writer always supplies an account_id, and an orphan is historical residue no writer
+-- produces.
+--
+-- SAFETY. CONCURRENTLY as this file's SOLE statement, mirroring 000077/000082/000138/000144/000182.
+-- balance_snapshots is written by every Plaid sync, so a plain CREATE UNIQUE INDEX would hold a
+-- write-blocking ShareLock on it for the whole build. Squawk's require-concurrent-index-creation is
+-- in .squawk.toml's excluded_rules, so the linter would not have caught a non-concurrent form;
+-- CONCURRENTLY is used here on the merits.
+--
+-- ⚠ "SOLE STATEMENT" IS ABOUT golang-migrate. It sends a file as one simple query, which Postgres
+-- wraps in an implicit transaction only when the file holds MORE than one statement — that is why a
+-- lone CONCURRENTLY works in production, and why 000193's DO block had to go in its own file. This
+-- repo ALSO replays every migration from 000149 to HEAD through scripts/test-migrations.sh, which
+-- decides per file whether to pass `psql -1` (replay_file_runs_outside_a_transaction); a
+-- CONCURRENTLY file is replayed without it, so this migration inherits that support rather than
+-- needing new support. See scripts/__tests__/replay-concurrently-transaction.test.sh.
+--
+-- ⚠ IT COUPLES BACKWARDS TO 000017's ROLLBACK, and that had to be fixed in the same change.
+-- 000017's down migration retypes snapshot_at from TIMESTAMPTZ to DATE, which makes Postgres rebuild
+-- every index on the column — and this expression is immutable only while the column is TIMESTAMPTZ,
+-- so the rebuild fails with SQLSTATE 42P17 naming an index 000017 has never heard of. A `down -all`
+-- is fine (this file's own down runs first), but a rollback of 000017 in ISOLATION is not, so
+-- 000017's down now drops this index too. See the comment on that DROP for the full reasoning. If you
+-- add another functional index on this column, it belongs on that list.
+--
+-- ⚠ THE RESIDUAL: if THIS build is interrupted it leaves an INVALID index (inherent to
+-- CONCURRENTLY; no migration can prevent it) and golang-migrate marks the database DIRTY at 194. It
+-- does NOT self-heal — docker-entrypoint.sh only retries `migrate up`, which refuses to run while
+-- dirty, so the container fails to start rather than continuing on a half-built index. The repair
+-- forces to the version immediately BEFORE this pair — the pair is 000193/000194, so that is 192 —
+-- and then runs up, so that 000193's conditional drop of an invalid leftover runs BEFORE this file
+-- rebuilds: `migrate force 192` then `migrate up`. Forcing to 193 instead would re-run only this
+-- file, whose IF NOT EXISTS matches on the NAME and not on validity, so the build would report
+-- success and leave the invalid index in place.
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_balance_snapshots_daily_capture
+    ON balance_snapshots (account_id, ((snapshot_at AT TIME ZONE 'UTC')::date))
+    WHERE source = 'daily_capture';

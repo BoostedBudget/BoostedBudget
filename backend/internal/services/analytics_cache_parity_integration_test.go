@@ -372,10 +372,25 @@ func buildParityCases(t *testing.T, f *parityFixture, now time.Time) []parityCas
 				return resp
 			},
 			Mutate: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
-				// A later same-account snapshot: bucketNetWorth takes the LAST value in each
-				// bucket, so this changes the latest bucket's net worth (and its change_abs/pct)
-				// for every grouping.
-				f.seedBalanceSnapshot(t, ctx, 1500.00, now)
+				// A later same-account snapshot, STRICTLY INSIDE the read window rather than at
+				// its edge. bucketNetWorth takes the LAST observed value in each bucket, so a
+				// day after the seed's either changes that bucket's net worth (same bucket) or
+				// adds a bucket — different JSON for every grouping either way.
+				//
+				// ⚠ THE `-5` IS LOAD-BEARING; this mutation used to be written at `now` and was
+				// then absorbed entirely (#1626, gap G18). The absorber is NOT the carry-forward
+				// itself but the end bound introduced alongside it: GetAggregatedHistory now
+				// compares `(bs.snapshot_at AT TIME ZONE 'UTC')::date <= $3::date` where it
+				// previously compared the instants `bs.snapshot_at <= $3`, and pgx resolves that
+				// parameter to a DATE, which it encodes from `time.Now()` in the PROCESS-LOCAL
+				// zone. A snapshot written at UTC `now` therefore falls OUTSIDE the window
+				// whenever the process's local date lags the UTC date — every evening in any
+				// negative-offset zone — so both ground-truth reads returned the seed row alone
+				// and the case could not test staleness at all. Verified: at `now` these three
+				// cases fail under `TZ=Etc/GMT+12` with the step-6 self-check; at `-5` they pass
+				// under UTC, Etc/GMT+12 and Asia/Tokyo alike, five days being far outside any
+				// zone offset.
+				f.seedBalanceSnapshot(t, ctx, 1500.00, now.AddDate(0, 0, -5))
 			},
 			Bump: bumpPersonal(f),
 		})
@@ -468,6 +483,27 @@ func buildParityCases(t *testing.T, f *parityFixture, now time.Time) []parityCas
 		},
 		Mutate: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 			f.seedTransaction(t, ctx, -200.00, now.AddDate(0, 0, -1), "Refund", "Employer Inc", "INCOME", "INCOME_WAGES")
+		},
+		Bump: bumpPersonal(f),
+	})
+
+	// ── GetCategoryHierarchy (#1626) ─────────────────────────────────────────────────────────
+	// Direction is a METHOD ARGUMENT rather than a SpendingFilters field, so it is not covered by
+	// EncodeSpendingFilters; this case exists partly to prove the wrapper caches and invalidates
+	// correctly around that extra key component.
+	chFilters := domain.SpendingFilters{StartDate: periodStart, EndDate: periodEnd}
+	cases = append(cases, parityCase{
+		Name: "GetCategoryHierarchy",
+		Seed: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+			f.seedTransaction(t, ctx, 75.00, now.AddDate(0, 0, -5), "Groceries", "Market", "FOOD_AND_DRINK", "FOOD_AND_DRINK_GROCERIES")
+		},
+		Call: func(t *testing.T, ctx context.Context, svc AnalyticsService) any {
+			resp, err := svc.GetCategoryHierarchy(ctx, f.userID, chFilters, domain.CategoryDirectionExpense)
+			require.NoError(t, err)
+			return resp
+		},
+		Mutate: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+			f.seedTransaction(t, ctx, 40.00, now.AddDate(0, 0, -1), "Coffee", "Cafe", "FOOD_AND_DRINK", "FOOD_AND_DRINK_COFFEE")
 		},
 		Bump: bumpPersonal(f),
 	})
@@ -806,6 +842,7 @@ func buildParityCasesTemplate() []string {
 		"GetAverageMonthlySpend",
 		"GetCategoryTotalForPeriod",
 		"GetIncomeSourceBreakdown",
+		"GetCategoryHierarchy",
 	)
 	return names
 }

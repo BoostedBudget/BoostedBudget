@@ -3160,11 +3160,16 @@ func TestGetByUserIDKeyset_Date_Desc_FirstPage(t *testing.T) {
 	pattern := "SELECT .+ FROM transactions t WHERE t\\.user_id .+" +
 		regexp.QuoteMeta("ORDER BY COALESCE(t.authorized_date, t.date) DESC, t.id ASC") +
 		`.+LIMIT`
+	// The first page now also issues a whole-set aggregate ahead of the page query (#1626
+	// Phase 2). Registered here because pgxmock is ordered and exhaustive; the totals it
+	// returns are asserted in feed_totals_test.go, not here.
+	expectFeedTotalsAggregate(mock, 0, 0, userID)
+
 	mock.ExpectQuery(pattern).
 		WithArgs(userID, limit+1).
 		WillReturnRows(rows)
 
-	txs, nextCursor, err := repo.GetByUserIDKeyset(ctx, userID, filters, nil, limit)
+	txs, nextCursor, _, err := repo.GetByUserIDKeyset(ctx, userID, filters, nil, limit)
 	require.NoError(t, err)
 	assert.Len(t, txs, 2, "should return 2 rows (no next page)")
 	assert.Nil(t, nextCursor, "cursor should be nil when fewer than limit+1 rows returned")
@@ -3215,7 +3220,7 @@ func TestGetByUserIDKeyset_Date_Desc_SecondPage(t *testing.T) {
 		WithArgs(userID, cursorDate, cursorID.String(), limit+1).
 		WillReturnRows(rows)
 
-	txs, nextCursor, err := repo.GetByUserIDKeyset(ctx, userID, filters, cursor, limit)
+	txs, nextCursor, _, err := repo.GetByUserIDKeyset(ctx, userID, filters, cursor, limit)
 	require.NoError(t, err)
 	assert.Len(t, txs, limit, "should return exactly limit rows when limit+1 fetched")
 	require.NotNil(t, nextCursor, "cursor should be non-nil when limit+1 rows returned")
@@ -3253,11 +3258,16 @@ func TestGetByUserIDKeyset_Merchant_Asc_FirstPage(t *testing.T) {
 	pattern := `SELECT .+ FROM transactions t.+LEFT JOIN merchant_name_overrides.+` +
 		regexp.QuoteMeta("ORDER BY "+effectiveMerchantNameExpr+" ASC, t.id ASC") +
 		`.+LIMIT`
+	// The first page now also issues a whole-set aggregate ahead of the page query (#1626
+	// Phase 2). Registered here because pgxmock is ordered and exhaustive; the totals it
+	// returns are asserted in feed_totals_test.go, not here.
+	expectFeedTotalsAggregate(mock, 0, 0, userID)
+
 	mock.ExpectQuery(pattern).
 		WithArgs(userID, limit+1).
 		WillReturnRows(rows)
 
-	txs, nextCursor, err := repo.GetByUserIDKeyset(ctx, userID, filters, nil, limit)
+	txs, nextCursor, _, err := repo.GetByUserIDKeyset(ctx, userID, filters, nil, limit)
 	require.NoError(t, err)
 	assert.Len(t, txs, 1)
 	assert.Nil(t, nextCursor)
@@ -3307,7 +3317,7 @@ func TestGetByUserIDKeyset_Amount_Desc_SecondPage(t *testing.T) {
 		WithArgs(userID, cursorSV, cursorID.String(), limit+1).
 		WillReturnRows(rows)
 
-	txs, nextCursor, err := repo.GetByUserIDKeyset(ctx, userID, filters, cursor, limit)
+	txs, nextCursor, _, err := repo.GetByUserIDKeyset(ctx, userID, filters, cursor, limit)
 	require.NoError(t, err)
 	assert.Len(t, txs, limit)
 	require.NotNil(t, nextCursor)
@@ -3341,11 +3351,16 @@ func TestGetByUserIDKeyset_Category_Asc_FirstPage(t *testing.T) {
 	pattern := "SELECT .+ FROM transactions t WHERE t\\.user_id .+" +
 		regexp.QuoteMeta("ORDER BY COALESCE(t.effective_category_name, t.effective_pfc_primary, t.pfc_primary) ASC, t.id ASC") +
 		`.+LIMIT`
+	// The first page now also issues a whole-set aggregate ahead of the page query (#1626
+	// Phase 2). Registered here because pgxmock is ordered and exhaustive; the totals it
+	// returns are asserted in feed_totals_test.go, not here.
+	expectFeedTotalsAggregate(mock, 0, 0, userID)
+
 	mock.ExpectQuery(pattern).
 		WithArgs(userID, limit+1).
 		WillReturnRows(rows)
 
-	txs, nextCursor, err := repo.GetByUserIDKeyset(ctx, userID, filters, nil, limit)
+	txs, nextCursor, _, err := repo.GetByUserIDKeyset(ctx, userID, filters, nil, limit)
 	require.NoError(t, err)
 	assert.Len(t, txs, 2)
 	assert.Nil(t, nextCursor, "fewer than limit+1 rows means no next page")
@@ -3387,11 +3402,16 @@ func TestGetByUserIDKeyset_MidSessionInsertExcluded(t *testing.T) {
 	patternPage1 := `SELECT .+ FROM transactions t WHERE t\.user_id .+` +
 		regexp.QuoteMeta("ORDER BY COALESCE(t.authorized_date, t.date) DESC, t.id ASC") +
 		`.+LIMIT`
+	// The first page now also issues a whole-set aggregate ahead of the page query (#1626
+	// Phase 2). Registered here because pgxmock is ordered and exhaustive; the totals it
+	// returns are asserted in feed_totals_test.go, not here.
+	expectFeedTotalsAggregate(mock, 0, 0, userID)
+
 	mock.ExpectQuery(patternPage1).
 		WithArgs(userID, limit+1).
 		WillReturnRows(rowsPage1)
 
-	txsP1, cursorP1, err := repo.GetByUserIDKeyset(ctx, userID, filters, nil, limit)
+	txsP1, cursorP1, _, err := repo.GetByUserIDKeyset(ctx, userID, filters, nil, limit)
 	require.NoError(t, err)
 	assert.Len(t, txsP1, limit, "page 1 returns exactly limit rows")
 	require.NotNil(t, cursorP1, "cursor must be present when limit+1 rows were fetched")
@@ -3419,7 +3439,7 @@ func TestGetByUserIDKeyset_MidSessionInsertExcluded(t *testing.T) {
 		WithArgs(userID, cursorDate, cursorUUID.String(), limit+1).
 		WillReturnRows(rowsPage2)
 
-	txsP2, _, err := repo.GetByUserIDKeyset(ctx, userID, filters, cursorP1, limit)
+	txsP2, _, _, err := repo.GetByUserIDKeyset(ctx, userID, filters, cursorP1, limit)
 	require.NoError(t, err)
 	assert.Len(t, txsP2, limit, "page 2 returns exactly limit rows")
 
@@ -3930,7 +3950,7 @@ func TestGetByUserIDKeyset_Merchant_Desc_Predicate(t *testing.T) {
 		WithArgs(userID, cursorSV, cursorID.String(), limit+1).
 		WillReturnRows(rows)
 
-	txs, nextCursor, err := repo.GetByUserIDKeyset(ctx, userID, filters, cursor, limit)
+	txs, nextCursor, _, err := repo.GetByUserIDKeyset(ctx, userID, filters, cursor, limit)
 	require.NoError(t, err)
 	assert.Len(t, txs, limit)
 	require.NotNil(t, nextCursor)
