@@ -227,6 +227,27 @@ describe('buildSearchResult', () => {
     expect(text).not.toContain('unknown')
   })
 
+  // Issue #1630 Task 12a: search() must render `format` so a date field announces itself, and
+  // must render an anyOf-merged format (multiple branches) legibly rather than dropping it.
+  it('renders format on a body field, including a multi-branch anyOf format (#1630)', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'createBudget',
+        method: 'POST',
+        path: '/api/v1/budgets',
+        summary: 'Create a budget',
+        tags: ['Budgets'],
+        manifestClass: 'write',
+        excluded: false,
+        requestBody: [
+          { name: 'start_date', type: 'string', format: 'date|date-time', required: true },
+        ],
+      },
+    ])
+    const text = result.content[0]?.text ?? ''
+    expect(text).toContain('start_date (string, format: date|date-time, required)')
+  })
+
   it('omits the body: block entirely when there is no requestBody (byte-identical to today for GETs)', () => {
     const result = buildSearchResult([
       {

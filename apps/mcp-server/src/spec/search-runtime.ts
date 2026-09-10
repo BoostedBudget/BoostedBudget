@@ -25,6 +25,13 @@ export interface SpecParameter {
 export interface SpecBodyField {
   name: string
   type?: string
+  /**
+   * OpenAPI `format` (e.g. `date`, `date-time`, `uuid`) — issue #1630. A field validated by an
+   * `anyOf` of same-typed branches with different formats (e.g. `domain.FlexibleDate`'s
+   * `anyOf: [{format: date}, {format: date-time}]`) carries every distinct branch format,
+   * joined `|` (`"date|date-time"`) — see flattenBodySchema's anyOf handling in index-builder.ts.
+   */
+  format?: string
   required?: boolean
   enum?: string[]
   description?: string
