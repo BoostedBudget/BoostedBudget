@@ -3247,6 +3247,12 @@ func (m *MockUserAccountService) SetHidden(ctx context.Context, userAccountID, u
 	return args.Error(0)
 }
 
+// SetInvestmentBackfillEnqueuer is a no-op in this mock: the #1631 M4 nudge it wires is optional
+// and nil-safe by design, so no test here needs to observe it. The durable half of the backfill
+// obligation is a SQL write, not this setter.
+func (m *MockUserAccountService) SetInvestmentBackfillEnqueuer(jobQueue queue.JobQueue, accountRepo repository.AccountRepository, logger *slog.Logger) {
+}
+
 // NOTE: MockUserAccountRepository is defined in user_account_service_test.go
 // We reuse it here for account_service re-link tests
 

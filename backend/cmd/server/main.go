@@ -2001,6 +2001,20 @@ func main() {
 					accountService.SetJobQueue(jobQueue)
 					appLogger.Info("Account service connected to job queue for auto-sync")
 				}
+				// #1631 M4: nudge an investment-transactions sync when the owner re-includes a
+				// previously excluded chain, so the recorded backfill obligation is honoured now
+				// instead of at Plaid's next INVESTMENTS_TRANSACTIONS webhook — which for a quiet
+				// brokerage can be months away.
+				//
+				// ⚠ Wired HERE, alongside the other post-River SetJobQueue calls, and NOT beside
+				// NewUserAccountService: `jobQueue` is nil until the River client is built a few
+				// lines above, so the earlier site would have silently wired a no-op nudge. The
+				// obligation itself lives on the user_accounts row and is honoured by whichever
+				// sync runs next, so even a missed wiring costs latency, not data.
+				if userAccountService != nil {
+					userAccountService.SetInvestmentBackfillEnqueuer(jobQueue, accountRepo, appLogger)
+					appLogger.Info("User account service connected to job queue for investment backfill nudges")
+				}
 				if plaidSyncWorker != nil {
 					plaidSyncWorker.SetJobQueue(jobQueue)
 					appLogger.Info("Plaid sync worker connected to job queue for follow-up jobs")

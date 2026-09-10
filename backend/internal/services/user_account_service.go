@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -48,11 +50,44 @@ type UserAccountService interface {
 	// — see the implementation. A user hide arrives through UpdateCustomization instead.
 	// Returns repository.ErrUserAccountNotFound (unwrapped) if userID does not own userAccountID (#1566).
 	SetHidden(ctx context.Context, userAccountID, userID string, hidden bool) error
+
+	// SetInvestmentBackfillEnqueuer wires the PROMPTNESS half of the #1631 M4 backfill: when the
+	// owner re-includes a previously excluded chain, this lets UpdateCustomization nudge an
+	// investment-transactions sync for the item that carries the chain, instead of waiting for
+	// Plaid's next INVESTMENTS_TRANSACTIONS webhook — which for a quiet brokerage can be months.
+	//
+	// ⚠ It is a NUDGE, NOT THE OBLIGATION. The obligation is
+	// user_accounts.investment_backfill_requested_at, written in the same UPDATE that clears the
+	// flag; whichever sync runs next honours it whether or not this enqueue ever happened. That is
+	// why setter injection and a nil-safe no-op are acceptable here and would NOT be acceptable for
+	// the obligation itself: the worst case of losing this is latency, and the worst case of losing
+	// the obligation is the user's history never coming back.
+	SetInvestmentBackfillEnqueuer(jobQueue queue.JobQueue, accountRepo repository.AccountRepository, logger *slog.Logger)
 }
 
 // userAccountService implements UserAccountService
 type userAccountService struct {
 	repo repository.UserAccountRepository
+
+	// Optional, all three set together by SetInvestmentBackfillEnqueuer and all three nil-checked
+	// as one. See that method for why losing them is only a latency cost.
+	jobQueue    queue.JobQueue
+	accountRepo repository.AccountRepository
+	logger      *slog.Logger
+}
+
+// SetInvestmentBackfillEnqueuer wires the optional backfill nudge. See the interface method.
+func (s *userAccountService) SetInvestmentBackfillEnqueuer(
+	jobQueue queue.JobQueue,
+	accountRepo repository.AccountRepository,
+	logger *slog.Logger,
+) {
+	s.jobQueue = jobQueue
+	s.accountRepo = accountRepo
+	if logger == nil {
+		logger = slog.Default()
+	}
+	s.logger = logger
 }
 
 // NewUserAccountService creates a new UserAccountService instance
@@ -243,6 +278,11 @@ func (s *userAccountService) UpdateCustomization(
 		return nil, err
 	}
 
+	// The PRE-UPDATE value of the exclusion flag, captured before Step 2 overwrites it. Used only
+	// to decide whether to nudge a sync in Step 5 — never to decide whether the obligation is owed,
+	// which is settled in SQL. See the ExcludeInvestmentSync block below.
+	wasExcludedFromInvestmentSync := existing.ExcludeInvestmentSync
+
 	// Step 2: Apply updates from request (nil = no change)
 	if req.Nickname != nil {
 		if *req.Nickname == "" {
@@ -319,9 +359,15 @@ func (s *userAccountService) UpdateCustomization(
 		//     can observe a second time. This service holds only a repository, reads outside any
 		//     transaction, and the repository writes through its pool directly, so there is no
 		//     pgx.Tx for a second write to join. One statement is atomic by definition.
-		//  2. IT NEEDS THE OLD VALUE. The obligation arises on a TRANSITION, and by this line the
-		//     struct's previous value has already been overwritten. Postgres can see it; this
-		//     function cannot.
+		//  2. IT NEEDS THE OLD VALUE UNDER CONCURRENCY. The obligation arises on a TRANSITION, and
+		//     Postgres evaluates the CASE against the row as it stands at UPDATE time. This
+		//     function reads the value it loaded earlier (wasExcludedFromInvestmentSync above), so
+		//     under two concurrent PATCHes its notion of the transition can be wrong; the
+		//     statement's cannot.
+		//
+		// The Go-side capture is used for ONE thing only: deciding whether to nudge a sync in
+		// Step 5, where being wrong costs a redundant sync or a little latency. It is never the
+		// authority on whether a backfill is owed.
 		//
 		// So the assignment stays plain — but not because there is nothing to reconcile.
 		existing.ExcludeInvestmentSync = *req.ExcludeInvestmentSync
@@ -338,7 +384,75 @@ func (s *userAccountService) UpdateCustomization(
 		return nil, err
 	}
 
+	// Step 5: if the owner just RE-INCLUDED a previously excluded chain, nudge a sync so the
+	// backfill happens now rather than whenever Plaid next has something to say about this item.
+	//
+	// ⚠ Deliberately AFTER the write and deliberately unable to fail the request. The durable
+	// obligation is already committed by Step 4's single statement; this only shortens the wait.
+	if wasExcludedFromInvestmentSync && !existing.ExcludeInvestmentSync {
+		s.nudgeInvestmentBackfill(ctx, existing.ID, userID)
+	}
+
 	return existing, nil
+}
+
+// nudgeInvestmentBackfill enqueues an investment-transactions sync for the live linked item that
+// carries this chain, so a just-recorded backfill obligation is honoured promptly.
+//
+// ⚠ Void by design, and every failure path here is a no-op rather than an error. The obligation
+// itself is already durably committed on the user_accounts row, and ANY investment-transactions
+// sync for the item discharges it — this webhook-independent nudge only decides whether that
+// happens in seconds or at Plaid's convenience, which for a quiet brokerage can be months. A
+// returned error would therefore fail a customization the user successfully made, in exchange for
+// nothing.
+//
+// ⚠ It does NOT decide whether a backfill is owed. Its caller's Go-side transition check can be
+// wrong under two concurrent PATCHes; the authority is investment_backfill_requested_at, and the
+// sync reads that, not this. A spurious nudge costs one extra sync whose window the marker's
+// absence narrows back to incremental; a missed nudge costs latency only.
+func (s *userAccountService) nudgeInvestmentBackfill(ctx context.Context, userAccountID, userID string) {
+	if s.jobQueue == nil || s.accountRepo == nil {
+		return // not wired (tests, or a deployment with no queue) — the obligation still stands
+	}
+
+	// GetByUserAccountIDAndUser prefers the ACTIVE account on the chain and is user-scoped, which
+	// answers the "which linked item?" question without this code having to choose: a chain spans
+	// re-links, and the item that currently carries it is the only one whose access token can fetch
+	// anything. A chain whose every member is terminal still returns a row, and enqueueing for its
+	// item is harmless — the sync will find nothing to store and the marker will simply stand.
+	account, err := s.accountRepo.GetByUserAccountIDAndUser(ctx, userAccountID, userID)
+	if err != nil || account == nil || account.LinkedItemID == "" {
+		s.logger.Info("investment backfill recorded but no live account found to sync it through; "+
+			"the obligation stays on the row and the next sync for this chain will honour it",
+			"user_account_id", userAccountID,
+			"error", err,
+		)
+		return
+	}
+
+	opts := []queue.EnqueueOption{
+		// Same 5-minute by-args uniqueness the initial-link enqueue uses. A dedup against an
+		// in-flight sync for the same item is the CORRECT outcome, not a lost nudge: that sync
+		// reads the marker too.
+		queue.WithUnique(*plaidSyncUniqueOpts()),
+		queue.WithTags("investment_backfill"),
+	}
+	if _, err := s.jobQueue.Enqueue(ctx, investmentTransactionsSyncJobArgs{
+		UserID: userID,
+		ItemID: account.LinkedItemID,
+	}, opts...); err != nil {
+		s.logger.Warn("failed to enqueue the investment backfill sync; the obligation is durable "+
+			"on user_accounts.investment_backfill_requested_at and the next sync will honour it",
+			"user_account_id", userAccountID,
+			"linked_item_id", account.LinkedItemID,
+			"error", err,
+		)
+		return
+	}
+	s.logger.Info("enqueued an investment backfill sync after the owner re-included a chain",
+		"user_account_id", userAccountID,
+		"linked_item_id", account.LinkedItemID,
+	)
 }
 
 // SetHidden updates the is_hidden flag on a UserAccount, scoped to its owner (#1566).
