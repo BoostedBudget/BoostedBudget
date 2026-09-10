@@ -10,11 +10,25 @@ export interface RedactedError {
   code?: string
 }
 
-// Patterns to redact from error messages
+// Patterns to redact from error messages. Order matters — patterns run in sequence via
+// String#replace, so a more specific shape (a whole UUID, a $-prefixed currency amount) must run
+// BEFORE the generic bare-digit catch-all, or the catch-all would chew a numeric segment out of it
+// and leave the rest (e.g. a UUID's own digit-only groups, or the fractional part of an amount)
+// exposed as a partial leftover. #1630 Task-4-fixwave: the previous list missed plain (no-$)
+// integer/comma-grouped amounts, one-decimal-digit amounts, emails, UUIDs, and hyphen-grouped
+// account numbers — an independent adversarial review's concrete example,
+// "Balance is 50000 for alice@example.com, account 1234-5678-9012", passed through every one of
+// those gaps unredacted.
 const REDACT_PATTERNS: RegExp[] = [
-  /\$[\d,]+\.?\d*/g,              // currency amounts: $1,234.56
-  /\b\d+\.\d{2,}\b/g,            // decimal amounts: 9999.99, 1234.56
-  /\b\d{10,}\b/g,                 // account/card numbers
+  /\$[\d,]+\.?\d*/g,                                            // currency: $1,234.56
+  /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g, // UUIDs
+  /\b\d[\d,]*\.\d+\b/g,          // decimal amounts, any precision, optionally comma-grouped:
+                                 // 9.5, 1234.56, 1,234.56
+  /\b\d{1,3}(?:,\d{3})+\b/g,     // comma-grouped integers with no decimal: 50,000
+  /\b\d[\d-]*\d\b/g,             // any other bare multi-digit run, optionally hyphen-grouped —
+                                 // catches plain integer balances (50000) and hyphenated account
+                                 // numbers (1234-5678-9012) alike
+  /[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}/g, // email addresses
   /eyJ[A-Za-z0-9_-]{10,}/g,      // JWT header prefix
   /Bearer\s+\S+/gi,               // Bearer tokens
   /\baccess_token\s*[:=]\s*\S+/gi, // access token key-value
@@ -72,7 +86,16 @@ export function redactError(err: unknown): RedactedError {
     const obj = err as Record<string, unknown>
     let message = typeof obj.message === 'string' ? redactString(obj.message) : 'An error occurred'
 
-    const detail = extractBodyDetail(obj.body)
+    // #1630 Task-4-fixwave: only surface body detail for a 4xx. A 4xx body's strings are the
+    // backend's own hand-written validation prose (domain.ErrInvalidBudget's field-naming errors,
+    // Huma's schema-validation location/message pairs) — content the backend author chose to put
+    // in a client-facing error on purpose. A 5xx body is an unhandled failure: its strings are
+    // whatever the failing code happened to be holding (a raw value, an internal detail), never
+    // authored for a client audience, and every mapper string this codebase actually returns for a
+    // 5xx is static (see internal/huma/errors) — so restricting passthrough to 4xx costs nothing
+    // and removes a whole class of incidental-PII/financial-value leak risk for free.
+    const status = typeof obj.status === 'number' ? obj.status : undefined
+    const detail = status !== undefined && status >= 400 && status < 500 ? extractBodyDetail(obj.body) : undefined
     if (detail) {
       message = `${message}: ${redactString(detail)}`
     }
