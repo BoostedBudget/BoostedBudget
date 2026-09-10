@@ -629,10 +629,33 @@ export function BudgetCategoryForm({
                   Unable to load preview
                 </span>
               ) : preview ? (
-                <span>
-                  Matches <strong>{preview.transaction_count}</strong> transaction{preview.transaction_count !== 1 ? 's' : ''} totaling{' '}
-                  <strong data-ph-mask>{formatCurrency(preview.total_amount)}</strong>
-                </span>
+                <div className="flex flex-col gap-1">
+                  <span>
+                    Matches <strong>{preview.transaction_count}</strong> transaction{preview.transaction_count !== 1 ? 's' : ''} totaling{' '}
+                    <strong data-ph-mask>{formatCurrency(preview.total_amount)}</strong>
+                  </span>
+                  {/* Issue #1630 Task 5: a pfc_primary (or parent custom category) rolls up its
+                      nested children (Issue #1203) — disclose the split so a correct rolled-up
+                      total never again reads as a double-count bug. */}
+                  {preview.children && preview.children.length > 0 && (
+                    <ul
+                      className="budget-category-form__preview-breakdown flex flex-col gap-0.5 pl-4 text-sm text-muted-foreground"
+                      data-testid="category-preview-breakdown"
+                    >
+                      <li data-ph-mask>
+                        <strong>{formatCurrency(preview.direct_amount ?? 0)}</strong> direct
+                        {' '}({preview.direct_transaction_count ?? 0} transaction{(preview.direct_transaction_count ?? 0) !== 1 ? 's' : ''})
+                      </li>
+                      {preview.children.map((child) => (
+                        <li key={child.category_id} data-ph-mask>
+                          <strong>{formatCurrency(child.total_amount)}</strong> from your{' '}
+                          <strong>{child.category_name}</strong> category
+                          {' '}({child.transaction_count} transaction{child.transaction_count !== 1 ? 's' : ''})
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               ) : null}
             </Alert>
           )}

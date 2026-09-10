@@ -26,6 +26,15 @@ func (m *MockTransactionStatsCalculator) GetMatchingTransactionStats(ctx context
 	return args.Int(0), args.Get(1).(float64), args.Error(2)
 }
 
+func (m *MockTransactionStatsCalculator) GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, startDate, endDate time.Time) ([]domain.CategoryPreviewBreakdownItem, int, float64, error) {
+	args := m.Called(ctx, userID, categoryKind, pfcPrimary, pfcDetailed, customCategoryID, startDate, endDate)
+	var children []domain.CategoryPreviewBreakdownItem
+	if v := args.Get(0); v != nil {
+		children = v.([]domain.CategoryPreviewBreakdownItem)
+	}
+	return children, args.Int(1), args.Get(2).(float64), args.Error(3)
+}
+
 // TestCategoryPreviewService_PreviewCategoryMatches_Success tests successful preview
 func TestCategoryPreviewService_PreviewCategoryMatches_Success(t *testing.T) {
 	mockCalc := new(MockTransactionStatsCalculator)
@@ -46,11 +55,59 @@ func TestCategoryPreviewService_PreviewCategoryMatches_Success(t *testing.T) {
 		ctx, userID, "pfc", ptrStr("FOOD_AND_DRINK"), (*string)(nil), (*string)(nil), []string{}, domain.MatchLogicCategoryOnly,
 		mock.Anything, mock.Anything,
 	).Return(5, 250.50, nil)
+	mockCalc.On("GetCategoryMatchBreakdown",
+		ctx, userID, "pfc", ptrStr("FOOD_AND_DRINK"), (*string)(nil), (*string)(nil),
+		mock.Anything, mock.Anything,
+	).Return(nil, 0, 0.0, nil)
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
 	require.NoError(t, err)
 	assert.Equal(t, 5, resp.TransactionCount)
 	assert.Equal(t, 250.50, resp.TotalAmount)
+	assert.Empty(t, resp.Children)
+
+	mockCalc.AssertExpectations(t)
+}
+
+// TestCategoryPreviewService_PreviewCategoryMatches_WithChildBreakdown tests that a
+// pfc_primary rollup discloses its nested custom-category children (Issue #1630 Task 5):
+// a "2 txns, $615.28" total that includes a $423.20 "HOA" custom category should say so.
+func TestCategoryPreviewService_PreviewCategoryMatches_WithChildBreakdown(t *testing.T) {
+	mockCalc := new(MockTransactionStatsCalculator)
+	service := NewCategoryPreviewService(mockCalc)
+
+	ctx := context.Background()
+	userID := "user-123"
+	req := &domain.CategoryPreviewRequest{
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("RENT_AND_UTILITIES"),
+		Tags:         []string{},
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
+	}
+
+	mockCalc.On("GetMatchingTransactionStats",
+		ctx, userID, "pfc", ptrStr("RENT_AND_UTILITIES"), (*string)(nil), (*string)(nil), []string{}, domain.MatchLogicCategoryOnly,
+		mock.Anything, mock.Anything,
+	).Return(2, 615.28, nil)
+	mockCalc.On("GetCategoryMatchBreakdown",
+		ctx, userID, "pfc", ptrStr("RENT_AND_UTILITIES"), (*string)(nil), (*string)(nil),
+		mock.Anything, mock.Anything,
+	).Return([]domain.CategoryPreviewBreakdownItem{
+		{CategoryID: "cc-hoa", CategoryName: "HOA", TransactionCount: 1, TotalAmount: 423.20},
+	}, 1, 192.08, nil)
+
+	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
+	require.NoError(t, err)
+	assert.Equal(t, 2, resp.TransactionCount)
+	assert.Equal(t, 615.28, resp.TotalAmount)
+	assert.Equal(t, 1, resp.DirectTransactionCount)
+	assert.Equal(t, 192.08, resp.DirectAmount)
+	require.Len(t, resp.Children, 1)
+	assert.Equal(t, "HOA", resp.Children[0].CategoryName)
+	assert.Equal(t, 423.20, resp.Children[0].TotalAmount)
+	assert.Equal(t, 1, resp.Children[0].TransactionCount)
 
 	mockCalc.AssertExpectations(t)
 }
@@ -103,6 +160,10 @@ func TestCategoryPreviewService_PreviewCategoryMatches_AndLogic(t *testing.T) {
 		ctx, userID, "pfc", ptrStr("FOOD_AND_DRINK"), (*string)(nil), (*string)(nil), []string{"Essential"}, domain.MatchLogicAnd,
 		mock.Anything, mock.Anything,
 	).Return(3, 150.00, nil)
+	mockCalc.On("GetCategoryMatchBreakdown",
+		ctx, userID, "pfc", ptrStr("FOOD_AND_DRINK"), (*string)(nil), (*string)(nil),
+		mock.Anything, mock.Anything,
+	).Return(nil, 0, 0.0, nil)
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
 	require.NoError(t, err)
@@ -132,6 +193,10 @@ func TestCategoryPreviewService_PreviewCategoryMatches_OrLogic(t *testing.T) {
 		ctx, userID, "pfc", ptrStr("FOOD_AND_DRINK"), (*string)(nil), (*string)(nil), []string{"Essential"}, domain.MatchLogicOr,
 		mock.Anything, mock.Anything,
 	).Return(10, 500.00, nil)
+	mockCalc.On("GetCategoryMatchBreakdown",
+		ctx, userID, "pfc", ptrStr("FOOD_AND_DRINK"), (*string)(nil), (*string)(nil),
+		mock.Anything, mock.Anything,
+	).Return(nil, 0, 0.0, nil)
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
 	require.NoError(t, err)
@@ -350,6 +415,10 @@ func TestCategoryPreviewService_PreviewCategoryMatches_ZeroResults(t *testing.T)
 		ctx, userID, "pfc", ptrStr("TRANSFER_IN"), (*string)(nil), (*string)(nil), []string{}, domain.MatchLogicCategoryOnly,
 		mock.Anything, mock.Anything,
 	).Return(0, 0.0, nil)
+	mockCalc.On("GetCategoryMatchBreakdown",
+		ctx, userID, "pfc", ptrStr("TRANSFER_IN"), (*string)(nil), (*string)(nil),
+		mock.Anything, mock.Anything,
+	).Return(nil, 0, 0.0, nil)
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
 	require.NoError(t, err)

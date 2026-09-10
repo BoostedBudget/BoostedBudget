@@ -642,7 +642,37 @@ type CategoryPreviewRequest struct {
 
 // CategoryPreviewResponse represents the response with matching transaction stats.
 // Issue #497: Transaction preview feature
+//
+// Issue #1630 Task 5: a `pfc_primary` (or parent `custom`) category rolls up its nested
+// children (Issue #1203) — a correct total that nonetheless surprised a reporter who had
+// no way to see it. DirectTransactionCount/DirectAmount and Children disclose the split:
+// Direct* covers transactions filed straight under the targeted category itself, and each
+// Children entry is one nested custom category (a PFC-primary's nested custom categories,
+// or a parent custom category's custom children) with its own share of the total. Both are
+// populated ONLY when the category kind can roll up AND at least one child actually
+// matched — a leaf category (pfc_detailed set, or a custom category with no children)
+// leaves them zero-valued/nil because there is nothing to disclose. TransactionCount and
+// TotalAmount remain the single rolled-up figure every existing caller already relies on;
+// this is additive.
 type CategoryPreviewResponse struct {
+	TransactionCount int     `json:"transaction_count"`
+	TotalAmount      float64 `json:"total_amount"`
+
+	// DirectTransactionCount/DirectAmount cover only transactions filed directly under the
+	// targeted category (not a nested child). Populated only when Children is non-empty.
+	DirectTransactionCount int     `json:"direct_transaction_count,omitempty"`
+	DirectAmount           float64 `json:"direct_amount,omitempty"`
+
+	// Children breaks the rolled-up total down by nested custom category. Empty/nil when
+	// the category kind cannot roll up, or no nested child actually matched.
+	Children []CategoryPreviewBreakdownItem `json:"children,omitempty"`
+}
+
+// CategoryPreviewBreakdownItem is one nested child's contribution to a rolled-up
+// CategoryPreviewResponse total. Issue #1630 Task 5.
+type CategoryPreviewBreakdownItem struct {
+	CategoryID       string  `json:"category_id"`
+	CategoryName     string  `json:"category_name"`
 	TransactionCount int     `json:"transaction_count"`
 	TotalAmount      float64 `json:"total_amount"`
 }

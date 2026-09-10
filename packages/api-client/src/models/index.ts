@@ -98,6 +98,7 @@ export * from './categoryBreakdownForMerchantResponse';
 export * from './categoryBreakdownItem';
 export * from './categoryHierarchyNode';
 export * from './categoryHierarchyResponse';
+export * from './categoryPreviewBreakdownItem';
 export * from './categoryPreviewRequest';
 export * from './categoryPreviewResponse';
 export * from './categorySpending';
