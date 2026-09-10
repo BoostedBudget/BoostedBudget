@@ -301,10 +301,10 @@ func TestInvestmentTransactionSyncResult_Counts(t *testing.T) {
 
 func TestHolding_GainLoss(t *testing.T) {
 	tests := []struct {
-		name     string
-		holding  Holding
-		wantNil  bool
-		wantVal  float64
+		name    string
+		holding Holding
+		wantNil bool
+		wantVal float64
 	}{
 		{
 			name: "returns gain when both values present",
@@ -490,27 +490,38 @@ func TestHolding_DayChangePct(t *testing.T) {
 				},
 			},
 			wantNil: false,
-			wantVal: (10 * (175.50 - 170.00)) / 1755.00 * 100,
+			// #1631: the denominator is the PRIOR close value (quantity x close_price), not the
+			// current institution_value. The two differ by the day change itself, which is what
+			// made every percentage in the app wrong.
+			wantVal: (10 * (175.50 - 170.00)) / (10 * 170.00) * 100,
 		},
 		{
-			name: "returns nil when institution_value is nil",
+			// #1631 changed this from wantNil: institution_value is no longer the denominator, so
+			// its absence no longer prevents the calculation. DayChange only needs the price and
+			// the prior close, both present here.
+			name: "computes without institution_value, which is no longer the denominator",
 			holding: Holding{
 				Quantity:         10.0,
 				InstitutionPrice: float64Ptr(175.50),
 				InstitutionValue: nil,
 				Security:         &Security{ClosePrice: float64Ptr(170.00)},
 			},
-			wantNil: true,
+			wantNil: false,
+			wantVal: (10 * (175.50 - 170.00)) / (10 * 170.00) * 100,
 		},
 		{
-			name: "returns nil when institution_value is zero",
+			// Likewise: a zero CURRENT value against a non-zero prior close is a real -100% day,
+			// not an undefined one. Only a zero PRIOR value is undefined, and that case is covered
+			// in investment_daychange_test.go.
+			name: "a zero institution_value no longer suppresses the percentage",
 			holding: Holding{
 				Quantity:         10.0,
 				InstitutionPrice: float64Ptr(175.50),
 				InstitutionValue: float64Ptr(0.0),
 				Security:         &Security{ClosePrice: float64Ptr(170.00)},
 			},
-			wantNil: true,
+			wantNil: false,
+			wantVal: (10 * (175.50 - 170.00)) / (10 * 170.00) * 100,
 		},
 		{
 			name: "returns nil when DayChange is nil",
@@ -535,4 +546,3 @@ func TestHolding_DayChangePct(t *testing.T) {
 		})
 	}
 }
-

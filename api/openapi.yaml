@@ -3832,6 +3832,10 @@ components:
         day_change:
           format: double
           type: number
+        day_change_as_of:
+          type: string
+        day_change_is_stale:
+          type: boolean
         day_change_pct:
           format: double
           type: number

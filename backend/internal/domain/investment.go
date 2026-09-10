@@ -120,17 +120,28 @@ func (h *Holding) DayChange() *float64 {
 	return &v
 }
 
-// DayChangePct returns DayChange / institution_value * 100, or nil when either
-// DayChange is nil or institution_value is absent/zero.
+// DayChangePct returns the day change as a percentage of the PRIOR CLOSE — i.e.
+// (current - prior) / prior * 100 — or nil when the prior value cannot anchor it.
+//
+// ⚠ #1631: this divided by institution_value (the CURRENT value) until now, which answers a
+// different question and made every day-change percentage in the app wrong: it understated gains
+// and overstated losses by exactly the day change. A true +5% day (prior 100 → current 105)
+// reported 5/105 = 4.76%, and a doubling reported 50% instead of 100%. The error grows with the
+// size of the move, which is the opposite of what you want from a volatility figure.
+//
+// The prior value is quantity × close_price, deliberately recomputed here rather than taken from
+// institution_value: the two differ by the day change, and that difference IS the bug.
 func (h *Holding) DayChangePct() *float64 {
 	dc := h.DayChange()
 	if dc == nil {
 		return nil
 	}
-	if h.InstitutionValue == nil || *h.InstitutionValue == 0 {
+	// DayChange() has already established both are non-nil.
+	priorValue := h.Quantity * *h.Security.ClosePrice
+	if priorValue == 0 {
 		return nil
 	}
-	v := *dc / *h.InstitutionValue * 100
+	v := *dc / priorValue * 100
 	return &v
 }
 
@@ -228,4 +239,39 @@ type InvestmentTransactionFilters struct {
 	ActivityTypes []string
 	StartDate     *time.Time
 	EndDate       *time.Time
+}
+
+// maxClosePriceStalenessDays bounds how old securities.close_price_as_of may be before the figure
+// derived from it stops describing a "day".
+//
+// Measured in CALENDAR DAYS, not as a duration, because close_price_as_of is a DATE column: a
+// duration comparison makes the answer depend on the time of day the question is asked, so the
+// same price would be fresh at 09:00 and stale at 14:00.
+//
+// Four days, not one: Plaid's close price is an overnight update, so on a Monday the newest
+// available close is Friday's (3 days), and a Monday public holiday pushes it to Thursday's (4).
+// This is a floor on usefulness rather than a trading-calendar rule — the repo has no market
+// calendar, and inventing one here would be worse than a deliberately generous bound.
+const maxClosePriceStalenessDays = 4
+
+// ClosePriceIsStale reports whether the prior close backing DayChange is too old to describe a day.
+//
+// ⚠ #1631: securities.close_price_as_of was WRITE-ONLY — nothing read it, so nothing could tell.
+// That matters more than it sounds, because the price-retention logic in
+// security_repository.UpsertBatch deliberately keeps the last known close_price alive indefinitely
+// when a payload omits one (#1569 T20). Unbounded staleness is therefore the NORMAL case rather
+// than an edge case, and a week-old close still produced a number labelled "day change".
+//
+// Returns false when the timestamp is absent: an undated price is a separate problem from a stale
+// one, and refusing to answer would suppress the figure for every security Plaid dates loosely.
+// Callers that need certainty should check ClosePriceAsOf themselves.
+func (h *Holding) ClosePriceIsStale(now time.Time) bool {
+	if h.Security == nil || h.Security.ClosePriceAsOf == nil {
+		return false
+	}
+	asOf := *h.Security.ClosePriceAsOf
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	closeDay := time.Date(asOf.Year(), asOf.Month(), asOf.Day(), 0, 0, 0, 0, time.UTC)
+	days := int(today.Sub(closeDay).Hours() / 24)
+	return days > maxClosePriceStalenessDays
 }

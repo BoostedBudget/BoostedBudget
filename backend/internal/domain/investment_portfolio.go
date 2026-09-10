@@ -85,6 +85,22 @@ type HoldingView struct {
 	GainLossPct  *float64 `json:"gain_loss_pct,omitempty"`
 	DayChange    *float64 `json:"day_change,omitempty"`
 	DayChangePct *float64 `json:"day_change_pct,omitempty"`
+
+	// DayChangeAsOf is the prior-session date the day change is measured FROM
+	// (securities.close_price_as_of), and DayChangeIsStale is the server's verdict on whether that
+	// date is too old for the figure to describe a day.
+	//
+	// #1631: close_price_as_of was write-only, so nothing could tell how old the anchor was — and
+	// the price-retention logic deliberately keeps the last known close alive indefinitely when a
+	// payload omits one, which makes unbounded staleness the normal case rather than an edge case.
+	// A week-old close still produced a number labelled "day change".
+	//
+	// ⚠ A date-only STRING, not a timestamp, per the rule stated on HoldingSnapshotView: a
+	// date-only value rendered through a timestamp shifts back a day for every user west of UTC.
+	// The staleness verdict is served rather than left to the client because the threshold is
+	// policy, not presentation.
+	DayChangeAsOf    *string `json:"day_change_as_of,omitempty"`
+	DayChangeIsStale *bool   `json:"day_change_is_stale,omitempty"`
 }
 
 // NewHoldingView constructs a HoldingView from a Holding (which must have Security populated).
@@ -108,6 +124,16 @@ func NewHoldingView(h *Holding) *HoldingView {
 		v.TickerSymbol = h.Security.TickerSymbol
 		v.SecurityName = &h.Security.Name
 		v.SecurityType = h.Security.Type
+		if h.Security.ClosePriceAsOf != nil {
+			asOf := h.Security.ClosePriceAsOf.Format("2006-01-02")
+			v.DayChangeAsOf = &asOf
+		}
+	}
+	// Only meaningful alongside a day change; omitted otherwise so a client cannot read "not
+	// stale" as "the figure is trustworthy" when there is no figure.
+	if v.DayChange != nil {
+		stale := h.ClosePriceIsStale(time.Now().UTC())
+		v.DayChangeIsStale = &stale
 	}
 	return v
 }
@@ -199,12 +225,20 @@ type AllocationBreakdown struct {
 
 // TopMoverItem represents one holding in the top movers list.
 type TopMoverItem struct {
-	HoldingID     string   `json:"holding_id"`
-	AccountID     string   `json:"account_id"`
-	TickerSymbol  *string  `json:"ticker_symbol,omitempty"`
-	SecurityName  *string  `json:"security_name,omitempty"`
-	DayChange     *float64 `json:"day_change,omitempty"`     // nil when close_price unavailable
-	DayChangePct  *float64 `json:"day_change_pct,omitempty"` // nil when close_price unavailable
+	HoldingID    string  `json:"holding_id"`
+	AccountID    string  `json:"account_id"`
+	TickerSymbol *string `json:"ticker_symbol,omitempty"`
+	SecurityName *string `json:"security_name,omitempty"`
+	// ⚠ #1631 corrected these comments rather than the code. They claimed "nil when close_price
+	// unavailable", but such a holding is ABSENT from this surface, not present-with-nil: the query
+	// inner-JOINs securities and requires close_price IS NOT NULL. That exclusion is right for a
+	// top-MOVERS list — a holding with no prior close cannot be ranked by how far it moved — and it
+	// is already stated in the endpoint's own description. The comment was the wrong half.
+	//
+	// DayChange is therefore always present here. DayChangePct is nil only when the prior close
+	// VALUE is zero (a zero quantity, or a zero close price), where the percentage is undefined.
+	DayChange     *float64 `json:"day_change,omitempty"`
+	DayChangePct  *float64 `json:"day_change_pct,omitempty"` // nil only when the prior value is zero
 	TotalGainLoss *float64 `json:"total_gain_loss,omitempty"`
 }
 
