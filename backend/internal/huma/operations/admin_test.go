@@ -636,6 +636,6 @@ func TestGetSystemHealth_ServiceError(t *testing.T) {
 // #1626 Phase 3, Defect 3: the periodic balance-capture dispatcher's global item enumeration.
 // Nothing in this test file's subject reaches it; the method exists so the mock still satisfies
 // repository.LinkedItemRepository.
-func (m *mockLinkedItemRepo) GetItemsForBalanceCapture(context.Context, int) ([]domain.BalanceCaptureTarget, error) {
+func (m *mockLinkedItemRepo) GetItemsForBalanceCapturePage(context.Context, *repository.BalanceCaptureSweepCursor, int) ([]domain.BalanceCaptureTarget, error) {
 	return nil, nil
 }

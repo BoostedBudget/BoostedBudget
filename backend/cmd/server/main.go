@@ -1671,6 +1671,10 @@ func main() {
 					ItemRepo: linkedItemRepo,
 					JobQueue: nil, // Set after River client created (circular dependency)
 					Logger:   appLogger,
+					// MUST be wired. Without it every dispatch run re-enumerates from the oldest
+					// active linked item, so above balanceCaptureItemsPerRun the same prefix is
+					// captured every day and every newer item accrues no balance snapshot ever.
+					SweepCursors: sweepCursorRepo,
 				})
 				appLogger.Info("Balance snapshot dispatch and capture workers created")
 

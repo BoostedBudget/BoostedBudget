@@ -433,8 +433,8 @@ var (
 // #1626 Phase 3, Defect 3: the periodic balance-capture dispatcher's global item enumeration.
 // Nothing in this test file's subject reaches it; the method exists so the mock still satisfies
 // repository.LinkedItemRepository.
-func (m *MockLinkedItemRepository) GetItemsForBalanceCapture(ctx context.Context, limit int) ([]domain.BalanceCaptureTarget, error) {
-	args := m.Called(ctx, limit)
+func (m *MockLinkedItemRepository) GetItemsForBalanceCapturePage(ctx context.Context, after *repository.BalanceCaptureSweepCursor, limit int) ([]domain.BalanceCaptureTarget, error) {
+	args := m.Called(ctx, after, limit)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

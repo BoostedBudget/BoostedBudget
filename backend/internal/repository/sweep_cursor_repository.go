@@ -177,6 +177,14 @@ import (
 // keeps damaging), so it stores a COUNT of rows consumed at ts1 instead — sweep_cursors.ts1_offset,
 // migration 000183 — which resumes INSIDE the group without naming a row. The same substitution
 // would close the same gap for these four; doing it is #1477's, and nothing here depends on it.
+//
+// ⚠ THERE ARE NOW FIVE CONSTANTS BELOW AND SIX ROWS IN THE TABLE. #1626 Phase 3 added
+// SweepCursorBalanceCapture (the daily balance-snapshot dispatcher), which acquired this exact
+// defect the day it shipped with a bare cap and no cursor. Everything this header says about the
+// mechanism — the reset rules, the sentinel arithmetic, the wrap, and the over-cap tie-group
+// residual — applies to it unchanged. Its own constant's comment records the one thing that is
+// genuinely different about it: its candidate set never shrinks, so the cap is a CADENCE dial rather
+// than a blast-radius dial, and the wrap is the steady state rather than an edge case.
 type SweepCursorName string
 
 const (
@@ -199,6 +207,24 @@ const (
 	// only the retention deadline is allowed to end the retrying. So an ordinary, expected Plaid
 	// failure was enough to starve everything behind it.
 	SweepCursorOrphanRetry SweepCursorName = "plaid_orphan_retry"
+	// SweepCursorBalanceCapture is BalanceSnapshotDispatchWorker's sweep over
+	// GetItemsForBalanceCapturePage. TS1 = linked_items.created_at; TS2 unused.
+	//
+	// ⚠ ITS STARVING HEAD NEEDS NO FAILURE OF ANY KIND, which makes it the most severe of the set
+	// and the only one whose candidate rows never leave the candidate set at all. The other four
+	// starve when a per-row action keeps failing; here the per-row action SUCCEEDING changes nothing
+	// about eligibility — every active linked item is a candidate every single day, by design, so
+	// under a bare cap the first cap-worth of items (ordered by created_at) were the only ones ever
+	// enumerated, and every item created after them accrued no balance snapshot EVER. Not "drained
+	// slowly": never.
+	//
+	// ⚠ AND THE CYCLE LENGTH IS THE POINT, not just the reachability. Because the candidate set is
+	// "everything active" rather than a backlog that shrinks, the wrap is not an edge case — it is
+	// the steady state. With N active items and a cap of C the sweep walks the whole set every
+	// ceil(N/(C-1)) + 1 runs, i.e. each item is captured on roughly that fraction of days rather
+	// than daily. The cap is therefore a CADENCE dial here, unlike the other four where it is a
+	// blast-radius dial; balanceCaptureItemsPerRun's comment states the consequence.
+	SweepCursorBalanceCapture SweepCursorName = "balance_capture_dispatch"
 )
 
 // MinSweepSentinelID and MaxSweepSentinelID are the two synthesized uuid values that turn a

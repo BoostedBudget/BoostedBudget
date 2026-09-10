@@ -369,8 +369,18 @@ type LinkedItemRepository interface {
 	// GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
 	GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error)
 
-	// GetItemsForBalanceCapture enumerates, across ALL users, the linked items eligible for the
-	// periodic daily balance capture (#1626 Phase 3, Defect 3), oldest first, at most limit rows.
+	// GetItemsForBalanceCapturePage enumerates, across ALL users, the linked items eligible for the
+	// periodic daily balance capture (#1626 Phase 3, Defect 3), oldest first, at most limit rows,
+	// starting strictly after `after` when one is supplied.
+	//
+	// ⚠ IT IS PAGED, AND THE CURSOR IS NOT OPTIONAL SUGAR. The unpaged form this replaced took only
+	// a limit, and the dispatcher called it once per run with a hard cap: because the ORDER BY is
+	// deterministic, every run therefore read the SAME first `limit` items and everything ranked
+	// behind them was starved PERMANENTLY once a deployment exceeded the cap — a silent, permanent
+	// absence of balance history that looked like a healthy daily job. The cursor is what lets a
+	// capped run tell the next one where to continue; the cross-run half of that (and the
+	// wrap-around that stops an advancing watermark from running off the end) is
+	// repository/sweep_cursor_repository.go.
 	//
 	// ELIGIBILITY IS `status = 'active'` AND NOTHING ELSE, and the narrowness is the point. Every
 	// other status is either a needs-reauth state or a terminal one:
@@ -387,11 +397,11 @@ type LinkedItemRepository interface {
 	// Note this is NARROWER than GetActiveItemsByUserID, which excludes only replaced/disconnected
 	// because its callers want everything a user can still see. Do not "unify" the two.
 	//
-	// It returns only the two identifiers the dispatcher needs. It deliberately does NOT return
-	// domain.LinkedItem: that would decrypt an access token per row for a global scan whose result is
-	// mostly used to enqueue a job, and the capture worker re-reads its own item (and re-checks the
-	// status) at execution time anyway.
-	GetItemsForBalanceCapture(ctx context.Context, limit int) ([]domain.BalanceCaptureTarget, error)
+	// It returns only the two identifiers the dispatcher needs plus the sort key it must persist. It
+	// deliberately does NOT return domain.LinkedItem: that would decrypt an access token per row for
+	// a global scan whose result is mostly used to enqueue a job, and the capture worker re-reads its
+	// own item (and re-checks the status) at execution time anyway.
+	GetItemsForBalanceCapturePage(ctx context.Context, after *BalanceCaptureSweepCursor, limit int) ([]domain.BalanceCaptureTarget, error)
 
 	// UpdateInvestmentsLastSyncedDate updates the date through which investment transactions
 	// have been synced. Called after a successful investment transactions sync.
@@ -2048,7 +2058,8 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 	return items, nil
 }
 
-// getItemsForBalanceCaptureSQL is GetItemsForBalanceCapture's statement.
+// getItemsForBalanceCaptureSelect is GetItemsForBalanceCapturePage's statement, without its keyset
+// predicate, ORDER BY or LIMIT — those are appended per call because the predicate is conditional.
 //
 // COALESCE rather than a bare `status = 'active'`: the column is NOT NULL DEFAULT 'active' in the
 // current schema, so a NULL cannot arise today — but this repository has already been bitten once by
@@ -2059,22 +2070,57 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 // ORDER BY created_at, id — deterministic, so a run truncated by the limit takes a stable prefix
 // rather than an arbitrary one, and the limit is applied in SQL so one run can never materialise
 // every item in the database.
-const getItemsForBalanceCaptureSQL = `
-		SELECT id, user_id
+//
+// ⚠ THAT DETERMINISM IS EXACTLY WHY THE KEYSET PREDICATE HAD TO EXIST. A stable prefix plus a
+// per-run cap and no cursor is not "a stable subset", it is the SAME subset on every run forever.
+// See GetItemsForBalanceCapturePage's interface comment.
+//
+// li.created_at is NOT NULL (schema default NOW()), so neither side of the comparison needs
+// COALESCE — unlike cleanupCandidateSortKeyTuple, whose two columns are both nullable. li.id is a
+// uuid and makes the order total, which is what keeps keyset pagination from skipping or repeating
+// rows that share a created_at.
+const getItemsForBalanceCaptureSelect = `
+		SELECT id, user_id, created_at
 		FROM linked_items
 		WHERE COALESCE(status, 'active') = 'active'
+	`
+
+// BalanceCaptureSweepCursor is a keyset-pagination position for GetItemsForBalanceCapturePage,
+// captured from the last row of the previous page, matching that page's
+// ORDER BY (created_at, id) ASC. A nil cursor starts from the beginning.
+//
+// A distinct type rather than a shared one, matching DeletionSweepCursor / RetentionSweepCursor /
+// ItemCleanupSweepCursor / OrphanRetryCursor: it is what makes it impossible for a position
+// harvested from one sweep to reach another sweep's query.
+//
+// CreatedAt is a value, not a pointer, because linked_items.created_at is NOT NULL — there is no
+// legitimate NULL position here, which is the difference from ItemCleanupSweepCursor.
+type BalanceCaptureSweepCursor struct {
+	CreatedAt time.Time
+	ItemID    string
+}
+
+// GetItemsForBalanceCapturePage — see the interface for the eligibility rule, why it is narrower
+// than GetActiveItemsByUserID, and why the cursor is load-bearing rather than optional.
+func (r *linkedItemRepository) GetItemsForBalanceCapturePage(ctx context.Context, after *BalanceCaptureSweepCursor, limit int) ([]domain.BalanceCaptureTarget, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("GetItemsForBalanceCapturePage: limit must be positive, got %d", limit)
+	}
+
+	query := getItemsForBalanceCaptureSelect
+	args := []interface{}{limit}
+	if after != nil {
+		query += `
+		  AND (created_at, id) > ($2::timestamptz, $3::uuid)
+	`
+		args = append(args, after.CreatedAt, after.ItemID)
+	}
+	query += `
 		ORDER BY created_at, id
 		LIMIT $1
 	`
 
-// GetItemsForBalanceCapture — see the interface for the eligibility rule and why it is narrower than
-// GetActiveItemsByUserID.
-func (r *linkedItemRepository) GetItemsForBalanceCapture(ctx context.Context, limit int) ([]domain.BalanceCaptureTarget, error) {
-	if limit <= 0 {
-		return nil, fmt.Errorf("GetItemsForBalanceCapture: limit must be positive, got %d", limit)
-	}
-
-	rows, err := r.db.Query(ctx, getItemsForBalanceCaptureSQL, limit)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2083,7 +2129,7 @@ func (r *linkedItemRepository) GetItemsForBalanceCapture(ctx context.Context, li
 	targets := make([]domain.BalanceCaptureTarget, 0, limit)
 	for rows.Next() {
 		var t domain.BalanceCaptureTarget
-		if err := rows.Scan(&t.LinkedItemID, &t.UserID); err != nil {
+		if err := rows.Scan(&t.LinkedItemID, &t.UserID, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		targets = append(targets, t)

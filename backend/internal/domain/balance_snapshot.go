@@ -113,14 +113,20 @@ type BalanceHistoryPoint struct {
 // BalanceCaptureTarget identifies one linked item the periodic balance-snapshot dispatcher should
 // enqueue a capture job for (#1626 Phase 3, Defect 3).
 //
-// Two identifiers and nothing else, deliberately. The dispatcher's whole job is to fan out, and a
-// global scan that decrypted an access token per row would pay a per-item crypto cost for data it
-// does not use — the capture worker re-reads its own item (and re-checks its status) at execution
-// time, because minutes can pass between enqueue and run.
+// Two identifiers plus the sort key, deliberately nothing more. The dispatcher's whole job is to fan
+// out, and a global scan that decrypted an access token per row would pay a per-item crypto cost for
+// data it does not use — the capture worker re-reads its own item (and re-checks its status) at
+// execution time, because minutes can pass between enqueue and run.
 //
 // LinkedItemID is the internal UUID, never Plaid's item_id: it is what the capture job's args carry
 // and what every repository read on this path keys on.
+//
+// CreatedAt is the LEADING component of the enumeration's ORDER BY, carried so a capped dispatch run
+// can persist where it stopped and the next run can resume there instead of re-reading the same
+// oldest items forever (#1626 Phase 3; the mechanism is repository/sweep_cursor_repository.go).
+// Without it the dispatcher would have no position to save that was not a row identity.
 type BalanceCaptureTarget struct {
-	LinkedItemID string `json:"linked_item_id"`
-	UserID       string `json:"user_id"`
+	LinkedItemID string    `json:"linked_item_id"`
+	UserID       string    `json:"user_id"`
+	CreatedAt    time.Time `json:"created_at"`
 }
