@@ -502,13 +502,14 @@ func (bc *BudgetCategory) Validate() error {
 			return fmt.Errorf("%w: pfc_primary is required when category_kind is pfc", ErrInvalidBudget)
 		}
 		// Issue #1630: pfc_detailed: "" is ambiguous between "no sub-category" (nil) and a
-		// bogus non-nil-but-empty value. IsSubAllocationWithin and the analytics SQL both key
-		// off "is this pointer/column non-NULL", so a persisted "" reads as a CHILD in Go/SQL —
-		// while the frontend's `!cat.pfc_detailed` reads "" as falsy and treats the identical
-		// row as a PARENT. That split makes the two totals disagree on identical data. Reject
-		// at write time instead of trying to make every reader agree on what "" means: a
-		// present-but-empty pfc_detailed is never a value any caller intends to set, whereas
-		// nil (omitted) unambiguously means "no sub-category".
+		// bogus non-nil-but-empty value. Go and SQL now BOTH treat "" identically to nil/absent
+		// (hasPFCDetailed, and the SQL side's explicit `pfc_detailed IS NOT NULL AND pfc_detailed
+		// <> ''` predicates) — matching the frontend's `!cat.pfc_detailed`, which already reads ""
+		// as falsy. So a persisted "" no longer makes Go/SQL and TypeScript disagree about the
+		// same row. This rejection is still worth keeping: reject at write time instead of relying
+		// on every reader to keep applying that agreement correctly, because a present-but-empty
+		// pfc_detailed is never a value any caller intends to set, whereas nil (omitted)
+		// unambiguously means "no sub-category".
 		if bc.PFCDetailed != nil && *bc.PFCDetailed == "" {
 			return fmt.Errorf("%w: pfc_detailed must not be an empty string; omit it entirely for a primary-only category", ErrInvalidBudget)
 		}
