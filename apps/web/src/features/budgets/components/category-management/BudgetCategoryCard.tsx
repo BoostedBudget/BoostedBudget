@@ -14,6 +14,7 @@ import {
   formatBudgetCategoryLabel,
   computeParentAllocationRemainder,
   computeParentDirectSpend,
+  formatCurrency,
 } from '../../types';
 import { MATCH_LOGIC_LABELS } from '@boostedbudget/shared-types/matching';
 import { BudgetProgressBar } from '../BudgetProgressBar';
@@ -81,16 +82,6 @@ export interface BudgetCategoryCardProps extends VariantProps<typeof budgetCateg
    * match_logic escapes containment is excluded automatically by computeParent* (types.ts).
    */
   childCategories?: BudgetCategory[];
-}
-
-/**
- * Formats a currency amount for display
- */
-function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(amount);
 }
 
 /**
