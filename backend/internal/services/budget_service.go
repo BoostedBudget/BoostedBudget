@@ -498,10 +498,11 @@ func (s *budgetService) UpdateBudget(ctx context.Context, userID, budgetID strin
 		budget.Period = *req.Period
 	}
 	if req.StartDate != nil {
-		budget.StartDate = *req.StartDate
+		budget.StartDate = req.StartDate.Time()
 	}
 	if req.EndDate != nil {
-		budget.EndDate = req.EndDate
+		t := req.EndDate.Time()
+		budget.EndDate = &t
 	}
 	// Reconcile expected_income and amount (Issue #1048): expected_income wins when set.
 	if req.ExpectedIncome != nil && *req.ExpectedIncome > 0 {

@@ -631,8 +631,12 @@ type UpdateBudgetRequest struct {
 	Name        *string       `json:"name,omitempty" validate:"omitempty,max=100"`
 	Description *string       `json:"description,omitempty"`
 	Period      *BudgetPeriod `json:"period,omitempty"`
-	StartDate   *time.Time    `json:"start_date,omitempty"`
-	EndDate     *time.Time    `json:"end_date,omitempty" doc:"Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error."`
+	// StartDate/EndDate are domain.FlexibleDate, matching CreateBudgetRequest (Issue #1630
+	// Task 9): accepts YYYY-MM-DD (matching every read endpoint's date format) or a full
+	// RFC3339 timestamp. Left as *time.Time until now, which 422'd "2026-09-01" here while
+	// CreateBudgetRequest already accepted it — issue #1630's own P3 complaint, one verb over.
+	StartDate *FlexibleDate `json:"start_date,omitempty" doc:"Budget start date. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp."`
+	EndDate   *FlexibleDate `json:"end_date,omitempty" doc:"Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error. Accepts YYYY-MM-DD or a full RFC3339 timestamp."`
 	// Amount is overwritten to mirror expected_income when expected_income is set and > 0
 	// (Issue #1048) — declined the alternative of making this read-only, since amount is
 	// still the authoritative field when expected_income is absent.
