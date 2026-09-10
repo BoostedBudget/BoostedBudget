@@ -85,6 +85,18 @@ const (
 	EventDataKeyPeriodStart  = "period_start"  // Period start date (YYYY-MM-DD); emitted by period-close check
 	EventDataKeyPeriodEnd    = "period_end"    // Period end date (YYYY-MM-DD); emitted by period-close check
 	EventDataKeyCategories   = "categories"    // Per-category metrics map (keyed by category ID); emitted by both emitters (#1270)
+
+	// EventDataCategoryKeyIsSubAllocation is a per-category metric key (nested under
+	// EventDataKeyCategories) marking whether that row is a sub-allocation of a budgeted
+	// parent (Issue #1630 Task 3.6). 1.0 if the row's dollars are already reflected in
+	// its parent's own spent/remaining (BudgetCategory.IsSubAllocationWithin), 0.0
+	// otherwise. Consumers that sum or roll per-category dollars across rows (e.g. the
+	// category_rollover boost executor) MUST consult this before treating a row as an
+	// independent source of money — otherwise a sub-allocation's dollars, already
+	// counted via its parent, get counted a second time. Kept as a float64 (not bool)
+	// so the value fits the same map[string]map[string]float64 shape BuildCategoryEventData
+	// already returns for every other per-category metric.
+	EventDataCategoryKeyIsSubAllocation = "is_sub_allocation"
 )
 
 // validTriggerTypes is a set of all valid trigger types.
