@@ -31,6 +31,7 @@ import {
   filterTopLevel,
   isSubAllocationOfParent,
   computeParentAllocationRemainder,
+  formatCurrency,
 } from '../../types';
 import type { UserTag } from '@/features/tags/types';
 import { BudgetCategoryCard } from './BudgetCategoryCard';
@@ -73,17 +74,6 @@ interface FormDialogState {
 interface DeleteDialogState {
   isOpen: boolean;
   category: BudgetCategory | null;
-}
-
-/**
- * Formats a currency amount for display. Duplicated locally rather than shared, matching the
- * existing pattern in AllocationBreakdown.tsx and BudgetCategoryCard.tsx.
- */
-function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(amount);
 }
 
 export function BudgetCategoryManager({

@@ -150,10 +150,11 @@ export function filterTopLevel(categories: BudgetCategory[]): BudgetCategory[] {
 
 /**
  * Reports whether `child` is specifically the sub-allocation nested under `parent` (as opposed
- * to merely "some" budgeted parent — see isSubAllocationWithin above). Mirrors
- * AllocationBreakdown.tsx's private isNestedUnder and backend DuplicateParentIdentity's shape
- * test (Issue #1630 Task 4) — kept here, exported, so BudgetCategoryCard/BudgetCategoryManager
- * can identify a specific parent's own children without re-deriving the relation a third time.
+ * to merely "some" budgeted parent — see isSubAllocationWithin above). Mirrors backend
+ * DuplicateParentIdentity's shape test (Issue #1630 Task 4). Exported so every caller shares
+ * one relation: AllocationBreakdown, BudgetCategoryCard and BudgetCategoryManager all use it.
+ * AllocationBreakdown briefly had its own private copy (isNestedUnder); that was removed in the
+ * #1630 simplification pass, which is exactly what this export exists to prevent.
  */
 export function isSubAllocationOfParent(child: BudgetCategory, parent: BudgetCategory): boolean {
   if (!isContainingMatchLogic(parent.match_logic)) return false;
@@ -224,6 +225,17 @@ export function computeParentDirectSpend(
     .filter((c) => isSubAllocationOfParent(c, parent))
     .reduce((sum, c) => sum + c.spent_amount, 0);
   return parent.spent_amount - childrenSpent;
+}
+
+/**
+ * Formats a number as USD currency for display. Shared utility to avoid duplication
+ * across budget UI components.
+ */
+export function formatCurrency(amount: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  }).format(amount);
 }
 
 export interface Budget {

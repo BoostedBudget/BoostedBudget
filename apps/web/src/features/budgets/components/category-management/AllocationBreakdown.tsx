@@ -9,7 +9,7 @@ import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import type { BudgetCategory } from '../../types';
 import { Alert } from '@/components/ui/alert';
-import { formatBudgetCategoryLabel, filterTopLevel } from '../../types';
+import { formatBudgetCategoryLabel, filterTopLevel, isSubAllocationOfParent, formatCurrency } from '../../types';
 import type { CustomCategoryMap } from '../../utils/groupBudgetCategoriesByPrimary';
 
 export interface AllocationBreakdownProps {
@@ -37,49 +37,6 @@ function resolveCategoryLabel(cat: BudgetCategory, customCategoryMap?: CustomCat
     return resolved ?? 'Custom category';
   }
   return formatBudgetCategoryLabel(cat);
-}
-
-/**
- * Formats a currency amount for display
- */
-function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(amount);
-}
-
-/**
- * Reports whether `child` is the specific sub-allocation nested under `parent` (as opposed
- * to merely "some" budgeted parent — see isSubAllocationWithin in types.ts). Used only to
- * decide which top-level segment a child's nested segment renders inside; the match_logic
- * containment gating (#1630) has already happened by the time a category reaches this
- * function — it is only ever called with `child` drawn from the non-top-level remainder of
- * `filterTopLevel`, so re-checking match_logic here would be redundant.
- */
-function isNestedUnder(child: BudgetCategory, parent: BudgetCategory): boolean {
-  if (child.category_kind === 'pfc') {
-    return !!(
-      child.pfc_detailed &&
-      child.pfc_primary &&
-      parent.category_kind === 'pfc' &&
-      !parent.pfc_detailed &&
-      parent.pfc_primary === child.pfc_primary
-    );
-  }
-  if (child.category_kind === 'custom') {
-    if (child.custom_parent_id) {
-      return parent.category_kind === 'custom' && parent.custom_category_id === child.custom_parent_id;
-    }
-    if (child.custom_parent_pfc_primary) {
-      return (
-        parent.category_kind === 'pfc' &&
-        !parent.pfc_detailed &&
-        parent.pfc_primary === child.custom_parent_pfc_primary
-      );
-    }
-  }
-  return false;
 }
 
 /**
@@ -149,7 +106,7 @@ export function AllocationBreakdown({
     topLevel.forEach((cat, index) => {
       const percent = (cat.allocated_amount / totalIncome) * 100;
       const children = nonTopLevel
-        .filter((child) => isNestedUnder(child, cat))
+        .filter((child) => isSubAllocationOfParent(child, cat))
         .map((child) => ({
           id: child.id,
           name: resolveCategoryLabel(child, customCategoryMap),
