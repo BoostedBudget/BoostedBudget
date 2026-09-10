@@ -1,11 +1,12 @@
 package main
 
-// TestIssue1477SweepCursorWiringNoDrift guards the four production injections of the
+// TestIssue1477SweepCursorWiringNoDrift guards the FIVE production injections of the
 // shared sweep-cursor repository (Issue #1477).
 //
-// Why this needs a test at all: every one of the four workers treats SweepCursors as
+// Why this needs a test at all: every one of the five workers treats SweepCursors as
 // OPTIONAL and nil-safe (`if deps.SweepCursors != nil { … }` in scheduled_deletion_check.go,
-// retention_cleanup_check.go, item_cleanup_check.go and plaid_orphan_retry.go). Dropping
+// retention_cleanup_check.go, item_cleanup_check.go, plaid_orphan_retry.go and
+// balance_snapshot_capture.go). Dropping
 // one injection therefore compiles, starts, serves traffic, and passes every unit test —
 // while silently restoring the pre-#1477 behaviour in which a permanently-failing head of
 // the candidate set starves everything behind the per-run cap. main.go:448-455 states that
@@ -16,10 +17,10 @@ package main
 // route_registration_drift_test.go): read main.go from disk, assert the production
 // composition contains the wiring the type system cannot demand.
 //
-// It parses rather than substring-scans, deliberately. The four injections are textually
+// It parses rather than substring-scans, deliberately. The five injections are textually
 // IDENTICAL lines (`SweepCursors: sweepCursorRepo,`), so a `strings.Contains` scan is
 // satisfied by any ONE of them — the vacuous-pass class this branch keeps finding — and
-// even a count-of-four is satisfied by deleting one site and adding a fifth somewhere it
+// even a count-of-N is satisfied by deleting one site and adding another somewhere it
 // does not belong.
 //
 // It anchors on the CONSTRUCTOR CALL, not on a free-floating composite literal. An
@@ -43,7 +44,7 @@ package main
 // Load and Save fails, and `sweepResume` treats a Load failure as NON-FATAL and starts the
 // run FROM THE BEGINNING (see resumeSweep in queue/jobs/sweep_resume.go) — which is exactly
 // the silent starvation regime this guard exists to prevent, reached without touching any
-// of the four field assignments. Four bypasses were executed against the version of this
+// of the five field assignments. Four bypasses were executed against the version of this
 // test that lacked the check, all four PASSING it:
 //
 //	repository.NewSweepCursorRepository(nil)                       // literal nil
@@ -51,7 +52,7 @@ package main
 //	repository.NewSweepCursorRepository(sweepCursorDB(db))         // helper returning the DB
 //	db = nil; repository.NewSweepCursorRepository(db)              // the pool itself neutered
 //
-// The last is the worst of the four: `db` is a *pgxpool.Pool, so a nil one stored in the
+// The last is the worst of those four: `db` is a *pgxpool.Pool, so a nil one stored in the
 // repository's DB interface field is a NON-nil interface — the workers' `!= nil` guards all
 // pass and the calls panic instead of degrading.
 //
@@ -70,7 +71,7 @@ package main
 //     func(p *repository.SweepCursorRepository) { *p = nil }(&sweepCursorRepo)
 //
 //     leaves sawCursorConstruction true, produces no Ident and no Selector on any LHS, and
-//     nils the shared interface for all four sites. The guard cannot follow the pointer, so
+//     nils the shared interface for all five sites. The guard cannot follow the pointer, so
 //     it forbids the step that CREATES one: taking the address of `sweepCursorRepo` or of
 //     `db` anywhere in main.go is drift. `&` is the only way to obtain such a pointer (even
 //     reflect and unsafe need one), so this is a genuine choke point rather than a filter.
@@ -92,7 +93,7 @@ package main
 //     be reported even though it is outside main() and cannot shadow main's local. The
 //     round-13 Codex re-review raised this and judged it nuisance-level: renaming the
 //     parameter to `pool` satisfies the guard in one edit. Narrowing the rule to "inside
-//     main() only" would mean deciding which function is main and how the four call sites
+//     main() only" would mean deciding which function is main and how the five call sites
 //     are reached from it, which is the sort of clever filter this guard keeps finding
 //     holes in. The fail-closed direction costs one rename; the other direction costs a
 //     silent bypass.
@@ -115,13 +116,14 @@ package main
 // The two tests are complementary and neither replaces the other: the real-main.go
 // assertion catches drift in PRODUCTION WIRING, the fixtures catch drift in the GUARD.
 //
-// NOT covered, stated so it is not mistaken for covered: whether the four constructed
+// NOT covered, stated so it is not mistaken for covered: whether the five constructed
 // workers are actually REGISTERED with River. That is a materially larger surface (the
 // river.Workers registry, its AddWorker calls and the queue config) and belongs in its own
 // guard, not bolted onto this one. The #1432 round-13 review sharpened this residual with
-// the exact sites it leaves open — deleting any of main.go's four `river.AddWorker` calls
-// for scheduledDeletionCheckWorker, retentionCleanupCheckWorker, itemCleanupCheckWorker or
-// plaidOrphanRetryWorker leaves every assertion in this file green.
+// the exact sites it leaves open — deleting any of main.go's `river.AddWorker` calls for
+// scheduledDeletionCheckWorker, retentionCleanupCheckWorker, itemCleanupCheckWorker,
+// plaidOrphanRetryWorker or balanceSnapshotDispatchWorker leaves every assertion in this
+// file green.
 //
 // If a sweep is legitimately retired, delete its entry from requiredSweepWiring below —
 // that edit is the deliberate, reviewable act this test exists to force.
@@ -136,7 +138,7 @@ import (
 	"testing"
 )
 
-// Each of the four capped sweeps: the constructor main.go must call, the Deps type its
+// Each of the five capped sweeps: the constructor main.go must call, the Deps type its
 // single argument must be an inline literal of, and why that sweep needs the cursor.
 var requiredSweepWiring = []struct {
 	ctor     string
@@ -162,6 +164,11 @@ var requiredSweepWiring = []struct {
 		"NewPlaidOrphanRetryWorker",
 		"PlaidOrphanRetryWorkerDeps",
 		"plaid_orphan_retry: unwired, an orphan record whose /item/remove keeps failing at Plaid holds the head and nothing past maxOrphanRetriesPerSweep is ever retried",
+	},
+	{
+		"NewBalanceSnapshotDispatchWorker",
+		"BalanceSnapshotDispatchWorkerDeps",
+		"balance_snapshot_dispatch (#1626): unwired, every run re-enumerates from the oldest active linked item, so above balanceCaptureItemsPerRun the same prefix is captured every day and every newer item accrues no balance snapshot on ANY day. Unlike the four above, this one needs NO per-row failure to starve — its candidate set is every active item and never shrinks, so the healthy path starves it",
 	},
 }
 
@@ -315,7 +322,7 @@ func scanSweepCursorWiring(fset *token.FileSet, file *ast.File) []cursorWiringFi
 	// value. EVERY such binding must be the constructor call AROUND `db`; anything else —
 	// `= nil`, a substitute repository, a shadowing `var` declaration, a tuple assignment
 	// whose per-name value cannot be read, or the real constructor around a substituted or
-	// nil DB — is drift, because after it the four workers below receive a value this test
+	// nil DB — is drift, because after it the workers below receive a value this test
 	// never checked. This is the same fail-closed shape as fieldAssignments: the guard
 	// enumerates the bindings it can prove correct and treats everything else as a finding.
 	noteCursorBinding := func(pos token.Pos, value ast.Expr) {
@@ -425,7 +432,7 @@ func scanSweepCursorWiring(fset *token.FileSet, file *ast.File) []cursorWiringFi
 				// somewhere leaves `sweepCursorRepo = nil` one line later completely
 				// invisible: the constructor returns an INTERFACE, so the reassigned
 				// variable is a genuinely nil interface, every worker's
-				// `if deps.SweepCursors != nil` skips, and all four sweeps revert to the
+				// `if deps.SweepCursors != nil` skips, and all five sweeps revert to the
 				// pre-#1477 starving behaviour while this test still passes.
 				if id, ok := lhs.(*ast.Ident); ok {
 					var value ast.Expr
@@ -506,7 +513,7 @@ func scanSweepCursorWiring(fset *token.FileSet, file *ast.File) []cursorWiringFi
 	// otherwise silence this guard entirely while it still reported success.
 	if totalJobsCtorCalls == 0 {
 		add(findingVacuousScan,
-			"found ZERO calls to any of the four jobs.New*Worker constructors in main.go — the "+
+			"found ZERO calls to any of the five jobs.New*Worker constructors in main.go — the "+
 				"scan is vacuous, not clean. main.go parsed (%d top-level decls), so the worker "+
 				"construction moved or the `jobs` import alias changed; update this test to follow it.",
 			len(file.Decls))
@@ -515,7 +522,7 @@ func scanSweepCursorWiring(fset *token.FileSet, file *ast.File) []cursorWiringFi
 
 	if !sawCursorConstruction {
 		add(findingNoConstruction,
-			"main.go never binds %s to a call to %s.%s(...) — the value the four sites pass is "+
+			"main.go never binds %s to a call to %s.%s(...) — the value the five sites pass is "+
 				"not a real sweep-cursor repository (Issue #1477), so every worker falls back to the "+
 				"pre-#1477 starving behaviour.", sweepCursorVarName, sweepCursorPkg, sweepCursorCtor)
 	}
@@ -524,8 +531,8 @@ func scanSweepCursorWiring(fset *token.FileSet, file *ast.File) []cursorWiringFi
 		add(findingCursorRebound,
 			"WIRING DRIFT: main.go binds %s at %s to something other than %s.%s(...).\n"+
 				"  The constructor returns an INTERFACE, so `%s = nil` yields a genuinely nil interface: "+
-				"every worker's `if deps.SweepCursors != nil` skips, all four sweeps silently revert to "+
-				"the pre-#1477 starving behaviour, and the four per-site literal checks below still pass "+
+				"every worker's `if deps.SweepCursors != nil` skips, all five sweeps silently revert to "+
+				"the pre-#1477 starving behaviour, and the five per-site literal checks below still pass "+
 				"because they only look at the NAME. The name must be bound exactly once, by the "+
 				"constructor, and never rebound.", sweepCursorVarName, at, sweepCursorPkg, sweepCursorCtor,
 			sweepCursorVarName)
@@ -538,7 +545,7 @@ func scanSweepCursorWiring(fset *token.FileSet, file *ast.File) []cursorWiringFi
 				"  The constructor is not a validator: it wraps whatever it is given. A nil or substituted "+
 				"DB makes every Load and Save fail, and resumeSweep (queue/jobs/sweep_resume.go) treats a "+
 				"failed Load as NON-FATAL and starts the run FROM THE BEGINNING — the pre-#1477 starving "+
-				"behaviour, reached without touching any of the four %s field assignments this test checks "+
+				"behaviour, reached without touching any of the five %s field assignments this test checks "+
 				"below. If the pool legitimately moved or was renamed, update %s in this test; that edit is "+
 				"the reviewable act the guard exists to force.",
 			sweepCursorVarName, at, sweepCursorCtor, dbVarName, sweepCursorField, "dbVarName")
@@ -561,7 +568,7 @@ func scanSweepCursorWiring(fset *token.FileSet, file *ast.File) []cursorWiringFi
 			"WIRING DRIFT: main.go takes the ADDRESS of a guarded variable at %s.\n"+
 				"  Every other check in this guard reads the left-hand side of an assignment as an "+
 				"identifier or a selector. `*p = nil` through a pointer is neither, so it nils the shared "+
-				"value for all four sweeps with nothing to see: `go build`, `go vet` and this test were all "+
+				"value for all five sweeps with nothing to see: `go build`, `go vet` and this test were all "+
 				"clean against the demonstrated bypass\n"+
 				"    func(p *repository.SweepCursorRepository) { *p = nil }(&%s)\n"+
 				"  Since the guard cannot follow a pointer, it forbids creating one. If main.go legitimately "+
@@ -658,7 +665,7 @@ func TestIssue1477SweepCursorWiringNoDrift(t *testing.T) {
 
 // cursorFixtureSource wraps one snippet in the smallest main.go-shaped program the scan can
 // read: the two recognised `db` bindings, then the snippet (which must bind
-// sweepCursorRepo), then the four worker constructions wired correctly. Only the snippet
+// sweepCursorRepo), then the five worker constructions wired correctly. Only the snippet
 // varies between fixtures, so any difference in the findings is attributable to it.
 //
 // The sources are PARSED, never compiled — go/parser does no name resolution, so undeclared
@@ -675,6 +682,7 @@ func main() {
 	w2 = jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{SweepCursors: sweepCursorRepo})
 	w3 = jobs.NewItemCleanupCheckWorker(jobs.ItemCleanupCheckWorkerDeps{SweepCursors: sweepCursorRepo})
 	w4 = jobs.NewPlaidOrphanRetryWorker(jobs.PlaidOrphanRetryWorkerDeps{SweepCursors: sweepCursorRepo})
+	w5 = jobs.NewBalanceSnapshotDispatchWorker(jobs.BalanceSnapshotDispatchWorkerDeps{SweepCursors: sweepCursorRepo})
 }
 `
 }

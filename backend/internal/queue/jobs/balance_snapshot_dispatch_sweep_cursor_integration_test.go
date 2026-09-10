@@ -108,6 +108,18 @@ func assertItemsAreTheOldestActive(t *testing.T, pool *pgxpool.Pool, seeded []st
 // A fresh recording queue per run is what makes "which items did THIS run reach" answerable.
 func runBalanceCaptureDispatch(t *testing.T, pool *pgxpool.Pool, pageSize, capItems int) map[string]bool {
 	t.Helper()
+	out := map[string]bool{}
+	for _, id := range runBalanceCaptureDispatchOrdered(t, pool, pageSize, capItems) {
+		out[id] = true
+	}
+	return out
+}
+
+// runBalanceCaptureDispatchOrdered is the same run, returning every enqueue IN ORDER and WITH
+// DUPLICATES. The duplicate-preserving form exists because a set cannot see a repeated dispatch, and
+// a repeated dispatch is exactly what an off-by-one keyset predicate produces.
+func runBalanceCaptureDispatchOrdered(t *testing.T, pool *pgxpool.Pool, pageSize, capItems int) []string {
+	t.Helper()
 	q := &captureRecordingQueue{}
 	worker := NewBalanceSnapshotDispatchWorker(BalanceSnapshotDispatchWorkerDeps{
 		ItemRepo:       repository.NewLinkedItemRepository(pool, newJobsTestFieldEncryptor(t)),
@@ -118,9 +130,9 @@ func runBalanceCaptureDispatch(t *testing.T, pool *pgxpool.Pool, pageSize, capIt
 		MaxItemsPerRun: capItems,
 	})
 	require.NoError(t, worker.Work(context.Background(), captureDispatchJob()))
-	out := make(map[string]bool, len(q.calls))
+	out := make([]string, 0, len(q.calls))
 	for _, c := range q.calls {
-		out[c.args.ItemID] = true
+		out = append(out, c.args.ItemID)
 	}
 	return out
 }
@@ -257,4 +269,48 @@ func TestBalanceCaptureDispatchSweepCursor_PastTheEndPositionWrapsWithinTheSameR
 		"the run reached the end of its candidate set, so it must DELETE its cursor row rather than "+
 			"store a past-the-end position; only ever storing 'we stopped mid-set' is what keeps a "+
 			"stale watermark from becoming durable state")
+}
+
+// TestBalanceCaptureDispatchSweepCursor_MultiPageWithinOneRunDispatchesEachItemExactlyOnce covers
+// the WITHIN-run half of the keyset predicate, which the two tests above cannot reach: both of them
+// stop after a single page, so the cursor they exercise is always the cross-run one built from the
+// stored watermark and a uuid SENTINEL.
+//
+// ⚠ AND THAT DISTINCTION IS WHY THIS TEST EXISTS RATHER THAN BEING FOLDED IN. A sentinel-based
+// cursor is insensitive to the strictness of the comparison — `> (T, 00000000-…)` and
+// `>= (T, 00000000-…)` select the same rows, because no real uuid equals the minimum (see
+// repository.MinSweepSentinelID). The WITHIN-run cursor is built from a REAL item id, and there the
+// strictness is load-bearing: `>=` re-returns the row each page ended on, so every page after the
+// first re-dispatches an item. A mutation from `>` to `>=` in
+// GetItemsForBalanceCapturePage survived the two tests above for exactly that reason, and this test
+// is the fixture that closes it. Duplicates, not coverage, are the signal — hence
+// runBalanceCaptureDispatchOrdered.
+func TestBalanceCaptureDispatchSweepCursor_MultiPageWithinOneRunDispatchesEachItemExactlyOnce(t *testing.T) {
+	pool := connectJobsTestDB(t)
+	resetSweepCursor(t, pool, repository.SweepCursorBalanceCapture)
+	owner := seedBalanceCaptureOwner(t, pool)
+
+	base := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+	seeded := make([]string, 0, 5)
+	for i := 0; i < 5; i++ {
+		seeded = append(seeded, seedActiveCaptureItem(t, pool, owner, base.Add(time.Duration(i)*time.Second)))
+	}
+	assertItemsAreTheOldestActive(t, pool, seeded)
+
+	// pageSize 2 against 5 seeded items forces at least three page round-trips inside ONE run, with
+	// a cap high enough that the run cannot stop on it.
+	ordered := runBalanceCaptureDispatchOrdered(t, pool, 2, 100000)
+
+	counts := map[string]int{}
+	for _, id := range ordered {
+		counts[id]++
+	}
+	for _, id := range seeded {
+		require.Equal(t, 1, counts[id],
+			"seeded item %s was dispatched %d times in ONE run. Each item must be enqueued exactly "+
+				"once per run: the within-run keyset cursor is built from a REAL item id, so a "+
+				"non-strict comparison re-returns the row every page ended on and the run pays a "+
+				"duplicate Plaid /accounts/get for it. Full dispatch order: %v",
+			id, counts[id], ordered)
+	}
 }
