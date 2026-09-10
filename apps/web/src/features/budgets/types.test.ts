@@ -3,7 +3,16 @@
  * formatBudgetCategoryLabel — savings kind (#1300).
  */
 import { describe, it, expect } from 'bun:test'
-import { computeBudgetMetrics, filterTopLevel, formatBudgetCategoryLabel, type Budget, type BudgetCategory } from './types'
+import {
+  computeBudgetMetrics,
+  computeParentAllocationRemainder,
+  computeParentDirectSpend,
+  filterTopLevel,
+  formatBudgetCategoryLabel,
+  isSubAllocationOfParent,
+  type Budget,
+  type BudgetCategory,
+} from './types'
 
 const baseCat = {
   budget_id: 'b1',
@@ -126,5 +135,100 @@ describe('filterTopLevel / isSubAllocationWithin — match_logic containment (#1
       { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD', allocated_amount: 50, spent_amount: 20, match_logic: '' as BudgetCategory['match_logic'] },
     ])
     expect(result.map((c) => c.id)).toEqual(['p'])
+  })
+})
+
+describe('computeParentAllocationRemainder — Issue #1630 Task 4', () => {
+  const parent = {
+    ...baseCat,
+    id: 'p',
+    category_kind: 'pfc',
+    pfc_primary: 'RENT_AND_UTILITIES',
+    allocated_amount: 500,
+    spent_amount: 0,
+  } as BudgetCategory
+
+  it('subtracts sub-allocation children from the parent\'s own allocation', () => {
+    const electric = {
+      ...baseCat,
+      id: 'electric',
+      category_kind: 'pfc',
+      pfc_primary: 'RENT_AND_UTILITIES',
+      pfc_detailed: 'RENT_AND_UTILITIES_ELECTRIC',
+      allocated_amount: 300,
+      spent_amount: 0,
+    } as BudgetCategory
+    const cable = {
+      ...baseCat,
+      id: 'cable',
+      category_kind: 'pfc',
+      pfc_primary: 'RENT_AND_UTILITIES',
+      pfc_detailed: 'RENT_AND_UTILITIES_CABLE',
+      allocated_amount: 200,
+      spent_amount: 0,
+    } as BudgetCategory
+    // $500 utilities contains $300 electric + $200 cable, leaving $0 for anything else.
+    expect(computeParentAllocationRemainder(parent, [electric, cable])).toBe(0)
+  })
+
+  it('goes NEGATIVE when children over-allocate the parent (legal, persistable state)', () => {
+    const electric = { ...baseCat, id: 'electric', category_kind: 'pfc', pfc_primary: 'RENT_AND_UTILITIES', pfc_detailed: 'RENT_AND_UTILITIES_ELECTRIC', allocated_amount: 400, spent_amount: 0 } as BudgetCategory
+    const cable = { ...baseCat, id: 'cable', category_kind: 'pfc', pfc_primary: 'RENT_AND_UTILITIES', pfc_detailed: 'RENT_AND_UTILITIES_CABLE', allocated_amount: 200, spent_amount: 0 } as BudgetCategory
+    // $600 of children under a $500 parent -> remainder is -$100.
+    expect(computeParentAllocationRemainder(parent, [electric, cable])).toBe(-100)
+  })
+
+  it('ignores a child that escapes containment via match_logic (never carved out of the parent)', () => {
+    const escapee = {
+      ...baseCat,
+      id: 'escapee',
+      category_kind: 'pfc',
+      pfc_primary: 'RENT_AND_UTILITIES',
+      pfc_detailed: 'RENT_AND_UTILITIES_GAS',
+      allocated_amount: 9000,
+      spent_amount: 0,
+      match_logic: 'tag_only',
+    } as BudgetCategory
+    expect(computeParentAllocationRemainder(parent, [escapee])).toBe(500)
+  })
+
+  it('returns the full allocation when there are no children', () => {
+    expect(computeParentAllocationRemainder(parent, [])).toBe(500)
+  })
+})
+
+describe('computeParentDirectSpend — Issue #1630 Task 4', () => {
+  it("subtracts only sub-allocation children's spend from the parent's own rolled spend", () => {
+    const parent = { ...baseCat, id: 'p', category_kind: 'pfc', pfc_primary: 'RENT_AND_UTILITIES', allocated_amount: 500, spent_amount: 480 } as BudgetCategory
+    const electric = { ...baseCat, id: 'electric', category_kind: 'pfc', pfc_primary: 'RENT_AND_UTILITIES', pfc_detailed: 'RENT_AND_UTILITIES_ELECTRIC', allocated_amount: 300, spent_amount: 300 } as BudgetCategory
+    const cable = { ...baseCat, id: 'cable', category_kind: 'pfc', pfc_primary: 'RENT_AND_UTILITIES', pfc_detailed: 'RENT_AND_UTILITIES_CABLE', allocated_amount: 200, spent_amount: 150 } as BudgetCategory
+    // parent's own rolled spend ($480) already contains electric+cable's $450 (category match) —
+    // the water bill itself only cost $30.
+    expect(computeParentDirectSpend(parent, [electric, cable])).toBe(30)
+  })
+
+  it('does not subtract a child that escapes containment (its spend was never rolled into the parent)', () => {
+    const parent = { ...baseCat, id: 'p', category_kind: 'pfc', pfc_primary: 'RENT_AND_UTILITIES', allocated_amount: 500, spent_amount: 100 } as BudgetCategory
+    const escapee = { ...baseCat, id: 'escapee', category_kind: 'pfc', pfc_primary: 'RENT_AND_UTILITIES', pfc_detailed: 'RENT_AND_UTILITIES_GAS', allocated_amount: 50, spent_amount: 9000, match_logic: 'tag_only' } as BudgetCategory
+    expect(computeParentDirectSpend(parent, [escapee])).toBe(100)
+  })
+})
+
+describe('isSubAllocationOfParent — Issue #1630 Task 4', () => {
+  const parent = { ...baseCat, id: 'p', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', allocated_amount: 300, spent_amount: 150 } as BudgetCategory
+
+  it('true for a contained PFC detailed child of this exact primary', () => {
+    const child = { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD', allocated_amount: 50, spent_amount: 20 } as BudgetCategory
+    expect(isSubAllocationOfParent(child, parent)).toBe(true)
+  })
+
+  it('false for a child of a DIFFERENT primary', () => {
+    const child = { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'RENT_AND_UTILITIES', pfc_detailed: 'RENT_AND_UTILITIES_ELECTRIC', allocated_amount: 50, spent_amount: 20 } as BudgetCategory
+    expect(isSubAllocationOfParent(child, parent)).toBe(false)
+  })
+
+  it('false when the child escapes containment via match_logic', () => {
+    const child = { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD', allocated_amount: 50, spent_amount: 20, match_logic: 'or' } as BudgetCategory
+    expect(isSubAllocationOfParent(child, parent)).toBe(false)
   })
 })

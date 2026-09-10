@@ -6,11 +6,15 @@
  */
 
 import { useState, useMemo } from 'react';
-import { PencilIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
+import { PencilIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon, AlertTriangleIcon } from 'lucide-react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 import type { BudgetCategory } from '../../types';
-import { formatBudgetCategoryLabel } from '../../types';
+import {
+  formatBudgetCategoryLabel,
+  computeParentAllocationRemainder,
+  computeParentDirectSpend,
+} from '../../types';
 import { MATCH_LOGIC_LABELS } from '@boostedbudget/shared-types/matching';
 import { BudgetProgressBar } from '../BudgetProgressBar';
 import { BudgetTransactionList } from '../transaction-link/BudgetTransactionList';
@@ -67,6 +71,16 @@ export interface BudgetCategoryCardProps extends VariantProps<typeof budgetCateg
    * sub-allocation belongs to its parent (#1203).
    */
   parentLabel?: string;
+  /**
+   * For the 'parent' variant: this parent's own hierarchy children (#1630 Task 4) — named
+   * `childCategories`, not `children`, to avoid colliding with React's JSX-content prop. Used to
+   * compute the parent's own unallocated remainder (allocated_amount minus children's) and its
+   * own direct spending (spent_amount minus children's contained sub-allocation spend) — both
+   * distinct from simply displaying category.allocated_amount/spent_amount as-is. Ignored for
+   * every other variant. Pass every hierarchy child rendered under this card; a child whose
+   * match_logic escapes containment is excluded automatically by computeParent* (types.ts).
+   */
+  childCategories?: BudgetCategory[];
 }
 
 /**
@@ -107,6 +121,7 @@ export function BudgetCategoryCard({
   variant = 'standalone',
   customCategoryName,
   parentLabel,
+  childCategories,
 }: BudgetCategoryCardProps) {
   const [isTransactionsExpanded, setIsTransactionsExpanded] = useState(false);
 
@@ -122,6 +137,21 @@ export function BudgetCategoryCard({
   const isOverBudget = category.spent_amount > category.allocated_amount;
   const hasTags = category.tags && category.tags.length > 0;
   const matchLogicLabel = MATCH_LOGIC_LABELS[category.match_logic];
+
+  // Issue #1630 Task 4: the parent's own unallocated remainder and its own direct spending,
+  // distinct from its children's. Allocation is subtractive (typed numbers); spend is NOT — see
+  // computeParentDirectSpend's doc comment for why subtracting only contained sub-allocation
+  // children is safe here despite spend not generally being subtractive.
+  const isParent = variant === 'parent';
+  const children = childCategories ?? [];
+  // Cheap, small-array arithmetic — plain computation each render rather than useMemo, since
+  // computeParentAllocationRemainder/computeParentDirectSpend are O(children.length) and children
+  // lists are always small (a handful of sub-allocations per parent).
+  const allocationRemainder = isParent ? computeParentAllocationRemainder(category, children) : 0;
+  const directSpend = isParent ? computeParentDirectSpend(category, children) : 0;
+  // Over-allocation WARNS, never blocks — the write already succeeded (#1630 Task 4). A negative
+  // remainder ("$600 of children under a $500 parent") is a legal, persistable state.
+  const isOverAllocated = isParent && allocationRemainder < 0;
 
   return (
     <article
@@ -172,6 +202,67 @@ export function BudgetCategoryCard({
           </span>
         </div>
       </div>
+
+      {/*
+        Parent's own remainder + direct spending (#1630 Task 4) — distinct from its children's.
+        Allocation remainder = allocated_amount - sub-allocation children's allocated_amount
+        (subtraction is valid: these are numbers the user typed). Direct spending = spent_amount
+        - sub-allocation children's spent_amount (safe ONLY because computeParentDirectSpend
+        restricts the subtraction to children the Task 0.5 containment rule guarantees are a
+        subset of the parent's own matched spend — see that function's doc comment).
+
+        NEGATIVE remainder ("$600 of children under a $500 parent") is a legal, persistable
+        state — over-allocation warns, never blocks. It renders here as a negative currency value
+        in destructive styling plus an explicit warning line, rather than clamping to $0, so the
+        user can see the true over-commitment. The progress bar below is UNCHANGED by any of
+        this: it still plots category.spent_amount (rolled, inclusive of contained children)
+        against category.allocated_amount — the "rolled spend ÷ inclusive allocation" figure —
+        so it can legitimately disagree with an over-allocated remainder here (e.g. a parent
+        under its own rolled-spend budget while its children are allocated past its total) or
+        with a child's own bar below. Both are true at once and are not reconciled into one
+        number; they answer different questions (allocation commitment vs. actual spend).
+      */}
+      {isParent && children.length > 0 && (
+        <div className="budget-category-card__parent-summary flex flex-col gap-1 mb-3 pt-3 border-t border-border">
+          <div className="budget-category-card__amount-row flex justify-between items-center">
+            <span className="budget-category-card__label text-[0.8125rem] text-muted-foreground">
+              Remaining after children:
+            </span>
+            <span
+              className={cn(
+                'budget-category-card__value text-sm font-semibold',
+                isOverAllocated ? 'text-destructive' : 'text-foreground'
+              )}
+              data-ph-mask
+            >
+              {formatCurrency(allocationRemainder)}
+            </span>
+          </div>
+          <div className="budget-category-card__amount-row flex justify-between items-center">
+            <span className="budget-category-card__label text-[0.8125rem] text-muted-foreground">
+              Direct spending:
+            </span>
+            <span className="budget-category-card__value text-sm font-semibold text-foreground" data-ph-mask>
+              {formatCurrency(directSpend)}
+            </span>
+          </div>
+          {isOverAllocated && (
+            <p
+              className="budget-category-card__over-allocated-warning flex items-start gap-1.5 mt-1 text-[0.8125rem] text-destructive"
+              role="status"
+            >
+              <AlertTriangleIcon className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
+              <span>
+                Children allocate{' '}
+                <span data-ph-mask>{formatCurrency(Math.abs(allocationRemainder))}</span> more
+                than this category&apos;s own{' '}
+                <span data-ph-mask>{formatCurrency(category.allocated_amount)}</span> budget. This
+                still saves — you can leave it as an intentional over-earmark.
+              </span>
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Progress Bar */}
       <div className="budget-category-card__progress mb-3">

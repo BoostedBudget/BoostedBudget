@@ -26,7 +26,12 @@ import type {
   CreateBudgetCategoryRequest,
   UpdateBudgetCategoryRequest,
 } from '../../types';
-import { formatBudgetCategoryLabel, filterTopLevel } from '../../types';
+import {
+  formatBudgetCategoryLabel,
+  filterTopLevel,
+  isSubAllocationOfParent,
+  computeParentAllocationRemainder,
+} from '../../types';
 import type { UserTag } from '@/features/tags/types';
 import { BudgetCategoryCard } from './BudgetCategoryCard';
 import { BudgetCategoryForm } from './BudgetCategoryForm';
@@ -68,6 +73,17 @@ interface FormDialogState {
 interface DeleteDialogState {
   isOpen: boolean;
   category: BudgetCategory | null;
+}
+
+/**
+ * Formats a currency amount for display. Duplicated locally rather than shared, matching the
+ * existing pattern in AllocationBreakdown.tsx and BudgetCategoryCard.tsx.
+ */
+function formatCurrency(amount: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  }).format(amount);
 }
 
 export function BudgetCategoryManager({
@@ -250,6 +266,19 @@ export function BudgetCategoryManager({
       .reduce((sum, c) => sum + c.allocated_amount, 0);
   }, [formDialog.mode, formDialog.category, categories])
 
+  // Issue #1630 Task 4: when the category pending deletion is a parent, its sub-allocation
+  // children are promoted to top-level and the budget total changes by the parent's own
+  // unallocated remainder — say so in the delete-confirm copy rather than leaving it silent.
+  const deleteDialogSubAllocationChildren = useMemo(() => {
+    if (!deleteDialog.category) return [];
+    return categories.filter((c) => isSubAllocationOfParent(c, deleteDialog.category!));
+  }, [categories, deleteDialog.category]);
+
+  const deleteDialogRemainder = useMemo(() => {
+    if (!deleteDialog.category) return 0;
+    return computeParentAllocationRemainder(deleteDialog.category, deleteDialogSubAllocationChildren);
+  }, [deleteDialog.category, deleteDialogSubAllocationChildren]);
+
   // Resolve a custom category's display name, with a placeholder during loading/error
   // so a raw UUID is never shown (#1203).
   const getCustomCategoryName = useCallback(
@@ -275,7 +304,8 @@ export function BudgetCategoryManager({
       category: BudgetCategory,
       variant: 'standalone' | 'parent' | 'child' | 'savings',
       flatIndex: number,
-      parentLabel?: string
+      parentLabel?: string,
+      childCategories?: BudgetCategory[]
     ) => (
       <div
         key={category.id}
@@ -291,6 +321,7 @@ export function BudgetCategoryManager({
           variant={variant}
           customCategoryName={getCustomCategoryName(category.custom_category_id)}
           parentLabel={variant === 'child' ? parentLabel : undefined}
+          childCategories={variant === 'parent' ? childCategories : undefined}
           onEdit={() => handleOpenEditForm(category)}
           onDelete={() => handleOpenDeleteDialog(category)}
           disabled={disabled}
@@ -373,7 +404,7 @@ export function BudgetCategoryManager({
                 const parentIdx = flatOrder.findIndex(c => c.id === group.id);
                 return (
                   <div key={groupKey}>
-                    {renderCategoryItem(group, parentVariant, parentIdx)}
+                    {renderCategoryItem(group, parentVariant, parentIdx, undefined, children)}
                     {children.map((child) => {
                       const childIdx = flatOrder.findIndex(c => c.id === child.id);
                       return renderCategoryItem(child, 'child', childIdx, categoryDisplayLabel(group));
@@ -435,7 +466,21 @@ export function BudgetCategoryManager({
         title="Delete Category"
         description={
           deleteDialog.category ? (
-            <>Are you sure you want to delete the category &ldquo;<span data-ph-mask>{categoryDisplayLabel(deleteDialog.category)}</span>&rdquo;? It leaves this budget, but nothing is thrown away &mdash; the spending already recorded against it is kept. This action cannot be undone.</>
+            <>
+              Are you sure you want to delete the category &ldquo;
+              <span data-ph-mask>{categoryDisplayLabel(deleteDialog.category)}</span>&rdquo;? It
+              leaves this budget, but nothing is thrown away &mdash; the spending already
+              recorded against it is kept.
+              {deleteDialogSubAllocationChildren.length > 0 && (
+                <>
+                  {' '}Its {deleteDialogSubAllocationChildren.length === 1 ? 'child category' : `${deleteDialogSubAllocationChildren.length} child categories`} will move up to the top level of
+                  this budget, and the budget&apos;s total allocation will change by{' '}
+                  <span data-ph-mask>{formatCurrency(deleteDialogRemainder)}</span> (this
+                  category&apos;s own unallocated remainder).
+                </>
+              )}
+              {' '}This action cannot be undone.
+            </>
           ) : ''
         }
         variant="destructive"
