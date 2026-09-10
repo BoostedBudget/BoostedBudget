@@ -33,6 +33,7 @@
 
 export interface InvestmentTransaction {
   account_id: string;
+  activity_type?: string;
   amount: number;
   created_at: string;
   date: string;

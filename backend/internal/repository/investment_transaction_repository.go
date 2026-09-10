@@ -323,7 +323,7 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 
 	// Activity type filter (SQL-pushed, not post-fetch)
 	if len(filters.ActivityTypes) > 0 {
-		clause, typeArgs := domain.TradeTypeToSQLPredicate(filters.ActivityTypes, "it")
+		clause, typeArgs := domain.TradeTypeToSQLPredicate(filters.ActivityTypes, "it", "sec")
 		if clause != "" {
 			// Renumber placeholders from argIdx
 			renumbered := renumberPlaceholders(clause, argIdx)
@@ -364,7 +364,12 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 			it.type, it.subtype, it.name,
 			it.quantity, it.amount, it.price, it.fees, it.date,
 			it.created_at,
-			sec.ticker_symbol, sec.name AS security_name
+			sec.ticker_symbol, sec.name AS security_name,
+			-- #1631: the two joined-security facts NormalizeTradeType needs, so this endpoint
+			-- returns the SAME normalized activity_type the unified feed does. Without it the
+			-- investments page fell back to the raw Plaid type and disagreed with the feed.
+			(sec.id IS NOT NULL)   AS security_attached,
+			sec.is_cash_equivalent AS security_is_cash_equivalent
 		FROM investment_transactions it
 		LEFT JOIN securities sec ON sec.id = it.security_id
 		WHERE it.user_id = $1
@@ -393,6 +398,8 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 	for rows.Next() {
 		txn := domain.InvestmentTransaction{}
 		var tickerSymbol, securityName *string
+		var secAttached bool
+		var secIsCashEquivalent *bool
 		if err := rows.Scan(
 			&txn.ID, &txn.UserID, &txn.AccountID, &txn.UserAccountID, &txn.SecurityID,
 			&txn.PlaidInvestmentTransactionID,
@@ -400,11 +407,16 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 			&txn.Quantity, &txn.Amount, &txn.Price, &txn.Fees, &txn.Date,
 			&txn.CreatedAt,
 			&tickerSymbol, &securityName,
+			&secAttached, &secIsCashEquivalent,
 		); err != nil {
 			return nil, nil, fmt.Errorf("GetByUserIDKeyset scan: %w", err)
 		}
 		txn.TickerSymbol = tickerSymbol
 		txn.SecurityName = securityName
+		// Normalize here rather than in the client, so this endpoint and the unified feed cannot
+		// disagree about the same row (#1631).
+		at := domain.NormalizeTradeType(txn.Type, txn.Subtype, secAttached, secIsCashEquivalent)
+		txn.ActivityType = &at
 		txns = append(txns, txn)
 	}
 	if rows.Err() != nil {

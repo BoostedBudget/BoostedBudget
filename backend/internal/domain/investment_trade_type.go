@@ -14,6 +14,11 @@ const (
 	TradeTypeFee      = "fee"
 	TradeTypeCash     = "cash"
 	TradeTypeOther    = "other"
+	// #1631: added because 226 production rows were landing on "other" (transfers) and "cash"
+	// (interest) purely for want of a bucket. Interest also made the chip disagree with
+	// IncomeSubtypes, which has always counted it as income.
+	TradeTypeTransfer = "transfer"
+	TradeTypeInterest = "interest"
 )
 
 // Canonical Plaid v23 subtype sets.
@@ -35,7 +40,6 @@ var reinvestSubtypes = []string{
 	"interest reinvestment",
 	"long-term capital gain reinvestment",
 	"short-term capital gain reinvestment",
-	"capital gain reinvestment",
 }
 
 // feeTaxSubtypes are cash-type transactions representing fees and taxes.
@@ -60,22 +64,55 @@ var interestSubtypes = []string{
 	"interest receivable",
 }
 
+// capitalGainSubtypes are capital-gain DISTRIBUTIONS — income in exactly the way a dividend is,
+// and unhandled before #1631, so every one fell through to "cash". Distinct from the
+// *reinvestment* variants above, which are the same income immediately spent on shares.
+// "return of principal" is deliberately absent: it is a return of capital, not income.
+var capitalGainSubtypes = []string{
+	"long-term capital gain",
+	"short-term capital gain",
+	"unqualified gain",
+}
+
+// transferSubtypes are cash movements that shift money between accounts rather than earning or
+// spending it. Plaid types them "cash", so without this set they read as generic Cash.
+var transferSubtypes = []string{
+	"contribution",
+	"distribution",
+}
+
+// corporateActionSubtypes carve specific rows OUT of the "transfer" bucket. Plaid types a stock
+// split as transfer/split ("activity that modifies a position, but not through buy/sell activity"),
+// but a split is a corporate action, not a movement of value — labelling it "Transfer" would be
+// wrong. Only "split" is carved out; the remaining Plaid corporate actions (merger, spin off, ...)
+// do not appear in any production data yet and are left to the transfer bucket deliberately rather
+// than speculatively.
+var corporateActionSubtypes = []string{
+	"split",
+}
+
 // IncomeSubtypes is the full set of subtypes that count as income in GetInvestmentIncomeSummary.
 // It is WIDER than dividendSubtypes — it intentionally includes reinvested dividends/interest
 // because reinvested income is still economically income. This is independent of the
 // display/filter reinvest bucket (which answers a different question).
 // Built from the same canonical constants to ensure consistency.
+// IncomeSubtypes is the full set of subtypes that count as income in GetInvestmentIncomeSummary.
+//
+// ⚠ This is the SUBTYPE-LITERAL half of the income universe only. It cannot express the #1631
+// structural case — a cash/deposit against a non-cash-equivalent security — because that depends on
+// the joined security, not on the subtype. IncomeSummary applies both; see
+// investment_analytics_repository.go. Before #1631 this set was the whole universe, which is why
+// 211 dividend rows worth $6,249.43 were missing from reported portfolio income.
 var IncomeSubtypes = func() []string {
 	var s []string
 	s = append(s, dividendSubtypes...)
-	// reinvested dividend/interest are income; capital-gain reinvestment is not dividend income
+	s = append(s, capitalGainSubtypes...)
 	s = append(s, "dividend reinvestment")
 	s = append(s, "interest reinvestment")
 	s = append(s, interestSubtypes...)
 	return s
 }()
 
-// subtypeSet converts a slice to a lookup map for O(1) membership tests.
 func subtypeSet(ss []string) map[string]bool {
 	m := make(map[string]bool, len(ss))
 	for _, s := range ss {
@@ -85,18 +122,64 @@ func subtypeSet(ss []string) map[string]bool {
 }
 
 var (
-	dividendSubtypeSet = subtypeSet(dividendSubtypes)
-	reinvestSubtypeSet = subtypeSet(reinvestSubtypes)
-	feeTaxSubtypeSet   = subtypeSet(feeTaxSubtypes)
+	dividendSubtypeSet        = subtypeSet(dividendSubtypes)
+	reinvestSubtypeSet        = subtypeSet(reinvestSubtypes)
+	feeTaxSubtypeSet          = subtypeSet(feeTaxSubtypes)
+	interestSubtypeSet        = subtypeSet(interestSubtypes)
+	capitalGainSubtypeSet     = subtypeSet(capitalGainSubtypes)
+	transferSubtypeSet        = subtypeSet(transferSubtypes)
+	corporateActionSubtypeSet = subtypeSet(corporateActionSubtypes)
 )
+
+// normalizeSubtype lower-cases and trims a possibly-absent Plaid subtype. Every set lookup goes
+// through it: the literals in the sets above are lower-case, and before #1631 nothing normalised
+// the incoming value, so any casing or whitespace variance silently fell through to "cash".
+// The SQL side mirrors this exactly with COALESCE(lower(btrim(subtype)), the empty string).
+func normalizeSubtype(subtype *string) string {
+	if subtype == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(*subtype))
+}
 
 // NormalizeTradeType maps raw Plaid type/subtype to a display trade type string.
 // Used for display and labelling only. For SQL filtering use TradeTypeToSQLPredicate.
-func NormalizeTradeType(typ string, subtype *string) string {
-	sub := ""
-	if subtype != nil {
-		sub = *subtype
-	}
+// NormalizeTradeType maps a raw Plaid (type, subtype) pair onto the display bucket the UI shows.
+//
+// securityAttached and securityIsCashEquivalent describe the JOINED security: whether the row
+// references one at all, and whether Plaid flagged it "a highly liquid asset that can be treated
+// like cash" (CUR:USD, sweep funds). They are two parameters, not one nullable bool, because "no
+// security" and "a security whose is_cash_equivalent is NULL" are different facts that must not
+// arrive as the same nil.
+//
+// ⚠ The structural rule requires an AFFIRMATIVE false, not merely "not true". Plaid ships the flag
+// as a NullableBool, so an institution can omit it; treating an absent flag as "not cash
+// equivalent" would reclassify rows on the strength of a fact we do not have, inventing a
+// "Dividend" label from silence. NULL therefore falls through to Cash — today's behaviour — and the
+// SQL side mirrors this with `is_cash_equivalent IS FALSE`, which is likewise false for NULL.
+//
+// ⚠ Rule ORDER is load-bearing. Plaid's documented subtypes are consulted FIRST and the structural
+// cash-equivalence rule LAST, because "dividend reinvestment" is a real Plaid subtype that other
+// institutions do emit — the structural rule is an institution fallback, never the primary path.
+// It is also what keeps a bank sweep honest: MSPBNA is is_cash_equivalent=false and type='equity',
+// so only the earlier interest rule stops its cash/interest rows being read as dividends.
+//
+// The structural rule exists because the brokerage in #1631 reports a dividend reinvestment as a
+// PAIR of rows — a cash/deposit credit and a cash/withdrawal debit, both against the ETF — and
+// never emits the reinvestment subtype. A cash movement against a non-cash-equivalent security is
+// therefore a security-level event: money in is income, money out bought shares.
+//
+// Keyed on the subtype LITERALS, never the amount sign. Plaid's convention is inverted relative to
+// the Transactions product ("Inflow, such as stock sales, is shown as a negative amount, and
+// outflow, such as stock purchases, is positive"), so reaching for intuitive polarity inverts the
+// whole classification — and SQL could not mirror a mixed subtype+sign rule without desyncing.
+func NormalizeTradeType(typ string, subtype *string, securityAttached bool, securityIsCashEquivalent *bool) string {
+	sub := normalizeSubtype(subtype)
+	// A cash movement against a security KNOWN not to be cash-equivalent is a security-level event.
+	// An unknown flag is not evidence, so it is not structural.
+	structural := securityAttached &&
+		securityIsCashEquivalent != nil && !*securityIsCashEquivalent
+
 	switch typ {
 	case "buy":
 		return TradeTypeBuy
@@ -104,38 +187,56 @@ func NormalizeTradeType(typ string, subtype *string) string {
 		return TradeTypeSell
 	case "fee":
 		return TradeTypeFee
+	case "transfer":
+		if corporateActionSubtypeSet[sub] {
+			return TradeTypeOther
+		}
+		return TradeTypeTransfer
 	case "cash":
-		if dividendSubtypeSet[sub] {
+		switch {
+		case dividendSubtypeSet[sub], capitalGainSubtypeSet[sub]:
 			return TradeTypeDividend
-		}
-		if reinvestSubtypeSet[sub] {
+		case reinvestSubtypeSet[sub]:
 			return TradeTypeReinvest
-		}
-		if feeTaxSubtypeSet[sub] {
+		case feeTaxSubtypeSet[sub]:
 			return TradeTypeFee
+		case interestSubtypeSet[sub]:
+			return TradeTypeInterest
+		case transferSubtypeSet[sub]:
+			return TradeTypeTransfer
+		case structural && sub == "deposit":
+			return TradeTypeDividend
+		case structural && sub == "withdrawal":
+			return TradeTypeReinvest
 		}
 		return TradeTypeCash
 	}
 	return TradeTypeOther
 }
 
-// TradeTypeToSQLPredicate converts a slice of display trade-type keys into a
-// SQL WHERE clause fragment and argument list that can be ANDed into a query on
-// investment_transactions. The predicate is applied inside the UNION investment branch
-// and the dedicated /investment-transactions endpoint — always as a SQL WHERE, never
-// post-fetch, so that LIMIT n+1 keyset pagination is not corrupted.
+// TradeTypeToSQLPredicate is the SQL half of the display/filter PARTITION: it converts display
+// trade-type keys into a WHERE fragment over investment_transactions, and its buckets must select
+// exactly the rows NormalizeTradeType labels with the same key. Applied as a SQL WHERE, never
+// post-fetch, so LIMIT n+1 keyset pagination is not corrupted.
 //
-// tableAlias qualifies the type/subtype column references (e.g. "it") to avoid
-// the "column reference is ambiguous" error when the query JOINs accounts, which
-// also has type/subtype columns. Pass an empty string only when there is no JOIN
-// that would introduce ambiguity.
+// tableAlias qualifies type/subtype (e.g. "it") to avoid "column reference is ambiguous" when the
+// query JOINs accounts, which also has type/subtype columns.
 //
-// The buckets are mutually exclusive over the Plaid v23 subtype enum so that a row
-// can match at most one bucket when multiple types are requested (OR semantics in the
-// returned clause).
+// ⚠ securitiesAlias is REQUIRED (e.g. "sec") and must name a LEFT JOINed securities relation.
+// Before #1631 this function could be rendered join-free; it no longer can, because the dividend,
+// reinvest and cash buckets now depend on the joined security's is_cash_equivalent flag exactly as
+// NormalizeTradeType does. Both production callers already have the join
+// (transaction_repository.go, investment_transaction_repository.go). Passing "" makes those three
+// buckets un-renderable, so it panics rather than silently emitting a predicate that disagrees with
+// the display side — a desynced partition is the one failure this function exists to prevent.
+//
+// NULL-safety: every subtype comparison goes through COALESCE(lower(btrim(subtype)), the empty string), which
+// mirrors normalizeSubtype on the Go side and removes three-valued logic entirely — a NULL subtype
+// becomes the empty string and falls out of every IN and into every NOT IN, rather than making the whole predicate
+// NULL and dropping the row from BOTH sides of the partition.
 //
 // Returns ("", nil) when activityTypes is empty (no filter needed).
-func TradeTypeToSQLPredicate(activityTypes []string, tableAlias string) (string, []any) {
+func TradeTypeToSQLPredicate(activityTypes []string, tableAlias, securitiesAlias string) (string, []any) {
 	if len(activityTypes) == 0 {
 		return "", nil
 	}
@@ -148,8 +249,36 @@ func TradeTypeToSQLPredicate(activityTypes []string, tableAlias string) (string,
 		return tableAlias + "." + column
 	}
 
+	// sub is the normalised subtype expression — the SQL mirror of normalizeSubtype.
+	sub := fmt.Sprintf("COALESCE(lower(btrim(%s)), '')", col("subtype"))
+
+	needsSecurities := false
+	for _, at := range activityTypes {
+		if at == TradeTypeDividend || at == TradeTypeReinvest || at == TradeTypeCash {
+			needsSecurities = true
+		}
+	}
+	if needsSecurities && securitiesAlias == "" {
+		panic("TradeTypeToSQLPredicate: securitiesAlias is required for the dividend/reinvest/cash " +
+			"buckets — see the #1631 note on this function")
+	}
+	// structural mirrors NormalizeTradeType exactly: attached AND affirmatively not cash-equivalent.
+	// `IS FALSE` (not `NOT ... ` or `IS NOT TRUE`) is what makes NULL fall through to Cash on this
+	// side too — and, being a two-valued predicate, it cannot drop a row out of both buckets.
+	structural := fmt.Sprintf("(%s.id IS NOT NULL AND %s.is_cash_equivalent IS FALSE)",
+		securitiesAlias, securitiesAlias)
+
 	var parts []string
 	var args []any
+
+	// inList renders "$n, $n+1, ..." for vals and appends them to args.
+	inList := func(vals []string) string {
+		ph := sqlInPlaceholders(len(args)+1, len(vals))
+		for _, v := range vals {
+			args = append(args, v)
+		}
+		return ph
+	}
 
 	for _, at := range activityTypes {
 		switch at {
@@ -157,38 +286,50 @@ func TradeTypeToSQLPredicate(activityTypes []string, tableAlias string) (string,
 			parts = append(parts, fmt.Sprintf("%s = 'buy'", col("type")))
 		case TradeTypeSell:
 			parts = append(parts, fmt.Sprintf("%s = 'sell'", col("type")))
-		case TradeTypeDividend:
-			placeholders := sqlInPlaceholders(len(args)+1, len(dividendSubtypes))
-			parts = append(parts, fmt.Sprintf("%s IN (%s)", col("subtype"), placeholders))
-			for _, s := range dividendSubtypes {
-				args = append(args, s)
-			}
-		case TradeTypeReinvest:
-			placeholders := sqlInPlaceholders(len(args)+1, len(reinvestSubtypes))
-			parts = append(parts, fmt.Sprintf("%s IN (%s)", col("subtype"), placeholders))
-			for _, s := range reinvestSubtypes {
-				args = append(args, s)
-			}
 		case TradeTypeFee:
-			// type='fee' OR subtype IN feeTaxSubtypes
-			feePlaceholders := sqlInPlaceholders(len(args)+1, len(feeTaxSubtypes))
-			parts = append(parts, fmt.Sprintf("(%s = 'fee' OR %s IN (%s))", col("type"), col("subtype"), feePlaceholders))
-			for _, s := range feeTaxSubtypes {
-				args = append(args, s)
-			}
+			// type='fee' OR a cash row whose subtype is a fee/tax.
+			parts = append(parts, fmt.Sprintf("(%s = 'fee' OR (%s = 'cash' AND %s IN (%s)))",
+				col("type"), col("type"), sub, inList(feeTaxSubtypes)))
+		case TradeTypeInterest:
+			parts = append(parts, fmt.Sprintf("(%s = 'cash' AND %s IN (%s))",
+				col("type"), sub, inList(interestSubtypes)))
+		case TradeTypeTransfer:
+			// type='transfer' minus the corporate actions, plus the cash-typed transfer subtypes.
+			parts = append(parts, fmt.Sprintf(
+				"((%s = 'transfer' AND %s NOT IN (%s)) OR (%s = 'cash' AND %s IN (%s)))",
+				col("type"), sub, inList(corporateActionSubtypes),
+				col("type"), sub, inList(transferSubtypes)))
+		case TradeTypeDividend:
+			// Subtype-literal dividends and capital-gain distributions, plus the structural case:
+			// a cash deposit against a real security is income credited for that security.
+			parts = append(parts, fmt.Sprintf(
+				"(%s = 'cash' AND (%s IN (%s) OR (%s = 'deposit' AND %s)))",
+				col("type"), sub, inList(append(append([]string{}, dividendSubtypes...), capitalGainSubtypes...)),
+				sub, structural))
+		case TradeTypeReinvest:
+			// Subtype-literal reinvestments, plus the structural case: a cash withdrawal against a
+			// real security is cash spent acquiring it.
+			parts = append(parts, fmt.Sprintf(
+				"(%s = 'cash' AND (%s IN (%s) OR (%s = 'withdrawal' AND %s)))",
+				col("type"), sub, inList(reinvestSubtypes),
+				sub, structural))
 		case TradeTypeCash:
-			// type='cash' AND subtype NOT IN (dividendSubtypes ∪ reinvestSubtypes ∪ feeTaxSubtypes)
-			excludedSubtypes := append(append(append([]string{}, dividendSubtypes...), reinvestSubtypes...), feeTaxSubtypes...)
-			placeholders := sqlInPlaceholders(len(args)+1, len(excludedSubtypes))
-			parts = append(parts, fmt.Sprintf("(%s = 'cash' AND (%s IS NULL OR %s NOT IN (%s)))",
-				col("type"), col("subtype"), col("subtype"), placeholders))
-			for _, s := range excludedSubtypes {
-				args = append(args, s)
-			}
+			// The exact complement: a cash row classified by none of the sets above, and not a
+			// structural deposit/withdrawal.
+			classified := append([]string{}, dividendSubtypes...)
+			classified = append(classified, capitalGainSubtypes...)
+			classified = append(classified, reinvestSubtypes...)
+			classified = append(classified, feeTaxSubtypes...)
+			classified = append(classified, interestSubtypes...)
+			classified = append(classified, transferSubtypes...)
+			parts = append(parts, fmt.Sprintf(
+				"(%s = 'cash' AND %s NOT IN (%s) AND NOT (%s IN ('deposit', 'withdrawal') AND %s))",
+				col("type"), sub, inList(classified), sub, structural))
 		case TradeTypeOther:
-			// Everything that is not buy/sell/cash/fee (including transfer, which Plaid emits
-			// for cash movements and which NormalizeTradeType maps to TradeTypeOther for display).
-			parts = append(parts, fmt.Sprintf("(%s NOT IN ('buy', 'sell', 'cash', 'fee'))", col("type")))
+			// Neither a known type, nor a carved-out corporate action.
+			parts = append(parts, fmt.Sprintf(
+				"(%s NOT IN ('buy', 'sell', 'cash', 'fee', 'transfer') OR (%s = 'transfer' AND %s IN (%s)))",
+				col("type"), col("type"), sub, inList(corporateActionSubtypes)))
 		}
 	}
 
@@ -198,7 +339,6 @@ func TradeTypeToSQLPredicate(activityTypes []string, tableAlias string) (string,
 	return strings.Join(parts, " OR "), args
 }
 
-// sqlInPlaceholders generates "$n, $n+1, ..." for n positional args starting at start.
 func sqlInPlaceholders(start, count int) string {
 	if count == 0 {
 		return ""

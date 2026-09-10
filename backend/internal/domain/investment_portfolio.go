@@ -180,8 +180,12 @@ func (o AllocationOptions) IncludesLiabilities() bool {
 
 // AllocationItem represents one bucket in the portfolio allocation breakdown.
 type AllocationItem struct {
-	SecurityType string  `json:"security_type"` // "stock", "etf", "bond", "crypto", "cash", "other", "unknown", "liabilities"
-	AssetClass   string  `json:"asset_class"`   // "investments", "cash", "liabilities" — populated when group_by=asset_class
+	// SecurityType is securities.type verbatim from Plaid, or "unknown" when absent. ⚠ #1631: the
+	// values are PLAID's enum — cash, cryptocurrency, derivative, equity, etf, fixed income, loan,
+	// mutual fund, other — plus "unknown" and the synthetic "liabilities". This comment previously
+	// advertised "stock", "bond" and "crypto", none of which Plaid ever sends.
+	SecurityType string  `json:"security_type"`
+	AssetClass   string  `json:"asset_class"` // "investments", "cash", "liabilities" — populated when group_by=asset_class
 	TotalValue   float64 `json:"total_value"`
 	Percentage   float64 `json:"percentage"`
 	HoldingCount int     `json:"holding_count"`

@@ -3404,7 +3404,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	// return zero rows — consistent empty result rather than asymmetric (all invest, no banking).
 	var bankingActivityFilter, investActivityFilter string
 	if len(filters.ActivityTypes) > 0 {
-		clause, typeArgs := domain.TradeTypeToSQLPredicate(filters.ActivityTypes, "it")
+		clause, typeArgs := domain.TradeTypeToSQLPredicate(filters.ActivityTypes, "it", "sec")
 		if clause != "" {
 			renumbered := renumberPlaceholders(clause, argIdx)
 			investActivityFilter = " AND (" + renumbered + ")"
@@ -3533,7 +3533,9 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			NULL::text,
 			NULL::float8,
 			NULL::float8,
-			NULL::float8
+			NULL::float8,
+			NULL::bool,          -- inv_security_attached (#1631)
+			NULL::bool           -- inv_security_is_cash_equivalent (#1631)
 		FROM transactions t
 		%s
 		WHERE t.user_id = $1::uuid
@@ -3605,7 +3607,14 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			it.subtype,
 			it.quantity,
 			it.price,
-			it.fees
+			it.fees,
+			-- #1631: the two facts NormalizeTradeType needs about the joined security. Two
+			-- columns, not one nullable bool: "no security" and "a security whose
+			-- is_cash_equivalent is NULL" are different facts and must not arrive as one nil.
+			-- The flag is passed through RAW, not COALESCEd: an absent flag must not be read as
+			-- "not cash-equivalent", which would reclassify a row on a fact we do not have.
+			(sec.id IS NOT NULL)                        AS inv_security_attached,
+			sec.is_cash_equivalent                      AS inv_security_is_cash_equivalent
 		FROM investment_transactions it
 		LEFT JOIN securities sec ON sec.id = it.security_id
 		WHERE it.user_id = $1::uuid
@@ -3728,6 +3737,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			securityID, tickerSymbol, securityName    *string
 			invType, invSubtype                       *string
 			invQuantity, invPrice, invFees            *float64
+			invSecAttached, invSecIsCashEquivalent    *bool
 		)
 
 		if err := rows.Scan(
@@ -3748,6 +3758,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			&securityID, &tickerSymbol, &securityName,
 			&invType, &invSubtype,
 			&invQuantity, &invPrice, &invFees,
+			&invSecAttached, &invSecIsCashEquivalent,
 		); err != nil {
 			return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified scan: %w", err)
 		}
@@ -3807,9 +3818,16 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			}
 		}
 
-		// Normalize ActivityType from raw Plaid type/subtype for investment rows.
+		// Normalize ActivityType from the raw Plaid type/subtype plus the two joined-security facts
+		// (#1631). The cash-equivalence flag stays a *bool so a NULL reaches the rule as "unknown"
+		// rather than as "false" — the SQL filter's `is_cash_equivalent IS FALSE` treats it the same
+		// way, and that agreement is what keeps display and filter a partition.
 		if invType != nil {
-			at := domain.NormalizeTradeType(*invType, invSubtype)
+			at := domain.NormalizeTradeType(
+				*invType, invSubtype,
+				invSecAttached != nil && *invSecAttached,
+				invSecIsCashEquivalent,
+			)
 			item.ActivityType = &at
 		}
 
