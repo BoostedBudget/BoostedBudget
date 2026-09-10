@@ -363,6 +363,67 @@ func TestBudget_Totals_NoDoubleCountSubAllocations(t *testing.T) {
 			t.Errorf("TotalSpent() = %v, want 150", got)
 		}
 	})
+
+	// Issue #1630: hierarchy alone is not sufficient — containment is gated on match_logic too.
+	t.Run("savings category is never excluded, even nested under a same-name parent", func(t *testing.T) {
+		goalID := "33333333-3333-3333-3333-333333333333"
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300, SpentAmount: 150},
+			{CategoryKind: "savings", SavingsGoalID: &goalID, AllocatedAmount: 50, SpentAmount: 20},
+		}}
+		// The switch in IsSubAllocationWithin has no "savings" case — this is deliberate
+		// (Issue #1203) and must not be "tidied up" away. Savings always counts in full.
+		if got := b.TotalAllocated(); got != 350 {
+			t.Errorf("TotalAllocated() = %v, want 350 (savings never excluded)", got)
+		}
+		if got := b.TotalSpent(); got != 170 {
+			t.Errorf("TotalSpent() = %v, want 170 (savings never excluded)", got)
+		}
+	})
+
+	t.Run("tag_only child escapes the parent's category clause and is NOT excluded", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300, SpentAmount: 150, MatchLogic: MatchLogicCategoryOnly},
+			// A tag_only child can match transactions with no relation to `food` at all, so
+			// its spend is NOT already inside the parent's roll-up — it must count separately.
+			{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, AllocatedAmount: 50, SpentAmount: 20, MatchLogic: MatchLogicTagOnly},
+		}}
+		if got := b.TotalAllocated(); got != 350 {
+			t.Errorf("TotalAllocated() = %v, want 350 (tag_only child counts standalone)", got)
+		}
+		if got := b.TotalSpent(); got != 170 {
+			t.Errorf("TotalSpent() = %v, want 170 (tag_only child counts standalone)", got)
+		}
+	})
+
+	t.Run("or child escapes the parent's category clause and is NOT excluded", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "custom", CustomCategoryID: &customParentID, AllocatedAmount: 300, SpentAmount: 150, MatchLogic: MatchLogicCategoryOnly},
+			{CategoryKind: "custom", CustomCategoryID: &customChildID, CustomParentID: &customParentID, AllocatedAmount: 50, SpentAmount: 20, MatchLogic: MatchLogicOr},
+		}}
+		if got := b.TotalAllocated(); got != 350 {
+			t.Errorf("TotalAllocated() = %v, want 350 (or child counts standalone)", got)
+		}
+		if got := b.TotalSpent(); got != 170 {
+			t.Errorf("TotalSpent() = %v, want 170 (or child counts standalone)", got)
+		}
+	})
+
+	t.Run("and or tag_only parent has no envelope, so an otherwise-nested child still counts", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			// The parent's own match_logic is 'and': its matched set is category AND tags, a
+			// strict subset of "category only" — it has no envelope that a plain category_only
+			// child could fall inside, so the child must not be excluded from totals.
+			{CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300, SpentAmount: 150, MatchLogic: MatchLogicAnd, Tags: []string{"work"}},
+			{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, AllocatedAmount: 50, SpentAmount: 20, MatchLogic: MatchLogicCategoryOnly},
+		}}
+		if got := b.TotalAllocated(); got != 350 {
+			t.Errorf("TotalAllocated() = %v, want 350 (and-parent has no envelope)", got)
+		}
+		if got := b.TotalSpent(); got != 170 {
+			t.Errorf("TotalSpent() = %v, want 170 (and-parent has no envelope)", got)
+		}
+	})
 }
 
 // TestBudget_OverEarmarkedParentIDs verifies informational over-earmark detection (Issue #1203).

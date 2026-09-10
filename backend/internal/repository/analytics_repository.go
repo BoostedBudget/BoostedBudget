@@ -2156,18 +2156,61 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 
 // GetBudgetVsActual returns active budgets for a user filtered by their budget period,
 // joined with aggregated allocated and spent amounts from budget_categories.
+//
+// A budget_categories row that is a SUB-ALLOCATION of another live row in the same budget
+// is excluded from both sums: the parent's own allocated/spent amount already rolls the
+// child up (Issue #1203), so summing every row double-counts it. The exclusion rule mirrors
+// domain.BudgetCategory.IsSubAllocationWithin exactly, including its Issue #1630 correction:
+// hierarchy alone is NOT sufficient. A child is excluded only when BOTH
+//   - the PARENT's own match_logic is 'category_only' or 'or' (its matched set still contains
+//     the plain category match — an 'and'/'tag_only' parent has no envelope a plain-category
+//     child could fall inside), AND
+//   - the CHILD's own match_logic is 'category_only' or 'and' (it cannot escape the parent's
+//     category clause via tags — a 'tag_only'/'or' child can match transactions the parent's
+//     roll-up never counted, so it is never a sub-allocation).
+//
+// '' is treated as 'category_only' (the domain default and the column default), which SQL
+// will not coerce on its own. A savings-kind category is never a parent or a child of this
+// rule — Issue #1203's original switch has no "savings" case, and this reproduces that
+// omission deliberately: a savings-kind row always counts in full.
 // period selects by budget.period column (weekly/monthly/quarterly/yearly/custom).
-// Returns an empty slice when no matching active budgets exist. Issue #1215 PR3.
+// Returns an empty slice when no matching active budgets exist. Issue #1215 PR3; Issue #1630.
 func (r *analyticsRepository) GetBudgetVsActual(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error) {
 	const query = `
 		SELECT
 			b.id,
 			b.name,
 			b.period,
-			COALESCE(SUM(bc.allocated_amount), 0) AS allocated_amount,
-			COALESCE(SUM(bc.spent_amount), 0)     AS spent_amount
+			COALESCE(SUM(CASE WHEN sub.is_sub_allocation THEN 0 ELSE bc.allocated_amount END), 0) AS allocated_amount,
+			COALESCE(SUM(CASE WHEN sub.is_sub_allocation THEN 0 ELSE bc.spent_amount END), 0)     AS spent_amount
 		FROM budgets b
 		LEFT JOIN budget_categories bc ON bc.budget_id = b.id AND bc.deleted_at IS NULL
+		-- tombstone-exempt(custom_categories cc): the cc join resolves the PARENT LINKAGE of a
+		-- live budget line (bc.deleted_at IS NULL already filtered above), mirroring
+		-- budget_repository.go's GetCategoriesByBudgetID. DeleteWithReassignment tombstones a
+		-- category's budget lines in the same transaction as the category, so a live bc never
+		-- names a tombstoned cc; adding AND cc.deleted_at IS NULL would buy nothing and would
+		-- silently blank sub-allocation detection if that invariant ever slipped. #1569 T9.
+		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
+		LEFT JOIN LATERAL (
+			SELECT EXISTS (
+				SELECT 1
+				FROM budget_categories bc2
+				WHERE bc2.budget_id = bc.budget_id
+				  AND bc2.deleted_at IS NULL
+				  AND bc2.id <> bc.id
+				  AND COALESCE(NULLIF(bc2.match_logic, ''), 'category_only') IN ('category_only', 'or')
+				  AND COALESCE(NULLIF(bc.match_logic, ''), 'category_only') IN ('category_only', 'and')
+				  AND (
+					(bc.category_kind = 'pfc' AND bc.pfc_detailed IS NOT NULL AND bc.pfc_primary IS NOT NULL
+					 AND bc2.category_kind = 'pfc' AND bc2.pfc_detailed IS NULL AND bc2.pfc_primary = bc.pfc_primary)
+					OR (bc.category_kind = 'custom' AND cc.parent_id IS NOT NULL
+					 AND bc2.category_kind = 'custom' AND bc2.custom_category_id = cc.parent_id)
+					OR (bc.category_kind = 'custom' AND cc.parent_pfc_primary IS NOT NULL
+					 AND bc2.category_kind = 'pfc' AND bc2.pfc_detailed IS NULL AND bc2.pfc_primary = cc.parent_pfc_primary)
+				  )
+			) AS is_sub_allocation
+		) sub ON true
 		WHERE b.user_id = $1
 		  AND b.is_active = true
 		  AND b.period = $2
