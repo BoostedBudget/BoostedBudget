@@ -61,7 +61,7 @@ func (ist IncomeSourceType) IsValid() bool {
 
 // IncomeSource represents a tracked source of income for envelope budgeting.
 type IncomeSource struct {
-	Type         IncomeSourceType `json:"type"`
+	Type         IncomeSourceType `json:"type" enum:"pfc_primary,tag,manual" doc:"How this income source is matched. pfc_primary matches transactions by their PFCv2 primary category (e.g. INCOME); tag matches by transaction tag; manual is a fixed, user-entered amount with no automatic matching."`
 	Value        string           `json:"value"`                   // Category name, tag name, or description
 	Description  string           `json:"description,omitempty"`   // Optional user-friendly label
 	ValueDisplay string           `json:"value_display,omitempty"` // Human-readable display for Value when Type is pfc_primary
@@ -409,7 +409,7 @@ type BudgetCategory struct {
 
 	// Flexible matching fields (Issue #491)
 	Tags       []string   `json:"tags" db:"-"`
-	MatchLogic MatchLogic `json:"match_logic" db:"match_logic"`
+	MatchLogic MatchLogic `json:"match_logic" db:"match_logic" enum:"category_only,tag_only,and,or"`
 }
 
 // IsSubAllocationWithin reports whether this category's hierarchical parent is also
@@ -597,7 +597,7 @@ type CreateBudgetCategoryRequest struct {
 
 	// Flexible matching fields (Issue #491)
 	Tags       []string   `json:"tags,omitempty"`
-	MatchLogic MatchLogic `json:"match_logic,omitempty"`
+	MatchLogic MatchLogic `json:"match_logic,omitempty" enum:"category_only,tag_only,and,or" doc:"How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400)."`
 }
 
 // UpdateBudgetRequest represents the request to update a budget.
@@ -624,7 +624,7 @@ type UpdateBudgetCategoryRequest struct {
 
 	// Flexible matching fields (Issue #491)
 	Tags       *[]string   `json:"tags,omitempty"`
-	MatchLogic *MatchLogic `json:"match_logic,omitempty"`
+	MatchLogic *MatchLogic `json:"match_logic,omitempty" enum:"category_only,tag_only,and,or" doc:"How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400)."`
 }
 
 // CategoryPreviewRequest represents the request to preview matching transactions for a category config.
@@ -635,7 +635,7 @@ type CategoryPreviewRequest struct {
 	PFCDetailed      *string    `json:"pfc_detailed,omitempty"`
 	CustomCategoryID *string    `json:"custom_category_id,omitempty"`
 	Tags             []string   `json:"tags,omitempty"`
-	MatchLogic       MatchLogic `json:"match_logic" validate:"required,oneof=category_only tag_only and or"`
+	MatchLogic       MatchLogic `json:"match_logic" validate:"required,oneof=category_only tag_only and or" enum:"category_only,tag_only,and,or" doc:"How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array."`
 	StartDate        string     `json:"start_date" validate:"required"`
 	EndDate          string     `json:"end_date" validate:"required"`
 }
