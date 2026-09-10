@@ -8,9 +8,28 @@ import type { Account } from '@/features/accounts/types'
 export type TransactionSource = 'plaid' | 'manual' | 'teller' | 'finicity' | 'yodlee'
 
 /**
- * Investment activity type — mirrors backend InvestmentActivity domain.
+ * Investment activity type — mirrors backend domain.NormalizeTradeType's output buckets.
+ *
+ * #1631 added 'interest' and 'transfer'. Before that, 179 production transfer rows rendered
+ * "Other" and 47 interest rows rendered "Cash" purely for want of a bucket — and the interest
+ * case made the chip disagree with the backend's IncomeSubtypes, which has always counted
+ * interest as income.
+ *
+ * ⚠ Keep in step with ACTIVITY_TYPE_CONFIG: an activity type absent from that map renders the
+ * "Other" fallback chip, so a bucket added on the backend without adding it here is a silent UI
+ * regression rather than an error. ACTIVITY_TYPES below is the ordered list, and a test asserts
+ * the two agree.
  */
-export type ActivityType = 'buy' | 'sell' | 'dividend' | 'reinvest' | 'fee' | 'cash' | 'other'
+export type ActivityType =
+  | 'buy'
+  | 'sell'
+  | 'dividend'
+  | 'reinvest'
+  | 'interest'
+  | 'fee'
+  | 'transfer'
+  | 'cash'
+  | 'other'
 
 /**
  * Feed row source discriminator — identifies the row kind in the unified activity feed.
