@@ -94,6 +94,12 @@ function isContainedMatchLogic(ml: MatchLogic | undefined | ''): boolean {
  * budgetedPfcPrimaries/budgetedCustomIds already carry the parent-side containment test
  * (see filterTopLevel/buildBudgetedParentSets), so this function only needs to additionally
  * gate on the CHILD's own match_logic.
+ *
+ * `cat.pfc_detailed && ...` below treats a present-but-empty `pfc_detailed: ''` identically
+ * to absent/undefined (Issue #1630) — a `''` row is NOT treated as a detailed child here. The
+ * backend mirrors this with domain.hasPFCDetailed, and the analytics SQL's `IS NOT NULL AND
+ * <> ''` / `IS NULL OR = ''` predicates; without agreement here the backend and frontend
+ * totals disagreed on the exact same `''` row.
  */
 export function isSubAllocationWithin(
   cat: BudgetCategory,

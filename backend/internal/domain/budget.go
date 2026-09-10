@@ -197,6 +197,18 @@ func (b *Budget) Validate() error {
 	return nil
 }
 
+// hasPFCDetailed reports whether pfcDetailed carries a real detailed-category value —
+// treating a present-but-empty string ("") identically to nil/absent (Issue #1630).
+// BudgetCategory.Validate now rejects pfc_detailed: "" at write time going forward, but every
+// predicate that decides "is this row a primary-only parent or a detailed child" reads this
+// helper instead of testing the pointer directly, so a row that reaches these predicates any
+// other way (a pre-existing row, a value built in memory before validation) cannot make the
+// Go/SQL and TypeScript totals disagree about the same data. TS's `!cat.pfc_detailed` already
+// treats "" as absent for the same reason; this makes the Go/SQL side agree with it.
+func hasPFCDetailed(pfcDetailed *string) bool {
+	return pfcDetailed != nil && *pfcDetailed != ""
+}
+
 // isContainingMatchLogic reports whether a PARENT's match_logic still contains the plain
 // category match — i.e. its matched-transaction set is a superset of "category only"
 // (Issue #1630). '' is treated as 'category_only' (the domain/column default).
@@ -231,7 +243,7 @@ func budgetedParentSetsFor(categories []BudgetCategory) (pfcPrimaries, customIDs
 		if !isContainingMatchLogic(cat.MatchLogic) {
 			continue
 		}
-		if cat.CategoryKind == "pfc" && cat.PFCPrimary != nil && cat.PFCDetailed == nil {
+		if cat.CategoryKind == "pfc" && cat.PFCPrimary != nil && !hasPFCDetailed(cat.PFCDetailed) {
 			pfcPrimaries[*cat.PFCPrimary] = true
 		}
 		if cat.CategoryKind == "custom" && cat.CustomCategoryID != nil {
@@ -279,7 +291,7 @@ func (b *Budget) ChildrenAllocatedByParent() map[string]float64 {
 	customIDToCatID := make(map[string]string)
 	for i := range b.Categories {
 		c := &b.Categories[i]
-		if c.CategoryKind == "pfc" && c.PFCPrimary != nil && c.PFCDetailed == nil {
+		if c.CategoryKind == "pfc" && c.PFCPrimary != nil && !hasPFCDetailed(c.PFCDetailed) {
 			pfcPrimaryToID[*c.PFCPrimary] = c.ID
 		}
 		if c.CategoryKind == "custom" && c.CustomCategoryID != nil {
@@ -293,7 +305,7 @@ func (b *Budget) ChildrenAllocatedByParent() map[string]float64 {
 		var parentID string
 		switch c.CategoryKind {
 		case "pfc":
-			if c.PFCDetailed != nil && c.PFCPrimary != nil {
+			if hasPFCDetailed(c.PFCDetailed) && c.PFCPrimary != nil {
 				parentID = pfcPrimaryToID[*c.PFCPrimary]
 			}
 		case "custom":
@@ -430,7 +442,7 @@ func (bc *BudgetCategory) IsSubAllocationWithin(budgetedPFCPrimaries, budgetedCu
 	switch bc.CategoryKind {
 	case "pfc":
 		// A PFC detailed is a child of its primary when that primary is also budgeted.
-		if bc.PFCDetailed != nil && bc.PFCPrimary != nil && budgetedPFCPrimaries[*bc.PFCPrimary] {
+		if hasPFCDetailed(bc.PFCDetailed) && bc.PFCPrimary != nil && budgetedPFCPrimaries[*bc.PFCPrimary] {
 			return true
 		}
 	case "custom":
@@ -464,6 +476,17 @@ func (bc *BudgetCategory) Validate() error {
 	case "pfc":
 		if bc.PFCPrimary == nil || *bc.PFCPrimary == "" {
 			return fmt.Errorf("%w: pfc_primary is required when category_kind is pfc", ErrInvalidBudget)
+		}
+		// Issue #1630: pfc_detailed: "" is ambiguous between "no sub-category" (nil) and a
+		// bogus non-nil-but-empty value. IsSubAllocationWithin and the analytics SQL both key
+		// off "is this pointer/column non-NULL", so a persisted "" reads as a CHILD in Go/SQL —
+		// while the frontend's `!cat.pfc_detailed` reads "" as falsy and treats the identical
+		// row as a PARENT. That split makes the two totals disagree on identical data. Reject
+		// at write time instead of trying to make every reader agree on what "" means: a
+		// present-but-empty pfc_detailed is never a value any caller intends to set, whereas
+		// nil (omitted) unambiguously means "no sub-category".
+		if bc.PFCDetailed != nil && *bc.PFCDetailed == "" {
+			return fmt.Errorf("%w: pfc_detailed must not be an empty string; omit it entirely for a primary-only category", ErrInvalidBudget)
 		}
 		if bc.CustomCategoryID != nil {
 			return fmt.Errorf("%w: custom_category_id must not be set when category_kind is pfc", ErrInvalidBudget)
@@ -761,12 +784,12 @@ func DuplicateParentIdentity(existing []BudgetCategory, candidate *BudgetCategor
 	}
 	switch candidate.CategoryKind {
 	case "pfc":
-		if candidate.PFCDetailed != nil || candidate.PFCPrimary == nil {
+		if hasPFCDetailed(candidate.PFCDetailed) || candidate.PFCPrimary == nil {
 			return false
 		}
 		for i := range existing {
 			e := &existing[i]
-			if e.CategoryKind == "pfc" && e.PFCDetailed == nil &&
+			if e.CategoryKind == "pfc" && !hasPFCDetailed(e.PFCDetailed) &&
 				e.PFCPrimary != nil && *e.PFCPrimary == *candidate.PFCPrimary {
 				return true
 			}
@@ -800,15 +823,15 @@ func DuplicateParentIdentity(existing []BudgetCategory, candidate *BudgetCategor
 func hierarchyHasNestedChild(parent, child *BudgetCategory) bool {
 	switch child.CategoryKind {
 	case "pfc":
-		return child.PFCDetailed != nil && child.PFCPrimary != nil &&
-			parent.CategoryKind == "pfc" && parent.PFCDetailed == nil && parent.PFCPrimary != nil &&
+		return hasPFCDetailed(child.PFCDetailed) && child.PFCPrimary != nil &&
+			parent.CategoryKind == "pfc" && !hasPFCDetailed(parent.PFCDetailed) && parent.PFCPrimary != nil &&
 			*parent.PFCPrimary == *child.PFCPrimary
 	case "custom":
 		if child.CustomParentID != nil && parent.CategoryKind == "custom" && parent.CustomCategoryID != nil &&
 			*parent.CustomCategoryID == *child.CustomParentID {
 			return true
 		}
-		if child.CustomParentPFCPrimary != nil && parent.CategoryKind == "pfc" && parent.PFCDetailed == nil &&
+		if child.CustomParentPFCPrimary != nil && parent.CategoryKind == "pfc" && !hasPFCDetailed(parent.PFCDetailed) &&
 			parent.PFCPrimary != nil && *parent.PFCPrimary == *child.CustomParentPFCPrimary {
 			return true
 		}

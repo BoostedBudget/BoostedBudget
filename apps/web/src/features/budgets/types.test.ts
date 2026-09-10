@@ -90,6 +90,22 @@ describe('computeBudgetMetrics — top-level-only totals', () => {
     expect(m.total_allocated).toBe(50)
     expect(m.total_spent).toBe(20)
   })
+
+  it('treats pfc_detailed: "" as absent — matching backend domain.hasPFCDetailed (#1630)', () => {
+    // Before this fix, Go/SQL treated a present-but-empty pfc_detailed as a CHILD (so this
+    // row was excluded from the backend total), while `!cat.pfc_detailed` here already
+    // treated '' as falsy (so the frontend included it) — the two headline totals disagreed
+    // on identical data. Both rows are primary-only (parent) shapes, so both count in full;
+    // this is a duplicate-parent-identity shape, not a sub-allocation.
+    const m = computeBudgetMetrics(
+      budget([
+        { ...baseCat, id: 'p', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', allocated_amount: 300, spent_amount: 150 },
+        { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: '', allocated_amount: 50, spent_amount: 20 },
+      ])
+    )
+    expect(m.total_allocated).toBe(350)
+    expect(m.total_spent).toBe(170)
+  })
 })
 
 describe('filterTopLevel / isSubAllocationWithin — match_logic containment (#1630)', () => {

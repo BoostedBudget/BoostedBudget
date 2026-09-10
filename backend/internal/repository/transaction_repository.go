@@ -2237,8 +2237,9 @@ func buildCategoryClause(categoryKind string, pfcPrimary *string, pfcDetailed *s
 		if pfcPrimary == nil {
 			return "1=0", nil
 		}
-		if pfcDetailed != nil {
-			// A PFC detailed is a leaf — exact match, never rolls up.
+		if pfcDetailed != nil && *pfcDetailed != "" {
+			// A PFC detailed is a leaf — exact match, never rolls up. '' is treated as
+			// absent/primary-only here too (Issue #1630) — see domain.hasPFCDetailed.
 			return fmt.Sprintf(`(effective_pfc_primary = $%d AND effective_pfc_detailed = $%d)`, argStart, argStart+1),
 				[]interface{}{*pfcPrimary, *pfcDetailed}
 		}
