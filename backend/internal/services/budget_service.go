@@ -727,6 +727,10 @@ func (s *budgetService) UpdateCategory(ctx context.Context, userID, budgetID, ca
 		return nil, domain.ErrBudgetCategoryNotFound
 	}
 
+	// Issue #1630 HIGH-severity fix: capture the PRE-update match_logic before mutating the
+	// row in place, so WouldOrphanContainedChildren below can compare old vs new below.
+	originalMatchLogic := category.MatchLogic
+
 	// Apply updates
 	if req.AllocatedAmount != nil {
 		category.AllocatedAmount = *req.AllocatedAmount
@@ -742,6 +746,43 @@ func (s *budgetService) UpdateCategory(ctx context.Context, userID, budgetID, ca
 	// Validate
 	if err := category.Validate(); err != nil {
 		return nil, err
+	}
+
+	// Issue #1630 HIGH-severity fix: UpdateCategory can recreate the exact double-count
+	// AddCategory/CreateBudget's EscapedNestedChild guard exists to prevent — a caller can PATCH
+	// a conforming nested child's match_logic to one that escapes containment, as NEW data, not
+	// grandfathered. Only worth checking when match_logic actually changed (identity fields are
+	// immutable via this request, so no other field can create or break a hierarchical pair).
+	if req.MatchLogic != nil {
+		// Siblings this row could form a hierarchical pair with — every OTHER live category in
+		// this budget, using the read-time-populated custom-parent linkage already on
+		// budget.Categories (GetCategoriesByBudgetID's LEFT JOIN), so no extra lookup is needed
+		// here the way AddCategory needs one for its brand-new in-memory candidate.
+		siblings := make([]domain.BudgetCategory, 0, len(budget.Categories))
+		for i := range budget.Categories {
+			if budget.Categories[i].ID != categoryID {
+				siblings = append(siblings, budget.Categories[i])
+			}
+		}
+
+		// Direction 1: this row, AS UPDATED, forms an escaping pair with a sibling — whether as
+		// an escaping CHILD of a containing parent, or as a (still) containing PARENT of an
+		// existing escaping child. See domain.EscapedNestedChild.
+		if domain.EscapedNestedChild(siblings, category) {
+			return nil, fmt.Errorf("%w: match_logic %q on this category escapes its hierarchical parent's containment envelope — a parent whose own match_logic is category_only/or only fully rolls up children whose match_logic is category_only/and; use a top-level (non-nested) category instead if this one must match tag_only or or", domain.ErrEscapedNestedChild, category.MatchLogic)
+		}
+
+		// Direction 2: this row is itself a PARENT, and the edit would strand an existing,
+		// still-conforming child that relies on THIS row remaining a containing parent to stay
+		// excluded from top-level totals. EscapedNestedChild's own "candidate as parent" branch
+		// cannot see this because it requires the CANDIDATE (new) match_logic to still be
+		// containing; here the parent is precisely the one losing that status. See
+		// domain.WouldOrphanContainedChildren for the full reasoning.
+		originalParentSnapshot := *category
+		originalParentSnapshot.MatchLogic = originalMatchLogic
+		if domain.WouldOrphanContainedChildren(siblings, &originalParentSnapshot, category.MatchLogic) {
+			return nil, fmt.Errorf("%w: match_logic %q would remove this category's containment envelope while an existing nested child still relies on it to stay excluded from top-level totals — re-parent or update that child first", domain.ErrEscapedNestedChild, category.MatchLogic)
+		}
 	}
 
 	// Save changes
