@@ -168,6 +168,6 @@ func TestPlaidCleanupService_Integration_SideEffectClaim_TwoFlowsRacing_OnlyOneC
 // #1626 Phase 3, Defect 3: the periodic balance-capture dispatcher's global item enumeration.
 // Nothing in this test file's subject reaches it; the method exists so the mock still satisfies
 // repository.LinkedItemRepository.
-func (f *fakeLinkedItemRepoForRace) GetItemsForBalanceCapture(context.Context, int) ([]domain.BalanceCaptureTarget, error) {
+func (f *fakeLinkedItemRepoForRace) GetItemsForBalanceCapturePage(context.Context, *repository.BalanceCaptureSweepCursor, int) ([]domain.BalanceCaptureTarget, error) {
 	return nil, nil
 }

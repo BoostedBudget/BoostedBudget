@@ -30,6 +30,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
@@ -76,11 +77,39 @@ const BalanceSnapshotDispatchHourUTC = 21
 
 // balanceCaptureItemsPerRun bounds how many items ONE dispatch run may enqueue.
 //
-// Unlike this codebase's cleanup sweeps, a truncated run here is NOT resumable from a cursor: the
-// items it does not reach simply have no row for today, and there is no backfill. The cap is
-// therefore set high enough that reaching it is a capacity signal rather than routine, and the run
-// logs cap_reached so that signal is visible instead of silent.
+// ⚠ THIS COMMENT USED TO SAY THE OPPOSITE, AND THE OPPOSITE WAS A PRODUCTION DEFECT. It read:
+// "Unlike this codebase's cleanup sweeps, a truncated run here is NOT resumable from a cursor: the
+// items it does not reach simply have no row for today, and there is no backfill." That was an
+// accurate description of the code and an unacceptable design. The enumeration is a deterministic
+// `ORDER BY created_at, id LIMIT $1`, so with no cursor the run did not take "a truncated prefix" —
+// it took the SAME prefix on every run, forever. Once a deployment held more than this many active
+// linked items, every item created after the first cap-worth accrued NO balance snapshot on ANY day,
+// permanently, and the only signal was a cap_reached log line on an otherwise successful job. That
+// is precisely the silent, permanent absence of data this whole feature exists to remove,
+// reintroduced inside the fix for it.
+//
+// It is now CURSOR-RESUMABLE across runs (repository.SweepCursorBalanceCapture), so the cap bounds
+// one run's fan-out and nothing else: a run that stops on the cap persists where it stopped, the
+// next run continues there, and a run whose persisted position is past the end wraps to the
+// beginning WITHIN that run. No item can be starved indefinitely.
+//
+// ⚠ WHAT THE CAP NOW COSTS IS CADENCE, NOT COVERAGE, and that is the difference from every other
+// sweep that shares this mechanism. Their candidate sets SHRINK as they work (a marked item leaves
+// the set, a deleted user leaves the set), so their caps only defer a remainder. This sweep's
+// candidate set is "every active linked item", which never shrinks — every item is a candidate every
+// day, by design. So with N active items the sweep covers the whole set once per ceil(N/(cap-1)) + 1
+// runs: at N below the cap that is daily, and above it each item's capture rate degrades
+// proportionally rather than falling to zero. 5000 is therefore still chosen so that reaching it is
+// a capacity signal rather than routine, and cap_reached is still logged — but reaching it is now a
+// cadence warning, not a permanent data loss.
 const balanceCaptureItemsPerRun = 5000
+
+// balanceCaptureDispatchPageSize bounds each GetItemsForBalanceCapturePage query. Work() loops pages
+// of this size within one run, so this bounds only how many rows one query materialises — the total
+// a run enqueues is bounded separately by balanceCaptureItemsPerRun. 500 matches
+// itemCleanupCheckPageSize and the two user sweeps' page sizes; a page's cost is a row fetch either
+// way.
+const balanceCaptureDispatchPageSize = 500
 
 // balanceCaptureStagger / balanceCapturePerStaggerWindow spread one run's enqueues over time instead
 // of releasing every capture job at one instant.
@@ -129,7 +158,7 @@ func BalanceSnapshotDispatchSchedule() river.PeriodicSchedule {
 // consumer-defined interface, matching this package's convention — and narrow on purpose: the
 // dispatcher must not be able to read or write anything else.
 type BalanceCaptureItemReader interface {
-	GetItemsForBalanceCapture(ctx context.Context, limit int) ([]domain.BalanceCaptureTarget, error)
+	GetItemsForBalanceCapturePage(ctx context.Context, after *repository.BalanceCaptureSweepCursor, limit int) ([]domain.BalanceCaptureTarget, error)
 }
 
 // BalanceSnapshotDispatchWorker enumerates eligible linked items and enqueues one capture job each.
@@ -139,6 +168,16 @@ type BalanceSnapshotDispatchWorker struct {
 	items    BalanceCaptureItemReader
 	jobQueue queue.JobQueue
 	logger   *slog.Logger
+
+	// pageSize / maxItemsPerRun bound one run's enumeration; see balanceCaptureDispatchPageSize and
+	// balanceCaptureItemsPerRun.
+	pageSize       int
+	maxItemsPerRun int
+	// sweepCursors persists where a capped run stopped so the NEXT run resumes there instead of
+	// re-reading the same oldest items forever. Optional/nil-safe: a nil store reproduces the
+	// starvation this field exists to remove, so production MUST wire it (main.go). See
+	// sweep_resume.go and repository/sweep_cursor_repository.go.
+	sweepCursors sweepCursorStore
 }
 
 // BalanceSnapshotDispatchWorkerDeps holds the dispatcher's dependencies.
@@ -147,6 +186,16 @@ type BalanceSnapshotDispatchWorkerDeps struct {
 	// JobQueue is set after the River client exists (circular dependency), via SetJobQueue.
 	JobQueue queue.JobQueue
 	Logger   *slog.Logger
+	// SweepCursors persists this sweep's cross-run resume position. Optional and nil-safe: unwired,
+	// every run restarts from the oldest active item, which is the permanent starvation described on
+	// balanceCaptureItemsPerRun — production MUST wire it.
+	SweepCursors repository.SweepCursorRepository
+	// PageSize / MaxItemsPerRun override balanceCaptureDispatchPageSize /
+	// balanceCaptureItemsPerRun. Zero/unset uses the production default. They exist so tests can
+	// exercise the cap and the multi-page cursor loop without seeding thousands of fixture items —
+	// production should never set either.
+	PageSize       int
+	MaxItemsPerRun int
 }
 
 // NewBalanceSnapshotDispatchWorker constructs the dispatcher.
@@ -155,7 +204,19 @@ func NewBalanceSnapshotDispatchWorker(deps BalanceSnapshotDispatchWorkerDeps) *B
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &BalanceSnapshotDispatchWorker{items: deps.ItemRepo, jobQueue: deps.JobQueue, logger: logger}
+	w := &BalanceSnapshotDispatchWorker{
+		items:          deps.ItemRepo,
+		jobQueue:       deps.JobQueue,
+		logger:         logger,
+		pageSize:       intOrDefault(deps.PageSize, balanceCaptureDispatchPageSize),
+		maxItemsPerRun: intOrDefault(deps.MaxItemsPerRun, balanceCaptureItemsPerRun),
+	}
+	// Guarded rather than assigned directly, for the reason NewItemCleanupCheckWorker gives:
+	// "unwired means nil, and nil means do not persist" stays true by inspection.
+	if deps.SweepCursors != nil {
+		w.sweepCursors = deps.SweepCursors
+	}
+	return w
 }
 
 // SetJobQueue sets the job queue for enqueueing capture jobs, resolving the worker-registration
@@ -172,6 +233,16 @@ func (w *BalanceSnapshotDispatchWorker) SetJobQueue(jq queue.JobQueue) { w.jobQu
 // The run DOES return an error when any enqueue failed, so River retries — the capture jobs that
 // were already enqueued are idempotent (the cohort skip makes a re-run cheap and migration 000191's
 // unique index makes a duplicate write a no-op), so a retry of the whole dispatch is safe.
+//
+// ⚠ WHAT THE PERSISTED CURSOR CHANGES ABOUT THAT RETRY, stated because it is not nothing. Finish
+// runs before the error is returned, so a retry resumes from wherever this run got to rather than
+// from the beginning. For a run that reached the end of the set that is the beginning (Finish
+// CLEARS) and the retry does re-attempt every failed enqueue. For a run that stopped on its CAP the
+// retry continues past them, and the items whose enqueue failed are reached on the next wrap
+// instead — one cycle later, not never. That is the same bounded guarantee the cursor buys
+// everywhere else, applied to the enqueue-failure path, and it is strictly better than the
+// alternative it replaced: before the cursor, those items past the cap were reached on no run at
+// all.
 func (w *BalanceSnapshotDispatchWorker) Work(ctx context.Context, job *river.Job[BalanceSnapshotDispatchArgs]) (err error) {
 	start := time.Now()
 	defer func() {
@@ -194,56 +265,152 @@ func (w *BalanceSnapshotDispatchWorker) Work(ctx context.Context, job *river.Job
 		return errors.New("balance snapshot dispatch: no job queue wired")
 	}
 
-	targets, err := w.items.GetItemsForBalanceCapture(ctx, balanceCaptureItemsPerRun)
-	if err != nil {
-		return fmt.Errorf("balance snapshot dispatch: enumerate items: %w", err)
+	// Resume where the last CAPPED run stopped, instead of re-enumerating from the oldest active
+	// item every time. The design, the two reset rules and the BOUNDED starvation guarantee are
+	// documented once, in repository/sweep_cursor_repository.go's header; sweep_resume.go is the
+	// shared caller half.
+	//
+	// ⚠ THE JOB'S ARGS COULD NOT CARRY THIS. A River periodic schedule builds a fresh JobArgs for
+	// every run from BalanceSnapshotDispatchSchedule, so anything written into args is discarded
+	// between runs — the position has to live in the database, which is what sweep_cursors is.
+	resume := newSweepResume(ctx, w.sweepCursors, repository.SweepCursorBalanceCapture, w.logger, job.ID)
+	cursor := balanceCaptureCursorFrom(resume.start)
+	var reached repository.SweepPosition
+	cappedStop := false
+
+	now := time.Now()
+	var seen, enqueued int
+	var failures []error
+
+	for {
+		targets, pageErr := w.items.GetItemsForBalanceCapturePage(ctx, cursor, w.pageSize)
+		if pageErr != nil {
+			return fmt.Errorf("balance snapshot dispatch: enumerate items: %w", pageErr)
+		}
+
+		if len(targets) == 0 {
+			// An empty page at a RESUMED position means the persisted watermark is past the end, not
+			// that there is nothing to do: clear it and re-query from the beginning within this same
+			// run. This is the wrap, and for THIS sweep it is the steady state rather than an edge
+			// case — the candidate set is every active item and never shrinks, so an advancing
+			// watermark reaches the end on every cycle.
+			if resume.WrapNow(ctx, seen) {
+				cursor = nil
+				continue
+			}
+			break
+		}
+
+		// fetchedCount is the page length AS RETURNED by the repository, before the cap truncation
+		// below — the only reliable signal for whether the repository itself is exhausted
+		// (fetchedCount < pageSize means it had nothing left to give, regardless of the cap).
+		fetchedCount := len(targets)
+
+		if remaining := w.maxItemsPerRun - seen; fetchedCount >= remaining {
+			// remaining <= 0 is unreachable given the break at the bottom of this loop, but
+			// targets[:remaining] would panic on a negative length, so it is guarded explicitly.
+			if remaining <= 0 {
+				break
+			}
+			targets = targets[:remaining]
+		}
+
+		last := targets[len(targets)-1]
+
+		for _, target := range targets {
+			// The release schedule: each block of balanceCapturePerStaggerWindow items becomes
+			// available one balanceCaptureStagger later than the previous block. Integer division,
+			// so the FIRST block is available immediately — a run that dispatches a handful of items
+			// pays no delay at all. Counted over `seen`, not a per-page index, so the pacing spans
+			// the whole run rather than restarting on every page.
+			delay := time.Duration(seen/balanceCapturePerStaggerWindow) * balanceCaptureStagger
+			seen++
+
+			_, enqueueErr := w.jobQueue.Enqueue(ctx,
+				BalanceSnapshotCaptureArgs{UserID: target.UserID, ItemID: target.LinkedItemID},
+				queue.WithQueue(queue.QueueLow),
+				queue.WithScheduledAt(now.Add(delay)),
+				queue.WithUnique(*BalanceSnapshotCaptureUniqueOpts()),
+			)
+			if enqueueErr != nil {
+				failures = append(failures, fmt.Errorf("item %s: %w", target.LinkedItemID, enqueueErr))
+				continue
+			}
+			enqueued++
+		}
+
+		// The cursor advances past every row this page yielded AFTER the cap truncation — i.e. past
+		// the last row actually dispatched. Advancing past rows whose ENQUEUE FAILED is deliberate
+		// and is the whole point here: an item River refuses must not occupy the oldest slot of
+		// every subsequent page, within this run or across runs.
+		cursor = &repository.BalanceCaptureSweepCursor{CreatedAt: last.CreatedAt, ItemID: last.LinkedItemID}
+		// reached records only the TIMESTAMP half of that position — never last.LinkedItemID, and
+		// never its UserID (which is not part of the sort key at all). See
+		// repository/sweep_cursor_repository.go's header for why sweep_cursors stores no row
+		// identity.
+		createdAt := last.CreatedAt
+		reached = repository.SweepPosition{TS1: &createdAt}
+
+		// exhausted is computed from fetchedCount (pre-truncation) so it reflects what the
+		// REPOSITORY said, even on a page that also happens to trip the cap.
+		exhausted := fetchedCount < w.pageSize
+
+		if seen >= w.maxItemsPerRun && !exhausted {
+			// cap_reached, as a WARN rather than a field on the completion line, because it now
+			// means something an operator should act on: the whole active set no longer fits in one
+			// run, so every item's capture cadence has degraded below daily. It is NOT permanent
+			// data loss any more — the cursor below is what makes the remainder the next run's work
+			// — which is exactly why it needs saying out loud rather than being inferred from a
+			// boolean on an INFO line.
+			w.logger.Warn("balance snapshot dispatch hit its per-run cap; the remainder resumes on the next run, "+
+				"and every item's capture cadence is now slower than daily",
+				"job_id", job.ID, "dispatched", seen, "cap", w.maxItemsPerRun)
+			cappedStop = true
+			break
+		}
+
+		if exhausted {
+			break
+		}
 	}
-	if len(targets) == 0 {
+
+	// Persist the remainder position (cap hit) or clear it (end of set reached).
+	resume.Finish(ctx, cappedStop, reached)
+
+	if seen == 0 {
 		w.logger.Info("balance snapshot dispatch: no eligible items", "job_id", job.ID)
 		return nil
 	}
 
-	now := time.Now()
-	var enqueued int
-	var failures []error
-	for i, target := range targets {
-		// The release schedule: each block of balanceCapturePerStaggerWindow items becomes available
-		// one balanceCaptureStagger later than the previous block. Integer division, so the FIRST
-		// block is available immediately — a run that dispatches a handful of items pays no delay at
-		// all.
-		delay := time.Duration(i/balanceCapturePerStaggerWindow) * balanceCaptureStagger
-
-		_, enqueueErr := w.jobQueue.Enqueue(ctx,
-			BalanceSnapshotCaptureArgs{UserID: target.UserID, ItemID: target.LinkedItemID},
-			queue.WithQueue(queue.QueueLow),
-			queue.WithScheduledAt(now.Add(delay)),
-			queue.WithUnique(*BalanceSnapshotCaptureUniqueOpts()),
-		)
-		if enqueueErr != nil {
-			failures = append(failures, fmt.Errorf("item %s: %w", target.LinkedItemID, enqueueErr))
-			continue
-		}
-		enqueued++
-	}
-
-	// cap_reached is the backlog signal. Without it this line reads identically whether the run
-	// dispatched every eligible item or merely the first 5000 of more — and unlike this codebase's
-	// cursor-resumed sweeps, the items past the cap are not picked up later, they just have no row
-	// for today.
 	w.logger.Info("balance snapshot dispatch complete",
 		"job_id", job.ID,
-		"items", len(targets),
+		"items", seen,
 		"enqueued", enqueued,
 		"failed", len(failures),
-		"cap_reached", len(targets) >= balanceCaptureItemsPerRun,
+		"cap_reached", cappedStop,
 		"duration_ms", time.Since(start).Milliseconds(),
 	)
 
 	if len(failures) > 0 {
 		return fmt.Errorf("balance snapshot dispatch: %d of %d enqueues failed: %w",
-			len(failures), len(targets), errors.Join(failures...))
+			len(failures), seen, errors.Join(failures...))
 	}
 	return nil
+}
+
+// balanceCaptureCursorFrom converts a persisted position into the dispatcher's own cursor type,
+// pairing the stored timestamp with the uuid sentinel that reproduces it exactly — see
+// repository.MinSweepSentinelID. A nil position, or one with no TS1, means "start from the
+// beginning"; linked_items.created_at is NOT NULL, so this sweep never writes a nil TS1.
+//
+// A fifth conversion function rather than a generic one, for the reason its four siblings in
+// sweep_resume.go give: the cursor types are deliberately distinct so a position harvested from one
+// sweep cannot reach another sweep's query.
+func balanceCaptureCursorFrom(pos *repository.SweepPosition) *repository.BalanceCaptureSweepCursor {
+	if pos == nil || pos.TS1 == nil {
+		return nil
+	}
+	return &repository.BalanceCaptureSweepCursor{CreatedAt: *pos.TS1, ItemID: pos.SentinelID()}
 }
 
 // ─── the capture worker ────────────────────────────────────────────────────────────────────────

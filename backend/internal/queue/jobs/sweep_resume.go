@@ -9,30 +9,40 @@ import (
 
 // Issue #1477 — the caller half of the persisted cross-run sweep cursor. The design, the reset
 // rules and the BOUNDED starvation guarantee are documented once, in
-// repository/sweep_cursor_repository.go's header; this file is the mechanism the four sweeps
+// repository/sweep_cursor_repository.go's header; this file is the mechanism the five sweeps
 // share, and deliberately restates nothing.
 //
-// DO ALL FOUR SWEEPS SHARE ONE MECHANISM? Yes — and the check that they genuinely correspond was
-// made on the sort keys, not assumed. All four page with a keyset cursor whose ORDER BY is
-// (one or two timestamps ASC, then a `uuid` id ASC), and in all four the id is a pure
+// DO ALL FIVE SWEEPS SHARE ONE MECHANISM? Yes — and the check that they genuinely correspond was
+// made on the sort keys, not assumed. All five page with a keyset cursor whose ORDER BY is
+// (one or two timestamps ASC, then a `uuid` id ASC), and in all five the id is a pure
 // tie-breaker with no meaning of its own:
 //
-//	scheduled_deletion  ORDER BY deletion_scheduled_at ASC, id ASC
-//	expired_retention   ORDER BY retention_expires_at ASC, id ASC
-//	item_cleanup        ORDER BY COALESCE(last_error_at,'infinity') ASC,
-//	                             COALESCE(last_synced_at,'infinity') ASC, li.id ASC
-//	plaid_orphan_retry  ORDER BY orphaned_at ASC, id ASC
+//	scheduled_deletion       ORDER BY deletion_scheduled_at ASC, id ASC
+//	expired_retention        ORDER BY retention_expires_at ASC, id ASC
+//	item_cleanup             ORDER BY COALESCE(last_error_at,'infinity') ASC,
+//	                                  COALESCE(last_synced_at,'infinity') ASC, li.id ASC
+//	plaid_orphan_retry       ORDER BY orphaned_at ASC, id ASC
+//	balance_capture_dispatch ORDER BY created_at ASC, id ASC
 //
 // The only structural difference is arity (item_cleanup has two timestamp components and both of
-// its are nullable; the other three have one, NOT NULL by their own predicates or by schema).
+// its are nullable; the other four have one, NOT NULL by their own predicates or by schema).
 // SweepPosition carries two optional timestamps, which covers both shapes without a per-sweep type.
 // What is NOT shared is the cursor VALUE: each sweep has its own row in sweep_cursors under its own
 // SweepCursorName, and each converts the shared position into its OWN cursor type
-// (DeletionSweepCursor / RetentionSweepCursor / ItemCleanupSweepCursor / OrphanRetryCursor), which
-// the repository keeps as four distinct types precisely so a cursor harvested from one sweep can
-// never be fed to another's query. Sharing the persistence did not weaken that.
+// (DeletionSweepCursor / RetentionSweepCursor / ItemCleanupSweepCursor / OrphanRetryCursor /
+// BalanceCaptureSweepCursor), which the repository keeps as five distinct types precisely so a
+// cursor harvested from one sweep can never be fed to another's query. Sharing the persistence did
+// not weaken that.
 //
-// ⚠ ONE OF THE FOUR LOOPS IS NOT IN THIS PACKAGE. The plaid orphan retry pages inside
+// ⚠ THE FIFTH IS THE ONE WHOSE CANDIDATE SET NEVER SHRINKS. Four of these walk backlogs that empty
+// as the sweep works, so their caps only defer a remainder and the wrap is an end-of-backlog event.
+// balance_capture_dispatch enumerates every ACTIVE linked item, and a successful capture changes
+// nothing about eligibility — the item is a candidate again tomorrow, by design. So the wrap is that
+// sweep's steady state, and its cap sets each item's capture CADENCE rather than a blast radius. Its
+// starvation also needed no failure of any kind: the everything-works path starved it. See
+// repository.SweepCursorBalanceCapture and balanceCaptureItemsPerRun.
+//
+// ⚠ ONE OF THE FIVE LOOPS IS NOT IN THIS PACKAGE. The plaid orphan retry pages inside
 // services.PlaidOrphanRetryService.Sweep, because its per-row action is a Plaid call that belongs in
 // the service layer. Rather than grow a second mechanism there, the worker builds the same
 // sweepResume and hands it to Sweep through services.OrphanRetryResume — which is why WrapNow and

@@ -398,7 +398,7 @@ func TestDailyCapture_Integration_RemovedAccountIsNotPartOfTheCohort(t *testing.
 			"day forever and would invite a snapshot for an account the user disconnected")
 }
 
-// ── LinkedItemRepository.GetItemsForBalanceCapture ────────────────────────────────────────────
+// ── LinkedItemRepository.GetItemsForBalanceCapturePage ────────────────────────────────────────────
 
 // seedCaptureItem inserts one linked item for f's user with the given status and returns its ID.
 //
@@ -455,7 +455,7 @@ func TestDailyCapture_Integration_EnumerationSkipsNeedsReauthAndTerminalItems(t 
 	}
 
 	repo := NewLinkedItemRepository(tx, newTestFieldEncryptor(t))
-	targets, err := repo.GetItemsForBalanceCapture(ctx, 1000)
+	targets, err := repo.GetItemsForBalanceCapturePage(ctx, nil, 1000)
 	require.NoError(t, err)
 
 	var got []string
@@ -485,7 +485,7 @@ func TestDailyCapture_Integration_EnumerationRespectsItsLimit(t *testing.T) {
 	}
 
 	repo := NewLinkedItemRepository(tx, newTestFieldEncryptor(t))
-	targets, err := repo.GetItemsForBalanceCapture(ctx, 3)
+	targets, err := repo.GetItemsForBalanceCapturePage(ctx, nil, 3)
 	require.NoError(t, err)
 	assert.Len(t, targets, 3, "the limit must be applied in SQL, not by the caller")
 }
