@@ -14,10 +14,20 @@
 --   409 and a silent lost update are both wrong, but only one of them is invisible to the user.
 --
 -- WHAT version MEANS
---   The number of USER-FACING updates this rule has had. UpdateRule and ToggleRule (both of which
---   read-modify-write the whole row) bump it; match/override counters deliberately do not, and
+--   The number of USER-FACING changes this rule has had. The test a write must pass is "would the
+--   user SEE this change if they were looking at the rule?", not "is this a write".
+--   Match/override counters deliberately do not bump it, and
 --   TestCategorizationRuleRepository_MatchCountBumpIsNotAConflict_Integration asserts that on the
 --   COLUMN rather than merely on the absence of a conflict.
+--
+--   ⚠ #1625 third fix wave F1: an earlier revision of this file named ONE writer and said "and by
+--   nothing else". There are TWO, and the second arrived on this same branch (second fix wave H1):
+--     * CategorizationRuleRepository.Update -- the read-modify-write behind UpdateRule and
+--       ToggleRule.
+--     * CustomCategoryRepository's category tombstone -- deleting a custom category disables the
+--       rules that targeted it, which the user sees as the card flipping to "Disabled". Pinned by
+--       TestCategoryTombstone_DisablingRulesMovesTheConcurrencyToken_Integration.
+--   Do not add a third by matching that list; add one by satisfying the test above.
 --
 -- NOT NULL DEFAULT 1 rather than 0: every existing row is "version 1", and a zero would be
 -- indistinguishable from an uninitialised in-memory struct at the Go boundary — a guard that
@@ -28,4 +38,4 @@ ALTER TABLE categorization_rules
     ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
 
 COMMENT ON COLUMN categorization_rules.version IS
-    'Optimistic-concurrency token for USER-facing updates. Incremented by CategorizationRuleRepository.Update (the read-modify-write behind UpdateRule and ToggleRule) and by nothing else: IncrementMatchCount and IncrementOverrideCount are background bookkeeping and must NOT move it, or an ordinary sync would refuse the user''s save as a conflict. updated_at is unsuitable for this because a BEFORE UPDATE trigger stamps it on every write, background ones included. #1625.';
+    'Optimistic-concurrency token for USER-facing changes. Moved by a write the user would SEE if they were looking at the rule -- today CategorizationRuleRepository.Update (the read-modify-write behind UpdateRule and ToggleRule) and CustomCategoryRepository''s category tombstone, which disables the rules that targeted the deleted category. IncrementMatchCount and IncrementOverrideCount are background bookkeeping and must NOT move it, or an ordinary sync would refuse the user''s save as a conflict. updated_at is unsuitable for this because a BEFORE UPDATE trigger stamps it on every write, background ones included. #1625.';

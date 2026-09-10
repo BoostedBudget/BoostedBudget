@@ -357,10 +357,26 @@ func (r *categorizationRuleRepository) ListAllForQuarantineCensus(ctx context.Co
 // read-modify-write window therefore refused their save as "changed by another request", for a
 // change nobody made, with a likelihood that scaled with how well the rule worked.
 //
-// `version` (migration 000192) is moved ONLY here, so a competing user EDIT still conflicts and
-// background bookkeeping does not. Reverting to `WHERE id = $13` alone was the ship-sooner option
-// and was rejected: it reinstates the lost update Task 19 closed, and a silent lost update is
-// worse than a false 409 precisely because the user cannot see it.
+// The rule `version` (migration 000192) obeys is "would the user SEE this change if they were
+// looking at the rule?", not "is this a write". So a competing user-visible change still
+// conflicts and background bookkeeping does not. Reverting to `WHERE id = $13` alone was the
+// ship-sooner option and was rejected: it reinstates the lost update Task 19 closed, and a silent
+// lost update is worse than a false 409 precisely because the user cannot see it.
+//
+// ⚠ #1625 third fix wave F1: this said `version` moves ONLY here. It does not, and has not since
+// the second fix wave's H1 fix. There are TWO production writers, and any third must satisfy the
+// rule above rather than this list:
+//
+//	repository.categorizationRuleRepository.Update            (this function) — UpdateRule, ToggleRule
+//	repository.customCategoryRepository (custom_category_repository.go ~:629) — deleting a custom
+//	    category disables the rules that targeted it, which the user sees as the card flipping to
+//	    "Disabled". Not bumping there let a stale editor's name-only PATCH write `enabled = true`
+//	    back onto a rule pointing at a tombstoned category.
+//
+// The two writers that must NOT bump it are still IncrementMatchCount and IncrementOverrideCount,
+// for the reason above: invisible to the user. Re-derive the set with
+//
+//	/usr/bin/grep -rn --include='*.go' --exclude='*_test.go' 'UPDATE categorization_rules' backend/internal
 //
 // updated_at is still read back via RETURNING rather than assumed to be time.Now() from this
 // process, because the trigger — not this query — decides it.

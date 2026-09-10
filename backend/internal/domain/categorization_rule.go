@@ -179,8 +179,15 @@ type CategorizationRule struct {
 	// updated_at on every write, and IncrementMatchCount is a write — engine bookkeeping during an
 	// ordinary sync, no user involved. Racing one produced "This rule was changed by another
 	// request" for a change nobody made, and the more transactions a rule matched the likelier it
-	// got. Version moves only when Update runs, so a competing EDIT still conflicts and a match
-	// count does not.
+	// got. The test a write must pass is "would the user SEE this change if they were looking at
+	// the rule?" — so a competing visible change conflicts and a match count does not.
+	//
+	// ⚠ #1625 third fix wave F1: this said Version "moves only when Update runs". It has had TWO
+	// production writers since the second fix wave's H1 fix:
+	// repository.categorizationRuleRepository.Update (UpdateRule, ToggleRule) and
+	// repository.customCategoryRepository's category tombstone, which disables the rules that
+	// targeted the deleted category — a change the user sees as the card flipping to "Disabled".
+	// Do not add a third by matching that list; add one by satisfying the test above.
 	//
 	// Response-visible so a client can round-trip it, but the server never trusts a client-supplied
 	// value: Update reads the version off the copy the service itself loaded via GetByID.
