@@ -249,7 +249,12 @@ type IncomeSummary struct {
 
 // IncomeByType is the income breakdown by normalized income subtype.
 type IncomeByType struct {
-	IncomeType  string  `json:"income_type"` // "dividend", "interest", "dividend_reinvestment", "interest_reinvestment", "other_income"
+	// IncomeType is one of "dividend", "interest", "capital_gain", "dividend_reinvestment",
+	// "interest_reinvestment", "other_income". #1631 added "capital_gain" (capital-gain
+	// distributions previously matched no set at all and fell through to the generic bucket) and
+	// began counting a structural dividend — a cash credit against a non-cash-equivalent security,
+	// which is how some brokerages report an ETF distribution — under "dividend".
+	IncomeType  string  `json:"income_type"`
 	TotalAmount float64 `json:"total_amount"`
 	Count       int     `json:"count"`
 }

@@ -236,6 +236,28 @@ func NormalizeTradeType(typ string, subtype *string, securityAttached bool, secu
 // NULL and dropping the row from BOTH sides of the partition.
 //
 // Returns ("", nil) when activityTypes is empty (no filter needed).
+// SecurityIsStructuralSQL renders "the joined security is a real holding, not a cash equivalent" —
+// the condition under which a cash movement is a SECURITY-LEVEL event rather than a cash movement.
+//
+// It mirrors NormalizeTradeType exactly: attached AND affirmatively not cash-equivalent. `IS FALSE`
+// (never `NOT ...` or `IS NOT TRUE`) is what makes a NULL flag fall through to the cash reading on
+// this side too, and being two-valued it cannot drop a row out of both buckets the way a NULL-
+// producing comparison would.
+//
+// Exported so the filter predicate and IncomeSummary share ONE definition. They classify the same
+// rows for different purposes, and #1631 exists partly because two surfaces disagreed about the
+// same row; a second copy of this expression is how that happens again.
+func SecurityIsStructuralSQL(securitiesAlias string) string {
+	return fmt.Sprintf("(%s.id IS NOT NULL AND %s.is_cash_equivalent IS FALSE)",
+		securitiesAlias, securitiesAlias)
+}
+
+// NormalizedSubtypeSQL renders the NULL-safe, normalised subtype expression that every subtype
+// comparison must go through — the SQL mirror of normalizeSubtype.
+func NormalizedSubtypeSQL(column string) string {
+	return fmt.Sprintf("COALESCE(lower(btrim(%s)), '')", column)
+}
+
 func TradeTypeToSQLPredicate(activityTypes []string, tableAlias, securitiesAlias string) (string, []any) {
 	if len(activityTypes) == 0 {
 		return "", nil
@@ -250,7 +272,7 @@ func TradeTypeToSQLPredicate(activityTypes []string, tableAlias, securitiesAlias
 	}
 
 	// sub is the normalised subtype expression — the SQL mirror of normalizeSubtype.
-	sub := fmt.Sprintf("COALESCE(lower(btrim(%s)), '')", col("subtype"))
+	sub := NormalizedSubtypeSQL(col("subtype"))
 
 	needsSecurities := false
 	for _, at := range activityTypes {
@@ -262,11 +284,7 @@ func TradeTypeToSQLPredicate(activityTypes []string, tableAlias, securitiesAlias
 		panic("TradeTypeToSQLPredicate: securitiesAlias is required for the dividend/reinvest/cash " +
 			"buckets — see the #1631 note on this function")
 	}
-	// structural mirrors NormalizeTradeType exactly: attached AND affirmatively not cash-equivalent.
-	// `IS FALSE` (not `NOT ... ` or `IS NOT TRUE`) is what makes NULL fall through to Cash on this
-	// side too — and, being a two-valued predicate, it cannot drop a row out of both buckets.
-	structural := fmt.Sprintf("(%s.id IS NOT NULL AND %s.is_cash_equivalent IS FALSE)",
-		securitiesAlias, securitiesAlias)
+	structural := SecurityIsStructuralSQL(securitiesAlias)
 
 	var parts []string
 	var args []any
