@@ -4288,7 +4288,8 @@
         },
         {
           "name": "categories[].pfc_primary",
-          "type": "string"
+          "type": "string",
+          "description": "PFC primary category. When set with pfc_detailed omitted, this row is a pfc_primary category whose own spend total rolls up transactions filed under any custom category nested under it, in addition to its own direct matches."
         },
         {
           "name": "categories[].savings_goal_id",
@@ -4487,7 +4488,7 @@
       ],
       "manifestClass": "read",
       "excluded": false,
-      "description": "Returns the count and total amount of transactions matching the given category configuration within the date range.",
+      "description": "Returns the count and total amount of transactions matching the given category configuration within the date range. When the targeted category is a pfc_primary (a pfc category with pfc_primary set and pfc_detailed omitted) or a parent custom category, transaction_count/total_amount INCLUDE transactions filed under custom categories nested under it — direct_transaction_count/direct_amount report only what was filed directly under the targeted category itself, and children breaks the rolled-up total down by each nested custom category.",
       "requestBody": [
         {
           "name": "category_kind",
@@ -4536,29 +4537,34 @@
       "responseBody": [
         {
           "name": "children",
-          "type": "array of object"
+          "type": "array of object",
+          "description": "Breaks the rolled-up transaction_count/total_amount down by each nested custom category that actually matched. Empty/nil when the targeted category cannot roll up (a leaf category), or no nested child matched anything."
         },
         {
           "name": "direct_amount",
           "type": "number",
-          "format": "double"
+          "format": "double",
+          "description": "Amount of matching transactions filed directly under the targeted category itself, excluding any nested custom category. Populated only when children is non-empty; zero-valued for a leaf category with nothing to disclose."
         },
         {
           "name": "direct_transaction_count",
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "description": "Count of matching transactions filed directly under the targeted category itself, excluding any nested custom category. Populated only when children is non-empty; zero-valued for a leaf category with nothing to disclose."
         },
         {
           "name": "total_amount",
           "type": "number",
           "format": "double",
-          "required": true
+          "required": true,
+          "description": "Total matching transaction amount. When the targeted category is a pfc_primary or parent custom category, this INCLUDES transactions filed under its nested custom categories — see direct_amount and children to break the total down."
         },
         {
           "name": "transaction_count",
           "type": "integer",
           "format": "int64",
-          "required": true
+          "required": true,
+          "description": "Total matching transaction count. When the targeted category is a pfc_primary or parent custom category, this INCLUDES transactions filed under its nested custom categories — see direct_transaction_count and children to break the total down."
         }
       ]
     },
@@ -5038,7 +5044,8 @@
         },
         {
           "name": "pfc_primary",
-          "type": "string"
+          "type": "string",
+          "description": "PFC primary category. When set with pfc_detailed omitted, this row is a pfc_primary category whose own spend total rolls up transactions filed under any custom category nested under it, in addition to its own direct matches."
         },
         {
           "name": "savings_goal_id",

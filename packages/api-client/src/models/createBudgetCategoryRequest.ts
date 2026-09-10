@@ -41,6 +41,7 @@ export interface CreateBudgetCategoryRequest {
   /** How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400). */
   match_logic?: CreateBudgetCategoryRequestMatchLogic;
   pfc_detailed?: string;
+  /** PFC primary category. When set with pfc_detailed omitted, this row is a pfc_primary category whose own spend total rolls up transactions filed under any custom category nested under it, in addition to its own direct matches. */
   pfc_primary?: string;
   savings_goal_id?: string;
   /** @nullable */
