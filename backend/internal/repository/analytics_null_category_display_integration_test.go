@@ -195,12 +195,12 @@ func TestAnalyticsReads_NullEffectiveCategoryName_DoNotError(t *testing.T) {
 // GetCategoryTotalForPeriod, GetTopExpense, GetUnusualSpend or GetIncomeSourceBreakdown's
 // `sql.NullString` to a plain `string` left their pgxmock tests green.
 //
-// This test closes that gap for the three reads a real fixture can prove without disproportionate
-// setup (GetCategoryTotalForPeriod's two token forms, GetTopExpense, GetIncomeSourceBreakdown).
-// GetUnusualSpend needs a >=3-row same-category baseline with a non-zero standard deviation before
-// its NULL-display row is even reachable — building that baseline reliably is disproportionate to
-// what this gap needs proven, so its pgxmock test is renamed and re-commented instead (see
-// analytics_top_expense_unusual_spend_display_test.go), honest about what it can and cannot show.
+// This test closes that gap for three of them (GetCategoryTotalForPeriod's two token forms,
+// GetTopExpense, GetIncomeSourceBreakdown). GetUnusualSpend needs a >=3-row same-category baseline
+// with a non-zero standard deviation before its NULL-display row is even reachable; that was
+// judged disproportionate and its pgxmock test renamed instead, and #1626 gap G6 retracted the
+// judgement — the baseline is three rows, and it is now proven against real Postgres by
+// TestGetUnusualSpend_NullCategoryDisplay_ToleratedAgainstRealPostgres at the foot of this file.
 func TestAnalyticsReads_NullCategoryDisplay_ToleratedBySqlNullStringReads(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -335,4 +335,109 @@ func TestAnalyticsReads_NullCategoryDisplay_ToleratedBySqlNullStringReads(t *tes
 		assert.Empty(t, rows[0].CategoryDisplay)
 		assert.InDelta(t, 88.50, rows[0].Total, 0.001)
 	})
+}
+
+// ─── #1626 gap G6: GetUnusualSpend's NULL scan, proven instead of asserted ────────────────────────
+//
+// The sweep above left GetUnusualSpend as the one `sql.NullString` read with no real-NULL proof, on
+// the ground that its baseline was disproportionate to build. That judgement is retracted: the
+// baseline is three rows in one category, and the read was the LAST one whose NULL tolerance rested
+// on a pgxmock test that cannot fail (pgxmock scans a `nil` cell into a plain Go `string` without
+// error, so the mock test passes against a reverted plain-string scan — confirmed by mutation).
+//
+// WHAT THE FIXTURE HAS TO SATISFY before the NULL cell is even reachable, all of it read off the
+// query rather than guessed: the baseline CTE needs `COUNT(*) >= 3` rows of ONE effective category
+// inside [baselineStart, startDate), all `amount > 0`, settled, and non-TRANSFER; their
+// `STDDEV_POP` must be non-zero (NULLIF(...,0) plus `b.stddev_amount IS NOT NULL` drop a
+// zero-variance category); and the reported row must be in [startDate, endDate] with
+// (amount − mean) / stddev above the threshold.
+//
+// The category is a `custom:` token for the same reason as every case above: a custom row's
+// effective_category_name is filled in by the async refresh job, so its absence is the production
+// state rather than a fixture contrivance.
+func TestGetUnusualSpend_NullCategoryDisplay_ToleratedAgainstRealPostgres(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	repo := &analyticsRepository{db: tx}
+
+	userID := uuid.New().String()
+	userAccountID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+	accountID := uuid.New().String()
+	customCategoryID := uuid.New().String()
+
+	mustExec := func(what, sql string, args ...any) {
+		t.Helper()
+		_, execErr := tx.Exec(ctx, sql, args...)
+		require.NoError(t, execErr, "seed %s", what)
+	}
+
+	mustExec("user", `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1,$2,$3,'premium','active','iad')`,
+		userID, "test|unusual-"+userID, "unusual-"+userID+"@example.com")
+	mustExec("user_account", `
+		INSERT INTO user_accounts (id, user_id, institution_id, primary_type)
+		VALUES ($1,$2,'ins-unusual','depository')`, userAccountID, userID)
+	mustExec("linked_item", `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1,$2,$3,'enc-test-token')`, linkedItemID, userID, "unusual-item-"+linkedItemID)
+	mustExec("account", `
+		INSERT INTO accounts (id, linked_item_id, user_id, user_account_id, plaid_account_id, name, type, status)
+		VALUES ($1,$2,$3,$4,$5,'Unusual Checking','depository','active')`,
+		accountID, linkedItemID, userID, userAccountID, "plaid-acc-us-"+accountID)
+	mustExec("custom_category", `
+		INSERT INTO custom_categories (id, user_id, name, parent_pfc_primary)
+		VALUES ($1,$2,'Not Yet Refreshed Unusual','FOOD_AND_DRINK')`, customCategoryID, userID)
+
+	// ⚠ effective_category_name IS DELIBERATELY OMITTED on every row, so the scanned cell is a real
+	// Postgres NULL on the reported row.
+	seed := func(tag string, amount float64, date string) {
+		mustExec("txn "+tag, `
+			INSERT INTO transactions
+			  (id, user_id, account_id, user_account_id, external_transaction_id, name, amount, date,
+			   pending, source, category_override_kind, custom_category_override_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date,false,'plaid','custom',$9)`,
+			uuid.New().String(), userID, accountID, userAccountID,
+			"plaid-txn-us-"+uuid.New().String(), "unusual "+tag, amount, date, customCategoryID)
+	}
+	// Baseline: three rows, mean 20, STDDEV_POP sqrt(200/3) ≈ 8.1650 — deliberately not zero, or
+	// NULLIF would drop the whole category.
+	seed("baseline-1", 10, "2026-07-05")
+	seed("baseline-2", 20, "2026-07-10")
+	seed("baseline-3", 30, "2026-07-15")
+	// The outlier, inside the reporting window: (100 − 20) / 8.1650 ≈ 9.80 sigma.
+	seed("outlier", 100, "2026-08-10")
+
+	// The fixture's own premise, asserted rather than assumed: nothing (no trigger, no generated
+	// column) has filled the display column in. Without this the test could pass on a non-NULL cell
+	// and prove nothing about the scan.
+	var nullDisplays int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM transactions WHERE user_id = $1 AND effective_category_name IS NULL`,
+		userID).Scan(&nullDisplays))
+	require.Equal(t, 4, nullDisplays, "every seeded row's display column must really be NULL")
+
+	baselineStart := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+
+	rows, err := repo.GetUnusualSpend(ctx, userID, baselineStart, start, end, 2.0)
+	require.NoError(t, err,
+		"a real NULL effective_category_name must not fail the scan — this is the assertion the "+
+			"pgxmock test could not make, because pgxmock never reaches pgx's NULL handling")
+	require.Len(t, rows, 1, "only the outlier is above 2 sigma")
+	assert.Equal(t, "custom:"+customCategoryID, rows[0].Category)
+	assert.Empty(t, rows[0].CategoryDisplay,
+		"NULL normalises to \"\" through sql.NullString; the placeholder is the service's decision")
+	assert.InDelta(t, 100.0, rows[0].Amount, 0.001)
+	assert.InDelta(t, 20.0, rows[0].BaselineAvg, 0.001, "the baseline mean is the three baseline rows'")
+	assert.InDelta(t, 9.798, rows[0].SigmaAbove, 0.01,
+		"(100 - 20) / STDDEV_POP(10,20,30) — pinned numerically so a baseline built from the wrong "+
+			"window would not merely shift the count")
 }

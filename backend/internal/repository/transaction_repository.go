@@ -1591,7 +1591,26 @@ func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transa
 // scan-destination construction from post-scan processing (needed when an extra column is
 // appended to the scan destination, e.g. effective_merchant_sort_name in keyset queries).
 type transactionScanState struct {
-	source         string
+	source string
+	// accountID is scanned NULL-TOLERANTLY because transactions.account_id is NULLABLE and nothing
+	// in these reads hides such a row: migration 000035's ON DELETE SET NULL left an orphaned row
+	// behind every pre-#1569-Task-2 hard delete, buildWhereClause carries no account predicate at
+	// all, and the unified feed says outright that these are "still the user's own rows", admitting
+	// them with `OR t.account_id IS NULL`.
+	//
+	// Scanned straight into domain.Transaction.AccountID (a plain string) pgx failed the ROW
+	// outright — "cannot scan NULL into *string" — which is a 500 for the WHOLE list rather than one
+	// missing row, on every read sharing this dest slice (GetByID, GetByUserIDWithFilters,
+	// GetByUserIDKeyset). The unified feed's own scan already used a *string for this column, which
+	// is why only the banking path failed. Found by
+	// TestSankeyClickThrough_NodeAmountAndListTotalDescribeTheSameSet_Integration, whose fixture
+	// seeds an orphan because the category hierarchy counts one toward a node's amount.
+	//
+	// ⚠ sql.NullString, NOT *string, and that is not a style choice: pgxmock rejects a **string
+	// destination for a non-NULL string cell ("destination kind 'ptr' not supported for value kind
+	// 'string'"), so a pointer here reddens every pgxmock test that supplies an account_id. metaStr
+	// below gets away with *string only because those tests pass nil for it.
+	accountID      sql.NullString
 	metaStr        *string
 	tagsJSON       []byte
 	tagsSourceJSON []byte
@@ -1606,7 +1625,7 @@ func (r *transactionRepository) scanTransactionDestSliceWithState(tx *domain.Tra
 	dest := []any{
 		&tx.ID,
 		&tx.UserID,
-		&tx.AccountID,
+		&s.accountID,
 		&tx.LinkedItemID,
 		&s.source,
 		&tx.ExternalTransactionID,
@@ -1650,6 +1669,12 @@ func (r *transactionRepository) scanTransactionDestSliceWithState(tx *domain.Tra
 func (r *transactionRepository) postScanTransactionState(tx *domain.Transaction, s *transactionScanState) error {
 	tx.Source = domain.TransactionSource(s.source)
 	tx.ExternalMetadata = s.metaStr
+
+	// An orphaned row (account_id NULL — see transactionScanState.accountID) presents the empty
+	// string, which is what ActivityItem.AccountID already does for the same row on the unified
+	// path. It is deliberately NOT an error and NOT a dropped row: the row is retained history the
+	// user still owns.
+	tx.AccountID = s.accountID.String
 
 	if err := r.decryptTransactionPIIFields(tx); err != nil {
 		return fmt.Errorf("failed to decrypt transaction: %w", err)
