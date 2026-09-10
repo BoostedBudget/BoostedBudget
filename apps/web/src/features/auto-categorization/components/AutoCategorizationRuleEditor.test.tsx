@@ -187,6 +187,111 @@ describe('AutoCategorizationRuleEditor', () => {
       })
     })
 
+    // ── #1625: what the editor actually EMITS ────────────────────────────────────────────
+    //
+    // The condition dropdown now offers BOTH shapes: the 14 legacy fused type names and the
+    // {field, operator} pairs that have no fused ancestor (name, merchant_id, signed_amount,
+    // direction). Until these tests existed, `selectConditionChoice` could have been deleted
+    // outright and every frontend test stayed green — the only payload assertion above checks
+    // the fused shape, which is also what the pre-#1625 code produced.
+    //
+    // Picking one shape must CLEAR the other: sending a `type` that contradicts the pair is a
+    // 422 (ErrConditionShapeConflict) by design, so the server never has to guess.
+
+    async function fillRuleAndSave(user: ReturnType<typeof userEvent.setup>, choiceLabel: string, value: string) {
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+      fireEvent.click(screen.getByRole('button', { name: /add condition/i }))
+
+      const conditionSelect = screen.getByLabelText('Condition type') as HTMLSelectElement
+      fireEvent.change(conditionSelect, { target: { value: choiceLabel } })
+      // A `change` to a value that is not an option silently no-ops and leaves the default
+      // selected, which makes every assertion downstream vacuous. Fail here instead of passing a
+      // test that never exercised the choice it names.
+      expect(conditionSelect.value).toBe(choiceLabel)
+
+      const input = screen.queryByPlaceholderText(/enter value/i)
+      if (input) await user.type(input, value)
+
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food And Drink'))
+      fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    }
+
+    function renderEditor() {
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+          plaidPrimaries={mockPlaidPrimaries}
+        />
+      )
+    }
+
+    it('emits {field, operator} and NO type for a pair choice', async () => {
+      const user = userEvent.setup({ delay: null })
+      renderEditor()
+
+      // "name:contains" is the capability the reporter needed: a Zelle transfer has no
+      // merchant_name, so only the raw description can identify the payee.
+      await fillRuleAndSave(user, 'name:contains', 'jack liu')
+
+      await waitFor(() => expect(mockOnSave).toHaveBeenCalled())
+      const [saved] = mockOnSave.mock.calls[0] as unknown as [{ conditions: Record<string, unknown>[] }]
+      const cond = saved.conditions[0]
+
+      expect(cond).toMatchObject({ field: 'name', operator: 'contains', value: 'jack liu' })
+      expect(cond.type).toBeUndefined()
+    })
+
+    it('emits a bare type and NO field/operator for a legacy fused choice', async () => {
+      const user = userEvent.setup({ delay: null })
+      renderEditor()
+
+      // Deliberately NOT merchant_contains: that is DEFAULT_CONDITION's type, so selecting it
+      // proves nothing — the change could no-op and every assertion below would still pass.
+      await fillRuleAndSave(user, 'merchant_equals', 'amazon')
+
+      await waitFor(() => expect(mockOnSave).toHaveBeenCalled())
+      const [saved] = mockOnSave.mock.calls[0] as unknown as [{ conditions: Record<string, unknown>[] }]
+      const cond = saved.conditions[0]
+
+      expect(cond).toMatchObject({ type: 'merchant_equals', value: 'amazon' })
+      expect(cond.field).toBeUndefined()
+      expect(cond.operator).toBeUndefined()
+    })
+
+    it('switching from a pair choice to a fused one clears the stale pair', async () => {
+      const user = userEvent.setup({ delay: null })
+      renderEditor()
+
+      await user.type(screen.getByLabelText(/rule name/i), 'Test Rule')
+      fireEvent.click(screen.getByRole('button', { name: /add condition/i }))
+
+      const select = screen.getByLabelText('Condition type')
+      fireEvent.change(select, { target: { value: 'name:contains' } })
+      fireEvent.change(select, { target: { value: 'merchant_contains' } })
+
+      const input = screen.getByPlaceholderText(/enter value/i)
+      await user.type(input, 'amazon')
+
+      const categorySelect = screen.getByRole('combobox', { name: /target category/i })
+      await user.click(categorySelect)
+      await user.click(screen.getByText('Food And Drink'))
+      fireEvent.click(screen.getByRole('button', { name: /save/i }))
+
+      await waitFor(() => expect(mockOnSave).toHaveBeenCalled())
+      const [saved] = mockOnSave.mock.calls[0] as unknown as [{ conditions: Record<string, unknown>[] }]
+      const cond = saved.conditions[0]
+
+      // A type that contradicts a leftover field/operator is a 422 by design.
+      expect(cond.type).toBe('merchant_contains')
+      expect(cond.field).toBeUndefined()
+      expect(cond.operator).toBeUndefined()
+    })
+
     it('should call onCancel when Cancel is clicked', () => {
       render(
         <AutoCategorizationRuleEditor
@@ -1658,6 +1763,87 @@ describe('AutoCategorizationRuleEditor', () => {
       })
     })
 
+    // #1625 final review I4: the account_type checkbox group is reached for BOTH `eq` and `neq`
+    // (a closed-set picker expresses either equally well — types.ts says so deliberately), but the
+    // caption was hard-coded "Match ANY of:". For neq the backend computes `!anyOf(equals)`
+    // (field_evaluator.go's matchText), i.e. match NONE of — so the caption told the user the
+    // exact opposite of what the rule does.
+    it('captions the account_type picker "Match NONE of" for neq and "Match ANY of" for eq', async () => {
+      const user = userEvent.setup({ delay: null })
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+          plaidPrimaries={mockPlaidPrimaries}
+        />
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /add condition/i }))
+      const typeSelect = screen.getByLabelText(/condition type/i)
+
+      await user.selectOptions(typeSelect, 'account_type:neq')
+      await waitFor(() => {
+        expect(screen.getByText('Match NONE of:')).toBeDefined()
+      })
+      expect(screen.queryByText('Match ANY of:')).toBeNull()
+
+      // Falsifiability: the same widget, the inclusive operator, the opposite caption. The
+      // inclusive choice is the LEGACY FUSED key `account_type` — there is no `account_type:eq`
+      // pair, because FUSED_PAIR_KEYS excludes pairs that already have a fused equivalent.
+      await user.selectOptions(typeSelect, 'account_type')
+      await waitFor(() => {
+        expect(screen.getByText('Match ANY of:')).toBeDefined()
+      })
+      expect(screen.queryByText('Match NONE of:')).toBeNull()
+    })
+
+    // #1625 final review B4. The lazy-load gate keyed on the LEGACY FUSED type only
+    // (`c.type === 'existing_pfc_detailed'`), but a PAIR choice writes `type: undefined` and
+    // sets {field, operator} instead. So `pfc_detailed:neq` — an option the picker offers —
+    // never enabled the fetch: `plaidDetailed` stayed [], and the primary SearchableSelect
+    // rendered DISABLED with zero options. The user could pick "PFC Detailed is not" and then
+    // had no way to say what it is not.
+    //
+    // ⚠ Asserted on the FETCH GATE, not just on the rendered select, because the empty-options
+    // symptom is downstream: a future change that populated the list some other way would make a
+    // render-only assertion pass while the gate stayed broken for the next pair choice added.
+    it('detailed_endpoint_fetched_for_the_pair_form_too_not_only_the_fused_type', async () => {
+      const user = userEvent.setup({ delay: null })
+      mockUseGetPlaidDetailedCategories.mockClear()
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+          plaidPrimaries={mockPlaidPrimaries}
+        />
+      )
+
+      expect(mockUseGetPlaidDetailedCategories).toHaveBeenCalledWith(
+        expect.objectContaining({ query: { enabled: false } })
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /add condition/i }))
+      const typeSelect = screen.getByLabelText(/condition type/i)
+      // The PAIR choice, not the fused one. Its key is `<field>:<operator>`.
+      await user.selectOptions(typeSelect, 'pfc_detailed:neq')
+
+      await waitFor(() => {
+        expect(mockUseGetPlaidDetailedCategories).toHaveBeenCalledWith(
+          expect.objectContaining({ query: { enabled: true } })
+        )
+      })
+
+      // And the consequence the user sees: the primary picker is usable rather than an empty,
+      // disabled control.
+      const primaryPicker = screen.getByRole('combobox', { name: /select pfc primary for detailed/i })
+      expect(primaryPicker.getAttribute('aria-disabled')).not.toBe('true')
+    })
+
   })
 
   // Issue #1514 (fix round 2): SearchableSelect only masks option label/sublabel text
@@ -1747,6 +1933,122 @@ describe('AutoCategorizationRuleEditor', () => {
         { value: SENTINEL_RULE_TAG, fieldDescription: 'user_tag.name in Select tag dropdown' },
       ]
       expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+    })
+  })
+
+  // #1625 Task 5: `conditionChoiceKey` can only return a key CONDITION_CHOICES actually offers,
+  // OR the raw `field:operator`/`type` for anything it doesn't recognize. Before the fix, the
+  // <select> silently fell back to its FIRST <option> ("Merchant contains") for any unmatched
+  // key — showing the user a condition their rule does not have. This simulates the exact shape
+  // that shipped `effective_merchant` unreachable: a condition using a field the frontend does
+  // not know about (i.e. the backend/API gained a capability the frontend has not caught up to
+  // yet), so it stays a valid regression guard even after Task 4 widens CONDITION_CHOICES and
+  // makes every CURRENTLY known field reachable.
+  describe('unmatched condition key (#1625 Task 5)', () => {
+    it('shows an unrecognized condition as itself, never silently as the first option', () => {
+      const ruleWithUnknownCondition: CategorizationRule = {
+        ...mockExistingRule,
+        conditions: [
+          {
+            type: 'expression',
+            field: 'not_yet_supported_field' as CategorizationRule['conditions'][number]['field'],
+            operator: 'contains',
+            value: 'x',
+          },
+        ],
+      }
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="edit"
+          rule={ruleWithUnknownCondition}
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      const typeSelect = screen.getByLabelText(/condition type/i) as HTMLSelectElement
+      // The bug: this silently reads 'merchant_contains' (the first <option>) instead.
+      expect(typeSelect.value).toBe('not_yet_supported_field:contains')
+      expect(screen.getByText(/unsupported condition/i)).toBeInTheDocument()
+    })
+  })
+
+  // #1625 review round 1: account_type and payment_channel are CLOSED enums with no backend
+  // EnumFn validation for either field (see FieldSpecs in condition_schema.go — only
+  // direction/pfc_primary/pfc_detailed get one). A bare text box lets a user type a near-miss
+  // string ("Credit Card", "ACH") that validates cleanly server-side and then never matches any
+  // real transaction — silently. getInputTypeForCondition must route account_type/payment_channel
+  // through their curated pickers for `eq`/`neq`, the same as their fused equivalents, even
+  // though the generated pair carries no `type` (only fused choices set `type`).
+  describe('closed-enum widgets for generated pairs (#1625 review round 1)', () => {
+    it('renders the account-type picker, not a bare text box, for account_type:neq', () => {
+      const ruleWithAccountTypeNeq: CategorizationRule = {
+        ...mockExistingRule,
+        conditions: [
+          { type: 'expression', field: 'account_type', operator: 'neq', value: ['depository'] },
+        ],
+      }
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="edit"
+          rule={ruleWithAccountTypeNeq}
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      // The bug: a bare text input carrying this placeholder from the generic default case.
+      expect(screen.queryByPlaceholderText('Enter value')).not.toBeInTheDocument()
+      // The real widget: one checkbox per known account type.
+      expect(screen.getByRole('checkbox', { name: /credit card/i })).toBeInTheDocument()
+    })
+
+    it('renders the payment-channel picker, not a bare text box, for payment_channel:neq', () => {
+      const ruleWithPaymentChannelNeq: CategorizationRule = {
+        ...mockExistingRule,
+        conditions: [
+          { type: 'expression', field: 'payment_channel', operator: 'neq', value: 'online' },
+        ],
+      }
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="edit"
+          rule={ruleWithPaymentChannelNeq}
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      expect(screen.queryByPlaceholderText('Enter value')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Select payment channel')).toBeInTheDocument()
+    })
+
+    it('still renders a free-text box for account_type:contains — substring match is a legitimate query a picker cannot express', () => {
+      const ruleWithAccountTypeContains: CategorizationRule = {
+        ...mockExistingRule,
+        conditions: [
+          { type: 'expression', field: 'account_type', operator: 'contains', value: 'credit' },
+        ],
+      }
+
+      render(
+        <AutoCategorizationRuleEditor
+          mode="edit"
+          rule={ruleWithAccountTypeContains}
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      expect(screen.getByPlaceholderText('Enter value')).toBeInTheDocument()
+      expect(screen.queryByRole('checkbox', { name: /credit card/i })).not.toBeInTheDocument()
     })
   })
 })

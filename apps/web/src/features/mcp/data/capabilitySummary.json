@@ -1,7 +1,7 @@
 {
-  "totalOperations": 209,
-  "allowedOperations": 140,
-  "readOperations": 95,
+  "totalOperations": 211,
+  "allowedOperations": 142,
+  "readOperations": 97,
   "writeOperations": 45,
   "excludedOperations": 69,
   "destructiveWriteOperations": 4,

@@ -1,13 +1,7 @@
 package rules
 
 import (
-	"fmt"
-	"math"
-	"strings"
-	"time"
-
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
-	"github.com/maxnussbaum/BoostedBudget/internal/matching"
 )
 
 // ConditionEvaluator evaluates a single condition against a transaction.
@@ -21,44 +15,92 @@ type ConditionRegistry struct {
 	evaluators map[domain.ConditionType]ConditionEvaluator
 }
 
-// NewConditionRegistry creates a registry with all built-in evaluators.
+// NewConditionRegistry creates a registry.
+//
+// #1625: the fourteen per-fused-type evaluator structs are GONE, not merely un-registered. Every
+// built-in condition — legacy fused or new triple — now resolves through the single field-based
+// implementation in field_evaluator.go, so "merchant contains" has exactly one meaning rather
+// than two implementations that can drift apart.
+//
+// ⚠ #1625 final review I1: this comment said the structs were "retained (they are still directly
+// unit-tested, and Register() can inject them)" while the comment 15 lines below said they "are
+// gone". Both could not be true; a later commit on this branch deleted them and falsified this
+// half. Re-derived: `grep -rn 'Evaluator struct' internal/rules/` returns nothing. Register()
+// still exists and still works — for a CUSTOM type a caller supplies, which is the only thing it
+// was ever needed for.
 func NewConditionRegistry() *ConditionRegistry {
-	r := &ConditionRegistry{
+	return &ConditionRegistry{
 		evaluators: make(map[domain.ConditionType]ConditionEvaluator),
 	}
-
-	// Register merchant evaluators
-	r.evaluators[domain.ConditionMerchantContains] = &MerchantContainsEvaluator{}
-	r.evaluators[domain.ConditionMerchantEquals] = &MerchantEqualsEvaluator{}
-	r.evaluators[domain.ConditionMerchantStartsWith] = &MerchantStartsWithEvaluator{}
-	r.evaluators[domain.ConditionMerchantEndsWith] = &MerchantEndsWithEvaluator{}
-
-	// Register amount evaluators
-	r.evaluators[domain.ConditionAmountGreaterThan] = &AmountGreaterThanEvaluator{}
-	r.evaluators[domain.ConditionAmountLessThan] = &AmountLessThanEvaluator{}
-	r.evaluators[domain.ConditionAmountEquals] = &AmountEqualsEvaluator{}
-	r.evaluators[domain.ConditionAmountRange] = &AmountRangeEvaluator{}
-
-	// Register other evaluators
-	r.evaluators[domain.ConditionPaymentChannel] = &PaymentChannelEvaluator{}
-	r.evaluators[domain.ConditionAccountID] = &AccountIDEvaluator{}
-	r.evaluators[domain.ConditionAccountType] = &AccountTypeEvaluator{}
-	r.evaluators[domain.ConditionDateRange] = &DateRangeEvaluator{}
-	r.evaluators[domain.ConditionExistingPFCPrimary] = &ExistingPFCPrimaryEvaluator{}
-	r.evaluators[domain.ConditionExistingPFCDetailed] = &ExistingPFCDetailedEvaluator{}
-
-	return r
 }
 
-// Evaluate evaluates a condition using the appropriate evaluator.
-// Returns false (no error) for unknown condition types (graceful fallback).
+// Evaluate evaluates a condition.
+//
+// #1625: dispatch is on the normalized (Field, Operator) pair. The fourteen legacy fused types
+// normalize into the same pairs, so a persisted rule and a new triple share one implementation
+// rather than two that can drift. A condition arriving un-normalized (a hand-built struct in a
+// test, say) is normalized here first — normalization is idempotent and never touches the row.
+//
+// A registered per-type evaluator still wins when one exists, so anything injected through
+// Register() for a custom type keeps working. #1625: the fourteen BUILT-IN per-type evaluators
+// that used to be registrable are gone — they duplicated evaluateField, nothing in production
+// ever registered them, and because a registered evaluator wins, registering one would have
+// silently beaten the unified path. That is the drift the rework existed to remove, and keeping
+// them left it as a latent trap.
+//
+// ⚠ #1625 final review I5: COERCION IS APPLIED BEFORE DISPATCH, not inside the fallback. It used
+// to sit only on the evaluateField call, so a registered evaluator received the RAW value while
+// the built-in path received the repaired one — the same rule meaning two different things
+// depending on whether someone had called Register(). That is the identical trap the paragraph
+// above documents for the deleted structs, one line further down.
+//
+// Returns (false, nil) for an unknown field rather than an error. Note the ORIGINAL reason no
+// longer holds: EvaluateRules used to abort a transaction's entire rule set on an error, and
+// since #1625 A8 an error is local to its own rule. This stays fail-quiet deliberately, because
+// under OR logic an error would skip the whole rule where a non-match lets the rule's other
+// conditions decide. Making junk visible is shadow-mode quarantine's job, not this function's.
 func (r *ConditionRegistry) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	evaluator, ok := r.evaluators[condition.Type]
-	if !ok {
-		// Unknown condition type - gracefully return false (no match)
-		return false, nil
+	if condition.Field == "" {
+		if err := condition.Normalize(); err != nil {
+			return false, nil
+		}
 	}
-	return evaluator.Evaluate(tx, condition)
+	condition = repairedForEvaluation(condition)
+	if evaluator, ok := r.evaluators[condition.Type]; ok && condition.Type != domain.ConditionTypeExpression {
+		return evaluator.Evaluate(tx, condition)
+	}
+	return evaluateField(tx, condition)
+}
+
+// repairedForEvaluation returns the condition the evaluator should actually read.
+//
+// #1625 Task 2: a wrong-typed value with one honest reading is repaired here rather than left to
+// match nothing. Two properties, both of which have cost this branch a defect already:
+//
+//  1. ⚠ GATED ON ValidateShape. Coercion runs ONLY on a condition the strict validator REJECTS.
+//     The first version ran it unconditionally, which silently changed rules that were never
+//     broken: textValues DROPS a non-string array member and still reports ok, so
+//     ["uber", 42] PASSES ValidateShape, is classified healthy, and is accepted by the live write
+//     path today — and coercing it to ["uber","42"] made such a rule match transactions it did
+//     not match yesterday. That is the same mistake #1625 refused to make when it added
+//     effective_merchant as a NEW field instead of repointing merchant. Every value the validator
+//     accepts now reaches the evaluator byte-identical to the stored row. (The silent drop may
+//     well be a bug; fixing it belongs at the WRITE path, in its own change.)
+//  2. READ-PATH ONLY. `condition` is a COPY — the parameter is by value and Value is replaced,
+//     not mutated in place — so the stored row and rule_execution_history.definition_snapshot are
+//     untouched. Evaluate reassigns its own local `condition` from the return value for the same
+//     reason: the repair must reach every dispatch target without ever reaching the row.
+//
+// An uncoercible value is left exactly as it was: it is quarantined and enforced in RuleMatches,
+// and rewriting it here would only change which error the evaluator reports.
+func repairedForEvaluation(condition domain.RuleCondition) domain.RuleCondition {
+	if err := condition.ValidateShape(); err == nil {
+		return condition
+	}
+	if coerced, ok := condition.CoercedValue(); ok {
+		condition.Value = coerced
+	}
+	return condition
 }
 
 // Register adds or replaces an evaluator for a condition type.
@@ -67,329 +109,8 @@ func (r *ConditionRegistry) Register(conditionType domain.ConditionType, evaluat
 }
 
 // ============================================================================
-// Merchant Evaluators
-// ============================================================================
-
-// merchantMatchFunc defines a function that checks if a merchant matches a value.
-type merchantMatchFunc func(merchant, value string) bool
-
-// evaluateMerchantCondition is a helper that evaluates merchant conditions with custom match logic.
-func evaluateMerchantCondition(tx *domain.Transaction, condition domain.RuleCondition, matchFn merchantMatchFunc) (bool, error) {
-	merchantName := getMerchantName(tx)
-	if merchantName == "" {
-		return false, nil
-	}
-
-	values := matching.ExtractStringValues(condition.Value)
-	if len(values) == 0 {
-		return false, nil
-	}
-
-	merchantLower := strings.ToLower(merchantName)
-	for _, v := range values {
-		if matchFn(merchantLower, strings.ToLower(v)) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// MerchantContainsEvaluator checks if merchant name contains a substring.
-type MerchantContainsEvaluator struct{}
-
-func (e *MerchantContainsEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	return evaluateMerchantCondition(tx, condition, strings.Contains)
-}
-
-// MerchantEqualsEvaluator checks if merchant name exactly matches.
-type MerchantEqualsEvaluator struct{}
-
-func (e *MerchantEqualsEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	return evaluateMerchantCondition(tx, condition, func(merchant, value string) bool {
-		return merchant == value
-	})
-}
-
-// MerchantStartsWithEvaluator checks if merchant name starts with prefix.
-type MerchantStartsWithEvaluator struct{}
-
-func (e *MerchantStartsWithEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	return evaluateMerchantCondition(tx, condition, strings.HasPrefix)
-}
-
-// MerchantEndsWithEvaluator checks if merchant name ends with suffix.
-type MerchantEndsWithEvaluator struct{}
-
-func (e *MerchantEndsWithEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	return evaluateMerchantCondition(tx, condition, strings.HasSuffix)
-}
-
-// ============================================================================
-// Amount Evaluators
-// ============================================================================
-
-// amountCompareFn defines a function that compares an absolute amount against a threshold.
-type amountCompareFn func(absAmount, threshold float64) bool
-
-// evaluateAmountCondition is a helper that evaluates amount conditions.
-func evaluateAmountCondition(tx *domain.Transaction, condition domain.RuleCondition, compareFn amountCompareFn) (bool, error) {
-	threshold, ok := extractFloat(condition.Value)
-	if !ok {
-		return false, fmt.Errorf("invalid amount: %v", condition.Value)
-	}
-	return compareFn(math.Abs(tx.Amount), threshold), nil
-}
-
-// AmountGreaterThanEvaluator checks if absolute amount exceeds threshold.
-type AmountGreaterThanEvaluator struct{}
-
-func (e *AmountGreaterThanEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	return evaluateAmountCondition(tx, condition, func(absAmount, threshold float64) bool {
-		return absAmount > threshold
-	})
-}
-
-// AmountLessThanEvaluator checks if absolute amount is below threshold.
-type AmountLessThanEvaluator struct{}
-
-func (e *AmountLessThanEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	return evaluateAmountCondition(tx, condition, func(absAmount, threshold float64) bool {
-		return absAmount < threshold
-	})
-}
-
-// AmountEqualsEvaluator checks if absolute amount equals value (with small epsilon).
-type AmountEqualsEvaluator struct{}
-
-func (e *AmountEqualsEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	const epsilon = 0.001
-	return evaluateAmountCondition(tx, condition, func(absAmount, threshold float64) bool {
-		return math.Abs(absAmount-threshold) < epsilon
-	})
-}
-
-// AmountRangeEvaluator checks if absolute amount is within range (inclusive).
-type AmountRangeEvaluator struct{}
-
-func (e *AmountRangeEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	rangeMap, ok := condition.Value.(map[string]interface{})
-	if !ok {
-		return false, fmt.Errorf("invalid amount range: expected map with min/max")
-	}
-
-	minVal, minOk := extractFloat(rangeMap["min"])
-	maxVal, maxOk := extractFloat(rangeMap["max"])
-	if !minOk || !maxOk {
-		return false, fmt.Errorf("invalid amount range: min and max must be numbers")
-	}
-
-	absAmount := math.Abs(tx.Amount)
-	return absAmount >= minVal && absAmount <= maxVal, nil
-}
-
-// ============================================================================
-// Other Evaluators
-// ============================================================================
-
-// PaymentChannelEvaluator checks payment channel (online, in store, etc).
-type PaymentChannelEvaluator struct{}
-
-func (e *PaymentChannelEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	if tx.PaymentChannel == nil {
-		return false, nil
-	}
-
-	values := matching.ExtractStringValues(condition.Value)
-	if len(values) == 0 {
-		return false, nil
-	}
-
-	channelLower := strings.ToLower(*tx.PaymentChannel)
-	for _, v := range values {
-		if channelLower == strings.ToLower(v) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// AccountIDEvaluator checks if transaction belongs to specific account(s).
-type AccountIDEvaluator struct{}
-
-// AccountTypeEvaluator checks if transaction's account is of a specific type.
-// Uses OR logic: matches if account type is ANY of the specified types.
-type AccountTypeEvaluator struct{}
-
-// Evaluate matches a transaction's account against the condition's value list.
-// Issue #1109 chain-awareness: prefers the stable UserAccountID (survives Plaid re-links)
-// when it is set. Falls back to raw AccountID for legacy transactions AND for rules whose
-// condition value was not backfilled by migration 000070/000072 (accounts that had a NULL
-// user_account_id at migration time were skipped, so their rules still store a raw account_id).
-// Issue #1306 P2: the startup backfill populates UserAccountID on transactions, which would
-// silently break those stale rules if we hard-returned on a non-matching UserAccountID — so
-// we fall through to the AccountID check instead of returning false early.
-// Known limitation: because accounts.id and user_accounts.id are both server-generated v4 UUIDs,
-// a rule storing account B's user_account_id could theoretically match a transaction whose
-// raw AccountID happens to equal that same UUID. Collision probability is ~1 in 2^122 per pair
-// and is not practically exploitable. Documented in TestAccountIDEvaluator_ChainAware_KnownLimitation_UUIDCollision.
-func (e *AccountIDEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	values := matching.ExtractStringValues(condition.Value)
-	if len(values) == 0 {
-		return false, nil
-	}
-
-	// Prefer the stable UserAccountID when present (post-relink, #1109).
-	if tx.UserAccountID != nil && *tx.UserAccountID != "" {
-		for _, v := range values {
-			if *tx.UserAccountID == v {
-				return true, nil
-			}
-		}
-		// #1306 P2: fall through — the rule may store a raw account_id instead of
-		// user_account_id (migration 000072 skipped accounts NULL at migration time).
-	}
-
-	// Fallback: match the raw AccountID (legacy txns and migration-skipped rules).
-	if tx.AccountID == "" {
-		return false, nil
-	}
-	for _, v := range values {
-		if tx.AccountID == v {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func (e *AccountTypeEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	// Transaction must have an associated Account with a Type
-	if tx.Account == nil || tx.Account.Type == "" {
-		return false, nil
-	}
-
-	values := matching.ExtractStringValues(condition.Value)
-	if len(values) == 0 {
-		return false, nil
-	}
-
-	// OR logic: match if account type is ANY of the specified types
-	txAccountType := strings.ToLower(tx.Account.Type)
-	for _, v := range values {
-		if strings.EqualFold(txAccountType, v) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// ExistingPFCPrimaryEvaluator checks against the Plaid PFC primary field (e.g. "FOOD_AND_DRINK").
-// Uses the effective category: override if set, else source pfc_primary.
-type ExistingPFCPrimaryEvaluator struct{}
-
-func (e *ExistingPFCPrimaryEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	effective := tx.GetEffectiveCategory()
-	if effective == nil || effective.Kind != domain.EffectiveCategoryKindPFC || effective.PFCPrimary == nil {
-		return false, nil
-	}
-
-	values := matching.ExtractStringValues(condition.Value)
-	if len(values) == 0 {
-		return false, nil
-	}
-
-	primary := strings.ToLower(*effective.PFCPrimary)
-	for _, v := range values {
-		if primary == strings.ToLower(v) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// ExistingPFCDetailedEvaluator checks against the Plaid PFC detailed field (e.g. "FOOD_AND_DRINK_FAST_FOOD").
-// Uses the effective category: override if set, else source pfc_detailed.
-type ExistingPFCDetailedEvaluator struct{}
-
-func (e *ExistingPFCDetailedEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	effective := tx.GetEffectiveCategory()
-	if effective == nil || effective.Kind != domain.EffectiveCategoryKindPFC || effective.PFCDetailed == nil {
-		return false, nil
-	}
-
-	values := matching.ExtractStringValues(condition.Value)
-	if len(values) == 0 {
-		return false, nil
-	}
-
-	detailed := strings.ToLower(*effective.PFCDetailed)
-	for _, v := range values {
-		if detailed == strings.ToLower(v) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// DateRangeEvaluator checks if transaction date falls within range.
-type DateRangeEvaluator struct{}
-
-func (e *DateRangeEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
-	rangeMap, ok := condition.Value.(map[string]interface{})
-	if !ok {
-		return false, fmt.Errorf("invalid date range: expected map with start/end")
-	}
-
-	txDate := tx.Date
-
-	startStr, startOk := rangeMap["start"].(string)
-	endStr, endOk := rangeMap["end"].(string)
-
-	// At least one bound must be specified
-	if !startOk && !endOk {
-		return false, fmt.Errorf("date range must have at least start or end")
-	}
-
-	// Parse date strings (YYYY-MM-DD format)
-	const dateLayout = "2006-01-02"
-
-	// Check start bound (inclusive)
-	if startOk {
-		startDate, err := time.Parse(dateLayout, startStr)
-		if err != nil {
-			return false, fmt.Errorf("invalid start date format: %s", startStr)
-		}
-		if txDate.Before(startDate) {
-			return false, nil
-		}
-	}
-
-	// Check end bound (inclusive - add 1 day to include the end date fully)
-	if endOk {
-		endDate, err := time.Parse(dateLayout, endStr)
-		if err != nil {
-			return false, fmt.Errorf("invalid end date format: %s", endStr)
-		}
-		// Add 1 day to make end date inclusive
-		endDate = endDate.AddDate(0, 0, 1)
-		if txDate.After(endDate) || txDate.Equal(endDate) {
-			return false, nil
-		}
-	}
-
-	return true, nil
-}
-
-// ============================================================================
 // Helper Functions
 // ============================================================================
-
-// getMerchantName safely extracts merchant name from transaction.
-func getMerchantName(tx *domain.Transaction) string {
-	if tx.MerchantName != nil {
-		return *tx.MerchantName
-	}
-	return ""
-}
 
 // Note: extractStringValues moved to internal/matching package (Issue #495)
 

@@ -383,6 +383,18 @@ jobs:
       - name: Guard — no non-portable in-place sed in the tree (#1598)
         run: bash scripts/check-portable-sed.sh
 
+      # #1625 cluster F. Hosted here rather than in a frontend job because it needs Docker (it
+      # boots a real nginx against apps/web/nginx.conf) and this is the Linux runner that has it.
+      # ⚠ #1625: this step is NOT gated on the frontend paths filter -- `e2e-test` carries
+      # `if: always() && !cancelled()` and no `needs:`, so it runs on every PR unconditionally,
+      # regardless of what changed. (An earlier version of this comment claimed the `frontend`
+      # filter covered it; verified false -- there is no such gate on this job.) It is still
+      # deliberately NOT in check-ungated-guard-steps.py's REQUIRED_UNGATED_STEPS, because that
+      # list is for guards a paths filter fails to cover -- this one runs unconditionally, which is
+      # a stronger guarantee than any filter would give it, not a hole.
+      - name: Test nginx secret-path blocking (#1625 behavioural suite)
+        run: bash scripts/__tests__/check-nginx-secret-paths.test.sh
+
       - name: Test runner-portability guard (#1598 regression suite)
         run: bash scripts/__tests__/check-runner-portability.test.sh
 

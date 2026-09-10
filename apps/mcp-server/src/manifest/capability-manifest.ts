@@ -383,6 +383,19 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // proper standing-auth model.
   read('getUserRules'),
   read('getRuleByID'),
+  // #1625: previewRule is a POST, but it is a pure READ — it persists nothing, bumps no match
+  // count, and writes no execution history (pinned by TestPreviewRule_HasNoWriteSideEffects).
+  // Classified `read` so it is reachable from readExecute and needs no confirmation: making an
+  // agent confirm a dry run would defeat the point of offering one. ⚠ It is deliberately NOT
+  // admitted by readExecute's method check, which requires a conventionally non-mutating verb —
+  // see the SECURITY POINT in tools/execute.ts. It runs through writeExecute, where a `read`
+  // class simply means no confirmation challenge.
+  // #1625 follow-up: the published condition matrix. A pure GET of static, user-independent
+  // data — and unlike previewRule it is genuinely reachable from readExecute, whose admission
+  // gate requires a non-mutating HTTP verb. This is the operation an agent should call FIRST,
+  // before guessing at field/operator combinations or the sign convention.
+  read('getConditionSchema'),
+  read('previewRule'),
   write('createRule'),
   write('updateRule', { idempotent: true }),
   // Hard `DELETE FROM categorization_rules` (repository/categorization_rule_repository.go:348).
@@ -575,7 +588,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   write('logSavingsGoalContribution'),
   write('confirmSavingsGoalContribution', { idempotent: true }),
   write('rejectSavingsGoalContribution', { idempotent: true }), // R3-7: sticky tombstone
-  // Hard `DELETE FROM savings_goal_contributions` (savings_contribution_repository.go:656) —
+  // Hard `DELETE FROM savings_goal_contributions` (savings_contribution_repository.go:1067) —
   // no tombstone, no restore path. EXCLUDED (was an allowed `write` before Task 16): a
   // contribution is a money record in the user's savings ledger, so this is the same category of
   // loss as purgeSavingsGoal. rejectSavingsGoalContribution stays available as the reversible,

@@ -6,19 +6,29 @@
  */
 
 import { useId, useState, useCallback, useMemo } from 'react'
+import { RulePreviewPanel } from './RulePreviewPanel'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import type {
   CategorizationRule,
   CreateRuleRequest,
   UpdateRuleRequest,
   RuleCondition,
   ConditionType,
+  ConditionOperator,
   ConditionLogic,
   TagBehavior,
   AmountRangeValue,
   DateRangeValue,
   RuleTargetKind,
 } from '../types'
-import { CONDITION_TYPE_LABELS } from '../types'
+import {
+  CONDITION_CHOICES,
+  conditionChoiceKey,
+  unmatchedConditionLabel,
+  type ConditionChoice,
+  type ConditionField,
+} from '../types'
 import { SearchableSelect } from '../../../shared/components/SearchableSelect'
 import type { Account } from '../../accounts/types'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
@@ -41,10 +51,37 @@ const PAYMENT_CHANNELS = [
   { value: 'other', label: 'Other' },
 ]
 
+// account_type/payment_channel are closed enums; only these operators pick ONE known value —
+// see the comment inside getInputTypeForCondition for why contains/starts_with/ends_with are excluded.
+const ENUM_PICKER_OPERATORS: ConditionOperator[] = ['eq', 'neq']
+
 /**
  * Determines the input type for a given condition type
  */
-function getInputTypeForCondition(conditionType: ConditionType): string {
+function getInputTypeForCondition(
+  conditionType: ConditionType,
+  field?: ConditionField,
+  operator?: ConditionOperator,
+): string {
+  // #1625: fields with no fused ancestor decide the input on their own. Guarded by operator
+  // where a field has more than one shape (amount/signed_amount's `between` needs the range
+  // widget, not a single number box) — everything else is one shape regardless of operator.
+  if (field === 'direction') return 'direction_select'
+  if (field === 'amount' || field === 'signed_amount') {
+    return operator === 'between' ? 'amount_range' : 'number'
+  }
+  if (field === 'account_id') return 'account_select'
+  if (field === 'pfc_primary') return 'pfc_primary_select'
+  if (field === 'pfc_detailed') return 'pfc_detailed_select'
+  if (field === 'date' && operator !== 'between') return 'date_single'
+  // account_type/payment_channel are closed enums — `eq`/`neq` pick one of the known values, so
+  // they get the curated picker regardless of which shape (fused `eq`, or a generated `neq`
+  // pair) produced them. `contains`/`starts_with`/`ends_with` are deliberately EXCLUDED: those
+  // operators mean "match a SUBSTRING", which is a legitimate query a closed-set picker cannot
+  // express (e.g. payment_channel contains "line" should match "online") — forcing a picker
+  // there would make a real capability unreachable, the same mistake Task 4 exists to fix.
+  if (field === 'account_type' && operator && ENUM_PICKER_OPERATORS.includes(operator)) return 'account_type_select'
+  if (field === 'payment_channel' && operator && ENUM_PICKER_OPERATORS.includes(operator)) return 'payment_channel_select'
   switch (conditionType) {
     case 'amount_greater_than':
     case 'amount_less_than':
@@ -73,17 +110,22 @@ function getInputTypeForCondition(conditionType: ConditionType): string {
  * Validates a single condition and returns an error message if invalid
  */
 function validateCondition(condition: RuleCondition): string | null {
-  const { type, value } = condition
+  const { type, field, operator, value } = condition
+  // #1625: amount/signed_amount pairs with no fused ancestor (field set, type='expression') need
+  // the same numeric/range checks the fused amount_* types already got — the field decides the
+  // shape now, not just the legacy type name.
+  const isRangePair = (field === 'amount' || field === 'signed_amount') && operator === 'between'
+  const isNumericPair = (field === 'amount' || field === 'signed_amount') && !isRangePair
 
   // Required value check (except for some range types that allow partial values)
-  if (type !== 'date_range' && type !== 'amount_range') {
+  if (type !== 'date_range' && type !== 'amount_range' && !isRangePair) {
     if (value === undefined || value === null || value === '') {
       return 'Value is required'
     }
   }
 
   // Amount validation
-  if (['amount_greater_than', 'amount_less_than', 'amount_equals'].includes(type)) {
+  if (['amount_greater_than', 'amount_less_than', 'amount_equals'].includes(type) || isNumericPair) {
     const numValue = typeof value === 'string' ? parseFloat(value) : value
     if (typeof numValue !== 'number' || isNaN(numValue)) {
       return 'Must be a valid number'
@@ -91,7 +133,7 @@ function validateCondition(condition: RuleCondition): string | null {
   }
 
   // Amount range validation
-  if (type === 'amount_range') {
+  if (type === 'amount_range' || isRangePair) {
     const rangeValue = value as AmountRangeValue
     if (!rangeValue || (rangeValue.min === undefined && rangeValue.max === undefined)) {
       return 'At least one value is required'
@@ -121,8 +163,11 @@ function validateCondition(condition: RuleCondition): string | null {
     }
   }
 
-  // Account type validation (must be array)
-  if (type === 'account_type') {
+  // Account type validation (must be array) — covers both the fused `eq` choice and the
+  // generated `neq` pair, since both route to the same checkbox (account_type_select) widget.
+  const usesAccountTypeArrayWidget =
+    type === 'account_type' || (field === 'account_type' && operator && ENUM_PICKER_OPERATORS.includes(operator))
+  if (usesAccountTypeArrayWidget) {
     if (!Array.isArray(value) || value.length === 0) {
       return 'At least one account type must be selected'
     }
@@ -183,6 +228,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
 
   // UI state
   const [saving, setSaving] = useState(false)
+  const trackEvent = useTrackEvent()
   const [errors, setErrors] = useState<FormErrors>({})
   const [conditionErrors, setConditionErrors] = useState<ConditionErrors>({})
   const [pfcDetailedPrimarySelections, setPfcDetailedPrimarySelections] = useState<Record<number, string>>({})
@@ -195,9 +241,15 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
   // at read time from a `data-ph-mask`'d sr-only span's TEXT (matches IncomeSourceItem.tsx).
   const removeTagLabelId = useId()
 
-  // Lazy-load detailed categories for pfc_detailed conditions or pfc-kind targets
+  // Lazy-load detailed categories for pfc_detailed conditions or pfc-kind targets.
+  //
+  // ⚠ #1625 final review B4: BOTH shapes, not just the legacy fused type. A condition is either a
+  // fused `type` or a {field, operator} pair, and selectConditionChoice writes `type: undefined`
+  // for every pair choice — so keying this on `type` alone left `pfc_detailed:neq` (an option the
+  // picker offers) with plaidDetailed = [], rendering its primary select disabled with zero
+  // options. The user could say "PFC Detailed is not" and then had no way to say what it is not.
   const needsPlaidDetailed = useMemo(
-    () => conditions.some(c => c.type === 'existing_pfc_detailed') || targetKind === 'pfc',
+    () => conditions.some(c => c.type === 'existing_pfc_detailed' || c.field === 'pfc_detailed') || targetKind === 'pfc',
     [conditions, targetKind]
   )
   const { data: plaidDetailedData } = useGetPlaidDetailedCategories({ query: { enabled: needsPlaidDetailed } })
@@ -314,9 +366,28 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
         tag_behavior: tagBehavior,
       }
       await onSave(data)
+      // #1625: counts and the fixed field/operator vocabulary ONLY — never a condition value,
+      // a rule name, a merchant or an amount. Tells us which of the new fields people reach for.
+      trackEvent(ANALYTICS_EVENTS.RULE_SAVED, {
+        condition_count: conditions.length,
+        condition_logic: conditionLogic,
+        fields_used: conditions.map((c) => c.field ?? c.type).join(','),
+        target_kind: targetKind ?? 'tags_only',
+      })
     } finally {
       setSaving(false)
     }
+  }
+
+  // Default value for a {field, operator} choice — the fused choices delegate to the existing
+  // per-type defaults so their behaviour is untouched.
+  const getDefaultValueForChoice = (choice: ConditionChoice): RuleCondition['value'] => {
+    if (choice.type) return getDefaultValueForType(choice.type)
+    if (choice.operator === 'between') return { min: 0, max: 100 } as AmountRangeValue
+    if (choice.field === 'direction') return 'outflow'
+    if (choice.field === 'amount' || choice.field === 'signed_amount') return 0
+    if (choice.field === 'account_type' && choice.operator && ENUM_PICKER_OPERATORS.includes(choice.operator)) return [] as string[]
+    return ''
   }
 
   // Get default value for a condition type
@@ -355,6 +426,21 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
         }
       })
       return newErrors
+    })
+  }
+
+  // #1625: a choice is EITHER a legacy fused type or a {field, operator} pair. Whichever is
+  // chosen, the OTHER shape is cleared — sending a `type` that contradicts the pair is a 422
+  // (ErrConditionShapeConflict), deliberately, so the server never has to guess which one meant
+  // what.
+  const selectConditionChoice = (index: number, key: string) => {
+    const choice = CONDITION_CHOICES.find((c) => c.key === key)
+    if (!choice) return
+    updateCondition(index, {
+      type: choice.type,
+      field: choice.field,
+      operator: choice.operator,
+      value: getDefaultValueForChoice(choice),
     })
   }
 
@@ -462,13 +548,27 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
 
   // Render the appropriate input for a condition based on its type
   const renderConditionValueInput = (condition: RuleCondition, index: number) => {
-    const inputType = getInputTypeForCondition(condition.type)
+    const inputType = getInputTypeForCondition(condition.type, condition.field, condition.operator)
     const inputCls = 'flex-1 min-w-[100px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
     const numberInputCls = 'max-w-[120px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
     const dateInputCls = 'max-w-[150px] px-3 py-2 text-sm border border-input rounded bg-background text-foreground transition-colors focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70'
     const selectCls = 'flex-shrink-0 px-3 py-2 text-sm border border-input rounded bg-background text-foreground cursor-pointer min-w-[150px] focus:outline-none focus:border-primary disabled:bg-muted disabled:opacity-70 disabled:cursor-not-allowed'
 
     switch (inputType) {
+      case 'direction_select':
+        return (
+          <select
+            className={selectCls}
+            aria-label="Direction"
+            value={String(condition.value ?? 'outflow')}
+            onChange={(e) => updateCondition(index, { value: e.target.value })}
+            disabled={saving}
+          >
+            {/* Plaid PFCv2: a POSITIVE amount is money leaving the account. */}
+            <option value="outflow">Money out</option>
+            <option value="inflow">Money in</option>
+          </select>
+        )
       case 'number':
         return (
           <input
@@ -517,6 +617,19 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
           </div>
         )
       }
+
+      case 'date_single':
+        return (
+          <input
+            type="date"
+            className={dateInputCls}
+            value={String(condition.value || '')}
+            onChange={(e) => updateCondition(index, { value: e.target.value })}
+            onBlur={() => validateSingleCondition(index, conditions[index])}
+            disabled={saving}
+            aria-label="Condition value"
+          />
+        )
 
       case 'date_range': {
         const dateValue = (condition.value as DateRangeValue) || { start: '', end: '' }
@@ -640,9 +753,15 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
 
       case 'account_type_select': {
         const selectedTypes = (Array.isArray(condition.value) ? condition.value : []) as string[]
+        // #1625 final review I4: `neq` is match-NONE-of, not match-any-of. The backend's matchText
+        // computes `!anyOf(equals)` for neq (field_evaluator.go), so with the checkboxes read as
+        // "ANY of" the label said the exact opposite of what the rule would do — and this widget is
+        // reached for BOTH eq and neq, by design (a closed-set picker expresses either equally
+        // well). The picker is unchanged; only the sentence describing it is operator-aware.
+        const excludes = condition.operator === 'neq'
         return (
           <div className="flex flex-wrap gap-3 p-2 bg-muted rounded flex-1 min-w-[200px]">
-            <span className="w-full text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Match ANY of:</span>
+            <span className="w-full text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">{excludes ? 'Match NONE of:' : 'Match ANY of:'}</span>
             {ACCOUNT_TYPES.map((type) => (
               <label key={type.value} className="flex items-center gap-1.5 text-[0.8125rem] text-foreground cursor-pointer whitespace-nowrap">
                 <input
@@ -785,6 +904,21 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
           <span className={errorClass}>{errors.conditions}</span>
         )}
 
+        {/* #1625: try the rule before trusting it. */}
+        <div className="mb-3">
+          <RulePreviewPanel
+            name={name}
+            conditions={conditions}
+            conditionLogic={conditionLogic}
+            targetKind={targetKind ?? undefined}
+            targetPfcPrimary={targetPfcPrimary ?? undefined}
+            targetPfcDetailed={targetPfcDetailed ?? undefined}
+            targetCustomCategoryId={targetCustomCategoryId ?? undefined}
+            targetTags={targetTags.length > 0 ? targetTags : undefined}
+            disabled={saving}
+          />
+        </div>
+
         <div className="flex flex-col gap-3 mb-3">
           {conditions.map((condition, index) => (
             <div key={index} className="flex flex-col gap-1">
@@ -796,13 +930,22 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
                   id={`condition-type-${index}`}
                   aria-label="Condition type"
                   className={selectClass}
-                  value={condition.type}
-                  onChange={(e) => updateCondition(index, { type: e.target.value as ConditionType })}
+                  value={conditionChoiceKey(condition)}
+                  onChange={(e) => selectConditionChoice(index, e.target.value)}
                   disabled={saving}
                 >
-                  {Object.entries(CONDITION_TYPE_LABELS).map(([type, label]) => (
-                    <option key={type} value={type}>
-                      {label}
+                  {/* #1625 Task 5: a key matching no known choice (an unrecognized field, or a
+                      corrupted/legacy combination) is shown as its own disabled option instead
+                      of letting the <select> silently fall back to the first real choice — the
+                      user must never be shown a condition their rule does not have. */}
+                  {!CONDITION_CHOICES.some((c) => c.key === conditionChoiceKey(condition)) && (
+                    <option value={conditionChoiceKey(condition)} disabled>
+                      {unmatchedConditionLabel(condition)}
+                    </option>
+                  )}
+                  {CONDITION_CHOICES.map((choice) => (
+                    <option key={choice.key} value={choice.key}>
+                      {choice.label}
                     </option>
                   ))}
                 </select>

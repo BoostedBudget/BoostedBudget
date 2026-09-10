@@ -560,6 +560,11 @@ func main() {
 	// Issue #138: Declare portfolio snapshot worker (daily per-user snapshot, no Plaid dependency)
 	var portfolioSnapshotWorker *jobs.PortfolioSnapshotWorker
 
+	// #1625 Task 18 fix round 1: declare rule quarantine census worker (daily full-table scan,
+	// no Plaid dependency) — constructed unconditionally alongside its siblings below, since
+	// categorizationRuleRepo has no configuration gate.
+	var ruleQuarantineCensusWorker *jobs.RuleQuarantineCensusWorker
+
 	// Issue #1123: Declare effective category refresh worker
 	var effectiveCategoryRefreshWorker *jobs.EffectiveCategoryRefreshWorker
 
@@ -795,8 +800,20 @@ func main() {
 		customCategoryService.SetAuditLogRepository(repository.NewAuditLogRepository(db))
 		// Issue #346: Categorization rules services
 		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo, customCategoryRepo)
+		// #1625: backs POST /auto-categorization/preview. Setter injection so every other
+		// NewCategorizationRuleService call site keeps compiling; preview reports itself
+		// unavailable rather than panicking when this is not wired.
+		if svc, ok := categorizationRuleService.(interface {
+			SetTransactionReader(services.PreviewTransactionReader)
+		}); ok {
+			svc.SetTransactionReader(transactionRepo)
+		}
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
 		ruleApplicationService.SetAnalytics(phClient)
+		// #1625 Task 11: lets a rule match `effective_merchant` -- the name the user sees after
+		// their own rename or merge -- during sync, not just in preview. Fail-open: unwired, such
+		// conditions fall back to the raw provider name.
+		ruleApplicationService.SetEffectiveMerchantResolver(transactionRepo)
 		// Issue #1569 Task 5 (#1572): the automation audit trail's writer. Until this line
 		// rule_execution_history had no production writer at all — it was backfilled by migration
 		// 000164 and then never written to again, so the trail was permanently empty.
@@ -1327,6 +1344,15 @@ func main() {
 		})
 		appLogger.Info("Portfolio snapshot worker created (River)")
 
+		// #1625 Task 18 fix round 1: create rule quarantine census worker (daily full-table
+		// scan feeding the distinct-rule population gauge). categorizationRuleRepo already exists
+		// in this scope (constructed above for the categorization-rule service/API).
+		ruleQuarantineCensusWorker = jobs.NewRuleQuarantineCensusWorker(jobs.RuleQuarantineCensusWorkerDeps{
+			RuleRepo: categorizationRuleRepo,
+			Logger:   appLogger,
+		})
+		appLogger.Info("Rule quarantine census worker created (River)")
+
 		// Issue #1123: Create effective category refresh worker (no external dependencies)
 		effectiveCategoryRefreshWorker = jobs.NewEffectiveCategoryRefreshWorker(jobs.EffectiveCategoryRefreshWorkerDeps{
 			TransactionRepo: transactionRepo,
@@ -1775,6 +1801,7 @@ func main() {
 				savingsStatsWorker:                  savingsStatsWorker,
 				portfolioSnapshotWorker:             portfolioSnapshotWorker,
 				balanceSnapshotDispatchWorker:       balanceSnapshotDispatchWorker,
+				ruleQuarantineCensusWorker:          ruleQuarantineCensusWorker,
 				plaidOrphanRetryWorker:              plaidOrphanRetryWorker,
 			}, appLogger)
 
@@ -1898,6 +1925,10 @@ func main() {
 			if portfolioSnapshotWorker != nil {
 				river.AddWorker(riverWorkers, portfolioSnapshotWorker)
 				appLogger.Info("Portfolio snapshot worker registered with River")
+			}
+			if ruleQuarantineCensusWorker != nil {
+				river.AddWorker(riverWorkers, ruleQuarantineCensusWorker)
+				appLogger.Info("Rule quarantine census worker registered with River")
 			}
 			if effectiveCategoryRefreshWorker != nil {
 				river.AddWorker(riverWorkers, effectiveCategoryRefreshWorker)

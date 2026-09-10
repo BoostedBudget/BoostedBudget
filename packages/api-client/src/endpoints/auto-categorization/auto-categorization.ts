@@ -51,10 +51,13 @@ import type {
 
 import type {
   CategorizationRule,
+  ConditionSchemaResponse,
   CreateCategorizationRuleRequest,
   ErrorModel,
   GetUserRuleExecutionsParams,
+  PreviewRuleBody,
   RuleExecutionsResponse,
+  RulePreviewResult,
   ToggleCategorizationRuleRequest,
   UpdateCategorizationRuleRequest
 } from '../../models';
@@ -266,6 +269,164 @@ export const useCreateRule = <TError = ErrorType<ErrorModel>,
         TContext
       > => {
       return useMutation(getCreateRuleMutationOptions(options), queryClient);
+    }
+    /**
+ * Returns every condition field, the operators each accepts, the value shape each operator requires, closed value sets inlined where practical, and the semantics that cannot be inferred from a type — notably that signed_amount is POSITIVE for money leaving the account. The two PFC fields (pfc_primary, pfc_detailed) have closed sets too, but each field's own notes name the endpoint that publishes it instead of duplicating ~120 values here. Derived from the same matrix the validator enforces, so it cannot drift from it.
+ * @summary Get the condition matrix
+ */
+export const getConditionSchema = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<ConditionSchemaResponse>(
+      {url: `/api/v1/auto-categorization/condition-schema`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetConditionSchemaQueryKey = () => {
+    return [
+    `/api/v1/auto-categorization/condition-schema`
+    ] as const;
+    }
+
+
+export const getGetConditionSchemaQueryOptions = <TData = Awaited<ReturnType<typeof getConditionSchema>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getConditionSchema>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetConditionSchemaQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getConditionSchema>>> = ({ signal }) => getConditionSchema(requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getConditionSchema>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetConditionSchemaQueryResult = NonNullable<Awaited<ReturnType<typeof getConditionSchema>>>
+export type GetConditionSchemaQueryError = ErrorType<ErrorModel>
+
+
+export function useGetConditionSchema<TData = Awaited<ReturnType<typeof getConditionSchema>>, TError = ErrorType<ErrorModel>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getConditionSchema>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getConditionSchema>>,
+          TError,
+          Awaited<ReturnType<typeof getConditionSchema>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetConditionSchema<TData = Awaited<ReturnType<typeof getConditionSchema>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getConditionSchema>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getConditionSchema>>,
+          TError,
+          Awaited<ReturnType<typeof getConditionSchema>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetConditionSchema<TData = Awaited<ReturnType<typeof getConditionSchema>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getConditionSchema>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get the condition matrix
+ */
+
+export function useGetConditionSchema<TData = Awaited<ReturnType<typeof getConditionSchema>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getConditionSchema>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetConditionSchemaQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Reports which of your recent transactions a candidate rule would match, WITHOUT saving the rule. Condition, shape and target-category validation is identical to createRule. Two things preview cannot check, because they depend on state at the moment of the write: rule names must be unique per user, and the target category must still exist when you save.
+ * @summary Preview a categorization rule
+ */
+export const previewRule = (
+    previewRuleBody: BodyType<NonReadonly<PreviewRuleBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RulePreviewResult>(
+      {url: `/api/v1/auto-categorization/preview`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: previewRuleBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getPreviewRuleMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof previewRule>>, TError,{data: BodyType<NonReadonly<PreviewRuleBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof previewRule>>, TError,{data: BodyType<NonReadonly<PreviewRuleBody>>}, TContext> => {
+
+const mutationKey = ['previewRule'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof previewRule>>, {data: BodyType<NonReadonly<PreviewRuleBody>>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  previewRule(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PreviewRuleMutationResult = NonNullable<Awaited<ReturnType<typeof previewRule>>>
+    export type PreviewRuleMutationBody = BodyType<NonReadonly<PreviewRuleBody>>
+    export type PreviewRuleMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Preview a categorization rule
+ */
+export const usePreviewRule = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof previewRule>>, TError,{data: BodyType<NonReadonly<PreviewRuleBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof previewRule>>,
+        TError,
+        {data: BodyType<NonReadonly<PreviewRuleBody>>},
+        TContext
+      > => {
+      return useMutation(getPreviewRuleMutationOptions(options), queryClient);
     }
     /**
  * Removes a categorization rule.

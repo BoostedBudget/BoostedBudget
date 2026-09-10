@@ -1,4 +1,4 @@
--- Rollback for 000190. Restores migration 000016's wording of the source column comment.
+-- Rollback for 000193. Restores migration 000016's wording of the source column comment.
 --
 -- The conditional DROP in the up migration has no inverse and needs none: it destroys only an
 -- INVALID index left behind by an interrupted CONCURRENTLY build, which is state no rollback should

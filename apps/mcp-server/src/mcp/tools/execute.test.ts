@@ -629,3 +629,172 @@ describe('batch aggregate result bound (#1612)', () => {
     expect(auditEvents[0]?.result).toBe('denied')
   })
 })
+
+
+// ── Issue #1625 B + E: 204 rendering, and multi-write batch confirmation ──────────────────
+import { createHostProxy } from '../../sandbox/host-proxy'
+import type { FetchMutator } from '../../client/fetch-mutator'
+
+describe('#1625 B: a 204 No Content response is a SUCCESS, not "unexpected error"', () => {
+  // fetch-mutator maps 204 -> undefined. renderResult() then did
+  // `JSON.stringify(result).length`, and JSON.stringify(undefined) returns the VALUE undefined,
+  // not a string — so .length threw a TypeError that is not a HostProxyError, landing in the
+  // generic "unexpected error" branch which ALSO break()s the rest of the batch. The delete had
+  // already committed server-side, so the agent was told a successful write had failed.
+  it('reports success when the proxy resolves undefined (HTTP 204)', async () => {
+    const proxy = { invoke: mock(() => Promise.resolve(undefined)) }
+    const handler = buildWriteExecuteHandler(proxy, [
+      { operationId: 'deleteRule', path: '/api/v1/auto-categorization/{id}', method: 'DELETE' },
+    ])
+
+    const { toolResult, auditEvents } = await handler({
+      calls: [{ operationId: 'deleteRule', pathParams: { id: 'r-1' } }],
+      confirmationToken: 'tok',
+    })
+
+    const text = toolResult.content[0]!.text
+    expect(text).not.toContain('unexpected error')
+    expect(text).toContain('✅ deleteRule')
+    expect(auditEvents[0]).toMatchObject({ operationId: 'deleteRule', result: 'success' })
+  })
+
+  it('does not abort the rest of the batch after a 204', async () => {
+    let n = 0
+    const proxy = { invoke: mock(() => Promise.resolve(n++ === 0 ? undefined : { ok: true })) }
+    const handler = buildWriteExecuteHandler(proxy, [
+      { operationId: 'deleteRule', path: '/api/v1/auto-categorization/{id}', method: 'DELETE' },
+      { operationId: 'getTransactions', path: '/api/v1/transactions', method: 'GET' },
+    ])
+
+    const { auditEvents } = await handler({
+      calls: [
+        { operationId: 'deleteRule', pathParams: { id: 'r-1' } },
+        { operationId: 'getTransactions' },
+      ],
+      confirmationToken: 'tok',
+    })
+
+    expect(auditEvents).toHaveLength(2)
+    expect(auditEvents[1]).toMatchObject({ operationId: 'getTransactions', result: 'success' })
+  })
+})
+
+describe('#1625 E: a batch of multiple confirmation-gated writes must be completable', () => {
+  const SPEC: ExecuteSpecEntry[] = [
+    { operationId: 'createBudget', path: '/api/v1/budgets', method: 'POST' },
+    { operationId: 'addBudgetCategory', path: '/api/v1/budgets/{id}/categories', method: 'POST' },
+  ]
+  const CALLS: ExecuteCall[] = [
+    { operationId: 'createBudget', body: { name: 'Monthly' } },
+    { operationId: 'addBudgetCategory', pathParams: { id: 'b-1' }, body: { name: 'Mortgage' } },
+  ]
+
+  function realProxyHandler() {
+    const mutator = mock(() => Promise.resolve({ id: 'b-1' })) as unknown as FetchMutator
+    const proxy = createHostProxy({ mutator, userId: 'u1', grantId: 'g1' })
+    return { handler: buildWriteExecuteHandler(proxy, SPEC), mutator }
+  }
+  const tokenFrom = (t: string) => t.match(/confirmationToken: "([^"]+)"/)?.[1]
+  const callCount = (m: FetchMutator) => (m as unknown as { mock: { calls: unknown[] } }).mock.calls.length
+
+  it('executes NOTHING on the challenge round', async () => {
+    const { handler, mutator } = realProxyHandler()
+    const r1 = await handler({ calls: CALLS })
+    expect(tokenFrom(r1.toolResult.content[0]!.text)).toBeDefined()
+    expect(callCount(mutator)).toBe(0)
+  })
+
+  it('completes BOTH writes when the identical batch is replayed with the token', async () => {
+    const { handler, mutator } = realProxyHandler()
+    const r1 = await handler({ calls: CALLS })
+    const token = tokenFrom(r1.toolResult.content[0]!.text)!
+
+    const r2 = await handler({ calls: CALLS, confirmationToken: token })
+    const text = r2.toolResult.content[0]!.text
+
+    expect(text).not.toContain('invalid_confirmation')
+    expect(text).toContain('✅ createBudget')
+    expect(text).toContain('✅ addBudgetCategory')
+    expect(callCount(mutator)).toBe(2)
+    expect(r2.auditEvents.every((e) => e.result === 'success')).toBe(true)
+  })
+
+  it('refuses a replay whose calls differ from the confirmed batch', async () => {
+    const { handler, mutator } = realProxyHandler()
+    const r1 = await handler({ calls: CALLS })
+    const token = tokenFrom(r1.toolResult.content[0]!.text)!
+
+    const tampered: ExecuteCall[] = [
+      CALLS[0]!,
+      { operationId: 'addBudgetCategory', pathParams: { id: 'b-1' }, body: { name: 'SOMETHING ELSE' } },
+    ]
+    const r2 = await handler({ calls: tampered, confirmationToken: token })
+
+    expect(r2.toolResult.content[0]!.text).toContain('invalid_confirmation')
+    expect(callCount(mutator)).toBe(0)
+  })
+
+  it('cannot replay the same batch token twice', async () => {
+    const { handler, mutator } = realProxyHandler()
+    const r1 = await handler({ calls: CALLS })
+    const token = tokenFrom(r1.toolResult.content[0]!.text)!
+
+    await handler({ calls: CALLS, confirmationToken: token })
+    const again = await handler({ calls: CALLS, confirmationToken: token })
+
+    expect(again.toolResult.content[0]!.text).toContain('invalid_confirmation')
+    expect(callCount(mutator)).toBe(2) // still only the one successful round
+  })
+
+  it('names args-mismatch as a cause so the agent can self-correct', async () => {
+    const { handler } = realProxyHandler()
+    const r = await handler({ calls: CALLS, confirmationToken: 'not-a-real-token' })
+    expect(r.toolResult.content[0]!.text.toLowerCase()).toContain('identical')
+  })
+
+  it('tells the agent the identical calls payload must be resent', async () => {
+    const { handler } = realProxyHandler()
+    const r1 = await handler({ calls: CALLS })
+    expect(r1.toolResult.content[0]!.text.toLowerCase()).toContain('identical')
+  })
+})
+
+// #1625 Task 4: writeExecute must hand confirmBatch the WHOLE batch, not its gated subset.
+//
+// The challenge text and the invalid-token message both instruct the agent to replay "the
+// IDENTICAL calls array", but execute.ts filtered to gated calls before handing them over and
+// hashBatch hashed only those. An ungated read could therefore be swapped, added or dropped
+// between challenge and confirmation while the token still validated -- the enforced invariant
+// was narrower than the promised one. Reads are non-destructive so the practical risk is low;
+// the mismatch between promise and guarantee is the defect.
+describe('batch confirmation covers the whole batch (#1625)', () => {
+  const GATED = 'createMCPRecipe'
+  const READ = 'listMCPRecipes'
+
+  function proxyCapturingConfirmBatch() {
+    const seen: Array<Array<{ operationId: string }>> = []
+    return {
+      seen,
+      invoke: mock(() => Promise.resolve({})),
+      confirmBatch: mock((calls: Array<{ operationId: string }>) => {
+        seen.push(calls)
+        return Promise.resolve({ needsConfirmation: true, token: 'tok', count: 1 })
+      }),
+    }
+  }
+
+  it('passes ungated reads to confirmBatch, so they are inside the hashed batch', async () => {
+    const proxy = proxyCapturingConfirmBatch()
+    const handler = buildWriteExecuteHandler(proxy)
+
+    await handler({
+      calls: [
+        { operationId: READ, params: {} },
+        { operationId: GATED, params: {} },
+      ] as ExecuteCall[],
+    })
+
+    expect(proxy.seen).toHaveLength(1)
+    expect(proxy.seen[0]!.map((c) => c.operationId)).toEqual([READ, GATED])
+  })
+})

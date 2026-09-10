@@ -1,6 +1,6 @@
 -- #1626 Phase 3, Defect 3 (Task G) — the partial UNIQUE index that makes the periodic
 -- balance-snapshot gap-filler idempotent within a UTC day. Second half of a two-file addition; see
--- 000190 for the column comment and for why the conditional drop of an invalid leftover cannot
+-- 000193 for the column comment and for why the conditional drop of an invalid leftover cannot
 -- share this file.
 --
 -- WHAT IT CONSTRAINS. One row per (account_id, UTC calendar day) for source = 'daily_capture', and
@@ -47,7 +47,7 @@
 --
 -- ⚠ "SOLE STATEMENT" IS ABOUT golang-migrate. It sends a file as one simple query, which Postgres
 -- wraps in an implicit transaction only when the file holds MORE than one statement — that is why a
--- lone CONCURRENTLY works in production, and why 000190's DO block had to go in its own file. This
+-- lone CONCURRENTLY works in production, and why 000193's DO block had to go in its own file. This
 -- repo ALSO replays every migration from 000149 to HEAD through scripts/test-migrations.sh, which
 -- decides per file whether to pass `psql -1` (replay_file_runs_outside_a_transaction); a
 -- CONCURRENTLY file is replayed without it, so this migration inherits that support rather than
@@ -62,12 +62,14 @@
 -- add another functional index on this column, it belongs on that list.
 --
 -- ⚠ THE RESIDUAL: if THIS build is interrupted it leaves an INVALID index (inherent to
--- CONCURRENTLY; no migration can prevent it) and golang-migrate marks the database DIRTY at 191. It
+-- CONCURRENTLY; no migration can prevent it) and golang-migrate marks the database DIRTY at 194. It
 -- does NOT self-heal — docker-entrypoint.sh only retries `migrate up`, which refuses to run while
 -- dirty, so the container fails to start rather than continuing on a half-built index. The repair
--- is `migrate force 189` then `migrate up`, so that 000190's conditional drop runs BEFORE this file
--- rebuilds. Forcing to 190 instead would re-run only this file, whose IF NOT EXISTS matches on the
--- NAME and would leave the invalid index in place reporting success.
+-- forces to the version immediately BEFORE this pair — the pair is 000193/000194, so that is 192 —
+-- and then runs up, so that 000193's conditional drop of an invalid leftover runs BEFORE this file
+-- rebuilds: `migrate force 192` then `migrate up`. Forcing to 193 instead would re-run only this
+-- file, whose IF NOT EXISTS matches on the NAME and not on validity, so the build would report
+-- success and leave the invalid index in place.
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_balance_snapshots_daily_capture
     ON balance_snapshots (account_id, ((snapshot_at AT TIME ZONE 'UTC')::date))
     WHERE source = 'daily_capture';

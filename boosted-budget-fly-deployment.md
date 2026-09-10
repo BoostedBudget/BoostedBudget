@@ -1565,7 +1565,7 @@ Configuration" above: poolers reject the session-level parameters migrations set
 
 ```bash
 test -n "$MIGRATION_DATABASE_URL"  # must be the direct (non "-pooler") Neon endpoint
-migrate -path backend/migrations -database "$MIGRATION_DATABASE_URL" force 189
+migrate -path backend/migrations -database "$MIGRATION_DATABASE_URL" force 192
 migrate -path backend/migrations -database "$MIGRATION_DATABASE_URL" up
 ```
 
@@ -1582,19 +1582,23 @@ fly ssh console --app boostedbudget-api   # or boostedbudget-staging-api
 # Prefer MIGRATION_DATABASE_URL if the secret is set; otherwise derive the direct endpoint
 # from DATABASE_URL the same way docker-entrypoint.sh does (strip "-pooler" from the host):
 MIGRATION_URL="${MIGRATION_DATABASE_URL:-$(echo "$DATABASE_URL" | sed 's/\(@[^/]*\)-pooler\./\1./')}"
-migrate -path /app/migrations -database "$MIGRATION_URL" force 189
+migrate -path /app/migrations -database "$MIGRATION_URL" force 192
 migrate -path /app/migrations -database "$MIGRATION_URL" up
 ```
 
-⚠ **Force to 189, not 190.** Migration `000190` is the step that conditionally drops an
-`indisvalid = false` leftover; forcing to 190 skips that drop and leaves the invalid index in
-place **while reporting success**. `000191` then re-creates nothing and the unique constraint
-silently does not exist.
+⚠ **Force to 192, not 193 — and derive that number, don't memorise it.** The index is built by a
+PAIR of migrations: the first (`000193`) conditionally drops an `indisvalid = false` leftover, the
+second (`000194`) does the `CREATE UNIQUE INDEX CONCURRENTLY`. The repair has to make `migrate up`
+replay **both**, so it must force to the version immediately **before the pair** — that is `192`
+today, because the pair is `000193`/`000194`. Forcing to `193` replays only `000194`, whose
+`IF NOT EXISTS` matches on the index NAME and not on its validity: the build reports success, the
+invalid index stays, and the unique constraint silently does not exist. If this pair is ever
+renumbered again, recompute the number from that principle rather than bumping it by one.
 
 ### Verify, because the version number is not evidence
 
-A `schema_migrations` row saying `191` with `dirty = false` does **not** prove the index exists —
-this was observed for real on a scratch database that had been *forced* to 191 without the
+A `schema_migrations` row saying `194` with `dirty = false` does **not** prove the index exists —
+this was observed for real on a scratch database that had been *forced* to 194 without the
 migration executing. Check the index itself:
 
 ```sql

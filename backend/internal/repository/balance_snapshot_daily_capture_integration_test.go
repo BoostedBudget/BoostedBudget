@@ -17,7 +17,7 @@ package repository
 //     tolerance whatsoever — it is testing the mock, not the scan. This exact failure mode was found
 //     systemically on this branch. TestDailyCapture_Integration_NullCurrentBalanceSurvivesTheRoundTrip
 //     below is the test that would have lied.
-//  2. CreateDailyCapture's whole behaviour IS the partial unique index (migration 000191) and
+//  2. CreateDailyCapture's whole behaviour IS the partial unique index (migration 000194) and
 //     Postgres's ON CONFLICT arbiter inference against it. A mock cannot have an index, so a mock
 //     cannot distinguish "idempotent" from "inserts twice", and it cannot tell us that the index's
 //     predicate scopes the constraint to daily_capture rows only — which is the property that keeps

@@ -19,7 +19,7 @@ DROP INDEX IF EXISTS idx_balance_snapshots_user_at;
 DROP INDEX IF EXISTS idx_balance_snapshots_date_trunc;
 DROP INDEX IF EXISTS idx_balance_snapshots_account_at;
 -- ⚠ #1626 Phase 3 Task G: this one was NOT created by 000017 and is dropped here anyway, which is a
--- forward reference from an old rollback to a newer migration (000191) and deserves an explanation.
+-- forward reference from an old rollback to a newer migration (000194) and deserves an explanation.
 --
 -- Step 3 below retypes snapshot_at from TIMESTAMPTZ to DATE, and Postgres REBUILDS every index on
 -- that column as part of the ALTER. uq_balance_snapshots_daily_capture is a functional index on
@@ -32,11 +32,11 @@ DROP INDEX IF EXISTS idx_balance_snapshots_account_at;
 --
 -- and this whole rollback aborts on a completely opaque error about an index it never mentions.
 --
--- A `down -all` would have dropped that index first (000191's own down does), so this only bites a
+-- A `down -all` would have dropped that index first (000194's own down does), so this only bites a
 -- rollback of 000017 in ISOLATION — which is exactly what
 -- TestDownMigrationGuards_RefuseWithRowsProceedWhenEmpty_Integration replays, and which is also what
 -- an operator does when they want to undo one migration. IF EXISTS makes it a clean no-op on any
--- database that predates 000191. If a future migration adds another functional index on this
+-- database that predates 000194. If a future migration adds another functional index on this
 -- column, it belongs on this list too.
 DROP INDEX IF EXISTS uq_balance_snapshots_daily_capture;
 

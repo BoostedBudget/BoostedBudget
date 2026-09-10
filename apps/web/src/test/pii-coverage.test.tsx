@@ -68,6 +68,8 @@ import {
   mockUseGetUserRules,
   mockUseGetUserRuleExecutions,
   mockRefetchUserRuleExecutions,
+  mockPreviewRuleMutateAsync,
+  mockUsePreviewRule,
 } from '@/test/mocks/auto-categorization-api'
 import {
   mockUseGetBudgets,
@@ -203,6 +205,12 @@ const { HealthDashboardPage } = await import('@/features/admin/components/Health
 // --- Round 17 (#1514): AutoCategorizationRuleEditor target-tags + global chrome (name/email) ---
 const { AutoCategorizationRuleEditor } = await import(
   '@/features/auto-categorization/components/AutoCategorizationRuleEditor'
+)
+// --- #1625: the rule dry-run panel. Every match row it renders is a raw transaction — merchant,
+// description, amount, current category — so it belongs in the central sweep, not only in its own
+// unit test. Membership here is not derivable; a new surface joins only because someone adds it.
+const { RulePreviewPanel } = await import(
+  '@/features/auto-categorization/components/RulePreviewPanel'
 )
 const { MobileNav } = await import('@/components/layout/MobileNav')
 const { UserDropdown } = await import('@/components/layout/UserDropdown')
@@ -2626,6 +2634,55 @@ describe('PII coverage — Round 16: HealthDashboardPage', () => {
 // rounds because none of them was imported into this gate. This is the per-call-site
 // stopgap; issue #1521 tracks the structural fix (a lint rule / component-level default) so
 // this class of gap stops depending on someone remembering to add an import here. ---
+
+describe('PII coverage — #1625: RulePreviewPanel dry-run results', () => {
+  beforeEach(() => {
+    cleanup()
+    mockPreviewRuleMutateAsync.mockClear()
+    mockUsePreviewRule.mockReturnValue({
+      mutateAsync: mockPreviewRuleMutateAsync,
+      isPending: false,
+      error: null,
+    } as never)
+  })
+
+  // The panel renders RAW transactions — the very rows the rule would touch. That is as
+  // sensitive as the transactions table itself, so it is swept centrally rather than trusted
+  // to its own unit test.
+  test('preview match rows never leak transaction data into an unmasked node or attribute', async () => {
+    mockPreviewRuleMutateAsync.mockResolvedValueOnce({
+      scanned_count: 200,
+      match_count: 1,
+      matches: [
+        {
+          transaction_id: 'tx-pii-1625',
+          date: '2026-09-01T00:00:00Z',
+          name: SENTINEL_DESC,
+          merchant_name: SENTINEL_MERCHANT,
+          amount: 1234.56,
+          current_category: SENTINEL_CATEGORY_NAME,
+        },
+      ],
+    } as never)
+
+    render(
+      <RulePreviewPanel
+        name="Sentinel preview rule"
+        conditions={[{ type: 'expression', field: 'name', operator: 'contains', value: 'x' }]}
+        conditionLogic="AND"
+      />,
+      { wrapper: createWrapper() },
+    )
+    fireEvent.click(screen.getByRole('button', { name: /preview matches/i }))
+
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_MERCHANT, fieldDescription: 'rule_preview.matches[].merchant_name (#1625)' },
+      { value: SENTINEL_CATEGORY_NAME, fieldDescription: 'rule_preview.matches[].current_category (#1625)' },
+    ]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
 
 describe('PII coverage — Round 17: AutoCategorizationRuleEditor target tags', () => {
   beforeEach(() => {

@@ -27,12 +27,29 @@ bun-debug.log*
 Thumbs.db
 
 # Environment files (should use runtime injection)
-.env
-.env.local
-.env.*.local
-**/.env
-**/.env.local
-**/.env.*.local
+#
+# The patterns below were enumerated one-by-one and so covered only the env files that existed
+# when they were written. apps/web/Dockerfile does `COPY apps/web/ ./apps/web/`, so any env file
+# NOT listed here lands in the builder layer — and apps/web/.env.e2e holds CLERK_SECRET_KEY,
+# TEST_CLERK_PASSWORD and ENCRYPTION_KEY. It never reaches the final image (only dist is copied
+# out), but a pushed or cached builder layer would carry it.
+#
+# `.env*` is a wildcard on purpose: the next .env.<something> a developer creates is covered
+# without anyone remembering to come back here. The .example templates are re-admitted below
+# because they are committed, contain only placeholders, and some builds read them.
+.env*
+**/.env*
+!.env*.example
+!**/.env*.example
+
+# Local TLS material. `apps/web/.gitignore` ignores *.pem, but only under apps/web — a cert
+# generated at the repo root or in backend/ would otherwise reach a build context.
+*.pem
+**/*.pem
+*.key
+**/*.key
+*.p12
+**/*.p12
 
 # Testing artifacts
 **/coverage/

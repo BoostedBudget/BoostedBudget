@@ -23,10 +23,25 @@ build/
 .DS_Store
 Thumbs.db
 
-# Environment
-.env
-.env.local
-.env.*.local
+# Environment (#1625 cluster F)
+#
+# These three were enumerated one-by-one and so covered only what existed when they were written:
+# .env.production, .env.staging and .env.e2e all slipped through, and .env.e2e holds
+# CLERK_SECRET_KEY, TEST_CLERK_PASSWORD and ENCRYPTION_KEY. Wildcarded so the next one is covered
+# without anyone remembering to come back here; .example templates are re-admitted because they
+# are committed and hold only placeholders.
+.env*
+**/.env*
+!.env*.example
+!**/.env*.example
+
+# Local TLS / key material.
+*.pem
+**/*.pem
+*.key
+**/*.key
+*.p12
+**/*.p12
 
 # Testing
 coverage/

@@ -29,6 +29,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -275,6 +276,52 @@ type downGuardCase struct {
 	// actually sees on a genuine `down -all`, rather than a schema no real rollback order
 	// produces.
 	beforeProceed func(t *testing.T, ctx context.Context, tx pgx.Tx)
+	// clearRefusingState, when set, REPLACES the `DELETE FROM <table>` loop in the
+	// "proceeds when empty" half. The four #1625 lifecycle-column cases need it: their guards
+	// refuse on a PREDICATE over a table the rest of the schema depends on (accounts,
+	// transactions, savings_goals and friends, custom_categories), not on the table being
+	// populated at all. Emptying those outright fails on unrelated FK dependents and would
+	// anyway test a state no rollback ever sees; clearing the predicate is the state the guard
+	// is actually about. tables stays populated for the refusal message.
+	clearRefusingState func(t *testing.T, ctx context.Context, tx pgx.Tx)
+}
+
+// config158Tables are the four tables 000158's down migration counts tombstones in, in the order
+// its RAISE message names them.
+var config158Tables = []string{"savings_goals", "boosts", "budgets", "budget_categories"}
+
+// clear158Tombstones clears the tombstone PREDICATE on all four of 000158's tables. It is the
+// "proceeds when empty" half for every one of the four cases: the guard refuses on deleted_at over
+// tables the rest of the schema depends on, not on those tables being populated.
+func clear158Tombstones(t *testing.T, ctx context.Context, tx pgx.Tx) {
+	t.Helper()
+	for _, table := range config158Tables {
+		_, err := tx.Exec(ctx, //nolint:gosec // fixed literals from config158Tables, never user input
+			`UPDATE `+table+` SET deleted_at = NULL, deleted_reason = NULL, deleted_by = NULL`)
+		require.NoErrorf(t, err, "clear %s tombstones", table)
+	}
+}
+
+// isolate158Tombstones makes `keep` the ONLY table that can be holding a tombstone when the case
+// executes the down migration, and asserts it starts at zero so the seeded row is the whole count.
+// Without this a stray tombstone left in a sibling table — by an earlier test in this shared
+// database, or by the fixture itself — would make all four cases refuse no matter which counts the
+// guard actually performs, which is the exact way a per-table mutant escapes detection.
+func isolate158Tombstones(t *testing.T, ctx context.Context, tx pgx.Tx, keep string) {
+	t.Helper()
+	for _, table := range config158Tables {
+		if table == keep {
+			continue
+		}
+		_, err := tx.Exec(ctx, //nolint:gosec // fixed literals from config158Tables, never user input
+			`UPDATE `+table+` SET deleted_at = NULL, deleted_reason = NULL, deleted_by = NULL`)
+		require.NoErrorf(t, err, "clear %s tombstones so only %s can explain the refusal", table, keep)
+	}
+	var n int
+	require.NoError(t, tx.QueryRow(ctx, //nolint:gosec // fixed literal from config158Tables
+		`SELECT COUNT(*) FROM `+keep+` WHERE deleted_at IS NOT NULL`).Scan(&n))
+	require.Zerof(t, n, "%s must hold no tombstone before this case seeds one, or the count this "+
+		"case asserts on is not the row it seeded", keep)
 }
 
 var downGuardCases = []downGuardCase{
@@ -457,6 +504,28 @@ var downGuardCases = []downGuardCase{
 		wantMsgContains: []string{"refusing to roll back 000164", "definition_snapshot"},
 	},
 	{
+		// #1625 final review B3. 000190's down dropped archived_at unconditionally and its own
+		// comment claimed the resulting double-count was "the pre-#1625 behaviour this reverts to,
+		// not new damage". That was FALSE: archived_at is the only surviving record that a
+		// contribution belongs to a CLOSED contributions period (000190 added a column precisely
+		// because no other signal survives), so dropping it resurrects the 100 + 100 = 200
+		// double-count for every goal that round-tripped its basis while 000190 was applied — a
+		// derived FINANCIAL figure silently becoming wrong, which is the failure class this ticket
+		// exists to remove. 000180 already refuses on this same table while deleted_at is set;
+		// this mirrors it.
+		label:  "000190_archived_contribution",
+		file:   "000190_add_contribution_archived_at.down.sql",
+		tables: []string{"savings_goal_contributions"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				INSERT INTO savings_goal_contributions (id, savings_goal_id, amount, source, occurred_on, archived_at)
+				VALUES ($1, $2, 100.00, 'manual', CURRENT_DATE, now())`, uuid.New().String(), f.savingsGoalID)
+			require.NoError(t, err, "seed an ARCHIVED savings_goal_contribution")
+		},
+		wantMsgContains: []string{"refusing to roll back 000190", "archived_at", "double-counting"},
+	},
+	{
 		label:  "000169_transaction_annotation_history",
 		file:   "000169_record_the_prior_annotation.down.sql",
 		tables: []string{"transaction_annotation_history"},
@@ -468,6 +537,163 @@ var downGuardCases = []downGuardCase{
 			require.NoError(t, err, "seed transaction_annotation_history")
 		},
 		wantMsgContains: []string{"refusing to roll back 000169", "transaction_annotation_history"},
+	},
+	// The four entries below are #1625. Each was a CHECKED EXCEPTION in
+	// down_migration_destruction_discovery_test.go: a down migration dropping a lifecycle column
+	// with nothing but prose standing in for a control. What promoted them from "recorded" to
+	// "guarded" was not a rereading of the SQL — the whole point of this ticket is that rereading
+	// SQL produced confidently false answers twice — but a real sequential `migrate down` against
+	// a scratch database holding the exact rows each rationale is about. That run reached and
+	// completed all four downs, so the loss each header describes is REACHABLE, not merely
+	// arguable. See the header of each .down.sql for the command and its recorded output.
+	{
+		label:  "000154_accounts_removed_reason",
+		file:   "000154_add_accounts_removed_reason.down.sql",
+		tables: []string{"accounts"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				UPDATE accounts SET status = 'removed', removed_at = now(), removed_reason = 'user_disconnect'
+				WHERE id = $1`, f.accountID)
+			require.NoError(t, err, "seed an account removed for a RECORDED cause")
+		},
+		clearRefusingState: func(t *testing.T, ctx context.Context, tx pgx.Tx) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `UPDATE accounts SET removed_reason = NULL`)
+			require.NoError(t, err, "clear every recorded removal cause")
+		},
+		wantMsgContains: []string{"refusing to roll back 000154", "accounts", "removed_reason"},
+	},
+	{
+		label:  "000156_transaction_tombstones",
+		file:   "000156_add_transactions_tombstone.down.sql",
+		tables: []string{"transactions"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				UPDATE transactions
+				SET deleted_at = now(), deleted_reason = 'provider_removed_posted', deleted_by = 'system'
+				WHERE id = $1`, f.transactionID)
+			require.NoError(t, err, "seed a TOMBSTONED transaction")
+		},
+		clearRefusingState: func(t *testing.T, ctx context.Context, tx pgx.Tx) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				UPDATE transactions SET deleted_at = NULL, deleted_reason = NULL, deleted_by = NULL`)
+			require.NoError(t, err, "clear every transaction tombstone")
+		},
+		wantMsgContains: []string{"refusing to roll back 000156", "transactions", "deleted_at"},
+	},
+	// ── 000158 drives FOUR tables, so it gets FOUR cases: one tombstone, in one table, per case. ──
+	//
+	// ⚠ WHY NOT ONE CASE SEEDING ALL FOUR, which is what shipped and what this replaces. 000158's
+	// guard is a SUM of four independent counts. A case that seeds a tombstone in every table
+	// refuses even when the DO block counts only ONE of them, so it cannot tell a complete guard
+	// from a quarter of one. Concretely: with the single savings_goals-only case that stood here,
+	// deleting n_cats from 000158's down left this whole package GREEN, while a real
+	// `migrate goto 157` against a database holding a budget_categories tombstone completed and
+	// resurrected it.
+	//
+	// ⚠ WHAT WAS MUTATION-VERIFIED, AND A RETRACTION. Commit d518885a's message said
+	// "Mutation-verified, all five ways". That is true only at WHOLE-DO-BLOCK granularity — one
+	// mutant per file, delete the block, watch that file's case go red — and it says nothing about
+	// the four counts inside 000158's block, three of which no test exercised. The per-table
+	// granularity was verified separately, and that is what the four cases below rest on: each of
+	// n_goals / n_boosts / n_budgets / n_cats was removed from 000158's down in turn — its
+	// `SELECT ... INTO`, its term in the IF sum, its RAISE argument AND its `%` slot in the format
+	// string, because dropping the argument alone raises "too few parameters specified for RAISE"
+	// and would have been an invalid mutant that fails for the wrong reason. Each time exactly the
+	// matching case went red on its own `require.Error`, reporting "An error is expected but got
+	// nil" — i.e. the mutated file ran to COMPLETION, which is what makes the mutant valid — and no
+	// case went red for a mutant that was not its own.
+	//
+	// Every case deliberately uses a name that collides with NOTHING. A colliding pair would abort
+	// on the unconditional UNIQUE (user_id, name) this file re-adds, and that pre-existing,
+	// collision-dependent abort is precisely what this guard exists to generalise — so seeding a
+	// collision would let a case pass against no guard at all.
+	{
+		label:  "000158_config_parent_tombstones/savings_goals",
+		file:   "000158_soft_delete_config_parents.down.sql",
+		tables: config158Tables,
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			isolate158Tombstones(t, ctx, tx, "savings_goals")
+			_, err := tx.Exec(ctx, `
+				UPDATE savings_goals SET deleted_at = now(), deleted_reason = 'user_deleted', deleted_by = 'user'
+				WHERE id = $1`, f.savingsGoalID)
+			require.NoError(t, err, "seed a TOMBSTONED savings_goal with a unique name")
+		},
+		clearRefusingState: clear158Tombstones,
+		wantMsgContains:    []string{"refusing to roll back 000158", "1 savings_goals", "deleted_at"},
+	},
+	{
+		label:  "000158_config_parent_tombstones/boosts",
+		file:   "000158_soft_delete_config_parents.down.sql",
+		tables: config158Tables,
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			isolate158Tombstones(t, ctx, tx, "boosts")
+			_, err := tx.Exec(ctx, `
+				INSERT INTO boosts (id, user_id, name, boost_type, enabled, deleted_at, deleted_reason, deleted_by)
+				VALUES ($1, $2, $3, 'savings_goal', true, now(), 'user_deleted', 'user')`,
+				uuid.New().String(), f.userID, "tombstoned-only-boost-"+f.userID)
+			require.NoError(t, err, "seed a TOMBSTONED boost with a unique name")
+		},
+		clearRefusingState: clear158Tombstones,
+		wantMsgContains:    []string{"refusing to roll back 000158", "1 boosts", "deleted_at"},
+	},
+	{
+		label:  "000158_config_parent_tombstones/budgets",
+		file:   "000158_soft_delete_config_parents.down.sql",
+		tables: config158Tables,
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			isolate158Tombstones(t, ctx, tx, "budgets")
+			_, err := tx.Exec(ctx, `
+				UPDATE budgets SET deleted_at = now(), deleted_reason = 'user_deleted', deleted_by = 'user'
+				WHERE id = $1`, f.budgetID)
+			require.NoError(t, err, "seed a TOMBSTONED budget with a unique name")
+		},
+		clearRefusingState: clear158Tombstones,
+		wantMsgContains:    []string{"refusing to roll back 000158", "1 budgets", "deleted_at"},
+	},
+	{
+		label:  "000158_config_parent_tombstones/budget_categories",
+		file:   "000158_soft_delete_config_parents.down.sql",
+		tables: config158Tables,
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			isolate158Tombstones(t, ctx, tx, "budget_categories")
+			// The table the shipped single case never touched, and the one whose mutant a real
+			// `migrate goto 157` proved reachable: the row survives, deleted_at does not.
+			_, err := tx.Exec(ctx, `
+				UPDATE budget_categories SET deleted_at = now(), deleted_reason = 'user_deleted', deleted_by = 'user'
+				WHERE id = $1`, f.budgetCategoryID)
+			require.NoError(t, err, "seed a TOMBSTONED budget_category")
+		},
+		clearRefusingState: clear158Tombstones,
+		wantMsgContains:    []string{"refusing to roll back 000158", "1 budget_categories", "deleted_at"},
+	},
+	{
+		label:  "000159_custom_category_tombstones",
+		file:   "000159_soft_delete_custom_categories.down.sql",
+		tables: []string{"custom_categories"},
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			// A name no live row shares, for the same reason as 000158's entry.
+			_, err := tx.Exec(ctx, `
+				INSERT INTO custom_categories (id, user_id, name, deleted_at, deleted_reason, deleted_by)
+				VALUES ($1, $2, $3, now(), 'user_deleted', 'user')`,
+				uuid.New().String(), f.userID, "tombstoned-only-"+f.userID)
+			require.NoError(t, err, "seed a TOMBSTONED custom_category with a unique name")
+		},
+		clearRefusingState: func(t *testing.T, ctx context.Context, tx pgx.Tx) {
+			t.Helper()
+			_, err := tx.Exec(ctx, `
+				DELETE FROM custom_categories WHERE deleted_at IS NOT NULL`)
+			require.NoError(t, err, "remove every tombstoned custom_category")
+		},
+		wantMsgContains: []string{"refusing to roll back 000159", "custom_categories", "deleted_at"},
 	},
 }
 
@@ -504,9 +730,13 @@ func TestDownMigrationGuards_RefuseWithRowsProceedWhenEmpty_Integration(t *testi
 				_, err = tx.Exec(ctx, `SET LOCAL lock_timeout = '10s'`)
 				require.NoError(t, err)
 
-				for _, table := range tc.tables {
-					_, err = tx.Exec(ctx, `DELETE FROM `+table) //nolint:gosec // table is a fixed literal from downGuardCases, never user input
-					require.NoError(t, err, "empty %s before testing the proceed path", table)
+				if tc.clearRefusingState != nil {
+					tc.clearRefusingState(t, ctx, tx)
+				} else {
+					for _, table := range tc.tables {
+						_, err = tx.Exec(ctx, `DELETE FROM `+table) //nolint:gosec // table is a fixed literal from downGuardCases, never user input
+						require.NoError(t, err, "empty %s before testing the proceed path", table)
+					}
 				}
 
 				if tc.beforeProceed != nil {
@@ -575,5 +805,227 @@ func seedDownGuardFixture(t *testing.T, ctx context.Context, tx pgx.Tx, tag stri
 		budgetCategoryID: budgetCategoryID,
 		savingsGoalID:    savingsGoalID,
 		transactionID:    transactionID,
+	}
+}
+
+// TestDownMigration000190_RefusalIsNotTOCTOURacy_Integration is #1625 second fix wave M4.
+//
+// 000190's refusal did `SELECT COUNT(*)` in a DO block and then, as a SEPARATE statement,
+// `ALTER TABLE ... DROP COLUMN`. Nothing held the table between them. The production archive path
+// (savings_contribution_repository.ArchiveByGoal) can set archived_at inside that window: it takes
+// only ROW EXCLUSIVE, which does not conflict with the ACCESS SHARE a bare COUNT(*) takes, so it
+// commits, and the ALTER then acquires its ACCESS EXCLUSIVE and drops the marker the guard had
+// just decided did not exist. The guard reports success and the double-count it exists to prevent
+// is resurrected — the failure mode is "the refusal is silently bypassed", not "the refusal is
+// noisy", which is why a comment about narrow windows is not an answer.
+//
+// The fix is `LOCK TABLE ... IN ACCESS EXCLUSIVE MODE` inside the same transaction, BEFORE the
+// count. golang-migrate runs a migration file in one transaction, so the lock is held from before
+// the count until the ALTER.
+//
+// Asserted two independent ways, because either alone can pass against something weaker:
+//
+//  1. the guard's own backend really holds AccessExclusiveLock on the table after the DO block —
+//     a direct observation of the lock, not of its consequences;
+//  2. a SECOND connection attempting the production archive write is BLOCKED (lock_timeout)
+//     rather than committing — the consequence itself, on a real concurrent writer.
+//
+// Only the guard PREFIX is executed here (everything before the ALTER), which is the only way to
+// observe the window: running the whole file would take ACCESS EXCLUSIVE at the ALTER regardless
+// and prove nothing about the gap. The prefix is derived from the file's own bytes.
+func TestDownMigration000190_RefusalIsNotTOCTOURacy_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	down := readDownMigration(t, "000190_add_contribution_archived_at.down.sql")
+	idx := strings.Index(down, "ALTER TABLE")
+	require.Greater(t, idx, 0,
+		"000190's down no longer contains an ALTER TABLE — this test can no longer locate the "+
+			"window between the guard and the drop, so it is proving nothing")
+	guardOnly := down[:idx]
+	require.Contains(t, guardOnly, "SELECT COUNT(*)",
+		"the prefix must contain the guard's count, or the split picked the wrong statement")
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck // always rolled back
+
+	// The guard only proceeds past its RAISE when nothing is archived. Uncommitted, like every
+	// other test in this file.
+	_, err = tx.Exec(ctx, `SET LOCAL lock_timeout = '10s'`)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `DELETE FROM savings_goal_contributions`)
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, guardOnly)
+	require.NoError(t, err, "the guard must proceed on an empty table")
+
+	// (1) The lock itself.
+	var modes []string
+	rows, err := tx.Query(ctx, `
+		SELECT mode FROM pg_locks
+		WHERE relation = 'savings_goal_contributions'::regclass
+		  AND pid = pg_backend_pid()`)
+	require.NoError(t, err)
+	for rows.Next() {
+		var mode string
+		require.NoError(t, rows.Scan(&mode))
+		modes = append(modes, mode)
+	}
+	require.NoError(t, rows.Err())
+	rows.Close()
+	assert.Contains(t, modes, "AccessExclusiveLock",
+		"the guard did not lock savings_goal_contributions before counting (held: %v). Without it "+
+			"an archive can commit between the count and the DROP COLUMN, and the refusal is "+
+			"bypassed silently.", modes)
+
+	// (2) The consequence, on a genuinely separate connection. `WHERE false` touches no row, so a
+	// row-level conflict cannot explain a block: only the TABLE lock can. It is the same
+	// ROW EXCLUSIVE the production archive UPDATE takes.
+	probe, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer probe.Rollback(ctx) //nolint:errcheck // always rolled back
+	_, err = probe.Exec(ctx, `SET LOCAL lock_timeout = '750ms'`)
+	require.NoError(t, err)
+	_, err = probe.Exec(ctx, `UPDATE savings_goal_contributions SET archived_at = now() WHERE false`)
+	require.Error(t, err,
+		"a concurrent archive write was NOT blocked while 000190's guard held the table — it can "+
+			"therefore land between the count and the DROP COLUMN")
+	assert.Contains(t, err.Error(), "lock timeout",
+		"the write must fail by waiting on the guard's lock, not for some other reason: %v", err)
+}
+
+// TestDownMigration000149_AbortsBeforeItCanDropRemovedAt_Integration is #1625 second fix wave M5.
+//
+// down_migration_destruction_discovery_test.go carries 000149 as a CHECKED EXCEPTION: a down
+// migration that drops a lifecycle column (accounts.removed_at) with no `RAISE EXCEPTION` refusal.
+// Its recorded reason said dropping the column makes a removed account indistinguishable from a
+// live one, so its balance re-enters every current-state total.
+//
+// That reason was FALSE, and nothing in this repo checks that an allowlist reason is true — which
+// is why this test exists rather than a third revision of the prose. Step 2 of 000149's down
+// re-adds accounts_valid_status as CHECK (status IN ('active','replaced','expired')), and Postgres
+// validates a newly added CHECK against existing rows. So on any database holding a removed
+// account the rollback ABORTS at Step 2, and Step 3's DROP COLUMN is never reached. The hazard is
+// a hard failure partway through a `down -all` with a message that says nothing about retention —
+// not silent resurrection.
+//
+// Two assertions, because the abort alone would also be produced by an unrelated failure: the
+// error must name accounts_valid_status, and removed_at must still be there afterwards.
+func TestDownMigration000149_AbortsBeforeItCanDropRemovedAt_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	down := readDownMigration(t, "000149_add_accounts_removed_status.down.sql")
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck // always rolled back
+
+	_, _, accountID := seedDownProbeFixture(t, ctx, tx, "000149-abort")
+	_, err = tx.Exec(ctx,
+		`UPDATE accounts SET status = 'removed', removed_at = now(), removed_reason = 'user_disconnect' WHERE id = $1`,
+		accountID)
+	require.NoError(t, err, "seed a REMOVED account — the state whose loss the exception reason is about")
+
+	_, err = tx.Exec(ctx, down)
+	require.Error(t, err,
+		"000149's down completed with a removed account present. If that is now true, the checked "+
+			"exception's re-derived reason is wrong again and the column really is being dropped.")
+	assert.Contains(t, err.Error(), "accounts_valid_status",
+		"the rollback must abort on the narrowed status CHECK (Step 2), which is what makes Step "+
+			"3's DROP COLUMN unreachable: %v", err)
+
+	// The transaction is aborted, so the column check needs its own.
+	probe, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer probe.Rollback(ctx) //nolint:errcheck // always rolled back
+	var exists bool
+	require.NoError(t, probe.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = 'accounts' AND column_name = 'removed_at')
+	`).Scan(&exists))
+	assert.True(t, exists, "accounts.removed_at must survive: the rollback never reached its DROP COLUMN")
+}
+
+// The #1625 third fix wave put four tests here — one each for 000154, 000156, 000158 and 000159 —
+// and #1625 removed them deliberately. (Their names are not repeated: they no longer resolve, and
+// TestEveryCitedTestNameResolves rightly rejects a comment that cites a test which does not
+// exist.) Each asserted that the down COMPLETED and destroyed or resurrected the state it was
+// seeded with. That was a true observation of an unguarded migration, and all four are now
+// guarded, so keeping them would have meant keeping four assertions that the guards do not exist.
+// Their coverage moved into downGuardCases above, which asserts both halves — refuses with rows,
+// proceeds without them — instead of only the loss. 000149 keeps its own named test because it is
+// NOT guarded: it aborts on a re-added CHECK, which is a different mechanism.
+
+// TestDownMigration1625Guards_LockBeforeTheyCount_Integration is #1625.
+//
+// The four guards added for 000154/000156/000158/000159 are the same shape 000190's was found to
+// get wrong this week: a `SELECT COUNT(*)` deciding whether a DROP COLUMN may proceed. A bare
+// count takes only ACCESS SHARE, which does not conflict with the ROW EXCLUSIVE a production
+// writer takes, so without a lock a concurrent disconnect, sync, or delete can create the very row
+// the guard just decided did not exist — and the column is dropped anyway, with the rollback
+// reporting success. The failure mode is a SILENTLY BYPASSED refusal, so a test that only checks
+// the refusal fires on a quiet database cannot see it.
+//
+// Only the guard PREFIX is executed, for the same reason 000190's test does it: running the whole
+// file takes ACCESS EXCLUSIVE at the ALTER regardless and would prove nothing about the window.
+// The prefix is derived from each file's own bytes. The predicate is cleared first so the guard
+// PROCEEDS — a guard that raised would abort the transaction and leave nothing to observe.
+func TestDownMigration1625Guards_LockBeforeTheyCount_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	for _, tc := range downGuardCases {
+		if tc.clearRefusingState == nil {
+			continue // only the four #1625 lifecycle-column guards use that hook
+		}
+		tc := tc
+		t.Run(tc.label, func(t *testing.T) {
+			down := readDownMigration(t, tc.file)
+
+			endOfGuard := strings.Index(down, "END $$;")
+			require.Greater(t, endOfGuard, 0,
+				"%s no longer opens with a DO-block guard, so this test cannot locate its prefix "+
+					"and is proving nothing", tc.file)
+			rest := down[endOfGuard:]
+			cut := len(rest)
+			for _, marker := range []string{"ALTER TABLE", "DROP INDEX", "CREATE UNIQUE"} {
+				if i := strings.Index(rest, marker); i >= 0 && i < cut {
+					cut = i
+				}
+			}
+			require.Less(t, cut, len(rest),
+				"%s has no schema-changing statement after its guard — the split picked nothing", tc.file)
+			guardOnly := down[:endOfGuard+cut]
+			require.Contains(t, guardOnly, "SELECT COUNT(*)",
+				"%s: the prefix must contain the guard's count, or the split picked the wrong statement", tc.file)
+
+			tx, err := pool.Begin(ctx)
+			require.NoError(t, err)
+			defer tx.Rollback(ctx) //nolint:errcheck // always rolled back
+
+			_, err = tx.Exec(ctx, `SET LOCAL lock_timeout = '10s'`)
+			require.NoError(t, err)
+			tc.clearRefusingState(t, ctx, tx)
+
+			_, err = tx.Exec(ctx, guardOnly)
+			require.NoError(t, err, "%s's guard must proceed once its predicate holds nothing", tc.file)
+
+			for _, table := range tc.tables {
+				var held bool
+				require.NoError(t, tx.QueryRow(ctx, `
+					SELECT EXISTS(
+						SELECT 1 FROM pg_locks
+						WHERE relation = $1::regclass
+						  AND pid = pg_backend_pid()
+						  AND mode = 'AccessExclusiveLock')`, table).Scan(&held))
+				assert.Truef(t, held,
+					"%s's guard did not hold AccessExclusiveLock on %s while counting. Without it a "+
+						"concurrent writer can create the row the guard just decided did not exist, "+
+						"between the count and the DROP COLUMN, and the refusal is bypassed silently.",
+					tc.file, table)
+			}
+		})
 	}
 }

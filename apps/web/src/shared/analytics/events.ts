@@ -91,6 +91,18 @@ export const ANALYTICS_EVENTS = {
   // counts and a boolean, never a rule name, a condition value, an amount or an id.
   RULE_EXECUTION_HISTORY_VIEWED: 'rule_execution_history_viewed',
 
+  // #1625. The reporting session's failure mode was firing speculative rule writes at a live
+  // financial account because there was no way to try a rule first. RULE_PREVIEWED measures
+  // whether the dry run actually gets used before a save; RULE_SAVED carries the shape of the
+  // rule so we can see which of the NEW condition fields (name, merchant_id, signed_amount,
+  // direction) people reach for.
+  //
+  // ⚠ Properties are counts, booleans and the fixed field/operator vocabulary ONLY — never a
+  // condition VALUE, a rule name, a merchant, an amount or an id. A rule's value is user-typed
+  // financial detail and must not reach analytics.
+  RULE_PREVIEWED: 'rule_previewed',
+  RULE_SAVED: 'rule_saved',
+
   // Dashboard
   DASHBOARD_VIEWED: 'dashboard_viewed',
   WIDGET_ADDED: 'widget_added',
