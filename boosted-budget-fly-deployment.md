@@ -1612,3 +1612,26 @@ A row with `indisvalid = f` means an interrupted build: repair as above.
 Symptom if it is missing: writes to `balance_snapshots` from the daily capture job fail with
 `SQLSTATE 42P10` (`ON CONFLICT` names an arbiter that does not exist). That is deliberate — the
 insert fails loudly rather than silently double-writing a row per account per day.
+
+## Recovery: a dev database that silently skipped renumbered migrations
+
+**This is a dev-machine hazard, not a production one** — no deployed environment ever ran a
+renumbered pre-merge migration. If a local database applied a branch's migrations under numbers
+that were later renumbered or replaced before merge (concretely: a database that ran the #1626
+branch's pre-merge `000190`/`000191` reports `schema_migrations.version = 191`, so after the merge
+`migrate up` resumes at `192` and **silently skips** staging's actual `000190`/`000191`), the
+result is a hybrid schema: the version number looks right while the schema is neither the old one
+nor the new one. Detect it by comparing the database against the migrations **on disk**, not by
+trusting the version: `SELECT version, dirty FROM schema_migrations;` tells you where golang-migrate
+thinks it is, but — as the section above already warns — the version number is not evidence, so
+also diff the suspect database's `pg_dump --schema-only` output against a scratch database migrated
+from zero (`scripts/test-migrations.sh` builds exactly such a database, `freshcheck`). Any
+difference means migrations were skipped or divergent versions were applied. ⚠ **The remedy is
+NOT `migrate force`.** `force` exists to clear the dirty flag on an *interrupted* migration at the
+version where it stopped (as in the `force 192` repair above, which rewinds bookkeeping so an
+unapplied pair replays); running `force` to a version *behind* a database that is AHEAD, then
+`migrate up`, replays migrations onto objects that already exist — their idempotency guards
+(`IF NOT EXISTS`) then mask the divergence instead of repairing it, and doing exactly that earlier
+produced 55 integration-test failures. The correct remedy for a dev database is to stop treating it
+as repairable: drop it and re-run `migrate up` from empty against the merged tree's migrations. Dev
+databases are disposable by design; a hybrid schema is not.

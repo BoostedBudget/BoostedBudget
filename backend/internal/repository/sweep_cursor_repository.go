@@ -119,8 +119,9 @@ import (
 //	    paragraph stands unchanged — the mechanism is real, the old precondition really was wrong,
 //	    and the two tests that construct it are sound. What is withdrawn is the PRODUCTION
 //	    CONSEQUENCE. The sacrifice requires an OVER-CAP tie group, and the production caps are 1,000
-//	    (maxOrphanRetriesPerSweep, maxItemsPerCleanupSweep, maxUsersPerRetentionSweep) and 50,000
-//	    (maxUsersPerDeletionSweep), so it takes more than 1,000 rows sharing ONE identical sort key
+//	    (maxOrphanRetriesPerSweep, maxItemsPerCleanupSweep, maxUsersPerRetentionSweep), 5,000
+//	    (balanceCaptureItemsPerRun) and 50,000 (maxUsersPerDeletionSweep), so it takes more than
+//	    1,000 rows sharing ONE identical sort key
 //	    — for plaid_orphan_retry, a single erased user holding more than 1,000 Plaid Items in one
 //	    DeleteUserCascade. Not reachable. The plaid_orphan_retry bullet below already said exactly
 //	    this, and the two statements contradicted each other in one file for as long as both stood.
@@ -139,6 +140,15 @@ import (
 //	        owner; persisting it is the same artefact one indirection out. Rejected for the same
 //	        reason — and item_cleanup is the sweep where an over-cap tie group is actually realistic
 //	        (its (NULL, NULL) bucket, which the zero-active-accounts leg can populate in bulk).
+//	      - balance_capture ties on `linked_items.id` too, so item_cleanup's rejection applies to it
+//	        verbatim: the id is user-scoped and cascade-deleted with its owner, and persisting it
+//	        would put a user reference — one indirection out — into the table designed to outlive
+//	        that user's erasure. Rejected on the same GDPR grounds. Note it is also a sweep whose
+//	        over-cap tie group the branch that added it calls realistic (balance_snapshot_capture.go:
+//	        a single-transaction backfill gives thousands of linked_items ONE created_at, because
+//	        now() is transaction-constant in Postgres) — so the summary below, argued over four
+//	        sweeps when it was written, must account for the fifth, and does: blocked (GDPR) exactly
+//	        where the residual is real, the same shape as item_cleanup.
 //	      - plaid_orphan_retry ties on `plaid_orphaned_items.id`, a table built with no user_id and
 //	        no FK precisely so it can outlive erasure (migration 000134), so persisting THAT id would
 //	        carry no user reference and would be GDPR-neutral. But this sweep cannot produce an
@@ -160,28 +170,42 @@ import (
 // "within one cycle", not to "always promptly" and not to "always".
 
 // SweepCursorName identifies one sweep's row in sweep_cursors. Declared as a named string type so
-// a caller cannot accidentally pass an arbitrary string, and so these four values are enumerable
+// a caller cannot accidentally pass an arbitrary string, and so these five values are enumerable
 // and greppable from one place.
 //
-// ⚠ THESE FOUR ARE NO LONGER EVERY USER OF THE TABLE, and this comment used to imply they were.
-// #1569 round 14 task 9 added a FIFTH row, "accounts_user_account_backfill", written by
+// ⚠ THESE CONSTANTS ARE NOT EVERY USER OF THE TABLE, and this comment used to imply they were.
+// #1569 round 14 task 9 added a row none of them name, "accounts_user_account_backfill" (the fifth
+// row when it landed; the sixth today — see the "FIVE CONSTANTS ... SIX ROWS" ⚠ below), written by
 // database.backfillAccountsUserAccountIDsWithDB — the startup accounts backfill, which acquired
 // exactly this defect when it was capped per run. It does not use this type or this repository
 // because internal/repository's own integration tests import internal/database, so the reverse
 // import is a cycle in that test binary; internal/database/backfill_accounts_cursor.go restates the
 // contract locally against the same table and cross-references this file for the design. It also
-// differs in THREE ways worth knowing before reading the guarantee below as if it covered five
-// sweeps: its cadence is BOOTS rather than a periodic schedule; two servers can run it
-// simultaneously, which no River-scheduled sweep here can; and since #1569 round 15 it does not use
-// `exclusive` at all.
+// differs in THREE ways worth knowing before reading the guarantee below as if it covered every
+// sweep: its cadence is BOOTS rather than a periodic schedule; two servers can run it
+// simultaneously; and since #1569 round 15 it does not use `exclusive` at all.
 //
-// ⚠ THAT THIRD DIFFERENCE IS A KNOWN GAP IN THE FOUR SWEEPS BELOW, not a quirk of the fifth. The
+// ⚠ THE SECOND DIFFERENCE IS NO LONGER A CLEAN CONTRAST. This sentence used to end "which no
+// River-scheduled sweep here can", and #1626 Phase 3 falsified it: River's ByPeriod dedup
+// suppresses a duplicate insert only within ONE dedup bucket, so "cannot run concurrently" is only
+// ever as strong as each sweep's bucket width against its run duration. For the four sweeps this
+// header was written about, overlap has never been a named live scenario (day-scale cadences,
+// enqueue-only runs measured in minutes). For balance_capture_dispatch it IS one: its dispatcher is
+// registered RunOnStart: true with ByPeriod: 1h uniqueness (jobs.BalanceSnapshotDispatchUniqueOpts /
+// BalanceSnapshotDispatchPeriodicOpts), so a deploy-time catch-up run still executing when the
+// 21:00 UTC scheduled insert lands falls in a DIFFERENT one-hour bucket and is NOT suppressed —
+// migration 000194's header names exactly that concurrent pair as a reason its unique index exists.
+// Two dispatch runs on two servers can therefore execute simultaneously; the open lease/CAS
+// consequence for THIS table is stated on SweepCursorBalanceCapture below.
+//
+// ⚠ THAT THIRD DIFFERENCE IS A KNOWN GAP IN THE FIVE SWEEPS BELOW, not a quirk of the backfill. The
 // exclusive advance escapes an over-cap tie group by stepping PAST it, so the rows of that group the
 // run never looked at are reached on no later run — 000140's own column comment says so. The
 // accounts backfill could not ship that (its rows are financial history a recurring write-path bug
 // keeps damaging), so it stores a COUNT of rows consumed at ts1 instead — sweep_cursors.ts1_offset,
-// migration 000183 — which resumes INSIDE the group without naming a row. The same substitution
-// would close the same gap for these four; doing it is #1477's, and nothing here depends on it.
+// migration 000183 — which resumes INSIDE the group without naming a row. That ts1_offset
+// substitution remains OPEN for the sweeps here: it would close the same gap for these five; doing
+// it is #1477's, and nothing here depends on it.
 //
 // ⚠ THERE ARE NOW FIVE CONSTANTS BELOW AND SIX ROWS IN THE TABLE. #1626 Phase 3 added
 // SweepCursorBalanceCapture (the daily balance-snapshot dispatcher), which acquired this exact
@@ -229,6 +253,22 @@ const (
 	// ceil(N/(C-1)) + 1 runs, i.e. each item is captured on roughly that fraction of days rather
 	// than daily. The cap is therefore a CADENCE dial here, unlike the other four where it is a
 	// blast-radius dial; balanceCaptureItemsPerRun's comment states the consequence.
+	//
+	// ⚠ OPEN RESIDUAL — NO LEASE, NO CAS, AND CONCURRENT RUNS ARE REAL FOR THIS SWEEP. The
+	// Load / enumerate / Save cycle below has no lease and no compare-and-swap, and this is the one
+	// sweep whose runs can genuinely overlap: its dispatcher is RunOnStart: true with a 1-hour
+	// ByPeriod dedup bucket, so a deploy-time catch-up run still executing when the 21:00 UTC
+	// scheduled insert lands is NOT suppressed (see the SweepCursorName ⚠ above; migration 000194
+	// names the same pair). Two concurrent runs can therefore double-process a range, and whichever
+	// run Saves LAST can regress the cursor behind a farther-advanced position the other run already
+	// persisted. This is OPEN and ACCEPTED, not mitigated. What makes accepting it tenable is that
+	// the double-PROCESSING is idempotent-safe: migration 000194's partial unique index plus the
+	// targeted ON CONFLICT in BalanceSnapshotRepository.CreateDailyCapture (createDailyCaptureSQL,
+	// balance_snapshot_repository.go) make the duplicate write a no-op, and the capture jobs' own
+	// ByArgs uniqueness suppresses duplicate captures. None of that fixes the cursor REGRESSION
+	// itself — a last-writer-wins Save can still move the persisted position backwards, costing
+	// cadence on later runs. The follow-up, if ever taken, is an advisory lease or a versioned
+	// compare-and-swap on the sweep_cursors row.
 	SweepCursorBalanceCapture SweepCursorName = "balance_capture_dispatch"
 )
 
@@ -323,7 +363,8 @@ func equalTimePtr(a, b *time.Time) bool {
 // pointer. This comment used to add: "For plaid_orphan_retry the sacrificed row is a live,
 // removable Plaid Item that no run ever retries." That is true of the constructed fixture and
 // OVERSTATED as a production claim. The sacrifice needs an OVER-CAP tie group; production caps are
-// 1,000 (maxOrphanRetriesPerSweep, maxItemsPerCleanupSweep, maxUsersPerRetentionSweep) and 50,000
+// 1,000 (maxOrphanRetriesPerSweep, maxItemsPerCleanupSweep, maxUsersPerRetentionSweep), 5,000
+// (balanceCaptureItemsPerRun) and 50,000
 // (maxUsersPerDeletionSweep), so more than 1,000 rows would have to share ONE identical sort key —
 // for plaid_orphan_retry, one erased user holding more than 1,000 Plaid Items in a single
 // DeleteUserCascade. Nothing else here is withdrawn: the mechanism, the wrong old precondition and
@@ -359,6 +400,12 @@ type SweepCursorRepository interface {
 	// its per-run cap — a run that reached the end of its candidate set calls Clear instead. That
 	// asymmetry is what makes a past-the-end watermark a transient, self-correcting state rather
 	// than a permanent silent stall.
+	//
+	// ⚠ There is no lease and no compare-and-swap anywhere in this cycle: Save is a blind upsert,
+	// so between two CONCURRENT runs of one sweep the last writer wins and can regress a
+	// farther-advanced position. That is an OPEN, accepted residual, and it is live for exactly one
+	// sweep — see SweepCursorBalanceCapture's ⚠ above for why its runs can overlap and why
+	// accepting the regression is tenable there.
 	Save(ctx context.Context, name SweepCursorName, pos SweepPosition) error
 	// Clear deletes a sweep's resume position, so the next run starts from the beginning. Called
 	// when a run reaches the end of its candidate set, and when a run's resumed position turns out
