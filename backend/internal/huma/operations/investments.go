@@ -77,9 +77,20 @@ type GetPortfolioHistoryInput struct {
 }
 
 // GetPortfolioHistoryOutput is the response for GET /investments/portfolio/history.
+//
+// ⚠ The body stays an ANONYMOUS struct rather than becoming domain.PortfolioHistory directly, and
+// that is deliberate (#1631 M8a fix round 2, I-2). Huma names a schema after the named type it is
+// given, so handing it domain.PortfolioHistory would rename the generated model
+// GetPortfolioHistoryOutputBody -> PortfolioHistory and break every client import of the old name.
+// Restating the three fields here keeps the generated model name stable and makes the change
+// purely ADDITIVE, which is what every other surface in this task achieved. The fields mirror
+// domain.PortfolioHistory exactly; see that type for why the currency is a property of the SERIES
+// rather than of each point.
 type GetPortfolioHistoryOutput struct {
 	Body struct {
-		History []domain.PortfolioHistoryPoint `json:"history"`
+		History         []domain.PortfolioHistoryPoint `json:"history"`
+		CurrencyCode    *string                        `json:"currency_code,omitempty"`
+		IsMixedCurrency bool                           `json:"is_mixed_currency"`
 	}
 }
 
@@ -227,11 +238,11 @@ func (h *InvestmentHandler) GetPortfolioHistory(ctx context.Context, input *GetP
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &GetPortfolioHistoryOutput{
-		Body: struct {
-			History []domain.PortfolioHistoryPoint `json:"history"`
-		}{History: history},
-	}, nil
+	out := &GetPortfolioHistoryOutput{}
+	out.Body.History = history.Points
+	out.Body.CurrencyCode = history.CurrencyCode
+	out.Body.IsMixedCurrency = history.IsMixedCurrency
+	return out, nil
 }
 
 // GetInvestmentTransactions handles GET /api/v1/investments/investment-transactions.

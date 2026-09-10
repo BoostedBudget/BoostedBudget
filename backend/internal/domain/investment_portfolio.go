@@ -48,6 +48,24 @@ type PortfolioSnapshot struct {
 	// with no FX rate source in this system, that subtraction has no answer.
 	CurrencyCode *string `json:"currency_code,omitempty" db:"currency_code"`
 
+	// IsMixedCurrency is TRUE when the holdings behind this row's totals were denominated in two
+	// or more DIFFERENT currencies, making every total on the row a currency-blind sum (#1631 M8a
+	// fix round 2, migration 000198).
+	//
+	// ⚠ It exists because CurrencyCode's nil was OVERLOADED and one reader could not live with
+	// that. Read the two together:
+	//
+	//	(code, false)  a named single currency
+	//	(nil,  false)  no contributing holding stated one — UNKNOWN
+	//	(nil,  true)   two or more currencies — a currency-blind sum
+	//
+	// So false on a row written before 000198 still reads as unknown rather than as a claim,
+	// because its CurrencyCode is nil. The one reader is GetPortfolioSummary: it subtracts this
+	// row from a live total, and CurrenciesConflict deliberately treats an unknown currency as no
+	// conflict — correct for unknown, and catastrophic for mixed, which is how an unflagged
+	// USD_today − (USD+GBP)_yesterday used to reach the client as a plain number.
+	IsMixedCurrency bool `json:"is_mixed_currency" db:"is_mixed_currency"`
+
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
@@ -95,6 +113,33 @@ type PortfolioSummary struct {
 type PortfolioHistoryPoint struct {
 	Date       string  `json:"date" doc:"UTC calendar day (YYYY-MM-DD) this snapshot was captured"`
 	TotalValue float64 `json:"total_value"`
+}
+
+// PortfolioHistory is the whole series returned by GET /portfolio/history: the points, plus the
+// currency they are plotted in (#1631 M8a fix round 2, I-2).
+//
+// ⚠ THE CURRENCY IS A PROPERTY OF THE SERIES, NOT OF EACH POINT, and that is a design choice
+// rather than an economy. A line chart has ONE y-axis with ONE unit, so a series whose points are
+// denominated differently is broken AS A WHOLE — there is no meaningful way to plot it, and there
+// is no FX rate source in this system to normalise it with. Hanging a currency off each point
+// would invite a client to render a per-point symbol, which reads as "these are comparable, just
+// labelled differently"; they are not comparable at all. Stating it once, for the range, is the
+// only honest shape, and it matches every other aggregate in this task
+// (AllocationBreakdown / GainLossSummary / IncomeSummary / PortfolioSummary).
+//
+// Before this existed, GetPortfolioHistory read snapshots that HAD a currency and discarded it, so
+// a chart could silently mix currency-blind sums with single-currency totals.
+type PortfolioHistory struct {
+	Points []PortfolioHistoryPoint `json:"history"`
+
+	// CurrencyCode is the single currency every point is expressed in, or nil when one cannot be
+	// stated. IsMixedCurrency separates the two reasons nil happens: true means the series is not
+	// plottable as one unit — either two days disagree, or some single day was itself a
+	// currency-blind sum (portfolio_snapshots.is_mixed_currency) — and false means no day stated a
+	// currency at all, which is unknown rather than a conflict and is the state of every snapshot
+	// written before migration 000197.
+	CurrencyCode    *string `json:"currency_code,omitempty"`
+	IsMixedCurrency bool    `json:"is_mixed_currency"`
 }
 
 // HoldingView is the API view of a holding, joining security metadata and

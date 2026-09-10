@@ -89,6 +89,7 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 			total_gain_loss_pct,
 			total_value_investment_only,
 			currency_code,
+			is_mixed_currency,
 			created_at,
 			updated_at
 		)
@@ -148,6 +149,11 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 				THEN MAX(UPPER(TRIM(h.currency_code)))
 				ELSE NULL
 			END,
+			-- is_mixed_currency (#1631 M8a fix round 2 / migration 000198): the half of the
+			-- question the NULL above cannot answer. > 1 rather than <> 1 on purpose — zero
+			-- distinct currencies means nobody stated one, which is UNKNOWN and must stay FALSE,
+			-- or every pre-000197 portfolio would be declared mixed and lose its day change.
+			COUNT(DISTINCT UPPER(TRIM(h.currency_code))) > 1,
 			NOW(),
 			NOW()
 		-- Deliberately UNGATED by account type (#1569 T8 / Issue #1616) — do not add
@@ -186,10 +192,11 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 			total_gain_loss_pct = EXCLUDED.total_gain_loss_pct,
 			total_value_investment_only = EXCLUDED.total_value_investment_only,
 			currency_code     = EXCLUDED.currency_code,
+			is_mixed_currency = EXCLUDED.is_mixed_currency,
 			updated_at        = NOW()
 		RETURNING id, user_id, snapshot_date, total_value, total_cost_basis,
 		          total_gain_loss, total_gain_loss_pct, total_value_investment_only,
-		          currency_code, created_at, updated_at
+		          currency_code, is_mixed_currency, created_at, updated_at
 	`
 
 	snap := &domain.PortfolioSnapshot{}
@@ -203,6 +210,7 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 		&snap.TotalGainLossPct,
 		&snap.TotalValueInvestmentOnly,
 		&snap.CurrencyCode,
+		&snap.IsMixedCurrency,
 		&snap.CreatedAt,
 		&snap.UpdatedAt,
 	)
@@ -217,7 +225,7 @@ func (r *portfolioSnapshotRepository) GetByUserDateRange(ctx context.Context, us
 	query := `
 		SELECT id, user_id, snapshot_date, total_value, total_cost_basis,
 		       total_gain_loss, total_gain_loss_pct, total_value_investment_only,
-		       currency_code, created_at, updated_at
+		       currency_code, is_mixed_currency, created_at, updated_at
 		FROM portfolio_snapshots
 		WHERE user_id = $1
 		  AND snapshot_date >= $2::date
@@ -237,7 +245,7 @@ func (r *portfolioSnapshotRepository) GetByUserDateRange(ctx context.Context, us
 		if err := rows.Scan(
 			&s.ID, &s.UserID, &s.SnapshotDate, &s.TotalValue, &s.TotalCostBasis,
 			&s.TotalGainLoss, &s.TotalGainLossPct, &s.TotalValueInvestmentOnly,
-			&s.CurrencyCode, &s.CreatedAt, &s.UpdatedAt,
+			&s.CurrencyCode, &s.IsMixedCurrency, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -258,7 +266,7 @@ func (r *portfolioSnapshotRepository) GetLatestBefore(ctx context.Context, userI
 	query := `
 		SELECT id, user_id, snapshot_date, total_value, total_cost_basis,
 		       total_gain_loss, total_gain_loss_pct, total_value_investment_only,
-		       currency_code, created_at, updated_at
+		       currency_code, is_mixed_currency, created_at, updated_at
 		FROM portfolio_snapshots
 		WHERE user_id = $1
 		  AND snapshot_date < $2::date
@@ -270,7 +278,7 @@ func (r *portfolioSnapshotRepository) GetLatestBefore(ctx context.Context, userI
 	err := r.db.QueryRow(ctx, query, userID, date).Scan(
 		&s.ID, &s.UserID, &s.SnapshotDate, &s.TotalValue, &s.TotalCostBasis,
 		&s.TotalGainLoss, &s.TotalGainLossPct, &s.TotalValueInvestmentOnly,
-		&s.CurrencyCode, &s.CreatedAt, &s.UpdatedAt,
+		&s.CurrencyCode, &s.IsMixedCurrency, &s.CreatedAt, &s.UpdatedAt,
 	)
 	if err != nil {
 		// pgx returns pgx.ErrNoRows; treat as "no prior snapshot" (nil, nil)
