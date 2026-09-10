@@ -20,10 +20,23 @@
 -- archived_at (or delete the rows) yourself. There is no correct automatic answer -- see 000190's
 -- "NO BACKFILL, DELIBERATELY" note for why guessing is destructive in the other direction too.
 
+-- ⚠ The lock is load-bearing, not defensive tidiness (#1625 second fix wave M4). Without it this
+-- guard was TOCTOU-racy: the COUNT(*) took only ACCESS SHARE, which does not conflict with the
+-- ROW EXCLUSIVE the production archive path (savings_contribution_repository.ArchiveByGoal) takes,
+-- so an archive could commit between the count and the ALTER below acquiring its own ACCESS
+-- EXCLUSIVE — and the marker the guard had just decided did not exist was dropped anyway, with the
+-- rollback reporting success. golang-migrate runs a migration file in ONE transaction, so taking
+-- the lock here holds it through the ALTER and closes the window.
+--
+-- On an empty table this costs nothing and the rollback still proceeds; a concurrent writer is
+-- what it is meant to stop. Pinned by
+-- TestDownMigration000190_RefusalIsNotTOCTOURacy_Integration, which observes both the lock itself
+-- and a second connection being blocked by it.
 DO $$
 DECLARE
     n INTEGER;
 BEGIN
+    LOCK TABLE savings_goal_contributions IN ACCESS EXCLUSIVE MODE;
     SELECT COUNT(*) INTO n FROM savings_goal_contributions WHERE archived_at IS NOT NULL;
     IF n > 0 THEN
         RAISE EXCEPTION
