@@ -7,21 +7,31 @@ import (
 
 // Security represents a financial security (stock, ETF, mutual fund, etc.)
 // Securities are shared across users — not user-scoped.
+//
+// ⚠ ClosePriceAsOf is a *time.Time because securities.close_price_as_of is a DATE column
+// (migration 000051). It was a *string until #1631, which made every read of it fail with
+// "cannot scan date (OID 1082) in binary format into **string" — a hard 500 on
+// /investments/portfolio/summary and /investments/holdings for any user holding a security Plaid
+// had priced. pgx RESCUES the NULL case, so the bug was invisible to every fixture that left the
+// column empty; only a non-null value reaches the failing scan plan. Pinned by
+// holding_close_price_as_of_integration_test.go, whose two tests exist to document exactly that
+// asymmetry. Do not "simplify" this back to a string, and do not paper over it with a ::text cast:
+// the value is what tells DayChange how stale its close price is.
 type Security struct {
-	ID              string  `json:"id" db:"id"`
-	PlaidSecurityID string  `json:"plaid_security_id" db:"plaid_security_id"`
-	TickerSymbol    *string `json:"ticker_symbol,omitempty" db:"ticker_symbol"`
-	Name            string  `json:"name" db:"name"`
-	Type            *string `json:"type,omitempty" db:"type"`
-	ISIN            *string `json:"isin,omitempty" db:"isin"`
-	CUSIP           *string `json:"cusip,omitempty" db:"cusip"`
-	IsCashEquivalent *bool  `json:"is_cash_equivalent,omitempty" db:"is_cash_equivalent"`
+	ID               string  `json:"id" db:"id"`
+	PlaidSecurityID  string  `json:"plaid_security_id" db:"plaid_security_id"`
+	TickerSymbol     *string `json:"ticker_symbol,omitempty" db:"ticker_symbol"`
+	Name             string  `json:"name" db:"name"`
+	Type             *string `json:"type,omitempty" db:"type"`
+	ISIN             *string `json:"isin,omitempty" db:"isin"`
+	CUSIP            *string `json:"cusip,omitempty" db:"cusip"`
+	IsCashEquivalent *bool   `json:"is_cash_equivalent,omitempty" db:"is_cash_equivalent"`
 
 	// Institutional pricing (overnight updates, not real-time)
 	InstitutionPrice     *float64   `json:"institution_price,omitempty" db:"institution_price"`
 	InstitutionPriceAsOf *time.Time `json:"institution_price_as_of,omitempty" db:"institution_price_as_of"`
 	ClosePrice           *float64   `json:"close_price,omitempty" db:"close_price"`
-	ClosePriceAsOf       *string    `json:"close_price_as_of,omitempty" db:"close_price_as_of"`
+	ClosePriceAsOf       *time.Time `json:"close_price_as_of,omitempty" db:"close_price_as_of"`
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
@@ -127,22 +137,22 @@ func (h *Holding) DayChangePct() *float64 {
 // InvestmentTransaction represents a trade, dividend, fee, or other investment activity.
 // Investment transactions are immutable once posted by Plaid.
 type InvestmentTransaction struct {
-	ID                           string   `json:"id" db:"id"`
-	UserID                       string   `json:"user_id" db:"user_id"`
-	AccountID                    string   `json:"account_id" db:"account_id"`
-	UserAccountID                *string  `json:"user_account_id,omitempty" db:"user_account_id"` // Stable reference across Plaid re-links (Issue #1109)
-	SecurityID                   *string  `json:"security_id,omitempty" db:"security_id"` // NULL for cash transactions
-	PlaidSecurityID              string   `json:"plaid_security_id,omitempty" db:"-"`     // transient: used during sync only
-	TickerSymbol                 *string  `json:"ticker_symbol,omitempty" db:"-"`         // from LEFT JOIN securities in GetByUserIDKeyset; nil for cash
-	SecurityName                 *string  `json:"security_name,omitempty" db:"-"`         // from LEFT JOIN securities in GetByUserIDKeyset; nil for cash
-	PlaidInvestmentTransactionID string   `json:"plaid_investment_transaction_id" db:"plaid_investment_transaction_id"`
-	Type                         string   `json:"type" db:"type"` // buy, sell, dividend, cash, fee, transfer, etc.
-	Subtype                      *string  `json:"subtype,omitempty" db:"subtype"`
-	Name                         string   `json:"name" db:"name"`
-	Quantity                     *float64 `json:"quantity,omitempty" db:"quantity"`
-	Amount                       float64  `json:"amount" db:"amount"`
-	Price                        *float64 `json:"price,omitempty" db:"price"`
-	Fees                         *float64 `json:"fees,omitempty" db:"fees"`
+	ID                           string    `json:"id" db:"id"`
+	UserID                       string    `json:"user_id" db:"user_id"`
+	AccountID                    string    `json:"account_id" db:"account_id"`
+	UserAccountID                *string   `json:"user_account_id,omitempty" db:"user_account_id"` // Stable reference across Plaid re-links (Issue #1109)
+	SecurityID                   *string   `json:"security_id,omitempty" db:"security_id"`         // NULL for cash transactions
+	PlaidSecurityID              string    `json:"plaid_security_id,omitempty" db:"-"`             // transient: used during sync only
+	TickerSymbol                 *string   `json:"ticker_symbol,omitempty" db:"-"`                 // from LEFT JOIN securities in GetByUserIDKeyset; nil for cash
+	SecurityName                 *string   `json:"security_name,omitempty" db:"-"`                 // from LEFT JOIN securities in GetByUserIDKeyset; nil for cash
+	PlaidInvestmentTransactionID string    `json:"plaid_investment_transaction_id" db:"plaid_investment_transaction_id"`
+	Type                         string    `json:"type" db:"type"` // buy, sell, dividend, cash, fee, transfer, etc.
+	Subtype                      *string   `json:"subtype,omitempty" db:"subtype"`
+	Name                         string    `json:"name" db:"name"`
+	Quantity                     *float64  `json:"quantity,omitempty" db:"quantity"`
+	Amount                       float64   `json:"amount" db:"amount"`
+	Price                        *float64  `json:"price,omitempty" db:"price"`
+	Fees                         *float64  `json:"fees,omitempty" db:"fees"`
 	Date                         time.Time `json:"date" db:"date"`
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
@@ -204,11 +214,11 @@ type InvestmentTransactionSyncResult struct {
 // InvestmentTransactionFilters holds optional filters for querying investment transactions.
 type InvestmentTransactionFilters struct {
 	// AccountID filters to a specific account (chain-expanded via user_account_id).
-	AccountID *string
+	AccountID  *string
 	SecurityID string
 	// ActivityTypes filters by normalized trade type (buy/sell/dividend/reinvest/fee/cash/other).
 	// Applied as a SQL WHERE via domain.TradeTypeToSQLPredicate; never post-fetch.
 	ActivityTypes []string
-	StartDate  *time.Time
-	EndDate    *time.Time
+	StartDate     *time.Time
+	EndDate       *time.Time
 }

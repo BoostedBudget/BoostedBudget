@@ -636,10 +636,29 @@ func mapPlaidSecuritiesToDomain(plaidSecs []plaid.Security) []domain.Security {
 		sec.CUSIP = ps.Cusip.Get()
 		sec.IsCashEquivalent = ps.IsCashEquivalent.Get()
 		sec.ClosePrice = ps.ClosePrice.Get()
-		sec.ClosePriceAsOf = ps.ClosePriceAsOf.Get()
+		sec.ClosePriceAsOf = parsePlaidDate(ps.ClosePriceAsOf.Get())
 		result = append(result, sec)
 	}
 	return result
+}
+
+// parsePlaidDate converts a Plaid date-only string ("YYYY-MM-DD") into a *time.Time, returning nil
+// for an absent or unparsable value.
+//
+// ⚠ It drops only the FIELD, never the record — deliberately unlike the transaction-date handling in
+// mapPlaidInvestmentTransactions, which skips the whole row. That asymmetry is the point (#1631):
+// close_price_as_of is optional pricing metadata, whereas skipping the record here would write a
+// security with no identity, and UpsertBatch's ON CONFLICT never repairs a row afterwards. A
+// malformed optional date must not be able to cost us the security.
+func parsePlaidDate(s *string) *time.Time {
+	if s == nil || *s == "" {
+		return nil
+	}
+	t, err := time.Parse("2006-01-02", *s)
+	if err != nil {
+		return nil
+	}
+	return &t
 }
 
 // mapPlaidInvestmentTransactions converts Plaid investment transactions to domain types,
