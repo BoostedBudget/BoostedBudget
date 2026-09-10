@@ -2668,3 +2668,79 @@ func TestGetCashFlowHistory_RequestedEndEqualsEndDateForAPastRange(t *testing.T)
 	assert.True(t, resp.EndDate.Equal(end),
 		"nothing was clamped away, so the two windows are the same window")
 }
+
+// TestAnalyticsService_TrailingWindowDatesAreUTCNotProcessLocal is the final-gate regression for
+// finding F6.
+//
+// THE DEFECT. `time.Now().UTC()` is the SAME INSTANT as `time.Now()` with a different Location, so
+// dropping the .UTC() is invisible until something READS that Location — and two things do.
+//   - GetNetWorthTrend's bounds are compared as CALENDAR DATES: GetAggregatedHistory ends on
+//     `(bs.snapshot_at AT TIME ZONE 'UTC')::date <= $3::date` (its household twin on `<= $5::date`),
+//     so pgx encodes the parameter as a `date` built from the value's own Location. On a host behind
+//     UTC, a snapshot written "today" in UTC falls outside a range ending "today" and the day is
+//     invisible until local midnight.
+//   - Both bounds, and GetRecurringSubscriptions's AsOfDate, are echoed through
+//     `Format("2006-01-02")`, which is Location-dependent too.
+//
+// ⚠ WHY THE ZONE IS CHOSEN FROM THE CURRENT UTC HOUR RATHER THAN FIXED, and this is the whole
+// reason the test is written this way. A fixed offset only puts the local date on a DIFFERENT day
+// than UTC's for part of the day: UTC-11 does so while the UTC hour is under 11, UTC+14 while it is
+// 10 or over. So a fixed zone would make this test pass with or without the fix for most of the
+// day — a fixture sitting exactly where mutant and correct code agree, which is the trap this
+// branch has now hit repeatedly. Choosing per UTC hour covers all 24, and the require() below
+// FAILS THE TEST rather than skipping if the two dates ever coincide, so the assertion can never
+// be vacuous.
+//
+// time.Local is process-global; nothing in this package runs t.Parallel(), and Cleanup restores it.
+func TestAnalyticsService_TrailingWindowDatesAreUTCNotProcessLocal(t *testing.T) {
+	original := time.Local
+	t.Cleanup(func() { time.Local = original })
+
+	offset := 14 * 3600
+	if time.Now().UTC().Hour() < 11 {
+		offset = -11 * 3600
+	}
+	time.Local = time.FixedZone("test-offset", offset)
+
+	utcToday := time.Now().UTC().Format("2006-01-02")
+	require.NotEqual(t, utcToday, time.Now().Format("2006-01-02"),
+		"fixture guard: the process-local calendar day MUST differ from UTC's, or neither assertion "+
+			"below can tell the fix from the defect")
+
+	t.Run("GetNetWorthTrend", func(t *testing.T) {
+		var gotStart, gotEnd time.Time
+		snapRepo := &mockBalanceSnapshotRepository{
+			getAggregatedHistoryFn: func(_ context.Context, _ string, startDate, endDate time.Time, _ []string) ([]domain.BalanceHistoryPoint, error) {
+				gotStart, gotEnd = startDate, endDate
+				return nil, nil
+			},
+		}
+		service := NewAnalyticsService(&mockAnalyticsRepository{})
+		service.SetBalanceSnapshotRepo(snapRepo)
+
+		result, err := service.GetNetWorthTrend(context.Background(), "user-123", "monthly", nil)
+		require.NoError(t, err)
+
+		// The parameter as PostgreSQL will see it: pgx renders a `date` from the value's own
+		// Location, so this Format is the pgx-visible property, not a proxy for it.
+		assert.Equal(t, utcToday, gotEnd.Format("2006-01-02"),
+			"the end bound handed to GetAggregatedHistory must be the UTC calendar day; it is "+
+				"compared against ::date, so a process-local day hides today's snapshots")
+		assert.Equal(t, utcToday, gotStart.AddDate(1, 0, 0).Format("2006-01-02"),
+			"the trailing-12-month start must be derived from the same UTC day")
+		assert.Equal(t, utcToday, result.EndDate, "and the response must echo the UTC day it queried")
+	})
+
+	t.Run("GetRecurringSubscriptions AsOfDate", func(t *testing.T) {
+		service := NewAnalyticsService(&mockAnalyticsRepository{
+			getRecurringSubscriptionsFn: func(context.Context, string, time.Time) ([]domain.RecurringSubscriptionRow, error) {
+				return nil, nil
+			},
+		})
+
+		result, err := service.GetRecurringSubscriptions(context.Background(), "user-123")
+		require.NoError(t, err)
+		assert.Equal(t, utcToday, result.AsOfDate,
+			"every other date this API emits is a UTC calendar day, so 'as of' must be one too")
+	})
+}

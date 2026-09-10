@@ -836,6 +836,46 @@ func TestBalanceSnapshotDispatch_CapHitInsideAShortFinalPageStillPersistsItsPosi
 		sortedKeys(run1), sortedKeys(run2))
 }
 
+// TestBalanceSnapshotDispatch_ShortPageThatExactlyFillsTheCapStillCountsAsTheEnd is the control for
+// the case above, and it exists because a mutation SURVIVED without it.
+//
+// `truncated` must be `fetchedCount > remaining`, not `>=`. Equality means the cap and the page ended
+// in the same place — the cap cut NOTHING off, so the run really did reach the end of the candidate
+// set. With `>=` the run instead declares itself capped: it persists a cursor at the last item and
+// emits the cap WARN, on a run that had nothing left to do. That self-corrects on the next run (the
+// resumed position yields an empty page and the wrap clears it), so the damage is a redundant query
+// and a false operator signal rather than lost data — but the WARN is documented as meaning "the
+// active set no longer fits in one run", and a run that covered the WHOLE set must not raise it.
+//
+// total == cap == 4 with pageSize 10 is the only shape that distinguishes `>` from `>=`: one short
+// page, consumed exactly to the cap.
+func TestBalanceSnapshotDispatch_ShortPageThatExactlyFillsTheCapStillCountsAsTheEnd(t *testing.T) {
+	const (
+		total    = 4
+		capItems = 4
+		pageSize = 10
+	)
+	require.Equal(t, total, capItems, "fixture guard: the cap must be consumed EXACTLY, cutting nothing")
+	require.Less(t, total, pageSize, "fixture guard: and it must happen on a SHORT page")
+
+	all := captureTargets(total)
+	store := newMemorySweepCursorStore()
+	q := &captureRecordingQueue{}
+	w := NewBalanceSnapshotDispatchWorker(BalanceSnapshotDispatchWorkerDeps{
+		ItemRepo: &captureFakeItemReader{targets: all}, JobQueue: q, Logger: captureQuietLogger(),
+		SweepCursors: store, PageSize: pageSize, MaxItemsPerRun: capItems,
+	})
+
+	require.NoError(t, w.Work(context.Background(), captureDispatchJob()))
+	require.Len(t, dispatchedItemIDs(q), total, "every item must be dispatched")
+
+	pos, err := store.Load(context.Background(), repository.SweepCursorBalanceCapture)
+	require.NoError(t, err)
+	require.Nil(t, pos, "a run that dispatched the ENTIRE candidate set reached the end and must "+
+		"store nothing. Persisting here would be a run claiming it stopped early when the cap cut "+
+		"nothing off, which also raises the cap WARN on a fully-covered set")
+}
+
 // TestBalanceSnapshotDispatch_PersistedPositionPastTheEndWrapsWithinTheSameRun is the other half of
 // the fix, and the half that would otherwise be the same bug with extra steps: a watermark that only
 // ever advances eventually points past the last item, and a run that then found an empty page and
