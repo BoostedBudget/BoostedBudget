@@ -636,6 +636,8 @@ func mapPlaidSecuritiesToDomain(plaidSecs []plaid.Security) []domain.Security {
 		sec.ISIN = ps.Isin.Get()
 		sec.CUSIP = ps.Cusip.Get()
 		sec.IsCashEquivalent = ps.IsCashEquivalent.Get()
+		sec.InstitutionSecurityID = ps.InstitutionSecurityId.Get()
+		sec.ProxySecurityID = ps.ProxySecurityId.Get()
 		sec.ClosePrice = ps.ClosePrice.Get()
 		sec.ClosePriceAsOf = parsePlaidDate(ps.ClosePriceAsOf.Get())
 		sec.Name = synthesizeSecurityName(sec.Name, sec.TickerSymbol, ps.SecurityId)

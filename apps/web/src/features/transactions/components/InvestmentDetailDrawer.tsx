@@ -82,7 +82,11 @@ export function InvestmentDetailDrawer({
   const tickerDisplay = ticker_symbol ?? '—'
   const quantityDisplay = investment_quantity != null ? `${investment_quantity} shares` : '—'
   const priceDisplay = investment_price != null ? formatCurrencyFull(investment_price) : '—'
-  const feesDisplay = investment_fees == null || investment_fees === 0 ? '—' : formatCurrencyFull(investment_fees)
+  // #1631: fees is 0.00 on all 1,192 production rows — this institution never populates it. A
+  // "Fees: —" row would read as "we confirmed no fee was charged" when the truth is "we don't
+  // know", so the row is hidden entirely rather than shown with a placeholder.
+  const hasFees = investment_fees != null && investment_fees !== 0
+  const feesDisplay = hasFees ? formatCurrencyFull(investment_fees) : null
 
   const amountFormatted = formatTransactionAmount(amount)
 
@@ -123,11 +127,13 @@ export function InvestmentDetailDrawer({
             </span>
           </DetailRow>
 
-          <DetailRow label="Fees">
-            <span data-ph-mask="" data-testid="fees-value">
-              {feesDisplay}
-            </span>
-          </DetailRow>
+          {hasFees && (
+            <DetailRow label="Fees">
+              <span data-ph-mask="" data-testid="fees-value">
+                {feesDisplay}
+              </span>
+            </DetailRow>
+          )}
 
           <DetailRow label="Amount">
             <span

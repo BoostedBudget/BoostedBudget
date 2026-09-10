@@ -262,6 +262,36 @@ func TestMapPlaidSecuritiesToDomain_NameSynthesis(t *testing.T) {
 	})
 }
 
+// TestMapPlaidSecuritiesToDomain_ConsolidationIdentifiers covers #1631: Plaid gives us two
+// identifiers beyond plaid_security_id for consolidating a security's forked identities —
+// institution_security_id and proxy_security_id. Before this, mapPlaidSecuritiesToDomain dropped
+// both on the floor even though the Plaid SDK response carries them.
+func TestMapPlaidSecuritiesToDomain_ConsolidationIdentifiers(t *testing.T) {
+	t.Run("threads institution_security_id and proxy_security_id through when present", func(t *testing.T) {
+		sec := makePlaidSecurity("plaid-sec-1", "iShares Core U.S. Aggregate Bond ETF", "AGG")
+		sec.InstitutionSecurityId = plaidNullStr("INST-AGG-1")
+		sec.ProxySecurityId = plaidNullStr("PROXY-BOND-1")
+
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+
+		require.Len(t, result, 1)
+		require.NotNil(t, result[0].InstitutionSecurityID)
+		assert.Equal(t, "INST-AGG-1", *result[0].InstitutionSecurityID)
+		require.NotNil(t, result[0].ProxySecurityID)
+		assert.Equal(t, "PROXY-BOND-1", *result[0].ProxySecurityID)
+	})
+
+	t.Run("leaves both nil when Plaid sends neither", func(t *testing.T) {
+		sec := makePlaidSecurity("plaid-sec-2", "Tesla Inc.", "TSLA")
+
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+
+		require.Len(t, result, 1)
+		assert.Nil(t, result[0].InstitutionSecurityID)
+		assert.Nil(t, result[0].ProxySecurityID)
+	})
+}
+
 // makePlaidHolding creates a minimal plaid.Holding for testing.
 func makePlaidHolding(plaidAccountID, plaidSecurityID string, qty, price, value, costBasis float64) plaid.Holding {
 	return plaid.Holding{

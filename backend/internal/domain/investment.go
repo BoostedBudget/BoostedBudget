@@ -18,14 +18,42 @@ import (
 // asymmetry. Do not "simplify" this back to a string, and do not paper over it with a ::text cast:
 // the value is what tells DayChange how stale its close price is.
 type Security struct {
-	ID               string  `json:"id" db:"id"`
-	PlaidSecurityID  string  `json:"plaid_security_id" db:"plaid_security_id"`
-	TickerSymbol     *string `json:"ticker_symbol,omitempty" db:"ticker_symbol"`
-	Name             string  `json:"name" db:"name"`
-	Type             *string `json:"type,omitempty" db:"type"`
+	ID string `json:"id" db:"id"`
+	// PlaidSecurityID is Plaid's own dedup key, and the ONLY column our unique index
+	// (`unique_plaid_security_id`, migration 000051) and ON CONFLICT target key on. Plaid's docs
+	// say it "does not typically change, but may change if inherent details of the security change
+	// due to a corporate action, for example, in the event of a ticker symbol change or CUSIP
+	// change", and is only "typically" (not guaranteed) the same across institutions. So a
+	// corporate action can silently fork one real-world security into two `securities` rows, each
+	// with its own purchase/sale/dividend history hanging off `investment_transactions.security_id`
+	// — the exact shape observed in production for AGG/ISHARES.CORE.U.S.AGGREGATE and
+	// IEFA/IEMG/VCIT. Not fixed here: #1631 stores InstitutionSecurityID below so a future merge
+	// has a key to join forked identities on, but does NOT rewrite `security_id` on existing
+	// transactions — that is out of scope (retention ADR forbids merging history as a side effect
+	// of a display fix).
+	PlaidSecurityID string  `json:"plaid_security_id" db:"plaid_security_id"`
+	TickerSymbol    *string `json:"ticker_symbol,omitempty" db:"ticker_symbol"`
+	Name            string  `json:"name" db:"name"`
+	Type            *string `json:"type,omitempty" db:"type"`
+	// ISIN and CUSIP: Plaid nulls both by default for new customers, and for ALL customers after
+	// 2024-03-12, unless a CUSIP licence has been separately verified with Plaid. That is why every
+	// one of the 34 securities in production has NULL cusip/isin — it is not a sync defect, and no
+	// dedupe/consolidation design may key on either column without first completing that
+	// commercial licensing step.
 	ISIN             *string `json:"isin,omitempty" db:"isin"`
 	CUSIP            *string `json:"cusip,omitempty" db:"cusip"`
 	IsCashEquivalent *bool   `json:"is_cash_equivalent,omitempty" db:"is_cash_equivalent"`
+	// InstitutionSecurityID is "the identifier given to the security by the institution" (Plaid
+	// docs) — a second, institution-scoped identity for the same security, independent of
+	// PlaidSecurityID's corporate-action fragility above. Stored so a future consolidation of
+	// forked security identities has something to join on; #1631 stores and exposes it only —
+	// merging is explicitly out of scope.
+	InstitutionSecurityID *string `json:"institution_security_id,omitempty" db:"institution_security_id"`
+	// ProxySecurityID is "the ID of another security whose performance resembles this security,
+	// typically when the original security has low volume, or when a private security can be
+	// modeled with a publicly traded security" (Plaid docs). Stored for future use; nothing reads
+	// it yet.
+	ProxySecurityID *string `json:"proxy_security_id,omitempty" db:"proxy_security_id"`
 
 	// Institutional pricing (overnight updates, not real-time)
 	InstitutionPrice     *float64   `json:"institution_price,omitempty" db:"institution_price"`

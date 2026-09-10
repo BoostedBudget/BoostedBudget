@@ -44,9 +44,10 @@ func (r *securityRepository) UpsertBatch(ctx context.Context, securities []domai
 			INSERT INTO securities (
 				id, plaid_security_id, ticker_symbol, name, type,
 				isin, cusip, is_cash_equivalent,
+				institution_security_id, proxy_security_id,
 				institution_price, institution_price_as_of,
 				close_price, close_price_as_of
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 			ON CONFLICT (plaid_security_id) DO UPDATE SET
 				ticker_symbol = EXCLUDED.ticker_symbol,
 				name = EXCLUDED.name,
@@ -54,6 +55,8 @@ func (r *securityRepository) UpsertBatch(ctx context.Context, securities []domai
 				isin = EXCLUDED.isin,
 				cusip = EXCLUDED.cusip,
 				is_cash_equivalent = EXCLUDED.is_cash_equivalent,
+				institution_security_id = EXCLUDED.institution_security_id,
+				proxy_security_id = EXCLUDED.proxy_security_id,
 				-- Issue #1569 Task 20 (S12). The prices are RETAINED when the incoming payload has
 				-- none; every other column is overwritten. That asymmetry is the point.
 				--
@@ -100,6 +103,8 @@ func (r *securityRepository) UpsertBatch(ctx context.Context, securities []domai
 			sec.ISIN,
 			sec.CUSIP,
 			sec.IsCashEquivalent,
+			sec.InstitutionSecurityID,
+			sec.ProxySecurityID,
 			sec.InstitutionPrice,
 			sec.InstitutionPriceAsOf,
 			sec.ClosePrice,
