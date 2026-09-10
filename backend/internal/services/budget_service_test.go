@@ -9,6 +9,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/mockassert"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -2046,4 +2047,167 @@ func TestBudgetService_AddCategory_RejectsCrossUserCustomCategory(t *testing.T) 
 	mockBudgetRepo.AssertNotCalled(t, "CreateCategory")
 	mockBudgetRepo.AssertExpectations(t)
 	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_AddCategory_RejectsDuplicateParentIdentity_PFC pins Issue #1630 Task 4:
+// budgetedParentSets keys a parent by its pfc_primary VALUE, so a second primary-only row for
+// the same pfc_primary would silently collide with the first in that map. AddCategory must
+// reject the second row rather than persist an ambiguous parent.
+func TestBudgetService_AddCategory_RejectsDuplicateParentIdentity_PFC(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:              "cat-existing",
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			AllocatedAmount: 300.00,
+		},
+	}
+
+	req := &domain.CreateBudgetCategoryRequest{
+		CategoryKind:    "pfc",
+		PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+		AllocatedAmount: 100.00,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+
+	category, err := service.AddCategory(ctx, userID, budgetID, req)
+
+	assert.ErrorIs(t, err, domain.ErrDuplicateParentCategory)
+	assert.Nil(t, category)
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "CreateCategory")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_AddCategory_RejectsDuplicateParentIdentity_Custom mirrors the PFC case
+// above for custom categories, where custom_category_id itself is the parent identity.
+func TestBudgetService_AddCategory_RejectsDuplicateParentIdentity_Custom(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+	customID := "11111111-1111-1111-1111-111111111111"
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:               "cat-existing",
+			BudgetID:         budgetID,
+			CategoryKind:     "custom",
+			CustomCategoryID: &customID,
+			AllocatedAmount:  300.00,
+		},
+	}
+
+	req := &domain.CreateBudgetCategoryRequest{
+		CategoryKind:     "custom",
+		CustomCategoryID: &customID,
+		AllocatedAmount:  100.00,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{customID}).
+		Return(map[string]string{customID: "Groceries"}, nil)
+
+	category, err := service.AddCategory(ctx, userID, budgetID, req)
+
+	assert.ErrorIs(t, err, domain.ErrDuplicateParentCategory)
+	assert.Nil(t, category)
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "CreateCategory")
+	mockBudgetRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_AddCategory_AllowsSecondChildUnderSamePrimary confirms the guard above
+// does not over-reach: two DETAILED children under the same budgeted primary are a normal,
+// legal multi-child budget, not a duplicate parent (Issue #1630 Task 4).
+func TestBudgetService_AddCategory_AllowsSecondChildUnderSamePrimary(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:              "cat-parent",
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			AllocatedAmount: 300.00,
+		},
+		{
+			ID:              "cat-child-1",
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			PFCDetailed:     strPtr("FOOD_AND_DRINK_FAST_FOOD"),
+			AllocatedAmount: 50.00,
+		},
+	}
+
+	req := &domain.CreateBudgetCategoryRequest{
+		CategoryKind:    "pfc",
+		PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+		PFCDetailed:     strPtr("FOOD_AND_DRINK_COFFEE"),
+		AllocatedAmount: 20.00,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+
+	category, err := service.AddCategory(ctx, userID, budgetID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, category)
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_CreateBudget_RejectsDuplicateParentIdentityWithinBatch pins the
+// batch-create half of Issue #1630 Task 4: a single CreateBudget request naming the same
+// parent identity twice must fail atomically, before any row is persisted.
+func TestBudgetService_CreateBudget_RejectsDuplicateParentIdentityWithinBatch(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	req := createTestCreateBudgetRequest()
+	req.Categories = []domain.CreateBudgetCategoryRequest{
+		{CategoryKind: "pfc", PFCPrimary: strPtr("FOOD_AND_DRINK"), AllocatedAmount: 300.00},
+		{CategoryKind: "pfc", PFCPrimary: strPtr("FOOD_AND_DRINK"), AllocatedAmount: 100.00},
+	}
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	assert.ErrorIs(t, err, domain.ErrDuplicateParentCategory)
+	assert.Nil(t, budget)
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "CreateWithCategories")
+	mockBudgetRepo.AssertExpectations(t)
 }
