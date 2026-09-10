@@ -7,15 +7,25 @@ import { CONDITION_TYPE_LABELS } from '../types'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { formatPFCEnum } from '@/shared/categories/formatPfc'
 import { formatConditionValue } from '../utils/formatConditionValue'
+import { UNNAMED_CUSTOM_CATEGORY_LABEL } from '../constants'
 
 export interface AutoCategorizationRuleCardProps {
   rule: CategorizationRule
   onToggle: (enabled: boolean) => Promise<void>
   onEdit: () => void
   onDelete: () => Promise<void>
+  /**
+   * Account id → name index for `account_id` conditions (#1626, Task K). Supplied by
+   * `AutoCategorizationPage` from `useRuleAccountLabels` — the same hook the retained-history
+   * panel uses, so the live rule and the frozen snapshot name an account identically.
+   *
+   * A prop rather than the hook itself so this card stays renderable without a QueryClient.
+   * Omitting it degrades to the neutral `UNKNOWN_ACCOUNT_LABEL`, never to the raw id.
+   */
+  accountLabels?: Readonly<Record<string, string>>
 }
 
-export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }: AutoCategorizationRuleCardProps) {
+export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete, accountLabels }: AutoCategorizationRuleCardProps) {
   const [toggling, setToggling] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -68,7 +78,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
                   {CONDITION_TYPE_LABELS[condition.type] || condition.type}
                 </span>
                 <span className="text-foreground font-medium" data-ph-mask>
-                  {formatConditionValue(condition)}
+                  {formatConditionValue(condition, { accountLabels })}
                 </span>
               </li>
             ))}
@@ -92,7 +102,10 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
             {rule.target_kind === 'custom' && rule.target_custom_category_id && (
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-muted-foreground">Set custom category:</span>
-                <span className="text-foreground font-medium" data-ph-mask>{rule.target_custom_category_display ?? rule.target_custom_category_id}</span>
+                {/* #1626: never the id. `target_custom_category_display` is enriched separately
+                    from the row, so "no name" is a reachable state — and it used to render as a
+                    UUID. Wording matches the backend's `unnamedCustomCategoryLabel`. */}
+                <span className="text-foreground font-medium" data-ph-mask>{rule.target_custom_category_display ?? UNNAMED_CUSTOM_CATEGORY_LABEL}</span>
               </div>
             )}
             {rule.target_kind === 'clear' && (

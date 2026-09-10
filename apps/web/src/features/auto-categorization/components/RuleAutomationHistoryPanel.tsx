@@ -66,6 +66,7 @@ import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { CONDITION_TYPE_LABELS, type ConditionType } from '../types'
 import { formatConditionValue } from '../utils/formatConditionValue'
+import { useRuleAccountLabels } from '../hooks/useRuleAccountLabels'
 
 const PAGE_SIZE = 20
 const TABLE_ID = 'rule-user-executions'
@@ -168,6 +169,9 @@ export function RuleAutomationHistoryPanel() {
   const panelId = useId()
   const trackEvent = useTrackEvent()
   const { sizing, onSizingChange } = useTablePreferences(TABLE_ID, COLUMN_IDS)
+  // #1626: the same index the live rules list resolves account conditions through, so a frozen
+  // snapshot and the rule it was frozen from name an account identically.
+  const accountLabels = useRuleAccountLabels()
 
   const { data, isLoading, error, refetch } = useGetUserRuleExecutions({
     limit: PAGE_SIZE,
@@ -268,9 +272,9 @@ export function RuleAutomationHistoryPanel() {
                 <span className="text-muted-foreground">
                   {CONDITION_TYPE_LABELS[condition.type] ?? condition.type}
                 </span>
-                {/* User-typed text: a merchant substring, an amount, a date. */}
+                {/* User-identifying text: a merchant substring, an amount, a date, an account name. */}
                 <span className="font-medium text-foreground" data-ph-mask>
-                  {formatConditionValue(condition)}
+                  {formatConditionValue(condition, { accountLabels })}
                 </span>
               </span>
             ))}

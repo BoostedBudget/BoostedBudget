@@ -20,6 +20,7 @@ import {
   mockUseGetUserRuleExecutions,
   mockRefetchUserRuleExecutions,
 } from '@/test/mocks/auto-categorization-api'
+import { mockUseGetAccounts, mockRefetchAccounts } from '@/test/mocks/accounts-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { RuleAutomationHistoryPanel } from './RuleAutomationHistoryPanel'
@@ -113,6 +114,15 @@ describe('RuleAutomationHistoryPanel', () => {
   beforeEach(() => {
     mockTrackEvent.mockClear()
     mockRefetchUserRuleExecutions.mockClear()
+    // The preloaded default is "still loading"; restore it explicitly so an accounts fixture set
+    // by one test cannot leak into the next (#1626).
+    mockUseGetAccounts.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    } as unknown as ReturnType<typeof mockUseGetAccounts>)
     setExecutions([liveExecution, deletedRuleExecution, unsnapshottedExecution])
   })
 
@@ -318,5 +328,71 @@ describe('RuleAutomationHistoryPanel', () => {
         .getAttribute('aria-controls') as string
     )
     expect(within(region as HTMLElement).getAllByText('Old rainy-day rule').length).toBe(1)
+  })
+
+  /**
+   * Issue #1626 (Task K). This panel is the SECOND caller of `formatConditionValue`, and it is
+   * the one that renders the frozen `definition_snapshot`. The snapshot is stored and returned as
+   * an opaque JSON blob that the backend never re-enriches, so it carries the bare account id
+   * forever — which is exactly why the name resolution lives in the shared renderer and is fed
+   * from the same `useRuleAccountLabels` hook the live rules list uses.
+   */
+  describe('account conditions in a frozen snapshot (#1626)', () => {
+    const ACCOUNT_UUID = '32a0e8da-8aa6-44ac-9be7-3a321e1402c7'
+
+    const accountSnapshotExecution: RuleExecution = {
+      ...liveExecution,
+      id: 'exec-account',
+      rule_name: 'Move brokerage transfers',
+      definition_snapshot: {
+        name: 'Move brokerage transfers',
+        condition_logic: 'AND',
+        conditions: [{ type: 'account_id', value: ACCOUNT_UUID }],
+      },
+    }
+
+    function whyText(): string {
+      const region = document.getElementById(
+        screen
+          .getByRole('button', { name: /rule run history/i })
+          .getAttribute('aria-controls') as string
+      )
+      return (region as HTMLElement).textContent ?? ''
+    }
+
+    it('renders the account name a disconnected account still has', () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: {
+          accounts: [
+            // `removed` on purpose: a rule outlives the account it names, and the retained
+            // history is the surface most likely to point at one.
+            { id: ACCOUNT_UUID, name: 'Brokerage Cash', type: 'depository', status: 'removed' },
+          ],
+        },
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      } as unknown as ReturnType<typeof mockUseGetAccounts>)
+      setExecutions([accountSnapshotExecution])
+
+      renderPanel()
+      expand()
+
+      const text = whyText()
+      expect(text).toContain('Brokerage Cash')
+      expect(text).not.toContain(ACCOUNT_UUID)
+    })
+
+    it('renders the neutral label — never the UUID — when the account cannot be named', () => {
+      setExecutions([accountSnapshotExecution])
+
+      renderPanel()
+      expand()
+
+      const text = whyText()
+      expect(text).toContain('Unknown account')
+      expect(text).not.toContain(ACCOUNT_UUID)
+    })
   })
 })
