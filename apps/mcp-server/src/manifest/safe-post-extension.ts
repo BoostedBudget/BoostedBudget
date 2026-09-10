@@ -63,7 +63,9 @@ const DEFAULT_OPENAPI_PATH = resolve(__dirname, '../../../../api/openapi.yaml')
  * and returns ordered API calls for the CALLER to execute, which is a different thing from
  * proving its OWN handler writes nothing. See execute.test.ts's pinned refusal test.
  */
-export const ACKNOWLEDGED_SAFE_POST_OPERATIONS = ['previewCategoryMatches']
+// Re-exported from the dependency-free module so the Worker runtime never reaches this file's
+// node: imports. See safe-post-operations.ts for why.
+export { ACKNOWLEDGED_SAFE_POST_OPERATIONS } from './safe-post-operations'
 
 interface OpenAPIOperationWithExtensions {
   operationId?: string

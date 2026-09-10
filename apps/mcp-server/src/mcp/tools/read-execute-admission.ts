@@ -11,7 +11,7 @@
  */
 
 import type { CapabilityEntry } from '../../manifest/capability-manifest'
-import { ACKNOWLEDGED_SAFE_POST_OPERATIONS } from '../../manifest/safe-post-extension'
+import { ACKNOWLEDGED_SAFE_POST_OPERATIONS } from '../../manifest/safe-post-operations'
 
 /**
  * HTTP methods readExecute treats as conventionally non-mutating. This is a convention the gate
