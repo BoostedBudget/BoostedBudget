@@ -39,5 +39,6 @@ export interface CashFlowHistoryResponse {
   grouping: string;
   /** @nullable */
   periods: CashFlowPeriodData[] | null;
+  requested_end_date: string;
   start_date: string;
 }

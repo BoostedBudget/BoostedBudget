@@ -133,11 +133,16 @@ func TestUnifiedFeed_ChainExpansion_SQLShape(t *testing.T) {
 	//
 	// We assert all three in a single combined regex so a single test failure
 	// shows which predicates are absent.
+	// The first-page whole-set aggregate now precedes the page query (#1626 Phase 2). pgxmock is
+	// ORDERED, so this expectation must come first and must be pinned to the aggregate's own shape —
+	// the aggregate WRAPS the page query, so a pattern matching the page would match the aggregate
+	// too and this test would silently stop inspecting the statement it names.
+	expectFeedTotalsAggregate(mock, 0, 0, pgxmock.AnyArg())
 	mock.ExpectQuery(`chain_a\.status = 'active'`).
 		WithArgs(anyArgs(2)...). // userID + limit+1
 		WillReturnRows(rows)
 
-	_, _, err = repo.GetByUserIDKeysetUnified(
+	_, _, _, err = repo.GetByUserIDKeysetUnified(
 		ctx,
 		userID,
 		domain.TransactionFilters{
@@ -173,11 +178,16 @@ func TestUnifiedFeed_InvestmentChainPredicate_SQLShape(t *testing.T) {
 	rows := pgxmock.NewRows(unifiedFeedColumns()).
 		AddRow(makeUnifiedFeedRow(userID, "acct-inv-chain-1")...)
 
+	// The first-page whole-set aggregate now precedes the page query (#1626 Phase 2). pgxmock is
+	// ORDERED, so this expectation must come first and must be pinned to the aggregate's own shape —
+	// the aggregate WRAPS the page query, so a pattern matching the page would match the aggregate
+	// too and this test would silently stop inspecting the statement it names.
+	expectFeedTotalsAggregate(mock, 0, 0, pgxmock.AnyArg())
 	mock.ExpectQuery(`it\.user_account_id IS NOT NULL`).
 		WithArgs(anyArgs(2)...).
 		WillReturnRows(rows)
 
-	_, _, err = repo.GetByUserIDKeysetUnified(
+	_, _, _, err = repo.GetByUserIDKeysetUnified(
 		ctx,
 		userID,
 		domain.TransactionFilters{
@@ -208,11 +218,16 @@ func TestUnifiedFeed_BankingChainPredicate_SQLShape(t *testing.T) {
 	rows := pgxmock.NewRows(unifiedFeedColumns()).
 		AddRow(makeUnifiedFeedRow(userID, "acct-bank-chain-1")...)
 
+	// The first-page whole-set aggregate now precedes the page query (#1626 Phase 2). pgxmock is
+	// ORDERED, so this expectation must come first and must be pinned to the aggregate's own shape —
+	// the aggregate WRAPS the page query, so a pattern matching the page would match the aggregate
+	// too and this test would silently stop inspecting the statement it names.
+	expectFeedTotalsAggregate(mock, 0, 0, pgxmock.AnyArg())
 	mock.ExpectQuery(`t\.user_account_id IS NOT NULL`).
 		WithArgs(anyArgs(2)...).
 		WillReturnRows(rows)
 
-	_, _, err = repo.GetByUserIDKeysetUnified(
+	_, _, _, err = repo.GetByUserIDKeysetUnified(
 		ctx,
 		userID,
 		domain.TransactionFilters{},
@@ -249,11 +264,16 @@ func TestUnifiedFeed_NoActiveJoin_SQLShape(t *testing.T) {
 
 		// This regex would only match if the old JOIN-based active-account filter
 		// were present in the banking branch.  It must NOT match post-fix.
+		// The first-page whole-set aggregate now precedes the page query (#1626 Phase 2). pgxmock is
+		// ORDERED, so this expectation must come first and must be pinned to the aggregate's own shape —
+		// the aggregate WRAPS the page query, so a pattern matching the page would match the aggregate
+		// too and this test would silently stop inspecting the statement it names.
+		expectFeedTotalsAggregate(mock, 0, 0, pgxmock.AnyArg())
 		mock.ExpectQuery(`JOIN accounts a ON a\.id = t\.account_id AND a\.status = .active.`).
 			WithArgs(anyArgs(2)...).
 			WillReturnRows(rows)
 
-		_, _, _ = repo.GetByUserIDKeysetUnified(
+		_, _, _, _ = repo.GetByUserIDKeysetUnified(
 			ctx,
 			"user-no-join-1",
 			domain.TransactionFilters{},
@@ -280,11 +300,16 @@ func TestUnifiedFeed_NoActiveJoin_SQLShape(t *testing.T) {
 			AddRow(makeUnifiedFeedRow("user-no-join-2", "acct-no-join-2")...)
 
 		// Would match the old JOIN in the investment branch.  Must not match post-fix.
+		// The first-page whole-set aggregate now precedes the page query (#1626 Phase 2). pgxmock is
+		// ORDERED, so this expectation must come first and must be pinned to the aggregate's own shape —
+		// the aggregate WRAPS the page query, so a pattern matching the page would match the aggregate
+		// too and this test would silently stop inspecting the statement it names.
+		expectFeedTotalsAggregate(mock, 0, 0, pgxmock.AnyArg())
 		mock.ExpectQuery(`JOIN accounts a ON a\.id = it\.account_id AND a\.status = .active.`).
 			WithArgs(anyArgs(2)...).
 			WillReturnRows(rows)
 
-		_, _, _ = repo.GetByUserIDKeysetUnified(
+		_, _, _, _ = repo.GetByUserIDKeysetUnified(
 			ctx,
 			"user-no-join-2",
 			domain.TransactionFilters{IncludeInvestmentActivity: true},

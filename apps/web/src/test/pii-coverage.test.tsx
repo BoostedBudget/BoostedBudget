@@ -18,6 +18,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
+import type { CategoryHierarchyNode, CategoryHierarchyResponse } from '@boostedbudget/api-client/models'
 
 import { scanForUnmaskedPII, sentinelsFromFixture, type PIISentinel } from './pii-masking'
 import { ThemeProvider } from '@/shared/theme/ThemeProvider'
@@ -765,30 +766,39 @@ describe('PII coverage — Cash Flow Sankey (G6 — Codex fix #2 regression guar
   })
 
   test('currency amounts in sr-only table are covered by data-ph-mask; ECharts wrapper carries data-ph-mask', async () => {
-    const incomeData = {
+    // #1626: the chart now consumes the category-hierarchy shape, one response per direction.
+    // The custom category below is the case that matters here — its name is user-authored text,
+    // so it must reach the DOM as text and never as an attribute value.
+    const hierarchy = (levels: CategoryHierarchyNode[], direction: string): CategoryHierarchyResponse => ({
+      levels,
+      total: 3000,
+      direction,
       start_date: '2024-01-01',
       end_date: '2024-01-31',
-      total_income: 5000,
-      sources: [
-        { category: 'INCOME_WAGES', pfc_primary_display: 'Wages', total: 5000, percentage: 100, transaction_count: 2 },
+    })
+    const incomeData = hierarchy(
+      [{ category: 'INCOME_WAGES', display: 'Wages', total: 5000, direct_total: 5000, percentage: 100, transaction_count: 2, children: [] }],
+      'income',
+    )
+    const expenseData = hierarchy(
+      [
+        {
+          category: 'FOOD_AND_DRINK', display: 'Food & Drink', total: 1800, direct_total: 1000, percentage: 60, transaction_count: 20,
+          children: [{ category: 'custom:abc', display: 'Therapy sessions', total: 800, direct_total: 800, percentage: 26, transaction_count: 4, children: [] }],
+        },
+        { category: 'TRANSPORTATION', display: 'Transportation', total: 1200, direct_total: 1200, percentage: 40, transaction_count: 8, children: [] },
       ],
-    }
-    const categoryData = {
-      start_date: '2024-01-01',
-      end_date: '2024-01-31',
-      total_spent: 3000,
-      categories: [
-        { category: 'FOOD_AND_DRINK', pfc_primary_display: 'Food & Drink', total: 1800, percentage: 60, transaction_count: 20 },
-        { category: 'TRANSPORTATION', pfc_primary_display: 'Transportation', total: 1200, percentage: 40, transaction_count: 8 },
-      ],
-    }
+      'expense',
+    )
 
     render(
       <CashFlowSankeyChart
         incomeData={incomeData}
-        categoryData={categoryData}
+        expenseData={expenseData}
         loading={false}
         privacyMode={false}
+        viewMode={{ kind: 'expanded' }}
+        onFocus={() => {}}
         startDate="2024-01-01"
         endDate="2024-01-31"
       />,
@@ -806,6 +816,22 @@ describe('PII coverage — Cash Flow Sankey (G6 — Codex fix #2 regression guar
     // No currency text should be visible outside a masked ancestor.
     // The sr-only table has data-ph-mask — all its currency cells should be covered.
     expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+
+    // #1626: a custom category's name is user-authored and can be sensitive. data-ph-mask covers
+    // TEXT, not attribute values — session replay records those verbatim — so the name must never
+    // be interpolated into aria-label, title, or any other attribute.
+    //
+    // ⚠ THE PRECONDITION IS THE GUARD. The sweep below only means anything while the name is
+    // actually rendered: a ladder change, a prune bug or a fixture drifting to total:0 would drop
+    // the node entirely and make every not.toContain trivially true, and the sweep would stop
+    // guarding without a single test going red. So assert the name IS in the DOM first.
+    expect(document.body.textContent).toContain('Therapy sessions')
+
+    for (const el of Array.from(document.querySelectorAll('*'))) {
+      for (const attr of Array.from(el.attributes)) {
+        expect(attr.value).not.toContain('Therapy sessions')
+      }
+    }
   })
 })
 

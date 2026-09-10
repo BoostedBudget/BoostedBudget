@@ -231,12 +231,12 @@ func (m *mockTransactionRepoForBudget) GetByUserAccountID(ctx context.Context, u
 func (m *mockTransactionRepoForBudget) UpdateEffectiveCategoryNameByCustomCategoryID(ctx context.Context, userID string, customCategoryID string) (int64, error) {
 	return 0, nil
 }
-func (m *mockTransactionRepoForBudget) GetByUserIDKeyset(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]domain.Transaction, *domain.TransactionCursor, error) {
-	return nil, nil, nil
+func (m *mockTransactionRepoForBudget) GetByUserIDKeyset(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]domain.Transaction, *domain.TransactionCursor, *domain.FeedTotals, error) {
+	return nil, nil, nil, nil
 }
 
-func (m *mockTransactionRepoForBudget) GetByUserIDKeysetUnified(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]*domain.ActivityItem, *domain.TransactionCursor, error) {
-	return nil, nil, nil
+func (m *mockTransactionRepoForBudget) GetByUserIDKeysetUnified(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]*domain.ActivityItem, *domain.TransactionCursor, *domain.FeedTotals, error) {
+	return nil, nil, nil, nil
 }
 
 func (m *mockTransactionRepoForBudget) GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error) {

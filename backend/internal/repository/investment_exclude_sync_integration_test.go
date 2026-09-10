@@ -114,7 +114,7 @@ func setExcludeInvestmentSync(ctx context.Context, t *testing.T, tx pgx.Tx, user
 func feedIDs(ctx context.Context, t *testing.T, tx pgx.Tx, userID uuid.UUID) (invIDs, bankIDs []string) {
 	t.Helper()
 	repo := NewTransactionRepository(tx, newTestFieldEncryptor(t))
-	items, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), domain.TransactionFilters{
+	items, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), domain.TransactionFilters{
 		SortBy:                    "date",
 		IncludeInvestmentActivity: true,
 	}, nil, 50)

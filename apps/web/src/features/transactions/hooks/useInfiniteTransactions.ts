@@ -60,6 +60,10 @@ function flattenFilters(filters: TransactionFiltersState): Record<string, string
     // server default and stays off the wire, so the omitted and the declined cases produce the
     // same request and therefore the same React Query cache entry.
     ...(filters.include_reversed === true && { include_reversed: 'true' }),
+    // Issue #1626: same opt-in rule. The server ORs this with the three category predicates, so
+    // sending it can only widen the set — and sending 'false' would be a second spelling of the
+    // default that splits the cache for identical rows.
+    ...(filters.uncategorized === true && { uncategorized: 'true' }),
     // 2. activity_types: only send when investment activity is included AND types are selected; sort for stable cache key
     ...(filters.include_investment_activity !== false && filters.activity_types?.length && {
       activity_types: [...filters.activity_types].sort().join(','),

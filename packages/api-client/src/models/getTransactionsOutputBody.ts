@@ -37,6 +37,10 @@ export interface GetTransactionsOutputBody {
   readonly $schema?: string;
   limit: number;
   next_cursor?: string;
+  /** Summed amount of the whole filtered set, SIGNED like the rows (PFCv2: expenses positive, inflows negative) — not a magnitude. A Sankey node's amount is an ABS sum, so the property that holds is |node amount| == |total_amount|. First page only; absent means not computed, a present 0 means the set nets to zero. */
+  total_amount?: number;
+  /** Number of transactions in the whole filtered set. First page only; absent means not computed, a present 0 means the set is empty. */
+  total_count?: number;
   /** @nullable */
   transactions: ActivityItem[] | null;
 }

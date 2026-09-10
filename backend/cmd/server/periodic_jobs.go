@@ -38,6 +38,10 @@ type periodicJobsDeps struct {
 	savingsStatsWorker                  *jobs.SavingsStatsWorker
 	portfolioSnapshotWorker             *jobs.PortfolioSnapshotWorker
 	ruleQuarantineCensusWorker          *jobs.RuleQuarantineCensusWorker
+	// balanceSnapshotDispatchWorker is Plaid-specific and nil when Plaid is not configured: its
+	// capture jobs call /accounts/get, so with no Plaid there is nothing for it to dispatch
+	// (#1626 Phase 3, Defect 3).
+	balanceSnapshotDispatchWorker *jobs.BalanceSnapshotDispatchWorker
 	// plaidOrphanRetryWorker is Plaid-specific and nil when Plaid is not configured (Issue #1497).
 	// ⚠ There is deliberately NO field for the orphan-token PURGE worker: its registration is
 	// unconditional, so making it a nil-guardable dependency would be the first step towards it
@@ -57,12 +61,31 @@ type periodicJobSpec struct {
 	interval   time.Duration
 	build      func() (river.JobArgs, *river.InsertOpts)
 	opts       *river.PeriodicJobOpts
+	// schedule OVERRIDES interval when set, for a job whose cadence is a wall-clock time rather
+	// than a gap since the last run (#1626 Phase 3, Defect 3).
+	//
+	// ⚠ WHY THIS FIELD EXISTS AT ALL, since 16 of the 17 specs do not use it. River ships only
+	// PeriodicInterval, which schedules "N after the last run" — and with RunOnStart: true (which
+	// every spec here carries, by Issue #1448's invariant) that anchors a daily job to whenever the
+	// process last started. For a cleanup sweep that is irrelevant. For the balance snapshot
+	// dispatch it is not: its 21:00 UTC hour is chosen so the row lands near a closing balance AND
+	// so River's retry budget fits before the UTC day rolls over, and an interval would silently
+	// move that hour to whenever the last deploy happened.
+	//
+	// `interval` is still set alongside it, as the documented cadence the introspection tests read;
+	// periodic_jobs_test.go asserts the two AGREE, so the pair cannot drift into stating different
+	// frequencies.
+	schedule river.PeriodicSchedule
 }
 
 // toPeriodicJob converts this spec to the *river.PeriodicJob river.Config.PeriodicJobs
 // actually requires.
 func (s periodicJobSpec) toPeriodicJob() *river.PeriodicJob {
-	return river.NewPeriodicJob(river.PeriodicInterval(s.interval), s.build, s.opts)
+	schedule := s.schedule
+	if schedule == nil {
+		schedule = river.PeriodicInterval(s.interval)
+	}
+	return river.NewPeriodicJob(schedule, s.build, s.opts)
 }
 
 // buildPeriodicJobSpecs returns the periodicJobSpec for every periodic job that should be
@@ -264,6 +287,25 @@ func buildPeriodicJobSpecs(deps periodicJobsDeps) []periodicJobSpec {
 				return jobs.RuleQuarantineCensusArgs{TriggerSource: "periodic"}, jobs.RuleQuarantineCensusInsertOpts()
 			},
 			opts: jobs.RuleQuarantineCensusPeriodicOpts(),
+		})
+	}
+
+	// Issue #1626 Phase 3, Defect 3: Balance snapshot dispatch (daily at a fixed UTC hour) — fans
+	// out one per-item capture job each, so River's retry applies per item.
+	//
+	// ⚠ THE ONLY SPEC HERE WITH AN EXPLICIT SCHEDULE. See periodicJobSpec.schedule for why an
+	// interval cannot express this job's cadence, and jobs.BalanceSnapshotDispatchHourUTC for why
+	// the hour is 21:00 rather than later.
+	if deps.balanceSnapshotDispatchWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "balance snapshot dispatch",
+			logMessage: "Balance snapshot dispatch periodic job configured (daily at 21:00 UTC)",
+			interval:   24 * time.Hour,
+			schedule:   jobs.BalanceSnapshotDispatchSchedule(),
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.BalanceSnapshotDispatchArgs{TriggerSource: "periodic"}, jobs.BalanceSnapshotDispatchInsertOpts()
+			},
+			opts: jobs.BalanceSnapshotDispatchPeriodicOpts(),
 		})
 	}
 

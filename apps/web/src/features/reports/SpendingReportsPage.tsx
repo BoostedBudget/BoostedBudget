@@ -13,11 +13,13 @@ import { ErrorState } from '@/components/ui/error-state'
 import { useSpendingByCategory } from './hooks/useSpendingByCategory'
 import { useSpendingByMerchant } from './hooks/useSpendingByMerchant'
 import { useSpendingTrends } from './hooks/useSpendingTrends'
-import { useIncomeSourceBreakdown } from './hooks/useIncomeSourceBreakdown'
+import { useCategoryHierarchy } from './hooks/useCategoryHierarchy'
 import { CategoryBreakdownChart } from './components/CategoryBreakdownChart'
 import { CategoryDrilldownHeading } from './components/CategoryDrilldownHeading'
 import { CustomCategoryFilter } from './components/CustomCategoryFilter'
 import { CashFlowSankeyChart } from './components/CashFlowSankeyChart'
+import { SankeyViewModeControl } from './components/SankeyViewModeControl'
+import type { SankeyViewModeSelection } from './components/SankeyViewModeControl'
 import { SpendingTrendsChart } from './components/SpendingTrendsChart'
 import { TopMerchantsTable } from './components/TopMerchantsTable'
 import type { SortState } from '@/shared/components/DataTable'
@@ -49,6 +51,11 @@ export function SpendingReportsPage() {
   const [customCategoryIds, setCustomCategoryIds] = useState<string[]>([])
   const [merchantSort, setMerchantSort] = useState<SortState>({ columnId: 'total', direction: 'desc' })
   const [privacyMode, setPrivacyMode] = useState(false)
+  // The Sankey owns its own view state. It stays DECOUPLED from `drilldown` below, which drives the
+  // pie chart and table: the original design deliberately gave the chart its own unfiltered expense
+  // universe so drilling the table could not narrow the chart, and that separation still holds.
+  const [sankeyMode, setSankeyMode] = useState<SankeyViewModeSelection>('parents')
+  const [sankeyFocus, setSankeyFocus] = useState<string | undefined>()
 
   const derivedRange = preset !== 'custom' ? getDateRange(preset) : null
   const startDate = preset === 'custom' ? customStartDate : (derivedRange?.startDate ?? '')
@@ -61,22 +68,27 @@ export function SpendingReportsPage() {
   const filters = { startDate, endDate }
   const enabled = Boolean(startDate && endDate)
 
+  // The Sankey's own reads: one per flow direction, each returning the whole category tree in a
+  // single round trip so switching view mode never refetches.
   const {
-    data: incomeData,
-    loading: incomeLoading,
-    error: incomeError,
-    refetch: refetchIncome,
-  } = useIncomeSourceBreakdown({ filters, enabled })
-
-  // Top-level fetch (no drilldown) used by the Sankey so drilling into a category
-  // doesn't corrupt the expense universe shown in the chart.
-  const {
-    data: sankeyTopLevelData,
-    loading: sankeyTopLevelLoading,
-    error: sankeyTopLevelError,
-    refetch: refetchSankeyTopLevel,
-  } = useSpendingByCategory({
+    data: sankeyExpenseData,
+    loading: sankeyExpenseLoading,
+    error: sankeyExpenseError,
+    refetch: refetchSankeyExpense,
+  } = useCategoryHierarchy({
     filters: { ...filters, customCategoryIds },
+    direction: 'expense',
+    enabled,
+  })
+
+  const {
+    data: sankeyIncomeData,
+    loading: sankeyIncomeLoading,
+    error: sankeyIncomeError,
+    refetch: refetchSankeyIncome,
+  } = useCategoryHierarchy({
+    filters: { ...filters, customCategoryIds },
+    direction: 'income',
     enabled,
   })
 
@@ -113,6 +125,9 @@ export function SpendingReportsPage() {
   const handlePresetChange = (newPreset: DatePreset) => {
     setPreset(newPreset)
     setDrilldown(undefined)
+    // #1626: the focused category may not exist in the new universe. Leaving it set makes the
+    // control claim a focus the chart has silently abandoned.
+    setSankeyFocus(undefined)
     trackEvent(ANALYTICS_EVENTS.REPORT_DATE_CHANGED, { preset: newPreset })
   }
 
@@ -120,18 +135,27 @@ export function SpendingReportsPage() {
     setCustomStartDate(start)
     setCustomEndDate(end)
     setDrilldown(undefined)
+    // #1626: the focused category may not exist in the new universe. Leaving it set makes the
+    // control claim a focus the chart has silently abandoned.
+    setSankeyFocus(undefined)
     trackEvent(ANALYTICS_EVENTS.REPORT_DATE_CHANGED, { preset: 'custom' })
   }
 
   const handleCustomCategoryFilterChange = (ids: string[]) => {
     setCustomCategoryIds(ids)
     setDrilldown(undefined)
+    // #1626: the focused category may not exist in the new universe. Leaving it set makes the
+    // control claim a focus the chart has silently abandoned.
+    setSankeyFocus(undefined)
     trackEvent(ANALYTICS_EVENTS.REPORT_CUSTOM_CATEGORY_FILTERED, { count: ids.length })
   }
 
   const handleCategoryClick = (category: string, displayLabel: string) => {
     if (category.startsWith('custom:')) return
     if (drilldown?.category === category) {
+      // Deliberately does NOT touch sankeyFocus. A pie drilldown does not change the Sankey's
+      // universe — the chart reads its own endpoint, which has no `category` param at all — so
+      // resetting its focus here would re-couple the two views that are kept separate on purpose.
       setDrilldown(undefined)
     } else {
       setDrilldown({ category, displayLabel })
@@ -207,20 +231,30 @@ export function SpendingReportsPage() {
                 {privacyMode ? 'Show' : 'Hide'}
               </button>
             </div>
+            <div className="mb-3 flex justify-end">
+              <SankeyViewModeControl
+                value={sankeyMode}
+                onChange={setSankeyMode}
+                focusedKey={sankeyFocus}
+                onClearFocus={() => setSankeyFocus(undefined)}
+              />
+            </div>
             <Card>
               {readOrError(
-                incomeError ?? sankeyTopLevelError,
+                sankeyIncomeError ?? sankeyExpenseError,
                 () => {
-                  void refetchIncome()
-                  void refetchSankeyTopLevel()
+                  void refetchSankeyIncome()
+                  void refetchSankeyExpense()
                 },
                 <CashFlowSankeyChart
-                  incomeData={incomeData}
-                  categoryData={sankeyTopLevelData}
-                  loading={incomeLoading || sankeyTopLevelLoading}
+                  incomeData={sankeyIncomeData}
+                  expenseData={sankeyExpenseData}
+                  loading={sankeyIncomeLoading || sankeyExpenseLoading}
                   privacyMode={privacyMode}
                   startDate={startDate}
                   endDate={endDate}
+                  viewMode={sankeyFocus ? { kind: 'focus', key: sankeyFocus } : { kind: sankeyMode }}
+                  onFocus={setSankeyFocus}
                 />,
               )}
             </Card>

@@ -25,6 +25,7 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Switch } from '@/components/ui/switch'
 import type { CategorizationRule } from '../types'
+import { UNNAMED_CUSTOM_CATEGORY_LABEL } from '../constants'
 import { formatPFCEnum } from '@/shared/categories/formatPfc'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
@@ -124,7 +125,9 @@ function getCategoryLabel(rule: CategorizationRule): string {
     )
   }
   if (rule.target_kind === 'custom' && rule.target_custom_category_id) {
-    return rule.target_custom_category_display ?? rule.target_custom_category_id
+    // #1626: never the id. Same latent fallback the card carried; wording matches the backend's
+    // `unnamedCustomCategoryLabel` so the rules and analytics surfaces agree.
+    return rule.target_custom_category_display ?? UNNAMED_CUSTOM_CATEGORY_LABEL
   }
   if (rule.target_kind === 'clear') return 'Clear override'
   return 'No category'

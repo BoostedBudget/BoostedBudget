@@ -409,6 +409,9 @@ REAL_CONCURRENTLY_UP_FILES=(
     000138_add_audit_logs_deletion_residue_index.up.sql
     000144_rebuild_deletion_residue_index.up.sql
     000182_add_accounts_user_account_backfill_index.up.sql
+    # #1626 Phase 3 Task G: the partial UNIQUE index scoped to the daily_capture source. Sole
+    # statement in its file, CONCURRENTLY, exactly like 000182 above.
+    000194_add_balance_snapshots_daily_capture_unique_index.up.sql
 )
 # Files whose ONLY occurrences of the keyword are prose (comments) or SQL string data. Every one of
 # these is a file the old full-line-only strip happened to get right; they stay listed because the
@@ -422,6 +425,10 @@ PROSE_ONLY_CONCURRENTLY_UP_FILES=(
     000163_portfolio_snapshot_repair_ledger.up.sql
     000168_transactions_pending_twin_pointer.up.sql
     000181_drop_invalid_accounts_backfill_index.up.sql
+    # #1626 Phase 3 Task G: 000194's drop-first companion. It mentions CONCURRENTLY only while
+    # EXPLAINING why 000194 cannot share a file with it; its own statements are a COMMENT ON COLUMN
+    # and a DO block, both of which need -1's single-transaction semantics.
+    000193_balance_snapshot_daily_capture_provenance.up.sql
 )
 
 for file in "${REAL_CONCURRENTLY_UP_FILES[@]}"; do

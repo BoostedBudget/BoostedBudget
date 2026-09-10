@@ -251,6 +251,12 @@ func TestTransactionKeyset_EXPLAIN(t *testing.T) {
 type recordingDB struct {
 	sql  string
 	args []any
+	// aggSQL/aggArgs capture the QueryRow the whole-set totals aggregate issues ahead of the page
+	// query (#1626 Phase 2). It is recorded separately rather than overwriting sql because BOTH
+	// statements need planning: the aggregate's first version was syntactically invalid, and no
+	// pgxmock shape test could have told us — this is the test that would have.
+	aggSQL  string
+	aggArgs []any
 }
 
 func (d *recordingDB) Begin(context.Context) (pgx.Tx, error) { return nil, errRecordingDB }
@@ -261,8 +267,29 @@ func (d *recordingDB) Query(_ context.Context, sql string, args ...interface{}) 
 	d.sql, d.args = sql, args
 	return nil, errRecordingDB
 }
-func (d *recordingDB) QueryRow(context.Context, string, ...interface{}) pgx.Row { return nil }
-func (d *recordingDB) SendBatch(context.Context, *pgx.Batch) pgx.BatchResults   { return nil }
+func (d *recordingDB) QueryRow(_ context.Context, sql string, args ...interface{}) pgx.Row {
+	d.aggSQL, d.aggArgs = sql, args
+	return zeroRow{}
+}
+
+// zeroRow lets the totals aggregate SUCCEED with zeroes, so recording continues on to the page
+// query. Failing here would stop the method before it emits the statement this test primarily
+// exists to plan — and both statements need capturing.
+type zeroRow struct{}
+
+func (zeroRow) Scan(dest ...interface{}) error {
+	for _, d := range dest {
+		switch v := d.(type) {
+		case *int:
+			*v = 0
+		case *float64:
+			*v = 0
+		}
+	}
+	return nil
+}
+
+func (d *recordingDB) SendBatch(context.Context, *pgx.Batch) pgx.BatchResults { return nil }
 
 var errRecordingDB = errors.New("recordingDB: no results, by design")
 
@@ -285,7 +312,7 @@ func TestUnifiedFeed_EmittedQuery_EXPLAIN(t *testing.T) {
 
 	rec := &recordingDB{}
 	repo := NewTransactionRepository(rec, newTestFieldEncryptor(t))
-	_, _, err := repo.GetByUserIDKeysetUnified(ctx, "00000000-0000-0000-0000-000000000000",
+	_, _, _, err := repo.GetByUserIDKeysetUnified(ctx, "00000000-0000-0000-0000-000000000000",
 		domain.TransactionFilters{IncludeInvestmentActivity: true}, nil, 10)
 	require.ErrorIs(t, err, errRecordingDB, "the recording DB must be the only thing that failed")
 	require.NotEmpty(t, rec.sql, "no SQL captured — GetByUserIDKeysetUnified stopped calling Query")
@@ -315,4 +342,53 @@ func TestUnifiedFeed_EmittedQuery_EXPLAIN(t *testing.T) {
 			"migration 000151); a Seq Scan here is a full-table scan per candidate transaction.\nPlan:\n%s", plan)
 	assert.Contains(t, plan, "account_status_history",
 		"the plan must actually include the retained-visibility leg.\nPlan:\n%s", plan)
+
+	// And the whole-set totals aggregate, which is a SECOND statement this method emits (#1626
+	// Phase 2). Planning it is not optional bonus coverage: its first version failed to parse, and
+	// only executing it against Postgres could say so. Because it WRAPS the page query rather than
+	// restating its predicates, a plan for it also re-proves the page query still type-checks.
+	require.NotEmpty(t, rec.aggSQL,
+		"no aggregate captured — GetByUserIDKeysetUnified stopped computing first-page totals")
+	// ⚠ WHAT IS SHARED IS THE PREDICATE-BEARING UNION BODY, NOT THE PAGE QUERY (#1626 Phase 2,
+	// review finding X3). This assertion used to strip only the LIMIT and require the aggregate to
+	// contain everything else — which enshrined the page's `ORDER BY sort_date, source_disc, id`
+	// inside the aggregate, so an unfiltered first page sorted every banking AND investment row
+	// merely to COUNT and SUM them, and then the page query sorted again. The drift-safety was the
+	// right call and is unchanged: both statements are still derived from ONE string, so a predicate
+	// cannot drift between them. Only the presentation ordering stopped leaking into the aggregate.
+	//
+	// Both boundaries are stripped from the page text here, and the page must carry both, so this
+	// cannot pass by the clauses quietly disappearing.
+	orderAt := strings.LastIndex(rec.sql, "ORDER BY sort_date")
+	require.Positive(t, orderAt, "the page query must carry the presentation ORDER BY")
+	limitAt := strings.LastIndex(rec.sql, "LIMIT $")
+	require.Greater(t, limitAt, orderAt, "the page query's LIMIT must follow its ORDER BY")
+	// Asserted as a bool rather than require.Contains because both strings are ~7 KB and a Contains
+	// failure prints them twice, which buries the message that matters.
+	unionBody := strings.TrimSpace(rec.sql[:orderAt])
+	require.True(t, strings.Contains(rec.aggSQL, unionBody),
+		"the aggregate must WRAP the shared union body verbatim, not restate it — a restatement is "+
+			"free to drift, and a total that disagrees with its rows is worse than no total (#1626)")
+	require.NotContains(t, rec.aggSQL, "ORDER BY sort_date",
+		"the aggregate must NOT inherit the page's presentation ordering: COUNT(*) and SUM(amount) "+
+			"are order-independent, so sorting the whole filtered set to compute them is pure cost "+
+			"paid on the busiest list in the app (#1626 X3)")
+	require.Len(t, rec.aggArgs, len(rec.args)-1,
+		"the aggregate must bind every page arg EXCEPT the LIMIT: it has no LIMIT clause, and the "+
+			"extended protocol rejects a parameter the statement does not reference")
+
+	aggPlan := runExplain(ctx, t, conn, rec.aggSQL, rec.aggArgs...)
+	assert.NotContains(t, aggPlan, "Seq Scan on account_status_history",
+		"the aggregate inherits the page query's access paths and must not lose them.\nPlan:\n%s", aggPlan)
+
+	// ⚠ THE PLAN ASSERTION IS A PAIR, and the positive half is what makes the negative half mean
+	// something. Asserting only "no Sort in the aggregate" would also pass if the page query lost
+	// its ordering, or if this test started planning something else entirely; requiring the SAME
+	// predicate set to plan WITH a Sort for the page and WITHOUT one for the aggregate is the
+	// difference the finding is about, and neither half holds on its own.
+	assert.Contains(t, plan, "Sort",
+		"the PAGE query must still sort — it is the ordering the list presents.\nPlan:\n%s", plan)
+	assert.NotContains(t, aggPlan, "Sort",
+		"the aggregate's plan must contain no Sort at all: it is a COUNT and a SUM over a UNION ALL "+
+			"and has nothing to order.\nPlan:\n%s", aggPlan)
 }

@@ -873,9 +873,12 @@ func TestGetLargestTransactionsForPeriod(t *testing.T) {
 		defer mock.Close()
 
 		txDate := time.Date(2024, 2, 15, 0, 0, 0, 0, time.UTC)
-		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "date", "account_id"}).
-			AddRow("tx-001", "Amazon", 500.0, "SHOPPING", txDate, "acc-001").
-			AddRow("tx-002", "Whole Foods", 200.0, "FOOD_AND_DRINK", txDate, "acc-001")
+		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "category_display", "date", "account_id"}).
+			// #1626: the read now also selects effective_category_name. The custom row is the
+			// regression case — its key is the synthetic token and its name lives only here.
+			AddRow("tx-001", "Amazon", 500.0, "SHOPPING", "SHOPPING", txDate, "acc-001").
+			AddRow("tx-002", "Whole Foods", 200.0, "FOOD_AND_DRINK", "FOOD_AND_DRINK", txDate, "acc-001").
+			AddRow("tx-003", "Therapist", 150.0, "custom:9f1c2b3a-0000-4000-8000-000000000001", "Therapy", txDate, "acc-001")
 
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
@@ -883,7 +886,9 @@ func TestGetLargestTransactionsForPeriod(t *testing.T) {
 
 		result, err := repo.GetLargestTransactionsForPeriod(ctx, userID, filters, limit)
 		require.NoError(t, err)
-		assert.Len(t, result, 2)
+		assert.Len(t, result, 3)
+		assert.Equal(t, "Therapy", result[2].CategoryDisplay,
+			"a custom category's own name must survive the read (#1626)")
 		assert.Equal(t, "tx-001", result[0].TransactionID)
 		assert.Equal(t, "Amazon", result[0].MerchantName)
 		assert.InDelta(t, 500.0, result[0].Amount, 0.001)
@@ -894,7 +899,7 @@ func TestGetLargestTransactionsForPeriod(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "date", "account_id"})
+		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "category_display", "date", "account_id"})
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
 			WillReturnRows(rows)
@@ -921,7 +926,7 @@ func TestGetLargestTransactionsForPeriod(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "date", "account_id"})
+		rows := pgxmock.NewRows([]string{"id", "merchant_name", "amount", "category", "category_display", "date", "account_id"})
 		mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
 			WillReturnRows(rows)
@@ -945,9 +950,12 @@ func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"category", "total", "count"}).
-			AddRow("SHOPPING", 400.0, 5).
-			AddRow("GENERAL_MERCHANDISE", 200.0, 3)
+		// #1626: the read now also selects effective_category_name; the custom row is the case
+		// that used to surface as a title-cased UUID.
+		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "count"}).
+			AddRow("SHOPPING", "SHOPPING", 400.0, 5).
+			AddRow("GENERAL_MERCHANDISE", "GENERAL_MERCHANDISE", 200.0, 3).
+			AddRow("custom:9f1c2b3a-0000-4000-8000-000000000001", "Gifts", 100.0, 2)
 
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, merchantID).
@@ -955,7 +963,9 @@ func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 
 		result, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantID, filters)
 		require.NoError(t, err)
-		assert.Len(t, result, 2)
+		assert.Len(t, result, 3)
+		assert.Equal(t, "Gifts", result[2].CategoryDisplay,
+			"a custom category's own name must survive the read (#1626)")
 		assert.Equal(t, "SHOPPING", result[0].Category)
 		assert.InDelta(t, 400.0, result[0].Total, 0.001)
 		assert.Equal(t, 5, result[0].Count)
@@ -965,7 +975,9 @@ func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"category", "total", "count"})
+		// #1626: the read now also selects effective_category_name — normalised to the 4-column
+		// list the code actually produces, matching the "returns category breakdown rows" case above.
+		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "count"})
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, merchantID).
 			WillReturnRows(rows)
@@ -991,7 +1003,7 @@ func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"category", "total", "count"})
+		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "count"})
 		mock.ExpectQuery(`(?i)COALESCE\(mno\.merged_into_merchant_id.*::uuid`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, merchantID).
 			WillReturnRows(rows)
@@ -1005,7 +1017,7 @@ func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"category", "total", "count"})
+		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "count"})
 		mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
 			WithArgs(userID, filters.StartDate, filters.EndDate, merchantID).
 			WillReturnRows(rows)
@@ -1028,9 +1040,23 @@ func TestGetIncomeSourceBreakdown(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
-		rows := pgxmock.NewRows([]string{"category", "total", "count"}).
-			AddRow("INCOME", 5000.0, 3).
-			AddRow("TRANSFER_IN", 1000.0, 2)
+		// #1626: the read now also selects effective_category_name AS category_display. The third
+		// row is the regression case — a custom-categorised income source, whose key is the
+		// synthetic `custom:<uuid>` token and whose only human-readable name is the display column.
+		// The fourth row's category_display is nil: the column is nullable and app-maintained
+		// asynchronously, so the fourth AddRow's other three fields still get a real assertion
+		// below. ⚠ Its own CategoryDisplay assertion is NOT a NULL-scan proof — pgxmock scans a nil
+		// AddRow cell into a plain Go string WITHOUT error (mutation-confirmed: reverting
+		// GetIncomeSourceBreakdown's sql.NullString to a plain string leaves this subtest green), so
+		// it cannot tell a correct sql.NullString scan from a reverted, broken one. The real proof,
+		// against real Postgres, is TestAnalyticsReads_NullCategoryDisplay_ToleratedBySqlNullStringReads's
+		// "GetIncomeSourceBreakdown" subtest (analytics_null_category_display_integration_test.go,
+		// build tag integration; #1626 Phase 2 pgxmock sweep).
+		rows := pgxmock.NewRows([]string{"category", "category_display", "total", "count"}).
+			AddRow("INCOME", "INCOME", 5000.0, 3).
+			AddRow("TRANSFER_IN", "TRANSFER_IN", 1000.0, 2).
+			AddRow("custom:9f1c2b3a-0000-4000-8000-000000000001", "Side hustle", 750.0, 4).
+			AddRow("custom:9f1c2b3a-0000-4000-8000-000000000002", nil, 250.0, 1)
 
 		mock.ExpectQuery(`SELECT`).
 			WithArgs(userID, filters.StartDate, filters.EndDate).
@@ -1038,10 +1064,23 @@ func TestGetIncomeSourceBreakdown(t *testing.T) {
 
 		result, err := repo.GetIncomeSourceBreakdown(ctx, userID, filters)
 		require.NoError(t, err)
-		assert.Len(t, result, 2)
+		assert.Len(t, result, 4)
 		assert.Equal(t, "INCOME", result[0].Category)
+		assert.Equal(t, "INCOME", result[0].CategoryDisplay)
 		assert.InDelta(t, 5000.0, result[0].Total, 0.001)
 		assert.Equal(t, 3, result[0].Count)
+
+		assert.Equal(t, "custom:9f1c2b3a-0000-4000-8000-000000000001", result[2].Category)
+		assert.Equal(t, "Side hustle", result[2].CategoryDisplay,
+			"a custom income category's own name must survive the read — without it the service "+
+				"title-cases the raw token and the Sankey renders a UUID (#1626)")
+
+		assert.Empty(t, result[3].CategoryDisplay,
+			"a NULL display cell must not disturb this row's other fields; NOT a NULL-scan proof — "+
+				"pgxmock cannot provide one (#1626 Phase 2 pgxmock sweep)")
+		assert.Equal(t, "custom:9f1c2b3a-0000-4000-8000-000000000002", result[3].Category)
+		assert.InDelta(t, 250.0, result[3].Total, 0.001)
+		assert.Equal(t, 1, result[3].Count)
 	})
 
 	t.Run("returns empty slice when no data", func(t *testing.T) {

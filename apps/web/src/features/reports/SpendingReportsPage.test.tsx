@@ -7,6 +7,7 @@ import {
   mockUseGetSpendingByMerchant,
   mockUseGetSpendingTrends,
   mockUseGetIncomeSourceBreakdown,
+  mockUseGetCategoryHierarchy,
 } from '@/test/mocks/analytics-api'
 import { mockUseGetUserCategories } from '@/test/mocks/categories-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
@@ -45,7 +46,12 @@ describe('SpendingReportsPage', () => {
     renderPage()
     // radiogroup, not group: DateRangePicker renders <ToggleGroup type="single">.
     // See src/test/mocks/toggle-group.tsx for why the role changed.
-    expect(screen.getByRole('radiogroup')).toBeDefined()
+    //
+    // Identified by its own preset, not by role: #1626 added a SECOND ToggleGroup (the Sankey's
+    // view-mode control), so `getAllByRole('radiogroup').length > 0` would pass even with the date
+    // picker gone entirely — which is the one thing this test is named for.
+    expect(screen.getByText('Last 3 Months')).toBeDefined()
+    expect(screen.getAllByRole('radiogroup').length).toBeGreaterThanOrEqual(2)
   })
 
   it('renders category breakdown section', () => {
@@ -336,30 +342,69 @@ describe('SpendingReportsPage Sankey drilldown immunity (G3 — Codex fix #4 reg
     mockUseGetSpendingByCategory.mockClear()
   })
 
-  it('Sankey top-level fetch remains without category param after a drilldown click', () => {
+  it('a focused category is cleared when the date range changes', () => {
+    // The Sankey needs real data for there to be a node to focus.
+    mockUseGetCategoryHierarchy.mockReturnValue({
+      data: {
+        levels: [{
+          category: 'FOOD_AND_DRINK', display: 'Food And Drink', total: 300, direct_total: 100,
+          percentage: 100, transaction_count: 5,
+          children: [{
+            category: 'FOOD_AND_DRINK_FAST_FOOD', display: 'Fast Food', total: 200,
+            direct_total: 200, percentage: 66, transaction_count: 3, children: [],
+          }],
+        }],
+        total: 300, direction: 'expense', start_date: '2024-01-01', end_date: '2024-01-31',
+      },
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve({})),
+    } as never)
+
+    renderPage()
+
+    // Focus a category through the chart's own click path. Targeted by label rather than by
+    // position: the first button in the sr-only table is an INCOME row, which navigates.
+    const sankey = screen.getByTestId('sankey-chart')
+    fireEvent.click(within(sankey).getByText(/Total Income → Food And Drink/))
+    expect(screen.queryByText(/Back to all categories/)).not.toBeNull()
+
+    // Changing the date range changes the expense universe: the focused category may not exist in
+    // the new period. Leaving the focus set made the control claim a focus the chart had silently
+    // abandoned, since buildSankeyData falls back to a full view for an unknown key.
+    fireEvent.click(screen.getByText('This Month'))
+    expect(screen.queryByText(/Back to all categories/)).toBeNull()
+
+    mockUseGetCategoryHierarchy.mockReturnValue({
+      data: null, isLoading: false, error: null, refetch: mock(() => Promise.resolve({})),
+    } as never)
+  })
+
+  it('the Sankey reads a different endpoint entirely, so a drilldown cannot narrow it', () => {
     renderPage()
     mockUseGetSpendingByCategory.mockClear()
+    mockUseGetCategoryHierarchy.mockClear()
 
-    // Click a PFC category in the category chart to trigger drilldown
+    // Click a PFC category in the category chart to trigger drilldown.
     const categoryChart = screen.getByTestId('category-chart')
     fireEvent.click(within(categoryChart).getByTestId('echarts-point-0')) // FOOD_AND_DRINK
 
-    // After re-render: two useSpendingByCategory calls happen simultaneously —
-    // one for the Sankey (no category) and one for the category chart (with category).
-    type ParamsCall = [{ category?: string } | undefined, unknown]
-    const calls = mockUseGetSpendingByCategory.mock.calls as ParamsCall[]
+    // #1626 strengthened this guard. It used to rest on the Sankey issuing a SECOND
+    // spending-by-category call that merely omitted `category` — a convention two calls to one
+    // endpoint had to keep. The Sankey now reads category-hierarchy instead, so the immunity is
+    // structural: the drilldown param does not exist on that endpoint's input at all.
+    type ParamsCall = [Record<string, unknown> | undefined, unknown]
 
-    // At least one call should have category === undefined (the Sankey top-level fetch).
-    const hasSankeyTopLevelCall = calls.some(
-      ([params]) => params != null && params.category === undefined,
-    )
-    // And at least one call should have category set (the drilldown chart fetch).
-    const hasDrilldownCall = calls.some(
-      ([params]) => params?.category === 'FOOD_AND_DRINK',
-    )
+    const drilldownCalls = mockUseGetSpendingByCategory.mock.calls as unknown as ParamsCall[]
+    expect(drilldownCalls.some(([p]) => p?.category === 'FOOD_AND_DRINK')).toBe(true)
 
-    expect(hasSankeyTopLevelCall).toBe(true)
-    expect(hasDrilldownCall).toBe(true)
+    const sankeyCalls = mockUseGetCategoryHierarchy.mock.calls as unknown as ParamsCall[]
+    expect(sankeyCalls.length).toBeGreaterThan(0)
+    for (const [params] of sankeyCalls) {
+      expect(params?.category).toBeUndefined()
+    }
+    // And it still asks for both directions, which is what makes the chart's two fans consistent.
+    expect(new Set(sankeyCalls.map(([p]) => p?.direction))).toEqual(new Set(['income', 'expense']))
   })
 })
 
@@ -376,6 +421,9 @@ describe('SpendingReportsPage failed reads', () => {
 
   const restoreDefaults = () => {
     mockUseGetIncomeSourceBreakdown.mockReturnValue(OK)
+    // #1626: without this the Sankey's failure leaks into the next test, which then sees two
+    // alerts and cannot tell which section actually degraded.
+    mockUseGetCategoryHierarchy.mockReturnValue(OK)
     mockUseGetSpendingByCategory.mockReturnValue(OK)
     mockUseGetSpendingByMerchant.mockReturnValue(OK)
     mockUseGetSpendingTrends.mockReturnValue(OK)
@@ -384,8 +432,9 @@ describe('SpendingReportsPage failed reads', () => {
   beforeEach(restoreDefaults)
   afterEach(restoreDefaults)
 
-  it('reports a failed income read instead of "No cash flow data"', () => {
-    mockUseGetIncomeSourceBreakdown.mockReturnValue(FAILED)
+  it('reports a failed cash-flow read instead of "No cash flow data"', () => {
+    // #1626: the Sankey's reads are the category-hierarchy pair, not income-sources.
+    mockUseGetCategoryHierarchy.mockReturnValue(FAILED)
     renderPage()
     expect(screen.getAllByRole('alert').length).toBeGreaterThan(0)
     expect(screen.queryByText(/No cash flow data/i)).toBeNull()

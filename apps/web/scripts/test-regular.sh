@@ -51,6 +51,9 @@ EXCLUDE_PATTERNS=(
     "src/features/budgets/hooks/usePreviewCategories.test.tsx"
     # #898: useSessionDismiss tests the real implementation; session-dismiss.ts preload would shadow it
     "src/shared/hooks/useSessionDismiss.test.ts"
+    # #1626: must run against the REAL @radix-ui/react-toggle-group, not the shared bunfig-preloaded
+    # mock, to prove SankeyViewModeControl actually supplies item-level aria-labels
+    "src/features/reports/components/SankeyViewModeControl.test.tsx"
 )
 
 echo "Running tests with centralized mocks (excluding process-isolated tests)..."

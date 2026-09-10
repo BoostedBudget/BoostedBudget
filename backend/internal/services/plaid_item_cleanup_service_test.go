@@ -1731,3 +1731,14 @@ func TestPlaidCleanup_CleanupItems_StampFailure_SkipsMarkDisconnectedAndFails(t 
 			"without calling Plaid, so it would strand them")
 	mockRepo.AssertNotCalled(t, "MarkItemsDisconnected", mock.Anything, mock.Anything)
 }
+
+// #1626 Phase 3, Defect 3: the periodic balance-capture dispatcher's global item enumeration.
+// Nothing in this test file's subject reaches it; the method exists so the mock still satisfies
+// repository.LinkedItemRepository.
+func (m *MockLinkedItemRepoForCleanup) GetItemsForBalanceCapturePage(ctx context.Context, after *repository.BalanceCaptureSweepCursor, limit int) ([]domain.BalanceCaptureTarget, error) {
+	args := m.Called(ctx, after, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.BalanceCaptureTarget), args.Error(1)
+}

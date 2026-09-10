@@ -227,10 +227,22 @@ func TestInvestment_Snapshot_PartialNullCostBasis_Integration(t *testing.T) {
 // SCOPED TO THE INVESTMENT DOMAIN on purpose. This comment used to say "consistent with all read
 // paths that JOIN accounts WHERE status='active'", which read as a universal about the codebase and
 // is not one: after #1561 no spending/cash-flow analytics join carries a status predicate at all
-// (#1109 had already removed the personal-scope ones), and GetAggregatedHistoryForHousehold
-// expresses status as a DISTINCT ON ordering preference rather than a filter
-// (balance_snapshot_repository.go:325). Investment reads are the remaining family that genuinely
-// filters, which is why this snapshot matching them is worth pinning.
+// (#1109 had already removed the personal-scope ones), and the household balance read carries no
+// status FILTER either.
+//
+// ⚠ THE PRECEDING CLAIM WAS RETRACTED BY #1626 E2, AND THE LINE NUMBER WITH IT. It read
+// "GetAggregatedHistoryForHousehold expresses status as a DISTINCT ON ordering preference rather
+// than a filter (balance_snapshot_repository.go:325)". Both halves were false, and the second is
+// why it is retracted rather than re-pointed: #1569 T10.2 had already deleted that ordering
+// preference — the ORDER BY term reading (a.status = 'active') DESC NULLS LAST — and replaced the
+// chain-wide join with a.id = bs.account_id, so no status expression of any kind remained in that
+// method, while the cited line had drifted into the PERSONAL statement's carry-forward, a different
+// method entirely. Re-anchored by NAMING the constructs instead of counting lines to them: the two
+// places accounts.status is now mentioned anywhere near this read are
+// aggregatedHistoryHouseholdSQLBase's carried-row leg (a_carry.status = 'active', which gates an
+// INFERENCE about a day nobody reported rather than the visibility of any retained row) and
+// accountLiveOnDateClause. Neither is a read filter. Investment reads are the remaining family that
+// genuinely filters, which is why this snapshot matching them is worth pinning.
 func TestInvestment_Snapshot_ExcludesInactiveAccounts_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -455,13 +467,13 @@ func TestInvestment_UnifiedFeed_PageBoundary_Integration(t *testing.T) {
 	}
 
 	// Page 1: limit=2 → exactly 2 rows, with a next cursor
-	page1, cursor1, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 2)
+	page1, cursor1, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 2)
 	require.NoError(t, err, "page 1 must not error")
 	require.Len(t, page1, 2, "page 1 must have exactly 2 items")
 	require.NotNil(t, cursor1, "page 1 must return a next cursor")
 
 	// Page 2: continue from cursor → exactly 2 rows, no next cursor
-	page2, cursor2, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, cursor1, 2)
+	page2, cursor2, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, cursor1, 2)
 	require.NoError(t, err, "page 2 must not error")
 	require.Len(t, page2, 2, "page 2 must have exactly 2 items")
 	assert.Nil(t, cursor2, "page 2 must be the last page (nil cursor)")
@@ -556,7 +568,7 @@ func TestInvestment_UnifiedFeed_ActivityTypesExcludesBanking_Integration(t *test
 		ActivityTypes:             []string{"buy"},
 	}
 
-	items, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	items, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
 	require.NoError(t, err, "query must not error")
 
 	// Only the investment row (buy) must be returned — banking must be excluded (R2-4 fix)
@@ -757,7 +769,7 @@ func TestInvestment_UnifiedFeed_BankingOnlyFilter_ExcludesInvestment_Integration
 		IncludeInvestmentActivity: true,
 		Pending:                   &pendingTrue,
 	}
-	items, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	items, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
 	require.NoError(t, err, "Pending filter must not error")
 	require.Len(t, items, 1, "only the pending banking transaction should be returned")
 	assert.Equal(t, domain.FeedSourceBanking, items[0].Source, "result must be the banking row (proves GAP G fix)")
@@ -774,7 +786,7 @@ func TestInvestment_UnifiedFeed_BankingOnlyFilter_ExcludesInvestment_Integration
 		IncludeInvestmentActivity: true,
 		MerchantID:                &merchantIDStr,
 	}
-	itemsMerchant, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filtersMerchant, nil, 10)
+	itemsMerchant, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filtersMerchant, nil, 10)
 	require.NoError(t, err, "MerchantID filter must not error")
 	// Merchant filter returns zero rows (no txn has that merchant), confirming investment branch zeroed
 	assert.Empty(t, itemsMerchant, "MerchantID filter must zero investment rows (proves transaction_repository.go:2552-2557 branch)")
@@ -786,7 +798,7 @@ func TestInvestment_UnifiedFeed_BankingOnlyFilter_ExcludesInvestment_Integration
 		IncludeInvestmentActivity: true,
 		AccountIDs:                []string{investAcctIDStr},
 	}
-	items2, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters2, nil, 10)
+	items2, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters2, nil, 10)
 	require.NoError(t, err, "AccountIDs filter must not error")
 	require.Len(t, items2, 1, "only the investment transaction for that account should be returned")
 	assert.Equal(t, domain.FeedSourceInvestment, items2[0].Source, "AccountIDs must return investment rows")
@@ -1359,7 +1371,7 @@ func TestInvestment_UnifiedFeed_SearchMatchesTicker_Integration(t *testing.T) {
 		IncludeInvestmentActivity: true,
 		Search:                    &searchTicker,
 	}
-	items1, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters1, nil, 10)
+	items1, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters1, nil, 10)
 	require.NoError(t, err, "search by ticker")
 	require.Len(t, items1, 1, "Search=BGAIN must return exactly the investment row")
 	assert.Equal(t, domain.FeedSourceInvestment, items1[0].Source,
@@ -1374,7 +1386,7 @@ func TestInvestment_UnifiedFeed_SearchMatchesTicker_Integration(t *testing.T) {
 		IncludeInvestmentActivity: true,
 		Search:                    &searchName,
 	}
-	items2, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters2, nil, 10)
+	items2, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters2, nil, 10)
 	require.NoError(t, err, "search by banking name")
 	require.Len(t, items2, 1, "Search=Coffee must return exactly the banking row")
 	assert.Equal(t, domain.FeedSourceBanking, items2[0].Source,
@@ -1390,7 +1402,7 @@ func TestInvestment_UnifiedFeed_SearchMatchesTicker_Integration(t *testing.T) {
 		IncludeInvestmentActivity: true,
 		Search:                    &searchSecName,
 	}
-	items3, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters3, nil, 10)
+	items3, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters3, nil, 10)
 	require.NoError(t, err, "search by security name")
 	require.Len(t, items3, 1, "Search=Boosted must return exactly the investment row via sec.name")
 	assert.Equal(t, domain.FeedSourceInvestment, items3[0].Source,
@@ -1470,7 +1482,7 @@ func TestInvestment_UnifiedFeed_InvestmentSurvivesRelink_Integration(t *testing.
 	filters := domain.TransactionFilters{
 		IncludeInvestmentActivity: true,
 	}
-	items, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	items, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
 	require.NoError(t, err, "GetByUserIDKeysetUnified must not error")
 	require.Len(t, items, 1,
 		"pre-relink investment transaction must appear in unified feed after re-link (chain-expansion RED)")
@@ -1543,7 +1555,7 @@ func TestInvestment_UnifiedFeed_SurvivesRelink_WithAccountFilter_Integration(t *
 		AccountID:                 &accountBStr,
 	}
 	repo := NewTransactionRepository(tx, enc)
-	items, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	items, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
 	require.NoError(t, err, "GetByUserIDKeysetUnified with AccountID filter must not error")
 	require.Len(t, items, 1,
 		"pre-relink investment txn must be found via accountB filter (chain-expansion RED)")
@@ -1613,7 +1625,7 @@ func TestTransactions_UnifiedFeed_BankingSurvivesRelink_Integration(t *testing.T
 	filters := domain.TransactionFilters{
 		IncludeInvestmentActivity: false,
 	}
-	items, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	items, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
 	require.NoError(t, err, "GetByUserIDKeysetUnified (banking-only) must not error")
 	require.Len(t, items, 1,
 		"pre-relink banking transaction must appear in unified feed after re-link (banking chain-expansion RED)")
@@ -1640,7 +1652,7 @@ func TestTransactions_UnifiedFeed_BankingSurvivesRelink_Integration(t *testing.T
 	require.NoError(t, err)
 
 	// Re-query — orphan must NOT be returned (user_account_id is NULL, no chain)
-	items2, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	items2, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
 	require.NoError(t, err, "re-query after orphan insert must not error")
 	// Filter to count only the chained banking row.
 	// On current code both rows are dropped (inner JOIN excludes replaced accountA),
@@ -1683,7 +1695,7 @@ func TestTransactions_UnifiedFeed_BankingSurvivesRelink_Integration(t *testing.T
 	require.NoError(t, err)
 
 	// Re-query — null-acct chained row MUST be returned; orphan MUST NOT.
-	items3, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	items3, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
 	require.NoError(t, err, "re-query after null-acct-chained insert must not error")
 	nullAcctFound := false
 	for _, item := range items3 {
@@ -1762,7 +1774,7 @@ func TestTransactions_UnifiedFeed_NoDuplication_Integration(t *testing.T) {
 
 	repo := NewTransactionRepository(tx, enc)
 	filters := domain.TransactionFilters{IncludeInvestmentActivity: false}
-	items, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	items, _, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
 	require.NoError(t, err, "GetByUserIDKeysetUnified must not error")
 
 	// Count how many times bankTxnID appears. Under a JOIN with 2 active siblings

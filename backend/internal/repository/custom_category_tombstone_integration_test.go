@@ -738,7 +738,7 @@ func TestCategoryTombstone_ExemptReadsStillSeeTheHistory_Integration(t *testing.
 
 	// transaction_repository.go:2841 — the unified (banking+investment) keyset filter.
 	t.Run("the unified keyset filter still matches history", func(t *testing.T) {
-		items, _, err := txnRepo.GetByUserIDKeysetUnified(ctx, f.userID,
+		items, _, _, err := txnRepo.GetByUserIDKeysetUnified(ctx, f.userID,
 			domain.TransactionFilters{CustomCategoryIDs: []string{f.coffeeID}}, nil, 50)
 		require.NoError(t, err)
 		require.Len(t, items, 1)

@@ -27,6 +27,7 @@ const (
 	methodGetAverageMonthlySpend          = "GetAverageMonthlySpend"
 	methodGetCategoryTotalForPeriod       = "GetCategoryTotalForPeriod"
 	methodGetIncomeSourceBreakdown        = "GetIncomeSourceBreakdown"
+	methodGetCategoryHierarchy            = "GetCategoryHierarchy"
 
 	methodGetTopExpense                   = "GetTopExpense"
 	methodGetLargestTransactionsForPeriod = "GetLargestTransactionsForPeriod"
@@ -77,6 +78,23 @@ func (s *cachedAnalyticsService) GetSpendingByCategory(ctx context.Context, user
 		Enc(func(e *cache.ArgEncoder) { cache.EncodeSpendingFilters(e, userID, filters) })
 	return cache.GetOrLoad(ctx, s.c, k, func(ctx context.Context) (*domain.SpendingByCategoryResponse, error) {
 		return s.inner.GetSpendingByCategory(ctx, userID, filters)
+	})
+}
+
+func (s *cachedAnalyticsService) GetCategoryHierarchy(ctx context.Context, userID string, filters domain.SpendingFilters, direction domain.CategoryDirection) (*domain.CategoryHierarchyResponse, error) {
+	k := cache.NewKey(cache.NamespaceAnalytics, cache.ScopeFor(userID, filters.HouseholdScope), methodGetCategoryHierarchy).
+		Enc(func(e *cache.ArgEncoder) {
+			cache.EncodeSpendingFilters(e, userID, filters)
+			// Direction is a METHOD ARGUMENT, not a SpendingFilters field, so EncodeSpendingFilters
+			// cannot see it and it has to be encoded explicitly — otherwise income and expense share
+			// one key and serve each other's data. It stays an argument on purpose:
+			// TestSpendingFiltersEncoder_CoversEveryStructField asserts the encoder covers every
+			// field of that struct by reflection count, so adding one there is a breaking change to
+			// every existing analytics cache key.
+			e.String(string(direction))
+		})
+	return cache.GetOrLoad(ctx, s.c, k, func(ctx context.Context) (*domain.CategoryHierarchyResponse, error) {
+		return s.inner.GetCategoryHierarchy(ctx, userID, filters, direction)
 	})
 }
 
