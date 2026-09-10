@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
+	"github.com/maxnussbaum/BoostedBudget/internal/rules"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -50,6 +52,14 @@ func (m *mockRuleRepository) GetByName(ctx context.Context, userID, name string)
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.CategorizationRule), args.Error(1)
+}
+
+func (m *mockRuleRepository) ListAllForQuarantineCensus(ctx context.Context) ([]*domain.CategorizationRule, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.CategorizationRule), args.Error(1)
 }
 
 func (m *mockRuleRepository) Update(ctx context.Context, rule *domain.CategorizationRule) error {
@@ -750,4 +760,157 @@ func TestCategorizationRuleService_ToggleRule_RefusesToArmOntoATombstonedCategor
 	assert.Nil(t, rule)
 	mockRepo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
 	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestCategorizationRuleService_UpdateRule_RenamesALegacyStringValuedRule is #1625's final-review
+// B1 reproduction.
+//
+// `{amount_greater_than, "1000"}` is the corpus condition_coercion.go documents as REAL and common:
+// dedac0aa (#346) validated only the condition TYPE, so a number sent as a string has persisted
+// through the ordinary public API for the entire life of the feature, and this branch deliberately
+// REPAIRS it at read time so such rules keep running. The card even tells the user to "edit the
+// rule to confirm that is what you meant".
+//
+// Until this test, that advice was a dead end: UpdateRule ran ValidateShape over the MERGED rule,
+// so a PATCH that supplied nothing but a name was refused with
+// `invalid value shape: field "amount" with operator "gt" needs a number, got string` — a 422 on an
+// edit that never touched a condition. condition_schema.go's own textValues comment names that
+// failure ("permanently un-updatable ... precisely the quarantine-a-working-rule failure this
+// validator is meant to avoid") on a neighbouring case; this is the same failure one function over.
+//
+// ⚠ The write path stays STRICT for conditions the request actually supplies — see
+// TestCategorizationRuleService_UpdateRule_StillRefusesANewlySuppliedBadShape below. Skipping the
+// shape check for untouched conditions is not "accept anything on update"; it is "do not re-judge
+// data this request did not write".
+func TestCategorizationRuleService_UpdateRule_RenamesALegacyStringValuedRule(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
+	ctx := context.Background()
+	userID := "user-123"
+	ruleID := "rule-legacy"
+
+	legacy := &domain.CategorizationRule{
+		ID:     ruleID,
+		UserID: userID,
+		Name:   "Big purchases",
+		// The exact stored shape #1625 repairs at read time: a number as a string.
+		Conditions:       []domain.RuleCondition{{Type: domain.ConditionAmountGreaterThan, Value: "1000"}},
+		ConditionLogic:   "AND",
+		TargetKind:       ptrStr("pfc"),
+		TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		TagBehavior:      "add",
+		Source:           "manual",
+	}
+
+	// Falsifiability: the stored condition really is one the strict validator rejects. Without
+	// this, a future change that made "1000" legal would leave the test passing while testing
+	// nothing.
+	require.Error(t, legacy.Conditions[0].ValidateShape(),
+		"fixture is not a legacy-shape rule any more — ValidateShape now accepts it, so this test "+
+			"no longer reproduces B1")
+
+	mockRepo.On("GetByID", ctx, ruleID).Return(legacy, nil)
+	mockRepo.On("Update", ctx, mock.AnythingOfType("*domain.CategorizationRule")).Return(nil)
+
+	newName := "Big purchases (renamed)"
+	rule, err := service.UpdateRule(ctx, userID, ruleID, &domain.UpdateCategorizationRuleRequest{Name: &newName})
+
+	require.NoError(t, err, "renaming a rule whose stored conditions the server itself repairs at "+
+		"read time must not 422 — the rule is running, and the UI tells the user to edit it")
+	assert.Equal(t, newName, rule.Name)
+	// ⚠ #1625 second fix wave L7: this assertion used to claim the condition is persisted
+	// "byte-identical" while checking only Value. It is not, and could not be checked here: the
+	// repository NORMALIZES what it loads (normalizeLoadedConditions, categorization_rule_
+	// repository.go), so a legacy row's canonical Field/Operator can be filled in on the way out
+	// and written back on the way in. What this test actually pins — and all it needs to pin — is
+	// that the VALUE the request never mentioned is not rewritten, which is what a silent repair
+	// would look like to the user.
+	assert.Equal(t, "1000", rule.Conditions[0].Value,
+		"the untouched condition's VALUE must survive verbatim; rewriting it here would be a "+
+			"silent write the user did not ask for")
+	mockRepo.AssertExpectations(t)
+}
+
+// TestCategorizationRuleService_UpdateRule_StillRefusesANewlySuppliedBadShape is the other half of
+// B1: relaxing the update path must not become a back door for WRITING a malformed condition.
+// A request that supplies `conditions` is judged exactly as strictly as CreateRule.
+func TestCategorizationRuleService_UpdateRule_StillRefusesANewlySuppliedBadShape(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
+	ctx := context.Background()
+	userID := "user-123"
+	ruleID := "rule-legacy"
+
+	legacy := &domain.CategorizationRule{
+		ID:               ruleID,
+		UserID:           userID,
+		Name:             "Big purchases",
+		Conditions:       []domain.RuleCondition{{Type: domain.ConditionAmountGreaterThan, Value: "1000"}},
+		ConditionLogic:   "AND",
+		TargetKind:       ptrStr("pfc"),
+		TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		TagBehavior:      "add",
+		Source:           "manual",
+	}
+
+	mockRepo.On("GetByID", ctx, ruleID).Return(legacy, nil)
+
+	bad := []domain.RuleCondition{{Type: domain.ConditionAmountGreaterThan, Value: "still-not-a-number"}}
+	_, err := service.UpdateRule(ctx, userID, ruleID, &domain.UpdateCategorizationRuleRequest{Conditions: &bad})
+
+	require.Error(t, err, "a condition the REQUEST supplied is new data and must be shape-checked")
+	assert.ErrorIs(t, err, domain.ErrInvalidConditionValue)
+	mockRepo.AssertNotCalled(t, "Update", ctx, mock.AnythingOfType("*domain.CategorizationRule"))
+}
+
+// TestCategorizationRuleService_QuarantineBadgeFollowsTheKillSwitch is #1625's final-review I3.
+//
+// Enforcement had THREE sources of truth: rules.RuleMatches gated on RULE_QUARANTINE_ENFORCE,
+// while annotateQuarantineStatus here and reportQuarantineCandidates in rule_application_service
+// consulted observability.QuarantineReasonStopsMatching alone. With the switch off the card said
+// "Not running" — the strongest claim the UI can make — while the engine went on recategorising
+// the user's ledger. RuleMatches' own doc comment calls that divergence impossible.
+//
+// ⚠ Driven through the SERVICE's public read path, not through annotateQuarantineStatus directly,
+// because the response object is what the user is shown. And both switch positions are asserted:
+// checking only the off position would pass against a function that always returned false.
+func TestCategorizationRuleService_QuarantineBadgeFollowsTheKillSwitch(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	ruleID := "rule-quarantined"
+
+	// no_conditions_matches_everything: enforced, unreachable through the API, and therefore the
+	// cleanest fixture for "the engine refuses this rule outright".
+	stopped := &domain.CategorizationRule{
+		ID:               ruleID,
+		UserID:           userID,
+		Name:             "Broken rule",
+		Enabled:          true,
+		Conditions:       nil,
+		ConditionLogic:   "AND",
+		TargetKind:       ptrStr("pfc"),
+		TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		TagBehavior:      "add",
+		Source:           "manual",
+	}
+
+	for _, enforcing := range []bool{true, false} {
+		t.Run(map[bool]string{true: "enforcing", false: "kill switch off"}[enforcing], func(t *testing.T) {
+			restore := rules.SetQuarantineEnforcementForTest(enforcing)
+			t.Cleanup(restore)
+
+			mockRepo := new(mockRuleRepository)
+			service := NewCategorizationRuleService(mockRepo, new(MockCustomCategoryRepository))
+			mockRepo.On("GetByID", ctx, ruleID).Return(stopped, nil)
+
+			got, err := service.GetRuleByID(ctx, userID, ruleID)
+			require.NoError(t, err)
+
+			assert.Equal(t, string(observability.QuarantineNoConditions), got.QuarantineReason,
+				"the reason is reported in BOTH positions — the switch gates enforcement, not diagnosis")
+			assert.Equal(t, enforcing, got.Quarantined,
+				"`quarantined` is the claim \"this rule matches nothing\". With the kill switch off "+
+					"the engine runs the rule, so claiming it is not running is false.")
+		})
+	}
 }

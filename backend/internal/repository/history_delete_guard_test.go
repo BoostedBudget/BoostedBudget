@@ -184,17 +184,18 @@ var allowedHistoryDeletes = map[string]historyDeleteAllowance{
 	//
 	// ⚠ WIDENED PIN (#1569 round 17 task 6). Two legs were ADDED to the statement and are pinned
 	// here: `c.deleted_at IS NULL` (it could hard-destroy a contribution the system had ALREADY
-	// tombstoned and retained — the undocumented fifth finding) and `c.status <> $3`, bound to
-	// 'rejected' (a rejected row is R3-7's sticky tombstone, kept on purpose and hidden from the
-	// ledger UI). The status value is a BOUND PARAMETER, not an inline literal, because normaliseSQL
+	// tombstoned and retained — the undocumented fifth finding) and `c.status <> $4` (renumbered
+	// from $3 by #1625's `c.savings_goal_id = $3` ownership leg), bound to 'rejected' (a rejected
+	// row is R3-7's sticky tombstone, kept on purpose and hidden from the ledger UI). The status
+	// value is a BOUND PARAMETER, not an inline literal, because normaliseSQL
 	// blanks SQL string literals before matching — an inlined 'rejected' would be invisible to the
 	// very fragment meant to pin it. Same precedent, and same limitation, as PurgeAccount's
 	// `status <> $3`: this guard proves the LEG is present, never that $3 still carries 'rejected'.
 	// The behavioural authority for the value is
 	// TestDeleteContribution_RefusesARejectedContribution_Integration.
 	"repository/savings_contribution_repository.go#DeleteContribution|savings_goal_contributions": {
-		reason:    "the user deleting one named contribution that is still on their live ledger — the narrowest possible explicit request. NOT necessarily a row they entered: the predicate keys on c.id alone, so a reconciler-created row is reachable by it. It now refuses every row the product has already retired from that ledger: a tombstoned goal, a tombstoned contribution, and a 'rejected' sticky tombstone",
-		predicate: []string{"c.id = $1", "c.savings_goal_id = g.id", "g.user_id = $2", "g.deleted_at IS NULL", "c.deleted_at IS NULL", "c.status <> $3"},
+		reason:    "the user deleting one named contribution that is still on their live ledger — the narrowest possible explicit request. NOT necessarily a row they entered: within the named goal, the predicate keys on c.id alone, so a reconciler-created row is reachable by it. It now refuses every row the product has already retired from that ledger: a tombstoned goal, a tombstoned contribution, and a 'rejected' sticky tombstone. `c.savings_goal_id = $3` (#1625) is a separate, ownership leg — the delete is scoped to the goal the caller named in the URL, so a same-user request cannot destroy a DIFFERENT goal's contribution",
+		predicate: []string{"c.id = $1", "c.savings_goal_id = g.id", "g.user_id = $2", "c.savings_goal_id = $3", "g.deleted_at IS NULL", "c.deleted_at IS NULL", "c.status <> $4"},
 	},
 	// ⚠ REMOVED (#1569 round 12 task 2), NOT REWORDED. DeleteManagedForTransaction used to be a real
 	// `DELETE FROM savings_goal_contributions` and carried a blessing here. An independent Codex
@@ -1141,12 +1142,12 @@ func TestHistoryDeleteScan_SeesAPackageLevelConstant(t *testing.T) {
 // where a leg silently disappears. It did not close either of these, and both were MEASURED green
 // against the unmodified guard before this section was written:
 //
-//   - THE VALUE BEHIND A BOUND PARAMETER. `c.status <> $3` is text. Editing
+//   - THE VALUE BEHIND A BOUND PARAMETER. `c.status <> $4` is text. Editing
 //     `contributionStatusRejected` from "rejected" to "confirmed" leaves that text byte-identical
 //     and makes every rejected sticky tombstone deletable. Same for PurgeAccount's `status <> $3`
 //     and `domain.AccountStatusActive`. A guard that reads SQL source can never see the Go value,
 //     so the value has to be pinned separately — see pinnedPredicateBoundValues.
-//   - A DISJUNCTION AROUND THE LEG. `AND (c.status <> $3 OR TRUE)` CONTAINS the blessed fragment
+//   - A DISJUNCTION AROUND THE LEG. `AND (c.status <> $4 OR TRUE)` CONTAINS the blessed fragment
 //     verbatim; substring matching cannot distinguish a narrowing leg from a decorative one. The
 //     doc on historyDeleteAllowance already said "a fragment is not a proof of narrowness"; that
 //     was true and did nothing. See TestNoAllowlistedHistoryDeleteWidensItselfWithADisjunction.
@@ -1154,7 +1155,7 @@ func TestHistoryDeleteScan_SeesAPackageLevelConstant(t *testing.T) {
 // ⚠ AND THE HONEST LIMIT, WHICH NEITHER OF THE TWO TESTS BELOW MOVES. These are text and value
 // pins, not a proof of semantics. A blessed statement can still be widened in ways no scanner will
 // catch: `AND c.status IS DISTINCT FROM $3` reads as narrowing and is not the same predicate;
-// `AND c.status <> $3 AND TRUE` is a no-op decoration these tests permit; a fourth parameter could
+// `AND c.status <> $4 AND TRUE` is a no-op decoration these tests permit; a fourth parameter could
 // be introduced and mis-bound; and nothing here proves that $3 is the parameter the fragment's
 // position implies — the pins below assert the CONSTANT's value, and it is a human reading of the
 // call site that ties that constant to $3. The behavioural integration tests remain the only
@@ -1193,11 +1194,11 @@ var pinnedPredicateBoundValues = []boundValuePin{
 	},
 	{
 		key:      "repository/savings_contribution_repository.go#DeleteContribution|savings_goal_contributions",
-		fragment: "c.status <> $3",
+		fragment: "c.status <> $4",
 		got:      contributionStatusRejected,
 		want:     "rejected",
 		why: "a 'rejected' contribution is R3-7's sticky tombstone, retained on purpose and hidden " +
-			"from the ledger UI. If $3 stopped meaning 'rejected', DeleteContribution would destroy " +
+			"from the ledger UI. If $4 stopped meaning 'rejected', DeleteContribution would destroy " +
 			"those retained rows — the exact regression the leg was added to prevent",
 	},
 }
@@ -1250,7 +1251,7 @@ var sqlDisjunctionRegexp = regexp.MustCompile(`\bOR\b`)
 // TestNoAllowlistedHistoryDeleteWidensItselfWithADisjunction is #1569 round 17, Codex defect 1,
 // bypass two.
 //
-// ⚠ MEASURED, NOT REASONED: rewriting DeleteContribution's leg as `AND (c.status <> $3 OR TRUE)`
+// ⚠ MEASURED, NOT REASONED: rewriting DeleteContribution's leg as `AND (c.status <> $4 OR TRUE)`
 // left both existing G2 tests GREEN — the blessed fragment is still there, verbatim, inside a
 // disjunction that makes it decide nothing.
 //
@@ -1260,7 +1261,7 @@ var sqlDisjunctionRegexp = regexp.MustCompile(`\bOR\b`)
 // genuinely needs one, this test is the right place to argue for it — in the open, with a reason,
 // the same way allowedHistoryDeletes makes the destruction itself argue for itself.
 //
-// ⚠ It does NOT make a fragment a proof of narrowness. `AND c.status <> $3 AND TRUE` passes, and so
+// ⚠ It does NOT make a fragment a proof of narrowness. `AND c.status <> $4 AND TRUE` passes, and so
 // does any widening expressed without the `OR` keyword. See this section's header.
 func TestNoAllowlistedHistoryDeleteWidensItselfWithADisjunction(t *testing.T) {
 	found := scanHistoryDeletes(t, repoInternalRoot(t), historyBearingTables)
@@ -1288,7 +1289,7 @@ func TestNoAllowlistedHistoryDeleteWidensItselfWithADisjunction(t *testing.T) {
 	if len(offenders) > 0 {
 		t.Errorf("%d allowlisted history delete(s) contain a disjunction (#1569 round 17).\n"+
 			"A blessed predicate fragment inside an OR still MATCHES the allowlist while deciding "+
-			"nothing: `AND c.status <> $3 OR TRUE` keeps the blessing and destroys everything the "+
+			"nothing: `AND c.status <> $4 OR TRUE` keeps the blessing and destroys everything the "+
 			"leg was added to protect. Express the destruction as a conjunction of legs, or change "+
 			"this test deliberately and say why.\n    %s",
 			len(offenders), strings.Join(offenders, "\n    "))
@@ -1300,8 +1301,8 @@ func TestNoAllowlistedHistoryDeleteWidensItselfWithADisjunction(t *testing.T) {
 func TestDisjunctionGuard_FlagsTheConstructedBypass(t *testing.T) {
 	intact := historyDeleteStatements(
 		"DELETE FROM savings_goal_contributions c USING savings_goals g "+
-			"WHERE c.id = $1 AND c.savings_goal_id = g.id AND g.user_id = $2 "+
-			"AND g.deleted_at IS NULL AND c.deleted_at IS NULL AND c.status <> $3",
+			"WHERE c.id = $1 AND c.savings_goal_id = g.id AND g.user_id = $2 AND c.savings_goal_id = $3 "+
+			"AND g.deleted_at IS NULL AND c.deleted_at IS NULL AND c.status <> $4",
 		historyBearingTables)["savings_goal_contributions"]
 	if len(intact) != 1 || sqlDisjunctionRegexp.MatchString(intact[0]) {
 		t.Fatalf("the real statement must not read as a disjunction: %q", intact)
@@ -1309,8 +1310,8 @@ func TestDisjunctionGuard_FlagsTheConstructedBypass(t *testing.T) {
 
 	neutered := historyDeleteStatements(
 		"DELETE FROM savings_goal_contributions c USING savings_goals g "+
-			"WHERE c.id = $1 AND c.savings_goal_id = g.id AND g.user_id = $2 "+
-			"AND g.deleted_at IS NULL AND c.deleted_at IS NULL AND (c.status <> $3 OR TRUE)",
+			"WHERE c.id = $1 AND c.savings_goal_id = g.id AND g.user_id = $2 AND c.savings_goal_id = $3 "+
+			"AND g.deleted_at IS NULL AND c.deleted_at IS NULL AND (c.status <> $4 OR TRUE)",
 		historyBearingTables)["savings_goal_contributions"]
 	if len(neutered) != 1 {
 		t.Fatalf("expected one statement, got %d", len(neutered))

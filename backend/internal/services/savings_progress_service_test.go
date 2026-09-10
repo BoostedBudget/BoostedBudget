@@ -35,8 +35,8 @@ func (m *mockSavingsProgressGoalRepo) GetByIDForUser(ctx context.Context, id, us
 	return args.Get(0).(*domain.SavingsGoal), args.Error(1)
 }
 
-func (m *mockSavingsProgressGoalRepo) UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error {
-	return m.Called(ctx, goalID, currentAmount, lastCalculatedAt, balanceAsOf).Error(0)
+func (m *mockSavingsProgressGoalRepo) UpdateCurrentAmount(ctx context.Context, goalID, basis string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error {
+	return m.Called(ctx, goalID, basis, currentAmount, lastCalculatedAt, balanceAsOf).Error(0)
 }
 
 func (m *mockSavingsProgressGoalRepo) MarkCompleted(ctx context.Context, goalID string) error {
@@ -103,7 +103,7 @@ func TestSavingsProgress_Manual_NoOp(t *testing.T) {
 	svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
 
 	goal := makeGoal("g1", "u1", "acc1", domain.ProgressBasisManual, 1000, 500)
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertNotCalled(t, "UpdateCurrentAmount")
@@ -119,7 +119,7 @@ func TestSavingsProgress_Manual_EmptyBasis(t *testing.T) {
 	svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
 
 	goal := makeGoal("g1", "u1", "acc1", "", 1000, 500) // empty basis → manual
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertNotCalled(t, "UpdateCurrentAmount")
@@ -138,9 +138,9 @@ func TestSavingsProgress_Contributions_UpdatesAmount(t *testing.T) {
 	goal := makeGoal("g1", "u1", "acc1", domain.ProgressBasisContributions, 1000, 0)
 
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(750.00, nil)
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 750.00, mock.Anything, (*time.Time)(nil)).Return(nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 750.00, mock.Anything, (*time.Time)(nil)).Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	contribRepo.AssertExpectations(t)
@@ -160,10 +160,10 @@ func TestSavingsProgress_Contributions_MarksCompleted(t *testing.T) {
 	goal := makeGoal("g1", "u1", "acc1", domain.ProgressBasisContributions, 1000, 0)
 
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(1000.00, nil)
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 1000.00, mock.Anything, (*time.Time)(nil)).Return(nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 1000.00, mock.Anything, (*time.Time)(nil)).Return(nil)
 	goalRepo.On("MarkCompleted", mock.Anything, "g1").Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertCalled(t, "MarkCompleted", mock.Anything, "g1")
@@ -180,10 +180,10 @@ func TestSavingsProgress_Contributions_ExceedsTarget_StillMarksCompleted(t *test
 	goal := makeGoal("g1", "u1", "acc1", domain.ProgressBasisContributions, 1000, 0)
 
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(1200.00, nil)
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 1200.00, mock.Anything, (*time.Time)(nil)).Return(nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 1200.00, mock.Anything, (*time.Time)(nil)).Return(nil)
 	goalRepo.On("MarkCompleted", mock.Anything, "g1").Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertCalled(t, "MarkCompleted", mock.Anything, "g1")
@@ -200,9 +200,9 @@ func TestSavingsProgress_Contributions_RoundsToCents(t *testing.T) {
 
 	// 333.333... should round to 333.33
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(333.3333333, nil)
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 333.33, mock.Anything, (*time.Time)(nil)).Return(nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 333.33, mock.Anything, (*time.Time)(nil)).Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertExpectations(t)
@@ -227,9 +227,9 @@ func TestSavingsProgress_Balance_MirrorsAccountBalance(t *testing.T) {
 	}
 
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 3500.00, mock.Anything, mock.Anything).Return(nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 3500.00, mock.Anything, mock.Anything).Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	accountRepo.AssertExpectations(t)
@@ -249,9 +249,9 @@ func TestSavingsProgress_Balance_ClampsNegative(t *testing.T) {
 	account := &domain.Account{ID: "acc1", CurrentBalance: &balance, UpdatedAt: time.Now()}
 
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 0.00, mock.Anything, mock.Anything).Return(nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 0.00, mock.Anything, mock.Anything).Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertExpectations(t)
@@ -270,7 +270,7 @@ func TestSavingsProgress_Balance_NilBalance_SkipsRecompute(t *testing.T) {
 
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	// Neither UpdateCurrentAmount nor MarkCompleted should be called.
@@ -292,13 +292,13 @@ func TestSavingsProgress_Balance_SetsBalanceAsOf(t *testing.T) {
 	account := &domain.Account{ID: "acc1", CurrentBalance: &balance, UpdatedAt: syncedAt}
 
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 2000.00, mock.Anything,
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 2000.00, mock.Anything,
 		mock.MatchedBy(func(bao *time.Time) bool {
 			return bao != nil && bao.Equal(syncedAt)
 		}),
 	).Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertExpectations(t)
@@ -326,10 +326,10 @@ func TestSavingsProgress_Balance_DisconnectedAccount_SkipsRecompute(t *testing.T
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
 	// Registered as .Maybe() so a regression records the write instead of panicking on an
 	// unexpected mock call, letting assertNoCallTo below fail as a real assertion.
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	// Neither UpdateCurrentAmount nor MarkCompleted should be called — same freeze semantics
@@ -355,9 +355,9 @@ func TestSavingsProgress_AccountPercentage_ComputesCorrectly(t *testing.T) {
 
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
 	// 3000 * 0.4 = 1200.00
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 1200.00, mock.Anything, mock.Anything).Return(nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 1200.00, mock.Anything, mock.Anything).Return(nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertExpectations(t)
@@ -378,7 +378,7 @@ func TestSavingsProgress_AccountPercentage_NilBalance_SkipsRecompute(t *testing.
 
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	goalRepo.AssertNotCalled(t, "UpdateCurrentAmount")
@@ -395,7 +395,7 @@ func TestSavingsProgress_AccountPercentage_NilPercentage_ReturnsError(t *testing
 	goal := makeGoal("g1", "u1", "acc1", domain.ProgressBasisAccountPercentage, 2000, 0)
 	goal.AccountPercentage = nil // should not happen after validation, but guard it
 
-	err := svc.RecomputeGoal(context.Background(), goal)
+	_, err := svc.RecomputeGoal(context.Background(), goal)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "nil percentage")
@@ -418,17 +418,19 @@ func TestSavingsProgress_StickyCompletion_DoesNotCallMarkCompletedTwice(t *testi
 
 	// First call: reaches target.
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(1000.00, nil).Once()
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 1000.00, mock.Anything, (*time.Time)(nil)).Return(nil).Once()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 1000.00, mock.Anything, (*time.Time)(nil)).Return(nil).Once()
 	goalRepo.On("MarkCompleted", mock.Anything, "g1").Return(nil).Once()
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+	_, recomputeErr := svc.RecomputeGoal(context.Background(), goal)
+	require.NoError(t, recomputeErr)
 	goalRepo.AssertCalled(t, "MarkCompleted", mock.Anything, "g1")
 
 	// Second call: drops below target (balance_regression simulation).
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(400.00, nil).Once()
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", 400.00, mock.Anything, (*time.Time)(nil)).Return(nil).Once()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 400.00, mock.Anything, (*time.Time)(nil)).Return(nil).Once()
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+	_, recomputeErr = svc.RecomputeGoal(context.Background(), goal)
+	require.NoError(t, recomputeErr)
 	// MarkCompleted should NOT be called again (400 < 1000).
 	goalRepo.AssertNumberOfCalls(t, "MarkCompleted", 1)
 }
@@ -450,7 +452,7 @@ func TestSavingsProgress_RecomputeUser_ProcessesAllGoals(t *testing.T) {
 	// #1569 A4: CompletedGoalCount is now counted outside the active universe.
 	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g2").Return(800.00, nil)
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g2", 800.00, mock.Anything, (*time.Time)(nil)).Return(nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g2", mock.Anything, 800.00, mock.Anything, (*time.Time)(nil)).Return(nil)
 
 	err := svc.RecomputeUser(context.Background(), "u1")
 
@@ -479,7 +481,7 @@ func TestSavingsProgress_RecomputeUser_ContinuesOnGoalError(t *testing.T) {
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(0.0, errors.New("db error")).Once()
 	// g2 succeeds
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g2").Return(500.00, nil).Once()
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g2", 500.00, mock.Anything, (*time.Time)(nil)).Return(nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g2", mock.Anything, 500.00, mock.Anything, (*time.Time)(nil)).Return(nil)
 
 	err := svc.RecomputeUser(context.Background(), "u1")
 
@@ -539,7 +541,7 @@ func TestSavingsProgress_RecomputeGoalByID_CompletedGoal_UpdatesAmountKeepsCompl
 
 	// Suppose a new confirmed contribution pushes amount to 1200.
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g-done").Return(1200.00, nil)
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g-done", 1200.00, mock.Anything, (*time.Time)(nil)).Return(nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g-done", mock.Anything, 1200.00, mock.Anything, (*time.Time)(nil)).Return(nil)
 	// MarkCompleted is called because 1200 >= 1000; DB layer (CASE WHEN completed_at IS NULL)
 	// keeps completed_at sticky — this validates the service's sticky-completion call chain.
 	goalRepo.On("MarkCompleted", mock.Anything, "g-done").Return(nil)
@@ -548,7 +550,7 @@ func TestSavingsProgress_RecomputeGoalByID_CompletedGoal_UpdatesAmountKeepsCompl
 
 	require.NoError(t, err)
 	// Amount was updated.
-	goalRepo.AssertCalled(t, "UpdateCurrentAmount", mock.Anything, "g-done", 1200.00, mock.Anything, (*time.Time)(nil))
+	goalRepo.AssertCalled(t, "UpdateCurrentAmount", mock.Anything, "g-done", mock.Anything, 1200.00, mock.Anything, (*time.Time)(nil))
 	// MarkCompleted was called (amount >= target); DB stickiness preserves the original completed_at.
 	goalRepo.AssertCalled(t, "MarkCompleted", mock.Anything, "g-done")
 	// GetByIDForUser was used, not GetActiveByUserID (which would exclude the completed goal).
@@ -841,10 +843,10 @@ func TestSavingsProgress_TerminalAccountWithNoBalance_FreezesOnBothBases(t *test
 			}
 
 			accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
-			goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+			goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-			err := svc.RecomputeGoal(context.Background(), tc.goal())
+			_, err := svc.RecomputeGoal(context.Background(), tc.goal())
 
 			require.NoError(t, err)
 			assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
@@ -875,11 +877,12 @@ func TestSavingsProgress_TerminalAccountWithNoBalance_LogsTheDisconnection(t *te
 		Status: domain.AccountStatusRemoved, UpdatedAt: time.Now(),
 	}
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
-	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	require.NoError(t, svc.RecomputeGoal(context.Background(),
-		makeGoal("g1", "u1", "acc1", domain.ProgressBasisBalance, 5000, 1000)))
+	_, recomputeErr := svc.RecomputeGoal(context.Background(),
+		makeGoal("g1", "u1", "acc1", domain.ProgressBasisBalance, 5000, 1000))
+	require.NoError(t, recomputeErr)
 
 	out := logs.String()
 	assert.Contains(t, out, "basis account is no longer active",
@@ -887,4 +890,52 @@ func TestSavingsProgress_TerminalAccountWithNoBalance_LogsTheDisconnection(t *te
 	assert.NotContains(t, out, "account balance is nil",
 		"the nil check must not claim this one — since item D every closed account satisfies it too, "+
 			"so a nil-first ordering silently relabels every disconnection as 'stale'")
+}
+
+// TestRecomputeGoal_ReportsThePersistedAmountEvenWhenMarkCompletedFails pins the two-write
+// hazard. RecomputeGoal commits UpdateCurrentAmount and THEN calls MarkCompleted; when the
+// second fails it used to return (0, err), so CreateGoal/UpdateGoal kept the pre-recompute
+// figure while the row already held the new one. "Returned an error" and "changed nothing" are
+// different states, and conflating them is what made the response disagree with the database.
+//
+// Reachable for the balance and account_percentage bases, whose computed value comes straight
+// off an account balance and can meet the target immediately.
+func TestRecomputeGoal_ReportsThePersistedAmountEvenWhenMarkCompletedFails(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+
+	goal := makeGoal("g1", "u1", "acc1", domain.ProgressBasisContributions, 100, 0)
+
+	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(250.00, nil).Once()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 250.00, mock.Anything, mock.Anything).
+		Return(nil).Once()
+	// The amount is already committed at this point; only the completion flag fails.
+	goalRepo.On("MarkCompleted", mock.Anything, "g1").
+		Return(errors.New("boom")).Once()
+
+	svc := NewSavingsProgressService(goalRepo, contribRepo, nil, nil, testLogger())
+	amount, err := svc.RecomputeGoal(context.Background(), goal)
+
+	require.Error(t, err, "the MarkCompleted failure must still surface")
+	assert.Equal(t, 250.00, amount,
+		"the reported amount must be what the ROW holds (250), not 0 — the UpdateCurrentAmount write already committed")
+}
+
+// ...and when the FIRST write fails, nothing was persisted, so the prior amount is what the row
+// still holds. Returning the new figure there would be the same bug pointing the other way.
+func TestRecomputeGoal_ReportsThePriorAmountWhenNothingWasWritten(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+
+	goal := makeGoal("g1", "u1", "acc1", domain.ProgressBasisContributions, 1000, 42)
+
+	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(250.00, nil).Once()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 250.00, mock.Anything, mock.Anything).
+		Return(errors.New("boom")).Once()
+
+	svc := NewSavingsProgressService(goalRepo, contribRepo, nil, nil, testLogger())
+	amount, err := svc.RecomputeGoal(context.Background(), goal)
+
+	require.Error(t, err)
+	assert.Equal(t, 42.00, amount, "nothing was written, so the row still holds the prior amount")
 }

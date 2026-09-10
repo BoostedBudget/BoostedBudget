@@ -37,6 +37,7 @@ type periodicJobsDeps struct {
 	budgetPeriodCloseCheckWorker        *jobs.BudgetPeriodCloseCheckWorker
 	savingsStatsWorker                  *jobs.SavingsStatsWorker
 	portfolioSnapshotWorker             *jobs.PortfolioSnapshotWorker
+	ruleQuarantineCensusWorker          *jobs.RuleQuarantineCensusWorker
 	// plaidOrphanRetryWorker is Plaid-specific and nil when Plaid is not configured (Issue #1497).
 	// ⚠ There is deliberately NO field for the orphan-token PURGE worker: its registration is
 	// unconditional, so making it a nil-guardable dependency would be the first step towards it
@@ -246,6 +247,23 @@ func buildPeriodicJobSpecs(deps periodicJobsDeps) []periodicJobSpec {
 				return jobs.PortfolioSnapshotArgs{TriggerSource: "periodic"}, jobs.PortfolioSnapshotInsertOpts()
 			},
 			opts: jobs.PortfolioSnapshotPeriodicOpts(),
+		})
+	}
+
+	// #1625 Task 18 fix round 1: rule quarantine census (daily) — distinct-rule population gauge,
+	// previously computed by services.RunRuleQuarantineCensus but never invoked in production.
+	// Daily + QueueLow matches this file's other full-table-scan-into-an-aggregate jobs
+	// (savings stats, portfolio snapshot) — see RuleQuarantineCensusUniqueOpts/InsertOpts for why
+	// that cadence and queue are the right bound on cost rather than pagination.
+	if deps.ruleQuarantineCensusWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "rule quarantine census",
+			logMessage: "Rule quarantine census periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.RuleQuarantineCensusArgs{TriggerSource: "periodic"}, jobs.RuleQuarantineCensusInsertOpts()
+			},
+			opts: jobs.RuleQuarantineCensusPeriodicOpts(),
 		})
 	}
 

@@ -473,7 +473,7 @@ func TestSavingsContributionRepository_Integration_RejectTombstone_SurvivesResyn
 	require.NoError(t, err, "proposed contribution must exist after upsert")
 
 	// Step 3: User rejects the proposed row.
-	_, err = repo.RejectContribution(ctx, userID, contribID)
+	_, err = repo.RejectContribution(ctx, userID, goalID, contribID)
 	require.NoError(t, err, "RejectContribution must succeed")
 
 	// Verify tombstone is in place.
@@ -504,6 +504,83 @@ func TestSavingsContributionRepository_Integration_RejectTombstone_SurvivesResyn
 		"re-sync must not create a duplicate row; tombstone remains the only record")
 	assert.Equal(t, "rejected", statusAfterResync,
 		"tombstone status must remain 'rejected' after re-sync (R3-7 sticky guarantee)")
+}
+
+// TestSavingsContributionRepository_Integration_RejectTombstone_SurvivesArchiveThenResync closes
+// the gap Task 8's brief identified: the canonical sticky test above (reject → immediate resync)
+// never exercised ArchiveByGoal, and migration 000191's own test used an archived CONFIRMED row,
+// not a rejected one.
+//
+// Before this fix, ArchiveByGoal archived every live row regardless of status. Once the rejected
+// row got archived_at stamped, it left unique_contribution_per_goal_per_transaction (scoped to
+// `archived_at IS NULL` by 000191) — so a later sync's INSERT no longer collided with the
+// tombstone at all and inserted a brand-new status='proposed' row for the same transaction,
+// resurrecting a transfer the user explicitly turned down.
+//
+// RED (pre-fix): rowCount == 2, one 'rejected' (archived) and one freshly re-proposed.
+// GREEN (post-fix): the rejected row stays live (archived_at IS NULL) through the archive, so it
+// keeps the uniqueness slot and the resync is still a no-op.
+func TestSavingsContributionRepository_Integration_RejectTombstone_SurvivesArchiveThenResync(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -100.0)
+
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	// Step 1: Simulate sync detecting a proposed contribution, then the user rejects it.
+	err := repo.UpsertProposedFromTransaction(ctx, userID, goalID, txnID, 100.0)
+	require.NoError(t, err, "initial UpsertProposedFromTransaction must succeed")
+
+	var contribID string
+	err = pool.QueryRow(ctx,
+		`SELECT id FROM savings_goal_contributions WHERE transaction_id = $1 AND savings_goal_id = $2`,
+		txnID, goalID,
+	).Scan(&contribID)
+	require.NoError(t, err, "proposed contribution must exist after upsert")
+
+	_, err = repo.RejectContribution(ctx, userID, goalID, contribID)
+	require.NoError(t, err, "RejectContribution must succeed")
+
+	// Step 2: The goal's basis leaves and re-enters "contributions", closing the period.
+	require.NoError(t, repo.ArchiveByGoal(ctx, goalID))
+
+	var archivedAt *time.Time
+	var statusAfterArchive string
+	err = pool.QueryRow(ctx,
+		`SELECT status, archived_at FROM savings_goal_contributions WHERE id = $1`, contribID,
+	).Scan(&statusAfterArchive, &archivedAt)
+	require.NoError(t, err)
+	assert.Equal(t, "rejected", statusAfterArchive, "archiving must not change the tombstone's status")
+	assert.Nil(t, archivedAt,
+		"a rejected row must NOT be archived — archiving it would release its uniqueness slot "+
+			"and let a later sync re-propose the rejected transfer")
+
+	// Step 3: A later Plaid sync re-detects the same transfer-in.
+	err = repo.UpsertProposedFromTransaction(ctx, userID, goalID, txnID, 100.0)
+	require.NoError(t, err, "re-upsert after archive must not error")
+
+	// Step 4: Assert exactly one row remains and it is still 'rejected' — the transfer must NOT
+	// be re-proposed.
+	var rowCount int
+	var statusAfterResync string
+	err = pool.QueryRow(ctx,
+		`SELECT COUNT(*), COALESCE(MAX(status), '')
+		   FROM savings_goal_contributions
+		  WHERE transaction_id = $1 AND savings_goal_id = $2`,
+		txnID, goalID,
+	).Scan(&rowCount, &statusAfterResync)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, rowCount,
+		"archiving the period and re-syncing must not create a duplicate row; the tombstone "+
+			"remains the only record")
+	assert.Equal(t, "rejected", statusAfterResync,
+		"tombstone status must remain 'rejected' after archive-then-resync (R3-7 sticky guarantee "+
+			"must survive a basis period boundary)")
 }
 
 // TestSessionDateCast_Integration_UsesUTCCalendarDay proves the Issue #1461 decision documented on
@@ -633,7 +710,7 @@ func TestSavingsContributionRepository_Integration_ConfirmContribution_RejectsTo
 	}
 	require.NoError(t, repo.Insert(ctx, userID, proposed))
 
-	confirmed, err := repo.ConfirmContribution(ctx, userID, proposed.ID)
+	confirmed, err := repo.ConfirmContribution(ctx, userID, goalID, proposed.ID)
 	require.NoError(t, err, "baseline: ConfirmContribution's FOR UPDATE probe must parse")
 	require.NotNil(t, confirmed)
 	assert.Equal(t, "confirmed", confirmed.Status)
@@ -654,10 +731,53 @@ func TestSavingsContributionRepository_Integration_ConfirmContribution_RejectsTo
 
 	tombstoneTransaction(t, pool, txnID)
 
-	_, err = repo.ConfirmContribution(ctx, userID, second.ID)
+	_, err = repo.ConfirmContribution(ctx, userID, goalID, second.ID)
 	assert.ErrorIs(t, err, domain.ErrContributionNotFound,
 		"confirming a contribution whose transaction the provider removed must fail rather than "+
 			"silently counting reversed money toward a goal")
+}
+
+// TestSavingsContributionRepository_Integration_ConfirmContribution_RefusesRejectedRow closes
+// #1625 Task 9: RejectContribution sets a sticky tombstone (R3-7) so a later Plaid sync cannot
+// re-propose a transfer the user already turned down. ConfirmContribution rejected only
+// status=='confirmed' and then unconditionally flipped the row to 'confirmed' — so a direct
+// confirm call on a rejected row silently undid the user's decision. This is a DIFFERENT scenario
+// from TestSavingsContributionRepository_Integration_RejectTombstone_SurvivesResync above (which
+// pins that a sync cannot resurrect the row): this one pins that the confirm API itself cannot.
+func TestSavingsContributionRepository_Integration_ConfirmContribution_RefusesRejectedRow(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -50.0)
+
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	proposed := &domain.SavingsGoalContribution{
+		SavingsGoalID: goalID,
+		TransactionID: &txnID,
+		Amount:        20.0,
+		Source:        "confirmed_transfer",
+		Status:        "proposed",
+		OccurredOn:    time.Now().Format("2006-01-02"),
+	}
+	require.NoError(t, repo.Insert(ctx, userID, proposed))
+
+	rejected, err := repo.RejectContribution(ctx, userID, goalID, proposed.ID)
+	require.NoError(t, err, "RejectContribution must succeed on a proposed row")
+	require.Equal(t, "rejected", rejected.Status)
+
+	_, err = repo.ConfirmContribution(ctx, userID, goalID, proposed.ID)
+	require.Error(t, err, "confirming a rejected sticky tombstone must be refused, not silently succeed")
+	assert.ErrorIs(t, err, domain.ErrContributionAlreadyRejected)
+
+	var statusAfter string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT status FROM savings_goal_contributions WHERE id = $1`, proposed.ID,
+	).Scan(&statusAfter))
+	assert.Equal(t, "rejected", statusAfter,
+		"the row must remain 'rejected' — the refused confirm must not have mutated it")
 }
 
 // tombstoneTransaction applies the #1569 tombstone directly, so these tests do not depend on the
@@ -934,7 +1054,7 @@ func TestUpsertFromTransaction_Integration_DoesNotResurrectARejectedRow(t *testi
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT id FROM savings_goal_contributions WHERE transaction_id = $1 AND savings_goal_id = $2`,
 		txnID, goalID).Scan(&proposedID))
-	rejected, err := repo.RejectContribution(ctx, userID, proposedID)
+	rejected, err := repo.RejectContribution(ctx, userID, goalID, proposedID)
 	require.NoError(t, err)
 	require.Equal(t, "rejected", rejected.Status)
 	require.False(t, rejected.ConfirmedByUser, "rejection does not flip confirmed_by_user — this is exactly why status alone must also be checked")
@@ -973,4 +1093,339 @@ func TestUpsertFromTransaction_Integration_StillOverwritesAMachineConfirmedRow(t
 		txnID, goalID).Scan(&amount, &source))
 	assert.InDelta(t, 35.0, amount, 0.001, "a machine-confirmed row must remain updatable by a later automatic pass")
 	assert.Equal(t, "boost_match", source)
+}
+
+// TestSavingsContributionRepository_Integration_BasisRoundTripDoesNotDoubleCount is the #1625
+// Task 12 regression test, written against real SQL because pgxmock cannot catch an aggregate
+// error — the defect here IS the aggregate.
+//
+// The sequence that was broken:
+//
+//	ledger totals 100 → switch to manual → switch back to contributions
+//	  → handleBasisSwitch seeds a synthetic 100
+//	  → SumConfirmedByGoal returns the ORIGINAL 100 plus the synthetic 100 = 200
+//
+// ArchiveByGoal only cleared managed_by_reconciliation, which left the rows live and confirmed
+// and — because user-entered rows already carry false — destroyed the only signal that could
+// have distinguished them afterwards. Both sums now exclude archived rows.
+func TestSavingsContributionRepository_Integration_BasisRoundTripDoesNotDoubleCount(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	insert := func(amount float64, managed bool) string {
+		id := uuid.New().String()
+		_, err := pool.Exec(ctx, `
+			INSERT INTO savings_goal_contributions
+				(id, savings_goal_id, transaction_id, amount, source, status,
+				 managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at)
+			VALUES ($1, $2, NULL, $3, 'manual', 'confirmed', $4, true, CURRENT_DATE, now(), now())
+		`, id, goalID, amount, managed)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_, _ = pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE id = $1`, id)
+		})
+		return id
+	}
+
+	// A closed contributions period: one reconciler row and one the user entered by hand. The
+	// user's row is the one the old flag-clearing approach could never account for.
+	insert(60, true)
+	insert(40, false)
+
+	total, err := repo.SumConfirmedByGoal(ctx, userID, goalID)
+	require.NoError(t, err)
+	require.Equal(t, 100.0, total, "precondition: the live ledger totals 100")
+
+	// Leaving the contributions basis closes the period.
+	require.NoError(t, repo.ArchiveByGoal(ctx, goalID))
+
+	total, err = repo.SumConfirmedByGoal(ctx, userID, goalID)
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, total,
+		"an archived period must not count — including the user's own manual row, which the "+
+			"managed_by_reconciliation flag never covered")
+
+	// Returning to the contributions basis seeds the carried-over balance.
+	insert(100, false)
+
+	total, err = repo.SumConfirmedByGoal(ctx, userID, goalID)
+	require.NoError(t, err)
+	assert.Equal(t, 100.0, total,
+		"the round-trip reported 200 before #1625: the archived period summed alongside its own seed")
+
+	// Both sums must agree, or the lifetime total and the period total describe one ledger
+	// differently.
+	periodTotal, err := repo.SumConfirmedByGoalInPeriod(ctx, userID, goalID,
+		time.Now().AddDate(0, 0, -1), time.Now().AddDate(0, 0, 1))
+	require.NoError(t, err)
+	assert.Equal(t, 100.0, periodTotal, "SumConfirmedByGoalInPeriod must exclude archived rows too")
+
+	// Archived rows are RETAINED, not destroyed — this is a retention system.
+	var retained int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM savings_goal_contributions
+		  WHERE savings_goal_id = $1 AND archived_at IS NOT NULL AND deleted_at IS NULL`,
+		goalID).Scan(&retained))
+	assert.Equal(t, 2, retained, "the closed period must still be readable, just not counted")
+
+	// Idempotent: archiving again must not disturb the live seed.
+	require.NoError(t, repo.ArchiveByGoal(ctx, goalID))
+	total, err = repo.SumConfirmedByGoal(ctx, userID, goalID)
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, total, "a second archive closes the new period too, and does not error")
+}
+
+// TestSavingsContributionRepository_Integration_ArchivedRowReleasesTheUniquenessSlot is the
+// regression test for the defect migration 000190 CREATED and 000191 fixes (found by adversarial
+// review, not by the original change).
+//
+// 000190 made archived_at a period boundary but left
+// unique_contribution_per_goal_per_transaction conditional only on transaction_id/deleted_at, so
+// an archived row still owned its (transaction, goal) slot. A goal returning to the contributions
+// basis then could not re-record a transaction from a previous period: the upsert collided with
+// the archived row and its DO UPDATE predicate (status='proposed') failed against an archived
+// CONFIRMED row, so the caller was told the contribution already existed and the new period's
+// contribution was never recorded. That is the opposite of what 000190 set out to fix.
+func TestSavingsContributionRepository_Integration_ArchivedRowReleasesTheUniquenessSlot(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -250.0)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE savings_goal_id = $1`, goalID)
+	})
+
+	// Period 1: the transaction is recorded against the goal.
+	first, err := repo.InsertManualFromTransaction(ctx, userID, goalID, txnID, 250.0, "2026-01-15")
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	total, err := repo.SumConfirmedByGoal(ctx, userID, goalID)
+	require.NoError(t, err)
+	require.Equal(t, 250.0, total)
+
+	// The goal leaves the contributions basis: period 1 closes.
+	require.NoError(t, repo.ArchiveByGoal(ctx, goalID))
+
+	// Period 2: the SAME transaction must be recordable again. Before 000191 this returned
+	// ErrContributionAlreadyConfirmed, because the archived row still held the unique slot.
+	second, err := repo.InsertManualFromTransaction(ctx, userID, goalID, txnID, 250.0, "2026-06-15")
+	require.NoError(t, err,
+		"the archived row still owns the (transaction, goal) uniqueness slot, so the new period "+
+			"cannot record this transaction at all")
+	require.NotNil(t, second)
+	assert.NotEqual(t, first.ID, second.ID, "a new period must get its OWN row, not reuse the archived one")
+
+	// Only the live period counts.
+	total, err = repo.SumConfirmedByGoal(ctx, userID, goalID)
+	require.NoError(t, err)
+	assert.Equal(t, 250.0, total, "the archived period must not be added to the live one")
+
+	// And both rows are retained — the closed period is still history.
+	var rows int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM savings_goal_contributions
+		  WHERE savings_goal_id = $1 AND deleted_at IS NULL`, goalID).Scan(&rows))
+	assert.Equal(t, 2, rows, "both periods' rows must be retained")
+}
+
+// TestSavingsContributionRepository_Integration_ConfirmRejectAreBoundToTheirGoal closes the
+// bypass an adversarial review found in the Task 10 basis gate.
+//
+// The handler validates the goal in the URL, but the repository looked the contribution up by its
+// OWN id and the user id alone. A same-user request of the shape
+//
+//	/goals/{a-contributions-goal}/contributions/{a-manual-goal's-contribution}/confirm
+//
+// therefore passed goal A's basis gate and then mutated goal B's contribution — defeating exactly
+// the protection the gate was added for, and leaving B's derived balance stale because the handler
+// recomputes the goal from the URL.
+//
+// Bound in the SQL rather than in the handler: a handler-side check would be a TOCTOU race against
+// the same FOR UPDATE this query already takes.
+func TestSavingsContributionRepository_Integration_ConfirmRejectAreBoundToTheirGoal(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalA := seedIntegrationGoal(t, pool, userID, accountID)
+	goalB := seedIntegrationGoal(t, pool, userID, accountID)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	// A proposed contribution belonging to goal B.
+	contribID := uuid.New().String()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO savings_goal_contributions
+			(id, savings_goal_id, transaction_id, amount, source, status,
+			 managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at)
+		VALUES ($1, $2, NULL, 75.0, 'manual', 'proposed', true, false, CURRENT_DATE, now(), now())
+	`, contribID, goalB)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE id = $1`, contribID)
+	})
+
+	// Same user, but the contribution is not goal A's. Both must refuse.
+	_, err = repo.ConfirmContribution(ctx, userID, goalA, contribID)
+	require.ErrorIs(t, err, domain.ErrContributionNotFound,
+		"confirming another goal's contribution under goal A's id must not succeed — that is the "+
+			"basis-gate bypass")
+
+	_, err = repo.RejectContribution(ctx, userID, goalA, contribID)
+	require.ErrorIs(t, err, domain.ErrContributionNotFound,
+		"rejecting another goal's contribution under goal A's id must not succeed")
+
+	// The row is untouched.
+	var status string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT status FROM savings_goal_contributions WHERE id = $1`, contribID).Scan(&status))
+	assert.Equal(t, "proposed", status, "the mismatched call mutated the row anyway")
+
+	// The correct goal still works.
+	confirmed, err := repo.ConfirmContribution(ctx, userID, goalB, contribID)
+	require.NoError(t, err, "binding the goal must not break the legitimate call")
+	assert.Equal(t, "confirmed", confirmed.Status)
+}
+
+// TestDeleteContribution_Integration_IsBoundToItsGoal is Task 1 of #1625: the same cross-goal
+// bypass ConfirmContribution/RejectContribution had, but on the ONE hard delete of financial
+// history on this branch. A prior round bound goalID into Confirm and Reject and missed Delete —
+// the destructive path was the one left open.
+//
+// Before the fix, DeleteContribution looked the row up by c.id and g.user_id alone
+// (savings_contribution_repository.go, pre-#1625), so a same-user
+// DELETE /goals/{goalA}/contributions/{goalB's-contribution} permanently destroyed goal B's row —
+// not a stale recompute like the Confirm/Reject bypass, but an irreversible loss of financial
+// history with no restore path anywhere on this branch.
+func TestDeleteContribution_Integration_IsBoundToItsGoal(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalA := seedIntegrationGoal(t, pool, userID, accountID)
+	goalB := seedIntegrationGoal(t, pool, userID, accountID)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	// A confirmed contribution belonging to goal B — live, visible, destroyable data if named
+	// through ITS OWN goal.
+	contribID := uuid.New().String()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO savings_goal_contributions
+			(id, savings_goal_id, transaction_id, amount, source, status,
+			 managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at)
+		VALUES ($1, $2, NULL, 55.0, 'manual', 'confirmed', false, true, CURRENT_DATE, now(), now())
+	`, contribID, goalB)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM savings_goal_contributions WHERE id = $1`, contribID)
+	})
+
+	// Same user, but the contribution is not goal A's. Must refuse — and MUST NOT destroy the row.
+	err = repo.DeleteContribution(ctx, userID, goalA, contribID, nil)
+	require.ErrorIs(t, err, domain.ErrContributionNotFound,
+		"deleting another goal's contribution under goal A's id must not succeed — that is the "+
+			"cross-goal DELETE bypass (#1625)")
+
+	// The row must still exist — this is the one hard delete of financial history on this branch,
+	// so a bypass here is irreversible, unlike the Confirm/Reject bypass's stale recompute.
+	var status string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT status FROM savings_goal_contributions WHERE id = $1`, contribID).Scan(&status),
+		"the row must still exist after the refused cross-goal delete")
+	assert.Equal(t, "confirmed", status, "the mismatched call destroyed or mutated the row anyway")
+
+	// The correct goal still works: binding goalID must not break the legitimate delete.
+	require.NoError(t, repo.DeleteContribution(ctx, userID, goalB, contribID, nil),
+		"binding the goal must not break the legitimate call")
+
+	var stillThere int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM savings_goal_contributions WHERE id = $1`, contribID).Scan(&stillThere))
+	assert.Equal(t, 0, stillThere, "the correct goal's delete must still destroy the row")
+}
+
+// TestSavingsContributionRepository_Integration_ArchivedRowReleasesCapacity_CrossGoal is Task 7.
+//
+// Migration 000191 narrowed unique_contribution_per_goal_per_transaction's uniqueness slot to
+// `archived_at IS NULL`, but all three capacity checks (UpsertFromTransaction,
+// InsertManualFromTransaction, ConfirmContribution) still summed
+// `WHERE transaction_id = $1 AND status = 'confirmed' AND savings_goal_id != $2 AND deleted_at IS
+// NULL` with no `archived_at IS NULL` leg — so an archived row kept reserving capacity forever.
+//
+// The obvious same-goal scenario ("a goal re-records its own transaction after archiving") proves
+// nothing: every capacity query already carries `savings_goal_id != $2`, which excludes the goal
+// being written to regardless of archived_at. The real exposure is CROSS-GOAL: goal A's archived
+// row must not reserve capacity from goal B's fresh allocation of the SAME transaction.
+func TestSavingsContributionRepository_Integration_ArchivedRowReleasesCapacity_CrossGoal(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalA := seedIntegrationGoal(t, pool, userID, accountID)
+	goalB := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -100.0)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE savings_goal_id IN ($1, $2)`, goalA, goalB)
+	})
+
+	// Goal A allocates the full transaction amount.
+	_, err := repo.InsertManualFromTransaction(ctx, userID, goalA, txnID, 100.0, "2026-01-15")
+	require.NoError(t, err)
+
+	// Goal A's period closes — its row is archived, not deleted.
+	require.NoError(t, repo.ArchiveByGoal(ctx, goalA))
+
+	// Goal B now allocates the SAME transaction for the FULL amount. Goal A's archived row must
+	// not reserve any of that capacity — it is a closed period's history, not a live allocation.
+	second, err := repo.InsertManualFromTransaction(ctx, userID, goalB, txnID, 100.0, "2026-06-15")
+	require.NoError(t, err,
+		"goal A's ARCHIVED row still reserved capacity from goal B — the capacity slot was not "+
+			"released alongside the uniqueness slot 000191 freed (#1625 Task 7)")
+	require.NotNil(t, second)
+}
+
+// TestSavingsContributionRepository_Integration_LiveRowStillReservesCapacity_CrossGoal guards the
+// other direction of Task 7: adding `archived_at IS NULL` to the capacity queries must NOT disable
+// the over-allocation guard for the case it exists for. A LIVE (non-archived) confirmed row on
+// goal A must still block goal B from over-allocating the same transaction.
+func TestSavingsContributionRepository_Integration_LiveRowStillReservesCapacity_CrossGoal(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalA := seedIntegrationGoal(t, pool, userID, accountID)
+	goalB := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -100.0)
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE savings_goal_id IN ($1, $2)`, goalA, goalB)
+	})
+
+	// Goal A allocates the full transaction amount and stays LIVE (never archived).
+	_, err := repo.InsertManualFromTransaction(ctx, userID, goalA, txnID, 100.0, "2026-01-15")
+	require.NoError(t, err)
+
+	// Goal B tries to allocate the same transaction for the full amount — must still be refused,
+	// because goal A's row is live, not archived.
+	_, err = repo.InsertManualFromTransaction(ctx, userID, goalB, txnID, 100.0, "2026-06-15")
+	require.ErrorIs(t, err, domain.ErrContributionOverAllocated,
+		"a LIVE cross-goal allocation must still be refused — the archived_at filter must not "+
+			"weaken the guard for the case it exists for")
 }

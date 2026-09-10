@@ -1019,6 +1019,14 @@ func (m *mockSavingsGoalRepository) GetByName(ctx context.Context, userID, name 
 	return nil, domain.ErrSavingsGoalNotFound
 }
 
+func (m *mockSavingsGoalRepository) BeginTx(ctx context.Context) (repository.Transaction, error) {
+	return nil, errors.New("mockSavingsGoalRepository: BeginTx not supported")
+}
+
+func (m *mockSavingsGoalRepository) UpdateWithBasisGuardInTx(ctx context.Context, tx repository.Transaction, goal *domain.SavingsGoal, priorBasis string) error {
+	return errors.New("mockSavingsGoalRepository: UpdateWithBasisGuardInTx not supported")
+}
+
 func (m *mockSavingsGoalRepository) Update(ctx context.Context, goal *domain.SavingsGoal) error {
 	for i, g := range m.goals {
 		if g.ID == goal.ID {
@@ -1075,7 +1083,7 @@ func (m *mockSavingsGoalRepository) GetByAccountID(ctx context.Context, accountI
 	return result, nil
 }
 
-func (m *mockSavingsGoalRepository) UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error {
+func (m *mockSavingsGoalRepository) UpdateCurrentAmount(ctx context.Context, goalID, basis string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error {
 	for _, g := range m.goals {
 		if g.ID == goalID {
 			g.CurrentAmount = currentAmount

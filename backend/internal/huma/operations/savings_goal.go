@@ -162,6 +162,13 @@ func (h *SavingsGoalHandler) CreateGoal(ctx context.Context, input *CreateSaving
 				func() (interface{}, error) {
 					txGoalRepo := repository.NewSavingsGoalRepository(tx)
 					txGoalService := services.NewSavingsGoalService(txGoalRepo, h.accountGetter, slog.Default())
+					// #1625 Task 17: wired over the SAME tx. This call only creates, so the ledger
+					// is unused today — but an unwired service REFUSES every progress_basis change
+					// (repository.ErrUnguardedBasisChange), and leaving the hole here would turn
+					// the day somebody adds an update beside this line into a defect instead of a
+					// compile-time complaint. Pinned by
+					// TestEverySavingsGoalServiceConstructionWiresTheBasisSwitchLedger.
+					txGoalService.SetBasisSwitchContribRepo(repository.NewSavingsContributionRepository(tx))
 					return txGoalService.CreateGoal(ctx, input.UserID, &input.Body)
 				}, &goal)
 			if err != nil {
@@ -181,6 +188,8 @@ func (h *SavingsGoalHandler) CreateGoal(ctx context.Context, input *CreateSaving
 
 		txGoalRepo := repository.NewSavingsGoalRepository(tx)
 		txGoalService := services.NewSavingsGoalService(txGoalRepo, h.accountGetter, slog.Default())
+		// Same reasoning as the idempotent branch above — see that comment.
+		txGoalService.SetBasisSwitchContribRepo(repository.NewSavingsContributionRepository(tx))
 		goal, err := txGoalService.CreateGoal(ctx, input.UserID, &input.Body)
 		if err != nil {
 			return nil, humaerrors.LoggingMapError(ctx, err)

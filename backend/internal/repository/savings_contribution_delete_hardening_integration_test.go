@@ -62,7 +62,7 @@ func TestDeleteContribution_RefusesAnAlreadyTombstonedContribution_Integration(t
 		`SELECT deleted_at FROM savings_goal_contributions WHERE id = $1`, contribID).Scan(&deletedAt))
 	require.NotNil(t, deletedAt, "fixture precondition: the row must be tombstoned before the delete")
 
-	err := repo.DeleteContribution(ctx, userID, contribID, nil)
+	err := repo.DeleteContribution(ctx, userID, goalID, contribID, nil)
 	assert.ErrorIs(t, err, domain.ErrContributionNotFound,
 		"a tombstoned contribution is invisible in every product surface, so the user cannot have "+
 			"named it: the explicit-destruction path must refuse it, not destroy it")
@@ -100,11 +100,11 @@ func TestDeleteContribution_RefusesARejectedContribution_Integration(t *testing.
 	}
 	require.NoError(t, repo.Insert(ctx, userID, proposed))
 
-	rejected, err := repo.RejectContribution(ctx, userID, proposed.ID)
+	rejected, err := repo.RejectContribution(ctx, userID, goalID, proposed.ID)
 	require.NoError(t, err)
 	require.Equal(t, "rejected", rejected.Status)
 
-	err = repo.DeleteContribution(ctx, userID, proposed.ID, nil)
+	err = repo.DeleteContribution(ctx, userID, goalID, proposed.ID, nil)
 	assert.ErrorIs(t, err, domain.ErrContributionNotFound,
 		"destroying the sticky tombstone would both erase a row the product retains on purpose and "+
 			"regress R3-7: the next sync would re-propose the same transfer-in")
@@ -140,7 +140,7 @@ func TestDeleteContribution_WritesAnAuditRowInTheSameTransaction_Integration(t *
 		_, _ = pool.Exec(context.Background(), `DELETE FROM audit_logs WHERE resource_id = $1`, contrib.ID)
 	})
 
-	require.NoError(t, repo.DeleteContribution(ctx, userID, contrib.ID, repository.NewAuditLogRepository(pool)))
+	require.NoError(t, repo.DeleteContribution(ctx, userID, goalID, contrib.ID, repository.NewAuditLogRepository(pool)))
 
 	var audits int
 	require.NoError(t, pool.QueryRow(ctx, `
@@ -185,7 +185,7 @@ func TestDeleteContribution_AuditFailureRollsBackTheDelete_Integration(t *testin
 	}
 	require.NoError(t, repo.Insert(ctx, userID, contrib))
 
-	err := repo.DeleteContribution(ctx, userID, contrib.ID,
+	err := repo.DeleteContribution(ctx, userID, goalID, contrib.ID,
 		failingAuditLog{err: errors.New("audit sink down")})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "audit sink down")
@@ -219,7 +219,7 @@ func TestDeleteContribution_StillDestroysTheRowTheUserNamed_Integration(t *testi
 			OccurredOn:    time.Now().Format("2006-01-02"),
 		}
 		require.NoError(t, repo.Insert(ctx, userID, contrib), status)
-		require.NoError(t, repo.DeleteContribution(ctx, userID, contrib.ID, nil), status)
+		require.NoError(t, repo.DeleteContribution(ctx, userID, goalID, contrib.ID, nil), status)
 
 		var stillThere int
 		require.NoError(t, pool.QueryRow(ctx,
@@ -227,6 +227,56 @@ func TestDeleteContribution_StillDestroysTheRowTheUserNamed_Integration(t *testi
 		assert.Equal(t, 0, stillThere,
 			"a %s row the user named on a live goal is still destroyed — the endpoint's whole purpose", status)
 	}
+}
+
+// TestDeleteContribution_StillDeletesAnArchivedRow_Integration is the reviewer's five-line ask
+// from #1625's final review.
+//
+// DeleteContribution's predicate is BLESSED, fragment by fragment, by
+// TestEveryAllowlistedHistoryDeleteStillCarriesItsPredicate (G2's second half) — but that guard
+// checks the fragments the entry NAMES are still present. It says nothing about fragments ADDED.
+// So someone tidying `AND c.archived_at IS NULL` in "for consistency" with the SumConfirmed reads
+// would keep every guard green while quietly making a closed period's contributions
+// undeletable — a row the user explicitly asked to destroy, silently retained.
+//
+// Archived means "belongs to a CLOSED contributions period", not "protected". The user's explicit
+// destruction verb outranks the period boundary; that is what makes DeleteContribution explicit
+// destruction rather than side-effect destruction (see the ADR's classification test).
+func TestDeleteContribution_StillDeletesAnArchivedRow_Integration(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+
+	repo := repository.NewSavingsContributionRepository(pool)
+	contrib := &domain.SavingsGoalContribution{
+		SavingsGoalID: goalID,
+		Amount:        50.0,
+		Source:        "manual",
+		Status:        "confirmed",
+		OccurredOn:    time.Now().Format("2006-01-02"),
+	}
+	require.NoError(t, repo.Insert(ctx, userID, contrib))
+
+	_, err := pool.Exec(ctx,
+		`UPDATE savings_goal_contributions SET archived_at = now() WHERE id = $1`, contrib.ID)
+	require.NoError(t, err, "archive the row (what a progress_basis round-trip does)")
+
+	// Falsifiability: the row really is archived, so the assertion below is about archived rows.
+	var archived *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT archived_at FROM savings_goal_contributions WHERE id = $1`, contrib.ID).Scan(&archived))
+	require.NotNil(t, archived, "fixture failed to archive the row")
+
+	require.NoError(t, repo.DeleteContribution(ctx, userID, goalID, contrib.ID, nil),
+		"an archived contribution the user explicitly asked to delete must still be deletable")
+
+	var stillThere int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM savings_goal_contributions WHERE id = $1`, contrib.ID).Scan(&stillThere))
+	assert.Equal(t, 0, stillThere, "the row the user named must be gone")
 }
 
 // spyAuditLog records WHICH audit method was used and, from inside LogInTx, whether the caller's
@@ -281,7 +331,7 @@ func TestDeleteContribution_AuditRowSharesTheDeletesTransaction_Integration(t *t
 	require.NoError(t, repo.Insert(ctx, userID, contrib))
 
 	spy := &spyAuditLog{contribID: contrib.ID}
-	require.NoError(t, repo.DeleteContribution(ctx, userID, contrib.ID, spy))
+	require.NoError(t, repo.DeleteContribution(ctx, userID, goalID, contrib.ID, spy))
 
 	require.NoError(t, spy.scanErr)
 	assert.True(t, spy.calledLogInTx, "the audit entry must be written with LogInTx")

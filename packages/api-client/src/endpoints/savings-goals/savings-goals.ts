@@ -641,7 +641,7 @@ export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof g
 
 
 /**
- * Returns all confirmed and proposed contributions for a savings goal, newest first. Returns an empty list for a goal the user has DELETED — the contributions still logged against it are retained and are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).
+ * Returns all confirmed and proposed contributions for a savings goal, newest first. Includes archived contributions (closed periods) which do not count toward the goal's progress. Returns an empty list for a goal the user has DELETED — the contributions still logged against it are retained and are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).
  * @summary List savings goal contributions
  */
 export const listSavingsGoalContributions = (
@@ -734,7 +734,7 @@ export function useListSavingsGoalContributions<TData = Awaited<ReturnType<typeo
 
 
 /**
- * Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation.
+ * Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation. Requires the goal's progress_basis to be "contributions". ⚠ BREAKING (#1625): the request body rejects unknown fields, and the phantom "notes" field was removed — a client that previously sent it was silently ignored and now gets a 422. Drop the field; contribution notes were never stored.
  * @summary Log a savings goal contribution
  */
 export const logSavingsGoalContribution = (

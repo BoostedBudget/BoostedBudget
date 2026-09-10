@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -32,19 +33,32 @@ type GoalAutoCreateBudgetRepo interface {
 // GoalProgressRecomputer is a narrow interface for triggering goal progress recomputation.
 // Used by SavingsGoalService after CreateGoal to initialize current_amount per progress_basis
 // (Issue #1300 M13 / G3). Implementations must be non-blocking-safe; errors are logged only.
+//
+// #1625: returns the recomputed amount. Recomputation persists through UpdateCurrentAmount, which
+// does NOT mutate the in-memory goal — so CreateGoal used to hand back the caller-supplied
+// current_amount while the database held the recomputed one. Under the contributions basis that
+// is a brand-new goal reporting progress it does not have. The error contract is unchanged:
+// still best-effort, still logged only.
 type GoalProgressRecomputer interface {
-	RecomputeGoal(ctx context.Context, goal *domain.SavingsGoal) error
+	RecomputeGoal(ctx context.Context, goal *domain.SavingsGoal) (float64, error)
 }
 
 // GoalBasisSwitchContribRepo is a narrow interface for contribution operations needed during
 // progress_basis changes (Issue #1300 M14 / Codex C10).
 //   - Insert: seeds a "manual"-source contribution row equal to prior current_amount when
 //     switching manual → contributions, so existing savings history is preserved.
-//   - ArchiveByGoal: clears managed_by_reconciliation on all rows when switching away from
-//     "contributions" so the reconciler stops managing them (they become historical records).
+//   - ArchiveByGoal: archives contributions for a goal by setting managed_by_reconciliation=false
+//     and archived_at=NOW() (or preserving existing archived_at). Called on switches INTO
+//     contributions (to close any prior contributions period) and away from contributions (to
+//     close the current period). Excludes rejected rows (sticky tombstones remain managed).
+//
+// #1625: both methods are the InTx forms. The switch is no longer three independent writes that
+// each commit on their own — it is ONE transaction owned by applyBasisSwitch, and these run inside
+// it. A non-transactional variant is deliberately absent from this interface so a future edit
+// cannot quietly step back outside the boundary.
 type GoalBasisSwitchContribRepo interface {
-	Insert(ctx context.Context, userID string, contrib *domain.SavingsGoalContribution) error
-	ArchiveByGoal(ctx context.Context, goalID string) error
+	InsertInTx(ctx context.Context, tx repository.Transaction, userID string, contrib *domain.SavingsGoalContribution) error
+	ArchiveByGoalInTx(ctx context.Context, tx repository.Transaction, goalID string) error
 }
 
 // SavingsGoalService defines the interface for savings goal business logic.
@@ -154,9 +168,15 @@ func (s *savingsGoalService) CreateGoal(ctx context.Context, userID string, req 
 	)
 
 	// Create goal from request
+	// #1625: default NEW goals to the contributions basis. domain/savings_goal.go has documented
+	// "contributions" as the default for new goals since #1300, but the code defaulted to
+	// "manual" — so POST /savings-goals/{id}/contributions rejected every brand-new goal with a
+	// bare 422 "basis mismatch" and no way to discover the precondition. Existing goals are
+	// untouched: this is the create path only, and the repository still defaults a blank basis to
+	// manual for rows written by any other route.
 	progressBasis := req.ProgressBasis
 	if progressBasis == "" {
-		progressBasis = domain.ProgressBasisManual
+		progressBasis = domain.ProgressBasisContributions
 	}
 	goal := &domain.SavingsGoal{
 		ID:                uuid.New().String(),
@@ -164,7 +184,7 @@ func (s *savingsGoalService) CreateGoal(ctx context.Context, userID string, req 
 		Name:              req.Name,
 		Description:       req.Description,
 		TargetAmount:      req.TargetAmount,
-		CurrentAmount:     req.CurrentAmount,
+		CurrentAmount:     seedCurrentAmount(progressBasis, req.CurrentAmount),
 		CurrencyCode:      req.CurrencyCode,
 		AccountID:         req.AccountID,
 		Deadline:          req.Deadline,
@@ -217,12 +237,21 @@ func (s *savingsGoalService) CreateGoal(ctx context.Context, userID string, req 
 	// progress_basis from creation time (Issue #1300 M13 / G3). Best-effort:
 	// an error here must not fail goal creation.
 	if s.progressService != nil {
-		if err := s.progressService.RecomputeGoal(ctx, goal); err != nil {
+		recomputed, err := s.progressService.RecomputeGoal(ctx, goal)
+		// Assigned even on error: RecomputeGoal reports the amount the ROW now holds, and its
+		// two writes mean a failure does not imply nothing changed. Reporting the caller's seed
+		// after a partial write is how the response and the database came to disagree.
+		goal.CurrentAmount = recomputed
+		if err != nil {
 			s.logger.Warn("savings goal created but RecomputeGoal failed (non-fatal)",
 				slog.String("user_id", userID),
 				slog.String("goal_id", goal.ID),
 				slog.String("error", err.Error()),
 			)
+		} else {
+			// Success: the recompute touched five more columns than the amount. Re-read rather
+			// than guess at them.
+			goal = s.reloadAfterRecompute(ctx, goal)
 		}
 	}
 
@@ -394,6 +423,33 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 		goal.TargetAmount = *req.TargetAmount
 	}
 	if req.CurrentAmount != nil {
+		// ⚠ #1625: a DERIVED basis owns this number, so a caller-supplied one is refused rather
+		// than written. Without this check, PUT {"current_amount": 5000} on a contributions goal
+		// persists 5000 against an empty ledger — the ORIGINAL bug of this ticket, restored
+		// through the update endpoint. The create path was fixed and this one was not; found by
+		// adversarial review, not by me.
+		//
+		// Refused, not silently ignored: the caller asked for something the basis cannot honour,
+		// and a 4xx that says so beats a 200 that pretends.
+		//
+		// The check is on the TARGET basis, so switching TO manual while setting the amount is
+		// ALLOWED — that is the escape hatch the error message advertises, and it must work or
+		// the advice is a dead end. Only a switch INTO a derived basis is refused. (An earlier
+		// version of this comment claimed any basis switch with an amount was refused; the code
+		// never did that, and the test table now covers both directions.)
+		targetBasis := goal.ProgressBasis
+		if req.ProgressBasis != nil {
+			targetBasis = *req.ProgressBasis
+		}
+		if targetBasis != domain.ProgressBasisManual {
+			return nil, fmt.Errorf(
+				"%w: current_amount cannot be set on a goal whose progress_basis is %q — that value is "+
+					"derived. Log a contribution instead (POST /savings-goals/{id}/contributions); "+
+					"balance-based goals track their account automatically. Switching progress_basis to %q "+
+					"would let you set it by hand, but on a contributions goal that ARCHIVES the existing "+
+					"contribution ledger and switching back seeds only a single synthetic contribution",
+				domain.ErrInvalidGoalUpdate, targetBasis, domain.ProgressBasisManual)
+		}
 		goal.CurrentAmount = *req.CurrentAmount
 	}
 	if req.AccountID != nil {
@@ -421,19 +477,52 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 		return nil, err
 	}
 
-	// Save changes
-	if err := s.goalRepo.Update(ctx, goal); err != nil {
-		s.logger.Error("failed to update savings goal",
+	// Save changes.
+	//
+	// #1625: a basis switch takes a DIFFERENT path — one transaction covering the new basis, the
+	// archive of the closing period and the carry-over seed, behind a lock on the goal row. See
+	// applyBasisSwitch. Everything else is the ordinary single-statement update.
+	switch {
+	case basisChanged && s.basisSwitchRepo == nil:
+		// #1625 Task 17, fix round 1. This used to fall through to the plain Update below, which
+		// takes no lock and checks no predicate — so a service whose OPTIONAL ledger repo was never
+		// wired performed exactly the unguarded switch this ticket exists to remove, silently, with
+		// every test green. Refused instead.
+		//
+		// The repository refuses it too (repository.ErrUnguardedBasisChange, raised inside Update
+		// itself), which is what makes the bypass unrepresentable rather than merely tested
+		// against. This branch exists so the error names the actual cause — an unwired service —
+		// instead of arriving as a mystery from two layers down. Which production sites must wire
+		// it is pinned by TestEverySavingsGoalServiceConstructionWiresTheBasisSwitchLedger.
+		err := fmt.Errorf("%w: savings goal service has no basis-switch contribution repository wired, "+
+			"so the progress_basis change on goal %s cannot archive the closing period or seed the "+
+			"carry-over contribution", repository.ErrUnguardedBasisChange, goalID)
+		s.logger.Error("refusing an unguarded progress_basis change",
 			slog.String("goal_id", goalID),
-			slog.String("error", err.Error()),
+			slog.String("prior_basis", priorBasis),
+			slog.String("new_basis", goal.ProgressBasis),
 		)
 		return nil, err
-	}
 
-	// Issue #1300 M14: basis-switch semantics (Codex C10).
-	// These are best-effort; errors are logged but do not fail the update.
-	if basisChanged && s.basisSwitchRepo != nil {
-		s.handleBasisSwitch(ctx, userID, goalID, priorBasis, goal.ProgressBasis, priorAmount)
+	case basisChanged:
+		if err := s.applyBasisSwitch(ctx, userID, goal, priorBasis, priorAmount); err != nil {
+			s.logger.Error("failed to switch savings goal progress_basis",
+				slog.String("goal_id", goalID),
+				slog.String("prior_basis", priorBasis),
+				slog.String("new_basis", goal.ProgressBasis),
+				slog.String("error", err.Error()),
+			)
+			return nil, err
+		}
+
+	default:
+		if err := s.goalRepo.Update(ctx, goal); err != nil {
+			s.logger.Error("failed to update savings goal",
+				slog.String("goal_id", goalID),
+				slog.String("error", err.Error()),
+			)
+			return nil, err
+		}
 	}
 
 	// Emit analytics event for the basis change (best-effort).
@@ -447,11 +536,16 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 
 	// Re-run recompute so current_amount reflects the new basis immediately.
 	if basisChanged && s.progressService != nil {
-		if err := s.progressService.RecomputeGoal(ctx, goal); err != nil {
+		recomputed, err := s.progressService.RecomputeGoal(ctx, goal)
+		// Same reasoning as CreateGoal: this is the amount the row holds, error or not.
+		goal.CurrentAmount = recomputed
+		if err != nil {
 			s.logger.Warn("basis-changed RecomputeGoal failed (non-fatal)",
 				slog.String("goal_id", goalID),
 				slog.String("error", err.Error()),
 			)
+		} else {
+			goal = s.reloadAfterRecompute(ctx, goal)
 		}
 	}
 
@@ -463,24 +557,84 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 	return goal, nil
 }
 
-// handleBasisSwitch executes the contribution repository operations required when
-// progress_basis changes (Codex C10). Best-effort: errors are logged, never propagated.
+// applyBasisSwitch persists a progress_basis change and everything that change implies, in ONE
+// transaction, behind a SELECT … FOR UPDATE on the goal row.
 //
-//   - manual → contributions: seed a confirmed manual contribution equal to the prior
-//     current_amount so the existing savings balance is carried over as history.
-//   - contributions → anything else: archive managed rows so the reconciler stops
-//     touching them (they become immutable historical records).
-func (s *savingsGoalService) handleBasisSwitch(
+// THE BOUNDARY, and why it is drawn here (#1625).
+//
+// This used to be three independent commits in a row: goalRepo.Update, then ArchiveByGoal, then
+// Insert — with the seed's failure logged and swallowed. That produced a DATA-LOSS path with no
+// warning attached to it. A manual goal holding $100 switches to the contributions basis; the new
+// basis commits; the archive commits; the seed insert fails transiently; UpdateGoal returns 200;
+// RecomputeGoal then sums a live ledger that is now empty and persists $0. The $100 was a number
+// the user typed, no provider can supply it again, and nothing on this branch restores it.
+// Retention is this codebase's default (see docs/decisions/2026-08-24-financial-history-retained-
+// by-default.md) and a partially-applied switch violated it while reporting success.
+//
+// Inside the boundary: the goal-row lock, the basis predicate, the full goal UPDATE, the archive
+// of the closing period, and the seed. Those four either all happen or none do. Rolling back
+// CREATES nothing and DESTROYS nothing — the archive is an UPDATE of archived_at, so an aborted
+// switch leaves the prior period exactly as live as it was. That matters: a rollback here must
+// never be a deletion of retained history, and it is not.
+//
+// Outside the boundary: RecomputeGoal, which the caller runs after the commit. Three reasons, and
+// the first is the one that decides it:
+//
+//  1. It does not need to be inside. The defect was that the seed could be missing while the
+//     basis was present; once the seed is committed WITH the basis, the sum RecomputeGoal takes
+//     can no longer come up empty. If the recompute then fails, current_amount still holds the
+//     prior manual amount — which on a freshly seeded ledger is the same number the sum would
+//     have produced. The failure mode is a stale timestamp, not a lost balance.
+//  2. It cannot be inside for every basis. RecomputeGoal is basis-polymorphic: switching TO the
+//     balance or account_percentage basis makes it read an account, resolve a re-link chain and
+//     consult a separate repository. Dragging those into a transaction that holds a write lock on
+//     the goal row would hold that lock across unrelated reads for no correctness gain.
+//  3. The write it performs is now guarded in its own right. UpdateCurrentAmount binds the basis
+//     it computed for into its WHERE, so a recompute that lost a race cannot land on a row that
+//     has moved on. That is defect 4, and it is what makes leaving the recompute outside safe
+//     rather than merely convenient.
+//
+// A FAILED ARCHIVE STILL STOPS THE SEED — the invariant an earlier round of #1625 established, and
+// this must not regress it. It is preserved in a strictly stronger form: the archive error aborts
+// the transaction, so not only is nothing seeded, the new basis is not persisted either. There is
+// no interleaving in which the prior period's rows stay live beside a synthetic seed and the goal
+// counts both.
+func (s *savingsGoalService) applyBasisSwitch(
 	ctx context.Context,
-	userID, goalID, priorBasis, newBasis string,
+	userID string,
+	goal *domain.SavingsGoal,
+	priorBasis string,
 	priorAmount float64,
-) {
+) error {
+	tx, err := s.goalRepo.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+	// Rollback after a successful commit is a no-op; its error is not actionable.
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Locks the goal row and refuses if another request already moved it off priorBasis. Two
+	// concurrent manual→contributions switches would otherwise both archive and both seed, and a
+	// seed carries no transaction_id so the partial unique index does not stop the second.
+	if err := s.goalRepo.UpdateWithBasisGuardInTx(ctx, tx, goal, priorBasis); err != nil {
+		return err
+	}
+
 	switch {
-	case priorBasis == domain.ProgressBasisManual && newBasis == domain.ProgressBasisContributions:
+	case priorBasis == domain.ProgressBasisManual && goal.ProgressBasis == domain.ProgressBasisContributions:
+		// Close out any PRIOR contributions period before seeding (#1625 Task 12). Without it, a
+		// goal that was on the contributions basis earlier still has those rows live and
+		// confirmed; the seed below then adds a synthetic row for the same money and the sums
+		// report both (100 + 100 = 200). It is a no-op for a goal that has never been on the
+		// contributions basis.
+		if err := s.basisSwitchRepo.ArchiveByGoalInTx(ctx, tx, goal.ID); err != nil {
+			return fmt.Errorf("basis switch: archive prior period for goal %s: %w", goal.ID, err)
+		}
+
 		// Seed: carry the existing manual balance as a confirmed contribution.
 		if priorAmount > 0 {
 			seed := &domain.SavingsGoalContribution{
-				SavingsGoalID:           goalID,
+				SavingsGoalID:           goal.ID,
 				Amount:                  priorAmount,
 				Source:                  "manual",
 				Status:                  "confirmed",
@@ -488,25 +642,23 @@ func (s *savingsGoalService) handleBasisSwitch(
 				ConfirmedByUser:         true,
 				OccurredOn:              time.Now().Format("2006-01-02"),
 			}
-			if err := s.basisSwitchRepo.Insert(ctx, userID, seed); err != nil {
-				s.logger.Warn("basis-switch seed contribution failed (non-fatal)",
-					slog.String("goal_id", goalID),
-					slog.String("user_id", userID),
-					slog.String("error", err.Error()),
-				)
+			if err := s.basisSwitchRepo.InsertInTx(ctx, tx, userID, seed); err != nil {
+				// FATAL, where this was once logged and ignored. Returning the error rolls the
+				// whole switch back, so the goal stays manual and keeps its balance — the user
+				// sees a failure and retries, instead of a success that quietly zeroed them.
+				return fmt.Errorf("basis switch: seed carry-over contribution for goal %s: %w", goal.ID, err)
 			}
 		}
 
 	case priorBasis == domain.ProgressBasisContributions:
-		// Archive: stop the reconciler from modifying these rows.
-		if err := s.basisSwitchRepo.ArchiveByGoal(ctx, goalID); err != nil {
-			s.logger.Warn("basis-switch archive contributions failed (non-fatal)",
-				slog.String("goal_id", goalID),
-				slog.String("user_id", userID),
-				slog.String("error", err.Error()),
-			)
+		// Leaving the contributions basis closes the period: the reconciler stops modifying these
+		// rows and no sum counts them, but they are RETAINED and still readable.
+		if err := s.basisSwitchRepo.ArchiveByGoalInTx(ctx, tx, goal.ID); err != nil {
+			return fmt.Errorf("basis switch: archive contributions for goal %s: %w", goal.ID, err)
 		}
 	}
+
+	return tx.Commit(ctx)
 }
 
 // DeleteGoal tombstones a savings goal — see the interface method's doc comment.
@@ -593,4 +745,54 @@ func (s *savingsGoalService) validateAccountOwnershipWithAccount(ctx context.Con
 	}
 
 	return nil, errors.New("account not found or does not belong to user")
+}
+
+// seedCurrentAmount decides what current_amount a goal is CREATED with (#1625).
+//
+// A goal created this instant under the contributions basis has, by definition, no
+// contributions, so its current_amount is zero — no query required. A caller-supplied figure is
+// meaningless there: the ledger owns that number.
+//
+// ⚠ This runs BEFORE the insert, deliberately. The first version of this fix zeroed the
+// in-memory goal AFTER goalRepo.Create, which left the row holding the caller's 5000 while the
+// response said 0 — a worse bug than the one it replaced, because the two now disagreed and
+// only one of them was visible. Codex review caught it; the mock expectation in the test was
+// mock.AnythingOfType, so the test could not see the persisted argument at all.
+//
+// Scoped to `contributions` on purpose. For the balance and account_percentage bases zero would
+// be a fabricated answer rather than a derived one, so those keep the caller's value and are
+// corrected by the next recompute.
+func seedCurrentAmount(progressBasis string, requested float64) float64 {
+	if progressBasis == domain.ProgressBasisContributions {
+		return 0
+	}
+	return requested
+}
+
+// reloadAfterRecompute re-reads the goal so the RESPONSE matches the ROW.
+//
+// #1625. RecomputeGoal writes through UpdateCurrentAmount (current_amount, last_calculated_at,
+// balance_as_of, updated_at) and MarkCompleted (is_completed, completed_at, updated_at) — six
+// columns across two statements, on two different clocks: UpdateCurrentAmount takes a Go
+// timestamp while MarkCompleted stamps its own, and updated_at is written by both.
+//
+// Three successive attempts to keep the in-memory struct in step by copying fields back were
+// each wrong in a new way, because the set of fields kept growing and the timestamps were
+// unknowable from here. Re-reading is one query and is correct for every column, including ones
+// added later. It replaces the mirroring rather than supplementing it.
+//
+// Best-effort, like the recompute it follows: a failed re-read logs and leaves the caller with
+// the pre-recompute struct, which is no worse than what it had before this existed.
+func (s *savingsGoalService) reloadAfterRecompute(ctx context.Context, goal *domain.SavingsGoal) *domain.SavingsGoal {
+	fresh, err := s.goalRepo.GetByID(ctx, goal.ID)
+	if err != nil || fresh == nil {
+		if err != nil {
+			s.logger.Warn("could not re-read goal after recompute; response may lag the row",
+				slog.String("goal_id", goal.ID),
+				slog.String("error", err.Error()),
+			)
+		}
+		return goal
+	}
+	return fresh
 }

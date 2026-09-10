@@ -35,6 +35,8 @@ export interface SavingsGoalContribution {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   amount: number;
+  /** Set when this contribution belongs to a closed contributions period. Such rows are retained and listed but do NOT count toward the goal's current_amount. */
+  archived_at?: string;
   confirmed_by_user: boolean;
   created_at: string;
   id: string;

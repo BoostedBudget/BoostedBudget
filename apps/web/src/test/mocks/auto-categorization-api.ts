@@ -71,6 +71,18 @@ export const mockUseGetUserRuleExecutions = mock(() => ({
   refetch: mockRefetchUserRuleExecutions,
 }))
 
+// === usePreviewRule (#1625) ===
+// The rule dry-run. Defaults to a no-match result so a component that renders the panel without
+// exercising it stays quiet; tests that care set mockPreviewRuleMutateAsync explicitly.
+export const mockPreviewRuleMutateAsync = mock(() =>
+  Promise.resolve({ scanned_count: 0, match_count: 0, matches: [] })
+)
+export const mockUsePreviewRule = mock(() => ({
+  mutateAsync: mockPreviewRuleMutateAsync,
+  isPending: false,
+  error: null,
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/auto-categorization/auto-categorization', () => ({
   ...RealAutoCategorizationModule,
@@ -81,4 +93,5 @@ mock.module('@boostedbudget/api-client/endpoints/auto-categorization/auto-catego
   useGetRuleByID: mockUseGetRuleByID,
   useUpdateRule: mockUseUpdateRule,
   useToggleRule: mockUseToggleRule,
+  usePreviewRule: mockUsePreviewRule,
 }))
