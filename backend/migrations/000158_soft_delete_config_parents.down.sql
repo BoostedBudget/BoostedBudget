@@ -33,9 +33,36 @@
 --        SELECT user_id, name, count(*) FROM savings_goals GROUP BY 1,2 HAVING count(*) > 1;
 --      and the same for boosts and budgets.
 --
--- If a rollback is genuinely required, dump
---   SELECT id, deleted_at, deleted_reason, deleted_by FROM <table> WHERE deleted_at IS NOT NULL
--- for all four tables first, so the classification can be restored on the way back up.
+-- HOW TO ACTUALLY PROCEED, if a rollback is genuinely required. ⚠ This used to say only "dump the
+-- classification for all four tables first", which is step 1 of 3 and, on its own, an instruction
+-- that CANNOT WORK: the DO block below refuses while a single tombstone exists in ANY of the four,
+-- so a dump leaves the rollback exactly as blocked as it was. The steps that do work:
+--
+--   1. Dump the classification, for EVERY one of savings_goals, boosts, budgets and
+--      budget_categories -- the refusal counts all four and dumping only the table you expected
+--      leaves the other three blocking:
+--        SELECT id, deleted_at, deleted_reason, deleted_by FROM <table> WHERE deleted_at IS NOT NULL
+--   2. Empty the predicate the guard refuses on. Two ways, both lossy, and the choice is a human
+--      decision per row rather than a command to run reflexively:
+--        (a) UPDATE <table> SET deleted_at = NULL, deleted_reason = NULL, deleted_by = NULL
+--            WHERE deleted_at IS NOT NULL;
+--            keeps every row and RESURRECTS it -- warning 1. It also makes warning 3 live, and
+--            EARLIER than warning 3 says: the LIVE-only partial unique indexes
+--            (unique_savings_goal_name_per_user / _boost_ / _budget_, all WHERE deleted_at IS
+--            NULL, plus unique_budget_category_discriminated) are enforced by this very UPDATE, so
+--            it aborts on the first resurrected row whose (user_id, name) already exists live --
+--            before the unconditional UNIQUE restored further down is ever reached. Rename or
+--            merge the duplicates warning 3's query finds first, then clear.
+--        (b) DELETE FROM <table> WHERE deleted_at IS NOT NULL;
+--            destroys the retained config outright, and its blast radius is NOT symmetric across
+--            the four: budget_categories.budget_id and .savings_goal_id are both ON DELETE
+--            CASCADE, so deleting a budget or a goal destroys its categories too, and
+--            savings_goal_contributions cascades off savings_goals -- money the user logged BY
+--            HAND, recoverable from no provider. Deleting a boost only SET NULLs its
+--            boost_executions. Step 1's dump records what was tombstoned, and nothing records
+--            what the cascade took.
+--   3. Re-run the rollback. The guard now finds nothing and proceeds, and step 1's dump is what
+--      restores the classification on the way back up.
 --
 -- Idempotent: IF EXISTS on every statement, pg_constraint guards on the constraint restores.
 
