@@ -197,12 +197,32 @@ func (b *Budget) Validate() error {
 	return nil
 }
 
+// isContainingMatchLogic reports whether a PARENT's match_logic still contains the plain
+// category match — i.e. its matched-transaction set is a superset of "category only"
+// (Issue #1630). '' is treated as 'category_only' (the domain/column default).
+func isContainingMatchLogic(ml MatchLogic) bool {
+	return ml == "" || ml == MatchLogicCategoryOnly || ml == MatchLogicOr
+}
+
+// isContainedMatchLogic reports whether a CHILD's match_logic keeps it inside the plain
+// category match — i.e. it cannot escape the category clause via tags (Issue #1630). ''
+// is treated as 'category_only' (the domain/column default).
+func isContainedMatchLogic(ml MatchLogic) bool {
+	return ml == "" || ml == MatchLogicCategoryOnly || ml == MatchLogicAnd
+}
+
 // budgetedParentSets returns lookup sets of the PFC primaries and custom category
-// IDs that are budgeted as top-level rows, used to detect sub-allocations.
+// IDs that are budgeted as top-level rows AND eligible to adopt children — i.e. the
+// row's own match_logic still contains the plain category match (Issue #1630). A
+// 'tag_only' or 'and' parent has no envelope a plain-category child could fall inside,
+// so it is deliberately excluded from these sets.
 func (b *Budget) budgetedParentSets() (pfcPrimaries, customIDs map[string]bool) {
 	pfcPrimaries = make(map[string]bool)
 	customIDs = make(map[string]bool)
 	for _, cat := range b.Categories {
+		if !isContainingMatchLogic(cat.MatchLogic) {
+			continue
+		}
 		if cat.CategoryKind == "pfc" && cat.PFCPrimary != nil && cat.PFCDetailed == nil {
 			pfcPrimaries[*cat.PFCPrimary] = true
 		}
@@ -387,7 +407,18 @@ type BudgetCategory struct {
 // IsSubAllocationWithin reports whether this category's hierarchical parent is also
 // present among the given budget categories — i.e. this row is a sub-allocation
 // "within" a budgeted parent and must be excluded from budget totals (Issue #1203).
+//
+// Hierarchy alone is not sufficient (Issue #1630): exclusion is sound only when this
+// CHILD's own matched-transaction set is contained within the PARENT's. budgetedPFCPrimaries
+// and budgetedCustomIDs already carry the parent-side containment test (only a parent whose
+// own match_logic is 'category_only'/'or' is present in them — see budgetedParentSets), so
+// this method only needs to additionally gate on the CHILD's own match_logic: a 'tag_only' or
+// 'or' child can match transactions outside the parent's category clause entirely, so it must
+// never be treated as a sub-allocation even when it is hierarchically nested.
 func (bc *BudgetCategory) IsSubAllocationWithin(budgetedPFCPrimaries, budgetedCustomIDs map[string]bool) bool {
+	if !isContainedMatchLogic(bc.MatchLogic) {
+		return false
+	}
 	switch bc.CategoryKind {
 	case "pfc":
 		// A PFC detailed is a child of its primary when that primary is also budgeted.
