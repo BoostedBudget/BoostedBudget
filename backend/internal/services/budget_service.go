@@ -230,6 +230,7 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 	// R5-2: validate every category before persisting (matches AddCategory / UpdateCategory behaviour).
 	// R5-3: build all categories in memory first so CreateWithCategories can persist them atomically.
 	var categories []*domain.BudgetCategory
+	var flatCategories []domain.BudgetCategory // Issue #1630 Task 4: parent-identity dedup check below
 	for _, catReq := range req.Categories {
 		category := &domain.BudgetCategory{
 			ID:               uuid.New().String(),
@@ -250,7 +251,14 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		if err := category.Validate(); err != nil {
 			return nil, err
 		}
+		// Issue #1630 Task 4: a single request can name the same parent identity twice
+		// (e.g. two "FOOD_AND_DRINK" primary-only categories) — reject before persisting
+		// anything, mirroring the check AddCategory runs against already-persisted rows.
+		if domain.DuplicateParentIdentity(flatCategories, category) {
+			return nil, domain.ErrDuplicateParentCategory
+		}
 		categories = append(categories, category)
+		flatCategories = append(flatCategories, *category)
 	}
 
 	// R5-3: persist budget + user-provided categories atomically in a single transaction.
@@ -611,6 +619,13 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 	// Validate
 	if err := category.Validate(); err != nil {
 		return nil, err
+	}
+
+	// Issue #1630 Task 4: reject a second row sharing this budget's parent identity
+	// (same pfc_primary primary-only row, or same custom_category_id) before persisting.
+	// See domain.DuplicateParentIdentity for why an undetected collision is unsafe.
+	if domain.DuplicateParentIdentity(budget.Categories, category) {
+		return nil, domain.ErrDuplicateParentCategory
 	}
 
 	// Save to database

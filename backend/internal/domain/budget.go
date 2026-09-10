@@ -661,4 +661,57 @@ var (
 	ErrBudgetNotFound         = errors.New("budget not found")
 	ErrBudgetAlreadyExists    = errors.New("budget with this name already exists")
 	ErrBudgetCategoryNotFound = errors.New("budget category not found")
+	// ErrDuplicateParentCategory: Issue #1630 Task 4. budgetedParentSets (and the frontend's
+	// buildBudgetedParentSets) key a PARENT category by its pfc_primary/custom_category_id VALUE,
+	// not its row ID, and nothing previously stopped two live rows sharing that value from
+	// coexisting — the maps would silently keep whichever row a range/map iteration visited last,
+	// leaving which row "owns" a given child's rendering undefined. Enforced at write time instead
+	// (AddCategory, CreateBudget's batch path): the second row sharing a parent identity is
+	// rejected rather than allowed to collide. No backfill needed — Issue #1630 was authored
+	// pre-launch with zero production budgets, so no duplicate rows exist to reconcile.
+	ErrDuplicateParentCategory = errors.New("a budget category with this parent identity already exists")
 )
+
+// DuplicateParentIdentity reports whether `candidate` would collide with an existing LIVE
+// category's PARENT IDENTITY if added to `existing` (Issue #1630 Task 4).
+//
+// Parent identity is:
+//   - PFC: the pfc_primary VALUE, when the row is primary-only (PFCDetailed == nil) — that shape
+//     is exactly what budgetedParentSetsFor treats as a candidate parent.
+//   - Custom: the custom_category_id VALUE — a custom category has no primary/detailed split, so
+//     the referenced ID *is* its identity; two rows referencing the same custom_category_id in one
+//     budget are ambiguous the same way two same-primary PFC parent rows are.
+//
+// A detailed PFC row (PFCDetailed != nil) is a CHILD shape and is deliberately never compared
+// here — two children of the same primary are a normal, legal multi-child budget, not a
+// duplicate parent.
+func DuplicateParentIdentity(existing []BudgetCategory, candidate *BudgetCategory) bool {
+	if candidate == nil {
+		return false
+	}
+	switch candidate.CategoryKind {
+	case "pfc":
+		if candidate.PFCDetailed != nil || candidate.PFCPrimary == nil {
+			return false
+		}
+		for i := range existing {
+			e := &existing[i]
+			if e.CategoryKind == "pfc" && e.PFCDetailed == nil &&
+				e.PFCPrimary != nil && *e.PFCPrimary == *candidate.PFCPrimary {
+				return true
+			}
+		}
+	case "custom":
+		if candidate.CustomCategoryID == nil {
+			return false
+		}
+		for i := range existing {
+			e := &existing[i]
+			if e.CategoryKind == "custom" && e.CustomCategoryID != nil &&
+				*e.CustomCategoryID == *candidate.CustomCategoryID {
+				return true
+			}
+		}
+	}
+	return false
+}

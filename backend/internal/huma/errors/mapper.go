@@ -132,6 +132,8 @@ func MapError(err error) error {
 
 	case errors.Is(err, domain.ErrBudgetAlreadyExists):
 		return huma.Error409Conflict("A budget with this name already exists")
+	case errors.Is(err, domain.ErrDuplicateParentCategory):
+		return huma.Error409Conflict("A budget category for this parent already exists")
 	case errors.Is(err, domain.ErrTagAlreadyExists):
 		return huma.Error409Conflict("A tag with this name already exists")
 	case errors.Is(err, domain.ErrCategoryAlreadyExists):

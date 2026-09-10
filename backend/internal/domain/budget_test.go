@@ -1953,3 +1953,93 @@ func TestBudgetCategory_Validate_SavingsKind(t *testing.T) {
 		})
 	}
 }
+
+// TestDuplicateParentIdentity pins Issue #1630 Task 4: two live rows sharing a parent
+// identity (same pfc_primary primary-only row, or same custom_category_id) leave the
+// budgetedParentSets/ChildrenAllocatedByParent map with an undefined "last one wins" entry.
+// DuplicateParentIdentity is the write-time guard that must catch this before it happens.
+func TestDuplicateParentIdentity(t *testing.T) {
+	food := "FOOD_AND_DRINK"
+	utilities := "RENT_AND_UTILITIES"
+	fastFood := "FOOD_AND_DRINK_FAST_FOOD"
+	customA := "11111111-1111-1111-1111-111111111111"
+	customB := "22222222-2222-2222-2222-222222222222"
+
+	tests := []struct {
+		name      string
+		existing  []BudgetCategory
+		candidate BudgetCategory
+		want      bool
+	}{
+		{
+			name: "two PFC primary-only rows with the same pfc_primary collide",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food},
+			want:      true,
+		},
+		{
+			name: "two PFC primary-only rows with different pfc_primary do not collide",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &utilities},
+			want:      false,
+		},
+		{
+			name: "a detailed child under the same primary is NOT a duplicate parent",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood},
+			want:      false,
+		},
+		{
+			name: "two detailed children under the same primary are NOT duplicate parents (legal siblings)",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood},
+			want:      false,
+		},
+		{
+			name: "two custom rows referencing the same custom_category_id collide",
+			existing: []BudgetCategory{
+				{CategoryKind: "custom", CustomCategoryID: &customA},
+			},
+			candidate: BudgetCategory{CategoryKind: "custom", CustomCategoryID: &customA},
+			want:      true,
+		},
+		{
+			name: "two custom rows referencing different custom_category_ids do not collide",
+			existing: []BudgetCategory{
+				{CategoryKind: "custom", CustomCategoryID: &customA},
+			},
+			candidate: BudgetCategory{CategoryKind: "custom", CustomCategoryID: &customB},
+			want:      false,
+		},
+		{
+			name: "different category kinds never collide even with overlapping identifiers",
+			existing: []BudgetCategory{
+				{CategoryKind: "custom", CustomCategoryID: &customA},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food},
+			want:      false,
+		},
+		{
+			name:      "empty existing set never collides",
+			existing:  nil,
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food},
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DuplicateParentIdentity(tt.existing, &tt.candidate); got != tt.want {
+				t.Errorf("DuplicateParentIdentity() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
