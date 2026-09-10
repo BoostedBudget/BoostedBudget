@@ -207,6 +207,7 @@ func (r *investmentTransactionRepository) GetByUserID(ctx context.Context, userI
 		); err != nil {
 			return nil, err
 		}
+		txn.DateDisplay = txn.Date.Format("2006-01-02")
 		txns = append(txns, txn)
 	}
 
@@ -261,6 +262,7 @@ func (r *investmentTransactionRepository) GetByAccountID(ctx context.Context, ac
 		); err != nil {
 			return nil, err
 		}
+		txn.DateDisplay = txn.Date.Format("2006-01-02")
 		txns = append(txns, txn)
 	}
 
@@ -417,6 +419,7 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 		// disagree about the same row (#1631).
 		at := domain.NormalizeTradeType(txn.Type, txn.Subtype, secAttached, secIsCashEquivalent)
 		txn.ActivityType = &at
+		txn.DateDisplay = txn.Date.Format("2006-01-02")
 		txns = append(txns, txn)
 	}
 	if rows.Err() != nil {
@@ -502,6 +505,7 @@ func (r *investmentTransactionRepository) GetByUserAccountID(ctx context.Context
 		); err != nil {
 			return nil, err
 		}
+		txn.DateDisplay = txn.Date.Format("2006-01-02")
 		txns = append(txns, txn)
 	}
 

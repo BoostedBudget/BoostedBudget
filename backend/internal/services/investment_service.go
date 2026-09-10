@@ -185,7 +185,7 @@ func (s *investmentService) GetPortfolioHistory(ctx context.Context, userID stri
 	pts := make([]domain.PortfolioHistoryPoint, len(snaps))
 	for i, s := range snaps {
 		pts[i] = domain.PortfolioHistoryPoint{
-			Date:       s.SnapshotDate,
+			Date:       s.SnapshotDate.Format("2006-01-02"),
 			TotalValue: s.TotalValue,
 		}
 	}
