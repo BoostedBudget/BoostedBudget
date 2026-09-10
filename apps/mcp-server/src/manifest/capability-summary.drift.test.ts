@@ -109,9 +109,10 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
     // repairLinkedItem. Both are excludedWrite, so `allowed`/`read`/`write` are UNCHANGED and only
     // total and excluded move — reconnecting a bank needs a human in Plaid Link, so neither is a
     // capability an agent could ever exercise.
-    expect(fresh.totalOperations).toBe(208)
-    expect(fresh.allowedOperations).toBe(139)
-    expect(fresh.readOperations).toBe(94)
+    expect(fresh.totalOperations).toBe(210)
+    // +1 allowed / +1 read from #1625: previewRule, a read-class dry run of a candidate rule.
+    expect(fresh.allowedOperations).toBe(141)
+    expect(fresh.readOperations).toBe(96)
     expect(fresh.writeOperations).toBe(45)
     expect(fresh.excludedOperations).toBe(69)
     expect(fresh.destructiveWriteOperations).toBe(4)
@@ -165,6 +166,11 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
    */
   const NON_MUTATING_POSTS = new Set([
     'previewCategoryMatches', // POST /budgets/categories/preview — returns matches, writes nothing
+    // #1625: POST /auto-categorization/preview — a dry run of a CANDIDATE rule. It persists
+    // nothing, bumps no match count and writes no execution history; the service is exercised
+    // with a nil rule repository in TestPreviewRule_HasNoWriteSideEffects, so a write would
+    // nil-panic rather than pass. Same shape as previewCategoryMatches above.
+    'previewRule',
     'runMCPRecipe' // v1 recipes compose read-class ops only (see the manifest's own note)
   ])
 

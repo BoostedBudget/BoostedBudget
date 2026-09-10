@@ -223,6 +223,14 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"completely different repository (analyticsRepo, transactions/budget-based) and is not fed " +
 		"by this snapshot table at all. Verified by grep: no GetOrLoad/NamespaceAnalytics reference " +
 		"anywhere near SavingsImpactRepository."},
+	"rule_quarantine_census_worker.go": {dispositionNoCacheImpact, "#1625 Task 18 fix round 1. " +
+		"Its only writes are read-only (ListAllForQuarantineCensus is a SELECT) plus " +
+		"observability.SetRuleQuarantinePopulation, which sets a Prometheus GaugeVec — not a row " +
+		"in any table this codebase caches. It never touches categorization_rules, transactions, " +
+		"budgets, or any of the NamespaceAnalytics/NamespaceAnalyticsRows/NamespaceDashPrefs/ " +
+		"NamespaceIdentity tables cache.Generations covers, so there is no cache namespace for this " +
+		"job to invalidate. Verified by grep: no cache.GetOrLoad/Generations/Bump reference " +
+		"anywhere near CategorizationRuleRepository or this worker."},
 	"household_member_cleanup_check.go": {dispositionNoCacheImpact, "PurgeRemovedMembership " +
 		"deletes bookkeeping (the stale household_members row, its household_account_shares, and " +
 		"its entitlement) for a membership that has already been status='removed' for 30+ days. " +

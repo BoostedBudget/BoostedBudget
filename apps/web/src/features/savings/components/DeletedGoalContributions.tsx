@@ -68,6 +68,14 @@ interface DeletedGoalContributionsProps {
 function contributionLabel(contribution: SavingsGoalContribution): string {
   if (contribution.status === 'proposed') return 'Proposed'
   if (contribution.status === 'rejected') return 'Rejected'
+  // #1625 Task 6: `archived_at` means this contribution's tracking period closed (a
+  // progress_basis round-trip) before the goal itself was ever deleted. `total_confirmed` here
+  // comes from SumConfirmedByDeletedGoal, which deliberately INCLUDES archived rows so the total
+  // agrees with everything ListByDeletedGoal renders (unlike the live SumConfirmedByGoal, which
+  // excludes them) — so there is no total-vs-total mismatch to correct on this screen. What is
+  // still missing without this branch is the row itself explaining why it was excluded from the
+  // goal's `current_amount` while it was still alive.
+  if (contribution.archived_at) return 'Closed period'
   if (contribution.source === 'manual') return 'Entered by hand'
   return 'Detected transfer'
 }

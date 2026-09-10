@@ -84,6 +84,14 @@ export interface WriteExecuteInput {
 
 export interface HostProxy {
   invoke(operationId: string, args: Record<string, unknown>, opts?: { confirmationToken?: string; idempotencyKey?: string }): Promise<unknown>
+  /**
+   * #1625: batch-level confirmation gate. Optional so existing test doubles that only stub
+   * invoke() keep working — when absent, the per-call gate inside invoke() still applies.
+   */
+  confirmBatch?(
+    gated: Array<{ operationId: string; args: Record<string, unknown> }>,
+    token?: string,
+  ): Promise<{ needsConfirmation: boolean; token?: string; count: number }>
 }
 
 /**
@@ -196,7 +204,15 @@ const MAX_BATCH_RESULT_CHARS = 300_000
  * data in the marker itself).
  */
 function renderResult(result: unknown): string {
-  const full = JSON.stringify(result)
+  // #1625: a 204 No Content arrives here as `undefined` (fetch-mutator.ts maps it), and
+  // JSON.stringify(undefined) returns the VALUE undefined, not a string — so `.length` threw a
+  // TypeError that was not a HostProxyError, landing in the generic "unexpected error" branch,
+  // which ALSO break()s the rest of the batch. The delete had already committed server-side, so
+  // the agent was told a successful write had failed and typically retried it.
+  // `?? 'null'` covers the same hole for any other value JSON.stringify returns undefined for
+  // (a bare function or symbol), which cannot reach here today but would fail identically.
+  if (result === undefined) return 'No Content (204) — the operation succeeded and returned no body.'
+  const full = JSON.stringify(result) ?? 'null'
   if (full.length <= MAX_RESULT_CHARS) return full
 
   const shown = full.slice(0, MAX_RESULT_CHARS)
@@ -290,6 +306,72 @@ function buildHandlerCore(
     const results: string[] = []
     const auditEvents: ExecuteAuditEvent[] = []
     let batchCharsUsed = 0
+
+    // ── #1625: confirm the WHOLE batch before executing any of it ────────────────────────
+    //
+    // A confirmation token used to be bound to one (operationId, argsHash) and burned on use,
+    // while this handler passed that same single token to every gated call. So a batch with two
+    // or more gated writes could never complete: the first write consumed the token, the second
+    // got `invalid_confirmation`, and the batch broke — after the first write had already
+    // committed. Retrying re-executed it. That is the createBudget loop.
+    //
+    // Now one token covers the entire gated batch, and the challenge round executes NOTHING, so
+    // a refused or abandoned confirmation can never leave a half-applied batch behind.
+    if (opts.acceptsConfirmationToken && proxy.confirmBatch) {
+      // Hand over the WHOLE batch. confirmBatch decides which calls are gated and hashes all of
+      // them, so the token is bound to the identical calls array the messages promise — an
+      // ungated read can no longer be swapped under a valid token. `gated` is still computed here,
+      // but only to shape the audit events.
+      const canonical = calls.map((call) => ({
+        operationId: call.operationId,
+        args: buildRequestArgs(call, specEntries),
+      }))
+      const gated = canonical.filter((c) => {
+        const capability = getCapability(c.operationId)
+        return Boolean(capability && !capability.excluded && capability.confirmationRequired)
+      })
+
+      if (gated.length > 0) {
+        try {
+          const decision = await proxy.confirmBatch(canonical, confirmationToken)
+          if (decision.needsConfirmation) {
+            const plural = decision.count === 1 ? 'operation requires' : 'operations require'
+            return {
+              toolResult: {
+                content: [
+                  {
+                    type: 'text',
+                    text:
+                      `⚠️ ${decision.count} ${plural} confirmation. Nothing has been executed.\n` +
+                      `Re-invoke writeExecute() with the IDENTICAL calls array and ` +
+                      `confirmationToken: "${decision.token}"`,
+                  },
+                ],
+              },
+              // No call ran, so the only honest audit record is one confirmation_required entry
+              // per gated call — not a success or an error for any of them.
+              auditEvents: gated.map((g) => ({
+                operationId: g.operationId,
+                operationClass: getCapability(g.operationId)?.class ?? 'write',
+                result: 'confirmation_required' as const,
+              })),
+            }
+          }
+        } catch (err) {
+          if (err instanceof HostProxyError) {
+            return {
+              toolResult: { content: [{ type: 'text', text: `❌ batch confirmation failed: ${err.message} (${err.code})` }] },
+              auditEvents: gated.map((g) => ({
+                operationId: g.operationId,
+                operationClass: getCapability(g.operationId)?.class ?? 'write',
+                result: 'error' as const,
+              })),
+            }
+          }
+          throw err
+        }
+      }
+    }
 
     // Issue #1612 round 2: charge EVERY string that ends up in the returned text against the
     // budget, not just the rendered payload. Previously only `rendered.length` was counted while

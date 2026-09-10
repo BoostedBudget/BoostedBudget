@@ -140,6 +140,12 @@ func MapError(err error) error {
 		return huma.Error409Conflict("A categorization rule with this name already exists")
 	case errors.Is(err, domain.ErrSavingsGoalAlreadyExists):
 		return huma.Error409Conflict("A savings goal with this name already exists")
+	// #1625: raised by the repository's own locked basis assertion, which is the TOCTOU-free half
+	// of ContributionHandler.assertLedgerIsLive. The handler's copy still produces the better
+	// message for the ordinary case; this mapping is what stops the RACE-losing case — which only
+	// the repository can detect — from surfacing as a 500.
+	case errors.Is(err, domain.ErrContributionBasisMismatch):
+		return huma.Error422UnprocessableEntity("This goal no longer tracks progress through its contribution ledger. Reload the goal and try again.")
 	case errors.Is(err, repository.ErrDuplicateEmail):
 		return huma.Error409Conflict("Email address already in use")
 	case errors.Is(err, repository.ErrDuplicateAccount):
@@ -166,6 +172,23 @@ func MapError(err error) error {
 	// gated on the goal already having been deleted. Same 409 shape as ErrAccountNotDisconnected.
 	case errors.Is(err, domain.ErrSavingsGoalNotDeleted):
 		return huma.Error409Conflict("This savings goal must be deleted before it can be purged.")
+	// #1625: the goal's progress_basis moved underneath this request — a concurrent switch won the
+	// row, or a recompute computed its figure for a basis the row has since left. A PRECONDITION,
+	// not a fault: 4xx, and retryable after a re-read. Mapping it to 500 would be the exact defect
+	// this ticket was opened for, since the losing request did nothing wrong.
+	case errors.Is(err, domain.ErrSavingsGoalBasisConflict):
+		return huma.Error409Conflict("This savings goal's progress basis was changed by another request. Reload the goal and try again.")
+	// #1625 Task 19: UpdateRule/ToggleRule both read-modify-write the whole categorization rule
+	// row; this is the optimistic-concurrency guard's loser. A PRECONDITION, not a fault — the
+	// write did nothing wrong, the row just moved underneath it — so 409 with "reload and retry",
+	// same shape as ErrSavingsGoalBasisConflict just above. Mapping it to 500 would be the exact
+	// defect issue #1625 was opened for.
+	//
+	// ⚠ #1625 final review B2: this message is only TRUE because the guard is keyed on `version`
+	// (migration 000192), which only user-facing updates move. While it was keyed on updated_at,
+	// an ordinary sync's IncrementMatchCount produced this 409 for a change nobody made.
+	case errors.Is(err, domain.ErrRuleConcurrentlyModified):
+		return huma.Error409Conflict("This rule was changed by another request. Reload it and try again.")
 	// GAP AW: idempotency key reused for a different operation — RFC 7231 / Stripe semantics.
 	case errors.Is(err, repository.ErrIdempotencyKeyConflict):
 		return huma.Error409Conflict("This idempotency key was already used for a different operation. Use a new key to perform a different request.")
@@ -228,6 +251,25 @@ func MapError(err error) error {
 	// ================================
 	// 400 Bad Request - Validation errors
 	// ================================
+
+	// #1625 — categorization-rule validation. ORDER MATTERS: ErrInvalidCondition wraps
+	// ErrInvalidRule, so the condition case must come first or every condition error would be
+	// reported as a generic 400. Both carry the full message: an agent that cannot see WHICH
+	// field or operator was rejected has no way to correct itself, which is the whole reason
+	// these used to loop.
+	case errors.Is(err, domain.ErrInvalidGoalUpdate):
+		return huma.Error400BadRequest(err.Error())
+	// #1625 — savings-goal validation, the same ticket's headline defect in a second domain.
+	// SavingsGoal.Validate() / SavingsGoalContribution.Validate() previously returned bare
+	// errors.New with no sentinel, so every field failure (negative target_amount, an over-long
+	// name, a bad progress_basis/account_percentage combination) fell through to the default
+	// case below and became a 500 + Sentry event. Mirrors ErrInvalidRule's shape.
+	case errors.Is(err, domain.ErrInvalidSavingsGoal):
+		return huma.Error400BadRequest(err.Error())
+	case errors.Is(err, domain.ErrInvalidCondition):
+		return huma.Error422UnprocessableEntity(err.Error())
+	case errors.Is(err, domain.ErrInvalidRule):
+		return huma.Error400BadRequest(err.Error())
 
 	case errors.Is(err, domain.ErrInvalidTagName):
 		return huma.Error400BadRequest("Invalid tag name")

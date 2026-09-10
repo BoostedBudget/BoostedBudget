@@ -29,12 +29,19 @@ type CategorizationRuleService interface {
 
 	// GetEnabledRules retrieves all enabled rules for a user.
 	GetEnabledRules(ctx context.Context, userID string) ([]*domain.CategorizationRule, error)
+
+	// PreviewRule reports which recent transactions a candidate rule would match, without
+	// persisting anything (#1625).
+	PreviewRule(ctx context.Context, userID string, rule *domain.CategorizationRule, limit int) (*domain.RulePreviewResult, error)
 }
 
 // categorizationRuleService implements CategorizationRuleService.
 type categorizationRuleService struct {
 	ruleRepo           repository.CategorizationRuleRepository
 	customCategoryRepo repository.CustomCategoryRepository
+	// transactionReader backs PreviewRule (#1625). Optional: injected via SetTransactionReader
+	// so every existing constructor call site keeps compiling.
+	transactionReader PreviewTransactionReader
 }
 
 // NewCategorizationRuleService creates a new CategorizationRuleService instance.
@@ -162,11 +169,50 @@ func (s *categorizationRuleService) GetUserRules(ctx context.Context, userID str
 	}
 	for _, r := range rules {
 		r.PopulatePFCDisplay()
+		annotateQuarantineStatus(r)
 	}
 	if err := s.enrichCustomCategoryDisplay(ctx, userID, rules); err != nil {
 		return nil, err
 	}
 	return rules, nil
+}
+
+// annotateQuarantineStatus fills the response-only quarantine fields.
+//
+// #1625 Task 7. It classifies with quarantineReason -- the SAME function that labels the
+// shadow-mode metric -- rather than a second implementation, so the status a user is shown and
+// the inventory an operator reads can never describe the same rule differently.
+func annotateQuarantineStatus(r *domain.CategorizationRule) {
+	if r == nil {
+		return
+	}
+	reason := quarantineReason(r)
+	if reason == "" {
+		return
+	}
+	r.QuarantineReason = string(reason)
+	// Quarantined means "the server is stopping this rule RIGHT NOW", not "the rule has a
+	// problem". The reason field carries the problem; this field carries the consequence.
+	//
+	// ⚠ #1625 second fix wave H2/M3 settled this once, and every surface derives from it: the
+	// value is SWITCH-DEPENDENT. quarantineStopsMatching is
+	// rules.QuarantineEnforced() && observability.QuarantineReasonStopsMatching(reason), so with
+	// RULE_QUARANTINE_ENFORCE off an enforcement-class rule reports false — because the engine
+	// really is running it. The corollary that cost three surfaces a correction: false does NOT
+	// mean "repaired". See internal/services/quarantine_published_contract_test.go.
+	//
+	// ⚠ #1625 final review I1: this comment used to explain why invalid_condition_logic and
+	// unnormalizable_condition are NOT reported as stopped — sitting on the line that reports them
+	// as stopped. Both are `true` in QuarantineReasonStopsMatching and have been since Task 2
+	// moved enforcement into RuleMatches; the comment described the behaviour of an earlier round
+	// and was falsified by a later commit on the same branch. The surviving distinction is
+	// invalid_condition_value_shape, which is REPAIRED at read time (domain.CoercedValue) and DOES
+	// still match in BOTH switch positions.
+	//
+	// ⚠ #1625 final review I3: this goes through quarantineStopsMatching, NOT
+	// QuarantineReasonStopsMatching directly, so the badge and the engine cannot disagree while the
+	// RULE_QUARANTINE_ENFORCE kill switch is off.
+	r.Quarantined = quarantineStopsMatching(reason)
 }
 
 // GetRuleByID retrieves a specific rule by ID.
@@ -182,6 +228,7 @@ func (s *categorizationRuleService) GetRuleByID(ctx context.Context, userID, rul
 	}
 
 	rule.PopulatePFCDisplay()
+	annotateQuarantineStatus(rule)
 	if err := s.enrichCustomCategoryDisplay(ctx, userID, []*domain.CategorizationRule{rule}); err != nil {
 		return nil, err
 	}
@@ -258,8 +305,13 @@ func (s *categorizationRuleService) UpdateRule(ctx context.Context, userID, rule
 		rule.TagBehavior = *req.TagBehavior
 	}
 
-	// Validate
-	if err := rule.Validate(); err != nil {
+	// Validate.
+	//
+	// #1625 final review B1: the condition SHAPE check applies only when this request supplied
+	// conditions. `req.Conditions != nil` is the same expression that gated the merge above, so the
+	// rule is exactly "judge what this request writes, do not re-judge what it left alone" — see
+	// CategorizationRule.ValidateForUpdate for why re-judging made every legacy rule un-renamable.
+	if err := rule.ValidateForUpdate(req.Conditions != nil); err != nil {
 		return nil, err
 	}
 

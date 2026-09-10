@@ -8,6 +8,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/rules"
 )
 
@@ -105,6 +106,20 @@ type ruleApplicationService struct {
 	ruleEngine  *rules.RuleEngine
 	analytics   phclient.Analytics
 	historyRepo RuleExecutionHistoryRepository
+	// logger defaults to slog.Default() so every existing NewRuleApplicationService call site
+	// keeps compiling and shadow-mode quarantine still reports even where none is injected.
+	logger *slog.Logger
+	// merchantResolver enriches EffectiveMerchantName so a rule can match the name the USER sees
+	// (#1625 Task 11). Optional and FAIL-OPEN: nil, or an error, leaves EffectiveMerchantName
+	// unset and the evaluator falls back to the raw provider name. A merchant lookup must never
+	// stop a sync from categorising.
+	merchantResolver EffectiveMerchantResolver
+}
+
+// EffectiveMerchantResolver resolves merchant IDs to the per-user display name, in one query.
+// Satisfied by repository.TransactionRepository.
+type EffectiveMerchantResolver interface {
+	ResolveEffectiveMerchantNames(ctx context.Context, userID string, merchantIDs []string) (map[string]string, error)
 }
 
 // NewRuleApplicationService creates a new RuleApplicationService instance.
@@ -112,6 +127,73 @@ func NewRuleApplicationService(ruleRepo RuleApplicationRepository) *ruleApplicat
 	return &ruleApplicationService{
 		ruleRepo:   ruleRepo,
 		ruleEngine: rules.NewRuleEngine(),
+		logger:     slog.Default(),
+	}
+}
+
+// SetEffectiveMerchantResolver wires per-user merchant name resolution (#1625 Task 11).
+//
+// Setter injection, matching SetAnalytics/SetLogger, so every existing
+// NewRuleApplicationService call site keeps compiling. Unwired, effective_merchant conditions
+// simply fall back to the raw provider name rather than failing.
+func (s *ruleApplicationService) SetEffectiveMerchantResolver(r EffectiveMerchantResolver) {
+	s.merchantResolver = r
+}
+
+// enrichEffectiveMerchantNames fills EffectiveMerchantName on a batch in ONE query, so a rule
+// written against the name the user sees matches during sync exactly as it does in preview.
+//
+// Best-effort throughout: no resolver, no merchant ids, or a failed query all leave the field
+// unset, and the evaluator falls back to the raw name. Never returns an error — see the field
+// comment for why a merchant lookup must not be able to fail a sync.
+func (s *ruleApplicationService) enrichEffectiveMerchantNames(ctx context.Context, txns []domain.Transaction, userID string) {
+	if s.merchantResolver == nil {
+		return
+	}
+	seen := make(map[string]struct{}, len(txns))
+	ids := make([]string, 0, len(txns))
+	for i := range txns {
+		if txns[i].MerchantID == nil || *txns[i].MerchantID == "" {
+			continue
+		}
+		if _, dup := seen[*txns[i].MerchantID]; dup {
+			continue
+		}
+		seen[*txns[i].MerchantID] = struct{}{}
+		ids = append(ids, *txns[i].MerchantID)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	nameByID, err := s.merchantResolver.ResolveEffectiveMerchantNames(ctx, userID, ids)
+	if err != nil {
+		s.logger.WarnContext(ctx, "could not resolve effective merchant names; effective_merchant "+
+			"conditions will fall back to the raw provider name",
+			slog.String("user_id", userID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	for i := range txns {
+		if txns[i].MerchantID == nil {
+			continue
+		}
+		if name, ok := nameByID[*txns[i].MerchantID]; ok && name != "" {
+			n := name
+			txns[i].EffectiveMerchantName = &n
+		}
+	}
+}
+
+// SetLogger overrides the default logger.
+//
+// ⚠ TEST SEAM, not a production wiring gap. #1625 Task 9 checked: nothing in cmd/server calls
+// this, and nothing should — main.go:91 installs appLogger as slog.Default(), which the
+// constructor above already picks up, so the "default" is not a degraded fallback. Its only
+// callers capture log output to assert on it. Do not "fix" the missing main.go call.
+func (s *ruleApplicationService) SetLogger(logger *slog.Logger) {
+	if logger != nil {
+		s.logger = logger
 	}
 }
 
@@ -148,10 +230,20 @@ func (s *ruleApplicationService) ApplyRulesToTransaction(ctx context.Context, tx
 		return nil
 	}
 
-	// Evaluate rules against transaction
+	s.reportQuarantineCandidates(ctx, tx.UserID, userRules)
+
+	// Evaluate rules against transaction.
+	//
+	// ⚠ EvaluateRules cannot currently return a non-nil error at all — #1625 A8 made every
+	// evaluator failure rule-local, and the failures now arrive in result.FailedRuleIDs below.
+	// The check is retained as a guard on the SIGNATURE, not as a live path: it is what catches a
+	// future change that reintroduces a fatal error, rather than letting one be dropped silently.
 	result, err := s.ruleEngine.EvaluateRules(tx, userRules)
 	if err != nil {
 		return err
+	}
+	if result != nil {
+		s.logFailedRules(ctx, tx.UserID, tx.ID, result.FailedRuleIDs)
 	}
 
 	// No rules matched
@@ -161,24 +253,7 @@ func (s *ruleApplicationService) ApplyRulesToTransaction(ctx context.Context, tx
 
 	// Apply category override if matched (first-match-wins)
 	if result.TargetKind != nil {
-		switch *result.TargetKind {
-		case "pfc":
-			tx.CategoryOverrideKind = result.TargetKind
-			tx.PFCPrimaryOverride = result.TargetPFCPrimary
-			tx.PFCDetailedOverride = result.TargetPFCDetailed
-			tx.CustomCategoryOverrideID = nil
-		case "custom":
-			tx.CategoryOverrideKind = result.TargetKind
-			tx.CustomCategoryOverrideID = result.TargetCustomCategoryID
-			tx.PFCPrimaryOverride = nil
-			tx.PFCDetailedOverride = nil
-		case "clear":
-			tx.CategoryOverrideKind = nil
-			tx.PFCPrimaryOverride = nil
-			tx.PFCDetailedOverride = nil
-			tx.CustomCategoryOverrideID = nil
-		}
-		tx.CategorySourceField = domain.CategorySourceRule
+		applyCategoryOverride(tx, result)
 
 		// A rule applying a category action counts as an automated review
 		// (Issue #1203). Tag-only matches do NOT mark the transaction reviewed.
@@ -235,6 +310,10 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 		return nil, nil
 	}
 
+	// #1625 Task 11: resolve the merchant names the USER sees, once for the whole batch, before
+	// any rule runs. The sync path stamps MerchantID immediately before calling this.
+	s.enrichEffectiveMerchantNames(ctx, txns, userID)
+
 	// Indexed once for the audit trail: a record must carry the rule's name and definition AS THEY
 	// WERE at evaluation time, and the *domain.CategorizationRule holding them is only in scope
 	// here. Issue #1569 Task 5.
@@ -242,6 +321,8 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 	for _, r := range userRules {
 		rulesByID[r.ID] = r
 	}
+
+	s.reportQuarantineCandidates(ctx, userID, userRules)
 
 	var applications []BatchRuleApplication
 
@@ -266,33 +347,31 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 		result, err := s.ruleEngine.EvaluateRules(tx, userRules)
 		if err != nil {
 			// Non-fatal: log and continue with remaining transactions.
+			//
+			// #1625: this comment said "log and continue" while the code only continued — the
+			// error was discarded with no record anywhere. One bad condition silently stopped
+			// EVERY rule from applying to this transaction (EvaluateRules returns on the first
+			// error), and nothing said so.
+			s.logger.WarnContext(ctx, "rule evaluation failed for transaction — no rules applied to it",
+				slog.String("user_id", userID),
+				slog.String("transaction_id", tx.ID),
+				slog.String("error", err.Error()),
+			)
 			continue
 		}
 
-		if result == nil || (result.TargetKind == nil && len(result.Tags) == 0) {
+		if result == nil {
+			continue
+		}
+		s.logFailedRules(ctx, userID, tx.ID, result.FailedRuleIDs)
+
+		if result.TargetKind == nil && len(result.Tags) == 0 {
 			continue
 		}
 
 		// Apply category override if matched.
 		if result.TargetKind != nil {
-			switch *result.TargetKind {
-			case "pfc":
-				tx.CategoryOverrideKind = result.TargetKind
-				tx.PFCPrimaryOverride = result.TargetPFCPrimary
-				tx.PFCDetailedOverride = result.TargetPFCDetailed
-				tx.CustomCategoryOverrideID = nil
-			case "custom":
-				tx.CategoryOverrideKind = result.TargetKind
-				tx.CustomCategoryOverrideID = result.TargetCustomCategoryID
-				tx.PFCPrimaryOverride = nil
-				tx.PFCDetailedOverride = nil
-			case "clear":
-				tx.CategoryOverrideKind = nil
-				tx.PFCPrimaryOverride = nil
-				tx.PFCDetailedOverride = nil
-				tx.CustomCategoryOverrideID = nil
-			}
-			tx.CategorySourceField = domain.CategorySourceRule
+			applyCategoryOverride(tx, result)
 
 			// A rule applying a category counts as an automated review (Issue #1203).
 			// Tag-only matches do not mark reviewed.
@@ -594,6 +673,29 @@ func (s *ruleApplicationService) applyTagsToTransaction(tx *domain.Transaction, 
 	tx.TagsSource = newTagSources
 }
 
+// applyCategoryOverride applies a category result to a transaction based on the target kind.
+// Extracted to eliminate duplication between ApplyRulesToTransaction and ApplyRulesToBatch.
+func applyCategoryOverride(tx *domain.Transaction, result *rules.RuleResult) {
+	switch *result.TargetKind {
+	case "pfc":
+		tx.CategoryOverrideKind = result.TargetKind
+		tx.PFCPrimaryOverride = result.TargetPFCPrimary
+		tx.PFCDetailedOverride = result.TargetPFCDetailed
+		tx.CustomCategoryOverrideID = nil
+	case "custom":
+		tx.CategoryOverrideKind = result.TargetKind
+		tx.CustomCategoryOverrideID = result.TargetCustomCategoryID
+		tx.PFCPrimaryOverride = nil
+		tx.PFCDetailedOverride = nil
+	case "clear":
+		tx.CategoryOverrideKind = nil
+		tx.PFCPrimaryOverride = nil
+		tx.PFCDetailedOverride = nil
+		tx.CustomCategoryOverrideID = nil
+	}
+	tx.CategorySourceField = domain.CategorySourceRule
+}
+
 // EmitBatchSideEffects fires analytics and per-rule match-count increments for
 // batch rule applications, gated on the insertedIDs returned by CreateBatch.
 // Only transactions that were genuinely inserted (not conflict-preserved) receive
@@ -667,4 +769,83 @@ func (s *ruleApplicationService) writeExecutionHistory(ctx context.Context, user
 			)
 		}
 	}
+}
+
+// ─── Shadow-mode quarantine (#1625) ─────────────────────────────────────────────────────────
+//
+// A rule whose conditions do not validate has always executed anyway: unknown condition types
+// evaluate to no-match per condition, which under OR logic lets a VALID sibling still fire the
+// rule. So a rule the user cannot see is broken quietly matches on a condition set that is not
+// what it says. Three more traps ride along: a rule with ZERO conditions matches EVERY
+// transaction (engine.go), an invalid condition_logic silently degrades to AND, and one
+// evaluator error aborts every other rule for that transaction.
+//
+// ⚠ This is no longer shadow mode. #1625 Task 2 enforces the three reasons that CANNOT be
+// produced through the API (no_conditions, invalid_condition_logic, unnormalizable_condition)
+// plus uncoercible values: those rules match nothing, and the read model tells the user so. The
+// fourth, invalid_condition_value_shape, IS reachable through the ordinary API — #346 never
+// validated value shapes — so it is REPAIRED by read-path coercion and keeps running. This
+// reporter still counts and logs both kinds; the log line says which.
+// logFailedRules records rules that could not be EVALUATED, one line each.
+//
+// #1625 A8: an evaluator error used to abort EvaluateRules, so one broken rule silently
+// suppressed every other rule for that transaction and the batch handler logged a single
+// transaction-level line. Errors are rule-local now, so the honest record is per-rule — and it
+// names which rule, which the old line could not.
+func (s *ruleApplicationService) logFailedRules(ctx context.Context, userID, txID string, failed []string) {
+	for _, ruleID := range failed {
+		s.logger.WarnContext(ctx, "rule evaluation failed — this rule was skipped, others still applied",
+			slog.String("user_id", userID),
+			slog.String("transaction_id", txID),
+			slog.String("rule_id", ruleID),
+		)
+	}
+}
+
+func (s *ruleApplicationService) reportQuarantineCandidates(ctx context.Context, userID string, rules []*domain.CategorizationRule) {
+	for _, rule := range rules {
+		reason := quarantineReason(rule)
+		if reason == "" {
+			continue
+		}
+		// The counter is the INVENTORY that a future enforcing pass depends on — the log line
+		// alone is not aggregatable, and "counts and logs" was only half true without it.
+		// Only the fixed reason vocabulary is labelled; ids and user content stay in the log.
+		observability.RecordRuleQuarantineCandidate(reason)
+		s.logger.WarnContext(ctx, "categorization rule is quarantined",
+			slog.String("user_id", userID),
+			slog.String("rule_id", rule.ID),
+			slog.String("reason", string(reason)),
+			// The operator cannot infer this from the reason without knowing the enforcement
+			// set, and the whole failure class here is a rule being described as one thing
+			// while it does another.
+			slog.Bool("stopped_matching", quarantineStopsMatching(reason)),
+		)
+	}
+}
+
+// quarantineReason is a thin alias for the ONE classifier, rules.QuarantineReasonFor.
+//
+// #1625 Task 2 moved the implementation into package rules because the engine has to enforce the
+// same classification it reports, and the engine cannot import services. Keeping the local name
+// keeps every service call site unchanged; what it must never become again is a SECOND
+// implementation, because a rule the user is told is quarantined and a rule the engine refuses to
+// run would then be two different sets.
+func quarantineReason(rule *domain.CategorizationRule) observability.QuarantineReason {
+	return rules.QuarantineReasonFor(rule)
+}
+
+// quarantineStopsMatching is the ONE answer to "is this rule actually prevented from matching".
+//
+// #1625 final review I3. There were THREE sources of truth: RuleMatches gated on the kill switch,
+// while annotateQuarantineStatus and reportQuarantineCandidates consulted
+// observability.QuarantineReasonStopsMatching alone. With RULE_QUARANTINE_ENFORCE off, the card
+// therefore said "Not running" while the engine went on recategorising the user's ledger — the
+// divergence RuleMatches' own doc comment calls impossible, and the precise failure this ticket
+// exists to remove.
+//
+// The reason predicate answers "does this REASON stop a rule". That is only half the question
+// while a kill switch exists; the other half is whether enforcement is on at all.
+func quarantineStopsMatching(reason observability.QuarantineReason) bool {
+	return rules.QuarantineEnforced() && observability.QuarantineReasonStopsMatching(reason)
 }

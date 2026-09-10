@@ -1,0 +1,24 @@
+-- Reverses 000192.
+--
+-- ⚠ CORRECTED TWICE. The second fix wave (L7) rightly replaced "no read reports it to a user";
+-- `version` IS reported — selected by GetByID, GetByUserID and queryRules
+-- (categorization_rule_repository.go) and serialised on every rule the API returns. But the
+-- concrete harm it then invented is impossible, and the third fix wave (F1/F3) removes it: it
+-- claimed a client that read version 7 pre-rollback writes it back after a re-up and is refused
+-- forever, and that two clients holding version 1 become indistinguishable. Neither can happen.
+-- The server never accepts a client-supplied version: UpdateCategorizationRuleRequest has no
+-- version field at all, and UpdateRule reloads the rule with GetByID and uses THAT copy's version
+-- as the guard. After a re-up, two concurrent readers of version 1 still resolve correctly — the
+-- first bumps it to 2, the second's `WHERE ... AND version = 1` matches zero rows and its save is
+-- refused, which is the guard working.
+--
+-- WHAT THIS ROLLBACK ACTUALLY COSTS
+--   1. Real data loss of a DERIVED value: the accumulated per-rule update count is destroyed, and
+--      a later re-up recreates every row at the DEFAULT 1. Nothing regenerates it. It is not user
+--      or financial data — every rule's meaning (name, conditions, target) is untouched and the
+--      ledger does not change — which is why this needs no refusal of the 000180 kind.
+--   2. A behavioural regression: the pre-000192 `updated_at`-keyed guard comes back, and with it
+--      the false-conflict defect that key implies (a background match-count bump refusing the
+--      user's save as "changed by another request").
+ALTER TABLE categorization_rules
+    DROP COLUMN IF EXISTS version;
