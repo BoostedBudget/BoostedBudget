@@ -194,6 +194,15 @@ type TransactionRepository interface {
 	// Used for previewing how many transactions would match a budget category configuration.
 	GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (count int, totalAmount float64, err error)
 
+	// GetCategoryMatchBreakdown returns the same rolled-up total's split by nested child
+	// (Issue #1630 Task 5) — a pfc_primary's nested custom categories, or a parent custom
+	// category's custom children — versus transactions filed directly under the targeted
+	// category. Returns (nil, 0, 0, nil) for a leaf category (pfc_detailed set) or an
+	// unsupported kind, since there is no rollup to disclose. Tag matching is deliberately
+	// NOT applied here: the breakdown explains the CATEGORY clause's contribution
+	// independent of any tag constraint layered on top by and/or match logic.
+	GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, startDate, endDate time.Time) (children []domain.CategoryPreviewBreakdownItem, directCount int, directAmount float64, err error)
+
 	// Issue #499: Transaction-Budget Linking UI
 
 	// GetTransactionsForBudgetCategory returns paginated transactions matching a budget category.
@@ -2405,6 +2414,88 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 		return 0, 0, fmt.Errorf("failed to get matching transaction stats: %w", err)
 	}
 	return count, sum, nil
+}
+
+// GetCategoryMatchBreakdown returns the rolled-up total's per-child breakdown. Issue #1630
+// Task 5. See the interface doc comment for the leaf/unsupported no-op cases.
+func (r *transactionRepository) GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, startDate, endDate time.Time) ([]domain.CategoryPreviewBreakdownItem, int, float64, error) {
+	var catClause string
+	var catArgs []interface{}
+
+	switch {
+	case categoryKind == "pfc" && pfcDetailed == nil && pfcPrimary != nil:
+		catClause, catArgs = buildCategoryClause("pfc", pfcPrimary, nil, nil, 4)
+	case categoryKind == "custom" && customCategoryID != nil:
+		catClause, catArgs = buildCategoryClause("custom", nil, nil, customCategoryID, 4)
+	default:
+		// Leaf category (pfc_detailed set) or unsupported kind: no rollup, nothing to disclose.
+		return nil, 0, 0, nil
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			CASE WHEN t.category_override_kind = 'custom' THEN t.custom_category_override_id::text ELSE NULL END AS child_id,
+			cc.name AS child_name,
+			COUNT(*) AS cnt,
+			COALESCE(ABS(SUM(t.amount)), 0) AS total
+		FROM transactions t
+		LEFT JOIN custom_categories cc ON cc.id = t.custom_category_override_id /* tombstone-exempt(custom_categories cc): HISTORY FILTER (#1569 Task 9) — this join only resolves a display NAME for a transaction that already matched via buildCategoryClause's own exempted custom-category subquery; a since-deleted child category's own transactions must keep a legible label in the breakdown, the same reason that subquery admits them into the total in the first place. */
+		WHERE t.user_id = $1 AND t.amount > 0
+		  AND t.deleted_at IS NULL
+		  AND t.date BETWEEN $2 AND $3
+		  AND (%s)
+		GROUP BY child_id, child_name
+	`, catClause)
+
+	args := append([]interface{}{userID, startDate, endDate}, catArgs...)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to get category match breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	var directCount int
+	var directAmount float64
+	var children []domain.CategoryPreviewBreakdownItem
+
+	for rows.Next() {
+		var childID, childName *string
+		var cnt int
+		var total float64
+		if err := rows.Scan(&childID, &childName, &cnt, &total); err != nil {
+			return nil, 0, 0, fmt.Errorf("failed to scan category match breakdown row: %w", err)
+		}
+		if childID == nil {
+			directCount = cnt
+			directAmount = total
+			continue
+		}
+		// For the "custom" kind, a matched row can be the targeted parent category
+		// itself (custom_category_override_id == customCategoryID) — that is still
+		// "direct", not a nested child. The "pfc" kind never hits this: a custom
+		// category can never equal a pfc_primary value.
+		if categoryKind == "custom" && customCategoryID != nil && *childID == *customCategoryID {
+			directCount += cnt
+			directAmount += total
+			continue
+		}
+		name := ""
+		if childName != nil {
+			name = *childName
+		}
+		children = append(children, domain.CategoryPreviewBreakdownItem{
+			CategoryID:       *childID,
+			CategoryName:     name,
+			TransactionCount: cnt,
+			TotalAmount:      total,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to iterate category match breakdown rows: %w", err)
+	}
+
+	return children, directCount, directAmount, nil
 }
 
 // =============================================================================

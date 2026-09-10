@@ -30,10 +30,15 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { CategoryPreviewBreakdownItem } from './categoryPreviewBreakdownItem';
 
 export interface CategoryPreviewResponse {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  /** @nullable */
+  children?: CategoryPreviewBreakdownItem[] | null;
+  direct_amount?: number;
+  direct_transaction_count?: number;
   total_amount: number;
   transaction_count: number;
 }

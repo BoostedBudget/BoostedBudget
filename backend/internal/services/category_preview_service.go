@@ -17,6 +17,11 @@ import (
 // This follows the minimal dependency interface pattern used throughout the codebase.
 type TransactionStatsCalculator interface {
 	GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (count int, totalAmount float64, err error)
+
+	// GetCategoryMatchBreakdown discloses the rolled-up total's per-nested-child split
+	// (Issue #1630 Task 5). See repository.TransactionRepository's doc comment for the
+	// leaf/unsupported no-op cases.
+	GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, startDate, endDate time.Time) (children []domain.CategoryPreviewBreakdownItem, directCount int, directAmount float64, err error)
 }
 
 // CategoryPreviewService provides transaction preview functionality for budget category configuration.
@@ -98,8 +103,35 @@ func (s *categoryPreviewService) PreviewCategoryMatches(ctx context.Context, use
 		return nil, err
 	}
 
-	return &domain.CategoryPreviewResponse{
+	resp := &domain.CategoryPreviewResponse{
 		TransactionCount: count,
 		TotalAmount:      totalAmount,
-	}, nil
+	}
+
+	// Issue #1630 Task 5: disclose the rollup. Only category-shaped requests can roll up
+	// (tag_only has no category_kind at all), and the repository itself returns a no-op
+	// for a leaf category, so this is safe to call unconditionally whenever a category
+	// kind was given.
+	if hasCategoryKind {
+		children, directCount, directAmount, err := s.statsCalculator.GetCategoryMatchBreakdown(
+			ctx,
+			userID,
+			req.CategoryKind,
+			req.PFCPrimary,
+			req.PFCDetailed,
+			req.CustomCategoryID,
+			startDate,
+			endDate,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if len(children) > 0 {
+			resp.Children = children
+			resp.DirectTransactionCount = directCount
+			resp.DirectAmount = directAmount
+		}
+	}
+
+	return resp, nil
 }

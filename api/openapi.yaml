@@ -1977,6 +1977,25 @@ components:
         - start_date
         - end_date
       type: object
+    CategoryPreviewBreakdownItem:
+      additionalProperties: false
+      properties:
+        category_id:
+          type: string
+        category_name:
+          type: string
+        total_amount:
+          format: double
+          type: number
+        transaction_count:
+          format: int64
+          type: integer
+      required:
+        - category_id
+        - category_name
+        - transaction_count
+        - total_amount
+      type: object
     CategoryPreviewRequest:
       additionalProperties: false
       properties:
@@ -2023,6 +2042,18 @@ components:
           format: uri
           readOnly: true
           type: string
+        children:
+          items:
+            $ref: "#/components/schemas/CategoryPreviewBreakdownItem"
+          type:
+            - array
+            - "null"
+        direct_amount:
+          format: double
+          type: number
+        direct_transaction_count:
+          format: int64
+          type: integer
         total_amount:
           format: double
           type: number

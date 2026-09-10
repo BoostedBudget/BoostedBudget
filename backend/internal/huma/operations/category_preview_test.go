@@ -168,6 +168,48 @@ func TestPreviewCategoryMatches_ZeroResults(t *testing.T) {
 	assert.Equal(t, 0.0, output.Body.TotalAmount)
 }
 
+// TestPreviewCategoryMatches_WithChildBreakdown tests that the handler passes the
+// service's nested-child breakdown through to the response body unchanged (Issue #1630
+// Task 5).
+func TestPreviewCategoryMatches_WithChildBreakdown(t *testing.T) {
+	mockService := &mockCategoryPreviewService{
+		response: &domain.CategoryPreviewResponse{
+			TransactionCount:       2,
+			TotalAmount:            615.28,
+			DirectTransactionCount: 1,
+			DirectAmount:           192.08,
+			Children: []domain.CategoryPreviewBreakdownItem{
+				{CategoryID: "cc-hoa", CategoryName: "HOA", TransactionCount: 1, TotalAmount: 423.20},
+			},
+		},
+	}
+
+	handler := NewCategoryPreviewHandler(mockService)
+
+	input := &PreviewCategoryMatchesInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body = domain.CategoryPreviewRequest{
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("RENT_AND_UTILITIES"),
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+		StartDate:    "2024-01-01",
+		EndDate:      "2024-01-31",
+	}
+
+	output, err := handler.PreviewCategoryMatches(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, 2, output.Body.TransactionCount)
+	assert.Equal(t, 615.28, output.Body.TotalAmount)
+	assert.Equal(t, 1, output.Body.DirectTransactionCount)
+	assert.Equal(t, 192.08, output.Body.DirectAmount)
+	require.Len(t, output.Body.Children, 1)
+	assert.Equal(t, "HOA", output.Body.Children[0].CategoryName)
+	assert.Equal(t, 423.20, output.Body.Children[0].TotalAmount)
+}
+
 // TestCategoryPreviewRouteRegistration tests that routes are properly registered.
 func TestCategoryPreviewRouteRegistration(t *testing.T) {
 	mockService := &mockCategoryPreviewService{

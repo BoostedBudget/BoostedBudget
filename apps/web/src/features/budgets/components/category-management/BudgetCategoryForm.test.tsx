@@ -1358,6 +1358,129 @@ describe('BudgetCategoryForm', () => {
         expect(preview).not.toHaveTextContent(/transactions totaling/i)
       })
     })
+
+    // Issue #1630 Task 5: a pfc_primary rollup (Issue #1203) is a CORRECT total that looked
+    // like a double-count bug because the preview never disclosed the nested child's share.
+    it('should disclose the nested-child breakdown when a rollup occurred', async () => {
+      const user = userEvent.setup({ delay: null })
+      mockUsePreviewCategories.mockReturnValue({
+        preview: {
+          transaction_count: 2,
+          total_amount: 615.28,
+          direct_transaction_count: 1,
+          direct_amount: 192.08,
+          children: [
+            { category_id: 'cc-hoa', category_name: 'HOA', transaction_count: 1, total_amount: 423.20 },
+          ],
+        },
+        loading: false,
+        error: null,
+      })
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          budgetStartDate="2024-01-01"
+          budgetEndDate="2024-01-31"
+        />
+      )
+
+      await switchToCustom()
+
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+      await user.selectOptions(categorySelect, ['Restaurants'])
+
+      await waitFor(() => {
+        const breakdown = screen.getByTestId('category-preview-breakdown')
+        expect(breakdown).toHaveTextContent(/\$192\.08/)
+        expect(breakdown).toHaveTextContent(/direct/i)
+        expect(breakdown).toHaveTextContent(/\$423\.20/)
+        expect(breakdown).toHaveTextContent(/HOA/)
+      })
+    })
+
+    it('should not show a breakdown when the preview has no nested children', async () => {
+      const user = userEvent.setup({ delay: null })
+      mockUsePreviewCategories.mockReturnValue({
+        preview: { transaction_count: 5, total_amount: 250.50 },
+        loading: false,
+        error: null,
+      })
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          budgetStartDate="2024-01-01"
+          budgetEndDate="2024-01-31"
+        />
+      )
+
+      await switchToCustom()
+
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+      await user.selectOptions(categorySelect, ['Restaurants'])
+
+      await waitFor(() => {
+        expect(screen.getByTestId('category-preview')).toBeInTheDocument()
+      })
+      expect(screen.queryAllByTestId('category-preview-breakdown')).toHaveLength(0)
+    })
+
+    it('should mask money and the child category name in the breakdown for PII (data-ph-mask)', async () => {
+      const user = userEvent.setup({ delay: null })
+      mockUsePreviewCategories.mockReturnValue({
+        preview: {
+          transaction_count: 2,
+          total_amount: 615.28,
+          direct_transaction_count: 1,
+          direct_amount: 192.08,
+          children: [
+            { category_id: 'cc-hoa', category_name: 'HOA', transaction_count: 1, total_amount: 423.20 },
+          ],
+        },
+        loading: false,
+        error: null,
+      })
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          budgetStartDate="2024-01-01"
+          budgetEndDate="2024-01-31"
+        />
+      )
+
+      await switchToCustom()
+
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+      await user.selectOptions(categorySelect, ['Restaurants'])
+
+      await waitFor(() => {
+        expect(screen.getByTestId('category-preview-breakdown')).toBeInTheDocument()
+      })
+
+      const breakdown = screen.getByTestId('category-preview-breakdown')
+      const items = breakdown.querySelectorAll('li')
+      expect(items.length).toBeGreaterThan(0)
+      items.forEach((item) => {
+        expect(item).toHaveAttribute('data-ph-mask')
+      })
+    })
   })
 
   describe('Savings Goal kind (#1300)', () => {
