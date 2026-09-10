@@ -55,8 +55,16 @@ export function InvestmentTransactionsTable({
     {
       id: 'type',
       header: 'Type',
-      key: 'type',
-      render: (r) => <ActivityTypeChip activityType={r.type} />,
+      // ⚠ key is the SORT accessor, and it must move with the render (#1631). This column passed
+      // the RAW Plaid `type` to a chip the transactions feed feeds a NORMALIZED value, so this
+      // page could never show Dividend or Reinvest and disagreed with the feed about the same row.
+      // Switching only the render would leave a row DISPLAYING "Dividend" while SORTING under
+      // "cash", interleaved with rows displaying "Cash" — a visible sort/display disagreement on
+      // exactly the rows this issue exists to fix.
+      key: 'activity_type',
+      // activity_type is `omitempty`, so it is absent from older fixtures and mocks; fall back to
+      // the raw type rather than rendering the "Other" chip for a row we can still classify.
+      render: (r) => <ActivityTypeChip activityType={r.activity_type ?? r.type} />,
     },
     {
       id: 'security',
