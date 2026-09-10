@@ -250,7 +250,10 @@ describe('BudgetCategoryManager', () => {
     await user.clear(amountInput)
     await user.type(amountInput, '240')
 
-    expect(screen.queryByText(/exceed.*expected income/i)).not.toBeInTheDocument()
+    // Count, not `.not.toBeInTheDocument()`: when this assertion FAILS, jest-dom formats the
+    // whole rendered DOM into the message and bun's formatter dies with `RangeError: Out of
+    // memory`, hiding the reason. Asserting a number keeps a failure readable (#1630).
+    expect(screen.queryAllByText(/exceed.*expected income/i)).toHaveLength(0)
   })
 
   it('should show confirmation dialog when delete button clicked', async () => {
