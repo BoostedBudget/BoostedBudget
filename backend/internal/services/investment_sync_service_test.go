@@ -215,6 +215,53 @@ func makePlaidSecurity(securityID, name, ticker string) plaid.Security {
 	}
 }
 
+// TestMapPlaidSecuritiesToDomain_NameSynthesis covers #1631's root-cause fix: Plaid sending a
+// null/blank security name used to leave domain.Security.Name as "", and nothing on the sync path
+// ever called Security.Validate() to catch it — the NOT NULL column constraint is satisfied by an
+// empty string.
+// Synthesising a name (rather than skipping the row) was the chosen fix because UpsertBatch's ON
+// CONFLICT never repairs security_id afterwards, so dropping the row would strand any investment
+// transaction that already references it.
+func TestMapPlaidSecuritiesToDomain_NameSynthesis(t *testing.T) {
+	t.Run("keeps the provided name when non-blank", func(t *testing.T) {
+		sec := makePlaidSecurity("plaid-sec-1", "Apple Inc.", "AAPL")
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		require.Len(t, result, 1)
+		assert.Equal(t, "Apple Inc.", result[0].Name)
+	})
+
+	t.Run("falls back to the ticker symbol when name is a null Plaid string", func(t *testing.T) {
+		sec := makePlaidSecurity("plaid-sec-2", "", "VCIT")
+		sec.Name = plaidNilStr()
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		require.Len(t, result, 1)
+		assert.Equal(t, "VCIT", result[0].Name)
+	})
+
+	t.Run("falls back to the ticker symbol when name is an empty string", func(t *testing.T) {
+		sec := makePlaidSecurity("plaid-sec-3", "", "IEMG")
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		require.Len(t, result, 1)
+		assert.Equal(t, "IEMG", result[0].Name)
+	})
+
+	t.Run("falls back to a synthesised label from the plaid security id when both name and ticker are blank", func(t *testing.T) {
+		sec := makePlaidSecurity("plaid-sec-4", "", "")
+		sec.TickerSymbol = plaidNilStr()
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		require.Len(t, result, 1)
+		assert.Equal(t, "Security plaid-sec-4", result[0].Name)
+	})
+
+	t.Run("treats a whitespace-only name as blank", func(t *testing.T) {
+		sec := makePlaidSecurity("plaid-sec-5", "   ", "")
+		sec.TickerSymbol = plaidNilStr()
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		require.Len(t, result, 1)
+		assert.Equal(t, "Security plaid-sec-5", result[0].Name)
+	})
+}
+
 // makePlaidHolding creates a minimal plaid.Holding for testing.
 func makePlaidHolding(plaidAccountID, plaidSecurityID string, qty, price, value, costBasis float64) plaid.Holding {
 	return plaid.Holding{

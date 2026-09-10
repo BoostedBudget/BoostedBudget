@@ -16,6 +16,41 @@ export function titleCaseWords(value: string): string {
 }
 
 /**
+ * SECURITY_TYPE_ACRONYM_LABELS maps raw `securities.type` tokens that are acronyms to their
+ * canonical uppercase form (etf → "ETF") rather than a naive title-case ("Etf"). Shared so the
+ * Holdings table and the allocation donut render the SAME label for the SAME value — see
+ * securityTypeLabel below.
+ */
+export const SECURITY_TYPE_ACRONYM_LABELS: Readonly<Record<string, string>> = {
+  etf: 'ETF',
+  reit: 'REIT',
+  mbs: 'MBS',
+  abs: 'ABS',
+}
+
+/**
+ * securityTypeLabel humanises a `securities.type` value for display (#1631).
+ *
+ * `security_type` is a raw lowercase Plaid/provider token ("etf", "mutual fund", "stock") and
+ * `securities.type` is NULL for some rows (COALESCE'd to 'unknown' in the allocation SQL, but
+ * never assigned on the live holdings join — HoldingView.SecurityType stays nil). Before #1631,
+ * HoldingsTable's Type column had no `render` at all, so it printed the raw token verbatim, and a
+ * nil/empty value rendered as a blank cell — despite HoldingView's own comment promising
+ * `nil -> "unknown"`.
+ *
+ * `fallback` lets each caller choose its own copy for the empty case: the Holdings table wants
+ * "Unknown" (matching the promised value), the allocation donut wants "Other" (an aggregation
+ * bucket name, not a security-type label).
+ */
+export function securityTypeLabel(value: string | null | undefined, fallback: string): string {
+  const trimmed = (value ?? '').trim()
+  if (!trimmed || trimmed.toLowerCase() === 'unknown') return fallback
+  const lower = trimmed.toLowerCase()
+  if (SECURITY_TYPE_ACRONYM_LABELS[lower]) return SECURITY_TYPE_ACRONYM_LABELS[lower]
+  return titleCaseWords(lower)
+}
+
+/**
  * investmentSubcategoryLabel derives the Sub-category cell for an investment row.
  *
  * Before #1631 the Sub-category column had no investment branch at all: it cast the row to a

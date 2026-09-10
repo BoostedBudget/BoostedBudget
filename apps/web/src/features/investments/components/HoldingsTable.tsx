@@ -15,6 +15,7 @@ import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
 import type { HoldingSnapshotView } from '@boostedbudget/api-client/models/holdingSnapshotView'
+import { securityTypeLabel } from '@/features/transactions/investmentSubcategory'
 
 /**
  * The fields the column definitions below actually read.
@@ -119,7 +120,9 @@ const VALUE_COLUMNS: ColumnDef<HoldingRowShape>[] = [
     id: 'name',
     header: 'Security',
     key: 'security_name',
-    render: (r) => <span>{r.security_name ?? r.security_id}</span>,
+    // `??` alone misses production rows where security_name is '' rather than null/undefined
+    // (#1631) — a blank string is still truthy-checked here, not merely non-nullish.
+    render: (r) => <span>{r.security_name && r.security_name.length > 0 ? r.security_name : r.security_id}</span>,
   },
   {
     id: 'ticker',
@@ -129,7 +132,12 @@ const VALUE_COLUMNS: ColumnDef<HoldingRowShape>[] = [
   {
     id: 'type',
     header: 'Type',
-    key: 'security_type',
+    // Route through the shared title-caser + acronym map (#1631) so this column renders the same
+    // label the allocation donut immediately above it on the same page already shows for the
+    // same securities.type value ("etf" -> "ETF", "mutual fund" -> "Mutual Fund"). A null/blank
+    // type renders "Unknown" rather than a blank cell, matching HoldingView.SecurityType's doc
+    // comment.
+    render: (r) => <span>{securityTypeLabel(r.security_type, 'Unknown')}</span>,
   },
   {
     id: 'quantity',

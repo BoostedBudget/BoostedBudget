@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
@@ -637,9 +638,34 @@ func mapPlaidSecuritiesToDomain(plaidSecs []plaid.Security) []domain.Security {
 		sec.IsCashEquivalent = ps.IsCashEquivalent.Get()
 		sec.ClosePrice = ps.ClosePrice.Get()
 		sec.ClosePriceAsOf = parsePlaidDate(ps.ClosePriceAsOf.Get())
+		sec.Name = synthesizeSecurityName(sec.Name, sec.TickerSymbol, ps.SecurityId)
 		result = append(result, sec)
 	}
 	return result
+}
+
+// synthesizeSecurityName fills in a security's Name when Plaid sends a null or blank one (#1631).
+//
+// Root cause: Security.Validate()'s first rule is "name is required", but Validate() is never
+// called on this sync path (securityRepository.UpsertBatch does not validate either), and the
+// `name VARCHAR(500) NOT NULL` column constraint is satisfied by an empty string — so nothing
+// caught it, and production has securities with name = "".
+//
+// Synthesising is deliberate, not "call Validate() and skip": refusing the row would drop a
+// security that an investment transaction already references, and UpsertBatch's ON CONFLICT never
+// repairs `security_id` on a later sync (the same trap noted on parsePlaidDate above). A named
+// fallback keeps the row resolvable while still being honest that this is a synthesised label,
+// not provider data.
+func synthesizeSecurityName(name string, tickerSymbol *string, plaidSecurityID string) string {
+	if trimmed := strings.TrimSpace(name); trimmed != "" {
+		return trimmed
+	}
+	if tickerSymbol != nil {
+		if trimmed := strings.TrimSpace(*tickerSymbol); trimmed != "" {
+			return trimmed
+		}
+	}
+	return "Security " + plaidSecurityID
 }
 
 // parsePlaidDate converts a Plaid date-only string ("YYYY-MM-DD") into a *time.Time, returning nil

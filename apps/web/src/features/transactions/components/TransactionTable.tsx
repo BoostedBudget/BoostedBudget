@@ -177,9 +177,21 @@ export function TransactionTable({
       minSize: 160,
       render: (row) => {
         if (isInvestmentRow(row)) {
+          // `??` alone misses production rows where ticker_symbol/security_name are '' rather
+          // than null/undefined (#1631) — a blank cell used to render as the literal " · ".
+          // row.name (the transaction's own name) is the fallback for exactly those rows: it is
+          // the only field with content when the security metadata is blank.
+          const ticker = row.ticker_symbol && row.ticker_symbol.length > 0 ? row.ticker_symbol : null
+          const securityName =
+            row.security_name && row.security_name.length > 0 ? row.security_name : null
+          if (!ticker && !securityName) {
+            return (
+              <div className="font-medium text-foreground">{row.name || '—'}</div>
+            )
+          }
           return (
             <div className="font-medium text-foreground">
-              {row.ticker_symbol ?? '—'} · {row.security_name ?? '—'}
+              {ticker ?? '—'} · {securityName ?? '—'}
             </div>
           )
         }
