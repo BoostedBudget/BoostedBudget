@@ -61,8 +61,13 @@ func TestQuarantineReason_FlagsTheStructurallyBrokenRules(t *testing.T) {
 		},
 		{
 			// The REPAIRED half: a quoted number has exactly one reading, so the rule keeps
-			// running and is reported as a problem rather than switched off. This is the only
-			// reason reachable through the ordinary API — #346 never validated value shapes.
+			// running and is reported as a problem rather than switched off. #346 never validated
+			// value shapes, which is why the legacy corpus is full of these.
+			//
+			// ⚠ #1625 third fix wave F2: this said it was "the only reason reachable through the
+			// ordinary API". It is not — the same absent validation admitted uncoercible values
+			// too, which is the ENFORCED case in the row directly above this one. It is the
+			// COMMON case, not the sole one.
 			"a wrong-typed value with one honest reading",
 			func(r *domain.CategorizationRule) {
 				r.Conditions = []domain.RuleCondition{

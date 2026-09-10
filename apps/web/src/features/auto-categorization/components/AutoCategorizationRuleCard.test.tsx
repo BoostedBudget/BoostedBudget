@@ -532,10 +532,16 @@ describe('AutoCategorizationRuleCard', () => {
     })
 
     // ⚠ The distinction Codex caught, with #1625 Task 2's membership. A rule with a reason but
-    // quarantined=false is STILL MATCHING transactions. Only one reason is in that state now:
-    // a wrong-typed condition value whose intended reading is unambiguous, which the backend
-    // coerces at read time. Rendering "Not running" for it would tell the user their rule was
-    // off while it quietly recategorised their ledger.
+    // quarantined=false is STILL MATCHING transactions, and the card must not say otherwise:
+    // rendering "Not running" for it would tell the user their rule was off while it quietly
+    // recategorised their ledger.
+    //
+    // ⚠ #1625 third fix wave F2: this said only ONE reason can be in that state — a wrong-typed
+    // value the backend coerces at read time. That is the only reason in it while quarantine
+    // enforcement is ON. With RULE_QUARANTINE_ENFORCE off, services.quarantineStopsMatching
+    // returns false for EVERY enforcement-class reason, so the card must render this branch
+    // correctly for any of the five. The fixture below stays on the coercible reason because it
+    // is the one a default-configured server actually emits.
     it('says "Needs attention", NOT "Not running", for a rule that still runs', () => {
       render(
         <AutoCategorizationRuleCard
