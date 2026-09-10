@@ -4,9 +4,13 @@ package operations
 
 // Issue #1630, Task 0: reproduce (or strike) four claims from the issue against the REAL
 // handler -> service -> repository -> domain.Validate() -> errors.MapError chain, using a
-// live Postgres connection (not mocks). This is evidence-gathering only — no production code
-// is changed here. See .superpowers/sdd/brainstorming-writing-plans-using-super-fancy-melody/
-// task-0-report.md for the findings table.
+// live Postgres connection (not mocks). At the time task 0 wrote these tests this was
+// evidence-gathering only — no production code was changed. Task 7 then fixed the root cause
+// (domain.ErrInvalidBudget), which changed the P6 and P2 tests' expected status code from 500
+// to 400; those two tests were updated in place (not left pinning the pre-fix defect) rather
+// than duplicated, since the mechanism they exercise didn't change, only the status code did.
+// See .superpowers/sdd/brainstorming-writing-plans-using-super-fancy-melody/
+// task-0-report.md for the original findings table.
 //
 // Static reading at planning time (recorded in the task brief) already contradicted:
 //   P5: "monthly budget without end_date -> 422"
@@ -135,13 +139,18 @@ func TestClaim1630_P5_MonthlyWithoutEndDate_DoesNotReproduce(t *testing.T) {
 	assert.Equal(t, "P5 Monthly No End Date", out.Body.Name)
 }
 
-// TestClaim1630_P6_MatchLogicAnd_EmptyTags_Is500NotStruct400 confirms the issue's claim that
-// match_logic:"and" returns 400. Per domain/budget.go BudgetCategory.Validate(), "and" is a
-// legal MatchLogic value; the failure is that tags are required whenever match_logic is
-// "tag_only" or "and", and that failure is a bare errors.New (not a sentinel), which
-// internal/huma/errors/mapper.go's switch does not recognize -> falls through to
-// huma.Error500InternalServerError. ACTUAL is expected to be 500, not 400.
-func TestClaim1630_P6_MatchLogicAnd_EmptyTags_Is500NotStruct400(t *testing.T) {
+// TestClaim1630_P6_MatchLogicAnd_EmptyTags_Is400AfterErrInvalidBudget confirms the issue's
+// claim that match_logic:"and" returns 400. Per domain/budget.go BudgetCategory.Validate(),
+// "and" is a legal MatchLogic value; the failure is that tags are required whenever
+// match_logic is "tag_only" or "and". At the time task 0 wrote this test, that failure was a
+// bare errors.New with no sentinel, which internal/huma/errors/mapper.go's switch did not
+// recognize -> fell through to huma.Error500InternalServerError, so this test originally
+// pinned 500 (see TestClaim1630_P6_MatchLogicAnd_EmptyTags_Is500NotStruct400 in git history).
+// Task 7 (#1630) introduced domain.ErrInvalidBudget, which every Validate() failure in
+// domain/budget.go now wraps, and mapper.go now maps it to 400 — so the claimed status code
+// is now CORRECT, even though the issue's premise about WHY (tags required) was right and the
+// mechanism (unwrapped error -> 500) is what needed fixing, not the target status code.
+func TestClaim1630_P6_MatchLogicAnd_EmptyTags_Is400AfterErrInvalidBudget(t *testing.T) {
 	pool := connectClaim1630DB(t)
 	tx, err := pool.Begin(context.Background())
 	require.NoError(t, err)
@@ -170,10 +179,11 @@ func TestClaim1630_P6_MatchLogicAnd_EmptyTags_Is500NotStruct400(t *testing.T) {
 
 	var statusErr huma.StatusError
 	require.True(t, errors.As(err, &statusErr), "expected huma.StatusError, got %T: %v", err, err)
-	// CLAIM: 400. ACTUAL:
-	assert.Equal(t, http.StatusInternalServerError, statusErr.GetStatus(),
-		"P6 claim does NOT reproduce as stated: empty tags + match_logic=and maps to 500 "+
-			"(unwrapped errors.New falling through mapper's default case), not 400")
+	// CLAIM: 400. ACTUAL (post #1630 task 7): 400.
+	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus(),
+		"post-task-7: empty tags + match_logic=and now maps to 400 via domain.ErrInvalidBudget, "+
+			"not the pre-fix 500 (unwrapped errors.New falling through mapper's default case)")
+	assert.Contains(t, statusErr.Error(), "tags", "the field name must be discoverable in the body")
 }
 
 // TestClaim1630_P6_MatchLogicAnd_WithTags_Succeeds is the control case: match_logic="and" is
@@ -211,10 +221,13 @@ func TestClaim1630_P6_MatchLogicAnd_WithTags_Succeeds(t *testing.T) {
 
 // TestClaim1630_P2_IncomeSourceType_CategoryVsCustom_BothInvalid confirms the issue's claim
 // that IncomeSourceType "category" -> 422 while "custom" -> 500. Both are invalid
-// IncomeSourceType values (valid ones are pfc_primary/tag/manual); IncomeSource.Validate()
-// returns the identical bare errors.New("invalid income source type") for either string, wrapped
-// with fmt.Errorf("income_sources[%d]: %w", ...) by Budget.Validate(), which the mapper's switch
-// does not recognize -> default -> 500 for BOTH. Neither should be 422.
+// IncomeSourceType values (valid ones are pfc_primary/tag/manual); at the time task 0 wrote
+// this test, IncomeSource.Validate() returned the identical bare errors.New("invalid income
+// source type") for either string, which the mapper's switch did not recognize -> default ->
+// 500 for BOTH, so this test originally pinned 500 for both (see git history). Task 7 (#1630)
+// introduced domain.ErrInvalidBudget, which IncomeSource.Validate() now wraps, and mapper.go
+// now maps it to 400 for both — the issue's differentiated 422/500 claim remains wrong (both
+// STILL map to the identical code), but that code is now 400, not 500.
 func TestClaim1630_P2_IncomeSourceType_CategoryVsCustom_BothInvalid(t *testing.T) {
 	pool := connectClaim1630DB(t)
 
@@ -250,10 +263,12 @@ func TestClaim1630_P2_IncomeSourceType_CategoryVsCustom_BothInvalid(t *testing.T
 
 			var statusErr huma.StatusError
 			require.True(t, errors.As(err, &statusErr), "expected huma.StatusError, got %T: %v", err, err)
-			// CLAIM: "category"->422, "custom"->500. ACTUAL: both map to the SAME code.
-			assert.Equal(t, http.StatusInternalServerError, statusErr.GetStatus(),
-				"income source type %q must map to 500 (unwrapped validation error), "+
-					"not 422 — and must be IDENTICAL to the other invalid type", badType)
+			// CLAIM: "category"->422, "custom"->500. ACTUAL (post #1630 task 7): both 400.
+			assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus(),
+				"income source type %q must map to 400 via domain.ErrInvalidBudget (post-task-7), "+
+					"not the pre-fix 500 — and must be IDENTICAL to the other invalid type", badType)
+			assert.Contains(t, statusErr.Error(), "pfc_primary",
+				"legal values must be discoverable in the error body")
 		})
 	}
 }

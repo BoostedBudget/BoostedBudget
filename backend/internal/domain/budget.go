@@ -70,10 +70,10 @@ type IncomeSource struct {
 // Validate checks that the IncomeSource has valid fields.
 func (is *IncomeSource) Validate() error {
 	if !is.Type.IsValid() {
-		return errors.New("invalid income source type")
+		return fmt.Errorf("%w: invalid income source type %q: must be one of pfc_primary, tag, manual", ErrInvalidBudget, is.Type)
 	}
 	if is.Value == "" {
-		return errors.New("income source value is required")
+		return fmt.Errorf("%w: income source value is required", ErrInvalidBudget)
 	}
 	return nil
 }
@@ -140,51 +140,51 @@ type Budget struct {
 // Validate checks that the Budget has all required fields and valid values.
 func (b *Budget) Validate() error {
 	if b.UserID == "" {
-		return errors.New("user_id is required")
+		return fmt.Errorf("%w: user_id is required", ErrInvalidBudget)
 	}
 
 	if b.Name == "" {
-		return errors.New("name is required")
+		return fmt.Errorf("%w: name is required", ErrInvalidBudget)
 	}
 
 	if len(b.Name) > 100 {
-		return errors.New("name must be 100 characters or less")
+		return fmt.Errorf("%w: name must be 100 characters or less", ErrInvalidBudget)
 	}
 
 	if !b.Period.IsValid() {
-		return errors.New("invalid budget period: must be weekly, monthly, quarterly, yearly, or custom")
+		return fmt.Errorf("%w: invalid budget period %q: must be one of weekly, monthly, quarterly, yearly, custom", ErrInvalidBudget, b.Period)
 	}
 
 	if b.StartDate.IsZero() {
-		return errors.New("start_date is required")
+		return fmt.Errorf("%w: start_date is required", ErrInvalidBudget)
 	}
 
 	if b.Amount <= 0 {
-		return errors.New("amount must be positive")
+		return fmt.Errorf("%w: amount must be positive", ErrInvalidBudget)
 	}
 
 	if b.ExpectedIncome <= 0 {
-		return errors.New("expected_income must be positive")
+		return fmt.Errorf("%w: expected_income must be positive", ErrInvalidBudget)
 	}
 
 	if b.CurrencyCode == "" {
-		return errors.New("currency_code is required")
+		return fmt.Errorf("%w: currency_code is required", ErrInvalidBudget)
 	}
 
 	// Custom periods require an end_date
 	if b.Period == BudgetPeriodCustom && b.EndDate == nil {
-		return errors.New("end_date is required for custom period budgets")
+		return fmt.Errorf("%w: end_date is required for custom period budgets", ErrInvalidBudget)
 	}
 
 	// End date must be after start date if set
 	if b.EndDate != nil && !b.EndDate.After(b.StartDate) {
-		return errors.New("end_date must be after start_date")
+		return fmt.Errorf("%w: end_date must be after start_date", ErrInvalidBudget)
 	}
 
 	// Envelope budgeting validation (Issue #491)
 	// Income amount can be 0 for traditional budgets, but not negative
 	if b.IncomeAmount < 0 {
-		return errors.New("income_amount cannot be negative")
+		return fmt.Errorf("%w: income_amount cannot be negative", ErrInvalidBudget)
 	}
 
 	// Validate each income source
@@ -447,63 +447,63 @@ func (bc *BudgetCategory) IsSubAllocationWithin(budgetedPFCPrimaries, budgetedCu
 // Validate checks that the BudgetCategory has all required fields.
 func (bc *BudgetCategory) Validate() error {
 	if bc.BudgetID == "" {
-		return errors.New("budget_id is required")
+		return fmt.Errorf("%w: budget_id is required", ErrInvalidBudget)
 	}
 
 	if bc.MatchLogic != "" && !bc.MatchLogic.IsValid() {
-		return errors.New("invalid match_logic value")
+		return fmt.Errorf("%w: invalid match_logic value %q: must be one of category_only, tag_only, and, or", ErrInvalidBudget, bc.MatchLogic)
 	}
 
 	if bc.MatchLogic == MatchLogicTagOnly || bc.MatchLogic == MatchLogicAnd {
 		if len(bc.Tags) == 0 {
-			return errors.New("tags are required when match_logic is tag_only or and")
+			return fmt.Errorf("%w: tags are required when match_logic is tag_only or and", ErrInvalidBudget)
 		}
 	}
 
 	switch bc.CategoryKind {
 	case "pfc":
 		if bc.PFCPrimary == nil || *bc.PFCPrimary == "" {
-			return errors.New("pfc_primary is required when category_kind is pfc")
+			return fmt.Errorf("%w: pfc_primary is required when category_kind is pfc", ErrInvalidBudget)
 		}
 		if bc.CustomCategoryID != nil {
-			return errors.New("custom_category_id must not be set when category_kind is pfc")
+			return fmt.Errorf("%w: custom_category_id must not be set when category_kind is pfc", ErrInvalidBudget)
 		}
 		if bc.SavingsGoalID != nil {
-			return errors.New("savings_goal_id must not be set when category_kind is pfc")
+			return fmt.Errorf("%w: savings_goal_id must not be set when category_kind is pfc", ErrInvalidBudget)
 		}
 	case "custom":
 		if bc.CustomCategoryID == nil || *bc.CustomCategoryID == "" {
-			return errors.New("custom_category_id is required when category_kind is custom")
+			return fmt.Errorf("%w: custom_category_id is required when category_kind is custom", ErrInvalidBudget)
 		}
 		if bc.PFCPrimary != nil || bc.PFCDetailed != nil {
-			return errors.New("pfc_primary and pfc_detailed must not be set when category_kind is custom")
+			return fmt.Errorf("%w: pfc_primary and pfc_detailed must not be set when category_kind is custom", ErrInvalidBudget)
 		}
 		if bc.SavingsGoalID != nil {
-			return errors.New("savings_goal_id must not be set when category_kind is custom")
+			return fmt.Errorf("%w: savings_goal_id must not be set when category_kind is custom", ErrInvalidBudget)
 		}
 	case "savings":
 		// Savings categories link to a savings goal; PFC/custom fields must be absent.
 		if bc.SavingsGoalID == nil || *bc.SavingsGoalID == "" {
-			return errors.New("savings_goal_id is required when category_kind is savings")
+			return fmt.Errorf("%w: savings_goal_id is required when category_kind is savings", ErrInvalidBudget)
 		}
 		if bc.PFCPrimary != nil || bc.PFCDetailed != nil {
-			return errors.New("pfc_primary and pfc_detailed must not be set when category_kind is savings")
+			return fmt.Errorf("%w: pfc_primary and pfc_detailed must not be set when category_kind is savings", ErrInvalidBudget)
 		}
 		if bc.CustomCategoryID != nil {
-			return errors.New("custom_category_id must not be set when category_kind is savings")
+			return fmt.Errorf("%w: custom_category_id must not be set when category_kind is savings", ErrInvalidBudget)
 		}
 	default:
 		if bc.MatchLogic != MatchLogicTagOnly {
-			return errors.New("category_kind must be pfc, custom, or savings")
+			return fmt.Errorf("%w: category_kind must be pfc, custom, or savings", ErrInvalidBudget)
 		}
 	}
 
 	if bc.AllocatedAmount < 0 {
-		return errors.New("allocated_amount cannot be negative")
+		return fmt.Errorf("%w: allocated_amount cannot be negative", ErrInvalidBudget)
 	}
 
 	if bc.SpentAmount < 0 {
-		return errors.New("spent_amount cannot be negative")
+		return fmt.Errorf("%w: spent_amount cannot be negative", ErrInvalidBudget)
 	}
 
 	return nil
@@ -691,6 +691,16 @@ var (
 	ErrBudgetNotFound         = errors.New("budget not found")
 	ErrBudgetAlreadyExists    = errors.New("budget with this name already exists")
 	ErrBudgetCategoryNotFound = errors.New("budget category not found")
+	// ErrInvalidBudget is the field-validation sentinel for Budget / BudgetCategory /
+	// IncomeSource (Issue #1630, task 7 — the same headline defect #1625 fixed for savings
+	// goals, in a third domain). Budget.Validate(), BudgetCategory.Validate() and
+	// IncomeSource.Validate() previously returned bare errors.New with no sentinel, so every
+	// field failure (an invalid income_sources[].type, an invalid match_logic, a negative
+	// amount, an invalid category_kind) fell through internal/huma/errors/mapper.go's switch
+	// to the default case and became a 500 + Sentry event instead of a 4xx naming the field.
+	// Mirrors ErrInvalidSavingsGoal's shape exactly; see the mapper case comment for the
+	// ordering rationale.
+	ErrInvalidBudget = errors.New("invalid budget")
 	// ErrDuplicateParentCategory: Issue #1630 Task 4. budgetedParentSets (and the frontend's
 	// buildBudgetedParentSets) key a PARENT category by its pfc_primary/custom_category_id VALUE,
 	// not its row ID, and nothing previously stopped two live rows sharing that value from
