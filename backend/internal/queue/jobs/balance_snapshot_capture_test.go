@@ -777,6 +777,105 @@ func TestBalanceSnapshotDispatch_ConsecutiveCappedRunsAdvanceAndTheUnionReachesE
 	}
 }
 
+// TestBalanceSnapshotDispatch_CapHitInsideAShortFinalPageStillPersistsItsPosition is the final-gate
+// regression for the one shape every other capped case in this file cannot see.
+//
+// THE DEFECT. `exhausted` is computed from the PRE-truncation page length, so a page that is short
+// (the repository had nothing left) AND ALSO trips the cap sets exhausted=true. The `&& !exhausted`
+// guard then skips cappedStop, the loop breaks on `exhausted`, and Finish(ctx, false, …) CLEARS the
+// cursor — so a run that genuinely stopped on its cap records "we finished", the truncated tail is
+// never dispatched on that run, and the next run restarts from the beginning and truncates at the
+// same place. The documented invariant "a run that stops on its cap persists where it stopped" is
+// violated, and the cap WARN that is supposed to be the operator's only signal never fires.
+//
+// ⚠ WHY EVERY EXISTING CASE IS BLIND TO IT, and why these three numbers specifically. The cap must
+// land STRICTLY INSIDE a short page: cap % pageSize != 0 and cap < total <= pageSize. Every other
+// capped fixture here is PAGE-ALIGNED (cap=2, pageSize=2), where the page that trips the cap is a
+// FULL page — so fetchedCount == pageSize, exhausted is false, and the buggy and correct branches
+// agree. total=5 / cap=4 / pageSize=10 makes the first page short (5 < 10) and truncated (5 > 4) at
+// once, which is the only configuration where the two disagree.
+func TestBalanceSnapshotDispatch_CapHitInsideAShortFinalPageStillPersistsItsPosition(t *testing.T) {
+	const (
+		total    = 5
+		capItems = 4
+		pageSize = 10
+	)
+	// Fixture guard: the boundary this test exists to sit off. A page-aligned cap makes the defect
+	// unreachable, which is exactly how it survived every earlier round.
+	require.Less(t, capItems, total, "the cap must actually truncate")
+	require.LessOrEqual(t, total, pageSize, "the truncating page must be SHORT (one page holds everything)")
+	require.NotZero(t, capItems%pageSize, "a page-aligned cap cannot distinguish the fix from the defect")
+
+	all := captureTargets(total)
+	store := newMemorySweepCursorStore()
+	q := &captureRecordingQueue{}
+	w := NewBalanceSnapshotDispatchWorker(BalanceSnapshotDispatchWorkerDeps{
+		ItemRepo: &captureFakeItemReader{targets: all}, JobQueue: q, Logger: captureQuietLogger(),
+		SweepCursors: store, PageSize: pageSize, MaxItemsPerRun: capItems,
+	})
+
+	require.NoError(t, w.Work(context.Background(), captureDispatchJob()))
+	run1 := dispatchedItemIDs(q)
+	require.Len(t, run1, capItems, "the run must dispatch exactly its cap; got %v", sortedKeys(run1))
+
+	pos, err := store.Load(context.Background(), repository.SweepCursorBalanceCapture)
+	require.NotNil(t, pos, "a run that stopped on its cap inside a SHORT page must persist where it "+
+		"stopped. Clearing here records 'we reached the end' for a run that did not, so the %d "+
+		"undispatched item(s) are skipped and the next run re-reads the same prefix", total-capItems)
+	require.NoError(t, err)
+	require.Zero(t, store.clears, "the cursor must not be cleared by a capped run")
+
+	// And the behavioural consequence, not just the stored shape: the tail item is reached on the
+	// NEXT run. Without this the assertion above could be satisfied by any non-nil position.
+	newest := all[total-1].LinkedItemID
+	require.False(t, run1[newest], "fixture guard: the tail item must be the one the cap excluded")
+	require.NoError(t, w.Work(context.Background(), captureDispatchJob()))
+	run2 := dispatchedItemIDs(q)
+	require.True(t, run2[newest],
+		"the item the cap truncated away must be dispatched by the next run; run 1 got %v, run 2 got %v",
+		sortedKeys(run1), sortedKeys(run2))
+}
+
+// TestBalanceSnapshotDispatch_ShortPageThatExactlyFillsTheCapStillCountsAsTheEnd is the control for
+// the case above, and it exists because a mutation SURVIVED without it.
+//
+// `truncated` must be `fetchedCount > remaining`, not `>=`. Equality means the cap and the page ended
+// in the same place — the cap cut NOTHING off, so the run really did reach the end of the candidate
+// set. With `>=` the run instead declares itself capped: it persists a cursor at the last item and
+// emits the cap WARN, on a run that had nothing left to do. That self-corrects on the next run (the
+// resumed position yields an empty page and the wrap clears it), so the damage is a redundant query
+// and a false operator signal rather than lost data — but the WARN is documented as meaning "the
+// active set no longer fits in one run", and a run that covered the WHOLE set must not raise it.
+//
+// total == cap == 4 with pageSize 10 is the only shape that distinguishes `>` from `>=`: one short
+// page, consumed exactly to the cap.
+func TestBalanceSnapshotDispatch_ShortPageThatExactlyFillsTheCapStillCountsAsTheEnd(t *testing.T) {
+	const (
+		total    = 4
+		capItems = 4
+		pageSize = 10
+	)
+	require.Equal(t, total, capItems, "fixture guard: the cap must be consumed EXACTLY, cutting nothing")
+	require.Less(t, total, pageSize, "fixture guard: and it must happen on a SHORT page")
+
+	all := captureTargets(total)
+	store := newMemorySweepCursorStore()
+	q := &captureRecordingQueue{}
+	w := NewBalanceSnapshotDispatchWorker(BalanceSnapshotDispatchWorkerDeps{
+		ItemRepo: &captureFakeItemReader{targets: all}, JobQueue: q, Logger: captureQuietLogger(),
+		SweepCursors: store, PageSize: pageSize, MaxItemsPerRun: capItems,
+	})
+
+	require.NoError(t, w.Work(context.Background(), captureDispatchJob()))
+	require.Len(t, dispatchedItemIDs(q), total, "every item must be dispatched")
+
+	pos, err := store.Load(context.Background(), repository.SweepCursorBalanceCapture)
+	require.NoError(t, err)
+	require.Nil(t, pos, "a run that dispatched the ENTIRE candidate set reached the end and must "+
+		"store nothing. Persisting here would be a run claiming it stopped early when the cap cut "+
+		"nothing off, which also raises the cap WARN on a fully-covered set")
+}
+
 // TestBalanceSnapshotDispatch_PersistedPositionPastTheEndWrapsWithinTheSameRun is the other half of
 // the fix, and the half that would otherwise be the same bug with extra steps: a watermark that only
 // ever advances eventually points past the last item, and a run that then found an empty page and

@@ -1790,7 +1790,7 @@ func activeAccounts(accounts []domain.Account) []domain.Account {
 // ⚠ THREE CONDITIONS, NOT TWO, AND THE THIRD CLOSED A SILENT DATA LOSS (#1626 gap G7). The window
 // is five minutes of ELAPSED TIME and says nothing about the UTC DAY — but the daily gap-filler's
 // entire unit of work IS the UTC day: balanceCaptureService.CaptureItemBalances asks
-// AccountsMissingDailySnapshot whether TODAY's cohort is complete, and migration 000191's partial
+// AccountsMissingDailySnapshot whether TODAY's cohort is complete, and migration 000194's partial
 // unique index is keyed on the UTC date. So a capture landing in the 00:00–00:05 UTC window — a
 // RunOnStart deploy just after midnight, or River retrying a 23:5x attempt that failed — saw the
 // account as missing today's row, deduped against yesterday's 23:58 IDENTICAL row, wrote nothing,
@@ -1808,7 +1808,7 @@ func activeAccounts(accounts []domain.Account) []domain.Account {
 // there would leave the same hole one path over.
 //
 // ⚠ UTC EXPLICITLY, on BOTH sides. Comparing in the process's local zone would put the day boundary
-// somewhere neither AccountsMissingDailySnapshot nor migration 000191 puts it, which is the class of
+// somewhere neither AccountsMissingDailySnapshot nor migration 000194 puts it, which is the class of
 // silently-ambiguous day boundary every other date decision on this path is spelled UTC to avoid.
 func isRedundantSnapshot(latest, next *domain.BalanceSnapshot, now time.Time, window time.Duration) bool {
 	if latest == nil || next == nil {
