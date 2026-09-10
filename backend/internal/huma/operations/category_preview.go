@@ -63,5 +63,18 @@ func RegisterCategoryPreviewRoutes(api huma.API, handler *CategoryPreviewHandler
 		Description: "Returns the count and total amount of transactions matching the given category configuration within the date range.",
 		Tags:        []string{"Budget"},
 		Security:    []map[string][]string{{"clerk": {}}},
+		// #1630: this operation is a POST (the request body is a filter, not a resource to
+		// persist) but its handler (CategoryPreviewService.PreviewCategoryMatches) issues only
+		// SELECTs (transaction_repository.go: GetMatchingTransactionStats,
+		// GetCategoryMatchBreakdown) and writes nothing — see
+		// TestPreviewCategoryMatches_WritesNothing_Integration. x-mcp-lazy-init is the
+		// mirror-image problem (a GET that writes); this is a POST that doesn't. Tagging it
+		// here lets the MCP server's readExecute admit it WITHOUT inferring safety from the
+		// method or a comment — see apps/mcp-server/src/manifest/safe-post-extension.ts, which
+		// requires this tag to ALSO appear in a reviewed, human-maintained acknowledged list
+		// before admission takes effect, and
+		// apps/mcp-server/scripts/check-manifest-completeness.ts, which fails CI if a
+		// newly-tagged operation is not yet acknowledged there.
+		Extensions: map[string]any{"x-mcp-safe-post": true},
 	}, handler.PreviewCategoryMatches)
 }

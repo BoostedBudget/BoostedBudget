@@ -18,6 +18,11 @@ import {
   extractLazyInitOperationIds,
   findUnacknowledgedLazyInitOperations,
 } from '../src/manifest/lazy-init-extension'
+import {
+  ACKNOWLEDGED_SAFE_POST_OPERATIONS,
+  extractSafePostOperationIds,
+  findUnacknowledgedSafePostOperations,
+} from '../src/manifest/safe-post-extension'
 import { HTTP_METHODS } from '../src/spec/index-builder'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -25,7 +30,10 @@ const OPENAPI_PATH = resolve(__dirname, '../../../api/openapi.yaml')
 
 const rawYaml = readFileSync(OPENAPI_PATH, 'utf-8')
 const spec = parseYaml(rawYaml) as {
-  paths?: Record<string, Record<string, { operationId?: string; 'x-mcp-lazy-init'?: unknown }>>
+  paths?: Record<
+    string,
+    Record<string, { operationId?: string; 'x-mcp-lazy-init'?: unknown; 'x-mcp-safe-post'?: unknown }>
+  >
 }
 
 const missing: string[] = []
@@ -70,5 +78,23 @@ if (unacknowledged.length > 0) {
   process.exit(1)
 }
 
+const safePostTagged = extractSafePostOperationIds(spec)
+const unacknowledgedSafePosts = findUnacknowledgedSafePostOperations(safePostTagged, ACKNOWLEDGED_SAFE_POST_OPERATIONS)
+
+if (unacknowledgedSafePosts.length > 0) {
+  console.error('❌ Manifest completeness check FAILED — unacknowledged safe-POST operation(s):')
+  for (const id of unacknowledgedSafePosts) {
+    console.error(`   ${id}`)
+  }
+  console.error('')
+  console.error('This operation is tagged x-mcp-safe-post: true in api/openapi.yaml (it admits a')
+  console.error('non-read-verb call into readExecute) but is not in ACKNOWLEDGED_SAFE_POST_OPERATIONS')
+  console.error('(apps/mcp-server/src/manifest/safe-post-extension.ts). Review it — including proving')
+  console.error('by integration test that it writes nothing — then add it to that list AND to')
+  console.error("execute.test.ts's pinned expectation.")
+  process.exit(1)
+}
+
 console.log(`✅ Manifest completeness check passed — all OpenAPI operations are classified`)
 console.log(`✅ Lazy-init scan passed — ${lazyInitTagged.length} tagged operation(s), all acknowledged`)
+console.log(`✅ Safe-POST scan passed — ${safePostTagged.length} tagged operation(s), all acknowledged`)

@@ -203,6 +203,29 @@ describe('createHostProxy', () => {
     expect(idempotencyKey!.length).toBeGreaterThan(0)
   })
 
+  // #1630: `previewCategoryMatches` is now admitted into readExecute as an acknowledged
+  // safe-POST. readExecute never passes an `idempotencyKey` opt (mcp/tools/execute.ts calls
+  // `proxy.invoke(operationId, args, { confirmationToken })` only), and
+  // `confirmationRequired: false` (from the `read()` manifest helper) means the
+  // `entry.confirmationRequired` branch above — the ONLY place that mints/consumes an
+  // idempotency key — never runs for it. So `confirmedIdempotencyKey` stays `undefined` and
+  // `effectiveIdempotencyKey` falls through to `opts.idempotencyKey`, also undefined: no
+  // `Idempotency-Key` header is ever attached to a previewCategoryMatches call. Proven here
+  // against the real host-proxy + real manifest, not asserted from reading the code alone.
+  it('#1630: an admitted safe-POST (previewCategoryMatches) never carries an Idempotency-Key header', async () => {
+    const capturedOpts: Array<{ headers?: Record<string, string> } | undefined> = []
+    const capturingMutator: FetchMutator = mock((_config, opts) => {
+      capturedOpts.push(opts as { headers?: Record<string, string> } | undefined)
+      return Promise.resolve({ transaction_count: 0, total_amount: 0 })
+    }) as unknown as FetchMutator
+
+    const proxy = createHostProxy({ mutator: capturingMutator })
+    await proxy.invoke('previewCategoryMatches', { pfc_primary: 'FOOD_AND_DRINK' })
+
+    expect(capturedOpts).toHaveLength(1)
+    expect(capturedOpts[0]?.headers?.['Idempotency-Key']).toBeUndefined()
+  })
+
   // ── Rate limiting — per-user isolation ──────────────────────────────────
 
   it('rate-limits per userId independently (no cross-user bleed)', async () => {

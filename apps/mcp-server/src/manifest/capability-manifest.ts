@@ -451,7 +451,12 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // #1569 Task 16: tombstone, not a DELETE (budget_repository.go DeleteCategory).
   write('deleteBudgetCategory'),
   write('syncBudget'),
-  read('previewCategoryMatches'), // POST but non-mutating
+  // POST but non-mutating (proven: TestPreviewCategoryMatches_WritesNothing_Integration). Unlike
+  // this comment used to imply, that alone does NOT admit it into readExecute — the backend now
+  // tags it `x-mcp-safe-post: true` (category_preview.go) and it is listed in the reviewed
+  // ACKNOWLEDGED_SAFE_POST_OPERATIONS (manifest/safe-post-extension.ts), which is what
+  // read-execute-admission.ts actually consults (#1630).
+  read('previewCategoryMatches'),
 
   // ── Categories ──────────────────────────────────────────────────────────
   read('getUserCategories'),

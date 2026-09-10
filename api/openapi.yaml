@@ -11767,6 +11767,7 @@ paths:
       summary: Preview category matches
       tags:
         - Budget
+      x-mcp-safe-post: true
   /api/v1/budgets/current:
     get:
       description: Retrieves the current active budget (where today is within the period).

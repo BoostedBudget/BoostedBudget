@@ -7,6 +7,11 @@ import {
   findUnacknowledgedLazyInitOperations,
   readLazyInitOperationIds,
 } from '../../manifest/lazy-init-extension'
+import {
+  ACKNOWLEDGED_SAFE_POST_OPERATIONS,
+  findUnacknowledgedSafePostOperations,
+  readSafePostOperationIds,
+} from '../../manifest/safe-post-extension'
 import { readSpecIndex } from '../../../scripts/generate-mcp-capability-summary'
 
 // Minimal proxy stub for testing
@@ -355,6 +360,7 @@ describe('buildReadExecuteHandler — the three-way admission gate (#1610b)', ()
     { operationId: 'getTransactions', method: 'GET', path: '/api/v1/transactions' },
     { operationId: 'updateTransactionCategory', method: 'PATCH', path: '/api/v1/transactions/{id}/category' },
     { operationId: 'runMCPRecipe', method: 'POST', path: '/api/v1/mcp/recipes/{id}/run' },
+    { operationId: 'previewCategoryMatches', method: 'POST', path: '/api/v1/budgets/categories/preview' },
   ]
 
   it('admits a real read-only, non-confirmation-gated GET operation', async () => {
@@ -368,6 +374,23 @@ describe('buildReadExecuteHandler — the three-way admission gate (#1610b)', ()
     expect(toolResult.content[0]?.text).toContain('getTransactions')
     expect(proxy.invoke).toHaveBeenCalledTimes(1)
     expect(auditEvents[0]).toMatchObject({ operationId: 'getTransactions', operationClass: 'read', result: 'success' })
+  })
+
+  it('admits previewCategoryMatches — a POST reviewed and proven non-mutating (#1630 safe-POST)', async () => {
+    // Same shape as runMCPRecipe below (class 'read', confirmationRequired false, method POST) —
+    // the ONLY thing that distinguishes the two is ACKNOWLEDGED_SAFE_POST_OPERATIONS
+    // (manifest/safe-post-extension.ts), a reviewed, human-maintained, explicitly enumerated
+    // list. This must never become inferred from the method or the manifest alone.
+    const proxy = makeProxy({ transaction_count: 3, total_amount: 42.5 })
+    const handler = buildReadExecuteHandler(proxy, READ_EXECUTE_SPEC_ENTRIES)
+
+    const { toolResult, auditEvents } = await handler({
+      calls: [{ operationId: 'previewCategoryMatches', body: { pfc_primary: 'FOOD_AND_DRINK', tags: [] } }],
+    })
+
+    expect(toolResult.content[0]?.text).toContain('previewCategoryMatches')
+    expect(proxy.invoke).toHaveBeenCalledTimes(1)
+    expect(auditEvents[0]).toMatchObject({ operationId: 'previewCategoryMatches', operationClass: 'read', result: 'success' })
   })
 
   it('REFUSES runMCPRecipe — class="read" and confirmationRequired=false are BOTH honestly true, but its method is POST', async () => {
@@ -459,17 +482,51 @@ describe("readExecute's REAL guarantee, checked against the real manifest + spec
     // 0, the loop above is broken, not the manifest).
     expect(admittedOperationIds.length).toBeGreaterThan(10)
 
+    const acknowledgedSafePostSet = new Set(ACKNOWLEDGED_SAFE_POST_OPERATIONS)
+
     for (const operationId of admittedOperationIds) {
       const capability = getCapability(operationId)
       const spec = specEntries.find((e) => e.operationId === operationId)
       expect(capability, `admitted operation ${operationId} has no manifest entry`).toBeTruthy()
       expect(capability!.destructive, `${operationId} is admitted but destructive`).toBe(false)
       expect(capability!.confirmationRequired, `${operationId} is admitted but confirmation-gated`).toBe(false)
+      const methodIsReadOnly = !!spec && READ_ONLY_METHODS.has(spec.method.toUpperCase())
+      // #1630: the one disjunction the "conventionally read-only verb" invariant now tolerates —
+      // a POST reviewed and enumerated in ACKNOWLEDGED_SAFE_POST_OPERATIONS. Any OTHER
+      // non-read-only-verb admission is still a hole in this invariant, same as before.
+      const methodIsAcknowledgedSafePost = !!spec && acknowledgedSafePostSet.has(operationId)
       expect(
-        !!spec && READ_ONLY_METHODS.has(spec.method.toUpperCase()),
-        `${operationId} is admitted but its method (${spec?.method}) is not conventionally read-only`,
+        methodIsReadOnly || methodIsAcknowledgedSafePost,
+        `${operationId} is admitted but its method (${spec?.method}) is neither conventionally ` +
+          `read-only nor an acknowledged safe-POST`,
       ).toBe(true)
     }
+  })
+
+  // #1630: the exact admitted set is pinned, not just "some non-trivial slice" (the sanity check
+  // above). Isolates the interesting case — a class-'read' operation whose method is NOT
+  // GET/HEAD/OPTIONS — from the ordinary bulk of admitted GETs, so a second safe-POST added
+  // without deliberately updating this test stands out immediately. `runMCPRecipe` has the exact
+  // same shape (class 'read', confirmationRequired false, method POST) and must NOT appear here.
+  it('the only class-"read" operations admitted by readExecute on a non-read-only verb are the acknowledged safe-POSTs', async () => {
+    const nonReadOnlyVerbAdmitted: string[] = []
+
+    for (const operationId of ALL_OPERATION_IDS) {
+      const capability = getCapability(operationId)
+      const spec = specEntries.find((e) => e.operationId === operationId)
+      if (!capability || capability.class !== 'read' || capability.confirmationRequired !== false) continue
+      if (!spec || READ_ONLY_METHODS.has(spec.method.toUpperCase())) continue
+
+      const proxy = makeProxy({})
+      const handler = buildReadExecuteHandler(proxy, specEntries)
+      await handler({ calls: [{ operationId }] })
+      if ((proxy.invoke as unknown as { mock: { calls: unknown[] } }).mock.calls.length > 0) {
+        nonReadOnlyVerbAdmitted.push(operationId)
+      }
+    }
+
+    expect(nonReadOnlyVerbAdmitted.sort()).toEqual([...ACKNOWLEDGED_SAFE_POST_OPERATIONS].sort())
+    expect(nonReadOnlyVerbAdmitted).not.toContain('runMCPRecipe')
   })
 
   // The properties above are true of EVERY admitted operation, including these two — but they do
@@ -512,6 +569,34 @@ describe("readExecute's REAL guarantee, checked against the real manifest + spec
     // by-name-only tripwire above could not close.
     const specTagged = readLazyInitOperationIds()
     expect(findUnacknowledgedLazyInitOperations(specTagged, ACKNOWLEDGED_LAZY_INIT_OPERATIONS)).toEqual([])
+  })
+
+  // #1630: the mirror-image mechanism — a POST that unexpectedly does NOT write, rather than a
+  // GET that unexpectedly does. Same shape as the lazy-init tests above, copied part for part.
+  it.each(ACKNOWLEDGED_SAFE_POST_OPERATIONS)(
+    'acknowledges %s as an admitted POST proven to write nothing',
+    async (operationId) => {
+      const proxy = makeProxy({})
+      const handler = buildReadExecuteHandler(proxy, specEntries)
+
+      await handler({ calls: [{ operationId }] })
+
+      expect(proxy.invoke).toHaveBeenCalledTimes(1)
+      const capability = getCapability(operationId)
+      expect(capability?.class).toBe('read')
+      expect(capability?.confirmationRequired).toBe(false)
+      const spec = specEntries.find((e) => e.operationId === operationId)
+      expect(spec && !READ_ONLY_METHODS.has(spec.method.toUpperCase())).toBe(true)
+    },
+  )
+
+  it('the acknowledged safe-POST list is exactly this one — a new admitted non-read-verb operation needs a human to update this list', () => {
+    expect(ACKNOWLEDGED_SAFE_POST_OPERATIONS).toEqual(['previewCategoryMatches'])
+  })
+
+  it('api/openapi.yaml tags exactly the acknowledged operations with x-mcp-safe-post — no unreviewed drift', () => {
+    const specTagged = readSafePostOperationIds()
+    expect(findUnacknowledgedSafePostOperations(specTagged, ACKNOWLEDGED_SAFE_POST_OPERATIONS)).toEqual([])
   })
 })
 
