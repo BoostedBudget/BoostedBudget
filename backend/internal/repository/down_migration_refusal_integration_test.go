@@ -286,6 +286,44 @@ type downGuardCase struct {
 	clearRefusingState func(t *testing.T, ctx context.Context, tx pgx.Tx)
 }
 
+// config158Tables are the four tables 000158's down migration counts tombstones in, in the order
+// its RAISE message names them.
+var config158Tables = []string{"savings_goals", "boosts", "budgets", "budget_categories"}
+
+// clear158Tombstones clears the tombstone PREDICATE on all four of 000158's tables. It is the
+// "proceeds when empty" half for every one of the four cases: the guard refuses on deleted_at over
+// tables the rest of the schema depends on, not on those tables being populated.
+func clear158Tombstones(t *testing.T, ctx context.Context, tx pgx.Tx) {
+	t.Helper()
+	for _, table := range config158Tables {
+		_, err := tx.Exec(ctx, //nolint:gosec // fixed literals from config158Tables, never user input
+			`UPDATE `+table+` SET deleted_at = NULL, deleted_reason = NULL, deleted_by = NULL`)
+		require.NoErrorf(t, err, "clear %s tombstones", table)
+	}
+}
+
+// isolate158Tombstones makes `keep` the ONLY table that can be holding a tombstone when the case
+// executes the down migration, and asserts it starts at zero so the seeded row is the whole count.
+// Without this a stray tombstone left in a sibling table — by an earlier test in this shared
+// database, or by the fixture itself — would make all four cases refuse no matter which counts the
+// guard actually performs, which is the exact way a per-table mutant escapes detection.
+func isolate158Tombstones(t *testing.T, ctx context.Context, tx pgx.Tx, keep string) {
+	t.Helper()
+	for _, table := range config158Tables {
+		if table == keep {
+			continue
+		}
+		_, err := tx.Exec(ctx, //nolint:gosec // fixed literals from config158Tables, never user input
+			`UPDATE `+table+` SET deleted_at = NULL, deleted_reason = NULL, deleted_by = NULL`)
+		require.NoErrorf(t, err, "clear %s tombstones so only %s can explain the refusal", table, keep)
+	}
+	var n int
+	require.NoError(t, tx.QueryRow(ctx, //nolint:gosec // fixed literal from config158Tables
+		`SELECT COUNT(*) FROM `+keep+` WHERE deleted_at IS NOT NULL`).Scan(&n))
+	require.Zerof(t, n, "%s must hold no tombstone before this case seeds one, or the count this "+
+		"case asserts on is not the row it seeded", keep)
+}
+
 var downGuardCases = []downGuardCase{
 	{
 		label:  "000016_balance_snapshots",
@@ -546,30 +584,92 @@ var downGuardCases = []downGuardCase{
 		},
 		wantMsgContains: []string{"refusing to roll back 000156", "transactions", "deleted_at"},
 	},
+	// ── 000158 drives FOUR tables, so it gets FOUR cases: one tombstone, in one table, per case. ──
+	//
+	// ⚠ WHY NOT ONE CASE SEEDING ALL FOUR, which is what shipped and what this replaces. 000158's
+	// guard is a SUM of four independent counts. A case that seeds a tombstone in every table
+	// refuses even when the DO block counts only ONE of them, so it cannot tell a complete guard
+	// from a quarter of one. Concretely: with the single savings_goals-only case that stood here,
+	// deleting n_cats from 000158's down left this whole package GREEN, while a real
+	// `migrate goto 157` against a database holding a budget_categories tombstone completed and
+	// resurrected it.
+	//
+	// ⚠ WHAT WAS MUTATION-VERIFIED, AND A RETRACTION. Commit d518885a's message said
+	// "Mutation-verified, all five ways". That is true only at WHOLE-DO-BLOCK granularity — one
+	// mutant per file, delete the block, watch that file's case go red — and it says nothing about
+	// the four counts inside 000158's block, three of which no test exercised. The per-table
+	// granularity was verified separately, and that is what the four cases below rest on: each of
+	// n_goals / n_boosts / n_budgets / n_cats was removed from 000158's down in turn (its
+	// `SELECT ... INTO`, its term in the IF sum, and its RAISE argument), and each time exactly the
+	// matching case went red on its own `require.Error` — four mutants, four reds, and no case red
+	// for a mutant that was not its own.
+	//
+	// Every case deliberately uses a name that collides with NOTHING. A colliding pair would abort
+	// on the unconditional UNIQUE (user_id, name) this file re-adds, and that pre-existing,
+	// collision-dependent abort is precisely what this guard exists to generalise — so seeding a
+	// collision would let a case pass against no guard at all.
 	{
-		label:  "000158_config_parent_tombstones",
+		label:  "000158_config_parent_tombstones/savings_goals",
 		file:   "000158_soft_delete_config_parents.down.sql",
-		tables: []string{"savings_goals", "boosts", "budgets", "budget_categories"},
+		tables: config158Tables,
 		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
 			t.Helper()
-			// Deliberately a name that collides with NOTHING. A colliding pair would abort on the
-			// unconditional UNIQUE (user_id, name) this file re-adds, and that pre-existing,
-			// collision-dependent abort is precisely what this guard exists to generalise — so
-			// seeding a collision would let the test pass against no guard at all.
+			isolate158Tombstones(t, ctx, tx, "savings_goals")
 			_, err := tx.Exec(ctx, `
 				UPDATE savings_goals SET deleted_at = now(), deleted_reason = 'user_deleted', deleted_by = 'user'
 				WHERE id = $1`, f.savingsGoalID)
 			require.NoError(t, err, "seed a TOMBSTONED savings_goal with a unique name")
 		},
-		clearRefusingState: func(t *testing.T, ctx context.Context, tx pgx.Tx) {
+		clearRefusingState: clear158Tombstones,
+		wantMsgContains:    []string{"refusing to roll back 000158", "1 savings_goals", "deleted_at"},
+	},
+	{
+		label:  "000158_config_parent_tombstones/boosts",
+		file:   "000158_soft_delete_config_parents.down.sql",
+		tables: config158Tables,
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
 			t.Helper()
-			for _, table := range []string{"savings_goals", "boosts", "budgets", "budget_categories"} {
-				_, err := tx.Exec(ctx, //nolint:gosec // fixed literals from this same slice, never user input
-					`UPDATE `+table+` SET deleted_at = NULL, deleted_reason = NULL, deleted_by = NULL`)
-				require.NoErrorf(t, err, "clear %s tombstones", table)
-			}
+			isolate158Tombstones(t, ctx, tx, "boosts")
+			_, err := tx.Exec(ctx, `
+				INSERT INTO boosts (id, user_id, name, boost_type, enabled, deleted_at, deleted_reason, deleted_by)
+				VALUES ($1, $2, $3, 'savings_goal', true, now(), 'user_deleted', 'user')`,
+				uuid.New().String(), f.userID, "tombstoned-only-boost-"+f.userID)
+			require.NoError(t, err, "seed a TOMBSTONED boost with a unique name")
 		},
-		wantMsgContains: []string{"refusing to roll back 000158", "savings_goals", "deleted_at"},
+		clearRefusingState: clear158Tombstones,
+		wantMsgContains:    []string{"refusing to roll back 000158", "1 boosts", "deleted_at"},
+	},
+	{
+		label:  "000158_config_parent_tombstones/budgets",
+		file:   "000158_soft_delete_config_parents.down.sql",
+		tables: config158Tables,
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			isolate158Tombstones(t, ctx, tx, "budgets")
+			_, err := tx.Exec(ctx, `
+				UPDATE budgets SET deleted_at = now(), deleted_reason = 'user_deleted', deleted_by = 'user'
+				WHERE id = $1`, f.budgetID)
+			require.NoError(t, err, "seed a TOMBSTONED budget with a unique name")
+		},
+		clearRefusingState: clear158Tombstones,
+		wantMsgContains:    []string{"refusing to roll back 000158", "1 budgets", "deleted_at"},
+	},
+	{
+		label:  "000158_config_parent_tombstones/budget_categories",
+		file:   "000158_soft_delete_config_parents.down.sql",
+		tables: config158Tables,
+		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
+			t.Helper()
+			isolate158Tombstones(t, ctx, tx, "budget_categories")
+			// The table the shipped single case never touched, and the one whose mutant a real
+			// `migrate goto 157` proved reachable: the row survives, deleted_at does not.
+			_, err := tx.Exec(ctx, `
+				UPDATE budget_categories SET deleted_at = now(), deleted_reason = 'user_deleted', deleted_by = 'user'
+				WHERE id = $1`, f.budgetCategoryID)
+			require.NoError(t, err, "seed a TOMBSTONED budget_category")
+		},
+		clearRefusingState: clear158Tombstones,
+		wantMsgContains:    []string{"refusing to roll back 000158", "1 budget_categories", "deleted_at"},
 	},
 	{
 		label:  "000159_custom_category_tombstones",
