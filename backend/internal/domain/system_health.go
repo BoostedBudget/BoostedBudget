@@ -47,6 +47,13 @@ type SystemHealthResponse struct {
 	// restores. See RejectedWebhookAttemptMetrics for what it counts and, critically, what it does
 	// NOT count.
 	RejectedWebhookAttempts24h RejectedWebhookAttemptMetrics `json:"rejected_webhook_attempts_24h"`
+	// ForkedSecurityIdentities is the count of securities.institution_security_id groups spanning
+	// more than one plaid_security_id — a Plaid corporate action that forked one real-world
+	// security's identity into multiple `securities` rows, each with its own separate transaction/
+	// holding history (#1631 M8b). Detection only: nothing merges these, and whether a non-zero
+	// count should degrade overall health is a product decision this task never asked for — see
+	// ForkedSecurityIdentityMetrics for the "unknown is not zero" convention it follows.
+	ForkedSecurityIdentities ForkedSecurityIdentityMetrics `json:"forked_security_identities"`
 	// CacheEnabled reports whether the analytics-namespace cache (cache.NamespaceAnalytics) is
 	// currently active for this deployment — Issue #1531 Task 11e. It is false whenever
 	// CACHE_ENABLED=false, no cache Redis client could be constructed at startup, the namespace is

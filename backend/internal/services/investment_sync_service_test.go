@@ -33,6 +33,23 @@ func (m *MockSecurityRepository) UpsertBatch(ctx context.Context, securities []d
 	return args.Get(0).(map[string]string), args.Error(1)
 }
 
+// FindForkedIdentities and CountForkedIdentityGroups (#1631 M8b) are unused by the sync path this
+// mock backs — the sync service never calls them — so they are stubbed to satisfy
+// repository.SecurityRepository rather than exercised here. See
+// system_health_service_forked_identity_test.go for their real coverage.
+func (m *MockSecurityRepository) FindForkedIdentities(ctx context.Context) ([]domain.ForkedSecurityIdentity, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.ForkedSecurityIdentity), args.Error(1)
+}
+
+func (m *MockSecurityRepository) CountForkedIdentityGroups(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 type MockHoldingRepository struct {
 	mock.Mock
 }

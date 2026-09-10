@@ -46,14 +46,16 @@ func (m *mockInvestmentService) ListInvestmentTransactions(_ context.Context, _ 
 func (m *mockInvestmentService) SetAnalytics(_ phclient.Analytics) {}
 
 type mockInvestmentAnalyticsService struct {
-	allocation    *domain.AllocationBreakdown
-	allocationErr error
-	topMovers     *domain.TopMovers
-	topMoversErr  error
-	gainLoss      *domain.GainLossSummary
-	gainLossErr   error
-	income        *domain.IncomeSummary
-	incomeErr     error
+	allocation        *domain.AllocationBreakdown
+	allocationErr     error
+	topMovers         *domain.TopMovers
+	topMoversErr      error
+	gainLoss          *domain.GainLossSummary
+	gainLossErr       error
+	income            *domain.IncomeSummary
+	incomeErr         error
+	reconciliation    *domain.PositionReconciliationReport
+	reconciliationErr error
 }
 
 func (m *mockInvestmentAnalyticsService) GetAllocationBreakdown(_ context.Context, _ string, _ domain.AllocationOptions) (*domain.AllocationBreakdown, error) {
@@ -67,6 +69,9 @@ func (m *mockInvestmentAnalyticsService) GetGainLossSummary(_ context.Context, _
 }
 func (m *mockInvestmentAnalyticsService) GetIncomeSummary(_ context.Context, _ string, _, _ time.Time) (*domain.IncomeSummary, error) {
 	return m.income, m.incomeErr
+}
+func (m *mockInvestmentAnalyticsService) GetPositionReconciliation(_ context.Context, _ string) (*domain.PositionReconciliationReport, error) {
+	return m.reconciliation, m.reconciliationErr
 }
 
 // ============================================================================
