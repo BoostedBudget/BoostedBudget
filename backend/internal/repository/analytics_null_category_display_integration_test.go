@@ -341,9 +341,20 @@ func TestAnalyticsReads_NullCategoryDisplay_ToleratedBySqlNullStringReads(t *tes
 //
 // The sweep above left GetUnusualSpend as the one `sql.NullString` read with no real-NULL proof, on
 // the ground that its baseline was disproportionate to build. That judgement is retracted: the
-// baseline is three rows in one category, and the read was the LAST one whose NULL tolerance rested
-// on a pgxmock test that cannot fail (pgxmock scans a `nil` cell into a plain Go `string` without
-// error, so the mock test passes against a reverted plain-string scan — confirmed by mutation).
+// baseline is three rows in one category. Its pgxmock test cannot fail — pgxmock scans a `nil` cell
+// into a plain Go `string` without error, so it passes against a reverted plain-string scan
+// (mutation-confirmed).
+//
+// ⚠ WHAT THIS TEST DOES AND DOES NOT ADD, stated exactly, because the gap it was written for was
+// reported as "the scan is proven by nothing" and that is not quite true.
+// TestGetUnusualSpend_Integration (analytics_unusualspend_integration_test.go) seeds rows with no
+// effective_category_name and so reaches the same real NULL INCIDENTALLY: reverting the
+// `sql.NullString` reddens that test too (mutation-confirmed). What it never does is ASSERT
+// anything about the display column — it neither reads the field nor says what a NULL should
+// become, so the tolerance it protects is an accident of its fixture that a later fixture tidy-up
+// would remove without any assertion objecting. This test asserts the normalisation itself, and
+// asserts its own premise (that the column really is NULL) so it cannot decay into the same
+// accident.
 //
 // WHAT THE FIXTURE HAS TO SATISFY before the NULL cell is even reachable, all of it read off the
 // query rather than guessed: the baseline CTE needs `COUNT(*) >= 3` rows of ONE effective category
