@@ -190,7 +190,21 @@ rebuilt AS (
            -- repair alone on the reasoning that no as-of account type can be reconstructed --
            -- true, and irrelevant, because none is needed.)
            COALESCE(SUM(hs.institution_value) FILTER (WHERE rinv.type = 'investment'), 0)
-             AS total_value_investment_only
+             AS total_value_investment_only,
+           -- SIXTH column, mirroring Upsert's currency_code (#1631 M8a) for the same reason the
+           -- fifth exists: a repair that rewrites the totals and leaves the currency alone would
+           -- label a rebuilt figure with the currency of a different reconstruction. Read from
+           -- holding_snapshots, which froze each position's currency at capture time, so the
+           -- rebuilt total is labelled with the currency it was ACTUALLY in on that day rather
+           -- than with whatever the live holding says now.
+           --
+           -- Unknown does not vote: COUNT(DISTINCT ...) skips NULLs, so a day of rows that state
+           -- no currency rebuilds to NULL rather than being made to pick one.
+           CASE
+               WHEN COUNT(DISTINCT UPPER(TRIM(hs.currency_code))) = 1
+               THEN MAX(UPPER(TRIM(hs.currency_code)))
+               ELSE NULL
+           END AS currency_code
     FROM live l
     JOIN holding_snapshots hs
       ON hs.account_id = l.account_id
@@ -217,6 +231,7 @@ decided AS (
            COALESCE(rb.total_gain_loss, 0) AS new_total_gain_loss,
            rb.total_gain_loss_pct AS new_total_gain_loss_pct,
            COALESCE(rb.total_value_investment_only, 0) AS new_total_value_investment_only,
+           rb.currency_code AS new_currency_code,
            -- F2: rows can exist for a day and still be excluded by liveness, which is a DIFFERENT
            -- fact from "this day was never captured" and must not be reported as the same one.
            -- Deliberately NOT restricted to live accounts — that is the whole point of it.
@@ -244,7 +259,15 @@ updated AS (
         total_cost_basis    = d.new_total_cost_basis,
         total_gain_loss     = d.new_total_gain_loss,
         total_gain_loss_pct = d.new_total_gain_loss_pct,
-        total_value_investment_only = d.new_total_value_investment_only
+        total_value_investment_only = d.new_total_value_investment_only,
+        -- #1631 M8a: in the SET list, and deliberately NOT in the IS DISTINCT FROM tuple below,
+        -- for exactly the reasons spelled out for total_value_investment_only. Every row written
+        -- before migration 000197 has a NULL currency, so including it in the change-detection
+        -- tuple would make every historical day look like it disagreed and relabel a shelf of
+        -- already-correct days as "repaired" in the audit ledger. And leaving it out costs
+        -- nothing: it comes from the same reconstruction as the other five, so only a repair of
+        -- those can make it stale, and such a repair passes the predicate and writes both.
+        currency_code = d.new_currency_code
     FROM decided d
     WHERE ps.user_id = d.user_id
       AND ps.snapshot_date = d.snapshot_date

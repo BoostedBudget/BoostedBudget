@@ -106,6 +106,9 @@ func (s *holdingHistoryService) GetAccountHoldingsHistory(ctx context.Context, u
 		out.Positions = positions
 	}
 	out.TotalValue = sumInstitutionValue(out.Positions)
+	// #1631 M8a: say what currency that total is in, or declare that it cannot be stated. The sum
+	// above is currency-blind and there is nothing here to convert with.
+	out.CurrencyCode, out.IsMixedCurrency = resolvePositionsCurrency(out.Positions)
 	return out, nil
 }
 
@@ -129,4 +132,15 @@ func sumInstitutionValue(positions []domain.HoldingSnapshotView) *float64 {
 		return nil
 	}
 	return &total
+}
+
+// resolvePositionsCurrency reports the single currency a day's positions were reported in, and
+// whether they disagreed. Mirrors domain.ResolveHoldingsCurrency for the historical view type;
+// unknown does not vote, on the rule stated in domain/investment_currency.go.
+func resolvePositionsCurrency(positions []domain.HoldingSnapshotView) (*string, bool) {
+	codes := make([]string, 0, len(positions))
+	for _, p := range positions {
+		codes = append(codes, domain.NormalizeCurrencyCode(p.CurrencyCode))
+	}
+	return domain.ResolveCurrencyCodes(codes)
 }

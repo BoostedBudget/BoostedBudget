@@ -96,8 +96,8 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 					plaid_investment_transaction_id,
 					type, subtype, name,
 					quantity, amount, price, fees, date,
-					created_at
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+					currency_code, created_at
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 				ON CONFLICT (plaid_investment_transaction_id) DO UPDATE
 					SET user_account_id = EXCLUDED.user_account_id
 					WHERE investment_transactions.user_account_id IS NULL
@@ -134,6 +134,7 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 			txn.Price,
 			txn.Fees,
 			txn.Date,
+			txn.CurrencyCode,
 			txn.CreatedAt,
 		).Scan(&inserted)
 		if err != nil {
@@ -170,7 +171,7 @@ func (r *investmentTransactionRepository) GetByUserID(ctx context.Context, userI
 			investment_transactions.type, investment_transactions.subtype, investment_transactions.name,
 			investment_transactions.quantity, investment_transactions.amount, investment_transactions.price,
 			investment_transactions.fees, investment_transactions.date,
-			investment_transactions.created_at
+			investment_transactions.currency_code, investment_transactions.created_at
 		FROM investment_transactions
 		JOIN accounts a ON a.id = investment_transactions.account_id
 		WHERE investment_transactions.user_id = $1
@@ -203,6 +204,7 @@ func (r *investmentTransactionRepository) GetByUserID(ctx context.Context, userI
 			&txn.Price,
 			&txn.Fees,
 			&txn.Date,
+			&txn.CurrencyCode,
 			&txn.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -228,7 +230,7 @@ func (r *investmentTransactionRepository) GetByAccountID(ctx context.Context, ac
 			plaid_investment_transaction_id,
 			type, subtype, name,
 			quantity, amount, price, fees, date,
-			created_at
+			currency_code, created_at
 		FROM investment_transactions
 		WHERE (account_id = $1 AND user_account_id IS NULL)
 		   OR user_account_id = (SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL)
@@ -258,6 +260,7 @@ func (r *investmentTransactionRepository) GetByAccountID(ctx context.Context, ac
 			&txn.Price,
 			&txn.Fees,
 			&txn.Date,
+			&txn.CurrencyCode,
 			&txn.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -365,7 +368,7 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 			it.plaid_investment_transaction_id,
 			it.type, it.subtype, it.name,
 			it.quantity, it.amount, it.price, it.fees, it.date,
-			it.created_at,
+			it.currency_code, it.created_at,
 			sec.ticker_symbol, sec.name AS security_name,
 			-- #1631: the two joined-security facts NormalizeTradeType needs, so this endpoint
 			-- returns the SAME normalized activity_type the unified feed does. Without it the
@@ -407,7 +410,7 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 			&txn.PlaidInvestmentTransactionID,
 			&txn.Type, &txn.Subtype, &txn.Name,
 			&txn.Quantity, &txn.Amount, &txn.Price, &txn.Fees, &txn.Date,
-			&txn.CreatedAt,
+			&txn.CurrencyCode, &txn.CreatedAt,
 			&tickerSymbol, &securityName,
 			&secAttached, &secIsCashEquivalent,
 		); err != nil {
@@ -470,7 +473,7 @@ func (r *investmentTransactionRepository) GetByUserAccountID(ctx context.Context
 			plaid_investment_transaction_id,
 			type, subtype, name,
 			quantity, amount, price, fees, date,
-			created_at
+			currency_code, created_at
 		FROM investment_transactions
 		WHERE user_account_id = $1
 		ORDER BY date DESC
@@ -501,6 +504,7 @@ func (r *investmentTransactionRepository) GetByUserAccountID(ctx context.Context
 			&txn.Price,
 			&txn.Fees,
 			&txn.Date,
+			&txn.CurrencyCode,
 			&txn.CreatedAt,
 		); err != nil {
 			return nil, err

@@ -57,6 +57,7 @@ func makeInvKeysetRowWithSecurity(userID, accountID string, txnDate time.Time, t
 		&price,                            // price (nullable)
 		(*float64)(nil),                   // fees (nullable)
 		txnDate,                           // date
+		(*string)(nil),                    // currency_code (nullable, #1631 M8a)
 		txnDate,                           // created_at
 		ticker,                            // ticker_symbol (nullable, from LEFT JOIN securities)
 		securityName,                      // security_name (nullable, from LEFT JOIN securities)
@@ -72,6 +73,7 @@ func invKeysetColumns() []string {
 		"plaid_investment_transaction_id",
 		"type", "subtype", "name",
 		"quantity", "amount", "price", "fees", "date",
+		"currency_code",
 		"created_at",
 		"ticker_symbol", "security_name",
 		"security_attached", "security_is_cash_equivalent",

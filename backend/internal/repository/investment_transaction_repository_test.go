@@ -56,7 +56,7 @@ func TestInvestmentTransactionRepository_UpsertBatch_InsertNew(t *testing.T) {
 	// CTE returns 1 row inserted
 	rows := pgxmock.NewRows([]string{"inserted"}).AddRow(1)
 	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).
-		WithArgs(anyArgs(15)...).
+		WithArgs(anyArgs(16)...).
 		WillReturnRows(rows)
 
 	inserted, err := repo.UpsertBatch(ctx, []domain.InvestmentTransaction{txn})
@@ -81,7 +81,7 @@ func TestInvestmentTransactionRepository_UpsertBatch_SkipDuplicates(t *testing.T
 	// ON CONFLICT DO NOTHING — 0 rows inserted (already exists)
 	rows := pgxmock.NewRows([]string{"inserted"}).AddRow(0)
 	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).
-		WithArgs(anyArgs(15)...).
+		WithArgs(anyArgs(16)...).
 		WillReturnRows(rows)
 
 	inserted, err := repo.UpsertBatch(ctx, []domain.InvestmentTransaction{txn})
@@ -111,9 +111,9 @@ func TestInvestmentTransactionRepository_UpsertBatch_MixedNewAndDuplicate(t *tes
 	r0 := pgxmock.NewRows([]string{"inserted"}).AddRow(1)
 	r1 := pgxmock.NewRows([]string{"inserted"}).AddRow(0)
 	r2 := pgxmock.NewRows([]string{"inserted"}).AddRow(1)
-	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).WithArgs(anyArgs(15)...).WillReturnRows(r0)
-	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).WithArgs(anyArgs(15)...).WillReturnRows(r1)
-	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).WithArgs(anyArgs(15)...).WillReturnRows(r2)
+	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).WithArgs(anyArgs(16)...).WillReturnRows(r0)
+	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).WithArgs(anyArgs(16)...).WillReturnRows(r1)
+	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).WithArgs(anyArgs(16)...).WillReturnRows(r2)
 
 	inserted, err := repo.UpsertBatch(ctx, txns)
 
@@ -141,7 +141,7 @@ func TestInvestmentTransactionRepository_UpsertBatch_BackfillsNullUserAccountID(
 	// xmax::text::bigint != 0 (update path) → is_new_insert = false → COUNT returns 0.
 	rows := pgxmock.NewRows([]string{"inserted"}).AddRow(0)
 	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).
-		WithArgs(anyArgs(15)...).
+		WithArgs(anyArgs(16)...).
 		WillReturnRows(rows)
 
 	inserted, err := repo.UpsertBatch(ctx, []domain.InvestmentTransaction{txn})
@@ -186,13 +186,13 @@ func TestInvestmentTransactionRepository_GetByUserID(t *testing.T) {
 		"plaid_investment_transaction_id",
 		"type", "subtype", "name",
 		"quantity", "amount", "price", "fees", "date",
-		"created_at",
+		"currency_code", "created_at",
 	}).AddRow(
 		uuid.New().String(), userID, accountID, &userAccountID, &secID,
 		"plaid-inv-txn-001",
 		"buy", &subtype, "Apple Inc.",
 		&qty, 1500.00, &price, (*float64)(nil), txnDate,
-		txnDate,
+		(*string)(nil), txnDate,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`JOIN accounts a ON a.id = investment_transactions.account_id`)).
@@ -227,13 +227,13 @@ func TestInvestmentTransactionRepository_GetByAccountID(t *testing.T) {
 		"plaid_investment_transaction_id",
 		"type", "subtype", "name",
 		"quantity", "amount", "price", "fees", "date",
-		"created_at",
+		"currency_code", "created_at",
 	}).AddRow(
 		uuid.New().String(), userID, accountID, &secID,
 		"plaid-inv-txn-002",
 		"sell", &subtype, "Tesla Inc.",
 		&qty, 1000.00, &price, (*float64)(nil), txnDate,
-		txnDate,
+		(*string)(nil), txnDate,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -269,7 +269,7 @@ func TestInvestmentTransactionRepository_UpsertBatch_NullSecurityID(t *testing.T
 
 	rows := pgxmock.NewRows([]string{"inserted"}).AddRow(1)
 	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).
-		WithArgs(anyArgs(15)...).
+		WithArgs(anyArgs(16)...).
 		WillReturnRows(rows)
 
 	inserted, err := repo.UpsertBatch(ctx, []domain.InvestmentTransaction{cashTxn})
@@ -301,13 +301,13 @@ func TestInvestmentTransactionRepository_GetByUserID_ActiveAccountsOnly(t *testi
 		"plaid_investment_transaction_id",
 		"type", "subtype", "name",
 		"quantity", "amount", "price", "fees", "date",
-		"created_at",
+		"currency_code", "created_at",
 	}).AddRow(
 		uuid.New().String(), userID, accountID, &userAccountID, &secID,
 		"plaid-inv-txn-001",
 		"buy", &subtype, "Apple Inc.",
 		&qty, 1500.00, &price, (*float64)(nil), txnDate,
-		txnDate,
+		(*string)(nil), txnDate,
 	)
 
 	// The query must JOIN accounts and filter status='active'
@@ -339,7 +339,7 @@ func TestInvestmentTransactionRepository_GetByUserID_ReplacedAccountExcluded(t *
 		"plaid_investment_transaction_id",
 		"type", "subtype", "name",
 		"quantity", "amount", "price", "fees", "date",
-		"created_at",
+		"currency_code", "created_at",
 	})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`JOIN accounts a ON a.id = investment_transactions.account_id`)).
@@ -373,13 +373,13 @@ func TestInvestmentTransactionRepository_GetByUserAccountID(t *testing.T) {
 		"plaid_investment_transaction_id",
 		"type", "subtype", "name",
 		"quantity", "amount", "price", "fees", "date",
-		"created_at",
+		"currency_code", "created_at",
 	}).AddRow(
 		uuid.New().String(), userID, accountID, &userAccountID, &secID,
 		"plaid-inv-txn-001",
 		"buy", &subtype, "Apple Inc.",
 		&qty, 1500.00, &price, (*float64)(nil), txnDate,
-		txnDate,
+		(*string)(nil), txnDate,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`user_account_id = $1`)).
@@ -423,13 +423,13 @@ func TestInvestmentTransactionRepository_GetByAccountID_ChainExpand(t *testing.T
 			"plaid_investment_transaction_id",
 			"type", "subtype", "name",
 			"quantity", "amount", "price", "fees", "date",
-			"created_at",
+			"currency_code", "created_at",
 		}).AddRow(
 			uuid.New().String(), userID, replacedAccountID, &secID,
 			"plaid-chain-txn-001",
 			"buy", &subtype, "ACME Corp",
 			&qty, 450.00, &price, (*float64)(nil), txnDate,
-			txnDate,
+			(*string)(nil), txnDate,
 		))
 
 	txns, err := repo.GetByAccountID(ctx, activeAccountID)

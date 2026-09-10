@@ -202,9 +202,11 @@ func TestInvestmentAnalytics_AllocationBreakdown_ReturnsGroupedBuckets(t *testin
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	rows := pgxmock.NewRows([]string{"security_type", "holding_count", "total_value"}).
-		AddRow("stock", 3, 10000.0).
-		AddRow("etf", 2, 5000.0)
+	// currency_codes (#1631 M8a) is the set of DISTINCT currencies backing each bucket; both
+	// buckets here are USD, so the breakdown names USD and is not mixed.
+	rows := pgxmock.NewRows([]string{"security_type", "holding_count", "total_value", "currency_codes"}).
+		AddRow("stock", 3, 10000.0, []string{"USD"}).
+		AddRow("etf", 2, 5000.0, []string{"USD"})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`COALESCE(sec.type, 'unknown')`)).
 		WithArgs(pgxmock.AnyArg()).
@@ -241,7 +243,7 @@ func TestInvestmentAnalytics_AllocationBreakdown_EmptyPortfolio(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	rows := pgxmock.NewRows([]string{"security_type", "holding_count", "total_value"})
+	rows := pgxmock.NewRows([]string{"security_type", "holding_count", "total_value", "currency_codes"})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`COALESCE(sec.type, 'unknown')`)).
 		WithArgs(pgxmock.AnyArg()).
@@ -283,10 +285,10 @@ func TestInvestmentAnalytics_TopMovers_ReturnsSplit(t *testing.T) {
 
 	rows := pgxmock.NewRows([]string{
 		"holding_id", "account_id", "ticker_symbol", "security_name",
-		"day_change", "day_change_pct", "total_gain_loss", "mover_type",
+		"day_change", "day_change_pct", "total_gain_loss", "currency_code", "mover_type",
 	}).
-		AddRow(holdingID1, accountID1, &ticker1, &secName1, &dayChange1, &dayChangePct1, &totalGL1, "gainer").
-		AddRow(holdingID2, accountID2, &ticker2, &secName2, &dayChange2, &dayChangePct2, &totalGL2, "loser")
+		AddRow(holdingID1, accountID1, &ticker1, &secName1, &dayChange1, &dayChangePct1, &totalGL1, (*string)(nil), "gainer").
+		AddRow(holdingID2, accountID2, &ticker2, &secName2, &dayChange2, &dayChangePct2, &totalGL2, (*string)(nil), "loser")
 
 	mock.ExpectQuery(regexp.QuoteMeta(`WITH movers AS`)).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
@@ -335,9 +337,10 @@ func TestInvestmentAnalytics_UnrealizedGainLoss_AggregatesAccounts(t *testing.T)
 	// In this test all holdings have both values set, so known_pair == cost_basis_all.
 	rows := pgxmock.NewRows([]string{
 		"account_id", "value", "unrealized_gl", "unrealized_gl_pct", "cost_basis_known_pair", "cost_basis_all",
+		"currency_codes",
 	}).
-		AddRow(accountID1, 8000.0, 2000.0, &pct1, 6000.0, 6000.0).
-		AddRow(accountID2, 4000.0, -1000.0, &pct2, 5000.0, 5000.0)
+		AddRow(accountID1, 8000.0, 2000.0, &pct1, 6000.0, 6000.0, []string{"USD"}).
+		AddRow(accountID2, 4000.0, -1000.0, &pct2, 5000.0, 5000.0, []string{"USD"})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`h.account_id::text`)).
 		WithArgs(pgxmock.AnyArg()).
@@ -379,9 +382,9 @@ func TestInvestmentAnalytics_IncomeSummary_GroupsByType(t *testing.T) {
 	end := time.Date(2024, 3, 31, 23, 59, 59, 0, time.UTC)
 
 	// Positive values — represent post-negation DB output (COALESCE(-SUM(amount), 0) = +200/+50).
-	rows := pgxmock.NewRows([]string{"income_type", "count", "total_amount"}).
-		AddRow("dividend", 5, 200.0).
-		AddRow("interest", 3, 50.0)
+	rows := pgxmock.NewRows([]string{"income_type", "count", "total_amount", "currency_codes"}).
+		AddRow("dividend", 5, 200.0, []string{"USD"}).
+		AddRow("interest", 3, 50.0, []string{"USD"})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`income_type`)).
 		WithArgs(incomeSubtypeAnyArgs()...).
@@ -418,7 +421,7 @@ func TestInvestmentAnalytics_IncomeSummary_EmptyRange(t *testing.T) {
 	start := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2020, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	rows := pgxmock.NewRows([]string{"income_type", "count", "total_amount"})
+	rows := pgxmock.NewRows([]string{"income_type", "count", "total_amount", "currency_codes"})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`income_type`)).
 		WithArgs(incomeSubtypeAnyArgs()...).

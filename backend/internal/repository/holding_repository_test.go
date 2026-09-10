@@ -52,7 +52,7 @@ func TestHoldingRepository_ReplaceForAccount_DeletesOldInsertNew(t *testing.T) {
 		WithArgs(accountID, userID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 2))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holdings`)).
-		WithArgs(anyArgs(11)...).
+		WithArgs(anyArgs(12)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	// #1569 T6 fix round 1: the capture reads its UTC day from the SERVER (see serverUTCDate —
 	// the aggregate and its rows must be filed under the same day across UTC midnight), then runs
@@ -136,7 +136,7 @@ func TestHoldingRepository_ReplaceForAccount_RollbackOnInsertError(t *testing.T)
 		WithArgs(accountID, userID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holdings`)).
-		WithArgs(anyArgs(11)...).
+		WithArgs(anyArgs(12)...).
 		WillReturnError(errors.New("db constraint error"))
 	mock.ExpectRollback()
 
@@ -165,11 +165,11 @@ func TestHoldingRepository_GetByUserID(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "user_account_id", "security_id",
 		"quantity", "cost_basis", "institution_value", "institution_price",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, accountID, &userAccountID, secID,
 		10.0, &costBasis, &instValue, &instPrice,
-		now, now,
+		(*string)(nil), now, now,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`JOIN accounts a ON a.id = holdings.account_id`)).
@@ -202,11 +202,11 @@ func TestHoldingRepository_GetByAccountID(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "security_id",
 		"quantity", "cost_basis", "institution_value", "institution_price",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, accountID, secID,
 		5.0, &costBasis, &instValue, &instPrice,
-		now, now,
+		(*string)(nil), now, now,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -243,11 +243,11 @@ func TestHoldingRepository_GetByUserID_ActiveAccountsOnly(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "user_account_id", "security_id",
 		"quantity", "cost_basis", "institution_value", "institution_price",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, accountID, &userAccountID, secID,
 		10.0, &costBasis, &instValue, &instPrice,
-		now, now,
+		(*string)(nil), now, now,
 	)
 
 	// The query must JOIN accounts and filter status='active'
@@ -277,7 +277,7 @@ func TestHoldingRepository_GetByUserID_ReplacedAccountExcluded(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "user_account_id", "security_id",
 		"quantity", "cost_basis", "institution_value", "institution_price",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`JOIN accounts a ON a.id = holdings.account_id`)).
@@ -310,11 +310,11 @@ func TestHoldingRepository_GetByUserAccountID(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "user_account_id", "security_id",
 		"quantity", "cost_basis", "institution_value", "institution_price",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, accountID, &userAccountID, secID,
 		10.0, &costBasis, &instValue, &instPrice,
-		now, now,
+		(*string)(nil), now, now,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`user_account_id = $1`)).
@@ -356,11 +356,11 @@ func TestHoldingRepository_GetByAccountID_ChainExpand(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "user_id", "account_id", "security_id",
 			"quantity", "cost_basis", "institution_value", "institution_price",
-			"created_at", "updated_at",
+			"currency_code", "created_at", "updated_at",
 		}).AddRow(
 			uuid.New().String(), userID, replacedAccountID, setID,
 			8.0, &costBasis, &instValue, &instPrice,
-			now, now,
+			(*string)(nil), now, now,
 		))
 
 	holdings, err := repo.GetByAccountID(ctx, activeAccountID)

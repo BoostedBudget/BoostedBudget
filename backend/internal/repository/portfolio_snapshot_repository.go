@@ -88,6 +88,7 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 			total_gain_loss,
 			total_gain_loss_pct,
 			total_value_investment_only,
+			currency_code,
 			created_at,
 			updated_at
 		)
@@ -128,6 +129,25 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 			-- the FROM clause: an inner join or a WHERE would drop depository holdings out of
 			-- total_value too, which is exactly the mid-stream gating this file forbids.
 			COALESCE(SUM(h.institution_value) FILTER (WHERE ainv.type = 'investment'), 0),
+			-- currency_code (#1631 M8a): the ONE currency every total above is expressed in, or
+			-- NULL when the contributing holdings did not agree on one.
+			--
+			-- ⚠ NULL is deliberately overloaded here, and readers are told so on the column: it
+			-- means "mixed" AND it means "nobody stated a currency". Both are cases where a
+			-- reader must not assume a currency, and distinguishing them would need a second
+			-- column that no reader has a use for. What matters is the ONE thing this column is
+			-- for: GetPortfolioSummary subtracts this row from a live total, and must refuse when
+			-- the two are provably in different currencies.
+			--
+			-- Unknown does not vote. COUNT(DISTINCT ...) ignores NULLs, so a portfolio of rows
+			-- that state no currency (every row written before migration 000197) resolves to
+			-- NULL-because-unknown rather than being forced to pick one, and a single stated
+			-- currency alongside any number of unstated ones resolves to that currency.
+			CASE
+				WHEN COUNT(DISTINCT UPPER(TRIM(h.currency_code))) = 1
+				THEN MAX(UPPER(TRIM(h.currency_code)))
+				ELSE NULL
+			END,
 			NOW(),
 			NOW()
 		-- Deliberately UNGATED by account type (#1569 T8 / Issue #1616) — do not add
@@ -165,10 +185,11 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 			total_gain_loss   = EXCLUDED.total_gain_loss,
 			total_gain_loss_pct = EXCLUDED.total_gain_loss_pct,
 			total_value_investment_only = EXCLUDED.total_value_investment_only,
+			currency_code     = EXCLUDED.currency_code,
 			updated_at        = NOW()
 		RETURNING id, user_id, snapshot_date, total_value, total_cost_basis,
 		          total_gain_loss, total_gain_loss_pct, total_value_investment_only,
-		          created_at, updated_at
+		          currency_code, created_at, updated_at
 	`
 
 	snap := &domain.PortfolioSnapshot{}
@@ -181,6 +202,7 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 		&snap.TotalGainLoss,
 		&snap.TotalGainLossPct,
 		&snap.TotalValueInvestmentOnly,
+		&snap.CurrencyCode,
 		&snap.CreatedAt,
 		&snap.UpdatedAt,
 	)
@@ -195,7 +217,7 @@ func (r *portfolioSnapshotRepository) GetByUserDateRange(ctx context.Context, us
 	query := `
 		SELECT id, user_id, snapshot_date, total_value, total_cost_basis,
 		       total_gain_loss, total_gain_loss_pct, total_value_investment_only,
-		       created_at, updated_at
+		       currency_code, created_at, updated_at
 		FROM portfolio_snapshots
 		WHERE user_id = $1
 		  AND snapshot_date >= $2::date
@@ -215,7 +237,7 @@ func (r *portfolioSnapshotRepository) GetByUserDateRange(ctx context.Context, us
 		if err := rows.Scan(
 			&s.ID, &s.UserID, &s.SnapshotDate, &s.TotalValue, &s.TotalCostBasis,
 			&s.TotalGainLoss, &s.TotalGainLossPct, &s.TotalValueInvestmentOnly,
-			&s.CreatedAt, &s.UpdatedAt,
+			&s.CurrencyCode, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -236,7 +258,7 @@ func (r *portfolioSnapshotRepository) GetLatestBefore(ctx context.Context, userI
 	query := `
 		SELECT id, user_id, snapshot_date, total_value, total_cost_basis,
 		       total_gain_loss, total_gain_loss_pct, total_value_investment_only,
-		       created_at, updated_at
+		       currency_code, created_at, updated_at
 		FROM portfolio_snapshots
 		WHERE user_id = $1
 		  AND snapshot_date < $2::date
@@ -248,7 +270,7 @@ func (r *portfolioSnapshotRepository) GetLatestBefore(ctx context.Context, userI
 	err := r.db.QueryRow(ctx, query, userID, date).Scan(
 		&s.ID, &s.UserID, &s.SnapshotDate, &s.TotalValue, &s.TotalCostBasis,
 		&s.TotalGainLoss, &s.TotalGainLossPct, &s.TotalValueInvestmentOnly,
-		&s.CreatedAt, &s.UpdatedAt,
+		&s.CurrencyCode, &s.CreatedAt, &s.UpdatedAt,
 	)
 	if err != nil {
 		// pgx returns pgx.ErrNoRows; treat as "no prior snapshot" (nil, nil)

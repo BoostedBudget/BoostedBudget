@@ -34,6 +34,11 @@ type HoldingSnapshotView struct {
 	CostBasis        *float64 `json:"cost_basis,omitempty"`
 	InstitutionValue *float64 `json:"institution_value,omitempty"`
 	InstitutionPrice *float64 `json:"institution_price,omitempty"`
+	// CurrencyCode is the currency the figures above were reported in, as at AsOfDate (#1631
+	// M8a), or nil when the provider never told us. As-of like everything else on this type: a
+	// past position is stated in the currency it was reported in at the time, not in whatever
+	// currency the live holding reports now.
+	CurrencyCode *string `json:"currency_code,omitempty"`
 
 	// Security metadata (LEFT JOIN securities — a security row can be absent).
 	TickerSymbol *string `json:"ticker_symbol,omitempty"`
@@ -69,6 +74,14 @@ type HoldingSnapshotHistory struct {
 	// TotalValue is the sum of the day's institution_value, pre-computed so no consumer has to do
 	// the arithmetic. Nil when no position on the day carries a value.
 	TotalValue *float64 `json:"total_value,omitempty"`
+
+	// CurrencyCode is the single currency TotalValue is expressed in, or nil when one cannot be
+	// stated; IsMixedCurrency says which of the two reasons applies — true means the day's
+	// positions were reported in two or more DIFFERENT currencies, so TotalValue is a
+	// currency-blind sum (there is no FX rate source in this system), false means no position
+	// stated a currency at all. #1631 M8a.
+	CurrencyCode    *string `json:"currency_code,omitempty"`
+	IsMixedCurrency bool    `json:"is_mixed_currency"`
 }
 
 // ComputeGainLoss fills GainLoss / GainLossPct from the row's own historical figures, using the

@@ -58,7 +58,7 @@ func TestSecurityRepository_UpsertBatch_InsertNew(t *testing.T) {
 		AddRow(sec.PlaidSecurityID, returnedID)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO securities`)).
-		WithArgs(anyArgs(14)...).
+		WithArgs(anyArgs(15)...).
 		WillReturnRows(rows)
 
 	mapping, err := repo.UpsertBatch(ctx, []domain.Security{sec})
@@ -82,7 +82,7 @@ func TestSecurityRepository_UpsertBatch_UpdateExisting(t *testing.T) {
 		AddRow(sec.PlaidSecurityID, existingID)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO securities`)).
-		WithArgs(anyArgs(14)...).
+		WithArgs(anyArgs(15)...).
 		WillReturnRows(rows)
 
 	mapping, err := repo.UpsertBatch(ctx, []domain.Security{sec})
@@ -114,7 +114,7 @@ func TestSecurityRepository_UpsertBatch_MultipleSec(t *testing.T) {
 		rows := pgxmock.NewRows([]string{"plaid_security_id", "id"}).
 			AddRow(pid, returnedIDs[i])
 		mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO securities`)).
-			WithArgs(anyArgs(14)...).
+			WithArgs(anyArgs(15)...).
 			WillReturnRows(rows)
 	}
 
@@ -154,6 +154,7 @@ func TestSecurityRepository_UpsertBatch_StoresConsolidationIdentifiers(t *testin
 			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
 			&instID, &proxyID,
 			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // currency_code (#1631 M8a)
 		).
 		WillReturnRows(rows)
 

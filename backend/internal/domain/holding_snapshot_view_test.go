@@ -93,7 +93,11 @@ func TestHoldingSnapshotHistory_NoHistoryResponse_WireShape(t *testing.T) {
 	_, hasAsOf := raw["as_of_date"]
 	assert.False(t, hasAsOf,
 		"as_of_date is omitempty: it must be ABSENT, not null — the doc string says so and the generated schema types it as a plain string. Got: %s", b)
-	assert.JSONEq(t, `{"account_id":"acct-1","available_dates":[],"positions":[]}`, string(b),
+	// #1631 M8a added is_mixed_currency, deliberately WITHOUT omitempty: a client must be able to
+	// read "these figures are not a currency-blind sum" as a positive statement, and an omitted
+	// bool cannot be told from a field the server does not implement. currency_code stays
+	// omitempty because nil there genuinely means "no answer", which is the same as absent.
+	assert.JSONEq(t, `{"account_id":"acct-1","available_dates":[],"positions":[],"is_mixed_currency":false}`, string(b),
 		"available_dates and positions must both be present and empty — `null` is indistinguishable from a failed read")
 
 	// And the dated case still carries the day, so the assertion above is about absence rather

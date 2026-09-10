@@ -46,8 +46,8 @@ func (r *securityRepository) UpsertBatch(ctx context.Context, securities []domai
 				isin, cusip, is_cash_equivalent,
 				institution_security_id, proxy_security_id,
 				institution_price, institution_price_as_of,
-				close_price, close_price_as_of
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+				close_price, close_price_as_of, currency_code
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 			ON CONFLICT (plaid_security_id) DO UPDATE SET
 				ticker_symbol = EXCLUDED.ticker_symbol,
 				name = EXCLUDED.name,
@@ -89,6 +89,16 @@ func (r *securityRepository) UpsertBatch(ctx context.Context, securities []domai
 					WHEN EXCLUDED.close_price IS NULL THEN securities.close_price_as_of
 					ELSE EXCLUDED.close_price_as_of
 				END,
+				-- #1631 M8a: currency_code is retained with the CLOSE PRICE, not overwritten like
+				-- the identity metadata above, because it is the unit of that price rather than a
+				-- fact about the instrument. Keeping a fresh currency beside a retained price
+				-- would relabel last week's figure as being in a currency it was never quoted in
+				-- — the same defect the as_of pairing above exists to prevent, one step worse
+				-- because it changes what the number MEANS rather than only when it was true.
+				currency_code = CASE
+					WHEN EXCLUDED.close_price IS NULL THEN securities.currency_code
+					ELSE EXCLUDED.currency_code
+				END,
 				updated_at = NOW()
 			RETURNING plaid_security_id, id
 		`
@@ -109,6 +119,7 @@ func (r *securityRepository) UpsertBatch(ctx context.Context, securities []domai
 			sec.InstitutionPriceAsOf,
 			sec.ClosePrice,
 			sec.ClosePriceAsOf,
+			sec.CurrencyCode,
 		).Scan(&plaidID, &internalID)
 		if err != nil {
 			return nil, err
