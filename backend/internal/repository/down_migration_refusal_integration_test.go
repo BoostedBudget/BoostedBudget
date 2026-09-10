@@ -599,10 +599,13 @@ var downGuardCases = []downGuardCase{
 	// mutant per file, delete the block, watch that file's case go red — and it says nothing about
 	// the four counts inside 000158's block, three of which no test exercised. The per-table
 	// granularity was verified separately, and that is what the four cases below rest on: each of
-	// n_goals / n_boosts / n_budgets / n_cats was removed from 000158's down in turn (its
-	// `SELECT ... INTO`, its term in the IF sum, and its RAISE argument), and each time exactly the
-	// matching case went red on its own `require.Error` — four mutants, four reds, and no case red
-	// for a mutant that was not its own.
+	// n_goals / n_boosts / n_budgets / n_cats was removed from 000158's down in turn — its
+	// `SELECT ... INTO`, its term in the IF sum, its RAISE argument AND its `%` slot in the format
+	// string, because dropping the argument alone raises "too few parameters specified for RAISE"
+	// and would have been an invalid mutant that fails for the wrong reason. Each time exactly the
+	// matching case went red on its own `require.Error`, reporting "An error is expected but got
+	// nil" — i.e. the mutated file ran to COMPLETION, which is what makes the mutant valid — and no
+	// case went red for a mutant that was not its own.
 	//
 	// Every case deliberately uses a name that collides with NOTHING. A colliding pair would abort
 	// on the unconditional UNIQUE (user_id, name) this file re-adds, and that pre-existing,
