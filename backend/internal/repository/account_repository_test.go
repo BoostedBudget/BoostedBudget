@@ -1557,6 +1557,15 @@ func TestAccountRepository_CheckFingerprintOwnership_NotFound(t *testing.T) {
 // nullable column. Live caller: account_service.go's LinkAccounts cross-user uniqueness gate
 // (Issue #1010) — a NULL status here must not fail the scan, since the row it came from is the
 // security-relevant "does someone else already own this fingerprint" check.
+//
+// ⚠ #1626 Phase 2 pgxmock sweep: the require.NoError below, taken alone, is NOT a NULL-scan proof
+// — pgxmock cannot distinguish this scan from a reverted, unfixed one (it never errors on a nil
+// AddRow cell scanned into a plain type, pointer intermediate or not). What makes this test sound
+// despite that is the assertion AFTER it: normalizeLinkedItemStatus's "active" mapping only comes
+// out right if the *string intermediate genuinely stayed nil, which is mutation-confirmed —
+// reverting the intermediate to a plain string (so the pointer always points at "" instead) makes
+// that assertion fail even though pgxmock still reports no error. See account_repository.go's
+// CheckFingerprintOwnership for the intermediate this depends on.
 func TestAccountRepository_CheckFingerprintOwnership_NullItemStatus_NoError(t *testing.T) {
 	mock, repo := setupAccountMockDB(t)
 	defer mock.Close()
@@ -1582,6 +1591,8 @@ func TestAccountRepository_CheckFingerprintOwnership_NullItemStatus_NoError(t *t
 
 	ownership, err := repo.CheckFingerprintOwnership(ctx, fingerprint, requestingUserID)
 
+	// pgxmock cannot prove this NoError alone; see the doc comment above for why the assertion
+	// after it is what actually pins the fix.
 	require.NoError(t, err, "a NULL li.status must not fail the scan")
 	require.NotNil(t, ownership)
 	assert.Equal(t, ownerUserID, ownership.UserID)
@@ -2033,6 +2044,12 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 
 	accounts, err := repo.GetAccountsWithInstitutionFiltered(ctx, userID, AccountFilterOptions{IncludeHidden: false})
 
+	// ⚠ #1626 Phase 2 pgxmock sweep: pgxmock cannot prove this NoError alone — it never errors
+	// scanning a nil AddRow cell into a plain string, intermediate or not. What actually pins the
+	// #1444 fix is the LinkedItemStatus assertion below: mutation-confirmed, reverting the
+	// *string intermediates in GetAccountsWithInstitutionFiltered back to scanning straight into
+	// account.InstitutionName/LinkedItemStatus makes that assertion fail ("" != "active") even
+	// though this NoError still passes.
 	require.NoError(t, err, "a NULL l.institution_name/l.status must not fail the scan")
 	require.Len(t, accounts, 1)
 	assert.Equal(t, "", accounts[0].InstitutionName, "NULL institution_name should surface as the empty string")

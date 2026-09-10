@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, spyOn, setSystemTime, mock } from 'bun:test'
 import { render, screen, renderHook, act } from '@testing-library/react'
-import { format, startOfMonth, endOfMonth, startOfWeek, startOfYear, subMonths } from 'date-fns'
+import { format, startOfMonth, startOfWeek, startOfYear, subMonths } from 'date-fns'
 import type { ReactNode } from 'react'
 
 // Must be hoisted before DashboardProvider import (bun:test hoists mock.module calls)
@@ -102,7 +102,7 @@ describe('DashboardContext', () => {
         format(startOfMonth(mockToday), 'yyyy-MM-dd')
       )
       expect(result.current.filters.endDate).toBe(
-        format(endOfMonth(mockToday), 'yyyy-MM-dd')
+        format(mockToday, 'yyyy-MM-dd')
       )
     })
 
@@ -291,7 +291,7 @@ describe('DashboardContext', () => {
         format(startOfMonth(mockToday), 'yyyy-MM-dd')
       )
       expect(result.current.filters.endDate).toBe(
-        format(endOfMonth(mockToday), 'yyyy-MM-dd')
+        format(mockToday, 'yyyy-MM-dd')
       )
     })
   })

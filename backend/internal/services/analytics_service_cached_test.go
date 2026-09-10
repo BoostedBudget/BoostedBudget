@@ -109,6 +109,7 @@ func TestAnalyticsCacheMethods_AreUnique(t *testing.T) {
 		methodGetAverageMonthlySpend,
 		methodGetCategoryTotalForPeriod,
 		methodGetIncomeSourceBreakdown,
+		methodGetCategoryHierarchy,
 		methodGetTopExpense,
 		methodGetLargestTransactionsForPeriod,
 		methodGetUnusualSpend,
@@ -119,7 +120,7 @@ func TestAnalyticsCacheMethods_AreUnique(t *testing.T) {
 		assert.False(t, seen[m], "duplicate method constant %q", m)
 		seen[m] = true
 	}
-	assert.Len(t, seen, 17, "expected exactly 17 cached analytics methods (13 analytics + 4 analytics_rows)")
+	assert.Len(t, seen, 18, "expected exactly 18 cached analytics methods (14 analytics + 4 analytics_rows)")
 }
 
 func testAnalyticsRepoFixture() *mockAnalyticsRepository {

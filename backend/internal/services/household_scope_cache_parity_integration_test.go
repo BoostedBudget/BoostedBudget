@@ -22,8 +22,9 @@
 //     assertion below would be vacuous (there'd be nothing for it to over-invalidate).
 //
 // Scope decision (documented per the task 11c brief's bar for judgment calls): this suite covers
-// 3 representative methods, not all ~17 household-capable rows in the `analytics`/`analytics_rows`
-// 19+4-row tables:
+// 3 representative methods, not all ~18 household-capable rows in the `analytics`/`analytics_rows`
+// 20+4-row tables (#1626 added GetCategoryHierarchy, a cached household-capable analytics read;
+// the counts here are descriptive prose, not enforced, so they were re-derived by hand):
 //   - GetSpendingByCategory   (domain.SpendingFilters.HouseholdScope — the most common wiring
 //     shape, shared by 8 of the 19 `analytics` rows)
 //   - GetCashFlowSummary      (domain.CashFlowFilters.HouseholdScope — the same wiring shape

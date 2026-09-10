@@ -533,5 +533,40 @@ describe('AutoCategorizationRuleTable', () => {
       expect(onToggle).toHaveBeenCalledWith(mockRules[0], false)
     })
   })
+
+  /**
+   * Issue #1626 (Task K). The category column had the same latent `?? id` fallback the card did.
+   * The table's conditions column shows only a count ("1 condition"), so it has no `account_id`
+   * value to resolve — the category cell is its whole exposure to this defect class.
+   */
+  describe('identifiers never reach the screen (#1626)', () => {
+    const CUSTOM_CATEGORY_UUID = '5c5c5c5c-3333-4333-8333-333333333333'
+
+    const customRule = (display?: string): CategorizationRule => ({
+      ...mockRules[0],
+      id: 'rule-custom',
+      target_kind: 'custom',
+      target_pfc_primary: undefined,
+      target_pfc_detailed: undefined,
+      target_pfc_detailed_display: undefined,
+      target_pfc_primary_display: undefined,
+      target_custom_category_id: CUSTOM_CATEGORY_UUID,
+      target_custom_category_display: display,
+    })
+
+    it('renders the shared neutral label when a custom-category target has no display name', () => {
+      render(<AutoCategorizationRuleTable rules={[customRule()]} />)
+
+      expect(screen.getByText('Custom category')).toBeInTheDocument()
+      expect(screen.queryByText(CUSTOM_CATEGORY_UUID)).toBeNull()
+    })
+
+    it('still prefers the enriched custom-category name when it arrives', () => {
+      render(<AutoCategorizationRuleTable rules={[customRule('Bike Maintenance')]} />)
+
+      expect(screen.getByText('Bike Maintenance')).toBeInTheDocument()
+      expect(screen.queryByText('Custom category')).toBeNull()
+    })
+  })
 })
 

@@ -109,10 +109,18 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
     // repairLinkedItem. Both are excludedWrite, so `allowed`/`read`/`write` are UNCHANGED and only
     // total and excluded move — reconnecting a bank needs a human in Plaid Link, so neither is a
     // capability an agent could ever exercise.
-    expect(fresh.totalOperations).toBe(210)
-    // +1 allowed / +1 read from #1625: previewRule, a read-class dry run of a candidate rule.
-    expect(fresh.allowedOperations).toBe(141)
-    expect(fresh.readOperations).toBe(96)
+    // #1626 added getCategoryHierarchy, a read: +1 total, +1 allowed, +1 read.
+    // #1628's rule-engine rework (staging) added getConditionSchema and previewRule, BOTH
+    // read-class (previewRule is a dry run — it returns candidate matches and persists nothing):
+    // +2 total, +2 allowed, +2 read.
+    // ⚠ These three additions are INDEPENDENT and both sides' numbers were correct for their own
+    // branch (209/140/95 here, 210/141/96 on staging, from a shared 208/139/94). The merged totals
+    // are the sum: 211/142/97. `write`, `excluded` and `destructive` are untouched by all three,
+    // which is what the two closure assertions below re-derive. The generators are the authority —
+    // `bun run scripts/generate-mcp-capability-summary.ts` prints exactly this breakdown.
+    expect(fresh.totalOperations).toBe(211)
+    expect(fresh.allowedOperations).toBe(142)
+    expect(fresh.readOperations).toBe(97)
     expect(fresh.writeOperations).toBe(45)
     expect(fresh.excludedOperations).toBe(69)
     expect(fresh.destructiveWriteOperations).toBe(4)

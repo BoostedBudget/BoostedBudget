@@ -470,6 +470,13 @@ func main() {
 	var accountDeletionWorker *jobs.AccountDeletionWorker
 	var scheduledDeletionCheckWorker *jobs.ScheduledDeletionCheckWorker
 
+	// Issue #1626 Phase 3, Defect 3: declare the periodic balance-snapshot dispatcher and its
+	// per-item capture worker. Both are Plaid-specific (the capture calls /accounts/get), so both
+	// stay nil when Plaid is not configured — and BOTH must be nil or non-nil together: a
+	// registered periodic dispatcher with no capture worker would enqueue jobs nothing can run.
+	var balanceSnapshotDispatchWorker *jobs.BalanceSnapshotDispatchWorker
+	var balanceSnapshotCaptureWorker *jobs.BalanceSnapshotCaptureWorker
+
 	// Issue #668: Declare cleanup workers for Plaid item lifecycle management
 	var itemCleanupCheckWorker *jobs.ItemCleanupCheckWorker
 	var itemCleanupWorker *jobs.ItemCleanupWorker
@@ -1658,6 +1665,45 @@ func main() {
 				})
 				appLogger.Info("Investment transactions sync worker created")
 
+				// Issue #1626 Phase 3, Defect 3: the periodic balance-snapshot gap-filler.
+				//
+				// balance_snapshots — what the net-worth and balance-history charts read — was
+				// written ONLY as a side effect of a transaction sync, i.e. on initial link and on an
+				// inbound Plaid TRANSACTIONS webhook. A day with no webhook was a day with no row,
+				// permanently, because no backfill exists.
+				//
+				// The capture service is deliberately NOT transactionSyncService: it shares that
+				// service's row-building code (writeBalanceCohort) but performs no account
+				// reconciliation, which retires the whole partial-roster risk class rather than
+				// guarding it.
+				balanceCaptureService := services.NewBalanceCaptureService(services.BalanceCaptureServiceDeps{
+					LinkedItemRepo:      linkedItemRepo,
+					AccountRepo:         accountRepo,
+					BalanceSnapshotRepo: balanceSnapshotRepo,
+					PlaidService:        plaidService,
+					Logger:              appLogger,
+				})
+				balanceSnapshotCaptureWorker = jobs.NewBalanceSnapshotCaptureWorker(jobs.BalanceSnapshotCaptureWorkerDeps{
+					CaptureService: balanceCaptureService,
+					Logger:         appLogger,
+				})
+				// The GENERATION bump, not NamespaceAnalytics.SchemaVersion — see the setter's own
+				// comment. Without it a day's captured rows stay invisible to cached dashboard and
+				// analytics reads until the namespace TTL, and a River job never passes through the
+				// HTTP mutation middleware that would otherwise cover the write. householdRepo
+				// structurally satisfies the lookup, same as it does for transactionSyncService.
+				balanceSnapshotCaptureWorker.SetCacheInvalidation(cacheInstance.Generations(), householdRepo)
+				balanceSnapshotDispatchWorker = jobs.NewBalanceSnapshotDispatchWorker(jobs.BalanceSnapshotDispatchWorkerDeps{
+					ItemRepo: linkedItemRepo,
+					JobQueue: nil, // Set after River client created (circular dependency)
+					Logger:   appLogger,
+					// MUST be wired. Without it every dispatch run re-enumerates from the oldest
+					// active linked item, so above balanceCaptureItemsPerRun the same prefix is
+					// captured every day and every newer item accrues no balance snapshot ever.
+					SweepCursors: sweepCursorRepo,
+				})
+				appLogger.Info("Balance snapshot dispatch and capture workers created")
+
 				// Issue #668: Create ItemCleanupCheckWorker for periodic orphaned item detection
 				// Checks for items in error state, revoked, stale, or with zero accounts
 				itemCleanupCheckWorker = jobs.NewItemCleanupCheckWorker(jobs.ItemCleanupCheckWorkerDeps{
@@ -1754,6 +1800,7 @@ func main() {
 				budgetPeriodCloseCheckWorker:        budgetPeriodCloseCheckWorker,
 				savingsStatsWorker:                  savingsStatsWorker,
 				portfolioSnapshotWorker:             portfolioSnapshotWorker,
+				balanceSnapshotDispatchWorker:       balanceSnapshotDispatchWorker,
 				ruleQuarantineCensusWorker:          ruleQuarantineCensusWorker,
 				plaidOrphanRetryWorker:              plaidOrphanRetryWorker,
 			}, appLogger)
@@ -1909,6 +1956,18 @@ func main() {
 				river.AddWorker(riverWorkers, itemCleanupCheckWorker)
 				appLogger.Info("Item cleanup check worker registered with River")
 			}
+			// Issue #1626 Phase 3, Defect 3. Registered as a PAIR: the periodic dispatcher is only
+			// registered when its worker is non-nil (periodic_jobs.go), and the capture worker must
+			// be registered whenever the dispatcher is, or the dispatcher enqueues jobs River has
+			// nothing to run.
+			if balanceSnapshotDispatchWorker != nil {
+				river.AddWorker(riverWorkers, balanceSnapshotDispatchWorker)
+				appLogger.Info("Balance snapshot dispatch worker registered with River")
+			}
+			if balanceSnapshotCaptureWorker != nil {
+				river.AddWorker(riverWorkers, balanceSnapshotCaptureWorker)
+				appLogger.Info("Balance snapshot capture worker registered with River")
+			}
 			if itemCleanupWorker != nil {
 				river.AddWorker(riverWorkers, itemCleanupWorker)
 				appLogger.Info("Item cleanup worker registered with River")
@@ -1943,6 +2002,14 @@ func main() {
 				if itemCleanupCheckWorker != nil {
 					itemCleanupCheckWorker.SetJobQueue(jobQueue)
 					appLogger.Info("Item cleanup check worker connected to job queue")
+				}
+				// Issue #1626 Phase 3, Defect 3: the dispatcher's ONLY action is enqueueing, so an
+				// unwired queue makes it useless rather than degraded — its Work() returns an error
+				// instead of a silent no-op, which on a daily schedule would otherwise mean no
+				// balance history for anybody, indefinitely.
+				if balanceSnapshotDispatchWorker != nil {
+					balanceSnapshotDispatchWorker.SetJobQueue(jobQueue)
+					appLogger.Info("Balance snapshot dispatch worker connected to job queue")
 				}
 				if budgetPeriodCloseCheckWorker != nil {
 					budgetPeriodCloseCheckWorker.SetJobQueue(jobQueue)

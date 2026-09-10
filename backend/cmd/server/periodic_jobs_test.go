@@ -1,6 +1,6 @@
 package main
 
-// Issue #1448: every one of the 17 periodic River jobs registered by main.go must carry
+// Issue #1448: every one of the 18 periodic River jobs registered by main.go must carry
 // (1) a real dedup guarantee (queue-level UniqueOpts, or — for BudgetPeriodCloseCheck — its
 // own documented DB-level exactly-once marker), (2) RunOnStart: true, and (3) a non-empty,
 // stable PeriodicJobOpts.ID so River restores nextRunAt across restarts/leader elections
@@ -26,7 +26,7 @@ import (
 
 // allNonNilPeriodicJobsDeps returns a periodicJobsDeps with every worker field populated by a
 // real (zero-configured) worker instance, so buildPeriodicJobSpecs produces the full set of
-// 17 specs — one per periodic job main.go registers when every dependency is present.
+// 18 specs — one per periodic job main.go registers when every dependency is present.
 func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 	return periodicJobsDeps{
 		scheduledDeletionCheckWorker:        jobs.NewScheduledDeletionCheckWorker(jobs.ScheduledDeletionCheckWorkerDeps{}),
@@ -43,6 +43,7 @@ func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 		savingsStatsWorker:                  jobs.NewSavingsStatsWorker(jobs.SavingsStatsWorkerDeps{}),
 		portfolioSnapshotWorker:             jobs.NewPortfolioSnapshotWorker(jobs.PortfolioSnapshotWorkerDeps{}),
 		ruleQuarantineCensusWorker:          jobs.NewRuleQuarantineCensusWorker(jobs.RuleQuarantineCensusWorkerDeps{}),
+		balanceSnapshotDispatchWorker:       jobs.NewBalanceSnapshotDispatchWorker(jobs.BalanceSnapshotDispatchWorkerDeps{}),
 		// Issue #1497. Only the RETRY worker appears here, because only it is nil-guardable: the
 		// orphan-token purge has no periodicJobsDeps field at all — its registration is unconditional
 		// on purpose, so there is nothing to set and nothing that could omit it. That asymmetry is
@@ -52,14 +53,20 @@ func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 }
 
 // TestBuildPeriodicJobSpecs_Count proves every nil-guarded worker (plus the always-on jobs)
-// produces exactly one spec when non-nil — 15 nil-guarded workers + 2 unconditional jobs
-// (idempotency cleanup, and Issue #1497's orphan-token purge) = 17. #1625 Task 18 fix round 1
-// added the rule quarantine census (nil-guarded), taking this from 16 to 17.
+// produces exactly one spec when non-nil — 16 nil-guarded workers + 2 unconditional jobs
+// (idempotency cleanup, and Issue #1497's orphan-token purge) = 18.
+//
+// ⚠ THIS COUNT MOVED TWICE INDEPENDENTLY AND THE TWO INCREMENTS ARE BOTH REAL. #1625 Task 18 fix
+// round 1 added the rule quarantine census (nil-guarded), 16 -> 17 on staging; #1626 Phase 3
+// Defect 3 added the balance snapshot dispatch (nil-guarded), 16 -> 17 on this branch. Merging the
+// two branches means BOTH specs exist, so the count is 18 — a resolution that kept only one side's
+// number would have left an unwired worker, and `periodicJobsDeps` fields are nil-safe by design
+// so nothing else in the suite would have said so.
 func TestBuildPeriodicJobSpecs_Count(t *testing.T) {
 	specs := buildPeriodicJobSpecs(allNonNilPeriodicJobsDeps())
 
-	if len(specs) != 17 {
-		t.Fatalf("expected 17 periodic job specs when every worker is non-nil, got %d", len(specs))
+	if len(specs) != 18 {
+		t.Fatalf("expected 18 periodic job specs when every worker is non-nil, got %d", len(specs))
 	}
 }
 
@@ -98,8 +105,8 @@ func TestBuildPeriodicJobSpecs_NilWorkerOmitsItsSpec(t *testing.T) {
 
 	specs := buildPeriodicJobSpecs(deps)
 
-	if len(specs) != 16 {
-		t.Fatalf("expected 16 specs with itemCleanupCheckWorker nil, got %d", len(specs))
+	if len(specs) != 17 {
+		t.Fatalf("expected 17 specs with itemCleanupCheckWorker nil, got %d", len(specs))
 	}
 	for _, s := range specs {
 		if s.name == "item cleanup check" {
@@ -272,5 +279,88 @@ func TestBuildPeriodicJobSpecs_PurgeRunsHourlyAndItsDedupDoesNotSuppressThat(t *
 		t.Errorf("SIBLING ASSERTION: the Plaid-dependent retry sweep interval = %v, want 24h. The purge "+
 			"was shortened, the retry deliberately was not — domain.OrphanedItemRetryStaleAfter (48h) is "+
 			"documented as two cadences of THIS sweep", retry.interval)
+	}
+}
+
+// TestBuildPeriodicJobSpecs_BalanceSnapshotDispatchRunsDailyAtTheChosenUTCHour is #1626 Phase 3
+// Task G's T1, and it pins the three things about this registration that could each go wrong
+// silently.
+//
+// WHY IT NEEDS ITS OWN TEST rather than riding on the count and the RunOnStart/dedup invariant:
+//
+//  1. THE SCHEDULE, NOT THE INTERVAL. Every other periodic job in this file expresses "daily" as a
+//     24-hour PeriodicInterval, which River anchors to the last run — so with RunOnStart, a deploy
+//     at 04:00 moves every subsequent run to 04:00. That is harmless for a cleanup sweep and NOT
+//     harmless here: the 21:00 UTC hour exists so that a net-worth series records something close
+//     to a closing balance AND so River's retry budget fits before the UTC day rolls over (a failed
+//     run at the boundary loses the day permanently — there is no backfill). This job therefore
+//     carries an explicit schedule, and this asserts it is actually attached.
+//  2. THE INTERVAL FIELD MUST STILL AGREE. The spec keeps `interval` as its documented cadence and
+//     the introspection tests read it, so a schedule that fired at some other frequency than the
+//     interval claims would make this file's own prose false.
+//  3. ByPeriod MUST BE SHORTER THAN A DAY, which is the opposite of what every other daily job here
+//     does — see BalanceSnapshotDispatchUniqueOpts for why a 24h window would let a deploy suppress
+//     that day's 21:00 run against the already-completed RunOnStart run.
+func TestBuildPeriodicJobSpecs_BalanceSnapshotDispatchRunsDailyAtTheChosenUTCHour(t *testing.T) {
+	specs := buildPeriodicJobSpecs(allNonNilPeriodicJobsDeps())
+
+	var spec *periodicJobSpec
+	for i := range specs {
+		if specs[i].name == "balance snapshot dispatch" {
+			spec = &specs[i]
+		}
+	}
+	if spec == nil {
+		t.Fatal("no 'balance snapshot dispatch' spec — balance_snapshots would keep being written " +
+			"ONLY as a side effect of a Plaid webhook sync, so a day with no webhook stays a day " +
+			"with no row (#1626 Phase 3, Defect 3)")
+	}
+
+	if spec.interval != 24*time.Hour {
+		t.Errorf("balance snapshot dispatch interval = %v, want 24h", spec.interval)
+	}
+
+	if spec.schedule == nil {
+		t.Fatal("balance snapshot dispatch must carry an explicit schedule: a bare 24h " +
+			"PeriodicInterval anchors the run to process start, so a deploy would move the daily " +
+			"capture off its chosen UTC hour")
+	}
+	// Asked from an instant BEFORE the hour on a fixed date, so the answer is a value and not a
+	// restatement of the constant's arithmetic.
+	from := time.Date(2026, 9, 9, 6, 15, 0, 0, time.UTC)
+	next := spec.schedule.Next(from)
+	if got, want := next.UTC(), time.Date(2026, 9, 9, jobs.BalanceSnapshotDispatchHourUTC, 0, 0, 0, time.UTC); !got.Equal(want) {
+		t.Errorf("schedule.Next(%v) = %v, want %v", from, got, want)
+	}
+	// And the schedule's own period must equal the interval the spec advertises.
+	if got := spec.schedule.Next(next).Sub(next); got != spec.interval {
+		t.Errorf("consecutive scheduled runs are %v apart but the spec's interval says %v", got, spec.interval)
+	}
+
+	_, insertOpts := spec.build()
+	if insertOpts == nil {
+		t.Fatal("balance snapshot dispatch build() returned nil InsertOpts")
+	}
+	if insertOpts.UniqueOpts.ByPeriod >= 24*time.Hour {
+		t.Errorf("balance snapshot dispatch UniqueOpts.ByPeriod = %v: a window of a day or longer "+
+			"buckets by UTC calendar day, so a deploy at any hour would silently suppress that day's "+
+			"%02d:00 run against the already-completed RunOnStart run",
+			insertOpts.UniqueOpts.ByPeriod, jobs.BalanceSnapshotDispatchHourUTC)
+	}
+}
+
+// TestBuildPeriodicJobSpecs_EveryOtherSpecStillUsesItsInterval is the sibling assertion, and it is
+// not decoration: without it, the test above passes just as well if someone attached a schedule to
+// EVERY periodic job, which would change 17 unrelated jobs' cadence semantics as a side effect of
+// this one addition.
+func TestBuildPeriodicJobSpecs_EveryOtherSpecStillUsesItsInterval(t *testing.T) {
+	for _, s := range buildPeriodicJobSpecs(allNonNilPeriodicJobsDeps()) {
+		if s.name == "balance snapshot dispatch" {
+			continue
+		}
+		if s.schedule != nil {
+			t.Errorf("%s carries an explicit schedule: only the balance snapshot dispatch needs one, "+
+				"and attaching them elsewhere silently changes those jobs' cadence anchoring", s.name)
+		}
 	}
 }

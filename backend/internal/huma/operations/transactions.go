@@ -54,9 +54,10 @@ type GetTransactionsInput struct {
 	AccountIDs        string `query:"account_ids" doc:"Filter by multiple account IDs (comma-separated UUIDs)"`
 	StartDate         string `query:"start_date" doc:"Filter transactions on or after this date (YYYY-MM-DD)"`
 	EndDate           string `query:"end_date" doc:"Filter transactions on or before this date (YYYY-MM-DD)"`
-	PFCPrimaries      string `query:"pfc_primaries" doc:"Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)"`
-	PFCDetaileds      string `query:"pfc_detaileds" doc:"Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). Combined with pfc_primaries using OR logic."`
-	CustomCategoryIDs string `query:"custom_category_ids" doc:"Filter by custom category UUIDs (comma-separated)"`
+	PFCPrimaries      string `query:"pfc_primaries" doc:"Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL). OR-joined with pfc_detaileds, custom_category_ids and uncategorized: a transaction matches if ANY of them matches."`
+	PFCDetaileds      string `query:"pfc_detaileds" doc:"Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). OR-joined with pfc_primaries, custom_category_ids and uncategorized."`
+	CustomCategoryIDs string `query:"custom_category_ids" doc:"Filter by custom category UUIDs (comma-separated). Each id also matches its child categories. OR-joined with pfc_primaries, pfc_detaileds and uncategorized — combining them returns the union, not the (always empty) intersection."`
+	Uncategorized     string `query:"uncategorized" doc:"When true, also match transactions with NO category at all — the rows analytics reports as 'Uncategorized'. OR-joined with pfc_primaries, pfc_detaileds and custom_category_ids. Omitted or false adds no filter; it never means 'exclude uncategorized'. Issue #1626."`
 	Search            string `query:"search" doc:"Search in merchant name or transaction name"`
 	Pending           string `query:"pending" doc:"Filter by pending status (true/false)"`
 	Reviewed          string `query:"reviewed" doc:"Filter by review state: true (reviewed), false (unreviewed inbox), omit for both"`
@@ -99,6 +100,27 @@ type GetTransactionsOutput struct {
 		Transactions []*domain.ActivityItem `json:"transactions"`
 		NextCursor   *string                `json:"next_cursor,omitempty"`
 		Limit        int                    `json:"limit"`
+		// TotalCount and TotalAmount describe the WHOLE filtered set, not this page, and are
+		// present only on the FIRST page (no cursor supplied) — re-aggregating the set on every
+		// page of the busiest list in the app would cost real time for a number that does not
+		// change as the user pages.
+		//
+		// ⚠ POINTERS so that "not computed" (absent) and "computed, and zero" (present zero) are
+		// different responses. With non-pointer scalars the zero value IS the omitted value, so a
+		// first page whose filter matched nothing could not report "0 results, $0.00", and the
+		// default mixed income/expense feed — which nets to exactly zero under PFCv2 signs — sent
+		// a count with no amount beside it. Pinned by
+		// TestGetTransactions_WholeSetTotals_OmittedNeverZeroed.
+		//
+		// TotalAmount is SIGNED, following the rows (PFCv2: expenses positive, inflows negative),
+		// so a client must not assume it is a magnitude. The chart-side comparison it exists to
+		// make checkable is therefore on MAGNITUDES: a category-hierarchy node's amount is
+		// SUM(ABS(amount)) — an unsigned chart quantity — so the property that holds is
+		// |node amount| == |total_amount| over the same filtered set, not equality of the two
+		// numbers. Added in #1626 so the reports Sankey's click-through is something a consumer —
+		// or a test — can actually check.
+		TotalCount  *int     `json:"total_count,omitempty" doc:"Number of transactions in the whole filtered set. First page only; absent means not computed, a present 0 means the set is empty."`
+		TotalAmount *float64 `json:"total_amount,omitempty" doc:"Summed amount of the whole filtered set, SIGNED like the rows (PFCv2: expenses positive, inflows negative) — not a magnitude. A Sankey node's amount is an ABS sum, so the property that holds is |node amount| == |total_amount|. First page only; absent means not computed, a present 0 means the set nets to zero."`
 	}
 }
 
@@ -350,6 +372,17 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 		filters.IncludeReversed = includeReversed
 	}
 
+	// Uncategorized (#1626 Phase 2) — parsed like include_reversed above, and for the same reason:
+	// the raw string is the ONLY place absence can be distinguished from an explicit false, and an
+	// invalid value is rejected rather than coerced. `false` is a no-op, never an exclusion.
+	if input.Uncategorized != "" {
+		uncategorized, err := strconv.ParseBool(input.Uncategorized)
+		if err != nil {
+			return nil, huma.Error400BadRequest("Invalid uncategorized parameter (expected true or false)")
+		}
+		filters.Uncategorized = uncategorized
+	}
+
 	// Category source filter (Issue #1210) — comma-separated, validated enum tokens
 	if input.CategorySources != "" {
 		sources := parseCommaSeparated(input.CategorySources)
@@ -444,6 +477,8 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 	out.Body.Transactions = result.Transactions
 	out.Body.NextCursor = result.NextCursor
 	out.Body.Limit = result.Limit
+	out.Body.TotalCount = result.TotalCount
+	out.Body.TotalAmount = result.TotalAmount
 	return out, nil
 }
 

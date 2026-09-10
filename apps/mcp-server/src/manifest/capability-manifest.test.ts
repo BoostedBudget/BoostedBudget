@@ -371,7 +371,14 @@ describe('completeness', () => {
     //   either one out. They shipped in the spec before being classified, which broke
     //   check:manifest and the spec-index build until this entry — the same failure mode Task 16
     //   records above.
-    expect(ALL_OPERATION_IDS.length).toBe(210)
+    // +1 from Issue #1626: getCategoryHierarchy, a read. Every Analytics-tagged operation must
+    //   be read-class — TestMCPManifest_AnalyticsOpsAreInGoManifest enforces that on the Go side.
+    // +2 from Issue #1628's rule-engine rework (staging): getConditionSchema (read) and
+    //   previewRule (write, non-destructive — it returns candidate matches and persists nothing).
+    // ⚠ 211 is the SUM of two independent increments from a shared 208, not either side's total:
+    //   this branch took it to 209 and staging to 210, and the merge has all three new operations.
+    //   Re-derive from `bun run src/spec/index-builder.ts`, which prints the entry count it wrote.
+    expect(ALL_OPERATION_IDS.length).toBe(211)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified

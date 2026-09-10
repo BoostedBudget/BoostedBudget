@@ -313,7 +313,7 @@ func TestAccountRepository_PurgeAccount_Integration_MultiMemberChain_Transaction
 		"purge must succeed on a multi-member chain, not refuse")
 
 	txnRepo := NewTransactionRepository(tx, nil)
-	items, _, err := txnRepo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	items, _, _, err := txnRepo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
 	require.NoError(t, err)
 	assert.Contains(t, feedNames(items), "Coffee Before Purge",
 		"purging one chain member must not hide transactions the surviving active member's chain key still covers")

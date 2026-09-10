@@ -79,6 +79,16 @@ export const mockUseGetIncomeSourceBreakdown = mock(() => ({
   refetch: createMockRefetch(),
 }))
 
+// === useGetCategoryHierarchy (#1626) ===
+// The Sankey's own read, one call per flow direction. Tests that care about direction assert on
+// the params the hook was called with rather than on two separate mocks — the hook is one function.
+export const mockUseGetCategoryHierarchy = mock(() => ({
+  data: null,
+  isLoading: false,
+  error: null,
+  refetch: createMockRefetch(),
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/analytics/analytics', () => ({
   ...RealAnalyticsModule,
@@ -92,4 +102,5 @@ mock.module('@boostedbudget/api-client/endpoints/analytics/analytics', () => ({
   useGetSpendingTrends: mockUseGetSpendingTrends,
   useGetPortfolioAllocationBreakdown: mockUseGetPortfolioAllocationBreakdown,
   useGetIncomeSourceBreakdown: mockUseGetIncomeSourceBreakdown,
+  useGetCategoryHierarchy: mockUseGetCategoryHierarchy,
 }))

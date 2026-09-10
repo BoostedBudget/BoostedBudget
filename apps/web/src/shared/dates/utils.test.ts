@@ -35,14 +35,12 @@ describe('inferPreset', () => {
     expect(inferPreset('', '')).toBe('all')
   })
 
-  test('this_month: start = first of current month, end = last day of current month', () => {
-    // Get this month boundaries
-    const now = new Date()
-    const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-    const lastOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-    const start = formatDateForAPI(firstOfMonth)
-    const end = formatDateForAPI(lastOfMonth)
-    expect(inferPreset(start, end)).toBe('this_month')
+  // this_month now ends on TODAY (UTC), not on the last day of the month (#1626 Phase 3).
+  // Both bounds are derived from the UTC calendar date because that is what the preset emits.
+  test('this_month: start = first of current UTC month, end = today (UTC)', () => {
+    const todayUTC = new Date().toISOString().slice(0, 10)
+    const start = todayUTC.slice(0, 8) + '01'
+    expect(inferPreset(start, todayUTC)).toBe('this_month')
   })
 
   test('last_month: start = first of prev month, end = last of prev month', () => {

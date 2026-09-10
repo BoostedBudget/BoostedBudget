@@ -50,6 +50,7 @@ import type {
   CashFlowHistoryResponse,
   CashFlowSummaryResponse,
   CategoryBreakdownForMerchantResponse,
+  CategoryHierarchyResponse,
   CategoryTotalResponse,
   FinancialSummaryResponse,
   GainLossSummary,
@@ -73,9 +74,11 @@ export const getGetAverageMonthlySpendResponseMock = (overrideResponse: Partial<
 
 export const getGetBudgetVsActualResponseMock = (overrideResponse: Partial<Extract<BudgetVsActualResponse, object>> = {}): BudgetVsActualResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), budgets: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({allocated_amount: faker.number.float({fractionDigits: 2}), budget_id: faker.string.alpha({length: {min: 10, max: 20}}), budget_name: faker.string.alpha({length: {min: 10, max: 20}}), over_budget: faker.datatype.boolean(), pct_used: faker.number.float({fractionDigits: 2}), period: faker.string.alpha({length: {min: 10, max: 20}}), remaining: faker.number.float({fractionDigits: 2}), spent_amount: faker.number.float({fractionDigits: 2})})), null]), period: faker.string.alpha({length: {min: 10, max: 20}}), total_allocated: faker.number.float({fractionDigits: 2}), total_remaining: faker.number.float({fractionDigits: 2}), total_spent: faker.number.float({fractionDigits: 2}), ...overrideResponse})
 
-export const getGetCashFlowHistoryResponseMock = (overrideResponse: Partial<Extract<CashFlowHistoryResponse, object>> = {}): CashFlowHistoryResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), end_date: faker.date.past().toISOString().slice(0, 19) + 'Z', grouping: faker.string.alpha({length: {min: 10, max: 20}}), periods: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({expenses: faker.number.float({fractionDigits: 2}), income: faker.number.float({fractionDigits: 2}), net_cash_flow: faker.number.float({fractionDigits: 2}), period_end: faker.date.past().toISOString().slice(0, 19) + 'Z', period_start: faker.date.past().toISOString().slice(0, 19) + 'Z', transaction_count: faker.number.int()})), null]), start_date: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
+export const getGetCashFlowHistoryResponseMock = (overrideResponse: Partial<Extract<CashFlowHistoryResponse, object>> = {}): CashFlowHistoryResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), end_date: faker.date.past().toISOString().slice(0, 19) + 'Z', grouping: faker.string.alpha({length: {min: 10, max: 20}}), periods: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({expenses: faker.number.float({fractionDigits: 2}), income: faker.number.float({fractionDigits: 2}), net_cash_flow: faker.number.float({fractionDigits: 2}), period_end: faker.date.past().toISOString().slice(0, 19) + 'Z', period_start: faker.date.past().toISOString().slice(0, 19) + 'Z', transaction_count: faker.number.int()})), null]), requested_end_date: faker.date.past().toISOString().slice(0, 19) + 'Z', start_date: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
 
 export const getGetCashFlowSummaryResponseMock = (overrideResponse: Partial<Extract<CashFlowSummaryResponse, object>> = {}): CashFlowSummaryResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), end_date: faker.date.past().toISOString().slice(0, 19) + 'Z', expense_count: faker.number.int(), expenses: faker.number.float({fractionDigits: 2}), income: faker.number.float({fractionDigits: 2}), income_count: faker.number.int(), net_cash_flow: faker.number.float({fractionDigits: 2}), period_comparison: faker.helpers.arrayElement([{expense_change_amount: faker.number.float({fractionDigits: 2}), expense_change_percent: faker.number.float({fractionDigits: 2}), income_change_amount: faker.number.float({fractionDigits: 2}), income_change_percent: faker.number.float({fractionDigits: 2}), net_change_amount: faker.number.float({fractionDigits: 2}), net_change_percent: faker.number.float({fractionDigits: 2}), previous_expenses: faker.number.float({fractionDigits: 2}), previous_income: faker.number.float({fractionDigits: 2}), previous_net_cash_flow: faker.number.float({fractionDigits: 2})}, undefined]), start_date: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
+
+export const getGetCategoryHierarchyResponseMock = (overrideResponse: Partial<Extract<CategoryHierarchyResponse, object>> = {}): CategoryHierarchyResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), direction: faker.string.alpha({length: {min: 10, max: 20}}), end_date: faker.string.alpha({length: {min: 10, max: 20}}), levels: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({category: faker.string.alpha({length: {min: 10, max: 20}}), children: faker.helpers.arrayElement([[], undefined]), direct_total: faker.number.float({fractionDigits: 2}), display: faker.string.alpha({length: {min: 10, max: 20}}), percentage: faker.number.float({fractionDigits: 2}), total: faker.number.float({fractionDigits: 2}), transaction_count: faker.number.int()})), null]), start_date: faker.string.alpha({length: {min: 10, max: 20}}), total: faker.number.float({fractionDigits: 2}), ...overrideResponse})
 
 export const getGetCategoryTotalForPeriodResponseMock = (overrideResponse: Partial<Extract<CategoryTotalResponse, object>> = {}): CategoryTotalResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), category: faker.string.alpha({length: {min: 10, max: 20}}), end_date: faker.string.alpha({length: {min: 10, max: 20}}), pfc_primary_display: faker.string.alpha({length: {min: 10, max: 20}}), start_date: faker.string.alpha({length: {min: 10, max: 20}}), total: faker.number.float({fractionDigits: 2}), transaction_count: faker.number.int(), ...overrideResponse})
 
@@ -157,6 +160,18 @@ export const getGetCashFlowSummaryMockHandler = (overrideResponse?: CashFlowSumm
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getGetCashFlowSummaryResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getGetCategoryHierarchyMockHandler = (overrideResponse?: CategoryHierarchyResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<CategoryHierarchyResponse> | CategoryHierarchyResponse), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/analytics/category-hierarchy', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetCategoryHierarchyResponseMock(),
       { status: 200
       })
   }, options)
@@ -382,6 +397,7 @@ export const getAnalyticsMock = () => [
   getGetBudgetVsActualMockHandler(),
   getGetCashFlowHistoryMockHandler(),
   getGetCashFlowSummaryMockHandler(),
+  getGetCategoryHierarchyMockHandler(),
   getGetCategoryTotalForPeriodMockHandler(),
   getGetFinancialSummaryMockHandler(),
   getGetIncomeSourceBreakdownMockHandler(),

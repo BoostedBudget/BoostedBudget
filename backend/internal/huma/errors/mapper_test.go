@@ -256,6 +256,24 @@ func TestMapError_RepairNonceInvalidIs403AndSaysNothingAboutWhy(t *testing.T) {
 		"the message must name the one recovery a user can actually perform")
 }
 
+// Issue #1626 Phase 2 (review finding X2): a `custom:` category token whose suffix is not a UUID
+// must be 400, not 500. The analytics read casts that suffix with `::uuid`, so before this mapping
+// a client's own malformed query string was reported as a server failure — and would have paged
+// somebody. The wrapped form is used deliberately: the service returns
+// `fmt.Errorf("%w: %q", ErrInvalidCategoryToken, suffix)`, so an errors.Is-based case is the only
+// one that can see it.
+func TestLoggingMapError_400_InvalidCategoryToken(t *testing.T) {
+	wrapped := fmt.Errorf("%w: %q", services.ErrInvalidCategoryToken, "not-a-uuid")
+	result := humaerrors.LoggingMapError(context.Background(), wrapped)
+	require.NotNil(t, result)
+
+	statusErr, ok := result.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError")
+	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
+	assert.NotContains(t, statusErr.Error(), "not-a-uuid",
+		"the response must not echo attacker-supplied text back to the client")
+}
+
 // TestMapError_InvalidGoalUpdateIsA400 is the boundary test the service-level errors.Is check
 // cannot give: removing the mapper case would leave that test passing while the endpoint went
 // back to returning 500 for a client mistake. Ordering matters in this switch — several

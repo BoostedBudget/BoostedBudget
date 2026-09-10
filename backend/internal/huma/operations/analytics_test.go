@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -19,40 +21,43 @@ import (
 
 // mockAnalyticsService is a mock implementation of services.AnalyticsService
 type mockAnalyticsService struct {
-	summaryResponse                         *domain.CashFlowSummaryResponse
-	historyResponse                         *domain.CashFlowHistoryResponse
-	spendingByCategoryResponse              *domain.SpendingByCategoryResponse
-	spendingByMerchantResponse              *domain.SpendingByMerchantResponse
-	spendingTrendsResponse                  *domain.SpendingTrendsResponse
-	averageMonthlySpendResponse             *domain.AverageMonthlySpendResponse
-	recurringSubscriptionsResponse          *domain.RecurringSubscriptionsResponse
-	savingsRateResponse                     *domain.SavingsRateResponse
-	monthOverMonthResponse                  *domain.MonthOverMonthResponse
-	largestTransactionsResponse             *domain.LargestTransactionsResponse
-	categoryBreakdownForMerchantResponse    *domain.CategoryBreakdownForMerchantResponse
-	incomeSourceBreakdownResponse           *domain.IncomeSourceBreakdownResponse
-	unusualSpendResponse                    *domain.UnusualSpendResponse
-	netWorthTrendResponse                   *domain.NetWorthTrendResponse
-	budgetVsActualResponse                  *domain.BudgetVsActualResponse
-	summaryErr                              error
-	historyErr                              error
-	spendingByCategoryErr                   error
-	spendingByMerchantErr                   error
-	spendingTrendsErr                       error
-	averageMonthlySpendErr                  error
-	recurringSubscriptionsErr               error
-	savingsRateErr                          error
-	monthOverMonthErr                       error
-	largestTransactionsErr                  error
-	categoryBreakdownForMerchantErr         error
-	incomeSourceBreakdownErr                error
-	unusualSpendErr                         error
-	netWorthTrendErr                        error
-	budgetVsActualErr                       error
-	categoryTotalResponse                   *domain.CategoryTotalResponse
-	categoryTotalErr                        error
-	topExpenseResponse                      *domain.TopExpenseResponse
-	topExpenseErr                           error
+	summaryResponse                      *domain.CashFlowSummaryResponse
+	historyResponse                      *domain.CashFlowHistoryResponse
+	spendingByCategoryResponse           *domain.SpendingByCategoryResponse
+	spendingByMerchantResponse           *domain.SpendingByMerchantResponse
+	spendingTrendsResponse               *domain.SpendingTrendsResponse
+	averageMonthlySpendResponse          *domain.AverageMonthlySpendResponse
+	recurringSubscriptionsResponse       *domain.RecurringSubscriptionsResponse
+	savingsRateResponse                  *domain.SavingsRateResponse
+	monthOverMonthResponse               *domain.MonthOverMonthResponse
+	largestTransactionsResponse          *domain.LargestTransactionsResponse
+	categoryBreakdownForMerchantResponse *domain.CategoryBreakdownForMerchantResponse
+	categoryHierarchyResponse            *domain.CategoryHierarchyResponse
+	categoryHierarchyErr                 error
+	lastCategoryDirection                domain.CategoryDirection
+	incomeSourceBreakdownResponse        *domain.IncomeSourceBreakdownResponse
+	unusualSpendResponse                 *domain.UnusualSpendResponse
+	netWorthTrendResponse                *domain.NetWorthTrendResponse
+	budgetVsActualResponse               *domain.BudgetVsActualResponse
+	summaryErr                           error
+	historyErr                           error
+	spendingByCategoryErr                error
+	spendingByMerchantErr                error
+	spendingTrendsErr                    error
+	averageMonthlySpendErr               error
+	recurringSubscriptionsErr            error
+	savingsRateErr                       error
+	monthOverMonthErr                    error
+	largestTransactionsErr               error
+	categoryBreakdownForMerchantErr      error
+	incomeSourceBreakdownErr             error
+	unusualSpendErr                      error
+	netWorthTrendErr                     error
+	budgetVsActualErr                    error
+	categoryTotalResponse                *domain.CategoryTotalResponse
+	categoryTotalErr                     error
+	topExpenseResponse                   *domain.TopExpenseResponse
+	topExpenseErr                        error
 	// lastCashFlowFilters/lastSpendingFilters capture the most recent call's filters, so
 	// tests can assert HouseholdScope was (or wasn't) threaded through. #1369 — Phase 5.
 	lastCashFlowFilters *domain.CashFlowFilters
@@ -127,6 +132,12 @@ func (m *mockAnalyticsService) GetCategoryBreakdownForMerchant(_ context.Context
 func (m *mockAnalyticsService) GetIncomeSourceBreakdown(_ context.Context, _ string, filters domain.SpendingFilters) (*domain.IncomeSourceBreakdownResponse, error) {
 	m.lastSpendingFilters = &filters
 	return m.incomeSourceBreakdownResponse, m.incomeSourceBreakdownErr
+}
+
+func (m *mockAnalyticsService) GetCategoryHierarchy(_ context.Context, _ string, filters domain.SpendingFilters, direction domain.CategoryDirection) (*domain.CategoryHierarchyResponse, error) {
+	m.lastSpendingFilters = &filters
+	m.lastCategoryDirection = direction
+	return m.categoryHierarchyResponse, m.categoryHierarchyErr
 }
 
 func (m *mockAnalyticsService) GetUnusualSpend(_ context.Context, _ string, _ time.Time, _ time.Time) (*domain.UnusualSpendResponse, error) {
@@ -1278,6 +1289,7 @@ func TestSpendingRouteRegistration(t *testing.T) {
 		"/api/v1/analytics/largest-transactions",
 		"/api/v1/analytics/merchant-category-breakdown",
 		"/api/v1/analytics/income-sources",
+		"/api/v1/analytics/category-hierarchy",
 		"/api/v1/analytics/unusual-spend",
 		"/api/v1/analytics/net-worth-trend",
 		"/api/v1/analytics/budget-vs-actual",
@@ -1877,4 +1889,210 @@ func TestGetSpendingByCategory_HouseholdScope_ResolvesAndAttachesToFilters(t *te
 	require.NotNil(t, mockSvc.lastSpendingFilters)
 	assert.Same(t, scope, mockSvc.lastSpendingFilters.HouseholdScope)
 	mockHousehold.AssertExpectations(t)
+}
+
+// TestGetCategoryHierarchy_PassesDirectionAndScoping pins the handler's parameter plumbing (#1626).
+//
+// Direction is the one param that changes WHICH HALF OF THE LEDGER is read, so an unset or
+// misspelled value must not silently swap income for expense. The enum tag rejects garbage at the
+// edge, but the handler still defaults defensively, and that default is what this asserts.
+func TestGetCategoryHierarchy_PassesDirectionAndScoping(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		categoryHierarchyResponse: &domain.CategoryHierarchyResponse{Direction: "expense"},
+	}
+	handler := NewAnalyticsHandler(mockService, nil)
+
+	t.Run("income direction reaches the service", func(t *testing.T) {
+		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+			Direction:          "income",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, domain.CategoryDirectionIncome, mockService.lastCategoryDirection)
+	})
+
+	t.Run("an empty direction defaults to expense, never to income", func(t *testing.T) {
+		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, domain.CategoryDirectionExpense, mockService.lastCategoryDirection,
+			"an unset direction must not read the other half of the ledger")
+	})
+
+	t.Run("custom category scoping and roll-up default", func(t *testing.T) {
+		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+			CustomCategoryIDs:  " abc , def ,, ",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, mockService.lastSpendingFilters)
+		assert.Equal(t, []string{"abc", "def"}, mockService.lastSpendingFilters.CustomCategoryIDs,
+			"blank entries must be dropped and values trimmed")
+		assert.True(t, mockService.lastSpendingFilters.RollUpChildren,
+			"roll-up defaults to true — only the literal \"false\" disables it")
+	})
+
+	// #1626 Phase 2, item 7. The subtests above cover direction and custom-category scoping and
+	// stop there, so three parameters this endpoint declares reached the service untested:
+	// account_types, include_transfers and scope. An unparsed param is not a cosmetic gap — the
+	// reports page sends all three, and an endpoint that silently ignores one returns a correct
+	// answer to a question the user did not ask.
+	t.Run("account_types is parsed into a list, not passed through raw", func(t *testing.T) {
+		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+			AccountTypes:       " depository , credit ,, ",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, mockService.lastSpendingFilters)
+		// Asserting the PARSED value, not merely that something arrived: no test in this package
+		// pins AccountTypes' splitting, so a handler that forwarded the raw string — or dropped the
+		// param — would look identical from the outside.
+		assert.Equal(t, []string{"depository", "credit"}, mockService.lastSpendingFilters.AccountTypes,
+			"blank entries must be dropped and values trimmed, as custom_category_ids are")
+	})
+
+	t.Run("include_transfers defaults to false and only true opts in", func(t *testing.T) {
+		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+		})
+		require.NoError(t, err)
+		assert.False(t, mockService.lastSpendingFilters.IncludeTransfers,
+			"absent must mean false — counting transfers as spend double-counts money moving between "+
+				"the user's own accounts")
+
+		_, err = handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+			IncludeTransfers:   "true",
+		})
+		require.NoError(t, err)
+		assert.True(t, mockService.lastSpendingFilters.IncludeTransfers)
+	})
+
+	t.Run("a malformed include_transfers is rejected, not silently treated as false", func(t *testing.T) {
+		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+			IncludeTransfers:   "yes-please",
+		})
+		// Falling back to the default would answer a different question than the one asked and give
+		// the caller no way to notice.
+		require.Error(t, err)
+	})
+
+	t.Run("roll_up=false disables roll-up", func(t *testing.T) {
+		_, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			StartDate:          "2026-01-01",
+			EndDate:            "2026-03-31",
+			RollUp:             "false",
+		})
+		require.NoError(t, err)
+		assert.False(t, mockService.lastSpendingFilters.RollUpChildren)
+	})
+}
+
+// The #1369 pair, mirrored for the hierarchy endpoint (#1626 Phase 2, item 7). Household scope was
+// declared by this endpoint from the day it shipped and asserted nowhere, and the two halves are
+// separate tests on purpose: the first proves the resolved scope is ATTACHED, the second proves the
+// personal path never even asks. A single test cannot fail for both reasons.
+//
+// The handler needs a real &mockHouseholdService{} rather than nil for either to be meaningful.
+func TestGetCategoryHierarchy_HouseholdScope_ResolvesAndAttachesToFilters(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		categoryHierarchyResponse: &domain.CategoryHierarchyResponse{Direction: "expense"},
+	}
+	mockHousehold := &mockHouseholdService{}
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"user-123", "member-2"}}
+	mockHousehold.On("ResolveScope", mock.Anything, "user-123", "household").Return(scope, nil)
+
+	handler := NewAnalyticsHandler(mockService, mockHousehold)
+	output, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2026-01-01",
+		EndDate:            "2026-03-31",
+		Scope:              "household",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.lastSpendingFilters)
+	// assert.Same, not assert.Equal: the resolved scope must be the very object the household
+	// service returned. An Equal would pass against a handler that rebuilt an identical-looking
+	// scope from the request, which is the bug — it would trust caller-supplied membership.
+	assert.Same(t, scope, mockService.lastSpendingFilters.HouseholdScope)
+	mockHousehold.AssertExpectations(t)
+}
+
+func TestGetCategoryHierarchy_PersonalScope_NeverCallsHouseholdServiceGolden(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		categoryHierarchyResponse: &domain.CategoryHierarchyResponse{Direction: "expense"},
+	}
+	// Deliberately NO .On(...): an unexpected call to this mock fails the test by itself, so the
+	// AssertNotCalled below is belt as well as braces.
+	mockHousehold := &mockHouseholdService{}
+
+	handler := NewAnalyticsHandler(mockService, mockHousehold)
+	output, err := handler.GetCategoryHierarchy(context.Background(), &GetCategoryHierarchyInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2026-01-01",
+		EndDate:            "2026-03-31",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.lastSpendingFilters)
+	assert.Nil(t, mockService.lastSpendingFilters.HouseholdScope)
+	mockHousehold.AssertNotCalled(t, "ResolveScope", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestGetCategoryTotalForPeriod_MalformedCustomTokenIsABadRequest is #1626 Phase 2's review
+// finding X2 at the API boundary.
+//
+// WHAT IT PROVES, precisely: the handler passes a service error through
+// humaerrors.LoggingMapError, so an ErrInvalidCategoryToken raised by the gate becomes a 400
+// huma.StatusError rather than the 500 that a `custom:not-a-uuid` query string used to produce
+// when its suffix reached the repository's `$5::uuid` cast.
+//
+// ⚠ WHAT IT DOES NOT PROVE, said out loud so nobody reads it as more than it is: the mock service
+// does not validate, so this does not exercise the gate itself. That is
+// TestGetCategoryTotalForPeriod_RejectsAMalformedCustomToken /
+// _AcceptsTheTokensItIsSupposedTo (internal/services), which cover the malformed, empty and valid
+// custom tokens plus the PFC tokens that must be left alone. The two halves together are the
+// chain; neither alone is.
+func TestGetCategoryTotalForPeriod_MalformedCustomTokenIsABadRequest(t *testing.T) {
+	mockSvc := &mockAnalyticsService{
+		categoryTotalErr: fmt.Errorf("%w: %q", services.ErrInvalidCategoryToken, "not-a-uuid"),
+	}
+	handler := NewAnalyticsHandler(mockSvc, nil)
+
+	input := &GetCategoryTotalForPeriodInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2026-01-01",
+		EndDate:            "2026-01-31",
+		Category:           "custom:not-a-uuid",
+	}
+	output, err := handler.GetCategoryTotalForPeriod(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	statusErr, ok := err.(huma.StatusError)
+	require.True(t, ok, "the handler must return a huma.StatusError, not a bare error")
+	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus(),
+		"a malformed category token is the client's mistake; 500 would page somebody for it")
+	assert.NotContains(t, statusErr.Error(), "not-a-uuid",
+		"the response must not echo the attacker-supplied suffix")
 }

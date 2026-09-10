@@ -358,12 +358,12 @@ func (m *MockTransactionRepository) UpdateEffectiveCategoryNameByCustomCategoryI
 	return args.Get(0).(int64), args.Error(1)
 }
 
-func (m *MockTransactionRepository) GetByUserIDKeyset(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]domain.Transaction, *domain.TransactionCursor, error) {
-	return nil, nil, nil
+func (m *MockTransactionRepository) GetByUserIDKeyset(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]domain.Transaction, *domain.TransactionCursor, *domain.FeedTotals, error) {
+	return nil, nil, nil, nil
 }
 
-func (m *MockTransactionRepository) GetByUserIDKeysetUnified(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]*domain.ActivityItem, *domain.TransactionCursor, error) {
-	return nil, nil, nil
+func (m *MockTransactionRepository) GetByUserIDKeysetUnified(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]*domain.ActivityItem, *domain.TransactionCursor, *domain.FeedTotals, error) {
+	return nil, nil, nil, nil
 }
 
 func (m *MockTransactionRepository) GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error) {
@@ -429,3 +429,14 @@ func (m *MockProvider) SupportsIncrementalSync() bool {
 var (
 	ErrLinkedItemNotFound = repository.ErrLinkedItemNotFound
 )
+
+// #1626 Phase 3, Defect 3: the periodic balance-capture dispatcher's global item enumeration.
+// Nothing in this test file's subject reaches it; the method exists so the mock still satisfies
+// repository.LinkedItemRepository.
+func (m *MockLinkedItemRepository) GetItemsForBalanceCapturePage(ctx context.Context, after *repository.BalanceCaptureSweepCursor, limit int) ([]domain.BalanceCaptureTarget, error) {
+	args := m.Called(ctx, after, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.BalanceCaptureTarget), args.Error(1)
+}

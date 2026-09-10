@@ -299,6 +299,12 @@ func MapError(err error) error {
 		return huma.Error400BadRequest("Invalid webhook signature format")
 	case errors.Is(err, services.ErrInvalidPageSizeNumber):
 		return huma.Error400BadRequest("page_size must be between 1 and 100")
+	// #1626 Phase 2 (X2): a `custom:` category token whose suffix is not a UUID. It reaches a
+	// `::uuid` cast in the analytics read, so without this case the client's own malformed query
+	// string is reported as a server error. The message deliberately does NOT echo the offending
+	// suffix — it is attacker-supplied text and has no place in a response body.
+	case errors.Is(err, services.ErrInvalidCategoryToken):
+		return huma.Error400BadRequest("Invalid category. A custom category must be given as custom:<uuid>")
 	// Issue #1270: GAP-L — rule validation failed (unknown event, unsupported operator, bad field).
 	// Strip the "invalid automation rule: " prefix to expose only the user-facing detail.
 	case errors.Is(err, domain.ErrInvalidBoost):

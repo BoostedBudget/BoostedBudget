@@ -162,6 +162,21 @@ export const ANALYTICS_EVENTS = {
   REPORT_CATEGORY_CLICKED: 'report_category_clicked',
   REPORT_MERCHANT_CLICKED: 'report_merchant_clicked',
   REPORT_SANKEY_PRIVACY_TOGGLED: 'report_sankey_privacy_toggled',
+  // #1626: carries the view MODE only. Never a category name, id or amount — event
+  // properties are stored verbatim and are not covered by data-ph-mask.
+  REPORT_SANKEY_VIEW_MODE_CHANGED: 'report_sankey_view_mode_changed',
+  // #1626: a parent node was drilled into. Carries `depth` (from node.depth — see the warning on
+  // its sibling below, which governs this event too) and nothing else.
+  REPORT_SANKEY_CATEGORY_FOCUSED: 'report_sankey_category_focused',
+  // #1626 Phase 2: a Sankey node was clicked through to the filtered transactions list. Same PII
+  // rule as its siblings above — STRUCTURAL fields only (direction, depth), never a category
+  // name, id or amount, because event properties are recorded verbatim and no masking applies.
+  //
+  // ⚠ Do NOT derive `depth` from a node id by splitting on ':', in EITHER of these two events.
+  // Income nodes are flattened to `in:l1:*` regardless of their real depth, so that reading would
+  // report every income navigation as level 1 — a plausible-looking number that is simply wrong.
+  // `node.depth` carries the real value and both events now read it.
+  REPORT_SANKEY_NODE_NAVIGATED: 'report_sankey_node_navigated',
 
   // Admin
   ADMIN_PAGE_VIEWED: 'admin_page_viewed',
@@ -277,6 +292,10 @@ export const ANALYTICS_EVENTS = {
   // Issue #1569 T12: the user opted in/out of bank-reversed transactions. Worth measuring —
   // if nobody ever turns it on, the retention it exposes is invisible in practice.
   REVERSED_TRANSACTIONS_FILTER_TOGGLED: 'reversed_transactions_filter_toggled',
+  // Issue #1626: the user removed the uncategorized pill. Only ever fired on a CLEAR — the pill
+  // is the way out of a filter the reports Sankey turned on, and nothing in this panel turns it
+  // on — so a high rate here means people are landing on that list and leaving immediately.
+  UNCATEGORIZED_FILTER_CLEARED: 'uncategorized_filter_cleared',
   // Issue #1569 T12: a deleted savings goal was erased for good, destroying hand-logged
   // contributions. Deliberately carries no goal identity — it is a rate, not a record.
   SAVINGS_GOAL_PURGED: 'savings_goal_purged',
