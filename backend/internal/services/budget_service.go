@@ -257,11 +257,32 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		if err := category.Validate(); err != nil {
 			return nil, err
 		}
+		// Issue #1630 HIGH-severity fix: populate this custom category's own hierarchical
+		// parent linkage (mirrors the LEFT JOIN custom_categories cc GetCategoriesByBudgetID
+		// does at read time) so EscapedNestedChild below can see whether THIS row is nested
+		// under another custom category or PFC primary, in either direction relative to the
+		// rest of this batch. Not persisted (CustomParentID/CustomParentPFCPrimary are db:"-").
+		if category.CategoryKind == "custom" && category.CustomCategoryID != nil {
+			cc, err := s.customCategoryRepo.GetByID(ctx, *category.CustomCategoryID)
+			if err != nil {
+				return nil, err
+			}
+			category.CustomParentID = cc.ParentID
+			category.CustomParentPFCPrimary = cc.ParentPFCPrimary
+		}
 		// Issue #1630 Task 4: a single request can name the same parent identity twice
 		// (e.g. two "FOOD_AND_DRINK" primary-only categories) — reject before persisting
 		// anything, mirroring the check AddCategory runs against already-persisted rows.
 		if domain.DuplicateParentIdentity(flatCategories, category) {
 			return nil, domain.ErrDuplicateParentCategory
+		}
+		// Issue #1630 HIGH-severity fix: reject a nested pair whose match_logic escapes
+		// containment BEFORE persisting anything — checked in both directions against every
+		// category already built in this batch, so it does not matter whether the parent or
+		// the escaping child appears first in req.Categories. See EscapedNestedChild /
+		// ErrEscapedNestedChild for the double-count this prevents.
+		if domain.EscapedNestedChild(flatCategories, category) {
+			return nil, fmt.Errorf("%w: match_logic %q on this category escapes its hierarchical parent's containment envelope — a parent whose own match_logic is category_only/or only fully rolls up children whose match_logic is category_only/and; use a top-level (non-nested) category instead if this one must match tag_only or or", domain.ErrEscapedNestedChild, category.MatchLogic)
 		}
 		categories = append(categories, category)
 		flatCategories = append(flatCategories, *category)
@@ -627,11 +648,33 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 		return nil, err
 	}
 
+	// Issue #1630 HIGH-severity fix: populate this custom category's own hierarchical parent
+	// linkage (mirrors the LEFT JOIN custom_categories cc GetCategoriesByBudgetID already
+	// performed for the EXISTING rows in budget.Categories above) so EscapedNestedChild below
+	// can see whether this new row is nested under an existing parent, or is itself a parent of
+	// an existing child. Not persisted (CustomParentID/CustomParentPFCPrimary are db:"-").
+	if category.CategoryKind == "custom" && category.CustomCategoryID != nil {
+		cc, err := s.customCategoryRepo.GetByID(ctx, *category.CustomCategoryID)
+		if err != nil {
+			return nil, err
+		}
+		category.CustomParentID = cc.ParentID
+		category.CustomParentPFCPrimary = cc.ParentPFCPrimary
+	}
+
 	// Issue #1630 Task 4: reject a second row sharing this budget's parent identity
 	// (same pfc_primary primary-only row, or same custom_category_id) before persisting.
 	// See domain.DuplicateParentIdentity for why an undetected collision is unsafe.
 	if domain.DuplicateParentIdentity(budget.Categories, category) {
 		return nil, domain.ErrDuplicateParentCategory
+	}
+	// Issue #1630 HIGH-severity fix: reject a nested pair whose match_logic escapes
+	// containment before persisting — checked in both directions (this new row as the escaping
+	// child of an existing parent, OR as a containing parent of an existing escaping child), so
+	// it does not matter whether the parent or the child was added to this budget first. See
+	// domain.EscapedNestedChild / ErrEscapedNestedChild for the double-count this prevents.
+	if domain.EscapedNestedChild(budget.Categories, category) {
+		return nil, fmt.Errorf("%w: match_logic %q on this category escapes its hierarchical parent's containment envelope — a parent whose own match_logic is category_only/or only fully rolls up children whose match_logic is category_only/and; use a top-level (non-nested) category instead if this one must match tag_only or or", domain.ErrEscapedNestedChild, category.MatchLogic)
 	}
 
 	// Save to database
