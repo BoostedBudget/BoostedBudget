@@ -606,9 +606,28 @@ func (r *customCategoryRepository) DeleteWithReassignment(ctx context.Context, u
 	}
 
 	// 2. Disable, do not delete and do not blank, the rules that targeted it. See the ruling above.
+	//
+	// ⚠ `version` is bumped, and that is load-bearing rather than tidy (#1625 second fix wave H1).
+	// CategorizationRuleRepository.Update's optimistic guard is `WHERE id = $13 AND version = $14`,
+	// and its doc comment justifies keying on `version` as "moved only by user EDITS, so a
+	// competing VISIBLE change still conflicts and background bookkeeping does not". This
+	// statement is one of those visible changes: the user deleted the category, the card flips to
+	// "Disabled", and the engine stops firing the rule. Leaving `version` alone made it invisible
+	// to the guard, so an editor opened BEFORE the delete could save a name-only PATCH — which
+	// triggers neither of UpdateRule's live-category rechecks — and write the whole stale row
+	// back, restoring `enabled = true` on a rule pointing at a tombstoned category. That is the
+	// exact failure this disable exists to prevent, reintroduced by the lock meant to stop lost
+	// updates. Pinned by
+	// TestCategoryTombstone_DisablingRulesMovesTheConcurrencyToken_Integration.
+	//
+	// The two bookkeeping writers (IncrementMatchCount, IncrementOverrideCount) still must NOT
+	// bump it: they are invisible to the user, and bumping there is the false-conflict defect
+	// #1625 final review B2 removed. The test for that is
+	// TestCategorizationRuleRepository_MatchCountBumpIsNotAConflict_Integration. The rule is
+	// "would the user see this change if they were looking at the rule?", not "is this a write".
 	if _, err := tx.Exec(ctx, `
 		UPDATE categorization_rules
-		SET enabled = false, updated_at = NOW()
+		SET enabled = false, updated_at = NOW(), version = version + 1
 		WHERE user_id = $1 AND target_custom_category_id = $2 AND enabled = true
 	`, userID, categoryID); err != nil {
 		return fmt.Errorf("failed to disable rules targeting the category: %w", err)
