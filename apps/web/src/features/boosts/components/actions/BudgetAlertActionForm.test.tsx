@@ -529,7 +529,7 @@ describe('BudgetAlertActionForm', () => {
                 created_at: '2024-01-01',
                 updated_at: '2024-01-01',
                 tags: [],
-                match_logic: 'any',
+                match_logic: 'category_only',
               },
             ],
           },

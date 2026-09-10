@@ -2933,7 +2933,7 @@ describe('PII coverage — Round 19 (#1514 fix round 3): budget/category-name <o
           created_at: '2024-01-01T00:00:00Z',
           updated_at: '2024-01-01T00:00:00Z',
           tags: [],
-          match_logic: 'any' as const,
+          match_logic: 'category_only' as const,
         },
       ],
       created_at: '2024-01-01T00:00:00Z',
