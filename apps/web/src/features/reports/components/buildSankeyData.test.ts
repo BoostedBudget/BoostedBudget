@@ -369,7 +369,17 @@ describe('buildSankeyData — the income fan is hierarchical too', () => {
 
     const bonus = data.nodes.find(n => n.name === 'Bonus')
     expect(bonus?.id.startsWith('in:l1:')).toBe(true)
-    expect(bonus?.depth).toBe(3)
+    expect(bonus?.categoryDepth).toBe(3)
+  })
+
+  // #1630: ECharts' sankey series reads a node-data field literally named `depth` as its LAYOUT
+  // LAYER, not as arbitrary payload — that collision is what put income on the wrong side of the
+  // chart. This field must therefore never be reintroduced under that name.
+  it('never emits a node-data field named `depth` — ECharts reads that name as its layout layer', () => {
+    const data = buildSankeyData(incomeTree, [node('FOOD_AND_DRINK', 'Food And Drink', 5500)], { kind: 'parents' })
+    for (const n of data.nodes) {
+      expect(Object.prototype.hasOwnProperty.call(n, 'depth')).toBe(false)
+    }
   })
 
   it('a PFC detailed income leaf navigates by pfc_detaileds, not its primary', () => {
