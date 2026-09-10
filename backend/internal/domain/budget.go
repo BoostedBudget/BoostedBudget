@@ -711,10 +711,12 @@ var (
 	// buildBudgetedParentSets) key a PARENT category by its pfc_primary/custom_category_id VALUE,
 	// not its row ID, and nothing previously stopped two live rows sharing that value from
 	// coexisting — the maps would silently keep whichever row a range/map iteration visited last,
-	// leaving which row "owns" a given child's rendering undefined. Enforced at write time instead
-	// (AddCategory, CreateBudget's batch path): the second row sharing a parent identity is
-	// rejected rather than allowed to collide. No backfill needed — Issue #1630 was authored
-	// pre-launch with zero production budgets, so no duplicate rows exist to reconcile.
+	// leaving which row "owns" a given child's rendering undefined. Enforced at write time only,
+	// from CreateBudget's batch path and AddCategory — NOT from UpdateBudget, which never touches
+	// Categories at all. No backfill: this guard is a write-time gate, so a pre-existing colliding
+	// row (issue #1630 was reproduced against a real production budget,
+	// bf6676b1-7bbd-4f06-b765-62756ce0094e, five categories) is grandfathered — it stays readable
+	// and updatable, and only a NEW row that would collide with it is refused going forward.
 	ErrDuplicateParentCategory = errors.New("a budget category with this parent identity already exists")
 	// ErrEscapedNestedChild: adversarial review of Issue #1630's own fix found a HIGH-severity
 	// double-count it introduced. buildCategoryClause (transaction_repository.go) rolls up a
@@ -730,10 +732,13 @@ var (
 	//
 	// Fixed by refusing to PERSIST the escaping shape at all (EscapedNestedChild, wired into
 	// CreateBudget's batch loop and AddCategory — the same two call sites as
-	// DuplicateParentIdentity). This is write-time only and does NOT retroactively fix the
-	// parent's roll-up query; any row that predates this guard (there are none — Issue #1630 was
-	// authored pre-launch with zero production budgets) would keep the pre-existing double-count
-	// forever, exactly as ErrDuplicateParentCategory's rows are grandfathered.
+	// DuplicateParentIdentity, and NOT UpdateBudget, which never touches Categories). This is
+	// write-time only and does NOT retroactively fix the parent's roll-up query: any row that
+	// predates this guard keeps the pre-existing double-count forever, exactly as
+	// ErrDuplicateParentCategory's rows are grandfathered — it stays readable and updatable, just
+	// never re-created. This is not hypothetical: issue #1630 was reproduced against a real
+	// production budget (bf6676b1-7bbd-4f06-b765-62756ce0094e, five categories), so say plainly
+	// that the double count for any pre-existing escaping row persists — it is not fixed.
 	ErrEscapedNestedChild = fmt.Errorf("%w: nested budget category's match_logic escapes its parent's containment envelope", ErrInvalidBudget)
 )
 
