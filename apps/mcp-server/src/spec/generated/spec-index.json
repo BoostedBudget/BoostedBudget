@@ -6972,8 +6972,17 @@
       ],
       "responseBody": [
         {
+          "name": "currency_code",
+          "type": "string"
+        },
+        {
           "name": "history",
           "type": "array of object",
+          "required": true
+        },
+        {
+          "name": "is_mixed_currency",
+          "type": "boolean",
           "required": true
         }
       ]

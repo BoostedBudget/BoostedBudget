@@ -3680,14 +3680,19 @@ components:
           format: uri
           readOnly: true
           type: string
+        currency_code:
+          type: string
         history:
           items:
             $ref: "#/components/schemas/PortfolioHistoryPoint"
           type:
             - array
             - "null"
+        is_mixed_currency:
+          type: boolean
       required:
         - history
+        - is_mixed_currency
       type: object
     GetTransactionsOutputBody:
       additionalProperties: false
