@@ -11,12 +11,19 @@ import (
 //
 // #1625 Task 2. Of the FIVE quarantine reasons (observability.AllQuarantineReasons(); this said
 // "four" because it was written in the very commit that added the fifth,
-// uncoercible_condition_value — #1625 final review I1), `invalid_condition_value_shape` is the
-// only one real user rules can be in: dedac0aa (#346) — the commit that created categorization rules —
+// uncoercible_condition_value — #1625 final review I1), `invalid_condition_value_shape` is the one
+// COMMON to real user rules: dedac0aa (#346) — the commit that created categorization rules —
 // validated `cond.Type.IsValid()` and NOTHING about the value, so a wrong-typed value has
 // persisted through the ordinary public API for the entire life of the feature. Enforcing that
 // reason would switch off rules people wrote and use. Most of those values are a number sent as
 // a string or the reverse, which has exactly one reading, so they are repaired instead.
+//
+// ⚠ #1625 second fix wave L7: it is NOT the only reason an API-created rule can be in, and this
+// comment said it was. The same absent validation admitted values that coercion CANNOT repair —
+// an object where a scalar is required, an empty array, a non-numeric string for a number — which
+// is precisely why quarantine.go carries uncoercible_condition_value as a separate, enforced
+// reason instead of folding it into this one. The honest statement is that repairable shape
+// errors are the COMMON case in the legacy corpus, not the only reachable one.
 //
 // Three properties this function must keep, each of which has a test:
 //
