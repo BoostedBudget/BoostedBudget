@@ -2169,19 +2169,25 @@ func (r *transactionRepository) GetDistinctPlaidCategories(ctx context.Context, 
 
 // GetIncomeSumByCategory returns the sum of income (inflow/negative amount under PFCv2) transactions
 // matching the given category within the date range, using the effective category.
+// Issue #1630: reuses buildCategoryClause's "pfc" branch so a pfc_primary income source
+// rolls up custom categories nested under it, matching the spend-side roll-up (#1203)
+// rather than forking a second copy of the rule (guarded by df92d470).
 func (r *transactionRepository) GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error) {
-	query := `
+	catClause, catArgs := buildCategoryClause("pfc", &category, nil, nil, 4)
+	query := fmt.Sprintf(`
 		SELECT COALESCE(ABS(SUM(amount)), 0)
 		FROM transactions
 		WHERE user_id = $1
 		  AND deleted_at IS NULL
 		  AND amount < 0
 		  AND date BETWEEN $2 AND $3
-		  AND effective_pfc_primary = $4
-	`
+		  AND (%s)
+	`, catClause)
+
+	args := append([]interface{}{userID, startDate, endDate}, catArgs...)
 
 	var sum float64
-	if err := r.db.QueryRow(ctx, query, userID, startDate, endDate, category).Scan(&sum); err != nil {
+	if err := r.db.QueryRow(ctx, query, args...).Scan(&sum); err != nil {
 		return 0, fmt.Errorf("failed to get income sum by category: %w", err)
 	}
 	return sum, nil
