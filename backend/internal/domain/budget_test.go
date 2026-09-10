@@ -424,6 +424,28 @@ func TestBudget_Totals_NoDoubleCountSubAllocations(t *testing.T) {
 			t.Errorf("TotalSpent() = %v, want 170 (and-parent has no envelope)", got)
 		}
 	})
+
+	// Issue #1630: BudgetCategory.Validate now rejects pfc_detailed: "" at write time, but
+	// this pins the READ-side behavior directly (bypassing Validate, as a row already
+	// persisted before the guard existed would) so a "" row can never make this Go total
+	// disagree with the frontend's isSubAllocationWithin, which already treats "" the same
+	// as absent/undefined.
+	t.Run("pfc_detailed empty string is treated as absent, not a child", func(t *testing.T) {
+		emptyDetailed := ""
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300, SpentAmount: 150},
+			{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &emptyDetailed, AllocatedAmount: 50, SpentAmount: 20},
+		}}
+		// If "" were treated as a real detailed value, this row would be excluded as a
+		// sub-allocation of the row above and the totals would read 300/150. Because "" is
+		// absent, this is actually a DUPLICATE parent identity — both rows count in full.
+		if got := b.TotalAllocated(); got != 350 {
+			t.Errorf("TotalAllocated() = %v, want 350 (pfc_detailed: '' is not a child)", got)
+		}
+		if got := b.TotalSpent(); got != 170 {
+			t.Errorf("TotalSpent() = %v, want 170 (pfc_detailed: '' is not a child)", got)
+		}
+	})
 }
 
 // TestBudget_OverEarmarkedParentIDs verifies informational over-earmark detection (Issue #1203).
@@ -706,6 +728,21 @@ func TestBudgetCategory_Validate(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "spent_amount cannot be negative",
+		},
+		{
+			// Issue #1630: pfc_detailed: "" (present but empty) must be rejected at write
+			// time, not silently persisted — see hasPFCDetailed's doc comment for why a
+			// persisted "" would otherwise make the Go/SQL and TypeScript totals disagree.
+			name: "empty string pfc_detailed is rejected",
+			category: BudgetCategory{
+				BudgetID:        "budget-123",
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
+				PFCDetailed:     ptrStr(""),
+				AllocatedAmount: 100.00,
+			},
+			wantErr: true,
+			errMsg:  "pfc_detailed must not be an empty string",
 		},
 	}
 

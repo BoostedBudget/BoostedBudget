@@ -2186,6 +2186,13 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 // will not coerce on its own. A savings-kind category is never a parent or a child of this
 // rule — Issue #1203's original switch has no "savings" case, and this reproduces that
 // omission deliberately: a savings-kind row always counts in full.
+//
+// pfc_detailed = '' is treated identically to NULL/absent (Issue #1630): a plain
+// `IS NOT NULL` / `IS NULL` test disagreed with the frontend's `!cat.pfc_detailed`, which
+// already reads '' as falsy — the same row would be excluded from a total here but included
+// there. `bc.pfc_detailed IS NOT NULL AND bc.pfc_detailed <> ''` / `(bc2.pfc_detailed IS NULL
+// OR bc2.pfc_detailed = '')` below keep this query in agreement with
+// domain.hasPFCDetailed and the frontend predicates.
 // period selects by budget.period column (weekly/monthly/quarterly/yearly/custom).
 // Returns an empty slice when no matching active budgets exist. Issue #1215 PR3; Issue #1630.
 func (r *analyticsRepository) GetBudgetVsActual(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error) {
@@ -2215,12 +2222,12 @@ func (r *analyticsRepository) GetBudgetVsActual(ctx context.Context, userID, per
 				  AND COALESCE(NULLIF(bc2.match_logic, ''), 'category_only') IN ('category_only', 'or')
 				  AND COALESCE(NULLIF(bc.match_logic, ''), 'category_only') IN ('category_only', 'and')
 				  AND (
-					(bc.category_kind = 'pfc' AND bc.pfc_detailed IS NOT NULL AND bc.pfc_primary IS NOT NULL
-					 AND bc2.category_kind = 'pfc' AND bc2.pfc_detailed IS NULL AND bc2.pfc_primary = bc.pfc_primary)
+					(bc.category_kind = 'pfc' AND bc.pfc_detailed IS NOT NULL AND bc.pfc_detailed <> '' AND bc.pfc_primary IS NOT NULL
+					 AND bc2.category_kind = 'pfc' AND (bc2.pfc_detailed IS NULL OR bc2.pfc_detailed = '') AND bc2.pfc_primary = bc.pfc_primary)
 					OR (bc.category_kind = 'custom' AND cc.parent_id IS NOT NULL
 					 AND bc2.category_kind = 'custom' AND bc2.custom_category_id = cc.parent_id)
 					OR (bc.category_kind = 'custom' AND cc.parent_pfc_primary IS NOT NULL
-					 AND bc2.category_kind = 'pfc' AND bc2.pfc_detailed IS NULL AND bc2.pfc_primary = cc.parent_pfc_primary)
+					 AND bc2.category_kind = 'pfc' AND (bc2.pfc_detailed IS NULL OR bc2.pfc_detailed = '') AND bc2.pfc_primary = cc.parent_pfc_primary)
 				  )
 			) AS is_sub_allocation
 		) sub ON true
