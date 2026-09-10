@@ -93,7 +93,7 @@ func newMCPCreateBudgetInput(userID, workerSecret, customCategoryID string) *Cre
 		Body: domain.CreateBudgetRequest{
 			Name:      "MCP Custom Category Budget",
 			Period:    domain.BudgetPeriodMonthly,
-			StartDate: time.Now(),
+			StartDate: domain.FlexibleDate(time.Now()),
 			Amount:    1000,
 			Categories: []domain.CreateBudgetCategoryRequest{
 				{

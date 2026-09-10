@@ -124,7 +124,7 @@ func TestClaim1630_P5_MonthlyWithoutEndDate_DoesNotReproduce(t *testing.T) {
 		Body: domain.CreateBudgetRequest{
 			Name:         "P5 Monthly No End Date",
 			Period:       domain.BudgetPeriodMonthly,
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 			Amount:       1000,
 			CurrencyCode: "USD",
 			// EndDate deliberately omitted.
@@ -237,7 +237,7 @@ func TestClaim1630_P2_IncomeSourceType_CategoryVsCustom_BothInvalid(t *testing.T
 			Body: domain.CreateBudgetRequest{
 				Name:         "P2 Income Source Type",
 				Period:       domain.BudgetPeriodMonthly,
-				StartDate:    time.Now(),
+				StartDate:    domain.FlexibleDate(time.Now()),
 				Amount:       1000,
 				CurrencyCode: "USD",
 				IncomeSources: []domain.IncomeSource{

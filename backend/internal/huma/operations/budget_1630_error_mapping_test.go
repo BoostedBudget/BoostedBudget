@@ -66,7 +66,7 @@ func TestCreateBudget_InvalidIncomeSourceType_Returns400WithLegalValues(t *testi
 	input.Body = domain.CreateBudgetRequest{
 		Name:          "Bad Income Source",
 		Period:        domain.BudgetPeriodMonthly,
-		StartDate:     time.Now(),
+		StartDate:     domain.FlexibleDate(time.Now()),
 		Amount:        1000,
 		CurrencyCode:  "USD",
 		IncomeSources: []domain.IncomeSource{badSource},
@@ -175,7 +175,7 @@ func TestCreateBudget_NegativeAmount_Returns400WithFieldName(t *testing.T) {
 	input.Body = domain.CreateBudgetRequest{
 		Name:         "Negative Amount",
 		Period:       domain.BudgetPeriodMonthly,
-		StartDate:    time.Now(),
+		StartDate:    domain.FlexibleDate(time.Now()),
 		Amount:       -50,
 		CurrencyCode: "USD",
 	}

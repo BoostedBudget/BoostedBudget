@@ -138,15 +138,21 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		seriesID = ancestor.SeriesID
 	}
 
-	// Create budget from request
+	// Create budget from request. #1630 Task 9: StartDate/EndDate are domain.FlexibleDate
+	// (accepts YYYY-MM-DD or RFC3339) on the request; Budget itself stays plain time.Time.
+	var endDate *time.Time
+	if req.EndDate != nil {
+		t := req.EndDate.Time()
+		endDate = &t
+	}
 	budget := &domain.Budget{
 		ID:             newID,
 		UserID:         userID,
 		Name:           req.Name,
 		Description:    req.Description,
 		Period:         req.Period,
-		StartDate:      req.StartDate,
-		EndDate:        req.EndDate,
+		StartDate:      req.StartDate.Time(),
+		EndDate:        endDate,
 		Amount:         reconcileAmount,
 		ExpectedIncome: reconcileExpectedIncome,
 		CurrencyCode:   req.CurrencyCode,

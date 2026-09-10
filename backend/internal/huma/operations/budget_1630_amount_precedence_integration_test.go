@@ -44,7 +44,7 @@ func TestCreateBudget_AmountExpectedIncomePrecedence(t *testing.T) {
 		input.Body = domain.CreateBudgetRequest{
 			Name:           "Precedence Test",
 			Period:         domain.BudgetPeriodMonthly,
-			StartDate:      time.Now(),
+			StartDate:      domain.FlexibleDate(time.Now()),
 			Amount:         100.00, // lower value — must lose
 			ExpectedIncome: &expectedIncome,
 			CurrencyCode:   "USD",
@@ -72,7 +72,7 @@ func TestCreateBudget_AmountExpectedIncomePrecedence(t *testing.T) {
 		input.Body = domain.CreateBudgetRequest{
 			Name:         "Precedence Fallback Test",
 			Period:       domain.BudgetPeriodMonthly,
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 			Amount:       750.00,
 			CurrencyCode: "USD",
 			// ExpectedIncome deliberately omitted.
