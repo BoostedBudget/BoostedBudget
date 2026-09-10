@@ -260,7 +260,9 @@ var deliberatelyUnguardedDestructiveDownMigrations = map[string]deliberatelyUngu
 			"constraint violation that says nothing about retention — not silent resurrection. " +
 			"Recorded rather than guarded because the abort already IS a refusal, just an " +
 			"unhelpfully worded one; a `RAISE EXCEPTION` here would only improve the message. " +
-			"Re-derived 2026-09-09 (#1625 second fix wave M5) — NOT endorsed as safe.",
+			"Re-derived 2026-09-09 (#1625 second fix wave M5) and EXECUTED by " +
+			"TestDownMigration000149_AbortsBeforeItCanDropRemovedAt_Integration — NOT endorsed as " +
+			"safe.",
 	},
 	"000154_add_accounts_removed_reason.down.sql": {
 		reason: "drops accounts.removed_reason with no runtime refusal. The file's own header " +
@@ -268,19 +270,25 @@ var deliberatelyUnguardedDestructiveDownMigrations = map[string]deliberatelyUngu
 			"rather than being wrongly resurrected), which is why this is recorded rather than " +
 			"changed. It is still the only queryable record of WHY an account was removed, which " +
 			"RestoreProviderRemovedAccount reads. Recorded 2026-09-09 (#1625 final review B3). " +
-			"RE-DERIVED #1625 second fix wave M5 and it STANDS, unlike 000149's: this file drops " +
-			"a constraint and a column and re-adds NOTHING, so nothing is validated against " +
-			"existing rows and the drop always proceeds. The loss is reachable.",
+			"EXECUTED, not merely re-read: " +
+			"TestDownMigration000154_DropsRemovedReasonUnconditionally_Integration seeds a removed " +
+			"account and runs this file's own bytes. This file drops a constraint and a column and " +
+			"re-adds NOTHING, so nothing is validated against existing rows and the drop always " +
+			"proceeds. The loss is reachable. (#1625 second fix wave M5 re-derived this by reading " +
+			"the SQL and wrote 'it STANDS'; the third wave's F6 made it a runtime assertion, " +
+			"because reading the SQL is exactly what was wrong about 000149 for two rounds.)",
 	},
 	"000156_add_transactions_tombstone.down.sql": {
 		reason: "drops transactions.deleted_at/deleted_reason/deleted_by with no runtime refusal. " +
 			"The file's own header states the consequence precisely — settled pendings and " +
 			"retained reversals become indistinguishable from live rows and every total that spans " +
 			"them DOUBLE-COUNTS — and states it is lossy by design. Comment-only, no refusal. " +
-			"Recorded 2026-09-09 (#1625 final review B3) — NOT endorsed as safe. RE-DERIVED " +
-			"#1625 second fix wave M5 and it STANDS: the file drops an index, two constraints and " +
-			"three columns and re-adds nothing, so nothing validates against existing rows and " +
-			"the resurrection is reachable on any database holding a tombstoned transaction.",
+			"Recorded 2026-09-09 (#1625 final review B3) — NOT endorsed as safe. EXECUTED by " +
+			"TestDownMigration000156_DropsTransactionTombstonesUnconditionally_Integration, which " +
+			"seeds a tombstoned transaction, runs this file's own bytes, and observes both halves: " +
+			"the three columns are gone and the row is still there, now indistinguishable from a " +
+			"live one. The file drops an index, two constraints and three columns and re-adds " +
+			"nothing, so nothing validates against existing rows.",
 	},
 	"000158_soft_delete_config_parents.down.sql": {
 		reason: "drops deleted_at from savings_goals/boosts/budgets/budget_categories with no " +
@@ -289,7 +297,9 @@ var deliberatelyUnguardedDestructiveDownMigrations = map[string]deliberatelyUngu
 			"refuses on `deleted_at IS NOT NULL` rather than on a row count. This scan is that " +
 			"mechanism; flipping the documented decision for a shipped migration is a separate " +
 			"call. Recorded 2026-09-09 (#1625 final review B3). RE-DERIVED #1625 second fix wave " +
-			"M5, with one finding the earlier text missed: this file DOES re-add three " +
+			"M5, with one finding the earlier text missed, and EXECUTED by " +
+			"TestDownMigration000158_AbortsOnlyOnANameCollision_Integration (#1625 third fix wave " +
+			"F6), which asserts BOTH halves: this file DOES re-add three " +
 			"unconditional UNIQUE (user_id, name) constraints before the drops, so it aborts — " +
 			"like 000149 — whenever a live and a tombstoned row share a name. That is a PARTIAL, " +
 			"collision-dependent refusal, not a general one: a tombstoned goal, boost or budget " +
@@ -298,7 +308,8 @@ var deliberatelyUnguardedDestructiveDownMigrations = map[string]deliberatelyUngu
 	"000159_soft_delete_custom_categories.down.sql": {
 		reason: "drops custom_categories.deleted_at with no runtime refusal. Same class, same " +
 			"deliberate #1569 round 12 task 4 decision, same header reasoning as 000158. Recorded " +
-			"2026-09-09 (#1625 final review B3). RE-DERIVED #1625 second fix wave M5: same partial, " +
+			"2026-09-09 (#1625 final review B3). EXECUTED by " +
+			"TestDownMigration000159_AbortsOnlyOnANameCollision_Integration: same partial, " +
 			"collision-dependent abort as 000158 (it re-adds unique_user_category_name before the " +
 			"drops), and the same conclusion — a tombstoned category with a unique name is " +
 			"resurrected silently, so the entry stands.",
