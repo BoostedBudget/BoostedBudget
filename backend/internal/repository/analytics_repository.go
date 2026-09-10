@@ -2169,6 +2169,20 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 //     category clause via tags — a 'tag_only'/'or' child can match transactions outside the
 //     parent's category clause entirely, so summing it separately is not a NEW double-count).
 //
+// ⚠ That "mirrors IsSubAllocationWithin exactly" claim is about match_logic containment, not
+// about hierarchy DEPTH — this query's sub.is_sub_allocation lateral, like
+// IsSubAllocationWithin, only ever looks ONE level up (bc's direct parent bc2). This is a real,
+// pre-existing limitation (dates to #1203's hierarchy-only exclusion; out of scope to fix here),
+// not a closed case: custom_category_service.go's validateParent rejects a parent only when
+// parent.ParentID != nil, not when parent.ParentPFCPrimary is set, so a three-level chain is
+// constructible (pfc X ← custom C with parent_pfc_primary = X ← custom G with parent_id = C).
+// C is excluded here as a sub-allocation of X; C's own bc.spent_amount rolls up G's transactions
+// (buildCategoryClause is hierarchical); but X's row has no bc2 whose parent linkage is G, and no
+// bc2 in this lateral ever walks past one hop to find X transitively. A transaction filed under
+// G is therefore rolled up by NEITHER C's row (excluded) NOR X's (no linkage to G) — it appears
+// in NO total this query returns. Name the shape when debugging a total that looks short: a
+// grandchild nested under a nested child, not merely a direct child under a direct parent.
+//
 // ⚠ That does NOT mean an escaping child's spend is absent from the parent's own sum. The
 // parent's roll-up (buildCategoryClause, transaction_repository.go) is hierarchical and
 // match_logic-BLIND — it has no sibling/match_logic context — so it counts every transaction
@@ -2179,8 +2193,10 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 // parent's SpentAmount (which the child's SQL-side transactions still feed). This was a
 // HIGH-severity finding on Issue #1630's own fix. It is addressed by refusing to PERSIST that
 // shape at write time (domain.EscapedNestedChild, wired into budget_service.go's CreateBudget
-// and AddCategory) rather than by changing this query, which has no sibling context to subtract
-// from — any pre-existing row of this shape (there should be none) keeps the double-count.
+// and AddCategory, and NOT UpdateBudget, which never touches Categories) rather than by
+// changing this query, which has no sibling context to subtract from — a pre-existing row of
+// this shape (grandfathered; write-time guards do not retroactively touch already-persisted
+// rows — see ErrEscapedNestedChild's doc comment in domain/budget.go) keeps the double-count.
 //
 // '' is treated as 'category_only' (the domain default and the column default), which SQL
 // will not coerce on its own. A savings-kind category is never a parent or a child of this

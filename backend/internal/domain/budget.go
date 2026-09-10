@@ -433,6 +433,18 @@ type BudgetCategory struct {
 // and budgetedCustomIDs already carry the parent-side containment test (only a parent whose
 // own match_logic is 'category_only'/'or' is present in them — see budgetedParentSets), so
 // this method only needs to additionally gate on the CHILD's own match_logic: a 'tag_only' or
+//
+// ⚠ The containment test above is only ONE LEVEL DEEP, and that is a real limitation, not a
+// closed case (pre-existing since #1203's hierarchy-only exclusion; out of scope to fix here).
+// custom_category_service.go's validateParent rejects a parent only when parent.ParentID != nil
+// — it does NOT reject a parent whose own ParentPFCPrimary is set. So a three-level chain is
+// constructible: pfc X ← custom C (ParentPFCPrimary = X) ← custom G (ParentID = C). Then: C is
+// excluded here as a sub-allocation of X (this method's job); C's own SpentAmount rolls up G's
+// transactions (buildCategoryClause is hierarchical); but X's clause requires
+// parent_pfc_primary = X DIRECTLY, and G's is NULL (G is parented by ID, not by PFC primary) — so
+// a transaction filed under G is rolled up by NEITHER C's top-level row (excluded here) NOR X's
+// (wrong parent linkage). It appears in NO top-level total. A grandchild nested under a nested
+// child falls out of every total; this method only ever checks one hop of parent linkage.
 // 'or' child can match transactions outside the parent's category clause entirely, so it must
 // never be treated as a sub-allocation even when it is hierarchically nested.
 func (bc *BudgetCategory) IsSubAllocationWithin(budgetedPFCPrimaries, budgetedCustomIDs map[string]bool) bool {
