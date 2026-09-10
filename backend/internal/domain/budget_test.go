@@ -1785,6 +1785,83 @@ func TestBuildCategoryEventData_KeysAndAllocated(t *testing.T) {
 	}
 }
 
+// TestBuildCategoryEventData_MarksSubAllocation proves that a category whose hierarchical
+// parent is also budgeted (and whose own match_logic keeps it inside the parent's category
+// clause — Issue #1630) is marked "is_sub_allocation": 1.0 in the emitted event data, while
+// the parent and any non-nested category are marked 0.0. This is the fix for Task 3.6: a
+// rollover boost consuming this data must be able to tell a sub-allocation row apart from a
+// top-level one, because the sub-allocation's dollars are already reflected in its parent's
+// remaining/spent — rolling both independently would roll the same dollars twice.
+//
+// RED (pre-fix): BuildCategoryEventData emits only percent_used/remaining/spent/allocated,
+// so "is_sub_allocation" is absent from every entry and this test fails on the `has` check.
+func TestBuildCategoryEventData_MarksSubAllocation(t *testing.T) {
+	parentID := "parent-cat"
+	childID := "child-cat"
+	standaloneID := "standalone-cat"
+	parentCustomID := "custom-parent-1"
+
+	categories := []BudgetCategory{
+		{
+			ID:               parentID,
+			BudgetID:         "budget-1",
+			CategoryKind:     "custom",
+			CustomCategoryID: &parentCustomID,
+			MatchLogic:       MatchLogicCategoryOnly,
+			AllocatedAmount:  500.0,
+			SpentAmount:      200.0,
+		},
+		{
+			ID:               childID,
+			BudgetID:         "budget-1",
+			CategoryKind:     "custom",
+			CustomCategoryID: strPtr("custom-child-1"),
+			CustomParentID:   &parentCustomID,
+			MatchLogic:       MatchLogicCategoryOnly,
+			AllocatedAmount:  100.0,
+			SpentAmount:      50.0,
+		},
+		{
+			ID:               standaloneID,
+			BudgetID:         "budget-1",
+			CategoryKind:     "custom",
+			CustomCategoryID: strPtr("custom-standalone-1"),
+			MatchLogic:       MatchLogicCategoryOnly,
+			AllocatedAmount:  75.0,
+			SpentAmount:      10.0,
+		},
+	}
+
+	result := BuildCategoryEventData(categories)
+
+	parent, ok := result[parentID]
+	if !ok {
+		t.Fatal("expected key for parent category")
+	}
+	if _, has := parent["is_sub_allocation"]; !has {
+		t.Fatal("expected 'is_sub_allocation' key in parent category map")
+	}
+	if parent["is_sub_allocation"] != 0.0 {
+		t.Errorf("parent is_sub_allocation: got %v, want 0.0 (not a sub-allocation)", parent["is_sub_allocation"])
+	}
+
+	child, ok := result[childID]
+	if !ok {
+		t.Fatal("expected key for child category")
+	}
+	if child["is_sub_allocation"] != 1.0 {
+		t.Errorf("child is_sub_allocation: got %v, want 1.0 (nested under a budgeted parent)", child["is_sub_allocation"])
+	}
+
+	standalone, ok := result[standaloneID]
+	if !ok {
+		t.Fatal("expected key for standalone category")
+	}
+	if standalone["is_sub_allocation"] != 0.0 {
+		t.Errorf("standalone is_sub_allocation: got %v, want 0.0 (no budgeted parent)", standalone["is_sub_allocation"])
+	}
+}
+
 // Note: contains helper is defined in linked_item_test.go
 
 // TestBudgetCategory_Validate_SavingsKind tests the savings category_kind branch (Issue #1300).

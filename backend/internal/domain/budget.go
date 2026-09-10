@@ -217,9 +217,17 @@ func isContainedMatchLogic(ml MatchLogic) bool {
 // 'tag_only' or 'and' parent has no envelope a plain-category child could fall inside,
 // so it is deliberately excluded from these sets.
 func (b *Budget) budgetedParentSets() (pfcPrimaries, customIDs map[string]bool) {
+	return budgetedParentSetsFor(b.Categories)
+}
+
+// budgetedParentSetsFor is the slice-based core of budgetedParentSets, extracted so
+// callers holding only a []BudgetCategory (not a full *Budget) — e.g.
+// BuildCategoryEventData — can compute the same sets without re-deriving the rule
+// (Issue #1630 Task 3.6).
+func budgetedParentSetsFor(categories []BudgetCategory) (pfcPrimaries, customIDs map[string]bool) {
 	pfcPrimaries = make(map[string]bool)
 	customIDs = make(map[string]bool)
-	for _, cat := range b.Categories {
+	for _, cat := range categories {
 		if !isContainingMatchLogic(cat.MatchLogic) {
 			continue
 		}
@@ -367,22 +375,22 @@ func (b *Budget) ExceedsExpectedIncome() bool {
 // category_kind='custom' (custom_category_id required), or
 // category_kind='savings' (savings_goal_id required — Issue #1300).
 type BudgetCategory struct {
-	ID               string    `json:"id" db:"id"`
-	BudgetID         string    `json:"budget_id" db:"budget_id"`
-	CategoryKind     string    `json:"category_kind" db:"category_kind"` // "pfc", "custom", or "savings"
-	PFCPrimary       *string   `json:"pfc_primary,omitempty" db:"pfc_primary"`
-	PFCDetailed      *string   `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
-	CustomCategoryID *string   `json:"custom_category_id,omitempty" db:"custom_category_id"`
+	ID               string  `json:"id" db:"id"`
+	BudgetID         string  `json:"budget_id" db:"budget_id"`
+	CategoryKind     string  `json:"category_kind" db:"category_kind"` // "pfc", "custom", or "savings"
+	PFCPrimary       *string `json:"pfc_primary,omitempty" db:"pfc_primary"`
+	PFCDetailed      *string `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
+	CustomCategoryID *string `json:"custom_category_id,omitempty" db:"custom_category_id"`
 	// SavingsGoalID links this category to a SavingsGoal (required when kind=savings — Issue #1300).
 	SavingsGoalID *string `json:"savings_goal_id,omitempty" db:"savings_goal_id"`
 	// AutoCreated marks categories automatically created when a savings goal was created.
 	AutoCreated bool `json:"auto_created" db:"auto_created"`
 	// ManagedByGoalID is the goal ID that auto-created this category (populated when AutoCreated=true).
 	ManagedByGoalID *string   `json:"managed_by_goal_id,omitempty" db:"managed_by_goal_id"`
-	AllocatedAmount  float64   `json:"allocated_amount" db:"allocated_amount"`
-	SpentAmount      float64   `json:"spent_amount" db:"spent_amount"`
-	CreatedAt        time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at" db:"updated_at"`
+	AllocatedAmount float64   `json:"allocated_amount" db:"allocated_amount"`
+	SpentAmount     float64   `json:"spent_amount" db:"spent_amount"`
+	CreatedAt       time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at" db:"updated_at"`
 
 	// PFC display names (populated by PopulatePFCDisplay, not stored in DB)
 	PFCPrimaryDisplay  *string `json:"pfc_primary_display,omitempty" db:"-"`
@@ -524,17 +532,30 @@ func (bc *BudgetCategory) PercentUsed() float64 {
 
 // BuildCategoryEventData returns a map keyed by budget category ID suitable for
 // inclusion as the "categories" key in rules engine EventData.
-// Each value is a map with "percent_used", "remaining", "spent", and "allocated" keys.
-// The zero-allocation guard in BudgetCategory.PercentUsed ensures no NaN values.
+// Each value is a map with "percent_used", "remaining", "spent", "allocated", and
+// "is_sub_allocation" keys. The zero-allocation guard in BudgetCategory.PercentUsed
+// ensures no NaN values.
 // Issue #1271 Items 5+6: renamed "total_spent" → "spent", added "allocated".
+//
+// Issue #1630 Task 3.6: every row is still emitted — a rules-engine condition may
+// legitimately reference a sub-allocation child by category ID, so rows are never
+// dropped here. Instead each row is MARKED via "is_sub_allocation" so a consumer that
+// sums or rolls per-category dollars (unlike a single-row condition read) can exclude
+// sub-allocations and avoid double-counting dollars already reflected in the parent.
 func BuildCategoryEventData(categories []BudgetCategory) map[string]map[string]float64 {
+	pfcPrimaries, customIDs := budgetedParentSetsFor(categories)
 	result := make(map[string]map[string]float64, len(categories))
 	for _, bc := range categories {
+		isSubAllocation := 0.0
+		if bc.IsSubAllocationWithin(pfcPrimaries, customIDs) {
+			isSubAllocation = 1.0
+		}
 		result[bc.ID] = map[string]float64{
-			"percent_used": bc.PercentUsed(),
-			"remaining":    bc.RemainingAmount(),
-			"spent":        bc.SpentAmount,
-			"allocated":    bc.AllocatedAmount,
+			"percent_used":                      bc.PercentUsed(),
+			"remaining":                         bc.RemainingAmount(),
+			"spent":                             bc.SpentAmount,
+			"allocated":                         bc.AllocatedAmount,
+			EventDataCategoryKeyIsSubAllocation: isSubAllocation,
 		}
 	}
 	return result
@@ -571,8 +592,8 @@ type CreateBudgetCategoryRequest struct {
 	PFCDetailed      *string `json:"pfc_detailed,omitempty"`
 	CustomCategoryID *string `json:"custom_category_id,omitempty" validate:"omitempty,uuid"`
 	// SavingsGoalID is required when CategoryKind = "savings" (Issue #1300).
-	SavingsGoalID *string `json:"savings_goal_id,omitempty" validate:"omitempty,uuid"`
-	AllocatedAmount  float64 `json:"allocated_amount" validate:"required,gte=0"`
+	SavingsGoalID   *string `json:"savings_goal_id,omitempty" validate:"omitempty,uuid"`
+	AllocatedAmount float64 `json:"allocated_amount" validate:"required,gte=0"`
 
 	// Flexible matching fields (Issue #491)
 	Tags       []string   `json:"tags,omitempty"`

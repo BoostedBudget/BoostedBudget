@@ -386,6 +386,12 @@ func (s *boostExecutionService) simulateAction(boost *domain.Boost, triggerData 
 			remaining = r
 		}
 		amount := s.calculateRolloverAmount(rollover, remaining)
+		// Issue #1630 Task 3.6: mirror the executing path's sub-allocation guard so a
+		// dry-run/preview never claims a rollover the executing path would refuse to
+		// perform (see executeCategoryRollover for the reasoning).
+		if isSubAllocationCategory(triggerData, rollover.SourceBudgetCategoryID) {
+			amount = 0
+		}
 		simulatedAction["action_type"] = "category_rollover"
 		simulatedAction["rollover_type"] = rollover.RolloverType
 		simulatedAction["rollover_amount"] = amount
@@ -679,6 +685,15 @@ func (s *boostExecutionService) executeCategoryRollover(ctx context.Context, boo
 		return fmt.Errorf("rollover action not defined")
 	}
 
+	// Issue #1630 Task 3.6: a rollover boost scoped to a sub-allocation category (a child
+	// whose dollars are already reflected in its budgeted parent's own remaining/spent —
+	// see BudgetCategory.IsSubAllocationWithin) must not roll independently. Doing so would
+	// roll the same dollars twice: once via the parent's own rollover (if any), and again
+	// here via the child. Nothing to do — the parent is the sole rollover source.
+	if isSubAllocationCategory(triggerData, rollover.SourceBudgetCategoryID) {
+		return nil
+	}
+
 	// Calculate rollover amount from trigger data
 	remaining := 0.0
 	if r, ok := triggerData["remaining"].(float64); ok {
@@ -970,6 +985,33 @@ func lookupCategoryMetric(categoriesRaw interface{}, categoryID, suffix string) 
 		}
 	}
 	return nil, false
+}
+
+// isSubAllocationCategory reports whether categoryID is marked
+// domain.EventDataCategoryKeyIsSubAllocation in triggerData's categories map (Issue #1630
+// Task 3.6). Returns false (never treat as a sub-allocation) when categoryID is empty,
+// the categories map is absent (a flat/legacy payload), or the category/key isn't found —
+// so a rollover boost with no categories data still fires exactly as it did before this
+// fix. Handles both the typed map[string]map[string]float64 shape emitted directly by
+// BuildCategoryEventData and the map[string]interface{}/json.Number shape that arrives
+// after a River JSON round-trip, via lookupCategoryMetric.
+func isSubAllocationCategory(triggerData map[string]interface{}, categoryID string) bool {
+	if categoryID == "" {
+		return false
+	}
+	val, ok := lookupCategoryMetric(triggerData[domain.EventDataKeyCategories], categoryID, domain.EventDataCategoryKeyIsSubAllocation)
+	if !ok {
+		return false
+	}
+	switch v := val.(type) {
+	case float64:
+		return v != 0
+	case json.Number:
+		f, err := v.Float64()
+		return err == nil && f != 0
+	default:
+		return false
+	}
 }
 
 // evaluateCondition evaluates a single condition against the data.
