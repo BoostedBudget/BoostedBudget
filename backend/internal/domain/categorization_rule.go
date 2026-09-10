@@ -132,28 +132,36 @@ type CategorizationRule struct {
 	// a rule was not going to run was an operator reading /metrics. The user whose rule silently
 	// stopped matching could not. Surfacing this is a PRECONDITION for enforcing it.
 	//
-	// ⚠ TWO STATES, and collapsing them is a bug that has been shipped twice. A reason WITHOUT
-	// Quarantined does NOT mean "not running" — see the doc tag. FOUR reasons are enforced (three
-	// because they cannot be produced through the API at all, plus uncoercible_condition_value);
-	// the one that CAN be produced (dedac0aa/#346 validated the condition type and never the value
-	// shape) is repaired instead.
+	// ⚠ THREE STATES, and every collapse of them has shipped at least once.
+	//
+	// #1625 second fix wave H2/M3 settled the semantics ONCE, and every surface now derives from
+	// it: `quarantined` means "the server is CURRENTLY preventing this rule from matching
+	// anything". It is deliberately switch-dependent — with RULE_QUARANTINE_ENFORCE off the
+	// engine runs enforcement-class rules, so reporting quarantined=true would be a false claim
+	// about the user's own ledger. See internal/rules/quarantine_published_contract_test.go for
+	// the rejected alternative and why.
+	//
+	// The cost of that choice, and the reason the previous version of this comment was WRONG:
+	// `quarantined=false` does NOT mean "repaired". It means "quarantine is not what is stopping
+	// this rule right now" — either the problem is one read-path coercion repairs
+	// (invalid_condition_value_shape, the only reason ordinary API-created rules commonly hold),
+	// or enforcement is off and the rule is running as written, in which case a zero-condition
+	// rule matches EVERY transaction. Pinned by TestQuarantineFalseDoesNotMeanRepaired.
 	//
 	// ⚠ #1625 final review I4: this pair says NOTHING about `enabled`, and annotateQuarantineStatus
-	// never reads it. `quarantined=false` therefore means "quarantine is not what stops this rule",
-	// not "this rule is running" — a DISABLED rule is stopped by RuleMatches' first line, before
-	// quarantine is consulted at all. Both doc tags now say so, because they are published to MCP
-	// and an agent reading "it IS still matching" off a disabled rule would be told something
-	// false.
+	// never reads it. A DISABLED rule is stopped by RuleMatches' first line, before quarantine is
+	// consulted at all. Both doc tags now say so, because they are published to MCP and an agent
+	// reading "it IS still matching" off a disabled rule would be told something false.
 	//
 	// Deliberately no `quarantined_at`: nothing records when a rule entered this state, and a
 	// timestamp filled in at response time would answer "when did you ask", not "since when has
 	// this been broken". Reporting a number the system does not know is the defect class this
 	// whole ticket is about.
-	Quarantined bool `json:"quarantined,omitempty" db:"-" doc:"True only when QUARANTINE is what prevents this rule from matching — it is refused before any condition is evaluated and applies to nothing. False WITH a quarantine_reason means the rule has a problem the server repaired well enough to keep running it (a wrong-typed condition value with one honest reading is coerced at read time), so quarantine is not stopping it and the problem is reported rather than enforced. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless of what this says, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is this rule running. Computed per request; never persisted."`
+	Quarantined bool `json:"quarantined,omitempty" db:"-" doc:"True when the server is CURRENTLY preventing this rule from matching anything: it is refused before any condition is evaluated, so it applies to nothing. This is a statement about right now, not about the rule's shape. It is FALSE whenever quarantine enforcement is disabled server-wide (RULE_QUARANTINE_ENFORCE, default on), because the engine then runs the rule despite its problem. So false WITH a quarantine_reason does NOT mean the rule is healthy or that the server repaired it — it means quarantine is not what is stopping it: either the problem is one the server repairs at read time (a wrong-typed condition value with one honest reading is coerced), or enforcement is off and the rule is running exactly as written, in which case a rule with no conditions matches EVERY transaction. ⚠ This field says nothing about enabled: a disabled rule matches nothing regardless, because the engine returns early on the enabled flag before quarantine is consulted. Read enabled AND NOT quarantined for the question is the server letting this rule run — which is not the same as is it matching, because a condition the engine cannot evaluate still fails at evaluation time. Computed per request; never persisted."`
 	// QuarantineReason is a fixed vocabulary (never user content), shared with the
 	// categorization_rule_quarantine_candidates_total metric so the two cannot describe the same
 	// condition differently.
-	QuarantineReason string `json:"quarantine_reason,omitempty" db:"-" doc:"Why the rule is broken. Fixed vocabulary. Four values are ENFORCED (quarantined=true, the rule matches nothing): no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. One is REPAIRED (quarantined=false, so quarantine is not what stops it — but check enabled too, which this field ignores entirely): invalid_condition_value_shape — a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only. The stored rule is never rewritten; edit it to make the repair permanent."`
+	QuarantineReason string `json:"quarantine_reason,omitempty" db:"-" doc:"Why the rule is broken. Fixed vocabulary, never user content. Four values are in the ENFORCEMENT CLASS — the rule cannot be evaluated honestly as written, and while quarantine enforcement is on (RULE_QUARANTINE_ENFORCE, default on) the server refuses it and quarantined is true: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. With enforcement OFF those same rules RUN and quarantined is false — nothing about them was repaired. The fifth, invalid_condition_value_shape, is never enforced in either state: a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only, so the rule keeps running. Read quarantined, not this field, for whether the server is currently stopping the rule — and read enabled too, which both fields ignore entirely. The stored rule is never rewritten; edit it to make the repair permanent."`
 	TargetTags                  []string   `json:"target_tags,omitempty" db:"target_tags"`
 	TagBehavior                 string     `json:"tag_behavior" db:"tag_behavior"` // "add" or "replace"
 	Source                      string     `json:"source" db:"source"`             // "manual", "ai", or "template"

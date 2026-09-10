@@ -191,7 +191,15 @@ func annotateQuarantineStatus(r *domain.CategorizationRule) {
 		return
 	}
 	r.QuarantineReason = string(reason)
-	// Quarantined means "cannot match anything", NOT "has a problem".
+	// Quarantined means "the server is stopping this rule RIGHT NOW", not "the rule has a
+	// problem". The reason field carries the problem; this field carries the consequence.
+	//
+	// ⚠ #1625 second fix wave H2/M3 settled this once, and every surface derives from it: the
+	// value is SWITCH-DEPENDENT. quarantineStopsMatching is
+	// rules.QuarantineEnforced() && observability.QuarantineReasonStopsMatching(reason), so with
+	// RULE_QUARANTINE_ENFORCE off an enforcement-class rule reports false — because the engine
+	// really is running it. The corollary that cost three surfaces a correction: false does NOT
+	// mean "repaired". See internal/rules/quarantine_published_contract_test.go.
 	//
 	// ⚠ #1625 final review I1: this comment used to explain why invalid_condition_logic and
 	// unnormalizable_condition are NOT reported as stopped — sitting on the line that reports them
@@ -199,8 +207,7 @@ func annotateQuarantineStatus(r *domain.CategorizationRule) {
 	// moved enforcement into RuleMatches; the comment described the behaviour of an earlier round
 	// and was falsified by a later commit on the same branch. The surviving distinction is
 	// invalid_condition_value_shape, which is REPAIRED at read time (domain.CoercedValue) and DOES
-	// still match, so reporting it as not-running would tell the user their rule is off while it
-	// quietly recategorises their transactions.
+	// still match in BOTH switch positions.
 	//
 	// ⚠ #1625 final review I3: this goes through quarantineStopsMatching, NOT
 	// QuarantineReasonStopsMatching directly, so the badge and the engine cannot disagree while the

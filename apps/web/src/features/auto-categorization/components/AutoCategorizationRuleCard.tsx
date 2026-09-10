@@ -7,47 +7,13 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { formatPFCEnum } from '@/shared/categories/formatPfc'
 import { conditionLabel } from '../utils/conditionLabel'
 import { formatConditionValue } from '../utils/formatConditionValue'
+import { quarantineSentence } from '../utils/quarantineSentence'
 
 export interface AutoCategorizationRuleCardProps {
   rule: CategorizationRule
   onToggle: (enabled: boolean) => Promise<void>
   onEdit: () => void
   onDelete: () => Promise<void>
-}
-
-// Plain-language rendering of the backend's fixed quarantine vocabulary. Keys mirror
-// domain.CategorizationRule.QuarantineReason; an unrecognised key falls back to a generic
-// sentence rather than rendering a raw enum at the user.
-const QUARANTINE_EXPLANATIONS: Record<string, string> = {
-  no_conditions_matches_everything:
-    'This rule has no conditions, so it would match every transaction. It is not being run.',
-  invalid_condition_logic_defaults_to_and:
-    'This rule\'s condition logic is not AND or OR, so it is not being run. Edit it to choose AND or OR.',
-  unnormalizable_condition:
-    'One of this rule\'s conditions uses a field or operator that no longer exists, so the rule is not being run. Edit that condition to fix it.',
-  uncoercible_condition_value:
-    'One of this rule\'s conditions has a value that cannot be read as the kind of value that condition needs, so the rule is not being run. Edit the rule to fix it.',
-  invalid_condition_value_shape:
-    'One of this rule\'s conditions has a value of the wrong type. It is STILL RUNNING — the value has one obvious reading and is being interpreted that way — but edit the rule to confirm that is what you meant.',
-}
-
-// #1625 Task 10: the sentences above all assert a run status ("is not being run" / "STILL
-// RUNNING") that is only true while the rule is enabled. RuleMatches (backend/internal/rules/
-// engine.go) returns false for !rule.Enabled BEFORE quarantine is even consulted, so a disabled
-// rule is never running regardless of quarantine_reason or quarantined -- reusing the sentences
-// above for a disabled rule would repeat a true "not running" claim for an enforced reason, or
-// assert a FALSE "still running" claim for the one repaired reason. These fragments describe
-// only the underlying issue, so the disabled branch below can state the one true run-status fact
-// ("disabled, so not running") once and attach the issue as separate information a user would
-// want before re-enabling.
-const QUARANTINE_ISSUE_ONLY: Record<string, string> = {
-  no_conditions_matches_everything: 'it has no conditions, so it would match every transaction if it were enabled',
-  invalid_condition_logic_defaults_to_and: 'its condition logic is not AND or OR',
-  unnormalizable_condition: 'one of its conditions uses a field or operator that no longer exists',
-  uncoercible_condition_value:
-    'one of its conditions has a value that cannot be read as the kind of value that condition needs',
-  invalid_condition_value_shape:
-    'one of its conditions has a value of the wrong type (there is one obvious reading, but worth confirming when you re-enable it)',
 }
 
 export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }: AutoCategorizationRuleCardProps) {
@@ -114,19 +80,12 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
           // vocabulary and never user content, so it stays OUTSIDE data-ph-mask -- masking it
           // would hide the diagnostic without protecting anything.
           //
-          // ⚠ TWO DIFFERENT STATES, and conflating them was itself a bug. `quarantined` means the
-          // rule genuinely matches nothing: the backend refuses it before any condition is
-          // evaluated. A reason WITHOUT it means the rule has a problem the server repaired well
-          // enough to keep running it -- a wrong-typed condition value with one obvious reading
-          // is coerced at read time -- so the rule IS still matching transactions. Rendering
-          // "Not running" there would state something false about the user's own data, and
-          // rendering "Needs attention" for a rule that matches nothing would too.
-          //
-          // Task 10: the reason is still surfaced for a DISABLED rule (not suppressed) -- a user
-          // deciding whether to re-enable a rule needs to know it has an outstanding issue -- but
-          // the sentence must not carry the enabled-rule run-status claim ("is not being run" /
-          // "STILL RUNNING"), which QUARANTINE_EXPLANATIONS is written to assert. The disabled
-          // branch states the one true run-status fact once and attaches only the issue.
+          // ⚠ THREE DIFFERENT STATES, and every conflation of them has shipped at least once.
+          // The run status comes from `enabled` and `quarantined` ONLY -- see quarantineSentence
+          // above for why reading it off the reason is false whenever the RULE_QUARANTINE_ENFORCE
+          // kill switch is off. The reason is still SURFACED in all three states (a user deciding
+          // whether to re-enable a rule needs to know it has an outstanding issue); it just never
+          // decides what the card says about running.
           <p
             className={
               !rule.enabled
@@ -137,14 +96,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
             }
             role="status"
           >
-            {!rule.enabled
-              ? `This rule is disabled, so it is not running. Before re-enabling: ${
-                  QUARANTINE_ISSUE_ONLY[rule.quarantine_reason] ?? 'it has a problem with its conditions'
-                }.`
-              : QUARANTINE_EXPLANATIONS[rule.quarantine_reason] ??
-                (rule.quarantined
-                  ? 'This rule cannot be evaluated as written, so it is not matching any transactions.'
-                  : 'This rule has a problem and may not be matching what you intended.')}
+            {quarantineSentence(rule.enabled, Boolean(rule.quarantined), rule.quarantine_reason)}
           </p>
         )}
         {rule.description && (

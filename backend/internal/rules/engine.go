@@ -227,11 +227,15 @@ func QuarantineEnforced() bool { return enforceQuarantine }
 //
 // #1625 Task 2: enforcement lives HERE and nowhere else — one site, which also covers the two
 // Apply paths and the preview path that share it. Which reasons stop a rule is not decided here
-// either: it is read from observability.QuarantineReasonStopsMatching, the same predicate the
-// read model uses to set `quarantined` and the card uses to say "Not running". Deriving the two
-// from one source is what makes "the card says Not running" and "the rule matches nothing"
-// impossible to disagree — an earlier revision had them diverge, and the user was told a rule was
-// off while it quietly recategorised their ledger.
+// either: it is read from observability.QuarantineReasonStopsMatching. That predicate is only
+// HALF the answer, though, and #1625 second fix wave H2/M3 corrected this comment for implying it
+// was the whole one: the read model sets `quarantined` from
+// services.quarantineStopsMatching = QuarantineEnforced() && QuarantineReasonStopsMatching(...),
+// i.e. the same predicate AND the same kill switch this line gates on, and the card derives its
+// sentence from that field rather than from the reason. Those two expressions being literally the
+// same is what makes "the card says Not running" and "the rule matches nothing" impossible to
+// disagree — an earlier revision had them diverge, and the user was told a rule was off while it
+// quietly recategorised their ledger.
 //
 // The unenforced reason, invalid_condition_value_shape, is REPAIRED instead: see
 // domain.CoercedValue. It is the only reason reachable through the ordinary API, so switching

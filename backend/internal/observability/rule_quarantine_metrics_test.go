@@ -16,7 +16,7 @@ func TestRecordRuleQuarantineCandidate_UsesTheReasonLabel(t *testing.T) {
 	RecordRuleQuarantineCandidate(QuarantineNoConditions)
 
 	const want = `
-# HELP categorization_rule_quarantine_candidates_total Categorization rules found broken by the quarantine classifier, by reason. Reasons that stop matching are enforced in RuleMatches; invalid_condition_value_shape is repaired by read-path coercion and still executes. This is a per-OBSERVATION counter (it increments once every time a rule is re-evaluated, e.g. once per sync pass) and therefore cannot answer how many DISTINCT rules are affected — one rule observed 1000 times and 1000 distinct rules look identical here. For that question, see categorization_rule_quarantine_population.
+# HELP categorization_rule_quarantine_candidates_total Categorization rules found broken by the quarantine classifier, by reason. It counts CLASSIFICATION, not refusal: whether an enforcement-class label (no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value) means the rule was actually stopped depends on RULE_QUARANTINE_ENFORCE — with that switch off those rules still execute, and a zero-condition rule then matches every transaction. invalid_condition_value_shape is never enforced in either position; it is repaired by read-path coercion and always executes. This is a per-OBSERVATION counter (it increments once every time a rule is re-evaluated, e.g. once per sync pass) and therefore cannot answer how many DISTINCT rules are affected — one rule observed 1000 times and 1000 distinct rules look identical here. For that question, see categorization_rule_quarantine_population.
 # TYPE categorization_rule_quarantine_candidates_total counter
 categorization_rule_quarantine_candidates_total{reason="no_conditions_matches_everything"} 1
 `
@@ -34,7 +34,7 @@ func TestRecordRuleQuarantineCandidate_FoldsAnUnknownReasonIntoOther(t *testing.
 	RecordRuleQuarantineCandidate("Coffee at Blue Bottle")
 
 	const want = `
-# HELP categorization_rule_quarantine_candidates_total Categorization rules found broken by the quarantine classifier, by reason. Reasons that stop matching are enforced in RuleMatches; invalid_condition_value_shape is repaired by read-path coercion and still executes. This is a per-OBSERVATION counter (it increments once every time a rule is re-evaluated, e.g. once per sync pass) and therefore cannot answer how many DISTINCT rules are affected — one rule observed 1000 times and 1000 distinct rules look identical here. For that question, see categorization_rule_quarantine_population.
+# HELP categorization_rule_quarantine_candidates_total Categorization rules found broken by the quarantine classifier, by reason. It counts CLASSIFICATION, not refusal: whether an enforcement-class label (no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value) means the rule was actually stopped depends on RULE_QUARANTINE_ENFORCE — with that switch off those rules still execute, and a zero-condition rule then matches every transaction. invalid_condition_value_shape is never enforced in either position; it is repaired by read-path coercion and always executes. This is a per-OBSERVATION counter (it increments once every time a rule is re-evaluated, e.g. once per sync pass) and therefore cannot answer how many DISTINCT rules are affected — one rule observed 1000 times and 1000 distinct rules look identical here. For that question, see categorization_rule_quarantine_population.
 # TYPE categorization_rule_quarantine_candidates_total counter
 categorization_rule_quarantine_candidates_total{reason="other"} 1
 `
@@ -196,4 +196,55 @@ func TestMain(m *testing.M) {
 	seriesCountAtStartup = testutil.CollectAndCount(ruleQuarantineCandidates)
 	populationSeriesCountAtStartup = testutil.CollectAndCount(ruleQuarantinePopulation)
 	os.Exit(m.Run())
+}
+
+// TestQuarantineMetricHelpDoesNotAssertRefusal is #1625 second fix wave M3.
+//
+// The counter increments on CLASSIFICATION (rule_application_service.reportQuarantineCandidates
+// calls it for every rule with a reason, regardless of the kill switch), and its help string said
+// the enforcement-class labels identified rules that "did not run". With RULE_QUARANTINE_ENFORCE
+// off those rules DO run — a zero-condition rule matches every transaction — so an operator
+// reading this metric during the exact incident the switch exists for was being told the
+// opposite of what was happening.
+//
+// The chosen semantics (see internal/rules/quarantine_published_contract_test.go) is that
+// "stopped right now" is switch-dependent, so no surface may assert it from the reason alone.
+// This help string therefore describes CLASSIFICATION and names the switch that decides refusal.
+func TestQuarantineMetricHelpDoesNotAssertRefusal(t *testing.T) {
+	help := helpOf(t, ruleQuarantineCandidates.WithLabelValues(string(QuarantineNoConditions)).Desc().String())
+
+	for _, retracted := range []string{
+		"Reasons that stop matching are enforced in RuleMatches",
+		"did not run",
+	} {
+		if strings.Contains(help, retracted) {
+			t.Errorf("the help string still asserts %q. That is true only while "+
+				"RULE_QUARANTINE_ENFORCE is on; with it off the rule runs and the metric describes "+
+				"the opposite of what happened.", retracted)
+		}
+	}
+
+	if !strings.Contains(help, "RULE_QUARANTINE_ENFORCE") {
+		t.Error("the help string never names RULE_QUARANTINE_ENFORCE. Whether a sample under an " +
+			"enforcement-class label means the rule was refused depends entirely on that switch, " +
+			"so an operator who does not know it exists cannot read this metric correctly.")
+	}
+}
+
+// helpOf pulls the help text out of a prometheus Desc's String() form, which is
+// `Desc{fqName: "...", help: "...", constLabels: {}, variableLabels: {...}}`. Reading the Desc
+// rather than the Go literal is what makes this a check on what is PUBLISHED.
+func helpOf(t *testing.T, desc string) string {
+	t.Helper()
+	const marker = `help: "`
+	i := strings.Index(desc, marker)
+	if i < 0 {
+		t.Fatalf("could not find a help field in %q — this guard is scanning nothing", desc)
+	}
+	rest := desc[i+len(marker):]
+	j := strings.Index(rest, `", constLabels`)
+	if j < 0 {
+		t.Fatalf("could not find the end of the help field in %q", desc)
+	}
+	return rest[:j]
 }

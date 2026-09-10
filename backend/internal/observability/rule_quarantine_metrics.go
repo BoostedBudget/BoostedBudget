@@ -10,18 +10,24 @@ import (
 // ruleQuarantineCandidates counts categorization rules a quarantine pass finds broken, by reason
 // (Issue #1625).
 //
-// ⚠ It is NO LONGER a shadow-mode-only counter. Since Task 2 the reasons for which
-// QuarantineReasonStopsMatching is true are ENFORCED in RuleMatches, so a sample under one of
-// those labels is a rule that did not run. The remaining reason,
-// invalid_condition_value_shape, is repaired by read-path coercion and its rules DO still
-// execute. Read the label, not the metric name, before concluding a rule ran.
+// ⚠ It is NO LONGER a shadow-mode-only counter — but it is still a CLASSIFICATION counter, not a
+// refusal counter, and #1625 second fix wave M3 corrected this comment for saying otherwise.
+// reportQuarantineCandidates increments it for every rule that classifies, regardless of the kill
+// switch. Since Task 2 the reasons for which QuarantineReasonStopsMatching is true are refused in
+// RuleMatches *while RULE_QUARANTINE_ENFORCE is on* (the default); with it OFF those same rules
+// run, and a zero-condition rule matches every transaction. So a sample under an
+// enforcement-class label is a rule that did not run ONLY in the default position — which is
+// exactly backwards during the incident the switch exists for. The remaining reason,
+// invalid_condition_value_shape, is repaired by read-path coercion and its rules DO still execute
+// in either position. Read the label AND the switch, not the metric name, before concluding a
+// rule ran. Guarded by TestQuarantineMetricHelpDoesNotAssertRefusal.
 //
 // ⚠ The `reason` label is a fixed, closed vocabulary from quarantineReason(). It must never
 // carry a rule id, a rule name, a user id or a condition value: Prometheus labels are
 // high-cardinality poison and, worse here, user financial content.
 var ruleQuarantineCandidates = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "categorization_rule_quarantine_candidates_total",
-	Help: "Categorization rules found broken by the quarantine classifier, by reason. Reasons that stop matching are enforced in RuleMatches; invalid_condition_value_shape is repaired by read-path coercion and still executes. This is a per-OBSERVATION counter (it increments once every time a rule is re-evaluated, e.g. once per sync pass) and therefore cannot answer how many DISTINCT rules are affected — one rule observed 1000 times and 1000 distinct rules look identical here. For that question, see categorization_rule_quarantine_population.",
+	Help: "Categorization rules found broken by the quarantine classifier, by reason. It counts CLASSIFICATION, not refusal: whether an enforcement-class label (no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value) means the rule was actually stopped depends on RULE_QUARANTINE_ENFORCE — with that switch off those rules still execute, and a zero-condition rule then matches every transaction. invalid_condition_value_shape is never enforced in either position; it is repaired by read-path coercion and always executes. This is a per-OBSERVATION counter (it increments once every time a rule is re-evaluated, e.g. once per sync pass) and therefore cannot answer how many DISTINCT rules are affected — one rule observed 1000 times and 1000 distinct rules look identical here. For that question, see categorization_rule_quarantine_population.",
 }, []string{"reason"})
 
 // ⚠ #1625 final review I4: it counts every rule in the table, ENABLED OR NOT
