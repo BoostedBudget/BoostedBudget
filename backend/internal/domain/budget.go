@@ -225,9 +225,21 @@ func isContainedMatchLogic(ml MatchLogic) bool {
 
 // budgetedParentSets returns lookup sets of the PFC primaries and custom category
 // IDs that are budgeted as top-level rows AND eligible to adopt children — i.e. the
-// row's own match_logic still contains the plain category match (Issue #1630). A
-// 'tag_only' or 'and' parent has no envelope a plain-category child could fall inside,
-// so it is deliberately excluded from these sets.
+// row's own match_logic still contains the plain category match (Issue #1630).
+//
+// A 'tag_only' or 'and' parent IS still excluded from these sets, but not because it "has no
+// envelope" — that framing is backwards and was corrected after an adversarial-review finding
+// (Issue #1630 fixwave 4). Summing top-level rows is only safe when those rows are pairwise
+// DISJOINT; containment (parent's matched set ⊇ child's) is one way to get disjointness (the
+// child's dollars live entirely inside the parent's roll-up, so excluding the child is correct),
+// but it is not the only overlap that matters. An 'and' or 'tag_only' parent's matched-transaction
+// set is NOT a superset of "category only" — but buildCategoryClause (transaction_repository.go)
+// rolls up a nested child's category HIERARCHICALLY regardless of the parent's own match_logic,
+// so the parent's SpentAmount can still OVERLAP a nested child's SpentAmount even though the
+// parent doesn't contain it. Excluding only "containing" parents from these sets is what makes
+// EscapedNestedChild's write-time refusal (below) necessary for every other combination: this
+// function narrows which pairs are silently treated as safe sub-allocations, EscapedNestedChild
+// widens which pairs are refused at write time so the two invariants agree.
 func (b *Budget) budgetedParentSets() (pfcPrimaries, customIDs map[string]bool) {
 	return budgetedParentSetsFor(b.Categories)
 }
@@ -760,36 +772,43 @@ var (
 	// leaving which row "owns" a given child's rendering undefined. Enforced at write time only,
 	// from CreateBudget's batch path and AddCategory — NOT from UpdateBudget (which updates the
 	// Budget row's own fields and never touches Categories at all; UpdateCategory, which DOES
-	// mutate a Category row's match_logic, is guarded separately by EscapedNestedChild /
-	// WouldOrphanContainedChildren instead, since parent-identity fields are immutable via that
-	// request and duplication cannot be introduced there). No backfill: this guard is a
+	// mutate a Category row's match_logic, is guarded separately by EscapedNestedChild instead,
+	// since parent-identity fields are immutable via that request and duplication cannot be
+	// introduced there). No backfill: this guard is a
 	// write-time gate, so a pre-existing colliding
 	// row (issue #1630 was reproduced against a real production budget,
 	// bf6676b1-7bbd-4f06-b765-62756ce0094e, five categories) is grandfathered — it stays readable
 	// and updatable, and only a NEW row that would collide with it is refused going forward.
 	ErrDuplicateParentCategory = errors.New("a budget category with this parent identity already exists")
 	// ErrEscapedNestedChild: adversarial review of Issue #1630's own fix found a HIGH-severity
-	// double-count it introduced. buildCategoryClause (transaction_repository.go) rolls up a
-	// parent's SpentAmount hierarchically — every transaction filed under a nested custom
-	// category or PFC detailed, regardless of that child's own match_logic. The Go/SQL/TS
-	// containment rule (isContainingMatchLogic(parent) && isContainedMatchLogic(child)) only
-	// decides whether the CHILD is excluded from top-level totals; it does nothing to the
-	// PARENT's roll-up query, which has no sibling/match_logic context at all. So a nested child
-	// whose own match_logic escapes containment (e.g. a custom category nested under a budgeted
-	// 'category_only'/'or' parent, but itself 'or' or 'tag_only') is counted BOTH as its own
-	// top-level row AND inside the parent's roll-up — every dollar doubled. Wraps ErrInvalidBudget
-	// so the mapper's existing 400 case picks it up with no separate switch entry.
+	// double-count it introduced, and a SECOND independent adversarial review found this guard's
+	// first fix was itself incomplete (fixwave 4) — see EscapedNestedChild's doc comment for the
+	// full "containment is one way to get disjointness, not the only one" reasoning.
+	// buildCategoryClause (transaction_repository.go) rolls up a parent's SpentAmount
+	// hierarchically — every transaction filed under a nested custom category or PFC detailed,
+	// regardless of that child's own match_logic, AND regardless of the PARENT's own match_logic
+	// (an 'and' parent's clause still runs the category roll-up before applying its tag filter).
+	// The Go/SQL/TS containment rule (isContainingMatchLogic(parent) && isContainedMatchLogic
+	// (child)) only decides whether the CHILD is excluded from top-level totals; it does nothing
+	// to the PARENT's roll-up query, which has no sibling/match_logic context at all. So ANY
+	// nested pair that isn't cleanly contained — including a custom category nested under a
+	// budgeted 'category_only'/'or' parent but itself 'or'/'tag_only' (fixwave 3), and an 'and' or
+	// 'tag_only' parent with any nested child at all (fixwave 4) — is counted BOTH as its own
+	// top-level row AND inside the parent's roll-up (or the parent's own overlapping tag-match
+	// sum) — every dollar doubled. Wraps ErrInvalidBudget so the mapper's existing 400 case picks
+	// it up with no separate switch entry.
 	//
 	// Fixed by refusing to PERSIST the escaping shape at all (EscapedNestedChild, wired into
 	// CreateBudget's batch loop and AddCategory — the same two call sites as
 	// DuplicateParentIdentity). UpdateCategory ALSO mutates match_logic and can recreate this
 	// exact shape as new data (PATCHing a conforming nested child's match_logic to escape, or
-	// PATCHing a parent's match_logic away from containing while an existing contained child
-	// still relies on it — see WouldOrphanContainedChildren) — it is guarded by both
-	// EscapedNestedChild and WouldOrphanContainedChildren too. UpdateBudget (the Budget row's
-	// own fields) is the one path that genuinely never touches Categories. This is
-	// write-time only and does NOT retroactively fix the parent's roll-up query: any row that
-	// predates this guard keeps the pre-existing double-count forever, exactly as
+	// PATCHing a parent's match_logic away from clean containment while an existing nested child
+	// still relies on it) — it is guarded by EscapedNestedChild too, which is now the ONLY guard:
+	// see EscapedNestedChild's doc comment for why the widened single check subsumes the
+	// now-removed WouldOrphanContainedChildren. UpdateBudget (the Budget row's own fields) is the
+	// one path that genuinely never touches Categories. This is write-time only and does NOT
+	// retroactively fix the parent's roll-up query: any row that predates this guard (or predates
+	// fixwave 4's widening) keeps the pre-existing double-count forever, exactly as
 	// ErrDuplicateParentCategory's rows are grandfathered — it stays readable and updatable, just
 	// never re-created. This is not hypothetical: issue #1630 was reproduced against a real
 	// production budget (bf6676b1-7bbd-4f06-b765-62756ce0094e, five categories), so say plainly
@@ -872,20 +891,44 @@ func hierarchyHasNestedChild(parent, child *BudgetCategory) bool {
 }
 
 // EscapedNestedChild reports whether `candidate` would form a hierarchically-nested pair with
-// some row in `existing` whose match_logic combination escapes containment (Issue #1630 HIGH
-// review finding — see ErrEscapedNestedChild). A pair escapes containment when the would-be
-// PARENT's match_logic still contains the plain category match (isContainingMatchLogic) but the
-// would-be CHILD's does not stay inside it (isContainedMatchLogic) — the exact condition under
-// which buildCategoryClause's hierarchical roll-up still counts the child's transactions inside
-// the parent's own SpentAmount, while the child ALSO surfaces as its own top-level row (because
-// IsSubAllocationWithin/isContainedMatchLogic excludes it from sub-allocation treatment).
+// some row in `existing` that is not CLEANLY CONTAINED (Issue #1630 HIGH review finding, WIDENED
+// by an independent adversarial review — see ErrEscapedNestedChild).
 //
-// Checked in BOTH directions so call-site ordering within one batch never matters:
-//   - candidate as the CHILD of an existing (already-persisted-or-already-built) containing
-//     parent — the common case: adding a nested category under a parent that exists already.
-//   - candidate as the containing PARENT of an existing escaping child — covers a batch where
-//     the child request happens to be processed before its parent (CreateBudget's request order
-//     is caller-controlled, so either order is legal input).
+// A pair is cleanly contained only when the would-be PARENT's match_logic still contains the
+// plain category match (isContainingMatchLogic: category_only/or) AND the would-be CHILD's stays
+// inside it (isContainedMatchLogic: category_only/and). Every OTHER combination is refused,
+// including an 'and' or 'tag_only' PARENT with a nested child — the case the first version of
+// this guard missed, because it only ever checked pairs where isContainingMatchLogic(parent) was
+// already true. That check silently assumed a non-containing parent's own SpentAmount could never
+// overlap a nested child's: true for the specific "buildCategoryClause rolls up the child's
+// category into the parent's category clause" mechanism the first fix targeted, but false in
+// general — an 'and' parent's clause is `parent_category ∧ parent_tags`, and buildCategoryClause
+// still rolls the nested child's category into that `parent_category` term before the tag filter
+// is applied, so any transaction carrying the parent's tag AND filed under the child's (contained)
+// category is swept into the parent's sum; a 'tag_only' parent skips buildCategoryClause
+// entirely, but its pure tag-match sum still catches any transaction that happens to carry the
+// parent's tag and sits in the child's category, which the child then ALSO counts as its own
+// top-level row. Neither is a superset of the other's matched set, but their matched sets are not
+// disjoint either — and summing top-level rows requires disjointness, not containment
+// specifically. Containment is the one combination this codebase can PROVE disjoint without
+// reasoning about the transactions themselves; refusing every other nested combination is the
+// only sound response until/unless a specific non-containing combination is proven disjoint too.
+//
+// Checked in BOTH directions so call-site ordering within one batch never matters, and so an edit
+// to either the CHILD's or the PARENT's own match_logic (UpdateCategory can PATCH either row) is
+// caught by the same single check:
+//   - candidate as the CHILD of an existing (already-persisted-or-already-built) row — the common
+//     case: adding a nested category under a parent that exists already, or PATCHing a nested
+//     child's own match_logic.
+//   - candidate as the PARENT of an existing nested row — covers a batch where the child request
+//     happens to be processed before its parent (CreateBudget's request order is caller-controlled,
+//     so either order is legal input), and covers PATCHing a PARENT's match_logic away from
+//     containing while an existing, still-conforming child relies on it (the transition a prior
+//     narrower version of this guard needed a second function, WouldOrphanContainedChildren, to
+//     catch — this widened single check subsumes it: NOT(isContainingMatchLogic(candidate) &&
+//     isContainedMatchLogic(other)) is true whenever candidate stops containing at all, for any
+//     nested other, exactly what WouldOrphanContainedChildren tested. WouldOrphanContainedChildren
+//     was removed rather than also widened).
 //
 // Only a hierarchically-nested pair is considered at all; two unrelated top-level rows never
 // trip this regardless of their match_logic values.
@@ -895,60 +938,14 @@ func EscapedNestedChild(existing []BudgetCategory, candidate *BudgetCategory) bo
 	}
 	for i := range existing {
 		other := &existing[i]
-		// candidate as child, other as parent.
-		if !isContainedMatchLogic(candidate.MatchLogic) && isContainingMatchLogic(other.MatchLogic) &&
-			hierarchyHasNestedChild(other, candidate) {
+		// candidate as child, other as parent: refuse unless other cleanly contains candidate.
+		if hierarchyHasNestedChild(other, candidate) &&
+			(!isContainingMatchLogic(other.MatchLogic) || !isContainedMatchLogic(candidate.MatchLogic)) {
 			return true
 		}
-		// candidate as parent, other as child.
-		if isContainingMatchLogic(candidate.MatchLogic) && !isContainedMatchLogic(other.MatchLogic) &&
-			hierarchyHasNestedChild(candidate, other) {
-			return true
-		}
-	}
-	return false
-}
-
-// WouldOrphanContainedChildren reports whether changing `existingParent`'s match_logic to
-// `newMatchLogic` would strand an already-persisted, hierarchically-nested child that currently
-// relies on `existingParent` remaining a containing parent to stay excluded from top-level
-// budget totals (Issue #1630 HIGH review follow-up — UpdateCategory can PATCH a PARENT row's
-// own match_logic, not just a child's).
-//
-// EscapedNestedChild (above) catches an escaping pair by looking at the CANDIDATE row's own
-// match_logic in isolation: it fires only when the candidate, AS WRITTEN, forms an unsafe
-// (containing-parent, non-contained-child) pair. That per-pair test is symmetric and correct for
-// a row being newly created or having ITS OWN match_logic changed while staying (or becoming) a
-// non-contained child. It is NOT sufficient for the reverse edit: a PARENT flipping AWAY from a
-// containing match_logic (category_only/or) to a non-containing one (and/tag_only) never
-// satisfies EscapedNestedChild's "candidate as parent" branch, because that branch requires
-// isContainingMatchLogic(candidate) to still be true. Yet an existing child underneath — whose
-// own match_logic never changed and was, and remains, isContainedMatchLogic — was relying
-// entirely on the PARENT's match_logic to keep it excluded from top-level totals
-// (isContainingMatchLogic(parent) && isContainedMatchLogic(child), the exact formula
-// IsSubAllocationWithin/budgetedParentSets use at read time). The moment the parent stops
-// qualifying, that same child is no longer excluded there, while buildCategoryClause's
-// hierarchical roll-up (transaction_repository.go) keeps summing the child's transactions into
-// the parent's own SpentAmount whenever the parent's new match_logic still triggers it
-// (category_only/and/or — every branch except tag_only calls buildCategoryClause) — recreating
-// the identical double count ErrEscapedNestedChild exists to prevent, this time triggered by
-// editing the PARENT instead of the child.
-//
-// Deliberately conservative: this refuses the transition whenever the parent stops being
-// "containing" at all (including a transition to tag_only), even though tag_only's own roll-up
-// query skips buildCategoryClause entirely and so cannot double-count via THIS mechanism. The
-// broader refusal matches the plain-language containment rule this branch established
-// (`parent.match_logic ∈ {category_only, or}` is what a nested child relies on) rather than
-// re-deriving a narrower, buildCategoryClause-branch-specific carve-out purely to be permissive.
-// Callers who need a nested child to point at a tag_only or 'and' parent should remove or
-// re-parent the child first — the same remediation ErrEscapedNestedChild already asks for.
-func WouldOrphanContainedChildren(existing []BudgetCategory, existingParent *BudgetCategory, newMatchLogic MatchLogic) bool {
-	if existingParent == nil || !isContainingMatchLogic(existingParent.MatchLogic) || isContainingMatchLogic(newMatchLogic) {
-		return false
-	}
-	for i := range existing {
-		child := &existing[i]
-		if isContainedMatchLogic(child.MatchLogic) && hierarchyHasNestedChild(existingParent, child) {
+		// candidate as parent, other as child: refuse unless candidate cleanly contains other.
+		if hierarchyHasNestedChild(candidate, other) &&
+			(!isContainingMatchLogic(candidate.MatchLogic) || !isContainedMatchLogic(other.MatchLogic)) {
 			return true
 		}
 	}

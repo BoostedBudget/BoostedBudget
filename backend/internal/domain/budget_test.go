@@ -2086,6 +2086,16 @@ func TestDuplicateParentIdentity(t *testing.T) {
 // top-level row AND is still rolled into the parent's SpentAmount by buildCategoryClause's
 // match_logic-blind hierarchical query). EscapedNestedChild is the write-time guard that must
 // reject that shape, in either add order.
+//
+// A SECOND independent adversarial review (fixwave 4) found this guard's first version was
+// itself incomplete: it only ever checked pairs where the PARENT was already "containing"
+// (category_only/or), silently assuming an 'and' or 'tag_only' parent's own SpentAmount could
+// never overlap a nested child's. False — see EscapedNestedChild's doc comment for the mechanism
+// (an 'and' parent's clause still rolls the child's category into its own category term before
+// applying its tag filter; a 'tag_only' parent's pure tag match can still catch a transaction
+// that sits in the child's category). The guard now refuses ANY hierarchically-nested pair that
+// is not CLEANLY CONTAINED (isContainingMatchLogic(parent) && isContainedMatchLogic(child)),
+// which strictly widens — never narrows — the original refusal.
 func TestEscapedNestedChild(t *testing.T) {
 	food := "FOOD_AND_DRINK"
 	utilities := "RENT_AND_UTILITIES"
@@ -2124,11 +2134,43 @@ func TestEscapedNestedChild(t *testing.T) {
 			want:      false,
 		},
 		{
-			name: "PFC: and parent (non-containing) + or detailed child does not trip this guard",
+			name: "PFC: and parent + or detailed child escapes too (neither side of a non-containing pair is safe)",
 			existing: []BudgetCategory{
 				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicAnd, Tags: []string{"x"}},
 			},
 			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicOr},
+			want:      true,
+		},
+		{
+			name: "fixwave 4: PFC and parent + category_only (CONTAINED) detailed child now escapes — parent added after child",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicAnd, Tags: []string{"x"}},
+			want:      true,
+		},
+		{
+			name: "fixwave 4: PFC and parent + category_only (CONTAINED) detailed child now escapes — child added after parent",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicAnd, Tags: []string{"x"}},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicCategoryOnly},
+			want:      true,
+		},
+		{
+			name: "fixwave 4: PFC tag_only parent + and (CONTAINED) detailed child now escapes",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicTagOnly, Tags: []string{"splurge"}},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicAnd, Tags: []string{"splurge"}},
+			want:      true,
+		},
+		{
+			name: "fixwave 4: two UNRELATED and-logic categories (no hierarchy) still never trip this guard",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &utilities, MatchLogic: MatchLogicAnd, Tags: []string{"x"}},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicAnd, Tags: []string{"x"}},
 			want:      false,
 		},
 		{
@@ -2207,132 +2249,14 @@ func TestEscapedNestedChild(t *testing.T) {
 	}
 }
 
-// TestWouldOrphanContainedChildren pins the reverse half of Issue #1630's UpdateCategory
-// follow-up: a PARENT row's own match_logic can be PATCHed away from containing while an
-// existing, still-conforming child relies on it. EscapedNestedChild alone cannot see this
-// (its "candidate as parent" branch requires the candidate's NEW match_logic to still be
-// containing), so WouldOrphanContainedChildren covers exactly this transition.
-func TestWouldOrphanContainedChildren(t *testing.T) {
-	food := "FOOD_AND_DRINK"
-	fastFood := "FOOD_AND_DRINK_FAST_FOOD"
-
-	containedChild := BudgetCategory{
-		ID:           "child-1",
-		CategoryKind: "pfc",
-		PFCPrimary:   &food,
-		PFCDetailed:  &fastFood,
-		MatchLogic:   MatchLogicCategoryOnly,
-	}
-	escapedChild := BudgetCategory{
-		ID:           "child-2",
-		CategoryKind: "pfc",
-		PFCPrimary:   &food,
-		PFCDetailed:  &fastFood,
-		MatchLogic:   MatchLogicOr,
-	}
-	unrelatedChild := BudgetCategory{
-		ID:           "child-3",
-		CategoryKind: "pfc",
-		PFCPrimary:   strPtr1630("RENT_AND_UTILITIES"),
-		PFCDetailed:  strPtr1630("RENT_AND_UTILITIES_RENT"),
-		MatchLogic:   MatchLogicCategoryOnly,
-	}
-
-	tests := []struct {
-		name           string
-		existing       []BudgetCategory
-		existingParent *BudgetCategory
-		newMatchLogic  MatchLogic
-		want           bool
-	}{
-		{
-			name:           "nil existingParent never orphans",
-			existing:       []BudgetCategory{containedChild},
-			existingParent: nil,
-			newMatchLogic:  MatchLogicAnd,
-			want:           false,
-		},
-		{
-			name:     "flipping category_only parent to and orphans a contained child",
-			existing: []BudgetCategory{containedChild},
-			existingParent: &BudgetCategory{
-				ID:           "parent-1",
-				CategoryKind: "pfc",
-				PFCPrimary:   &food,
-				MatchLogic:   MatchLogicCategoryOnly,
-			},
-			newMatchLogic: MatchLogicAnd,
-			want:          true,
-		},
-		{
-			name:     "flipping or parent to tag_only orphans a contained child",
-			existing: []BudgetCategory{containedChild},
-			existingParent: &BudgetCategory{
-				ID:           "parent-1",
-				CategoryKind: "pfc",
-				PFCPrimary:   &food,
-				MatchLogic:   MatchLogicOr,
-			},
-			newMatchLogic: MatchLogicTagOnly,
-			want:          true,
-		},
-		{
-			name:     "staying containing (category_only to or) does not orphan",
-			existing: []BudgetCategory{containedChild},
-			existingParent: &BudgetCategory{
-				ID:           "parent-1",
-				CategoryKind: "pfc",
-				PFCPrimary:   &food,
-				MatchLogic:   MatchLogicCategoryOnly,
-			},
-			newMatchLogic: MatchLogicOr,
-			want:          false,
-		},
-		{
-			name:     "parent that was never containing cannot orphan anything",
-			existing: []BudgetCategory{containedChild},
-			existingParent: &BudgetCategory{
-				ID:           "parent-1",
-				CategoryKind: "pfc",
-				PFCPrimary:   &food,
-				MatchLogic:   MatchLogicAnd,
-			},
-			newMatchLogic: MatchLogicTagOnly,
-			want:          false,
-		},
-		{
-			name:     "child that already escaped is not this function's concern",
-			existing: []BudgetCategory{escapedChild},
-			existingParent: &BudgetCategory{
-				ID:           "parent-1",
-				CategoryKind: "pfc",
-				PFCPrimary:   &food,
-				MatchLogic:   MatchLogicCategoryOnly,
-			},
-			newMatchLogic: MatchLogicAnd,
-			want:          false,
-		},
-		{
-			name:     "unrelated sibling under a different primary is never orphaned",
-			existing: []BudgetCategory{unrelatedChild},
-			existingParent: &BudgetCategory{
-				ID:           "parent-1",
-				CategoryKind: "pfc",
-				PFCPrimary:   &food,
-				MatchLogic:   MatchLogicCategoryOnly,
-			},
-			newMatchLogic: MatchLogicAnd,
-			want:          false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := WouldOrphanContainedChildren(tt.existing, tt.existingParent, tt.newMatchLogic); got != tt.want {
-				t.Errorf("WouldOrphanContainedChildren() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func strPtr1630(s string) *string { return &s }
+// WouldOrphanContainedChildren (and its test, formerly here) was removed in fixwave 4:
+// EscapedNestedChild's widened check — refusing any hierarchically-nested pair that is not
+// cleanly contained, in both directions — subsumes it. A PARENT edit that stops "containing" at
+// all (the exact transition WouldOrphanContainedChildren tested) now trips EscapedNestedChild's
+// own "candidate as parent" branch directly: NOT(isContainingMatchLogic(candidate) &&
+// isContainedMatchLogic(other)) is true whenever candidate stops containing, for any nested
+// other. See TestEscapedNestedChild's "fixwave 4" cases above, and
+// TestBudgetService_UpdateCategory_RejectsParentOrphaningContainedChild (budget_service_test.go),
+// which still exercises this exact transition end-to-end through the service layer and still
+// passes unchanged — it asserts errors.Is(err, ErrEscapedNestedChild), the same sentinel both
+// guards always wrapped, so it does not care which of the two guards produced the refusal.
