@@ -2125,6 +2125,8 @@ func TestBudgetService_AddCategory_RejectsDuplicateParentIdentity_Custom(t *test
 	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
 	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{customID}).
 		Return(map[string]string{customID: "Groceries"}, nil)
+	mockCategoryRepo.On("GetByID", ctx, customID).
+		Return(&domain.CustomCategory{ID: customID}, nil)
 
 	category, err := service.AddCategory(ctx, userID, budgetID, req)
 
@@ -2210,4 +2212,144 @@ func TestBudgetService_CreateBudget_RejectsDuplicateParentIdentityWithinBatch(t 
 	assert.Nil(t, budget)
 	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "CreateWithCategories")
 	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_AddCategory_RejectsEscapedNestedChild_PFC pins Issue #1630's HIGH-severity
+// adversarial-review finding: a detailed PFC child whose match_logic escapes containment
+// (here, 'or') under an existing budgeted category_only primary must be rejected at write
+// time with a 400 naming match_logic, not silently persisted to double-count spend.
+func TestBudgetService_AddCategory_RejectsEscapedNestedChild_PFC(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:              "cat-parent",
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			MatchLogic:      domain.MatchLogicCategoryOnly,
+			AllocatedAmount: 300.00,
+		},
+	}
+
+	req := &domain.CreateBudgetCategoryRequest{
+		CategoryKind:    "pfc",
+		PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+		PFCDetailed:     strPtr("FOOD_AND_DRINK_FAST_FOOD"),
+		AllocatedAmount: 50.00,
+		MatchLogic:      domain.MatchLogicOr,
+		Tags:            []string{"splurge"},
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+
+	category, err := service.AddCategory(ctx, userID, budgetID, req)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrEscapedNestedChild)
+	assert.ErrorIs(t, err, domain.ErrInvalidBudget)
+	assert.Contains(t, err.Error(), "match_logic")
+	assert.Nil(t, category)
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "CreateCategory")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_AddCategory_AllowsProperlyContainedNestedChild confirms the guard above
+// does not over-reach: a category_only parent with a category_only nested child stays
+// well-formed (Issue #1630's original contained-nesting shape must remain legal).
+func TestBudgetService_AddCategory_AllowsProperlyContainedNestedChild(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:              "cat-parent",
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			MatchLogic:      domain.MatchLogicCategoryOnly,
+			AllocatedAmount: 300.00,
+		},
+	}
+
+	req := &domain.CreateBudgetCategoryRequest{
+		CategoryKind:    "pfc",
+		PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+		PFCDetailed:     strPtr("FOOD_AND_DRINK_FAST_FOOD"),
+		AllocatedAmount: 50.00,
+		MatchLogic:      domain.MatchLogicCategoryOnly,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+
+	category, err := service.AddCategory(ctx, userID, budgetID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, category)
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_CreateBudget_RejectsEscapedNestedChildWithinBatch_CustomParentAfterChild
+// pins the ordering half of Issue #1630's HIGH-severity finding: a batch may legally name the
+// escaping CHILD before its containing PARENT in req.Categories (CreateBudget has no ordering
+// requirement today), and the guard must still catch the pair regardless of which one is
+// processed first.
+func TestBudgetService_CreateBudget_RejectsEscapedNestedChildWithinBatch_CustomParentAfterChild(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	childID := "22222222-2222-2222-2222-222222222222"
+
+	req := createTestCreateBudgetRequest()
+	req.Categories = []domain.CreateBudgetCategoryRequest{
+		// Child named FIRST: a custom category nested (via parent_pfc_primary) under
+		// FOOD_AND_DRINK, whose own match_logic is 'tag_only' — escapes containment.
+		{
+			CategoryKind:     "custom",
+			CustomCategoryID: &childID,
+			AllocatedAmount:  50.00,
+			MatchLogic:       domain.MatchLogicTagOnly,
+			Tags:             []string{"splurge"},
+		},
+		// Parent named SECOND: the budgeted category_only PFC primary the child nests under.
+		{CategoryKind: "pfc", PFCPrimary: strPtr("FOOD_AND_DRINK"), AllocatedAmount: 300.00, MatchLogic: domain.MatchLogicCategoryOnly},
+	}
+
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{childID}).
+		Return(map[string]string{childID: "Fast Food Splurges"}, nil)
+	mockCategoryRepo.On("GetByID", ctx, childID).
+		Return(&domain.CustomCategory{ID: childID, ParentPFCPrimary: strPtr("FOOD_AND_DRINK")}, nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrEscapedNestedChild)
+	assert.ErrorIs(t, err, domain.ErrInvalidBudget)
+	assert.Contains(t, err.Error(), "match_logic")
+	assert.Nil(t, budget)
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "CreateWithCategories")
+	mockCategoryRepo.AssertExpectations(t)
 }

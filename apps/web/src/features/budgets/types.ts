@@ -213,9 +213,20 @@ export function computeParentAllocationRemainder(
  * subtracts exclusively over `isSubAllocationOfParent` children: the Task 0.5 containment rule
  * (isContainingMatchLogic(parent) && isContainedMatchLogic(child)) is exactly the condition that
  * GUARANTEES a contained child's matched-transaction set is a subset of the parent's — the same
- * guarantee the backend's GetBudgetVsActual dedup already relies on. A child that escapes
- * containment (tag_only/or, or an 'and'-parent's child) is never included here, because its
- * spend was never rolled into the parent's own spent_amount to begin with.
+ * guarantee the backend's GetBudgetVsActual dedup already relies on.
+ *
+ * A child that escapes containment (tag_only/or, or an 'and'-parent's child) is likewise never
+ * subtracted here — but NOT because its spend "was never rolled into the parent's own
+ * spent_amount to begin with". That claim was FALSE and is the HIGH-severity defect an
+ * adversarial review of Issue #1630 found: the backend's roll-up (buildCategoryClause,
+ * transaction_repository.go) is hierarchical and match_logic-BLIND, so an escaping child's
+ * transactions ARE still counted inside the parent's own spent_amount, in addition to
+ * surfacing as the child's own top-level row — a real double-count, not a safe omission. This
+ * function does not correct that double-count; it merely does not make it worse by also
+ * subtracting the escaping child's amount a second time. The actual fix is refusing to persist
+ * an escaping nested pair at write time (backend domain.EscapedNestedChild) — existing data
+ * shapes this frontend function may still see (there should be none) carry the double-count
+ * unfixed by anything client-side.
  */
 export function computeParentDirectSpend(
   parent: BudgetCategory,

@@ -2166,8 +2166,21 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 //     the plain category match — an 'and'/'tag_only' parent has no envelope a plain-category
 //     child could fall inside), AND
 //   - the CHILD's own match_logic is 'category_only' or 'and' (it cannot escape the parent's
-//     category clause via tags — a 'tag_only'/'or' child can match transactions the parent's
-//     roll-up never counted, so it is never a sub-allocation).
+//     category clause via tags — a 'tag_only'/'or' child can match transactions outside the
+//     parent's category clause entirely, so summing it separately is not a NEW double-count).
+//
+// ⚠ That does NOT mean an escaping child's spend is absent from the parent's own sum. The
+// parent's roll-up (buildCategoryClause, transaction_repository.go) is hierarchical and
+// match_logic-BLIND — it has no sibling/match_logic context — so it counts every transaction
+// filed under a nested custom category or PFC detailed regardless of that child's own
+// match_logic. A legal shape (a budgeted 'category_only'/'or' parent with a nested child whose
+// own match_logic is 'or' or 'tag_only') is therefore double-counted here: once via the child's
+// own top-level row (this method does not exclude it, per the rule above) and again inside the
+// parent's SpentAmount (which the child's SQL-side transactions still feed). This was a
+// HIGH-severity finding on Issue #1630's own fix. It is addressed by refusing to PERSIST that
+// shape at write time (domain.EscapedNestedChild, wired into budget_service.go's CreateBudget
+// and AddCategory) rather than by changing this query, which has no sibling context to subtract
+// from — any pre-existing row of this shape (there should be none) keeps the double-count.
 //
 // '' is treated as 'category_only' (the domain default and the column default), which SQL
 // will not coerce on its own. A savings-kind category is never a parent or a child of this

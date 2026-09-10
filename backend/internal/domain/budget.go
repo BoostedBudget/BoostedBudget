@@ -716,6 +716,25 @@ var (
 	// rejected rather than allowed to collide. No backfill needed — Issue #1630 was authored
 	// pre-launch with zero production budgets, so no duplicate rows exist to reconcile.
 	ErrDuplicateParentCategory = errors.New("a budget category with this parent identity already exists")
+	// ErrEscapedNestedChild: adversarial review of Issue #1630's own fix found a HIGH-severity
+	// double-count it introduced. buildCategoryClause (transaction_repository.go) rolls up a
+	// parent's SpentAmount hierarchically — every transaction filed under a nested custom
+	// category or PFC detailed, regardless of that child's own match_logic. The Go/SQL/TS
+	// containment rule (isContainingMatchLogic(parent) && isContainedMatchLogic(child)) only
+	// decides whether the CHILD is excluded from top-level totals; it does nothing to the
+	// PARENT's roll-up query, which has no sibling/match_logic context at all. So a nested child
+	// whose own match_logic escapes containment (e.g. a custom category nested under a budgeted
+	// 'category_only'/'or' parent, but itself 'or' or 'tag_only') is counted BOTH as its own
+	// top-level row AND inside the parent's roll-up — every dollar doubled. Wraps ErrInvalidBudget
+	// so the mapper's existing 400 case picks it up with no separate switch entry.
+	//
+	// Fixed by refusing to PERSIST the escaping shape at all (EscapedNestedChild, wired into
+	// CreateBudget's batch loop and AddCategory — the same two call sites as
+	// DuplicateParentIdentity). This is write-time only and does NOT retroactively fix the
+	// parent's roll-up query; any row that predates this guard (there are none — Issue #1630 was
+	// authored pre-launch with zero production budgets) would keep the pre-existing double-count
+	// forever, exactly as ErrDuplicateParentCategory's rows are grandfathered.
+	ErrEscapedNestedChild = fmt.Errorf("%w: nested budget category's match_logic escapes its parent's containment envelope", ErrInvalidBudget)
 )
 
 // DuplicateParentIdentity reports whether `candidate` would collide with an existing LIVE
@@ -757,6 +776,74 @@ func DuplicateParentIdentity(existing []BudgetCategory, candidate *BudgetCategor
 				*e.CustomCategoryID == *candidate.CustomCategoryID {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// hierarchyHasNestedChild reports whether `child` is hierarchically nested under `parent`'s
+// identity — the same hierarchy test IsSubAllocationWithin and DuplicateParentIdentity use,
+// factored out so EscapedNestedChild can run it in both directions. It looks only at identity
+// (pfc_primary / custom_category_id / custom parent linkage), never at match_logic.
+//
+// The custom case relies on child.CustomParentID / child.CustomParentPFCPrimary — the parent
+// linkage of the CHILD's own referenced custom_categories row. At read time these are populated
+// by GetCategoriesByBudgetID's join; at write time (before either row is persisted) a caller
+// constructing a *BudgetCategory in memory must populate them itself via a custom-category
+// lookup (mirrors budget_service.go's existing IDOR-check calls to customCategoryRepo), or this
+// always reports "not nested" for that candidate's custom-parent-of-existing direction.
+func hierarchyHasNestedChild(parent, child *BudgetCategory) bool {
+	switch child.CategoryKind {
+	case "pfc":
+		return child.PFCDetailed != nil && child.PFCPrimary != nil &&
+			parent.CategoryKind == "pfc" && parent.PFCDetailed == nil && parent.PFCPrimary != nil &&
+			*parent.PFCPrimary == *child.PFCPrimary
+	case "custom":
+		if child.CustomParentID != nil && parent.CategoryKind == "custom" && parent.CustomCategoryID != nil &&
+			*parent.CustomCategoryID == *child.CustomParentID {
+			return true
+		}
+		if child.CustomParentPFCPrimary != nil && parent.CategoryKind == "pfc" && parent.PFCDetailed == nil &&
+			parent.PFCPrimary != nil && *parent.PFCPrimary == *child.CustomParentPFCPrimary {
+			return true
+		}
+	}
+	return false
+}
+
+// EscapedNestedChild reports whether `candidate` would form a hierarchically-nested pair with
+// some row in `existing` whose match_logic combination escapes containment (Issue #1630 HIGH
+// review finding — see ErrEscapedNestedChild). A pair escapes containment when the would-be
+// PARENT's match_logic still contains the plain category match (isContainingMatchLogic) but the
+// would-be CHILD's does not stay inside it (isContainedMatchLogic) — the exact condition under
+// which buildCategoryClause's hierarchical roll-up still counts the child's transactions inside
+// the parent's own SpentAmount, while the child ALSO surfaces as its own top-level row (because
+// IsSubAllocationWithin/isContainedMatchLogic excludes it from sub-allocation treatment).
+//
+// Checked in BOTH directions so call-site ordering within one batch never matters:
+//   - candidate as the CHILD of an existing (already-persisted-or-already-built) containing
+//     parent — the common case: adding a nested category under a parent that exists already.
+//   - candidate as the containing PARENT of an existing escaping child — covers a batch where
+//     the child request happens to be processed before its parent (CreateBudget's request order
+//     is caller-controlled, so either order is legal input).
+//
+// Only a hierarchically-nested pair is considered at all; two unrelated top-level rows never
+// trip this regardless of their match_logic values.
+func EscapedNestedChild(existing []BudgetCategory, candidate *BudgetCategory) bool {
+	if candidate == nil {
+		return false
+	}
+	for i := range existing {
+		other := &existing[i]
+		// candidate as child, other as parent.
+		if !isContainedMatchLogic(candidate.MatchLogic) && isContainingMatchLogic(other.MatchLogic) &&
+			hierarchyHasNestedChild(other, candidate) {
+			return true
+		}
+		// candidate as parent, other as child.
+		if isContainingMatchLogic(candidate.MatchLogic) && !isContainedMatchLogic(other.MatchLogic) &&
+			hierarchyHasNestedChild(candidate, other) {
+			return true
 		}
 	}
 	return false

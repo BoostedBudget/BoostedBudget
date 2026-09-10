@@ -2043,3 +2043,129 @@ func TestDuplicateParentIdentity(t *testing.T) {
 		})
 	}
 }
+
+// TestEscapedNestedChild pins Issue #1630's HIGH-severity adversarial-review finding: a nested
+// child whose own match_logic escapes containment double-counts spend (surfaces as its own
+// top-level row AND is still rolled into the parent's SpentAmount by buildCategoryClause's
+// match_logic-blind hierarchical query). EscapedNestedChild is the write-time guard that must
+// reject that shape, in either add order.
+func TestEscapedNestedChild(t *testing.T) {
+	food := "FOOD_AND_DRINK"
+	utilities := "RENT_AND_UTILITIES"
+	fastFood := "FOOD_AND_DRINK_FAST_FOOD"
+	customParent := "11111111-1111-1111-1111-111111111111"
+	customChild := "22222222-2222-2222-2222-222222222222"
+
+	tests := []struct {
+		name      string
+		existing  []BudgetCategory
+		candidate BudgetCategory
+		want      bool
+	}{
+		{
+			name: "PFC: category_only parent + or detailed child escapes (child added after parent)",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicOr},
+			want:      true,
+		},
+		{
+			name: "PFC: or detailed child added BEFORE its category_only parent still escapes",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicOr},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			want:      true,
+		},
+		{
+			name: "PFC: category_only parent + category_only detailed child does NOT escape",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicCategoryOnly},
+			want:      false,
+		},
+		{
+			name: "PFC: and parent (non-containing) + or detailed child does not trip this guard",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicAnd, Tags: []string{"x"}},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicOr},
+			want:      false,
+		},
+		{
+			name: "PFC: unrelated primaries never trip this guard",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &utilities, MatchLogic: MatchLogicOr},
+			want:      false,
+		},
+		{
+			name: "custom: category_only parent + tag_only nested child (via custom_parent_id) escapes",
+			existing: []BudgetCategory{
+				{CategoryKind: "custom", CustomCategoryID: &customParent, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{
+				CategoryKind:     "custom",
+				CustomCategoryID: &customChild,
+				CustomParentID:   &customParent,
+				MatchLogic:       MatchLogicTagOnly,
+				Tags:             []string{"x"},
+			},
+			want: true,
+		},
+		{
+			name: "custom: or parent nested under a budgeted PFC primary escapes (parent added after child)",
+			existing: []BudgetCategory{
+				{
+					CategoryKind:           "custom",
+					CustomCategoryID:       &customChild,
+					CustomParentPFCPrimary: &food,
+					MatchLogic:             MatchLogicOr,
+				},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			want:      true,
+		},
+		{
+			name: "custom: category_only parent + category_only nested child does NOT escape",
+			existing: []BudgetCategory{
+				{CategoryKind: "custom", CustomCategoryID: &customParent, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{
+				CategoryKind:     "custom",
+				CustomCategoryID: &customChild,
+				CustomParentID:   &customParent,
+				MatchLogic:       MatchLogicCategoryOnly,
+			},
+			want: false,
+		},
+		{
+			name:      "empty existing set never escapes",
+			existing:  nil,
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicOr},
+			want:      false,
+		},
+		{
+			name: "nil candidate never escapes",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := &tt.candidate
+			if tt.name == "nil candidate never escapes" {
+				candidate = nil
+			}
+			if got := EscapedNestedChild(tt.existing, candidate); got != tt.want {
+				t.Errorf("EscapedNestedChild() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
