@@ -111,6 +111,66 @@ describe('HoldingsTable', () => {
     expect(screen.getByText('AAPL')).toBeDefined()
   })
 
+  // #1631: the Type column had no `render` at all and printed the raw lowercase Plaid value.
+  describe('Type column humanization (#1631)', () => {
+    it('humanizes acronym security types to canonical uppercase form', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [makeHolding({ id: 'h-etf', security_type: 'etf' })], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText('ETF')).toBeDefined()
+      expect(screen.queryByText('etf')).toBeNull()
+    })
+
+    it('title-cases a multi-word security type', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [makeHolding({ id: 'h-mf', security_type: 'mutual fund' })], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText('Mutual Fund')).toBeDefined()
+    })
+
+    it('renders "Unknown" (never blank) when security_type is null', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [makeHolding({ id: 'h-null', security_type: undefined })], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText('Unknown')).toBeDefined()
+    })
+
+    it('renders "Unknown" when security_type is an empty string', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [makeHolding({ id: 'h-empty', security_type: '' })], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText('Unknown')).toBeDefined()
+    })
+  })
+
+  // #1631: `??` alone does not catch '' — production has securities with security_name = ''.
+  describe('Security name blank-string fallback (#1631)', () => {
+    it('falls back to security_id when security_name is an empty string', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: {
+          holdings: [makeHolding({ id: 'h-blank-name', security_id: 'sec-blank', security_name: '' })],
+          count: 1,
+        },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText('sec-blank')).toBeDefined()
+    })
+  })
+
   it('shows loading state', () => {
     mockUseGetHoldings.mockReturnValue({ data: undefined, isLoading: true, isError: false })
     const { container } = render(<HoldingsTable />)

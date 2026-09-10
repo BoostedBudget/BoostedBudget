@@ -78,7 +78,12 @@ type HoldingView struct {
 	// Security metadata (from joined securities row)
 	TickerSymbol *string `json:"ticker_symbol,omitempty"`
 	SecurityName *string `json:"security_name,omitempty"`
-	SecurityType *string `json:"security_type,omitempty"` // stock/etf/mutual fund/crypto/etc.; nil → "unknown"
+	// stock/etf/mutual fund/crypto/etc., or nil when securities.type is NULL. This field carries
+	// the raw provider token — nil is NOT rewritten to the literal string "unknown" here. The
+	// frontend Holdings table renders nil (and a blank/"unknown" value) as "Unknown" via the
+	// shared securityTypeLabel helper (#1631); the allocation aggregates instead COALESCE NULL to
+	// 'unknown' in SQL so untyped holdings are not dropped from the allocation breakdown.
+	SecurityType *string `json:"security_type,omitempty"`
 
 	// Computed values (nil when inputs are missing)
 	GainLoss     *float64 `json:"gain_loss,omitempty"`

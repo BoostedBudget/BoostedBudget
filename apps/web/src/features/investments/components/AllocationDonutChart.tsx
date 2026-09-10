@@ -11,6 +11,7 @@ import {
 import { useGetPortfolioAllocationBreakdown } from '@boostedbudget/api-client/endpoints/analytics/analytics'
 import type { AllocationConfig, GetPortfolioAllocationBreakdownGroupBy } from '../hooks/usePortfolioAllocationConfig'
 import { ErrorState } from '@/components/ui/error-state'
+import { securityTypeLabel } from '@/features/transactions/investmentSubcategory'
 
 interface AllocationDonutChartProps {
   config: AllocationConfig
@@ -23,22 +24,12 @@ interface AllocationDonutChartProps {
 //   3. Known acronyms → uppercase canonical form (etf → "ETF", reit → "REIT")
 //   4. Everything else → title-case by splitting on underscores/spaces
 //      ("mutual_fund" → "Mutual Fund", "stock" → "Stock")
-const ACRONYM_LABELS: Readonly<Record<string, string>> = {
-  etf: 'ETF',
-  reit: 'REIT',
-  mbs: 'MBS',
-  abs: 'ABS',
-}
-
+// Rules 1/3/4 are the shared `securityTypeLabel` helper (#1631) — reused here so this chart and
+// HoldingsTable's Type column render the SAME label for the SAME `securities.type` value.
 function humanizeBucketLabel(value: string, groupBy: GetPortfolioAllocationBreakdownGroupBy): string {
   if (!value || value.toLowerCase() === 'unknown') return 'Other'
   if (groupBy === 'account') return value
-  const lower = value.toLowerCase()
-  if (ACRONYM_LABELS[lower]) return ACRONYM_LABELS[lower]
-  return value
-    .split(/[_\s]+/)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join(' ')
+  return securityTypeLabel(value, 'Other')
 }
 
 // Aggregate buckets with the same humanized label, summing values and counts.

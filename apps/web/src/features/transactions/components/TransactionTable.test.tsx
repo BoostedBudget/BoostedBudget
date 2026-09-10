@@ -805,8 +805,34 @@ describe('TransactionTable', () => {
       )
       // The literal string "undefined" must never appear in the DOM
       expect(screen.queryByText(/\bundefined\b/)).not.toBeInTheDocument()
-      // Fallback separator renders for missing ticker/security
-      expect(screen.getByText('— · —')).toBeInTheDocument()
+    })
+
+    // #1631: when ticker_symbol AND security_name are both blank, the transaction's own name
+    // is the only field with content — falling back to it means a blank security can never
+    // produce an empty (or "— · —") cell. Before #1631 this rendered the literal "— · —".
+    it('falls back to row.name when both ticker_symbol and security_name are blank', () => {
+      render(
+        <TransactionTable
+          transactions={[sparseRow]}
+          accountsMap={mockAccounts}
+        />
+      )
+      expect(screen.getByText('Unknown investment')).toBeInTheDocument()
+      expect(screen.queryByText('— · —')).not.toBeInTheDocument()
+    })
+
+    it('falls back to "—" when row.name is also blank', () => {
+      const blankNameRow: InvestmentActivity = { ...sparseRow, id: 'inv-sparse-2', name: '' }
+      render(
+        <TransactionTable
+          transactions={[blankNameRow]}
+          accountsMap={mockAccounts}
+        />
+      )
+      // Other cells in the row (e.g. amount) may independently render '—', so scope to the
+      // Description cell specifically rather than asserting a single '—' in the whole table.
+      const row = screen.getByText('—', { selector: '.font-medium.text-foreground' })
+      expect(row).toBeInTheDocument()
     })
   })
 
