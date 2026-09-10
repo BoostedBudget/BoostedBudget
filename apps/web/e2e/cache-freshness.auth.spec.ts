@@ -435,7 +435,12 @@ async function captureCashFlowSummary(
     )
     .then((r) => r.json() as Promise<CashFlowSummaryResponse>)
 
-  await page.reload()
+  // Order matters: the response promise must exist BEFORE the reload (the response can land
+  // before any post-navigation await), but the reload is asserted — commit, then URL — before
+  // the promise is awaited. Otherwise a stalled reload lets the response timer expire first,
+  // and a navigation stall is mis-reported as cash-flow-summary cache staleness.
+  await page.reload({ waitUntil: 'commit', timeout: WAIT_ELEMENT_MS })
+  await expect(page).toHaveURL(/\/dashboard/)
   await page.waitForLoadState('domcontentloaded')
 
   return bodyPromise
@@ -460,7 +465,12 @@ async function captureSpendingByCategory(
     )
     .then((r) => r.json() as Promise<SpendingByCategoryResponse>)
 
-  await page.goto('/reports')
+  // Order matters: the response promise must exist BEFORE the goto (the response can land
+  // before any post-navigation await), but the navigation is asserted — commit, then URL —
+  // before the promise is awaited. Otherwise a stalled goto lets the response timer expire
+  // first, and a navigation stall is mis-reported as spending-by-category cache staleness.
+  await page.goto('/reports', { waitUntil: 'commit', timeout: WAIT_ELEMENT_MS })
+  await expect(page).toHaveURL(/\/reports/)
   await page.waitForLoadState('domcontentloaded')
   await acceptCookieConsent(page)
 
