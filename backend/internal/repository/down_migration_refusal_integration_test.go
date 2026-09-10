@@ -29,6 +29,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -598,4 +599,91 @@ func seedDownGuardFixture(t *testing.T, ctx context.Context, tx pgx.Tx, tag stri
 		savingsGoalID:    savingsGoalID,
 		transactionID:    transactionID,
 	}
+}
+
+// TestDownMigration000190_RefusalIsNotTOCTOURacy_Integration is #1625 second fix wave M4.
+//
+// 000190's refusal did `SELECT COUNT(*)` in a DO block and then, as a SEPARATE statement,
+// `ALTER TABLE ... DROP COLUMN`. Nothing held the table between them. The production archive path
+// (savings_contribution_repository.ArchiveByGoal) can set archived_at inside that window: it takes
+// only ROW EXCLUSIVE, which does not conflict with the ACCESS SHARE a bare COUNT(*) takes, so it
+// commits, and the ALTER then acquires its ACCESS EXCLUSIVE and drops the marker the guard had
+// just decided did not exist. The guard reports success and the double-count it exists to prevent
+// is resurrected — the failure mode is "the refusal is silently bypassed", not "the refusal is
+// noisy", which is why a comment about narrow windows is not an answer.
+//
+// The fix is `LOCK TABLE ... IN ACCESS EXCLUSIVE MODE` inside the same transaction, BEFORE the
+// count. golang-migrate runs a migration file in one transaction, so the lock is held from before
+// the count until the ALTER.
+//
+// Asserted two independent ways, because either alone can pass against something weaker:
+//
+//  1. the guard's own backend really holds AccessExclusiveLock on the table after the DO block —
+//     a direct observation of the lock, not of its consequences;
+//  2. a SECOND connection attempting the production archive write is BLOCKED (lock_timeout)
+//     rather than committing — the consequence itself, on a real concurrent writer.
+//
+// Only the guard PREFIX is executed here (everything before the ALTER), which is the only way to
+// observe the window: running the whole file would take ACCESS EXCLUSIVE at the ALTER regardless
+// and prove nothing about the gap. The prefix is derived from the file's own bytes.
+func TestDownMigration000190_RefusalIsNotTOCTOURacy_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	down := readDownMigration(t, "000190_add_contribution_archived_at.down.sql")
+	idx := strings.Index(down, "ALTER TABLE")
+	require.Greater(t, idx, 0,
+		"000190's down no longer contains an ALTER TABLE — this test can no longer locate the "+
+			"window between the guard and the drop, so it is proving nothing")
+	guardOnly := down[:idx]
+	require.Contains(t, guardOnly, "SELECT COUNT(*)",
+		"the prefix must contain the guard's count, or the split picked the wrong statement")
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck // always rolled back
+
+	// The guard only proceeds past its RAISE when nothing is archived. Uncommitted, like every
+	// other test in this file.
+	_, err = tx.Exec(ctx, `SET LOCAL lock_timeout = '10s'`)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `DELETE FROM savings_goal_contributions`)
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, guardOnly)
+	require.NoError(t, err, "the guard must proceed on an empty table")
+
+	// (1) The lock itself.
+	var modes []string
+	rows, err := tx.Query(ctx, `
+		SELECT mode FROM pg_locks
+		WHERE relation = 'savings_goal_contributions'::regclass
+		  AND pid = pg_backend_pid()`)
+	require.NoError(t, err)
+	for rows.Next() {
+		var mode string
+		require.NoError(t, rows.Scan(&mode))
+		modes = append(modes, mode)
+	}
+	require.NoError(t, rows.Err())
+	rows.Close()
+	assert.Contains(t, modes, "AccessExclusiveLock",
+		"the guard did not lock savings_goal_contributions before counting (held: %v). Without it "+
+			"an archive can commit between the count and the DROP COLUMN, and the refusal is "+
+			"bypassed silently.", modes)
+
+	// (2) The consequence, on a genuinely separate connection. `WHERE false` touches no row, so a
+	// row-level conflict cannot explain a block: only the TABLE lock can. It is the same
+	// ROW EXCLUSIVE the production archive UPDATE takes.
+	probe, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer probe.Rollback(ctx) //nolint:errcheck // always rolled back
+	_, err = probe.Exec(ctx, `SET LOCAL lock_timeout = '750ms'`)
+	require.NoError(t, err)
+	_, err = probe.Exec(ctx, `UPDATE savings_goal_contributions SET archived_at = now() WHERE false`)
+	require.Error(t, err,
+		"a concurrent archive write was NOT blocked while 000190's guard held the table — it can "+
+			"therefore land between the count and the DROP COLUMN")
+	assert.Contains(t, err.Error(), "lock timeout",
+		"the write must fail by waiting on the guard's lock, not for some other reason: %v", err)
 }
