@@ -89,7 +89,7 @@ export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
       // ambiguity this task exists to eliminate.
       const bodyLines = e.requestBody.map(
         (f) =>
-          `    ${f.name} (${f.type ?? 'any'}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
+          `    ${f.name} (${f.type ?? 'any'}${f.format ? `, format: ${f.format}` : ''}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
       )
       parts.push(`  body:\n${bodyLines.join('\n')}`)
     }
@@ -99,7 +99,7 @@ export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
     if (e.responseBody?.length) {
       const returnLines = e.responseBody.map(
         (f) =>
-          `    ${f.name} (${f.type ?? 'any'}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
+          `    ${f.name} (${f.type ?? 'any'}${f.format ? `, format: ${f.format}` : ''}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
       )
       parts.push(`  returns:\n${returnLines.join('\n')}`)
     }
