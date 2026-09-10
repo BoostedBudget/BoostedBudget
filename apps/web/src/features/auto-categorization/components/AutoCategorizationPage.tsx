@@ -6,6 +6,7 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { Card, CardContent } from '@/components/ui/card'
 import { useAutoCategorizationRules } from '../hooks/useAutoCategorizationRules'
 import { useRuleFilters } from '../hooks/useRuleFilters'
+import { useRuleAccountLabels } from '../hooks/useRuleAccountLabels'
 import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
 import { AutoCategorizationRuleTable, type SortColumn as RuleSortColumn, type SortDirection } from './AutoCategorizationRuleTable'
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
@@ -41,6 +42,10 @@ const getInitialView = (): ListView => {
 }
 
 export function AutoCategorizationPage({ categories, plaidPrimaries = [], accounts = [], tags = [] }: AutoCategorizationPageProps) {
+  // #1626: display-path account names for rule conditions. NOT the `accounts` prop above — that
+  // is the active-only SELECTION list the editor's dropdown needs, and a rule can name an account
+  // the user has since disconnected.
+  const accountLabels = useRuleAccountLabels()
   const {
     rules,
     loading,
@@ -324,6 +329,7 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
               <AutoCategorizationRuleCard
                 key={rule.id}
                 rule={rule}
+                accountLabels={accountLabels}
                 onToggle={(enabled) => handleToggle(rule.id, enabled)}
                 onEdit={() => handleEditClick(rule)}
                 onDelete={() => handleDelete(rule.id)}

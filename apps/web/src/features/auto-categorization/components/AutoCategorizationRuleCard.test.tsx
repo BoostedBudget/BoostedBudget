@@ -340,6 +340,10 @@ describe('AutoCategorizationRuleCard', () => {
       expect(screen.getByText('99.99')).toBeInTheDocument()
     })
 
+    // #1626 (Task K): this assertion USED to expect `acc-12345` on screen — it pinned the very
+    // defect the user reported (an opaque account id rendered where a name belongs). An
+    // unresolvable id now renders the neutral label; the resolved-name case is covered in
+    // "identifiers never reach the screen (#1626)" below.
     it('should display account_id condition', () => {
       renderCard({
         ...mockRule,
@@ -347,7 +351,8 @@ describe('AutoCategorizationRuleCard', () => {
       })
 
       expect(screen.getByText('Account is')).toBeInTheDocument()
-      expect(screen.getByText('acc-12345')).toBeInTheDocument()
+      expect(screen.getByText('Unknown account')).toBeInTheDocument()
+      expect(screen.queryByText('acc-12345')).toBeNull()
     })
 
     it('should display payment_channel condition', () => {
@@ -501,6 +506,88 @@ describe('AutoCategorizationRuleCard', () => {
       })
 
       expect(screen.getByText('Conditions (OR)')).toBeInTheDocument()
+    })
+  })
+
+  /**
+   * Issue #1626 (Task K). The user reported this card rendering
+   * `Account is / 32a0e8da-8aa6-44ac-9be7-3a321e1402c7` — an opaque id where a name belongs.
+   */
+  describe('identifiers never reach the screen (#1626)', () => {
+    const ACCOUNT_UUID = '32a0e8da-8aa6-44ac-9be7-3a321e1402c7'
+    const CUSTOM_CATEGORY_UUID = '5c5c5c5c-3333-4333-8333-333333333333'
+
+    const renderWithLabels = (rule: CategorizationRule, accountLabels?: Record<string, string>) =>
+      render(
+        <AutoCategorizationRuleCard
+          rule={rule}
+          accountLabels={accountLabels}
+          onToggle={mockOnToggle}
+          onEdit={mockOnEdit}
+          onDelete={mockOnDelete}
+        />
+      )
+
+    const accountRule: CategorizationRule = {
+      ...mockRule,
+      conditions: [{ type: 'account_id' as const, value: ACCOUNT_UUID }],
+    }
+
+    it('renders the account name for an account_id condition', () => {
+      renderWithLabels(accountRule, { [ACCOUNT_UUID]: 'Everyday Spending' })
+
+      expect(screen.getByText('Account is')).toBeInTheDocument()
+      expect(screen.getByText('Everyday Spending')).toBeInTheDocument()
+      expect(screen.queryByText(ACCOUNT_UUID)).toBeNull()
+    })
+
+    it('renders a neutral label instead of the UUID when the account cannot be named', () => {
+      renderWithLabels(accountRule)
+
+      expect(screen.getByText('Unknown account')).toBeInTheDocument()
+      expect(screen.queryByText(ACCOUNT_UUID)).toBeNull()
+    })
+
+    it('keeps the resolved account name inside data-ph-mask and out of every attribute', () => {
+      const { container } = renderWithLabels(accountRule, { [ACCOUNT_UUID]: 'Everyday Spending' })
+
+      const named = screen.getByText('Everyday Spending')
+      expect(named.closest('[data-ph-mask]')).not.toBeNull()
+
+      // Session replay records attribute values verbatim and data-ph-mask does not cover them.
+      for (const el of container.querySelectorAll('*')) {
+        for (const attr of el.attributes) {
+          expect(attr.value).not.toContain('Everyday Spending')
+        }
+      }
+    })
+
+    it('renders the shared neutral label when a custom-category target has no display name', () => {
+      renderWithLabels({
+        ...mockRule,
+        target_kind: 'custom' as const,
+        target_pfc_primary: undefined,
+        target_pfc_detailed: undefined,
+        target_custom_category_id: CUSTOM_CATEGORY_UUID,
+        target_custom_category_display: undefined,
+      })
+
+      expect(screen.getByText('Custom category')).toBeInTheDocument()
+      expect(screen.queryByText(CUSTOM_CATEGORY_UUID)).toBeNull()
+    })
+
+    it('still prefers the enriched custom-category name when it arrives', () => {
+      renderWithLabels({
+        ...mockRule,
+        target_kind: 'custom' as const,
+        target_pfc_primary: undefined,
+        target_pfc_detailed: undefined,
+        target_custom_category_id: CUSTOM_CATEGORY_UUID,
+        target_custom_category_display: 'Bike Maintenance',
+      })
+
+      expect(screen.getByText('Bike Maintenance')).toBeInTheDocument()
+      expect(screen.queryByText('Custom category')).toBeNull()
     })
   })
 })

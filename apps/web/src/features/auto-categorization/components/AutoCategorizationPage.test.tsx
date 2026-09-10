@@ -28,6 +28,7 @@ import {
   mockUseGetUserRuleExecutions,
   mockRefetchUserRuleExecutions,
 } from '@/test/mocks/auto-categorization-api'
+import { mockUseGetAccounts, mockRefetchAccounts } from '@/test/mocks/accounts-api'
 
 function renderWithProviders(ui: React.ReactElement) {
   const queryClient = new QueryClient({
@@ -130,6 +131,16 @@ describe('AutoCategorizationPage', () => {
     mockUseDeleteRule.mockClear()
     mockToggleRuleMutateAsync.mockClear()
     mockUseToggleRule.mockClear()
+
+    // #1626: restore the preloaded "accounts still loading" default so an accounts fixture set by
+    // one test cannot leak into the next.
+    mockUseGetAccounts.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    } as unknown as ReturnType<typeof mockUseGetAccounts>)
 
     // Default configuration - not loading, no error, empty rules
     configureQuery({ data: [] })
@@ -450,5 +461,51 @@ describe('AutoCategorizationPage — retained rule run history (#1569 T9.4)', ()
     } as ReturnType<typeof mockUseGetUserRuleExecutions>)
     renderWithProviders(<AutoCategorizationPage categories={[]} />)
     expect(screen.queryByRole('button', { name: /rule run history/i })).not.toBeInTheDocument()
+  })
+
+  /**
+   * Issue #1626 (Task K). The card resolves account names from a PROP, so the one thing that can
+   * silently regress is the page forgetting to supply it — the card would quietly fall back to
+   * "Unknown account" and nothing else would notice. This test is that wiring's only guard.
+   */
+  describe('account conditions on the rules list (#1626)', () => {
+    const ACCOUNT_UUID = '32a0e8da-8aa6-44ac-9be7-3a321e1402c7'
+
+    afterEach(() => {
+      // mock.module is process-global; restore the preloaded "still loading" accounts default.
+      mockUseGetAccounts.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        isError: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      } as unknown as ReturnType<typeof mockUseGetAccounts>)
+    })
+
+    it('renders the account name for an account_id condition', async () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: {
+          accounts: [
+            { id: ACCOUNT_UUID, name: 'Plaid Checking', nickname: 'Everyday Spending', type: 'depository', status: 'active' },
+          ],
+        },
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      } as unknown as ReturnType<typeof mockUseGetAccounts>)
+      mockUseGetUserRules.mockReturnValue({
+        data: [{ ...mockPageRule, conditions: [{ type: 'account_id' as const, value: ACCOUNT_UUID }] }],
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchUserRules,
+      } as unknown as ReturnType<typeof mockUseGetUserRules>)
+
+      renderWithProviders(<AutoCategorizationPage categories={[]} />)
+
+      expect(await screen.findByText('Everyday Spending')).toBeInTheDocument()
+      expect(screen.queryByText(ACCOUNT_UUID)).toBeNull()
+      expect(screen.queryByText('Unknown account')).toBeNull()
+    })
   })
 })
