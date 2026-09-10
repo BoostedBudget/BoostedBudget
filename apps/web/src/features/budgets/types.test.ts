@@ -3,7 +3,7 @@
  * formatBudgetCategoryLabel — savings kind (#1300).
  */
 import { describe, it, expect } from 'bun:test'
-import { computeBudgetMetrics, formatBudgetCategoryLabel, type Budget, type BudgetCategory } from './types'
+import { computeBudgetMetrics, filterTopLevel, formatBudgetCategoryLabel, type Budget, type BudgetCategory } from './types'
 
 const baseCat = {
   budget_id: 'b1',
@@ -80,5 +80,51 @@ describe('computeBudgetMetrics — top-level-only totals', () => {
     )
     expect(m.total_allocated).toBe(50)
     expect(m.total_spent).toBe(20)
+  })
+})
+
+describe('filterTopLevel / isSubAllocationWithin — match_logic containment (#1630)', () => {
+  // Mirrors backend TestBudgetCategory_IsSubAllocationWithin_MatchLogicContainment
+  // (domain/budget.go isContainingMatchLogic/isContainedMatchLogic) — the frontend and
+  // backend predicates must agree on which rows are sub-allocations.
+
+  it('excludes a plain category_only child under a category_only parent (baseline #1203)', () => {
+    const result = filterTopLevel([
+      { ...baseCat, id: 'p', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', allocated_amount: 300, spent_amount: 150, match_logic: 'category_only' },
+      { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD', allocated_amount: 50, spent_amount: 20, match_logic: 'category_only' },
+    ])
+    expect(result.map((c) => c.id)).toEqual(['p'])
+  })
+
+  it('does NOT exclude a child when the PARENT is "and" (no plain-category envelope)', () => {
+    const result = filterTopLevel([
+      { ...baseCat, id: 'p', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', allocated_amount: 300, spent_amount: 150, match_logic: 'and' },
+      { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD', allocated_amount: 50, spent_amount: 20, match_logic: 'category_only' },
+    ])
+    expect(result.map((c) => c.id).sort()).toEqual(['c', 'p'])
+  })
+
+  it('does NOT exclude a "tag_only" child even when the parent is category_only (child can escape the category clause)', () => {
+    const result = filterTopLevel([
+      { ...baseCat, id: 'p', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', allocated_amount: 300, spent_amount: 150, match_logic: 'category_only' },
+      { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD', allocated_amount: 50, spent_amount: 20, match_logic: 'tag_only' },
+    ])
+    expect(result.map((c) => c.id).sort()).toEqual(['c', 'p'])
+  })
+
+  it('DOES exclude a child when the parent is "or" and the child is "and" (still contained)', () => {
+    const result = filterTopLevel([
+      { ...baseCat, id: 'p', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', allocated_amount: 300, spent_amount: 150, match_logic: 'or' },
+      { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD', allocated_amount: 50, spent_amount: 20, match_logic: 'and' },
+    ])
+    expect(result.map((c) => c.id)).toEqual(['p'])
+  })
+
+  it("treats '' as category_only for both parent and child", () => {
+    const result = filterTopLevel([
+      { ...baseCat, id: 'p', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', allocated_amount: 300, spent_amount: 150, match_logic: '' as BudgetCategory['match_logic'] },
+      { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD', allocated_amount: 50, spent_amount: 20, match_logic: '' as BudgetCategory['match_logic'] },
+    ])
+    expect(result.map((c) => c.id)).toEqual(['p'])
   })
 })

@@ -35,5 +35,17 @@
 #
 # ⚠ The errors were not cosmetic — they were the reason the accounts-read error arm could not be
 # tested at all. See the comment on mockUseGetAccounts.
+#
+# 2005 -> 2006 (#1630). +1, accounted for individually, not a hand-wave. New RED test
+# BudgetDetailPage.test.tsx "excludes a sub-allocation child from totalAllocated (#1630)" calls
+# mockUseBudgetDetail.mockReturnValue({ budget: createMockBudget(...), ... }) — the exact same
+# call shape every other "Success State" test in that file already uses, and mockUseBudgetDetail's
+# inferred return type (src/test/mocks/budget-detail-hooks.ts) types `budget` as bare `null`
+# because its initial mock() factory returns `budget: null`, so passing an object there was
+# ALREADY a type error at every existing call site (dozens, present in the pre-#1630 baseline).
+# One more test using the file's own established pattern adds one more copy of that pre-existing,
+# already-tolerated error — not a new class of error, and not something this task's diff caused.
+# Full before/after error listing diffed (sorted, line/col stripped) confirms this is the ONLY
+# delta.
 
-2005
+2006
