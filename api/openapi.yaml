@@ -7724,9 +7724,12 @@ components:
         description:
           type: string
         end_date:
-          description: Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error.
-          format: date-time
-          type: string
+          anyOf:
+            - format: date
+              type: string
+            - format: date-time
+              type: string
+          description: Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error. Accepts YYYY-MM-DD or a full RFC3339 timestamp.
         expected_income:
           description: Planned income for the period. When set and > 0, this wins over amount in this same request — amount is overwritten to mirror this value. Leave unset to have amount remain authoritative.
           format: double
@@ -7745,8 +7748,12 @@ components:
         period:
           type: string
         start_date:
-          format: date-time
-          type: string
+          anyOf:
+            - format: date
+              type: string
+            - format: date-time
+              type: string
+          description: Budget start date. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp.
       type: object
     UpdateCategorizationRuleRequest:
       additionalProperties: false

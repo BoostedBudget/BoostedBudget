@@ -4811,8 +4811,8 @@
         {
           "name": "end_date",
           "type": "string",
-          "format": "date-time",
-          "description": "Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error."
+          "format": "date|date-time",
+          "description": "Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error. Accepts YYYY-MM-DD or a full RFC3339 timestamp."
         },
         {
           "name": "expected_income",
@@ -4868,7 +4868,8 @@
         {
           "name": "start_date",
           "type": "string",
-          "format": "date-time"
+          "format": "date|date-time",
+          "description": "Budget start date. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp."
         }
       ],
       "responseBody": [
