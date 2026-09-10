@@ -127,6 +127,20 @@ describe('CashFlowSankeyChart', () => {
   // this: the links were always correct, only the LAYOUT was wrong. These assertions are
   // option-level on purpose.
   describe('the ECharts series payload (#1630)', () => {
+    // ECharts' sankey default (`nodeAlign: 'justify'`) pins every TERMINAL node to the right
+    // edge — so a leaf expense parent (which terminates the flow, having no rendered children in
+    // the 'parents' view) would be stretched to the chart's max depth instead of sitting in its
+    // own column. `nodeAlign: 'left'` is what "leaf parents terminate at their own column" means
+    // in ECharts' vocabulary. This is option-level on purpose: a bun test cannot observe pixel
+    // layout, only the series option ECharts is handed.
+    it('sets nodeAlign to left so leaf expense parents terminate at their own column, not the right edge', () => {
+      render(<CashFlowSankeyChart {...defaultProps} viewMode={{ kind: 'parents' }} />)
+      const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+        series?: Array<{ nodeAlign?: string }>
+      }
+      expect(option?.series?.[0]?.nodeAlign).toBe('left')
+    })
+
     it('projects node data down to id/name/itemStyle — no internal field (least of all `depth`) leaks through', () => {
       render(<CashFlowSankeyChart {...defaultProps} viewMode={{ kind: 'parents' }} />)
       const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
