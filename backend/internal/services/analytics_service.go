@@ -690,7 +690,12 @@ func (s *analyticsService) GetRecurringSubscriptions(ctx context.Context, userID
 
 	return &domain.RecurringSubscriptionsResponse{
 		Subscriptions: items,
-		AsOfDate:      time.Now().Format("2006-01-02"),
+		// .UTC() before Format, because Format reads the value's Location: on a host behind UTC this
+		// reported yesterday's date as "as of". Every other date this API emits is a UTC calendar
+		// day (see clampFillEnd's docblock on why both ends resolve UTC for now), so this one has to
+		// be as well. The lookbackStart above needs no .UTC(): it is compared as an instant
+		// (`t.date >= $2`, no ::date cast) and is never formatted, so its Location is never read.
+		AsOfDate: time.Now().UTC().Format("2006-01-02"),
 	}, nil
 }
 
@@ -985,7 +990,16 @@ func (s *analyticsService) GetNetWorthTrend(ctx context.Context, userID string, 
 		return nil, fmt.Errorf("grouping must be one of: daily, weekly, monthly")
 	}
 
-	endDate := time.Now()
+	// ⚠ .UTC() IS NOT DECORATION HERE, and it is the only one of this file's `time.Now()` sites
+	// where it changes an answer. `time.Now().UTC()` is the same INSTANT with a different Location,
+	// so it matters exactly where the Location is read — and this value's Location is read twice.
+	// (1) GetAggregatedHistory bounds on `(bs.snapshot_at AT TIME ZONE 'UTC')::date <= $3::date`
+	// (and its household twin on `<= $5::date`), so pgx encodes this as a `date` using the value's
+	// OWN Location's calendar day; on a host behind UTC, snapshots written "today" in UTC fall
+	// outside a range ending "today" and today's net worth is invisible until local midnight.
+	// (2) both bounds are echoed as `Format("2006-01-02")` below, which is Location-dependent too.
+	// Production runs UTC so this was latent, not live.
+	endDate := time.Now().UTC()
 	startDate := endDate.AddDate(-1, 0, 0)
 
 	// Household mode fans out across every member's shared accounts instead of the

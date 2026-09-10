@@ -155,7 +155,7 @@ func NewBalanceCaptureService(deps BalanceCaptureServiceDeps) BalanceCaptureServ
 	}
 }
 
-// balanceCaptureEligibleStatuses is the set of linked-item statuses a daily capture will act on.
+// balanceCaptureEligible reports whether a linked-item status is one a daily capture will act on.
 //
 // Exactly one, and the narrowness is the point. Every other status is either a needs-reauth state
 // (login_required, error, pending_expiration, revoked) whose Plaid call would fail today and fail
@@ -405,7 +405,7 @@ func activeAccountsAbsentFromRoster(missing []string, accounts []domain.Account,
 //
 // It reduces excessive snapshots; it does not bound duplication (the read and the write are separate
 // statements and webhook processing takes no linked-item lock). For the daily capture, migration
-// 000191's partial unique index is what actually bounds it.
+// 000194's partial unique index is what actually bounds it.
 const balanceSnapshotDeduplicationWindow = 5 * time.Minute
 
 // balanceCohortInsert persists one snapshot and reports whether it inserted.
@@ -414,7 +414,7 @@ const balanceSnapshotDeduplicationWindow = 5 * time.Minute
 // handling and branching on a source string inside shared code would hide that. The sync path passes
 // a plain Create (webhook history permits several rows per account per day, by design — migration
 // 000017); the daily capture passes CreateDailyCapture, whose ON CONFLICT is scoped to migration
-// 000191's partial index.
+// 000194's partial index.
 type balanceCohortInsert func(ctx context.Context, snapshot *domain.BalanceSnapshot) (bool, error)
 
 // balanceCohortInput is one cohort write: a provider roster in, rows out.
@@ -538,7 +538,7 @@ func writeBalanceCohort(ctx context.Context, in balanceCohortInput) (balanceCoho
 //
 // PROVENANCE IS A PARAMETER (#1626 Phase 3 Task G). It used to be hardcoded to plaid_webhook, which
 // is one of the four entanglements that made the original writer unreusable — and it is not cosmetic:
-// migration 000191's uniqueness key is scoped to source = 'daily_capture', so a row written with the
+// migration 000194's uniqueness key is scoped to source = 'daily_capture', so a row written with the
 // wrong provenance would silently escape the idempotency constraint it was supposed to be under.
 //
 // ⚠ available_balance IS NOT COALESCED INTO current_balance, and that is a decision, not an

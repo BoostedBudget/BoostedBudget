@@ -11,9 +11,9 @@
  * ⚠ THE RETURN IS ALWAYS USER-IDENTIFYING TEXT: a merchant substring, an amount, a date, and
  * since #1626 an account NAME. Every caller must render it inside `data-ph-mask`, and must never
  * put it in an `aria-label`, `title` or any other attribute — session replay records attribute
- * values verbatim and `data-ph-mask` does not cover them. The LABEL
- * (`CONDITION_TYPE_LABELS[type]`) is a fixed vocabulary and deliberately stays outside the mask,
- * so session replay keeps the shape of the rule without keeping its contents.
+ * values verbatim and `data-ph-mask` does not cover them. The LABEL — rendered by the sibling
+ * `conditionLabel()` helper, which both callers use — is a fixed vocabulary and deliberately stays
+ * outside the mask, so session replay keeps the shape of the rule without keeping its contents.
  *
  * ⚠ Issue #1626 (Task K): `account_id` is resolved to a name HERE, not on the backend. The
  * backend route was rejected because the frozen `definition_snapshot` is stored and returned as
