@@ -514,7 +514,10 @@ export function buildSankeyData(
   links.push(...inFan.links)
 
   if (surplus < 0) {
-    nodes.push(syntheticNode('deficit', 'Drawn from Savings / Credit', CASH_FLOW_COLORS.netNegative, 'deficit'))
+    // The app has no way to know whether a shortfall was funded from savings, credit, or an
+    // overdraft — "Drawn from Savings / Credit" asserted a source we cannot observe. "Shortfall"
+    // states only what we actually know: expenses exceeded income for the period.
+    nodes.push(syntheticNode('deficit', 'Shortfall', CASH_FLOW_COLORS.netNegative, 'deficit'))
     links.push({ source: 'deficit', target: 'hub', value: -surplus })
   }
 
