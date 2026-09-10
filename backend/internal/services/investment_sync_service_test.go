@@ -360,21 +360,35 @@ type investmentSyncDeps struct {
 	holdingRepo    *MockHoldingRepository
 	invTxnRepo     *MockInvestmentTransactionRepository
 	snapshotRepo   *MockPortfolioSnapshotRepository
-	plaidSvc       *MockPlaidService
+	// userAccountRepo carries the #1631 investment backfill obligation. Tests that are not about
+	// the backfill register expectNoBackfillOwed (investment_sync_exclusion_test.go).
+	userAccountRepo *MockUserAccountRepository
+	plaidSvc        *MockPlaidService
 }
 
 func setupInvestmentSyncService(t *testing.T) (InvestmentSyncService, investmentSyncDeps) {
 	t.Helper()
 	deps := investmentSyncDeps{
-		webhookRepo:    new(MockWebhookRepository),
-		linkedItemRepo: new(MockLinkedItemRepository),
-		accountRepo:    new(MockAccountRepository),
-		securityRepo:   new(MockSecurityRepository),
-		holdingRepo:    new(MockHoldingRepository),
-		invTxnRepo:     new(MockInvestmentTransactionRepository),
-		snapshotRepo:   new(MockPortfolioSnapshotRepository),
-		plaidSvc:       new(MockPlaidService),
+		webhookRepo:     new(MockWebhookRepository),
+		linkedItemRepo:  new(MockLinkedItemRepository),
+		accountRepo:     new(MockAccountRepository),
+		securityRepo:    new(MockSecurityRepository),
+		holdingRepo:     new(MockHoldingRepository),
+		invTxnRepo:      new(MockInvestmentTransactionRepository),
+		snapshotRepo:    new(MockPortfolioSnapshotRepository),
+		userAccountRepo: new(MockUserAccountRepository),
+		plaidSvc:        new(MockPlaidService),
 	}
+	// Default permissive "nothing owed" answer: the overwhelming majority of these tests predate
+	// the backfill obligation and are not about it.
+	//
+	// ⚠ A test that IS about the obligation must NOT add a second expectation on top of this one.
+	// testify matches expectations in REGISTRATION order, so this mock.Anything default wins and
+	// the specific one is never consulted — which silently turns a backfill test into an
+	// incremental-sync test. Use newSyncServiceWithUserAccountRepo (investment_sync_exclusion_test.go)
+	// to swap in a fresh mock instead.
+	deps.userAccountRepo.On("PendingInvestmentBackfills", mock.Anything, mock.Anything).
+		Return(map[string]time.Time{}, nil).Maybe()
 	// Default permissive expectation for snapshot upsert.
 	// Tests that need to verify snapshot behavior set up specific expectations instead.
 	deps.snapshotRepo.On("Upsert", mock.Anything, mock.Anything, mock.Anything).
@@ -387,6 +401,7 @@ func setupInvestmentSyncService(t *testing.T) (InvestmentSyncService, investment
 		deps.holdingRepo,
 		deps.invTxnRepo,
 		deps.snapshotRepo,
+		deps.userAccountRepo,
 		deps.plaidSvc,
 		nil, // logger
 	)
@@ -695,6 +710,7 @@ func TestInvestmentSyncService_SyncHoldings_SnapshotUpsertedOnSuccess(t *testing
 		baseDeps.holdingRepo,
 		baseDeps.invTxnRepo,
 		snapshotRepo,
+		baseDeps.userAccountRepo,
 		baseDeps.plaidSvc,
 		nil,
 	)
@@ -748,6 +764,7 @@ func TestInvestmentSyncService_SyncHoldings_SnapshotSkippedOnPartialError(t *tes
 		baseDeps.holdingRepo,
 		baseDeps.invTxnRepo,
 		snapshotRepo,
+		baseDeps.userAccountRepo,
 		baseDeps.plaidSvc,
 		nil,
 	)

@@ -1577,6 +1577,12 @@ func main() {
 					holdingRepo,
 					investmentTxnRepo,
 					portfolioSnapshotRepo,
+					// #1631 M4: carries the investment backfill obligation recorded on
+					// user_accounts.investment_backfill_requested_at when an owner re-includes a
+					// previously excluded chain. A fresh repository rather than a shared handle
+					// because this file constructs one per consumer already (see
+					// userAccountService above); the repository is stateless.
+					repository.NewUserAccountRepository(db, fieldEncryptor),
 					plaidService,
 					appLogger,
 				)

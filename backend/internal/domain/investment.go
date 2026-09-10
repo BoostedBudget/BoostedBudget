@@ -249,11 +249,61 @@ type HoldingSyncResult struct {
 }
 
 // InvestmentTransactionSyncResult contains the results of an investment transaction sync.
+//
+// ⚠ Every counter below that is not TransactionsInserted means something DIFFERENT, and #1631
+// exists partly because they were previously conflated. Read the distinction before adding a
+// fifth: "we chose not to store it", "it was already there", and "we lost it" have opposite
+// operational responses, and a single number cannot tell an on-call engineer which happened.
 type InvestmentTransactionSyncResult struct {
 	SecuritiesUpserted   int
 	TransactionsInserted int
-	TransactionsSkipped  int // duplicates already in DB
-	PagesProcessed       int
+
+	// TransactionsSkipped means ALREADY PRESENT and nothing else — it is computed as
+	// len(domainTxns) - inserted, i.e. rows the upsert found on a unique conflict. It is a
+	// healthy number on every incremental sync (the 1-day overlap window guarantees some), so it
+	// must never be overloaded with a loss or an exclusion, both of which would then be invisible
+	// inside a figure nobody investigates.
+	TransactionsSkipped int
+
+	// TransactionsExcluded counts rows DELIBERATELY not stored because the owner set
+	// user_accounts.exclude_investment_sync on the chain that owns the account (#1631 M4). This is
+	// the user's own instruction being carried out, not a defect and not a loss, which is why it
+	// does not pin the watermark the way the Dropped* counters below do.
+	TransactionsExcluded int
+
+	// BackfilledChains counts the chains whose outstanding backfill obligation
+	// (user_accounts.investment_backfill_requested_at) this run honoured by widening its Plaid
+	// start date to the full lookback. Non-zero means the run cost a full-history re-fetch, which
+	// is worth being able to see in the log rather than inferring from a slow sync.
+	BackfilledChains int
+
+	// The Dropped* counters below are LOSSES: a row Plaid delivered that this sync could not
+	// store correctly. Any of them being non-zero pins investments_last_synced_date, because
+	// advancing the cursor past a row we did not store is what makes the loss permanent — the
+	// next run begins at lastSynced - 1 day and never sees it again.
+	//
+	// Each reason is separate on purpose. They have different causes and different fixes: an
+	// unmapped account means our account table is behind Plaid's, an unparsable date means Plaid
+	// sent something outside its own documented format, and an unresolved security means the
+	// response referenced a security it did not include.
+	TransactionsDroppedUnmappedAccount    int
+	TransactionsDroppedUnparsableDate     int
+	TransactionsDroppedUnresolvedSecurity int
+
+	PagesProcessed int
+}
+
+// AnyTransactionDropped reports whether this run failed to store a row Plaid delivered, which is
+// the condition under which investments_last_synced_date must NOT advance.
+//
+// ⚠ TransactionsExcluded is deliberately absent. An exclusion is the owner's instruction, so the
+// window was fully processed and the watermark may move; including it here would pin the cursor of
+// every item carrying an excluded brokerage cash account forever, re-fetching two years of the
+// SIBLING accounts' history on every single webhook.
+func (r *InvestmentTransactionSyncResult) AnyTransactionDropped() bool {
+	return r.TransactionsDroppedUnmappedAccount > 0 ||
+		r.TransactionsDroppedUnparsableDate > 0 ||
+		r.TransactionsDroppedUnresolvedSecurity > 0
 }
 
 // InvestmentTransactionFilters holds optional filters for querying investment transactions.
