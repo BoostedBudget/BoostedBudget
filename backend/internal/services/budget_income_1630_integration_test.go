@@ -92,7 +92,7 @@ func TestClaim1630_P2_IncomeAmountZero_EmptySourcesVsPFCPrimary(t *testing.T) {
 	enc := newTestFieldEncryptor(t)
 	txnRepo := repository.NewTransactionRepository(tx, enc)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	incomeSvc := NewBudgetIncomeService(txnRepo, logger)
+	incomeSvc := NewBudgetIncomeService(txnRepo.(IncomeTransactionGetter), logger)
 
 	baseBudget := &domain.Budget{
 		ID:     uuid.New().String(),

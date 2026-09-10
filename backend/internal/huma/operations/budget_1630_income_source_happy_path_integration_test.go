@@ -114,7 +114,7 @@ func TestUpdateBudget_PFCPrimaryIncomeSource_PersistsAndSyncsIncomeAmount(t *tes
 	customCategoryRepo := repository.NewCustomCategoryRepository(tx)
 	budgetSvc := services.NewBudgetService(budgetRepo, customCategoryRepo, nil, logger)
 
-	incomeSvc := services.NewBudgetIncomeService(txnRepo, logger)
+	incomeSvc := services.NewBudgetIncomeService(txnRepo.(services.IncomeTransactionGetter), logger)
 	matchingSvc := services.NewBudgetCategoryMatchingService(txnRepo)
 	syncSvc := services.NewBudgetSyncService(budgetRepo, incomeSvc, matchingSvc, logger)
 

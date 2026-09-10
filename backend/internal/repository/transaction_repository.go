@@ -2216,6 +2216,57 @@ func (r *transactionRepository) GetIncomeSumByTag(ctx context.Context, userID st
 	return sum, nil
 }
 
+// GetIncomeSumForSources returns the DEDUPLICATED sum of income (inflow/negative amount under
+// PFCv2) transactions matching ANY of the given pfc_primary categories or tags, in ONE query
+// (Issue #1630 fixwave 4 — an independent adversarial review found budget_income_service.go's
+// CalculateBudgetIncome summed GetIncomeSumByCategory/GetIncomeSumByTag independently per
+// configured source with no cross-source deduplication, so a single transaction matching two
+// configured sources — e.g. a paycheck deposit both categorized pfc_primary=INCOME and tagged
+// "salary" — was counted twice). Because every source's predicate is OR-ed together inside ONE
+// WHERE clause, a transaction satisfying more than one of them is still just one row in the
+// result set, so SUM(amount) counts it exactly once regardless of how many sources it matches —
+// this is what makes a single combined query the fix, not a smarter way to add per-source sums
+// back together. pfc_primary matching reuses buildCategoryClause's "pfc" branch (as
+// GetIncomeSumByCategory already did) so nested custom categories keep rolling up. Returns 0 with
+// no query when both slices are empty — CalculateBudgetIncome only calls this when at least one
+// non-manual source is configured, but this method itself must not fire an unconditioned "()"
+// clause.
+func (r *transactionRepository) GetIncomeSumForSources(ctx context.Context, userID string, pfcPrimaries, tags []string, startDate, endDate time.Time) (float64, error) {
+	if len(pfcPrimaries) == 0 && len(tags) == 0 {
+		return 0, nil
+	}
+
+	clauses := make([]string, 0, len(pfcPrimaries)+1)
+	args := []interface{}{userID, startDate, endDate}
+	nextArg := 4
+	for i := range pfcPrimaries {
+		catClause, catArgs := buildCategoryClause("pfc", &pfcPrimaries[i], nil, nil, nextArg)
+		clauses = append(clauses, "("+catClause+")")
+		args = append(args, catArgs...)
+		nextArg += len(catArgs)
+	}
+	if len(tags) > 0 {
+		clauses = append(clauses, fmt.Sprintf("tags ?| $%d", nextArg))
+		args = append(args, pq.Array(tags))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT COALESCE(ABS(SUM(amount)), 0)
+		FROM transactions
+		WHERE user_id = $1
+		  AND deleted_at IS NULL
+		  AND amount < 0
+		  AND date BETWEEN $2 AND $3
+		  AND (%s)
+	`, strings.Join(clauses, "\n\t\t  OR "))
+
+	var sum float64
+	if err := r.db.QueryRow(ctx, query, args...).Scan(&sum); err != nil {
+		return 0, fmt.Errorf("failed to get income sum for sources: %w", err)
+	}
+	return sum, nil
+}
+
 // =============================================================================
 // Issue #493: Budget Category Matching Service
 // =============================================================================
