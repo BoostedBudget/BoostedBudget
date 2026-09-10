@@ -199,7 +199,7 @@ func annotateQuarantineStatus(r *domain.CategorizationRule) {
 	// rules.QuarantineEnforced() && observability.QuarantineReasonStopsMatching(reason), so with
 	// RULE_QUARANTINE_ENFORCE off an enforcement-class rule reports false — because the engine
 	// really is running it. The corollary that cost three surfaces a correction: false does NOT
-	// mean "repaired". See internal/rules/quarantine_published_contract_test.go.
+	// mean "repaired". See internal/services/quarantine_published_contract_test.go.
 	//
 	// ⚠ #1625 final review I1: this comment used to explain why invalid_condition_logic and
 	// unnormalizable_condition are NOT reported as stopped — sitting on the line that reports them

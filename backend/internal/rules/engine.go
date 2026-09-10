@@ -200,6 +200,12 @@ var enforceQuarantine = quarantineEnforcementFromEnv()
 // and any future documentation generator cannot disagree about it.
 const quarantineEnforceEnvVar = "RULE_QUARANTINE_ENFORCE"
 
+// QuarantineEnforceEnvVar re-exports that name for guards in other packages. The published doc
+// tags on domain.CategorizationRule promise the reader this switch exists; the test that checks
+// they still name it lives in internal/services, beside the read model whose value the switch
+// changes, so it needs the name from here rather than a second copy of the literal.
+const QuarantineEnforceEnvVar = quarantineEnforceEnvVar
+
 // quarantineEnforcementFromEnv mirrors config.getEnvBool(key, true): unset or unparseable means
 // the default (ON), anything ParseBool understands means what it says.
 func quarantineEnforcementFromEnv() bool {
