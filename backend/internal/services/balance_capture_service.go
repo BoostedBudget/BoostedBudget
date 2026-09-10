@@ -155,7 +155,7 @@ func NewBalanceCaptureService(deps BalanceCaptureServiceDeps) BalanceCaptureServ
 	}
 }
 
-// balanceCaptureEligibleStatuses is the set of linked-item statuses a daily capture will act on.
+// balanceCaptureEligible reports whether a linked-item status is one a daily capture will act on.
 //
 // Exactly one, and the narrowness is the point. Every other status is either a needs-reauth state
 // (login_required, error, pending_expiration, revoked) whose Plaid call would fail today and fail
