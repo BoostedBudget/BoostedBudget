@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router'
 import type { BudgetCategory } from '../../types'
 import { MATCH_LOGIC_LABELS } from '@boostedbudget/shared-types/matching'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 mock.module('../BudgetProgressBar', () => ({
   BudgetProgressBar: ({ spent, total }: { spent: number; total: number }) => (
@@ -453,6 +454,139 @@ describe('BudgetCategoryCard', () => {
       render(<BudgetCategoryCard category={createSavingsCategory()} />)
       expect(screen.getByText('$200.00')).toBeTruthy()
       expect(screen.getByText('$50.00')).toBeTruthy()
+    })
+  })
+
+  describe('Parent remainder and over-allocation warning (#1630 Task 4)', () => {
+    const utilitiesParent = (): BudgetCategory =>
+      createMockCategory({
+        id: 'utilities',
+        category_kind: 'pfc',
+        pfc_primary: 'RENT_AND_UTILITIES',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+        spent_amount: 480,
+      })
+
+    const electricChild = (overrides?: Partial<BudgetCategory>): BudgetCategory =>
+      createMockCategory({
+        id: 'electric',
+        category_kind: 'pfc',
+        pfc_primary: 'RENT_AND_UTILITIES',
+        pfc_detailed: 'RENT_AND_UTILITIES_ELECTRIC',
+        allocated_amount: 300,
+        spent_amount: 300,
+        ...overrides,
+      })
+
+    const cableChild = (overrides?: Partial<BudgetCategory>): BudgetCategory =>
+      createMockCategory({
+        id: 'cable',
+        category_kind: 'pfc',
+        pfc_primary: 'RENT_AND_UTILITIES',
+        pfc_detailed: 'RENT_AND_UTILITIES_CABLE',
+        allocated_amount: 200,
+        spent_amount: 150,
+        ...overrides,
+      })
+
+    it("shows the parent's own unallocated remainder, distinct from its children's allocations", () => {
+      render(
+        <BudgetCategoryCard
+          category={utilitiesParent()}
+          variant="parent"
+          childCategories={[electricChild(), cableChild()]}
+        />
+      )
+      // $500 utilities contains $300 electric + $200 cable, leaving $0 remainder.
+      expect(screen.getByText(/remaining after children/i)).toBeInTheDocument()
+      expect(screen.getByText('$0.00')).toBeInTheDocument()
+    })
+
+    it("shows the parent's own direct spending, distinct from its children's spend", () => {
+      render(
+        <BudgetCategoryCard
+          category={utilitiesParent()}
+          variant="parent"
+          childCategories={[electricChild(), cableChild()]}
+        />
+      )
+      // parent's own rolled spend ($480) already contains electric+cable's $450 — the water
+      // bill itself only cost $30.
+      expect(screen.getByText(/direct spending/i)).toBeInTheDocument()
+      expect(screen.getByText('$30.00')).toBeInTheDocument()
+    })
+
+    it('renders a NEGATIVE remainder (children over-allocate the parent) without blocking anything', () => {
+      render(
+        <BudgetCategoryCard
+          category={utilitiesParent()}
+          variant="parent"
+          childCategories={[
+            electricChild({ allocated_amount: 400 }),
+            cableChild({ allocated_amount: 200 }),
+          ]}
+        />
+      )
+      // $600 of children under a $500 parent -> remainder is -$100.
+      expect(screen.getByText('-$100.00')).toBeInTheDocument()
+    })
+
+    it('shows a visible, non-blocking warning when children over-allocate the parent', () => {
+      render(
+        <BudgetCategoryCard
+          category={utilitiesParent()}
+          variant="parent"
+          childCategories={[
+            electricChild({ allocated_amount: 400 }),
+            cableChild({ allocated_amount: 200 }),
+          ]}
+        />
+      )
+      expect(screen.getByRole('status')).toHaveTextContent(/allocate.*more than/i)
+      // No disabled controls anywhere — warn, never block (#1630 Task 4).
+      expect(screen.queryByRole('button', { name: /disabled/i })).not.toBeInTheDocument()
+    })
+
+    it('shows no over-allocation warning when children are within the parent', () => {
+      render(
+        <BudgetCategoryCard
+          category={utilitiesParent()}
+          variant="parent"
+          childCategories={[electricChild(), cableChild()]}
+        />
+      )
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    })
+
+    it('does not render a remainder/direct-spend section for non-parent variants', () => {
+      render(<BudgetCategoryCard category={createMockCategory()} variant="standalone" />)
+      expect(screen.queryByText(/remaining after children/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/direct spending/i)).not.toBeInTheDocument()
+    })
+
+    it('does not render a remainder section for a parent with no children passed', () => {
+      render(<BudgetCategoryCard category={utilitiesParent()} variant="parent" />)
+      expect(screen.queryByText(/remaining after children/i)).not.toBeInTheDocument()
+    })
+
+    it('masks every money figure in the parent summary and warning, never in an attribute', () => {
+      render(
+        <BudgetCategoryCard
+          category={utilitiesParent()}
+          variant="parent"
+          childCategories={[
+            electricChild({ allocated_amount: 400 }),
+            cableChild({ allocated_amount: 200 }),
+          ]}
+        />
+      )
+      const card = screen.getByRole('article')
+      const sentinels: PIISentinel[] = [
+        { value: '-$100.00', fieldDescription: 'parent allocation remainder' },
+        { value: '$500.00', fieldDescription: "parent's own allocated_amount in warning copy" },
+      ]
+      expect(scanForUnmaskedPII(card, sentinels)).toEqual([])
     })
   })
 })

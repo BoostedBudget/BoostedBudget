@@ -148,6 +148,84 @@ export function filterTopLevel(categories: BudgetCategory[]): BudgetCategory[] {
   );
 }
 
+/**
+ * Reports whether `child` is specifically the sub-allocation nested under `parent` (as opposed
+ * to merely "some" budgeted parent — see isSubAllocationWithin above). Mirrors
+ * AllocationBreakdown.tsx's private isNestedUnder and backend DuplicateParentIdentity's shape
+ * test (Issue #1630 Task 4) — kept here, exported, so BudgetCategoryCard/BudgetCategoryManager
+ * can identify a specific parent's own children without re-deriving the relation a third time.
+ */
+export function isSubAllocationOfParent(child: BudgetCategory, parent: BudgetCategory): boolean {
+  if (!isContainingMatchLogic(parent.match_logic)) return false;
+  if (!isContainedMatchLogic(child.match_logic)) return false;
+  if (child.category_kind === 'pfc') {
+    return !!(
+      child.pfc_detailed &&
+      child.pfc_primary &&
+      parent.category_kind === 'pfc' &&
+      !parent.pfc_detailed &&
+      parent.pfc_primary === child.pfc_primary
+    );
+  }
+  if (child.category_kind === 'custom') {
+    if (child.custom_parent_id) {
+      return parent.category_kind === 'custom' && parent.custom_category_id === child.custom_parent_id;
+    }
+    if (child.custom_parent_pfc_primary) {
+      return (
+        parent.category_kind === 'pfc' &&
+        !parent.pfc_detailed &&
+        parent.pfc_primary === child.custom_parent_pfc_primary
+      );
+    }
+  }
+  return false;
+}
+
+/**
+ * A parent's own unallocated ALLOCATION remainder (Issue #1630 Task 4): what is left of the
+ * parent's own allocated_amount after its sub-allocation children's allocations are carved out.
+ * Subtraction is valid here — allocated_amount is a number the user typed, and a sub-allocation
+ * child's amount is genuinely a piece of the parent's own. Can be NEGATIVE: over-allocation
+ * warns rather than blocks (see AllocationBreakdown's isOverAllocated for the budget-wide
+ * analogue), so "$600 of children under a $500 parent" is a legal, persistable state whose
+ * remainder is -$100. Only children `isSubAllocationOfParent` recognizes as this SPECIFIC
+ * parent's are subtracted — a hierarchy child whose own match_logic escapes containment was
+ * never carved out of the parent's allocation in the first place.
+ */
+export function computeParentAllocationRemainder(
+  parent: BudgetCategory,
+  children: BudgetCategory[]
+): number {
+  const childrenAllocated = children
+    .filter((c) => isSubAllocationOfParent(c, parent))
+    .reduce((sum, c) => sum + c.allocated_amount, 0);
+  return parent.allocated_amount - childrenAllocated;
+}
+
+/**
+ * A parent's own DIRECT spending (Issue #1630 Task 4), distinct from its children's — i.e. the
+ * portion of the parent's own spent_amount not attributable to a sub-allocation child.
+ *
+ * Unlike the allocation remainder above, spend is NOT generally subtractive (a child's matched
+ * spend need not be a subset of the parent's — see Task 0.5). This is safe here ONLY because it
+ * subtracts exclusively over `isSubAllocationOfParent` children: the Task 0.5 containment rule
+ * (isContainingMatchLogic(parent) && isContainedMatchLogic(child)) is exactly the condition that
+ * GUARANTEES a contained child's matched-transaction set is a subset of the parent's — the same
+ * guarantee the backend's GetBudgetVsActual dedup already relies on. A child that escapes
+ * containment (tag_only/or, or an 'and'-parent's child) is never included here, because its
+ * spend was never rolled into the parent's own spent_amount to begin with.
+ */
+export function computeParentDirectSpend(
+  parent: BudgetCategory,
+  children: BudgetCategory[]
+): number {
+  const childrenSpent = children
+    .filter((c) => isSubAllocationOfParent(c, parent))
+    .reduce((sum, c) => sum + c.spent_amount, 0);
+  return parent.spent_amount - childrenSpent;
+}
+
 export interface Budget {
   id: string;
   user_id: string;

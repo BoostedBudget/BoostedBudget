@@ -228,7 +228,25 @@ export function subAllocationReduceVerdict(
 // "<path under features/budgets/>::<normalized receiver.reduce(...) snippet>" — not by line
 // number, which rots — with a reason for why the exemption is safe despite not routing through
 // filterTopLevel. Add an entry here, with a reason, in the same commit that adds such a site.
-const allowedRawSubAllocationReduces: Record<string, string> = {}
+const allowedRawSubAllocationReduces: Record<string, string> = {
+  // Issue #1630 Task 4: computeParentAllocationRemainder/computeParentDirectSpend each reduce
+  // over `children` — NOT the raw `categories` array this guard exists to catch — where
+  // `children` has ALREADY been filtered to `isSubAllocationOfParent(c, parent)` immediately
+  // before the .reduce() (see types.ts). That is a different quantity from the budget-wide
+  // total this guard protects: filterTopLevel answers "which rows count toward the BUDGET
+  // total", while these two answer "which of THIS ONE parent's children are its own
+  // sub-allocations" — a per-parent question filterTopLevel does not (and should not) answer.
+  // Routing it through filterTopLevel would be wrong here, not merely unnecessary: filterTopLevel
+  // returns top-level rows across the WHOLE budget, which would drop every child outright.
+  'types.ts::children.reduce((sum, c) => sum + c.allocated_amount, 0':
+    'computeParentAllocationRemainder (#1630 Task 4) — reduces only over children already ' +
+    'filtered to isSubAllocationOfParent(c, parent), a per-parent question filterTopLevel does ' +
+    'not answer; see block comment above this allowlist for the full reasoning.',
+  'types.ts::children.reduce((sum, c) => sum + c.spent_amount, 0':
+    'computeParentDirectSpend (#1630 Task 4) — same isSubAllocationOfParent(c, parent) filter as ' +
+    'the allocated_amount entry above; safe to subtract ONLY because that containment condition ' +
+    'guarantees each subtracted child\'s matched spend is a subset of the parent\'s own.',
+}
 
 // ---- The live guard. -----------------------------------------------------------------------
 

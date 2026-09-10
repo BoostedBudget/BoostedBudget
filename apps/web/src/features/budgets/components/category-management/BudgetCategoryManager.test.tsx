@@ -296,6 +296,66 @@ describe('BudgetCategoryManager', () => {
     expect(text).not.toMatch(/restore|recover|undelete/i)
   })
 
+  /**
+   * Issue #1630 Task 4: deleting a PARENT promotes its sub-allocation children to top-level and
+   * changes the budget's total allocation by the parent's own remainder — consistent, but
+   * previously silent. The confirm copy must say so; a leaf category with no children must not
+   * mention it at all (nothing changes about the total when a leaf is deleted).
+   */
+  it('delete confirmation discloses child promotion and the total-allocation change for a parent', async () => {
+    const user = userEvent.setup({ delay: null })
+    const categories = [
+      createMockCategory({
+        id: 'parent',
+        category_kind: 'pfc',
+        pfc_primary: 'RENT_AND_UTILITIES',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+        spent_amount: 0,
+      }),
+      createMockCategory({
+        id: 'electric',
+        category_kind: 'pfc',
+        pfc_primary: 'RENT_AND_UTILITIES',
+        pfc_detailed: 'RENT_AND_UTILITIES_ELECTRIC',
+        allocated_amount: 300,
+        spent_amount: 0,
+      }),
+    ]
+
+    renderManager({ categories })
+
+    // The parent card renders first — its delete button is the first in DOM order.
+    const deleteButtons = screen.getAllByRole('button', { name: /^Delete category$/i })
+    await user.click(deleteButtons[0])
+
+    const dialog = await screen.findByRole('alertdialog')
+    const text = dialog.textContent ?? ''
+
+    expect(text).toMatch(/top level/i)
+    expect(text).toMatch(/\$200\.00/) // parent's own remainder: 500 - 300
+    expect(text).not.toMatch(/restore|recover|undelete/i)
+
+    const sentinels: PIISentinel[] = [
+      { value: '$200.00', fieldDescription: 'parent remainder in delete confirmation dialog' },
+    ]
+    expect(scanForUnmaskedPII(dialog, sentinels)).toEqual([])
+  })
+
+  it('delete confirmation says nothing about children when deleting a leaf category', async () => {
+    const user = userEvent.setup({ delay: null })
+    const categories = [createMockCategory({ id: 'cat-1' })]
+
+    renderManager({ categories })
+    await user.click(screen.getByRole('button', { name: /^Delete category$/i }))
+
+    const dialog = await screen.findByRole('alertdialog')
+    const text = dialog.textContent ?? ''
+
+    expect(text).not.toMatch(/top level/i)
+    expect(text).not.toMatch(/child categor/i)
+  })
+
   it('should call onDeleteCategory after confirmation', async () => {
     const user = userEvent.setup({ delay: null })
     const categories = [createMockCategory({ id: 'cat-1' })]
