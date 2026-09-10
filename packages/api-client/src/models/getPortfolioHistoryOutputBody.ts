@@ -35,6 +35,8 @@ import type { PortfolioHistoryPoint } from './portfolioHistoryPoint';
 export interface GetPortfolioHistoryOutputBody {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  currency_code?: string;
   /** @nullable */
   history: PortfolioHistoryPoint[] | null;
+  is_mixed_currency: boolean;
 }
