@@ -888,7 +888,13 @@ func main() {
 
 		// Issue #494: Budget Sync Service for Envelope Budgeting
 		// Recalculates budget income and category spent amounts after transaction sync
-		budgetIncomeService := services.NewBudgetIncomeService(transactionRepo, budgetLogger)
+		// #1630 fixwave 4: IncomeTransactionGetter added GetIncomeSumForSources, which is not part
+		// of the broader repository.TransactionRepository interface transactionRepo is typed as
+		// (that interface is implemented by many mocks across the codebase; widening it would
+		// force every one of them to grow the method too). The concrete *transactionRepository
+		// this variable holds already implements GetIncomeSumForSources, so this assertion always
+		// succeeds — it exists purely to narrow the static interface type at this one call site.
+		budgetIncomeService := services.NewBudgetIncomeService(transactionRepo.(services.IncomeTransactionGetter), budgetLogger)
 		budgetCategoryMatchingService := services.NewBudgetCategoryMatchingService(transactionRepo)
 		budgetSyncService := services.NewBudgetSyncService(
 			budgetRepo,
