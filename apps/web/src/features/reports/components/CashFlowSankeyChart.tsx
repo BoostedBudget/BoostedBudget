@@ -136,6 +136,11 @@ export function CashFlowSankeyChart({
       },
       series: [{
         type: 'sankey',
+        // ECharts' default (`nodeAlign: 'justify'`) pins every TERMINAL node to the right edge,
+        // stretching a leaf expense parent all the way to the chart's max depth. `'left'` lets
+        // each node sit at its own natural depth instead — which is what "a leaf expense parent
+        // terminates at its own column, no synthetic children invented" means in ECharts' terms.
+        nodeAlign: 'left',
         emphasis: { focus: 'adjacency' },
         label: {
           formatter: (params: unknown) => {
