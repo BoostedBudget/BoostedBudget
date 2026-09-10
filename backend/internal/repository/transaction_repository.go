@@ -217,13 +217,15 @@ type TransactionRepository interface {
 	// GetByUserIDKeyset retrieves transactions using keyset (cursor) pagination.
 	// cursor=nil returns the first page. Fetches limit+1 rows to detect end-of-list.
 	// Returns a slice of up to limit transactions and the cursor for the next page (nil = end of list).
+	// The third return is whole-set totals for the filtered set, non-nil ONLY when cursor is nil
+	// (the first page). nil means "not computed", never "zero" — see domain.FeedTotals (#1626).
 	GetByUserIDKeyset(
 		ctx context.Context,
 		userID string,
 		filters domain.TransactionFilters,
 		cursor *domain.TransactionCursor,
 		limit int,
-	) ([]domain.Transaction, *domain.TransactionCursor, error)
+	) ([]domain.Transaction, *domain.TransactionCursor, *domain.FeedTotals, error)
 
 	// GetRecentInflowsByUserID returns posted (non-pending) inflow transactions
 	// (amount < 0 under PFCv2) for a user with a date on or after since.
@@ -245,13 +247,14 @@ type TransactionRepository interface {
 	// Issue #138: unified activity feed with cursor-correct UNION ALL.
 	// Requires filters.SortBy = "date" (enforced at service layer).
 	// Returns V:2 cursor; nil cursor = end of list.
+	// The third return is whole-set totals, non-nil ONLY on the first page — see GetByUserIDKeyset.
 	GetByUserIDKeysetUnified(
 		ctx context.Context,
 		userID string,
 		filters domain.TransactionFilters,
 		cursor *domain.TransactionCursor,
 		limit int,
-	) ([]*domain.ActivityItem, *domain.TransactionCursor, error)
+	) ([]*domain.ActivityItem, *domain.TransactionCursor, *domain.FeedTotals, error)
 
 	// ResolveEffectiveMerchantNames returns a map of merchant ID → effective display name
 	// for the given set of merchant IDs and user, in one DB round-trip.
@@ -1382,49 +1385,13 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		argIndex++
 	}
 
-	// pfc_primaries and pfc_detaileds use OR logic between them
-	// (a transaction matches if its primary is in primaries OR its detailed is in detaileds)
-	if len(filters.PFCPrimaries) > 0 || len(filters.PFCDetaileds) > 0 {
-		var orParts []string
-		if len(filters.PFCPrimaries) > 0 {
-			placeholders := make([]string, len(filters.PFCPrimaries))
-			for i, p := range filters.PFCPrimaries {
-				placeholders[i] = fmt.Sprintf("$%d", argIndex)
-				args = append(args, p)
-				argIndex++
-			}
-			orParts = append(orParts, "t.effective_pfc_primary IN ("+strings.Join(placeholders, ", ")+")")
-		}
-		if len(filters.PFCDetaileds) > 0 {
-			placeholders := make([]string, len(filters.PFCDetaileds))
-			for i, d := range filters.PFCDetaileds {
-				placeholders[i] = fmt.Sprintf("$%d", argIndex)
-				args = append(args, d)
-				argIndex++
-			}
-			orParts = append(orParts, "t.effective_pfc_detailed IN ("+strings.Join(placeholders, ", ")+")")
-		}
-		conditions = append(conditions, "("+strings.Join(orParts, " OR ")+")")
-	}
-
-	if len(filters.CustomCategoryIDs) > 0 {
-		placeholders := make([]string, len(filters.CustomCategoryIDs))
-		for i, id := range filters.CustomCategoryIDs {
-			placeholders[i] = fmt.Sprintf("$%d", argIndex)
-			args = append(args, id)
-			argIndex++
-		}
-		idList := strings.Join(placeholders, ", ")
-		conditions = append(conditions, fmt.Sprintf(
-			"(t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-				"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s))))"+
-				" /* tombstone-exempt(custom_categories): HISTORY FILTER (#1569 Task 9). This expands a requested"+
-				" category id to itself plus its children so the filter matches the transactions"+
-				" already filed under it. Excluding tombstones would make a user's own past"+
-				" transactions vanish from their own filtered view. The PICKER that supplies these"+
-				" ids is CustomCategoryRepository.GetByUserID, which IS tombstone-filtered. */",
-			idList, idList,
-		))
+	// #1626: the PFC and custom predicates are ONE OR-joined group. They used to be separate
+	// top-level conditions, and because a row is either pfc-kind or custom-kind (never both), the
+	// conjunction of the two matched nothing.
+	if catClause, catArgs, nextIdx := categoryFilterGroup(filters, argIndex, args); catClause != "" {
+		conditions = append(conditions, strings.TrimPrefix(catClause, " AND "))
+		args = catArgs
+		argIndex = nextIdx
 	}
 
 	if filters.Search != nil {
@@ -1624,7 +1591,26 @@ func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transa
 // scan-destination construction from post-scan processing (needed when an extra column is
 // appended to the scan destination, e.g. effective_merchant_sort_name in keyset queries).
 type transactionScanState struct {
-	source         string
+	source string
+	// accountID is scanned NULL-TOLERANTLY because transactions.account_id is NULLABLE and nothing
+	// in these reads hides such a row: migration 000035's ON DELETE SET NULL left an orphaned row
+	// behind every pre-#1569-Task-2 hard delete, buildWhereClause carries no account predicate at
+	// all, and the unified feed says outright that these are "still the user's own rows", admitting
+	// them with `OR t.account_id IS NULL`.
+	//
+	// Scanned straight into domain.Transaction.AccountID (a plain string) pgx failed the ROW
+	// outright — "cannot scan NULL into *string" — which is a 500 for the WHOLE list rather than one
+	// missing row, on every read sharing this dest slice (GetByID, GetByUserIDWithFilters,
+	// GetByUserIDKeyset). The unified feed's own scan already used a *string for this column, which
+	// is why only the banking path failed. Found by
+	// TestSankeyClickThrough_NodeAmountAndListTotalDescribeTheSameSet_Integration, whose fixture
+	// seeds an orphan because the category hierarchy counts one toward a node's amount.
+	//
+	// ⚠ sql.NullString, NOT *string, and that is not a style choice: pgxmock rejects a **string
+	// destination for a non-NULL string cell ("destination kind 'ptr' not supported for value kind
+	// 'string'"), so a pointer here reddens every pgxmock test that supplies an account_id. metaStr
+	// below gets away with *string only because those tests pass nil for it.
+	accountID      sql.NullString
 	metaStr        *string
 	tagsJSON       []byte
 	tagsSourceJSON []byte
@@ -1639,7 +1625,7 @@ func (r *transactionRepository) scanTransactionDestSliceWithState(tx *domain.Tra
 	dest := []any{
 		&tx.ID,
 		&tx.UserID,
-		&tx.AccountID,
+		&s.accountID,
 		&tx.LinkedItemID,
 		&s.source,
 		&tx.ExternalTransactionID,
@@ -1683,6 +1669,12 @@ func (r *transactionRepository) scanTransactionDestSliceWithState(tx *domain.Tra
 func (r *transactionRepository) postScanTransactionState(tx *domain.Transaction, s *transactionScanState) error {
 	tx.Source = domain.TransactionSource(s.source)
 	tx.ExternalMetadata = s.metaStr
+
+	// An orphaned row (account_id NULL — see transactionScanState.accountID) presents the empty
+	// string, which is what ActivityItem.AccountID already does for the same row on the unified
+	// path. It is deliberately NOT an error and NOT a dropped row: the row is retained history the
+	// user still owns.
+	tx.AccountID = s.accountID.String
 
 	if err := r.decryptTransactionPIIFields(tx); err != nil {
 		return fmt.Errorf("failed to decrypt transaction: %w", err)
@@ -2590,7 +2582,7 @@ func (r *transactionRepository) GetByUserIDKeyset(
 	filters domain.TransactionFilters,
 	cursor *domain.TransactionCursor,
 	limit int,
-) ([]domain.Transaction, *domain.TransactionCursor, error) {
+) ([]domain.Transaction, *domain.TransactionCursor, *domain.FeedTotals, error) {
 	whereClause, args := buildWhereClause(userID, filters)
 
 	sortKey := filters.SortBy
@@ -2670,6 +2662,51 @@ func (r *transactionRepository) GetByUserIDKeyset(
 		joinClause = merchantSortJoins
 	}
 
+	// ── Whole-set totals, FIRST PAGE ONLY (#1626 Phase 2) ────────────────────
+	//
+	// WHY. The response carried only a page, so "what does this filtered set come to" was not a
+	// question the product could answer — which is what made the reports Sankey's click-through
+	// claim unverifiable rather than merely untested.
+	//
+	// ⚠ STATED PRECISELY, because the loose form ("this node's amount equals the filtered list's
+	// total") is FALSE for income and shipped in five comments before this branch was reviewed. A
+	// hierarchy node's amount is COALESCE(SUM(ABS(t.amount)),0) — an unsigned chart quantity — while
+	// this total is SUM(t.amount) under PFCv2 signs, where inflows are NEGATIVE. So the property that
+	// holds over the same filtered set is |node amount| == |total_amount|; for an expense node the
+	// two numbers also happen to be equal, and for an income node they differ by a factor of −1.
+	// Both SQL expressions are right for their own consumer: a chart needs magnitudes, a ledger
+	// total needs signs. Do not "fix" either one to make the sentence simpler.
+	//
+	// ⚠ ONLY when no cursor was supplied. Re-aggregating the whole filtered set on every page of
+	// the busiest list in the app would be real cost for a number that does not change as the user
+	// pages. TestBankingKeysetCursoredPage_SkipsTheAggregateEntirely pins the skip.
+	//
+	// ⚠ IT REUSES THE PAGE QUERY’S OWN FRAGMENTS AND ARGS — that is the whole correctness
+	// argument. Rebuilding the predicate would let the total drift from the rows it describes, and
+	// a wrong total is worse than none because the client cannot tell that it is wrong. Two SQL
+	// strings agreeing is not two result sets agreeing, so the agreement is pinned behaviourally
+	// by TestFeedTotals_AgreeWithTheRowsTheyDescribe_Integration, not by reading these queries.
+	// Exact here because the cursor clause is the only later mutation of whereClause and the LIMIT
+	// arg the only later append to args, and neither has happened yet on this path.
+	var totals *domain.FeedTotals
+	if cursor == nil {
+		aggQuery := fmt.Sprintf(`
+		-- tombstone-exempt(transactions t): shares buildWhereClause's interpolated WHERE with the
+		-- page query below, which emits transactionTombstoneCondition("t", ...) unconditionally (#1569).
+		SELECT COUNT(*), COALESCE(SUM(t.amount), 0)
+		FROM transactions t
+		%s
+		%s
+	`, joinClause, whereClause)
+
+		var count int
+		var amount float64
+		if err := r.db.QueryRow(ctx, aggQuery, args...).Scan(&count, &amount); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to aggregate transactions (keyset totals): %w", err)
+		}
+		totals = &domain.FeedTotals{Count: count, Amount: amount}
+	}
+
 	// For merchant sort, select an extra column to capture the EFF value for cursor building.
 	selectExpr := transactionSelectExprT
 	effMerchantExtra := ""
@@ -2693,7 +2730,7 @@ func (r *transactionRepository) GetByUserIDKeyset(
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to query transactions (keyset): %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to query transactions (keyset): %w", err)
 	}
 	defer rows.Close()
 
@@ -2707,26 +2744,26 @@ func (r *transactionRepository) GetByUserIDKeyset(
 			dest, state := r.scanTransactionDestSliceWithState(&tx)
 			dest = append(dest, &effMerchantName)
 			if err := rows.Scan(dest...); err != nil {
-				return nil, nil, fmt.Errorf("failed to scan transaction: %w", err)
+				return nil, nil, nil, fmt.Errorf("failed to scan transaction: %w", err)
 			}
 			if err := r.postScanTransactionState(&tx, state); err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			txs = append(txs, tx)
 			effMerchantNames = append(effMerchantNames, effMerchantName)
 		}
 		if err := rows.Err(); err != nil {
-			return nil, nil, fmt.Errorf("error iterating transactions (keyset): %w", err)
+			return nil, nil, nil, fmt.Errorf("error iterating transactions (keyset): %w", err)
 		}
 	} else {
 		txs, err = r.scanTransactions(rows)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 
 	if err := r.enrichEffectiveMerchantNames(ctx, userID, txs); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if len(txs) == limit+1 {
@@ -2737,12 +2774,12 @@ func (r *transactionRepository) GetByUserIDKeyset(
 		}
 		nextCursor, buildErr := buildKeysetCursor(last, sortKey, sortDir, effMN)
 		if buildErr != nil {
-			return nil, nil, fmt.Errorf("failed to build next cursor: %w", buildErr)
+			return nil, nil, nil, fmt.Errorf("failed to build next cursor: %w", buildErr)
 		}
-		return txs[:limit], nextCursor, nil
+		return txs[:limit], nextCursor, totals, nil
 	}
 
-	return txs, nil, nil
+	return txs, nil, totals, nil
 }
 
 // buildKeysetCursor constructs a TransactionCursor from a transaction row.
@@ -2943,7 +2980,79 @@ func (r *transactionRepository) GetRecentInflowsByUserID(ctx context.Context, us
 // below; neither should be called on its own, and TestRetainedVisibilityLegsTravelTogether holds
 // that to account.
 func retainedAccountVisibilityLegs(alias, dateCol string) string {
-	return activeChainSiblingLeg(alias) + retainedAccountNoLiveSuccessorLeg(alias, dateCol)
+	return activeChainSiblingLeg(alias) +
+		retainedAccountNoLiveSuccessorLeg(alias, dateCol) +
+		accountWithNoActiveIntervalLeg(alias)
+}
+
+// accountWithNoActiveIntervalLeg admits a transaction whose account has NO 'active' row in
+// account_status_history at all (#1626 Phase 2).
+//
+// WHY IT EXISTS. The two legs above cover "the chain has a live sibling" and "this account was
+// active over an interval covering the row's date". An account with no 'active' row satisfies
+// neither, and migration 000152's zero-length-interval guard creates exactly that shape: it skips
+// the 'active' prefix when replaced_at/removed_at/updated_at is NULL or <= created_at, leaving only
+// a terminal row. The comment on the leg above already recorded the consequence — "its transactions
+// stay hidden ... a backfill-data property, not a decision taken here".
+//
+// It stopped being merely a data property once the reports Sankey began offering click-through
+// whose list is supposed to account for the node's amount: the analytics reads apply no visibility
+// predicate at all, so such a row counts toward the chart and could never appear in the list.
+// Hiding a user's own retained history because an interval was never written is the #1569 defect in
+// miniature, so absence of interval data is treated as "no reason to hide", not as evidence.
+//
+// ⚠ NARROW BY CONSTRUCTION, and this is the whole safety argument — stated precisely, because an
+// earlier version of this comment stated it wrongly and this branch's own fixture is the
+// counterexample. What the leg cannot do is override a RECORDED active interval: it fires only when
+// there is no 'active' row WHATSOEVER, so the moment one exists the historical leg governs the
+// account with its existing date bounds, whatever the removal cause.
+//
+// It does NOT key on removal cause, and it must not. Removal CAUSE and whether an interval was ever
+// WRITTEN are orthogonal: migration 000152's removed branch skips the 'active' prefix whenever
+// removed_at IS NULL or <= created_at while hardcoding the terminal reason 'user_disconnect'
+// (000152_backfill_account_status_history.up.sql, the 'removed accounts' INSERT pair), and
+// record_account_status_change() writes the same single-terminal-row shape for any account whose
+// FIRST recorded status is already terminal. So a 'user_disconnect' account with no 'active' row is
+// reachable, and this leg admits its transactions. That is the #1569 answer, not an accident: a
+// disconnected chain KEEPS its history (#1569 task 2), and nothing here changes a balance or
+// un-removes an account — it only stops hiding retained rows because an interval was never written.
+// Adding `AND na.removed_reason IS DISTINCT FROM 'user_disconnect'` would contradict #1569, not
+// tighten this. TestUnifiedFeed_AccountWithNoActiveInterval_StillShowsItsTransactions_Integration
+// seeds exactly that account and pins both halves.
+//
+// ⚠ IT WIDENS FIVE READS, NOT ONE, and three of them are not the transactions feed. It is rendered
+// inside retainedAccountVisibilityLegs (see above), whose call sites are: this file's unified feed
+// (banking and investment arms), investmentTransactionRepository.GetByUserIDKeyset — the
+// investments page's own list — investmentTransactionRepository.GetByUserID, which has no
+// production caller today and is documented as a latent trap, and
+// investmentAnalyticsRepository.IncomeSummary. That last one is not a list: it is a
+// `COALESCE(-SUM(it.amount),0) ... GROUP BY income_type` aggregate whose result is dividend and
+// interest income REPORTED TO THE USER, so this leg changes a money number as well as a row set.
+//
+// That is in scope on purpose. IncomeSummary already carries these legs precisely so the income
+// total and the investments feed cannot disagree about the same rows (#1569 T12 — before it did,
+// TotalIncome went 120.00 -> 0.00 on a disconnection with nothing deleted). Widening the feed but
+// not the total would recreate exactly that divergence, one artifact narrower. The money change is
+// pinned in its own right by
+// TestIncomeSummary_AccountWithNoActiveInterval_StillCountsItsIncome_Integration, which also holds
+// the narrow half: an account whose recorded 'active' interval closed before the row's date stays
+// excluded.
+//
+// ⚠ NOT EXISTS, not a LEFT JOIN: one account has many history rows, so joining would multiply
+// every feed row by that count. A semi-join asks the only question that matters and cannot fan out.
+// It is also why the widening cannot double-count inside the aggregate: the semi-join is over
+// accounts.id, the primary key.
+func accountWithNoActiveIntervalLeg(alias string) string {
+	return fmt.Sprintf(`
+		      OR EXISTS (
+		          SELECT 1
+		          FROM accounts na
+		          WHERE na.id = %s.account_id
+		            AND NOT EXISTS (
+		                SELECT 1 FROM account_status_history h2
+		                WHERE h2.account_id = na.id AND h2.status = 'active'
+		            )
+		      )`, alias)
 }
 
 // investmentSyncExclusionCondition renders the predicate that hides an investment_transactions row
@@ -3118,7 +3227,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	filters domain.TransactionFilters,
 	cursor *domain.TransactionCursor,
 	limit int,
-) ([]*domain.ActivityItem, *domain.TransactionCursor, error) {
+) ([]*domain.ActivityItem, *domain.TransactionCursor, *domain.FeedTotals, error) {
 	args := []any{userID}
 	argIdx := 2
 
@@ -3224,30 +3333,13 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		investBankingOnlyFilter = " AND FALSE"
 	}
 
-	// PFC / custom-category filters (banking only).
-	if len(filters.PFCPrimaries) > 0 || len(filters.PFCDetaileds) > 0 {
-		var orParts []string
-		var primPHs, detPHs []string
-		for _, p := range filters.PFCPrimaries {
-			primPHs = append(primPHs, fmt.Sprintf("$%d", argIdx))
-			args = append(args, p)
-			argIdx++
-		}
-		for _, d := range filters.PFCDetaileds {
-			detPHs = append(detPHs, fmt.Sprintf("$%d", argIdx))
-			args = append(args, d)
-			argIdx++
-		}
-		if len(primPHs) > 0 {
-			orParts = append(orParts, "t.effective_pfc_primary IN ("+strings.Join(primPHs, ", ")+")")
-		}
-		if len(detPHs) > 0 {
-			orParts = append(orParts, "t.effective_pfc_detailed IN ("+strings.Join(detPHs, ", ")+")")
-		}
-		if len(orParts) > 0 {
-			bankingExtraFilter += " AND (" + strings.Join(orParts, " OR ") + ")"
-			investBankingOnlyFilter = " AND FALSE"
-		}
+	// PFC / custom-category filters (banking only) — ONE OR-joined group (#1626). Investment rows
+	// carry no category at all, so any category filter zeroes that branch.
+	if catClause, catArgs, nextIdx := categoryFilterGroup(filters, argIdx, args); catClause != "" {
+		bankingExtraFilter += catClause
+		args = catArgs
+		argIdx = nextIdx
+		investBankingOnlyFilter = " AND FALSE"
 	}
 
 	// AccountIDs (multi-value) — chain-expanded via user_account_id on both branches.
@@ -3304,26 +3396,6 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		investBankingOnlyFilter = " AND FALSE"
 	}
 
-	// CustomCategoryIDs — rolls up children (parent_id), banking rows only → zero out investment.
-	if len(filters.CustomCategoryIDs) > 0 {
-		phs := make([]string, len(filters.CustomCategoryIDs))
-		for i, id := range filters.CustomCategoryIDs {
-			phs[i] = fmt.Sprintf("$%d", argIdx)
-			args = append(args, id)
-			argIdx++
-		}
-		idList := strings.Join(phs, ", ")
-		bankingExtraFilter += fmt.Sprintf(
-			" AND (t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-				"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s))))"+
-				" /* tombstone-exempt(custom_categories): HISTORY FILTER (#1569 Task 9) — same rollup as the"+
-				" transaction-list filter above, and the same reason: the ids come from a"+
-				" tombstone-filtered picker, and the rows they select are history. */",
-			idList, idList,
-		)
-		investBankingOnlyFilter = " AND FALSE"
-	}
-
 	// ── Investment-only filters ───────────────────────────────────────────────
 
 	// bankingActivityFilter zeroes the banking branch when an activity_types filter is active:
@@ -3372,7 +3444,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		// SVT is always populated for K="date" cursors by DecodeTransactionCursor;
 		// guard here defensively to avoid a nil-pointer on tampered/malformed cursors.
 		if cursor.SVT == nil {
-			return nil, nil, fmt.Errorf("cursor: missing sort date — restart pagination")
+			return nil, nil, nil, fmt.Errorf("cursor: missing sort date — restart pagination")
 		}
 		// We add: cursorDate, cursorDate, cursorID to args (3 slots).
 		// Both branches can reference argIdx..(argIdx+2) as needed.
@@ -3409,8 +3481,16 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	limitPH := argIdx
 
 	// ── Build UNION ALL query ─────────────────────────────────────────────────
-
-	query := fmt.Sprintf(`
+	//
+	// ⚠ unionBody CARRIES THE PREDICATES AND NOTHING ELSE — no ORDER BY, no LIMIT (#1626 Phase 2,
+	// review finding X3). Both statements this method issues are derived from it: the page appends
+	// the presentation ordering and the limit, the whole-set aggregate wraps it as-is. That keeps
+	// the drift-safety that mattered (there is exactly ONE copy of the predicate, so the total
+	// cannot describe a different row set than the rows) while stopping the page's ordering from
+	// leaking into a COUNT and a SUM, which are order-independent. It used to leak: the aggregate
+	// wrapped the ORDERED page query, so an unfiltered first page sorted every banking AND
+	// investment row merely to count them, and then the page query sorted again.
+	unionBody := fmt.Sprintf(`
 		SELECT
 			t.id::text,
 			t.user_id::text,
@@ -3542,9 +3622,6 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		  -- user still needs to see.
 %s
 		%s%s%s%s%s%s
-
-		ORDER BY sort_date DESC, source_disc ASC, id ASC
-		LIMIT $%d
 	`,
 		bankingMerchantJoins,
 		transactionTombstoneCondition("t", filters.IncludeReversed),
@@ -3553,12 +3630,73 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		retainedAccountVisibilityLegs("it", "it.date"),
 		investmentSyncExclusionCondition("it"),
 		investAcctFilter, investDateFilter, investSearchFilter, investActivityFilter, investCursorFilter, investBankingOnlyFilter,
-		limitPH,
 	)
 
-	rows, err := r.db.Query(ctx, query, args...)
+	// The presentation ordering and the LIMIT are APPENDED rather than interpolated, so the
+	// whole-set aggregate below can wrap unionBody without either of them (#1626 Phase 2). They are
+	// the page's only two differences from the set, and both belong to the page alone: a list has an
+	// order the user sees, a COUNT and a SUM do not.
+	orderClause := "\n\t\tORDER BY sort_date DESC, source_disc ASC, id ASC"
+	limitClause := fmt.Sprintf("\n\t\tLIMIT $%d", limitPH)
+	query := unionBody + orderClause
+
+	// ── Whole-set totals, FIRST PAGE ONLY (#1626 Phase 2) ────────────────────
+	//
+	// WHY. The response carried only a page, so "what does this filtered set come to" was not a
+	// question the product could answer — which is what made the reports Sankey's click-through
+	// claim unverifiable rather than merely untested.
+	//
+	// ⚠ STATED PRECISELY, because the loose form ("this node's amount equals the filtered list's
+	// total") is FALSE for income and shipped in five comments before this branch was reviewed. A
+	// hierarchy node's amount is COALESCE(SUM(ABS(t.amount)),0) — an unsigned chart quantity — while
+	// this total is SUM(t.amount) under PFCv2 signs, where inflows are NEGATIVE. So the property that
+	// holds over the same filtered set is |node amount| == |total_amount|; for an expense node the
+	// two numbers also happen to be equal, and for an income node they differ by a factor of −1.
+	// Both SQL expressions are right for their own consumer: a chart needs magnitudes, a ledger
+	// total needs signs. Do not "fix" either one to make the sentence simpler.
+	//
+	// ⚠ ONLY when no cursor was supplied. Re-aggregating the whole filtered set on every page of
+	// the busiest list in the app would be real cost for a number that does not change as the user
+	// pages. TestBankingKeysetCursoredPage_SkipsTheAggregateEntirely pins the skip.
+	//
+	// ⚠ IT WRAPS THE SHARED unionBody rather than restating its predicates, and that is deliberate.
+	// The first attempt here hand-copied the two UNION arms' WHERE clauses; it was syntactically
+	// invalid on the first real-Postgres run, and had it merely been subtly wrong instead it would
+	// have shipped a total that quietly disagreed with the rows it described — worse than no total,
+	// because the client cannot tell that it is wrong. Deriving both statements from one string
+	// makes drift impossible by construction: there is only one copy of the predicate.
+	//
+	// ⚠ unionBody, NOT the page query, and that distinction is #1626 Phase 2's review finding X3.
+	// This used to wrap `query`, which by then already carried the presentation ORDER BY — so an
+	// unfiltered first page sorted every banking AND investment row merely to COUNT and SUM them,
+	// and the page query then sorted again. COUNT and SUM are order-independent; the ordering is
+	// the page's alone. The drift-safety is unchanged, because the ordering was never part of the
+	// predicate. TestUnifiedFeed_EmittedQuery_EXPLAIN asserts BOTH halves — no ORDER BY in the
+	// aggregate's text and no Sort in its plan, while the page's plan still has one.
+	//
+	// `amount` is the second UNION arm's own column too, and a UNION takes its output names from
+	// the first arm, so the sum is over both banking and investment rows with their own signs.
+	//
+	// ⚠ And the LIMIT's ARGUMENT has to go with it. An earlier version of this comment claimed
+	// Postgres does not mind an unused trailing parameter; it does — the extended protocol rejects
+	// the bind outright ("expected 1 arguments, got 2"). args[:limitPH-1] drops exactly that one,
+	// which is sound only because the limit is appended last and $limitPH appears nowhere else.
+	var totals *domain.FeedTotals
+	if cursor == nil {
+		aggQuery := fmt.Sprintf(
+			`SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM (%s) agg`, unionBody)
+
+		var count int
+		var amount float64
+		if err := r.db.QueryRow(ctx, aggQuery, args[:limitPH-1]...).Scan(&count, &amount); err != nil {
+			return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified totals: %w", err)
+		}
+		totals = &domain.FeedTotals{Count: count, Amount: amount}
+	}
+
+	rows, err := r.db.Query(ctx, query+limitClause, args...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified: %w", err)
+		return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified: %w", err)
 	}
 	defer rows.Close()
 
@@ -3611,7 +3749,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			&invType, &invSubtype,
 			&invQuantity, &invPrice, &invFees,
 		); err != nil {
-			return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified scan: %w", err)
+			return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified scan: %w", err)
 		}
 
 		item := &domain.ActivityItem{
@@ -3679,7 +3817,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		if externalTxnID != nil {
 			decrypted, decErr := r.enc.DecryptNullableString(externalTxnID)
 			if decErr != nil {
-				return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified decrypt: %w", decErr)
+				return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified decrypt: %w", decErr)
 			}
 			item.ExternalTransactionID = decrypted
 		}
@@ -3688,7 +3826,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		if len(tagsJSON) > 0 {
 			var tags []string
 			if err := json.Unmarshal(tagsJSON, &tags); err != nil {
-				return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified unmarshal tags: %w", err)
+				return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified unmarshal tags: %w", err)
 			}
 			item.Tags = tags
 		}
@@ -3696,7 +3834,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		items = append(items, item)
 	}
 	if rows.Err() != nil {
-		return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified rows: %w", rows.Err())
+		return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified rows: %w", rows.Err())
 	}
 
 	// Build next-page cursor from the limit+1 probe row.
@@ -3704,7 +3842,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		last := items[limit-1]
 		lastID, err := uuid.Parse(last.ID)
 		if err != nil {
-			return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified: invalid id %q: %w", last.ID, err)
+			return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified: invalid id %q: %w", last.ID, err)
 		}
 		svt := last.SortDate
 		sv := last.SortDate.Format(time.DateOnly)
@@ -3718,8 +3856,8 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			Src: last.Source,
 			Inc: true,
 		}
-		return items[:limit], nextCursor, nil
+		return items[:limit], nextCursor, totals, nil
 	}
 
-	return items, nil, nil
+	return items, nil, totals, nil
 }

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mockAnalyticsRepository is a mock implementation for testing
@@ -24,6 +26,7 @@ type mockAnalyticsRepository struct {
 	getMonthOverMonthSpendingFn       func(ctx context.Context, userID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error)
 	getLargestTransactionsForPeriodFn func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.LargestTransactionRow, error)
 	getCategoryBreakdownForMerchantFn func(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
+	getCategoryHierarchyFn            func(ctx context.Context, userID string, filters domain.SpendingFilters, direction domain.CategoryDirection) ([]domain.CategoryHierarchyRow, error)
 	getIncomeSourceBreakdownFn        func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.IncomeSourceRow, error)
 	getUnusualSpendFn                 func(ctx context.Context, userID string, baselineStart, startDate, endDate time.Time, sigmaThreshold float64) ([]domain.UnusualSpendRow, error)
 	getBudgetVsActualFn               func(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error)
@@ -116,6 +119,13 @@ func (m *mockAnalyticsRepository) GetLargestTransactionsForPeriod(ctx context.Co
 func (m *mockAnalyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
 	if m.getCategoryBreakdownForMerchantFn != nil {
 		return m.getCategoryBreakdownForMerchantFn(ctx, userID, merchantID, filters)
+	}
+	return nil, nil
+}
+
+func (m *mockAnalyticsRepository) GetCategoryHierarchy(ctx context.Context, userID string, filters domain.SpendingFilters, direction domain.CategoryDirection) ([]domain.CategoryHierarchyRow, error) {
+	if m.getCategoryHierarchyFn != nil {
+		return m.getCategoryHierarchyFn(ctx, userID, filters, direction)
 	}
 	return nil, nil
 }
@@ -555,10 +565,15 @@ func TestAnalyticsService_GetSpendingByCategory(t *testing.T) {
 	t.Run("returns categories with percentages and display names", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
 			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				// PFCPrimaryDisplay is populated with the raw PFC enum, exactly like
+				// effective_category_name does in production (effectiveCategoryDisplayExpr()) —
+				// left empty here would make this fixture unable to tell the fixed
+				// resolveCategoryDisplay path from the old stored-display-else-pfcDisplayName
+				// bug, since an empty stored value falls through to the same lookup either way.
 				return []domain.SpendingByCategory{
-					{Category: "FOOD_AND_DRINK", Total: 300.0, TransactionCount: 20},
-					{Category: "TRANSPORTATION", Total: 100.0, TransactionCount: 8},
-					{Category: "ENTERTAINMENT", Total: 100.0, TransactionCount: 5},
+					{Category: "FOOD_AND_DRINK", PFCPrimaryDisplay: "FOOD_AND_DRINK", Total: 300.0, TransactionCount: 20},
+					{Category: "TRANSPORTATION", PFCPrimaryDisplay: "TRANSPORTATION", Total: 100.0, TransactionCount: 8},
+					{Category: "ENTERTAINMENT", PFCPrimaryDisplay: "ENTERTAINMENT", Total: 100.0, TransactionCount: 5},
 				}, nil
 			},
 		}
@@ -645,8 +660,11 @@ func TestAnalyticsService_GetSpendingByCategory(t *testing.T) {
 	t.Run("primary enum gets PrimaryDisplayName", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
 			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+				// PFCPrimaryDisplay populated with the raw enum, as production always does —
+				// left empty this cannot distinguish the fixed resolveCategoryDisplay path from
+				// the old stored-display-else-pfcDisplayName bug (see fixture note above).
 				return []domain.SpendingByCategory{
-					{Category: "FOOD_AND_DRINK", Total: 200.0, TransactionCount: 10},
+					{Category: "FOOD_AND_DRINK", PFCPrimaryDisplay: "FOOD_AND_DRINK", Total: 200.0, TransactionCount: 10},
 				}, nil
 			},
 		}
@@ -676,10 +694,18 @@ func TestAnalyticsService_GetSpendingByCategory(t *testing.T) {
 	t.Run("detailed enum drill-down gets DetailedDisplayName not PrimaryDisplayName", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
 			getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
-				// Drill-down: repository returns detailed-level enums
+				// Drill-down: repository returns detailed-level enums. PFCPrimaryDisplay is set
+				// to the PRIMARY enum ("FOOD_AND_DRINK"), matching what
+				// effective_category_name actually stores for a PFC row in production (#1626)
+				// — the key is the detailed enum but the stored display is always the primary.
+				// Leaving this field empty would make the test unable to tell the fixed
+				// resolveCategoryDisplay path from the old stored-display-else-pfcDisplayName
+				// bug: an empty stored value falls through to pfcDisplayName either way, so
+				// both implementations would produce "Fast Food" and the test would pass
+				// against the broken code too.
 				return []domain.SpendingByCategory{
-					{Category: "FOOD_AND_DRINK_FAST_FOOD", Total: 120.0, TransactionCount: 8},
-					{Category: "FOOD_AND_DRINK_COFFEE", Total: 80.0, TransactionCount: 5},
+					{Category: "FOOD_AND_DRINK_FAST_FOOD", PFCPrimaryDisplay: "FOOD_AND_DRINK", Total: 120.0, TransactionCount: 8},
+					{Category: "FOOD_AND_DRINK_COFFEE", PFCPrimaryDisplay: "FOOD_AND_DRINK", Total: 80.0, TransactionCount: 5},
 				}, nil
 			},
 		}
@@ -713,6 +739,21 @@ func TestAnalyticsService_GetSpendingByCategory(t *testing.T) {
 		// Detailed enum should use DetailedDisplayName: "Fast Food", NOT the primary "Food And Drink"
 		if fastFood.PFCPrimaryDisplay != "Fast Food" {
 			t.Errorf("detailed enum: expected PFCPrimaryDisplay 'Fast Food', got %q", fastFood.PFCPrimaryDisplay)
+		}
+
+		// Find FOOD_AND_DRINK_COFFEE
+		var coffee *domain.SpendingByCategory
+		for i := range result.Categories {
+			if result.Categories[i].Category == "FOOD_AND_DRINK_COFFEE" {
+				coffee = &result.Categories[i]
+			}
+		}
+		if coffee == nil {
+			t.Fatal("FOOD_AND_DRINK_COFFEE not found in results")
+		}
+		// Detailed enum should use DetailedDisplayName: "Coffee", NOT the primary "Food And Drink"
+		if coffee.PFCPrimaryDisplay != "Coffee" {
+			t.Errorf("detailed enum: expected PFCPrimaryDisplay 'Coffee', got %q", coffee.PFCPrimaryDisplay)
 		}
 	})
 }
@@ -1498,6 +1539,71 @@ func TestAnalyticsService_GetCategoryBreakdownForMerchant(t *testing.T) {
 		}
 	})
 
+	// ── #1626 Phase 2, item 10: PHASE 1 CAUSED THIS ──────────────────────────────────────────
+	//
+	// Phase 1 added t.effective_category_name to this read's GROUP BY so a custom category could
+	// be NAMED instead of showing a UUID. It did not add the merge the income and expense paths
+	// already had. That column is denormalised per transaction and refreshed ASYNCHRONOUSLY after
+	// a rename, so mid-refresh ONE custom category yields TWO rows — one per name — and the fix
+	// for a cosmetic bug became a correctness bug: the category appears twice, its spend split,
+	// and both percentages halved.
+	//
+	// ⚠ Merging alone is not sufficient, which is why this fixture has a COMPETING category. Two
+	// merged 60s outrank an unmerged 100, so percentages must come from the MERGED total and the
+	// list must be RE-SORTED after merging. A two-row single-key fixture cannot expose either
+	// failure — it would pass against a merge that forgot both.
+	t.Run("a mid-rename custom category is ONE row, correctly ranked", func(t *testing.T) {
+		const catKey = "custom:11111111-1111-1111-1111-111111111111"
+		mockRepo := &mockAnalyticsRepository{
+			getCategoryBreakdownForMerchantFn: func(ctx context.Context, userID string, mID string, f domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
+				// The SQL orders by total DESC, so the competing category leads on arrival: each
+				// half of the split category is smaller than it.
+				return []domain.CategoryBreakdownForMerchantRow{
+					{Category: "SHOPPING", CategoryDisplay: "SHOPPING", Total: 100.0, Count: 1},
+					{Category: catKey, CategoryDisplay: "Coffee runs", Total: 60.0, Count: 3},
+					{Category: catKey, CategoryDisplay: "Coffee", Total: 60.0, Count: 2},
+				}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+
+		result, err := service.GetCategoryBreakdownForMerchant(ctx, "user-123", merchantID, filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(result.Categories) != 2 {
+			t.Fatalf("expected the two names to merge into ONE category (2 total), got %d: %+v",
+				len(result.Categories), result.Categories)
+		}
+
+		// Ranking: 120 merged beats 100, so the custom category must lead. This is the assertion a
+		// merge without a re-sort fails — it would leave SHOPPING first, in pre-merge order.
+		if result.Categories[0].Category != catKey {
+			t.Errorf("expected the merged category (120) to outrank SHOPPING (100), got %q first",
+				result.Categories[0].Category)
+		}
+		if result.Categories[0].Total != 120.0 {
+			t.Errorf("expected merged total 120, got %f", result.Categories[0].Total)
+		}
+		if result.Categories[0].TransactionCount != 5 {
+			t.Errorf("expected merged count 5, got %d", result.Categories[0].TransactionCount)
+		}
+
+		// Percentages from the MERGED total: 120/220. Computed pre-merge they would be 27.27 each,
+		// which sums past 100 across the two halves and understates the real share.
+		wantPct := 120.0 / 220.0 * 100
+		if diff := result.Categories[0].Percentage - wantPct; diff > 0.001 || diff < -0.001 {
+			t.Errorf("expected merged percentage %f, got %f", wantPct, result.Categories[0].Percentage)
+		}
+
+		// The name resolves to one of the two the rows carried — never to a UUID, which is the
+		// bug #1626 exists to fix and which a merge could reintroduce by blanking the display.
+		if d := result.Categories[0].PFCPrimaryDisplay; d != "Coffee runs" && d != "Coffee" {
+			t.Errorf("expected a real name, got %q", d)
+		}
+	})
+
 	t.Run("empty result returns non-nil response with empty categories", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
 			getCategoryBreakdownForMerchantFn: func(ctx context.Context, userID string, mID string, f domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
@@ -1859,6 +1965,16 @@ func (m *mockBalanceSnapshotRepository) GetLatestByAccountID(ctx context.Context
 func (m *mockBalanceSnapshotRepository) GetAccountBalanceHistory(context.Context, string, string, *time.Time, *time.Time) ([]domain.AccountBalanceHistoryPoint, error) {
 	panic("analytics/dashboard must not read per-account retained balance history")
 }
+
+// The two #1626 Phase 3 gap-filler methods are WRITE/PLANNING operations belonging to the periodic
+// balance-capture job, and nothing in analytics or the dashboard may reach them — analytics reads;
+// it does not decide what to snapshot. Panics for the same reason the method above does.
+func (m *mockBalanceSnapshotRepository) CreateDailyCapture(context.Context, *domain.BalanceSnapshot) (bool, error) {
+	panic("analytics/dashboard must not write balance snapshots")
+}
+func (m *mockBalanceSnapshotRepository) AccountsMissingDailySnapshot(context.Context, string, time.Time) ([]string, error) {
+	panic("analytics/dashboard must not ask the daily-capture cohort question")
+}
 func (m *mockBalanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
 	return nil, nil
 }
@@ -2137,5 +2253,494 @@ func TestAnalyticsService_GetBudgetVsActual(t *testing.T) {
 		if err == nil {
 			t.Error("expected error from repository")
 		}
+	})
+}
+
+// TestAnalyticsService_GetSpendingByCategory_MidRefreshNameSurvives is #1626 in mild form, found by
+// the branch review.
+//
+// The SQL groups by (category, category_display), and effective_category_name is denormalised per
+// transaction and refreshed ASYNCHRONOUSLY after a rename — so mid-refresh one custom category
+// arrives as TWO rows, one carrying the name and one carrying NULL (which the repository scans as
+// ""). This read's hand-rolled merge added the totals and never revisited the survivor's display.
+// The SQL orders total DESC, so when the UN-named half is the larger one it wins the survivor slot
+// and the response says "Custom category" while the real name sat in the very next row — the UUID
+// defect one step removed. Both sibling reads (income sources, merchant breakdown) already guard
+// this, and mergeCategoryRows exists "so the two directions cannot drift apart". This was the drift.
+//
+// ⚠ The un-named half is deliberately the LARGER one; with the order reversed the test passes
+// against the unfixed code, because first-seen would already be the named row.
+func TestAnalyticsService_GetSpendingByCategory_MidRefreshNameSurvives(t *testing.T) {
+	ctx := context.Background()
+	const catKey = "custom:22222222-2222-2222-2222-222222222222"
+
+	mockRepo := &mockAnalyticsRepository{
+		getSpendingByCategoryFn: func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
+			return []domain.SpendingByCategory{
+				// A competing category, so a merge that forgets to re-sort or to recompute
+				// percentages from the merged total is also caught.
+				{Category: "SHOPPING", PFCPrimaryDisplay: "SHOPPING", Total: 100.0, TransactionCount: 1},
+				{Category: catKey, PFCPrimaryDisplay: "", Total: 70.0, TransactionCount: 4},
+				{Category: catKey, PFCPrimaryDisplay: "Therapy sessions", Total: 50.0, TransactionCount: 2},
+			}, nil
+		},
+	}
+	service := NewAnalyticsService(mockRepo)
+	result, err := service.GetSpendingByCategory(ctx, "user-123", domain.SpendingFilters{
+		StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Categories, 2, "the two names must merge into ONE category")
+
+	assert.Equal(t, catKey, result.Categories[0].Category,
+		"the merged 120 must outrank SHOPPING's 100 — a merge without a re-sort leaves SHOPPING first")
+	assert.Equal(t, "Therapy sessions", result.Categories[0].PFCPrimaryDisplay,
+		"the survivor arrived UN-named and the real name was in the next row. Keeping the placeholder "+
+			"shows the user \"Custom category\" for a category that has a name — the #1626 defect one "+
+			"step removed")
+	assert.InDelta(t, 120.0, result.Categories[0].Total, 0.0001)
+	assert.Equal(t, 6, result.Categories[0].TransactionCount)
+	assert.InDelta(t, 120.0/220.0*100, result.Categories[0].Percentage, 0.001,
+		"percentages must come from the MERGED total")
+}
+
+// ─── #1626 Phase 3, Defect 1: the cash-flow response must not reach into the future ─────────
+//
+// With "this month" selected on 2026-09-09 the Cash Flow chart showed weekly buckets labelled
+// "Week of Sep 13 / Sep 20 / Sep 27" — all entirely in the future, with Net Cash Flow flat at
+// exactly 0 — because the requested end date (the 30th) was taken verbatim and the repository
+// zero-filled every period up to it. The clamp lives HERE, at the service boundary, as a single
+// effectiveEnd threaded into the repository call, rather than buried in the fill loop.
+
+func todayUTCForTest() time.Time {
+	n := time.Now().UTC()
+	return time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+func TestGetCashFlowHistory_ClampsAFutureEndDateToToday(t *testing.T) {
+	today := todayUTCForTest()
+	var seen domain.CashFlowFilters
+	repo := &mockAnalyticsRepository{
+		getCashFlowGroupedFn: func(_ context.Context, _ string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			seen = filters
+			return []domain.CashFlowGroupedData{
+				{PeriodStart: today, Income: 10, Expenses: 4, TransactionCount: 2},
+			}, nil
+		},
+	}
+	svc := NewAnalyticsService(repo)
+
+	resp, err := svc.GetCashFlowHistory(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: today.AddDate(0, 0, -2),
+		EndDate:   today.AddDate(0, 0, 21),
+		Grouping:  "daily",
+	})
+	require.NoError(t, err)
+
+	// The clamp is threaded into the repository call: the same value bounds the query and the
+	// gap-filling, so neither can fabricate a bucket the other would not.
+	assert.True(t, seen.EndDate.Equal(today), "repository received end date %v, expected today %v", seen.EndDate, today)
+	assert.True(t, seen.StartDate.Equal(today.AddDate(0, 0, -2)), "the start date must not move")
+
+	// The response reports the range it actually answered for.
+	assert.True(t, resp.EndDate.Equal(today), "response end_date %v should be clamped to %v", resp.EndDate, today)
+	for _, p := range resp.Periods {
+		assert.False(t, p.PeriodStart.After(today), "period starts in the future: %v", p.PeriodStart)
+		assert.False(t, p.PeriodEnd.After(today), "period_end reaches into the future: %v", p.PeriodEnd)
+	}
+}
+
+// The grouping describes the range the USER asked for, so it is chosen before the clamp:
+// clamping first would silently re-bucket a three-month request as weekly or daily.
+func TestGetCashFlowHistory_ClampDoesNotChangeTheAutoSelectedGrouping(t *testing.T) {
+	today := todayUTCForTest()
+	repo := &mockAnalyticsRepository{
+		getCashFlowGroupedFn: func(_ context.Context, _ string, _ domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			return nil, nil
+		},
+	}
+	svc := NewAnalyticsService(repo)
+
+	resp, err := svc.GetCashFlowHistory(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: today.AddDate(0, 0, -2),
+		EndDate:   today.AddDate(0, 0, 21), // 23 days requested → weekly
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "weekly", resp.Grouping)
+}
+
+// A weekly bucket that STARTS in the past but whose calendar week has not finished must not
+// advertise an end date in the future.
+func TestGetCashFlowHistory_ClampsTheLastPeriodEnd(t *testing.T) {
+	today := todayUTCForTest()
+	weekday := int(today.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	monday := today.AddDate(0, 0, -(weekday - 1))
+
+	repo := &mockAnalyticsRepository{
+		getCashFlowGroupedFn: func(_ context.Context, _ string, _ domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			return []domain.CashFlowGroupedData{
+				{PeriodStart: monday, Income: 500, Expenses: 120, TransactionCount: 9},
+			}, nil
+		},
+	}
+	svc := NewAnalyticsService(repo)
+
+	resp, err := svc.GetCashFlowHistory(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: monday,
+		EndDate:   today.AddDate(0, 0, 30),
+		Grouping:  "weekly",
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Periods, 1)
+	assert.True(t, resp.Periods[0].PeriodEnd.Equal(today),
+		"period_end %v should be clamped to today %v", resp.Periods[0].PeriodEnd, today)
+	assert.Equal(t, 500.0-120.0, resp.Periods[0].NetCashFlow)
+}
+
+// The clamp must not delete data. Transactions are bucketed on t.date — a zoneless calendar
+// date that is effectively institution-local — so a user ahead of UTC legitimately has rows
+// dated later than the UTC calendar day. Whatever the repository returns is reported.
+func TestGetCashFlowHistory_KeepsARealPeriodDatedBeyondTheClamp(t *testing.T) {
+	today := todayUTCForTest()
+	tomorrow := today.AddDate(0, 0, 1)
+	repo := &mockAnalyticsRepository{
+		getCashFlowGroupedFn: func(_ context.Context, _ string, _ domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			return []domain.CashFlowGroupedData{
+				{PeriodStart: today, Income: 0, Expenses: 20, TransactionCount: 1},
+				{PeriodStart: tomorrow, Income: 0, Expenses: 33, TransactionCount: 1},
+			}, nil
+		},
+	}
+	svc := NewAnalyticsService(repo)
+
+	resp, err := svc.GetCashFlowHistory(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: today.AddDate(0, 0, -1),
+		EndDate:   today.AddDate(0, 0, 21),
+		Grouping:  "daily",
+	})
+	require.NoError(t, err)
+
+	require.Len(t, resp.Periods, 2, "a period the repository returned was dropped: %+v", resp.Periods)
+	beyond := resp.Periods[1]
+	assert.True(t, beyond.PeriodStart.Equal(tomorrow))
+	assert.Equal(t, 33.0, beyond.Expenses)
+	// Its own period_end is never clamped BEFORE its start — that would be a nonsense range.
+	assert.False(t, beyond.PeriodEnd.Before(beyond.PeriodStart))
+	// And the response's end_date widens to cover it rather than contradicting the data.
+	assert.False(t, resp.EndDate.Before(beyond.PeriodStart),
+		"end_date %v excludes a period the response contains (%v)", resp.EndDate, beyond.PeriodStart)
+}
+
+// A range lying entirely in the future answers for nothing at all — no fabricated "current
+// period", which is what truncateDate's backward move used to produce.
+func TestGetCashFlowHistory_EntirelyFutureRangeReturnsNoPeriods(t *testing.T) {
+	today := todayUTCForTest()
+	repo := &mockAnalyticsRepository{
+		getCashFlowGroupedFn: func(_ context.Context, _ string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			// Mirror the repository's own behaviour for the clamped bounds it is handed.
+			return fillMissingPeriodsForTest(filters), nil
+		},
+	}
+	svc := NewAnalyticsService(repo)
+
+	resp, err := svc.GetCashFlowHistory(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: today.AddDate(0, 0, 3),
+		EndDate:   today.AddDate(0, 0, 10),
+		Grouping:  "weekly",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, resp.Periods)
+}
+
+// fillMissingPeriodsForTest is the repository's guard in miniature: nothing is generated when
+// the (already clamped) end lies before the start.
+func fillMissingPeriodsForTest(filters domain.CashFlowFilters) []domain.CashFlowGroupedData {
+	if filters.StartDate.After(filters.EndDate) {
+		return nil
+	}
+	return []domain.CashFlowGroupedData{{PeriodStart: filters.StartDate}}
+}
+
+// ─── #1626 final whole-branch review, F2: each endpoint labels the window it MEASURED ─────────
+//
+// ⚠ THIS FAMILY REPLACES THE X7 ONE, AND REVERSES ITS RULING. X7 observed that for a
+// future-ranged request the two cash-flow endpoints echoed different ranges for the same
+// question, and fixed it by clamping the SUMMARY'S ECHO to today while leaving its QUERY on the
+// requested range. That made the endpoint inconsistent WITH ITSELF: the label said "through
+// today", the number covered rows past today, and for an entirely-future range responseEndDate
+// floored the echo to StartDate so the response claimed [start, start] while the aggregate
+// covered [start, requestedEnd]. Before X7 each endpoint was at least internally coherent and
+// they disagreed only on the LABEL — which the code called cosmetic; the fix is what made it
+// non-cosmetic.
+//
+// THE RULING NOW: a range and the numbers described by it must be the same range, per endpoint.
+//
+//   - The SUMMARY fabricates nothing — one aggregate over rows that exist — so it queries the
+//     requested range and echoes the requested range. It must NOT clamp the query:
+//     transactions.date is a zoneless, effectively institution-local calendar date, so a user
+//     ahead of UTC legitimately has rows dated later than the UTC day (the same fact
+//     TestGetCashFlowHistory_KeepsARealPeriodDatedBeyondTheClamp rests on), and clamping would
+//     delete those rows from their own total. That is real data loss to fix a label.
+//   - The HISTORY endpoint gap-FILLS, so an unclamped future end fabricates a zero-valued bucket
+//     per unhappened period. It keeps its clamp on both the query and the echo, and DISCLOSES the
+//     difference in requested_end_date rather than leaving a caller to guess why the two
+//     endpoints' windows differ.
+//
+// So the two endpoints still agree about the range they were ASKED for, and each is honest about
+// the range it ANSWERED for. What is gone is the third state: a label describing a window nobody
+// measured.
+
+// TestGetCashFlowSummary_EchoesTheWindowItActuallyQueried asserts the property by COMPARING the
+// echo with the filters the repository was handed, not by restating the expected date — so the
+// label and the measurement cannot drift apart without this failing, whichever of them moves.
+func TestGetCashFlowSummary_EchoesTheWindowItActuallyQueried(t *testing.T) {
+	today := todayUTCForTest()
+	start := today.AddDate(0, 0, -2)
+	requestedEnd := today.AddDate(0, 0, 21)
+
+	var seen domain.CashFlowFilters
+	repo := &mockAnalyticsRepository{
+		getCashFlowAggregationFn: func(_ context.Context, _ string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
+			if filters.StartDate.Equal(start) {
+				seen = filters
+			}
+			return &domain.CashFlowAggregation{Income: 900, Expenses: 250, IncomeCount: 3, ExpenseCount: 7}, nil
+		},
+	}
+	svc := NewAnalyticsService(repo)
+
+	resp, err := svc.GetCashFlowSummary(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: start,
+		EndDate:   requestedEnd,
+	})
+	require.NoError(t, err)
+
+	assert.True(t, seen.EndDate.Equal(requestedEnd),
+		"the QUERY bound must stay on the requested end (%v, got %v): transactions.date is "+
+			"institution-local, so clamping it would drop rows a user ahead of UTC really has",
+		requestedEnd, seen.EndDate)
+	assert.True(t, resp.EndDate.Equal(seen.EndDate),
+		"summary end_date %v must be the window it MEASURED (%v). Clamping the echo alone made "+
+			"this endpoint label a range it did not query — its number covered rows past today "+
+			"while its label said 'through today'",
+		resp.EndDate, seen.EndDate)
+	assert.True(t, resp.StartDate.Equal(seen.StartDate), "and the start likewise")
+}
+
+// TestGetCashFlowSummary_LeavesAPastRangeAlone is the narrow half: nothing may rewrite the echoed
+// end for a request that does not reach past today, which is nearly all of them — so a bug here
+// cannot be dismissed as "only affects future ranges".
+func TestGetCashFlowSummary_LeavesAPastRangeAlone(t *testing.T) {
+	today := todayUTCForTest()
+	start := today.AddDate(0, 0, -40)
+	end := today.AddDate(0, 0, -9)
+
+	repo := &mockAnalyticsRepository{
+		getCashFlowAggregationFn: func(_ context.Context, _ string, _ domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
+			return &domain.CashFlowAggregation{Income: 100, Expenses: 40}, nil
+		},
+	}
+	resp, err := NewAnalyticsService(repo).GetCashFlowSummary(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: start,
+		EndDate:   end,
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.EndDate.Equal(end), "a wholly-past end date must be echoed verbatim")
+}
+
+// TestGetCashFlowSummary_EntirelyFutureRange_TheTwoEndpointsAgreeAboutWhatWasASKED pins the
+// awkward boundary rather than only the easy middle: when the whole requested range lies ahead,
+// history's clamp alone would produce an end BEFORE its start, and responseEndDate floors it to
+// the start. That is the one case where the two endpoints' ANSWERED windows genuinely differ, so
+// it is the case where the disclosure has to work.
+//
+// Asserted by running both and comparing, never by restating an expected value, so a change to
+// the rule cannot leave this test agreeing with only one of them.
+func TestGetCashFlowSummary_EntirelyFutureRange_TheTwoEndpointsAgreeAboutWhatWasASKED(t *testing.T) {
+	today := todayUTCForTest()
+	filters := domain.CashFlowFilters{
+		StartDate: today.AddDate(0, 0, 3),
+		EndDate:   today.AddDate(0, 0, 10),
+		Grouping:  "weekly",
+	}
+
+	var summarySeen domain.CashFlowFilters
+	repo := &mockAnalyticsRepository{
+		getCashFlowAggregationFn: func(_ context.Context, _ string, f domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
+			if f.StartDate.Equal(filters.StartDate) {
+				summarySeen = f
+			}
+			return &domain.CashFlowAggregation{}, nil
+		},
+		getCashFlowGroupedFn: func(_ context.Context, _ string, f domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			return fillMissingPeriodsForTest(f), nil
+		},
+	}
+	svc := NewAnalyticsService(repo)
+
+	summary, err := svc.GetCashFlowSummary(context.Background(), "u1", filters)
+	require.NoError(t, err)
+	history, err := svc.GetCashFlowHistory(context.Background(), "u1", filters)
+	require.NoError(t, err)
+
+	assert.True(t, summary.StartDate.Equal(history.StartDate),
+		"summary start %v vs history start %v", summary.StartDate, history.StartDate)
+
+	// They agree about the REQUEST.
+	assert.True(t, history.RequestedEndDate.Equal(filters.EndDate),
+		"history must echo the caller's own end date in requested_end_date: %v vs %v",
+		history.RequestedEndDate, filters.EndDate)
+	assert.True(t, summary.EndDate.Equal(history.RequestedEndDate),
+		"the two endpoints must agree about the range they were ASKED for: summary end_date %v "+
+			"vs history requested_end_date %v", summary.EndDate, history.RequestedEndDate)
+
+	// And each is honest about what it ANSWERED. History answered nothing here — its whole range
+	// is unhappened — so its end_date floors to the start and it ships no periods.
+	assert.True(t, summary.EndDate.Equal(summarySeen.EndDate),
+		"summary still labels the window it measured, even when that window is entirely ahead: "+
+			"echoed %v, queried %v", summary.EndDate, summarySeen.EndDate)
+	assert.True(t, history.EndDate.Equal(filters.StartDate),
+		"history answered for no period at all, so its end_date floors to the start: got %v",
+		history.EndDate)
+	assert.Empty(t, history.Periods)
+	assert.False(t, history.EndDate.After(history.RequestedEndDate),
+		"the answered window can never exceed the requested one")
+	assert.False(t, summary.EndDate.Before(summary.StartDate),
+		"and no echoed range may be inverted")
+}
+
+// TestGetCashFlowHistory_DisclosesTheRequestedEndItClampedAway is the disclosure in the ordinary
+// case: a range that straddles today. Without the field a caller comparing this endpoint with
+// cash-flow-summary sees two different end dates and no way to tell that one of them is a
+// deliberate horizon rather than a disagreement.
+func TestGetCashFlowHistory_DisclosesTheRequestedEndItClampedAway(t *testing.T) {
+	today := todayUTCForTest()
+	requestedEnd := today.AddDate(0, 0, 21)
+	repo := &mockAnalyticsRepository{
+		getCashFlowGroupedFn: func(_ context.Context, _ string, _ domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			return []domain.CashFlowGroupedData{
+				{PeriodStart: today, Income: 10, Expenses: 4, TransactionCount: 2},
+			}, nil
+		},
+	}
+
+	resp, err := NewAnalyticsService(repo).GetCashFlowHistory(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: today.AddDate(0, 0, -2),
+		EndDate:   requestedEnd,
+		Grouping:  "daily",
+	})
+	require.NoError(t, err)
+
+	assert.True(t, resp.RequestedEndDate.Equal(requestedEnd),
+		"requested_end_date must be the caller's own end date, unchanged: %v vs %v",
+		resp.RequestedEndDate, requestedEnd)
+	assert.True(t, resp.EndDate.Equal(today),
+		"end_date is the horizon actually answered for: %v vs %v", resp.EndDate, today)
+	assert.True(t, resp.EndDate.Before(resp.RequestedEndDate),
+		"and the gap between them is what this response deliberately does not cover")
+}
+
+// TestGetCashFlowHistory_RequestedEndEqualsEndDateForAPastRange is the narrow half: the two fields
+// coincide for every request that does not reach past today, which is nearly all of them. A
+// disclosure field that silently differed on ordinary ranges would be worse than none.
+func TestGetCashFlowHistory_RequestedEndEqualsEndDateForAPastRange(t *testing.T) {
+	today := todayUTCForTest()
+	end := today.AddDate(0, 0, -9)
+	repo := &mockAnalyticsRepository{
+		getCashFlowGroupedFn: func(_ context.Context, _ string, _ domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+			return []domain.CashFlowGroupedData{
+				{PeriodStart: today.AddDate(0, 0, -40), Income: 100, Expenses: 40, TransactionCount: 1},
+			}, nil
+		},
+	}
+
+	resp, err := NewAnalyticsService(repo).GetCashFlowHistory(context.Background(), "u1", domain.CashFlowFilters{
+		StartDate: today.AddDate(0, 0, -40),
+		EndDate:   end,
+		Grouping:  "monthly",
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.RequestedEndDate.Equal(end))
+	assert.True(t, resp.EndDate.Equal(end),
+		"nothing was clamped away, so the two windows are the same window")
+}
+
+// TestAnalyticsService_TrailingWindowDatesAreUTCNotProcessLocal is the final-gate regression for
+// finding F6.
+//
+// THE DEFECT. `time.Now().UTC()` is the SAME INSTANT as `time.Now()` with a different Location, so
+// dropping the .UTC() is invisible until something READS that Location — and two things do.
+//   - GetNetWorthTrend's bounds are compared as CALENDAR DATES: GetAggregatedHistory ends on
+//     `(bs.snapshot_at AT TIME ZONE 'UTC')::date <= $3::date` (its household twin on `<= $5::date`),
+//     so pgx encodes the parameter as a `date` built from the value's own Location. On a host behind
+//     UTC, a snapshot written "today" in UTC falls outside a range ending "today" and the day is
+//     invisible until local midnight.
+//   - Both bounds, and GetRecurringSubscriptions's AsOfDate, are echoed through
+//     `Format("2006-01-02")`, which is Location-dependent too.
+//
+// ⚠ WHY THE ZONE IS CHOSEN FROM THE CURRENT UTC HOUR RATHER THAN FIXED, and this is the whole
+// reason the test is written this way. A fixed offset only puts the local date on a DIFFERENT day
+// than UTC's for part of the day: UTC-11 does so while the UTC hour is under 11, UTC+14 while it is
+// 10 or over. So a fixed zone would make this test pass with or without the fix for most of the
+// day — a fixture sitting exactly where mutant and correct code agree, which is the trap this
+// branch has now hit repeatedly. Choosing per UTC hour covers all 24, and the require() below
+// FAILS THE TEST rather than skipping if the two dates ever coincide, so the assertion can never
+// be vacuous.
+//
+// time.Local is process-global; nothing in this package runs t.Parallel(), and Cleanup restores it.
+func TestAnalyticsService_TrailingWindowDatesAreUTCNotProcessLocal(t *testing.T) {
+	original := time.Local
+	t.Cleanup(func() { time.Local = original })
+
+	offset := 14 * 3600
+	if time.Now().UTC().Hour() < 11 {
+		offset = -11 * 3600
+	}
+	time.Local = time.FixedZone("test-offset", offset)
+
+	utcToday := time.Now().UTC().Format("2006-01-02")
+	require.NotEqual(t, utcToday, time.Now().Format("2006-01-02"),
+		"fixture guard: the process-local calendar day MUST differ from UTC's, or neither assertion "+
+			"below can tell the fix from the defect")
+
+	t.Run("GetNetWorthTrend", func(t *testing.T) {
+		var gotStart, gotEnd time.Time
+		snapRepo := &mockBalanceSnapshotRepository{
+			getAggregatedHistoryFn: func(_ context.Context, _ string, startDate, endDate time.Time, _ []string) ([]domain.BalanceHistoryPoint, error) {
+				gotStart, gotEnd = startDate, endDate
+				return nil, nil
+			},
+		}
+		service := NewAnalyticsService(&mockAnalyticsRepository{})
+		service.SetBalanceSnapshotRepo(snapRepo)
+
+		result, err := service.GetNetWorthTrend(context.Background(), "user-123", "monthly", nil)
+		require.NoError(t, err)
+
+		// The parameter as PostgreSQL will see it: pgx renders a `date` from the value's own
+		// Location, so this Format is the pgx-visible property, not a proxy for it.
+		assert.Equal(t, utcToday, gotEnd.Format("2006-01-02"),
+			"the end bound handed to GetAggregatedHistory must be the UTC calendar day; it is "+
+				"compared against ::date, so a process-local day hides today's snapshots")
+		assert.Equal(t, utcToday, gotStart.AddDate(1, 0, 0).Format("2006-01-02"),
+			"the trailing-12-month start must be derived from the same UTC day")
+		assert.Equal(t, utcToday, result.EndDate, "and the response must echo the UTC day it queried")
+	})
+
+	t.Run("GetRecurringSubscriptions AsOfDate", func(t *testing.T) {
+		service := NewAnalyticsService(&mockAnalyticsRepository{
+			getRecurringSubscriptionsFn: func(context.Context, string, time.Time) ([]domain.RecurringSubscriptionRow, error) {
+				return nil, nil
+			},
+		})
+
+		result, err := service.GetRecurringSubscriptions(context.Background(), "user-123")
+		require.NoError(t, err)
+		assert.Equal(t, utcToday, result.AsOfDate,
+			"every other date this API emits is a UTC calendar day, so 'as of' must be one too")
 	})
 }

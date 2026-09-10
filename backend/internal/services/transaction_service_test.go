@@ -178,7 +178,7 @@ func (m *MockTransactionRepository) UpdateEffectiveCategoryNameByCustomCategoryI
 	return args.Get(0).(int64), args.Error(1)
 }
 
-func (m *MockTransactionRepository) GetByUserIDKeyset(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]domain.Transaction, *domain.TransactionCursor, error) {
+func (m *MockTransactionRepository) GetByUserIDKeyset(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]domain.Transaction, *domain.TransactionCursor, *domain.FeedTotals, error) {
 	args := m.Called(ctx, userID, filters, cursor, limit)
 	var txs []domain.Transaction
 	if v := args.Get(0); v != nil {
@@ -188,10 +188,17 @@ func (m *MockTransactionRepository) GetByUserIDKeyset(ctx context.Context, userI
 	if v := args.Get(1); v != nil {
 		nextCursor = v.(*domain.TransactionCursor)
 	}
-	return txs, nextCursor, args.Error(2)
+	// Whole-set totals, position 2 (#1626 Phase 2). Every .Return() must now pass it explicitly —
+	// a nil there is the legitimate "not computed on this page" value, and making it positional
+	// rather than optional means a test that cares about totals has to say so.
+	var totals *domain.FeedTotals
+	if v := args.Get(2); v != nil {
+		totals = v.(*domain.FeedTotals)
+	}
+	return txs, nextCursor, totals, args.Error(3)
 }
 
-func (m *MockTransactionRepository) GetByUserIDKeysetUnified(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]*domain.ActivityItem, *domain.TransactionCursor, error) {
+func (m *MockTransactionRepository) GetByUserIDKeysetUnified(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]*domain.ActivityItem, *domain.TransactionCursor, *domain.FeedTotals, error) {
 	args := m.Called(ctx, userID, filters, cursor, limit)
 	var items []*domain.ActivityItem
 	if v := args.Get(0); v != nil {
@@ -201,7 +208,12 @@ func (m *MockTransactionRepository) GetByUserIDKeysetUnified(ctx context.Context
 	if v := args.Get(1); v != nil {
 		nextCursor = v.(*domain.TransactionCursor)
 	}
-	return items, nextCursor, args.Error(2)
+	// See GetByUserIDKeyset above: totals are positional at 2.
+	var totals *domain.FeedTotals
+	if v := args.Get(2); v != nil {
+		totals = v.(*domain.FeedTotals)
+	}
+	return items, nextCursor, totals, args.Error(3)
 }
 
 func (m *MockTransactionRepository) GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error) {
@@ -351,7 +363,7 @@ func TestTransactionService_ListTransactionsByCursor_SearchPassesThrough(t *test
 						gotSearch = *f.Search
 					}
 				}).
-				Return([]domain.Transaction{}, (*domain.TransactionCursor)(nil), nil)
+				Return([]domain.Transaction{}, (*domain.TransactionCursor)(nil), nil, nil)
 
 			_, err := service.ListTransactionsByCursor(ctx, userID, filters, nil, 50)
 
@@ -429,7 +441,8 @@ func TestTransactionService_ListTransactions_IncludesPaginationMetadata(t *testi
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, totalCount, result.TotalCount)
+	require.NotNil(t, result.TotalCount, "the offset path always counts, so it always sets the pointer")
+	assert.Equal(t, totalCount, *result.TotalCount)
 	assert.Equal(t, limit, result.Limit)
 	assert.Equal(t, offset, result.Offset)
 	assert.True(t, result.HasMore) // 150 total, 50 returned, so there's more
@@ -466,7 +479,8 @@ func TestTransactionService_ListTransactions_HasMoreFalseWhenNoMoreResults(t *te
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, totalCount, result.TotalCount)
+	require.NotNil(t, result.TotalCount, "the offset path always counts, so it always sets the pointer")
+	assert.Equal(t, totalCount, *result.TotalCount)
 	assert.False(t, result.HasMore) // offset=100 + returned=20 = 120, no more results
 	mockRepo.AssertExpectations(t)
 }
@@ -793,7 +807,7 @@ func TestTransactionService_ListTransactionsByCursor_FirstPage(t *testing.T) {
 	repoNextCursor := &domain.TransactionCursor{V: 1, K: "date", D: "desc", ID: id2UUID}
 
 	mockRepo.On("GetByUserIDKeyset", ctx, userID, filters, (*domain.TransactionCursor)(nil), 2).
-		Return([]domain.Transaction{tx1, tx2}, repoNextCursor, nil)
+		Return([]domain.Transaction{tx1, tx2}, repoNextCursor, nil, nil)
 
 	result, err := service.ListTransactionsByCursor(ctx, userID, filters, nil, 2)
 
@@ -821,7 +835,7 @@ func TestTransactionService_ListTransactionsByCursor_LastPage(t *testing.T) {
 
 	// Repo returns one row and nil cursor (end of list).
 	mockRepo.On("GetByUserIDKeyset", ctx, userID, filters, incomingCursor, 2).
-		Return([]domain.Transaction{tx}, (*domain.TransactionCursor)(nil), nil)
+		Return([]domain.Transaction{tx}, (*domain.TransactionCursor)(nil), nil, nil)
 
 	result, err := service.ListTransactionsByCursor(ctx, userID, filters, incomingCursor, 2)
 
@@ -874,7 +888,7 @@ func TestTransactionService_ListTransactionsByCursor_PropagatesRepoError(t *test
 	repoErr := errors.New("db connection lost")
 
 	mockRepo.On("GetByUserIDKeyset", ctx, userID, filters, (*domain.TransactionCursor)(nil), 10).
-		Return(nil, (*domain.TransactionCursor)(nil), repoErr)
+		Return(nil, (*domain.TransactionCursor)(nil), nil, repoErr)
 
 	_, err := service.ListTransactionsByCursor(ctx, userID, filters, nil, 10)
 
@@ -1191,7 +1205,7 @@ func TestEnrichAccount_HappyPath(t *testing.T) {
 		Amount:    100.0,
 	}
 	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
-		Return([]*domain.ActivityItem{item}, (*domain.TransactionCursor)(nil), nil)
+		Return([]*domain.ActivityItem{item}, (*domain.TransactionCursor)(nil), nil, nil)
 
 	mockAcctRepo := new(MockAccountRepository)
 	mockAcctRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, repository.AccountFilterOptions{}).Return([]domain.Account{
@@ -1246,7 +1260,7 @@ func TestEnrichAccount_ActiveChainRelink(t *testing.T) {
 		Amount:        500.0,
 	}
 	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
-		Return([]*domain.ActivityItem{item}, (*domain.TransactionCursor)(nil), nil)
+		Return([]*domain.ActivityItem{item}, (*domain.TransactionCursor)(nil), nil, nil)
 
 	// Active account references the same user_account_id; replaced account is absent.
 	mockAcctRepo := new(MockAccountRepository)
@@ -1293,7 +1307,7 @@ func TestEnrichAccount_MissingAccount(t *testing.T) {
 		Amount:    10.0,
 	}
 	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
-		Return([]*domain.ActivityItem{item}, (*domain.TransactionCursor)(nil), nil)
+		Return([]*domain.ActivityItem{item}, (*domain.TransactionCursor)(nil), nil, nil)
 
 	mockAcctRepo := new(MockAccountRepository)
 	mockAcctRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, repository.AccountFilterOptions{}).Return([]domain.Account{}, nil) // empty active set
@@ -1327,7 +1341,7 @@ func TestEnrichAccount_NilSafe(t *testing.T) {
 		Amount:    200.0,
 	}
 	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
-		Return([]*domain.ActivityItem{item}, (*domain.TransactionCursor)(nil), nil)
+		Return([]*domain.ActivityItem{item}, (*domain.TransactionCursor)(nil), nil, nil)
 
 	// No SetAccountRepository call — accountRepo is nil.
 	svc := NewTransactionService(mockTxRepo, new(MockCustomCategoryRepository))
@@ -1360,7 +1374,7 @@ func TestListTransactionsByCursor_UnifiedFeed_EnrichesEffectiveMerchantName(t *t
 
 	mockTxRepo := new(MockTransactionRepository)
 	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
-		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil)
+		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil, nil)
 	mockTxRepo.On("ResolveEffectiveMerchantNames", ctx, userID, []string{merchantID}).
 		Return(map[string]string{merchantID: "Whole Foods Market"}, nil)
 
@@ -1395,7 +1409,7 @@ func TestListTransactionsByCursor_UnifiedFeed_EnrichMerchant_NoMerchantID(t *tes
 
 	mockTxRepo := new(MockTransactionRepository)
 	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
-		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil)
+		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil, nil)
 	// ResolveEffectiveMerchantNames must NOT be called when there are no merchant IDs.
 
 	svc := NewTransactionService(mockTxRepo, new(MockCustomCategoryRepository))
@@ -1427,7 +1441,7 @@ func TestEnrichAccount_BankingScopeGuard(t *testing.T) {
 		Amount:    4.5,
 	}
 	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
-		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil)
+		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil, nil)
 
 	// No accounts expectation — the enrichment early-exits when there are no
 	// investment rows, so GetAccountsWithInstitutionFiltered must NOT be called.
@@ -1529,7 +1543,7 @@ func TestListTransactionsByCursor_UnifiedFeed_EnrichMerchant_ResolverError(t *te
 
 	mockTxRepo := new(MockTransactionRepository)
 	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
-		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil)
+		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil, nil)
 	mockTxRepo.On("ResolveEffectiveMerchantNames", ctx, userID, []string{merchantID}).
 		Return(nil, errors.New("db error"))
 
@@ -1563,7 +1577,7 @@ func TestListTransactionsByCursor_UnifiedFeed_EnrichMerchant_MerchantIDAbsentFro
 
 	mockTxRepo := new(MockTransactionRepository)
 	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
-		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil)
+		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil, nil)
 	// Resolver returns an empty map — merchant ID not found.
 	mockTxRepo.On("ResolveEffectiveMerchantNames", ctx, userID, []string{merchantID}).
 		Return(map[string]string{}, nil)

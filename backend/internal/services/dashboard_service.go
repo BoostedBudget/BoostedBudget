@@ -1950,6 +1950,30 @@ func (s *dashboardService) GetNetWorthHistory(ctx context.Context, userID string
 			}
 		}
 
+		// #1626 Phase 3 item 5: THE UNTYPED REMAINDER, which used to be discarded.
+		//
+		// This reconstruction is driven ENTIRELY by ByType, and an ORPHANED balance snapshot —
+		// accounts row hard-deleted, balance_snapshots.account_id SET NULL — has no account row to
+		// take a type from. GetAggregatedHistory counted it toward TotalBalance and omitted it from
+		// ByType, so a day whose only rows were orphans reported net worth of EXACTLY ZERO beside a
+		// correct balance. That is one of the two ways the user's chart reached a flat zero.
+		//
+		// The repository now recovers the type from the snapshot's own chain row
+		// (user_accounts.identity_type) wherever one survives, which is both the common shape and
+		// the only way to get a credit card's SIGN right. What is left here is the residue that
+		// recovery cannot reach: a snapshot whose chain row is gone too.
+		//
+		// SIGN, NOT A DEFAULT TYPE. Routing the remainder through domain.AccountTypeCategory("")
+		// would silently call it an asset (its default branch), so an untyped DEBT would IMPROVE
+		// net worth. The balance's own sign is the only information left about what it is, so a
+		// positive remainder is an asset and a negative one a liability, both at face value.
+		//
+		if point.UntypedBalance > 0 {
+			totalAssets += point.UntypedBalance
+		} else if point.UntypedBalance < 0 {
+			totalLiabilities += -point.UntypedBalance
+		}
+
 		netWorth := totalAssets - totalLiabilities
 
 		snapshots[i] = domain.NetWorthHistorySnapshot{

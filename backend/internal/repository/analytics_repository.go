@@ -2,9 +2,13 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
@@ -65,6 +69,10 @@ type AnalyticsRepository interface {
 	// Filters by merchant_id (effective canonical) to include merged source transactions (#1348 G2b).
 	// Single DB round-trip (Issue #1215 PR2).
 	GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
+
+	// GetCategoryHierarchy returns one grouped row per leaf carrying its whole ancestor path,
+	// for a single flow direction (#1626).
+	GetCategoryHierarchy(ctx context.Context, userID string, filters domain.SpendingFilters, direction domain.CategoryDirection) ([]domain.CategoryHierarchyRow, error)
 
 	// GetIncomeSourceBreakdown returns income (amount < 0) totals grouped by category.
 	// Single DB round-trip (Issue #1215 PR2).
@@ -368,27 +376,52 @@ func (r *analyticsRepository) getCashFlowGroupedHousehold(ctx context.Context, r
 	return results, nil
 }
 
-// fillMissingPeriods fills in missing periods with zero values for chart continuity
-func fillMissingPeriods(data []domain.CashFlowGroupedData, startDate, endDate time.Time, grouping string) []domain.CashFlowGroupedData {
+// periodKeyLayout is the calendar-date key a cash-flow bucket is identified by. Buckets come
+// out of DATE_TRUNC as dates with no time part, so the key is the whole of their identity.
+const periodKeyLayout = "2006-01-02"
+
+// fillMissingPeriods returns every period the query produced, plus zero-valued periods for the
+// gaps between them, so a chart gets a continuous series.
+//
+// fillEnd is the last period this function may FABRICATE. The service clamps it (see
+// clampFillEnd in services/analytics_service.go) so a request reaching into the future does not
+// manufacture buckets for days that have not happened yet — the user-visible defect was a Cash
+// Flow chart showing "Week of Sep 13 / Sep 20 / Sep 27" on Sep 9, flat at exactly 0
+// (#1626 Phase 3, Defect 1). Two invariants make that clamp safe to apply:
+//
+//   - Nothing empty is generated past fillEnd, and nothing at all when the requested range lies
+//     entirely beyond it. That second guard is not redundant: truncateDate moves a start date
+//     BACKWARD to Monday/month-start, so a range wholly in the future (today Wednesday, request
+//     starting Friday) still truncated to a Monday inside the horizon and emitted one fake
+//     "current period" bucket.
+//   - No period present in `data` is ever dropped. This function rebuilds its output from the
+//     generated key sequence alone, so a real row whose key falls outside that sequence would be
+//     DISCARDED rather than merely left unfilled. That is precisely why the obvious fix — clamp
+//     the generated horizon to now — is a data-DELETING change and not a fix: transactions are
+//     bucketed on t.date, a zoneless calendar date that is effectively institution-local, so a
+//     user ahead of UTC has real, already-returned spending for a period the clamp would drop.
+//     Pinned by TestFillMissingPeriods_KeepsEveryRealPeriodBeyondTheHorizon.
+func fillMissingPeriods(data []domain.CashFlowGroupedData, startDate, fillEnd time.Time, grouping string) []domain.CashFlowGroupedData {
 	if len(data) == 0 {
-		return generateEmptyPeriods(startDate, endDate, grouping)
+		return generateEmptyPeriods(startDate, fillEnd, grouping)
 	}
 
-	periodMap := make(map[string]domain.CashFlowGroupedData)
+	periodMap := make(map[string]domain.CashFlowGroupedData, len(data))
 	for _, d := range data {
-		key := d.PeriodStart.Format("2006-01-02")
-		periodMap[key] = d
+		periodMap[d.PeriodStart.Format(periodKeyLayout)] = d
 	}
 
-	var result []domain.CashFlowGroupedData
-	current := truncateDate(startDate, grouping)
-	end := endDate
+	result := make([]domain.CashFlowGroupedData, 0, len(data))
+	emitted := make(map[string]bool, len(data))
 
-	for !current.After(end) {
-		key := current.Format("2006-01-02")
-		if existing, ok := periodMap[key]; ok {
-			result = append(result, existing)
-		} else {
+	if !startDate.After(fillEnd) {
+		for current := truncateDate(startDate, grouping); !current.After(fillEnd); current = advancePeriod(current, grouping) {
+			key := current.Format(periodKeyLayout)
+			emitted[key] = true
+			if existing, ok := periodMap[key]; ok {
+				result = append(result, existing)
+				continue
+			}
 			result = append(result, domain.CashFlowGroupedData{
 				PeriodStart:      current,
 				Income:           0,
@@ -396,18 +429,38 @@ func fillMissingPeriods(data []domain.CashFlowGroupedData, startDate, endDate ti
 				TransactionCount: 0,
 			})
 		}
-		current = advancePeriod(current, grouping)
 	}
+
+	// Real periods the generated sequence did not cover — beyond fillEnd, or before the start
+	// date the caller asked to fill from. Kept, never zeroed and never dropped.
+	for _, d := range data {
+		key := d.PeriodStart.Format(periodKeyLayout)
+		if emitted[key] {
+			continue
+		}
+		emitted[key] = true
+		result = append(result, d)
+	}
+
+	sort.Slice(result, func(i, j int) bool { return result[i].PeriodStart.Before(result[j].PeriodStart) })
 
 	return result
 }
 
-// generateEmptyPeriods creates a list of zero-value periods
-func generateEmptyPeriods(startDate, endDate time.Time, grouping string) []domain.CashFlowGroupedData {
+// generateEmptyPeriods creates a list of zero-value periods covering [startDate, fillEnd].
+// Returns nothing when the range lies entirely beyond fillEnd — see fillMissingPeriods above
+// for why truncateDate makes that guard necessary rather than merely defensive. This is the
+// path an empty result set takes, so it needs the guard in its own right: the clamp would
+// otherwise never be reached for a user with no transactions in the requested range.
+func generateEmptyPeriods(startDate, fillEnd time.Time, grouping string) []domain.CashFlowGroupedData {
+	if startDate.After(fillEnd) {
+		return nil
+	}
+
 	var result []domain.CashFlowGroupedData
 	current := truncateDate(startDate, grouping)
 
-	for !current.After(endDate) {
+	for !current.After(fillEnd) {
 		result = append(result, domain.CashFlowGroupedData{
 			PeriodStart:      current,
 			Income:           0,
@@ -489,9 +542,34 @@ func effectiveCategoryDisplayExpr() string {
 //
 // The ruling is ALPHABETICAL BY NAME, applied identically to both members of every pair. NULL
 // ordering is left at the ASC default (NULLS LAST) deliberately: a NULL name sorts last, which is
-// itself deterministic. It is also unreachable today — `effective_category_name` is scanned into a
-// non-pointer string (a NULL already fails the scan), and the merchant name COALESCEs to the
-// literal 'Unknown'.
+// itself deterministic.
+//
+// ⚠ #1626 falsified this paragraph's second half, which used to claim a NULL name was
+// "unreachable today — `effective_category_name` is scanned into a non-pointer string (a NULL
+// already fails the scan)". #1626 Phase 2 replaced it read-by-read because the tree was MIXED at
+// that point; #1626 E2 Part 2 converted the remaining four, so every read of this column is now
+// tolerant. The read-by-read form is KEPT anyway: it is what makes a new intolerant read visible as
+// an omission from a list rather than as a silent exception to a blanket claim.
+//
+// TOLERANT (7 reads, all scanning through `sql.NullString` and then taking .String): GetTopExpense,
+// GetLargestTransactionsForPeriod, GetCategoryBreakdownForMerchant, GetIncomeSourceBreakdown and
+// its household twin, GetUnusualSpend — six reading `t.effective_category_name` — plus
+// GetCategoryTotalForPeriod, whose display is a `cc.name` scalar subquery (NULL::text for every PFC
+// token by construction). For these a NULL is reachable and survives; the ordering stays
+// deterministic (NULLS LAST) and no longer decides what the user sees, because the service re-sorts
+// on the RESOLVED display where a NULL custom name has already become the neutral placeholder.
+//
+// ⚠ THE OWED FOLLOW-UP IS PAID (#1626 E2 Part 2), so this paragraph is REPLACED, not trimmed. It
+// used to record four reads — GetSpendingByCategory and getSpendingByCategoryHousehold scanning
+// `t.effective_category_name` into domain.SpendingByCategory.PFCPrimaryDisplay, GetSpendingTrends
+// and getSpendingTrendsHousehold scanning it into domain.SpendingTrendRow.CategoryDisplay — as
+// plain `string` scans, i.e. a latent 500, deferred to keep an earlier PR's blast radius
+// reviewable. All four now scan through `sql.NullString` like the seven above, so the tree is no
+// longer MIXED: every read of this column tolerates the NULL the schema expects. Pinned by
+// TestAnalyticsReads_NullEffectiveCategoryName_DoNotError, which is an INTEGRATION test because a
+// pgxmock NULL does not reproduce the failure — pgxmock converts Go values itself and never reaches
+// pgx's NULL handling, so the same assertions passed against the unfixed code. The merchant name is
+// unaffected either way: it still COALESCEs to the literal 'Unknown'.
 //
 // ⚠ Alphabetical alone does NOT determinise the MERCHANT reads. Their name is an aggregate
 // (`MAX(COALESCE(...))`) whose chain bottoms out in the literal 'Unknown', while the GROUP BY is on
@@ -1001,9 +1079,17 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 	var results []domain.SpendingByCategory
 	for rows.Next() {
 		var row domain.SpendingByCategory
-		if err := rows.Scan(&row.Category, &row.PFCPrimaryDisplay, &row.Total, &row.TransactionCount); err != nil {
+		// #1626 E2: sql.NullString, not string. effective_category_name is nullable BY DESIGN
+		// (migration 000073 leaves it nullable and indexes it partially on IS NOT NULL) and is
+		// refreshed asynchronously, so a custom-categorised row legitimately carries no name yet —
+		// and pgx v5 fails the scan on NULL rather than yielding "", which was a 500 for the whole
+		// report. The placeholder is resolveCategoryDisplay's decision in the service, not this
+		// layer's. Pinned by TestAnalyticsReads_NullEffectiveCategoryName_DoNotError.
+		var display sql.NullString
+		if err := rows.Scan(&row.Category, &display, &row.Total, &row.TransactionCount); err != nil {
 			return nil, fmt.Errorf("failed to scan spending by category: %w", err)
 		}
+		row.PFCPrimaryDisplay = display.String
 		results = append(results, row)
 	}
 
@@ -1066,9 +1152,12 @@ func (r *analyticsRepository) getSpendingByCategoryHousehold(ctx context.Context
 	var results []domain.SpendingByCategory
 	for rows.Next() {
 		var row domain.SpendingByCategory
-		if err := rows.Scan(&row.Category, &row.PFCPrimaryDisplay, &row.Total, &row.TransactionCount); err != nil {
+		// Nullable display, same as the personal read above — see there.
+		var display sql.NullString
+		if err := rows.Scan(&row.Category, &display, &row.Total, &row.TransactionCount); err != nil {
 			return nil, fmt.Errorf("failed to scan household spending by category: %w", err)
 		}
+		row.PFCPrimaryDisplay = display.String
 		results = append(results, row)
 	}
 
@@ -1235,9 +1324,12 @@ func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID stri
 	var results []domain.SpendingTrendRow
 	for rows.Next() {
 		var row domain.SpendingTrendRow
-		if err := rows.Scan(&row.PeriodStart, &row.Category, &row.CategoryDisplay, &row.Total); err != nil {
+		// Nullable display, same as GetSpendingByCategory — see there.
+		var display sql.NullString
+		if err := rows.Scan(&row.PeriodStart, &row.Category, &display, &row.Total); err != nil {
 			return nil, fmt.Errorf("failed to scan spending trend row: %w", err)
 		}
+		row.CategoryDisplay = display.String
 		results = append(results, row)
 	}
 
@@ -1286,9 +1378,12 @@ func (r *analyticsRepository) getSpendingTrendsHousehold(ctx context.Context, re
 	var results []domain.SpendingTrendRow
 	for rows.Next() {
 		var row domain.SpendingTrendRow
-		if err := rows.Scan(&row.PeriodStart, &row.Category, &row.CategoryDisplay, &row.Total); err != nil {
+		// Nullable display, same as GetSpendingByCategory — see there.
+		var display sql.NullString
+		if err := rows.Scan(&row.PeriodStart, &row.Category, &display, &row.Total); err != nil {
 			return nil, fmt.Errorf("failed to scan household spending trend row: %w", err)
 		}
+		row.CategoryDisplay = display.String
 		results = append(results, row)
 	}
 
@@ -1301,14 +1396,81 @@ func (r *analyticsRepository) getSpendingTrendsHousehold(ctx context.Context, re
 
 // GetCategoryTotalForPeriod returns the total expense amount for a specific effective category.
 // Matches both PFC primary categories (e.g. "FOOD_AND_DRINK") and custom categories ("custom:<uuid>").
-// Expenses are amount > 0 (PFCv2 convention). Returns zero row when no matching transactions exist.
-func (r *analyticsRepository) GetCategoryTotalForPeriod(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalRow, error) {
-	catExpr := effectiveCategoryExpr(false)
+// Expenses are amount > 0 (PFCv2 convention). Returns a single row of ZEROES when no matching
+// transactions exist — the aggregate is ungrouped, so there is no no-rows case (see the scan below).
+// customCategoryIDFromToken splits a `custom:<uuid>` grouping key. Kept beside its only caller
+// rather than shared: effectiveCategoryExpr's token format is an implementation detail of these
+// reads, and a widely-imported helper would invite parsing the token in places that should be
+// handling display through resolveCategoryDisplay instead (#1626).
+//
+// ⚠ IT PARSES THE SUFFIX AS A UUID, AND THAT IS WHAT MAKES THE REPOSITORY SAFE BY CONSTRUCTION
+// (#1626 gap G9). categoryTotalQuery(true) emits `cc.id = $5::uuid`, so the suffix is CAST by
+// Postgres rather than compared as text, and an unparseable one fails the whole statement — which
+// MapError classifies as a 500. services.validateCategoryToken already rejects that shape with a
+// 400, but it guards the SERVICE, not the cast: any other repository caller reaching
+// GetCategoryTotalForPeriod directly would get the 500 back, with nothing in the query's shape to
+// warn them. Returning false here means the uuid subquery is never emitted and no uuid is ever
+// bound, so a malformed token degrades to the plain text comparison it had before that subquery
+// existed — it matches no transaction and answers zero.
+//
+// ⚠ IT SAYS NOTHING ABOUT WHETHER THE CATEGORY EXISTS, and must not: a valid uuid naming a
+// tombstoned or absent custom category is a legitimate request that answers with a zero total and
+// resolveCategoryDisplay's "Custom category" label. Only the SHAPE is checked.
+//
+// ⚠ uuid.Parse, not a regexp, and the SAME call the service layer makes: it is the parser the
+// ::uuid cast will apply, so this gate can neither admit a spelling Postgres would reject nor
+// reject one it would accept.
+func customCategoryIDFromToken(category string) (string, bool) {
+	const tok = "custom:"
+	if !strings.HasPrefix(category, tok) {
+		return "", false
+	}
+	id := strings.TrimPrefix(category, tok)
+	if id == "" {
+		return "", false
+	}
+	if _, err := uuid.Parse(id); err != nil {
+		return "", false
+	}
+	return id, true
+}
 
-	query := fmt.Sprintf(`
+// categoryTotalQuery builds GetCategoryTotalForPeriod's statement.
+//
+// ⚠ WHY THE DISPLAY IS A SCALAR SUBQUERY AND NOT MAX(). This read used
+// MAX(t.effective_category_name), defended by "the WHERE pins one category, so MAX picks that
+// category's name rather than choosing between rivals". That is true of the CATEGORY and false of
+// the NAME: effective_category_name is denormalised per transaction and refreshed ASYNCHRONOUSLY
+// after a rename, so mid-refresh one category's rows legitimately carry BOTH names — and MAX is
+// lexicographic. It returns neither the stale nor the fresh name but whichever sorts higher, which
+// is an arbitrary answer wearing the costume of a deterministic one.
+//
+// A scalar subquery keeps this a one-row QueryRow aggregate. Selecting cc.name directly would be
+// invalid without grouping, and grouping risks multiple rows in ghost states.
+//
+// ⚠ The subquery is emitted ONLY for a custom token, and the uuid arrives as $5 rather than as a
+// substring of $4. An unconditional `substring($4 from 8)::uuid` is a cast Postgres may evaluate
+// before the guarding LIKE, turning every PFC-token call into invalid-input-syntax.
+func categoryTotalQuery(isCustomToken bool) string {
+	display := "NULL::text"
+	if isCustomToken {
+		// The exemption comment lives INSIDE the literal because the guard scans SQL strings, not
+		// the Go comments around them — a note up here excuses nothing.
+		display = `(
+				-- tombstone-exempt(custom_categories cc): HISTORY FILTER. A report for a category the
+				-- user has since deleted must still NAME it: the spend is retained history (#1569),
+				-- and a tombstoned category reverting to a raw UUID in the report is the #1626 bug
+				-- coming back through the door this very method was fixed to close.
+				SELECT cc.name FROM custom_categories cc
+				WHERE cc.id = $5::uuid AND cc.user_id = $1::uuid
+			)`
+	}
+
+	return fmt.Sprintf(`
 		SELECT
-			COALESCE(SUM(t.amount), 0) as total,
-			COUNT(*)                   as transaction_count
+			COALESCE(SUM(t.amount), 0)                    as total,
+			COUNT(*)                                      as transaction_count,
+			%s                                            as category_display
 		FROM transactions t
 		WHERE t.user_id = $1
 		  AND t.deleted_at IS NULL
@@ -1317,16 +1479,38 @@ func (r *analyticsRepository) GetCategoryTotalForPeriod(ctx context.Context, use
 		  AND t.amount > 0
 		  AND t.pending = false
 		  AND (%s) = $4
-	`, catExpr)
+	`, display, effectiveCategoryExpr(false))
+}
+
+func (r *analyticsRepository) GetCategoryTotalForPeriod(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalRow, error) {
+	// #1626 Phase 2: a custom token resolves its name from custom_categories; a PFC token has no
+	// row there and selects NULL, which resolveCategoryDisplay turns into the registry label.
+	customID, isCustomToken := customCategoryIDFromToken(category)
+	query := categoryTotalQuery(isCustomToken)
+
+	args := []interface{}{userID, startDate, endDate, category}
+	if isCustomToken {
+		args = append(args, customID)
+	}
 
 	var row domain.CategoryTotalRow
-	err := r.db.QueryRow(ctx, query, userID, startDate, endDate, category).Scan(
+	// Nullable: NULL for every PFC token by construction, and for a custom token whose category
+	// row is gone.
+	//
+	// ⚠ An empty period returns ONE row of zeroes, not no rows: categoryTotalQuery is an UNGROUPED
+	// aggregate (COALESCE(SUM(...),0), COUNT(*)), so Postgres always emits exactly one row and
+	// QueryRow can never yield ErrNoRows here. An earlier revision of this comment claimed the
+	// opposite; nothing downstream relies on the no-rows case because there is none.
+	var display sql.NullString
+	err := r.db.QueryRow(ctx, query, args...).Scan(
 		&row.Total,
 		&row.TransactionCount,
+		&display,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get category total for period: %w", err)
 	}
+	row.CategoryDisplay = display.String
 	return &row, nil
 }
 
@@ -1341,6 +1525,7 @@ func (r *analyticsRepository) GetTopExpense(ctx context.Context, userID string, 
 			COALESCE(t.merchant_name, '') as merchant_name,
 			t.amount,
 			(%s)                          as category,
+			t.effective_category_name     as category_display,
 			t.date
 		FROM transactions t
 		WHERE t.user_id = $1
@@ -1354,11 +1539,13 @@ func (r *analyticsRepository) GetTopExpense(ctx context.Context, userID string, 
 	`, catExpr)
 
 	var row domain.TopExpenseRow
+	var topDisplay sql.NullString
 	err := r.db.QueryRow(ctx, query, userID, startDate, endDate).Scan(
 		&row.TransactionID,
 		&row.MerchantName,
 		&row.Amount,
 		&row.Category,
+		&topDisplay,
 		&row.Date,
 	)
 	if err != nil {
@@ -1367,6 +1554,7 @@ func (r *analyticsRepository) GetTopExpense(ctx context.Context, userID string, 
 		}
 		return nil, fmt.Errorf("failed to get top expense: %w", err)
 	}
+	row.CategoryDisplay = topDisplay.String
 	return &row, nil
 }
 
@@ -1696,7 +1884,7 @@ func (r *analyticsRepository) GetLargestTransactionsForPeriod(ctx context.Contex
 	limitPlaceholder := fmt.Sprintf("$%d", argIndex)
 
 	query := fmt.Sprintf(`
-		SELECT t.id, COALESCE(t.merchant_name, ''), t.amount, (%s), t.date, t.account_id::text
+		SELECT t.id, COALESCE(t.merchant_name, ''), t.amount, (%s), t.effective_category_name, t.date, t.account_id::text
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
@@ -1719,9 +1907,11 @@ func (r *analyticsRepository) GetLargestTransactionsForPeriod(ctx context.Contex
 	results := make([]domain.LargestTransactionRow, 0)
 	for rows.Next() {
 		var row domain.LargestTransactionRow
-		if err := rows.Scan(&row.TransactionID, &row.MerchantName, &row.Amount, &row.Category, &row.Date, &row.AccountID); err != nil {
+		var display sql.NullString
+		if err := rows.Scan(&row.TransactionID, &row.MerchantName, &row.Amount, &row.Category, &display, &row.Date, &row.AccountID); err != nil {
 			return nil, fmt.Errorf("failed to scan largest transaction row: %w", err)
 		}
+		row.CategoryDisplay = display.String
 		results = append(results, row)
 	}
 
@@ -1741,7 +1931,7 @@ func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Contex
 	filterClause, args, _ := buildSpendingFilter(filters, args)
 
 	query := fmt.Sprintf(`
-		SELECT (%s), SUM(t.amount), COUNT(*)
+		SELECT (%s), t.effective_category_name, SUM(t.amount), COUNT(*)
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		%s
@@ -1753,7 +1943,7 @@ func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Contex
 		  AND t.pending = false
 		  AND %s = $4::uuid
 		  %s
-		GROUP BY (%s)
+		GROUP BY (%s), t.effective_category_name
 		ORDER BY SUM(t.amount) DESC
 	`, catExpr, merchantSortJoins, effectiveMerchantIdExpr, filterClause, catExpr)
 
@@ -1766,9 +1956,11 @@ func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Contex
 	results := make([]domain.CategoryBreakdownForMerchantRow, 0)
 	for rows.Next() {
 		var row domain.CategoryBreakdownForMerchantRow
-		if err := rows.Scan(&row.Category, &row.Total, &row.Count); err != nil {
+		var display sql.NullString
+		if err := rows.Scan(&row.Category, &display, &row.Total, &row.Count); err != nil {
 			return nil, fmt.Errorf("failed to scan category breakdown row: %w", err)
 		}
+		row.CategoryDisplay = display.String
 		results = append(results, row)
 	}
 
@@ -1787,11 +1979,12 @@ func (r *analyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, user
 	}
 
 	catExpr := effectiveCategoryExpr(false)
+	displayExpr := effectiveCategoryDisplayExpr()
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	filterClause, args, _ := buildSpendingFilter(filters, args)
 
 	query := fmt.Sprintf(`
-		SELECT (%s) AS category, ABS(SUM(t.amount)) AS total, COUNT(*) AS count
+		SELECT (%s) AS category, %s AS category_display, ABS(SUM(t.amount)) AS total, COUNT(*) AS count
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
@@ -1801,9 +1994,9 @@ func (r *analyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, user
 		  AND t.amount < 0
 		  AND t.pending = false
 		  %s
-		GROUP BY (%s)
-		ORDER BY ABS(SUM(t.amount)) DESC
-	`, catExpr, filterClause, catExpr)
+		GROUP BY (%s), category_display
+		ORDER BY total DESC, category_display ASC
+	`, catExpr, displayExpr, filterClause, catExpr)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1814,9 +2007,13 @@ func (r *analyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, user
 	results := make([]domain.IncomeSourceRow, 0)
 	for rows.Next() {
 		var row domain.IncomeSourceRow
-		if err := rows.Scan(&row.Category, &row.Total, &row.Count); err != nil {
+		// effective_category_name is nullable and app-maintained asynchronously, so it is scanned
+		// through a nullable type rather than straight into a string (#1626).
+		var display sql.NullString
+		if err := rows.Scan(&row.Category, &display, &row.Total, &row.Count); err != nil {
 			return nil, fmt.Errorf("failed to scan income source row: %w", err)
 		}
+		row.CategoryDisplay = display.String
 		results = append(results, row)
 	}
 
@@ -1837,7 +2034,7 @@ func (r *analyticsRepository) getIncomeSourceBreakdownHousehold(ctx context.Cont
 
 	query := fmt.Sprintf(`
 		WITH %s
-		SELECT (%s) AS category, ABS(SUM(t.amount)) AS total, COUNT(*) AS count
+		SELECT (%s) AS category, %s AS category_display, ABS(SUM(t.amount)) AS total, COUNT(*) AS count
 		FROM transactions t
 		JOIN accounts a ON t.account_id = a.id
 		WHERE %s
@@ -1847,9 +2044,9 @@ func (r *analyticsRepository) getIncomeSourceBreakdownHousehold(ctx context.Cont
 		  AND t.amount < 0
 		  AND t.pending = false
 		  %s
-		GROUP BY (%s)
-		ORDER BY ABS(SUM(t.amount)) DESC
-	`, householdGrantsCTE(), catExpr, householdSharedTransactionPredicate("t", "a"), filterClause, catExpr)
+		GROUP BY (%s), category_display
+		ORDER BY total DESC, category_display ASC
+	`, householdGrantsCTE(), catExpr, effectiveCategoryDisplayExpr(), householdSharedTransactionPredicate("t", "a"), filterClause, catExpr)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1860,9 +2057,12 @@ func (r *analyticsRepository) getIncomeSourceBreakdownHousehold(ctx context.Cont
 	var results []domain.IncomeSourceRow
 	for rows.Next() {
 		var row domain.IncomeSourceRow
-		if err := rows.Scan(&row.Category, &row.Total, &row.Count); err != nil {
+		// See the personal read: nullable, asynchronously maintained column (#1626).
+		var display sql.NullString
+		if err := rows.Scan(&row.Category, &display, &row.Total, &row.Count); err != nil {
 			return nil, fmt.Errorf("failed to scan household income source row: %w", err)
 		}
+		row.CategoryDisplay = display.String
 		results = append(results, row)
 	}
 
@@ -1903,6 +2103,7 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 			COALESCE(t.merchant_name, ''),
 			t.amount,
 			(%s),
+			t.effective_category_name,
 			t.date,
 			b.mean_amount,
 			(t.amount - b.mean_amount) / b.stddev_amount AS sigma_above
@@ -1929,17 +2130,20 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 	results := make([]domain.UnusualSpendRow, 0)
 	for rows.Next() {
 		var row domain.UnusualSpendRow
+		var unusualDisplay sql.NullString
 		if err := rows.Scan(
 			&row.TransactionID,
 			&row.MerchantName,
 			&row.Amount,
 			&row.Category,
+			&unusualDisplay,
 			&row.Date,
 			&row.BaselineAvg,
 			&row.SigmaAbove,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan unusual spend row: %w", err)
 		}
+		row.CategoryDisplay = unusualDisplay.String
 		results = append(results, row)
 	}
 

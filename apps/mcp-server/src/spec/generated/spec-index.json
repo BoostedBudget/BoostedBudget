@@ -1115,6 +1115,11 @@
           "required": true
         },
         {
+          "name": "requested_end_date",
+          "type": "string",
+          "required": true
+        },
+        {
           "name": "start_date",
           "type": "string",
           "required": true
@@ -1208,6 +1213,105 @@
         {
           "name": "start_date",
           "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "operationId": "getCategoryHierarchy",
+      "method": "GET",
+      "path": "/api/v1/analytics/category-hierarchy",
+      "summary": "Get the category hierarchy",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns the category tree for one flow direction (income or expense), up to three levels deep: PFC primary, then its detailed categories or custom categories nested under it, then custom categories nested under those. Each node carries a roll-up total, its own direct total, and a transaction count. Levels are ragged — a branch ends where its data ends.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "direction",
+          "in": "query",
+          "description": "Which side of the ledger to aggregate: income is amount < 0, expense is amount > 0. Both directions return the SAME full tree — this parameter selects which transactions are aggregated, not how deep the result goes. How many levels to SHOW is a presentation choice: the reports Sankey renders income at leaf depth, because income's useful distinction (wages, dividends, rental) lives one level down, and expenses at primary depth, because they read better consolidated.",
+          "enum": [
+            "income",
+            "expense"
+          ],
+          "type": "string"
+        },
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter",
+          "type": "string"
+        },
+        {
+          "name": "include_transfers",
+          "in": "query",
+          "description": "Include transfer transactions (true/false, default false)",
+          "type": "string"
+        },
+        {
+          "name": "custom_category_ids",
+          "in": "query",
+          "description": "Comma-separated custom category UUIDs to scope the report. NOTE: supplying any value narrows the WHOLE tree to custom-categorised transactions, so no PFC branches are returned — that is what scoping a report to specific custom categories means, and it matches the reports page's existing custom-category filter.",
+          "type": "string"
+        },
+        {
+          "name": "roll_up",
+          "in": "query",
+          "description": "When true, a parent custom category also includes its children (default true)",
+          "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope: personal (default) or household (requires active household membership). Custom category scoping always resolves to the requester's own categories, never a household member's.",
+          "enum": [
+            "personal",
+            "household"
+          ],
+          "type": "string"
+        }
+      ],
+      "responseBody": [
+        {
+          "name": "direction",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "end_date",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "levels",
+          "type": "array of object",
+          "required": true
+        },
+        {
+          "name": "start_date",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "total",
+          "type": "number",
           "required": true
         }
       ]
@@ -10125,19 +10229,25 @@
         {
           "name": "pfc_primaries",
           "in": "query",
-          "description": "Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)",
+          "description": "Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL). OR-joined with pfc_detaileds, custom_category_ids and uncategorized: a transaction matches if ANY of them matches.",
           "type": "string"
         },
         {
           "name": "pfc_detaileds",
           "in": "query",
-          "description": "Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). Combined with pfc_primaries using OR logic.",
+          "description": "Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). OR-joined with pfc_primaries, custom_category_ids and uncategorized.",
           "type": "string"
         },
         {
           "name": "custom_category_ids",
           "in": "query",
-          "description": "Filter by custom category UUIDs (comma-separated)",
+          "description": "Filter by custom category UUIDs (comma-separated). Each id also matches its child categories. OR-joined with pfc_primaries, pfc_detaileds and uncategorized — combining them returns the union, not the (always empty) intersection.",
+          "type": "string"
+        },
+        {
+          "name": "uncategorized",
+          "in": "query",
+          "description": "When true, also match transactions with NO category at all — the rows analytics reports as 'Uncategorized'. OR-joined with pfc_primaries, pfc_detaileds and custom_category_ids. Omitted or false adds no filter; it never means 'exclude uncategorized'. Issue #1626.",
           "type": "string"
         },
         {
@@ -10259,6 +10369,16 @@
         {
           "name": "next_cursor",
           "type": "string"
+        },
+        {
+          "name": "total_amount",
+          "type": "number",
+          "description": "Summed amount of the whole filtered set, SIGNED like the rows (PFCv2: expenses positive, inflows negative) — not a magnitude. A Sankey node's amount is an ABS sum, so the property that holds is |node amount| == |total_amount|. First page only; absent means not computed, a present 0 means the set nets to zero."
+        },
+        {
+          "name": "total_count",
+          "type": "integer",
+          "description": "Number of transactions in the whole filtered set. First page only; absent means not computed, a present 0 means the set is empty."
         },
         {
           "name": "transactions",

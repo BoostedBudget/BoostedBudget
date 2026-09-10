@@ -770,4 +770,68 @@ describe('useTransactionFilters', () => {
       expect(result.current.filters.include_reversed).toBe(true)
     })
   })
+  // ── #1626 Phase 2: uncategorized is navigable URL state ─────────────────────────────────
+  //
+  // The reports Sankey renders an "Uncategorized" node, but `UNCATEGORIZED` is a sentinel the
+  // analytics layer SYNTHESISES — no row stores it — so `pfc_primaries=UNCATEGORIZED` matched
+  // nothing and the node had to be inert. This filter is what makes it clickable, which means the
+  // Sankey's click-through depends on every layer below carrying the flag; a gap anywhere leaves
+  // the feature looking wired and behaving inertly.
+  describe('uncategorized filter', () => {
+    it('defaults to off and stays out of the URL', () => {
+      window.history.replaceState({}, '', '/')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+
+      expect(result.current.filters.uncategorized).toBeUndefined()
+      expect(result.current.uncategorized).toBe(false)
+      expect(result.current.activeFilterCount).toBe(0)
+    })
+
+    it('opting in serializes to the URL and counts as an active filter', () => {
+      window.history.replaceState({}, '', '/')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+
+      act(() => result.current.setUncategorized(true))
+
+      expect(new URLSearchParams(window.location.search).get('uncategorized')).toBe('true')
+      expect(result.current.filters.uncategorized).toBe(true)
+      expect(result.current.uncategorized).toBe(true)
+      expect(result.current.activeFilterCount).toBe(1)
+    })
+
+    // ⚠ This is the one the plain-boolean design makes easy to get wrong: the boolean codec
+    // serialises `false` as the string "false" and only `undefined`/`null` delete a param, so
+    // setFilter('uncategorized', false) would leave `?uncategorized=false` in the URL — a second
+    // filter state that requests exactly the same rows, splitting the React Query cache.
+    it('opting back out removes the param rather than writing false', () => {
+      window.history.replaceState({}, '', '/?uncategorized=true')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      expect(result.current.uncategorized).toBe(true)
+
+      act(() => result.current.setUncategorized(false))
+
+      expect(new URLSearchParams(window.location.search).get('uncategorized')).toBeNull()
+      expect(result.current.filters.uncategorized).toBeUndefined()
+      expect(result.current.activeFilterCount).toBe(0)
+    })
+
+    it('is deep-linkable, which is the whole point — the Sankey navigates by URL', () => {
+      window.history.replaceState({}, '', '/?uncategorized=true')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+
+      expect(result.current.filters.uncategorized).toBe(true)
+      expect(result.current.uncategorized).toBe(true)
+    })
+
+    // The four category predicates are OR-joined server-side (#1626 defect C), so combining them
+    // is a union and must read as FOUR active filters, not one.
+    it('combines with the category filters instead of replacing them', () => {
+      window.history.replaceState({}, '', '/?uncategorized=true&pfc_primaries=TRAVEL&pfc_detaileds=TRAVEL_FLIGHTS&custom_category_ids=abc')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+
+      expect(result.current.filters.uncategorized).toBe(true)
+      expect(result.current.filters.pfc_primaries).toEqual(['TRAVEL'])
+      expect(result.current.activeFilterCount).toBe(4)
+    })
+  })
 })

@@ -293,6 +293,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getLargestTransactionsForPeriod'), // MCP analytics helper — Issue #1215 PR2
   read('getCategoryBreakdownForMerchant'), // MCP analytics helper — Issue #1215 PR2
   read('getIncomeSourceBreakdown'), // MCP analytics helper — Issue #1215 PR2
+  read('getCategoryHierarchy'), // three-level category tree per flow direction — Issue #1626
   read('getUnusualSpend'), // MCP analytics helper — Issue #1215 PR3
   read('getNetWorthTrend'), // MCP analytics helper — Issue #1215 PR3
   read('getBudgetVsActual'), // MCP analytics helper — Issue #1215 PR3

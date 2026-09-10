@@ -14,12 +14,12 @@ import "github.com/maxnussbaum/BoostedBudget/internal/queue"
 // with the evidence recorded next to it, rather than something derived at runtime, for the same reason
 // queue.MirroredJobArgsShapes is declared: the derivation is the thing that has to be checkable.
 //
-//	17 periodic kinds — item_cleanup_check, scheduled_deletion_check, retention_cleanup_check,
+//	18 periodic kinds — item_cleanup_check, scheduled_deletion_check, retention_cleanup_check,
 //	  trial_expiration_check, past_due_check, paddle_reconciliation,
 //	  manual_tier_override_expiry_check, household_member_cleanup_check,
 //	  household_over_capacity_check, budget_period_close_check, savings_stats, portfolio_snapshot,
 //	  rule_quarantine_census, dlq_cleanup_check, idempotency_cleanup, plaid_orphan_retry,
-//	  plaid_orphan_token_purge:
+//	  plaid_orphan_token_purge, balance_snapshot_dispatch:
 //	  registered from cmd/server/periodic_jobs.go via each kind's *InsertOpts(), which is
 //	  riverInsertOptsFromUnique(queue, <Kind>UniqueOpts()) — see periodic_job_opts.go. Uniqueness IS
 //	  passed. (This is what Issue #1448 wired; before it, these hand-wrote bare InsertOpts.)
@@ -98,6 +98,24 @@ var uniqueOptsByKind = map[string]func() *queue.UniqueOpts{
 	// #1625 Task 18 fix round 1: periodic-only kind registered from cmd/server/periodic_jobs.go
 	// via RuleQuarantineCensusInsertOpts(), same shape as its siblings above.
 	"rule_quarantine_census": RuleQuarantineCensusUniqueOpts,
+
+	// Issue #1626 Phase 3, Defect 3. Producers audited, one each, and BOTH pass uniqueness — so a
+	// replay must too:
+	//
+	//   - balance_snapshot_dispatch — registered from cmd/server/periodic_jobs.go via
+	//     BalanceSnapshotDispatchInsertOpts(), which is riverInsertOptsFromUnique(queue,
+	//     BalanceSnapshotDispatchUniqueOpts()). Periodic-only; no other producer.
+	//   - balance_snapshot_capture — enqueued only by BalanceSnapshotDispatchWorker.Work
+	//     (balance_snapshot_capture.go), which passes
+	//     queue.WithUnique(*BalanceSnapshotCaptureUniqueOpts()) explicitly.
+	//
+	// ⚠ THE TWO KEYS ARE DELIBERATELY DIFFERENT AND A REPLAY MUST PRESERVE THAT. The dispatch key
+	// includes JobStateCompleted (RunOnStart requires it); the capture key deliberately EXCLUDES it,
+	// so replaying a capture that already completed is permitted — which is what makes a replay
+	// useful here at all, since a capture that ran hours ago did not see an account linked since.
+	// Mapping either to the other's helper would silently change what a replay can do.
+	"balance_snapshot_dispatch": BalanceSnapshotDispatchUniqueOpts,
+	"balance_snapshot_capture":  BalanceSnapshotCaptureUniqueOpts,
 
 	// Maintenance kinds
 	"dlq_cleanup_check":   DLQCleanupUniqueOpts,

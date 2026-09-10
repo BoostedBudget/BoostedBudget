@@ -223,6 +223,94 @@ describe('BalanceHistoryChart', () => {
     })
   })
 
+  // ─── #1626 Phase 3, 1d/1e ──────────────────────────────────────────────────────────────
+  describe('missing account types are gaps, not zeroes', () => {
+    const mixed: BalanceHistory = {
+      start_date: '2025-11-01',
+      end_date: '2025-11-03',
+      granularity: 'daily',
+      snapshots: [
+        { date: '2025-11-01', balance: 10000, by_type: { depository: 7000, credit: -2000 } },
+        { date: '2025-11-02', balance: 10500, by_type: { depository: 7500 } },
+        { date: '2025-11-03', balance: 9800, by_type: { depository: 6800, credit: -1800 } },
+      ],
+    }
+
+    const seriesOf = (name: string) => {
+      const option = mockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+        series?: Array<{
+          name: string
+          data: Array<number | null>
+          smooth?: boolean
+          smoothMonotone?: string
+          connectNulls?: boolean
+        }>
+      }
+      const found = (option.series ?? []).find((sr) => sr.name === name)
+      if (!found) throw new Error(`no series named ${name}`)
+      return found
+    }
+
+    it('renders a day with no entry for that type as null, not 0', () => {
+      render(<BalanceHistoryChart history={mixed} showTypeBreakdown={true} />)
+      // A credit balance of exactly 0 and "this account type had no balance recorded" are
+      // different facts. Rendering the second as the first is the same anti-pattern as the
+      // zero-filled future buckets this phase removed, at smaller scale.
+      expect(seriesOf('Credit').data).toEqual([-2000, null, -1800])
+      expect(seriesOf('Depository').data).toEqual([7000, 7500, 6800])
+    })
+
+    it('leaves a gap in the line rather than connecting across it', () => {
+      render(<BalanceHistoryChart history={mixed} showTypeBreakdown={true} />)
+      expect(seriesOf('Credit').connectNulls).not.toBe(true)
+    })
+
+    it('omits the gap from the tooltip instead of printing a zero', () => {
+      render(<BalanceHistoryChart history={mixed} showTypeBreakdown={true} />)
+      const option = mockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+        tooltip?: { formatter?: (p: unknown) => string }
+      }
+      const formatted = option.tooltip!.formatter!([
+        { seriesName: 'Depository', value: 7500, dataIndex: 1 },
+        { seriesName: 'Credit', value: null, dataIndex: 1 },
+      ])
+      expect(formatted).toContain('Depository')
+      expect(formatted).not.toContain('Credit')
+      expect(formatted).not.toContain('NaN')
+    })
+  })
+
+  describe('line smoothing', () => {
+    const seriesList = () => {
+      const option = mockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+        series?: Array<{ smooth?: boolean; smoothMonotone?: string }>
+      }
+      return option.series ?? []
+    }
+
+    // smoothMonotone is a MODIFIER of smooth, not a replacement: with smooth false it does
+    // nothing at all, so both have to be present. Smoothing is what turned a one-step plunge
+    // into an exponential-decay curve and made this bug look like a slow bleed rather than a
+    // cliff; monotone-x stops the curve overshooting between points without flattening a
+    // genuine step.
+    it('keeps smoothing on and constrains it to monotone-x (total balance)', () => {
+      render(<BalanceHistoryChart history={mockHistory} />)
+      for (const sr of seriesList()) {
+        expect(sr.smooth).toBe(true)
+        expect(sr.smoothMonotone).toBe('x')
+      }
+    })
+
+    it('keeps smoothing on and constrains it to monotone-x (type breakdown)', () => {
+      render(<BalanceHistoryChart history={mockHistory} showTypeBreakdown={true} />)
+      expect(seriesList()).toHaveLength(3)
+      for (const sr of seriesList()) {
+        expect(sr.smooth).toBe(true)
+        expect(sr.smoothMonotone).toBe('x')
+      }
+    })
+  })
+
   it('tooltip formatter escapes malicious series names (XSS regression — #1169)', () => {
     render(<BalanceHistoryChart history={mockHistory} />)
     const option = mockEChartsChart.mock.calls.at(-1)?.[0]?.option as {

@@ -165,3 +165,88 @@ describe('TransactionFilterPanel — reversed transactions (#1569 T12)', () => {
     expect(received).toBe(true)
   })
 })
+
+// ── #1626 Phase 2: the uncategorized filter needs a visible way out ───────────────────────
+//
+// The reports Sankey navigates here with ?uncategorized=true. Without a pill the user arrives at
+// a filtered list with no on-screen indication of WHY it is filtered and no way to clear it
+// except editing the URL — which is how a deep link becomes a bug report.
+//
+// A pill rather than a toggle switch is deliberate: the Sankey is the affordance that turns this
+// on, and a switch for it in the panel would invite turning it on with nothing to explain what
+// "uncategorized" means in a list that has a Category column.
+//
+// ⚠ Known limitation, recorded rather than hidden: pfc_primaries, pfc_detaileds and
+// custom_category_ids are equally invisible today and equally reachable from the Sankey. This
+// closes the one filter this issue introduced, not the whole class.
+describe('TransactionFilterPanel — uncategorized filter (#1626)', () => {
+  beforeEach(() => setViewportWidth(1280))
+  afterEach(() => setViewportWidth(0))
+
+  it('shows no uncategorized pill when the filter is off', () => {
+    render(<TransactionFilterPanel {...defaultProps} onUncategorizedChange={() => {}} />)
+
+    // 'Uncategorized:' — FilterPill renders the label with its trailing colon.
+    expect(screen.queryByText('Uncategorized:')).not.toBeInTheDocument()
+  })
+
+  it('shows a pill when the filter is on, so the user can see why the list is short', () => {
+    render(
+      <TransactionFilterPanel
+        {...defaultProps}
+        filters={{ uncategorized: true }}
+        onUncategorizedChange={() => {}}
+      />,
+    )
+
+    expect(screen.getByText('Uncategorized:')).toBeInTheDocument()
+    // 'Included', not 'Only': the server ORs this with the other category filters, so a pill
+    // reading "Only" would misdescribe a combined selection.
+    expect(screen.getByText('Included')).toBeInTheDocument()
+  })
+
+  // ⚠ This assertion is load-bearing beyond the badge: hasDateStatusFilters gates whether the
+  // pills section renders AT ALL. If uncategorized is not counted here, then arriving from the
+  // Sankey with only this filter set renders no pills section and therefore no pill — the count
+  // and the pill are the same switch, not two independent features.
+  it('counts as an active filter, which is also what makes the pill render', () => {
+    render(
+      <TransactionFilterPanel
+        {...defaultProps}
+        filters={{ uncategorized: true }}
+        onUncategorizedChange={() => {}}
+      />,
+    )
+
+    expect(screen.getByText('1')).toBeInTheDocument()
+    expect(screen.getByText('Uncategorized:')).toBeInTheDocument()
+  })
+
+  it('removing the pill clears the filter rather than toggling it on', () => {
+    let received: boolean | undefined
+    render(
+      <TransactionFilterPanel
+        {...defaultProps}
+        filters={{ uncategorized: true }}
+        onUncategorizedChange={(v: boolean) => { received = v }}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /remove uncategorized filter/i }))
+    expect(received).toBe(false)
+  })
+
+  it('is cleared by Clear all along with everything else', () => {
+    let received: boolean | undefined
+    render(
+      <TransactionFilterPanel
+        {...defaultProps}
+        filters={{ uncategorized: true }}
+        onUncategorizedChange={(v: boolean) => { received = v }}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /clear all/i }))
+    expect(received).toBe(false)
+  })
+})

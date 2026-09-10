@@ -32,6 +32,13 @@ export interface UseTransactionFiltersResult {
   /** Issue #1569: whether bank-reversed transactions are currently shown. Default false. */
   includeReversed: boolean
   setIncludeReversed: (val: boolean) => void
+  /**
+   * Issue #1626: whether uncategorized transactions are ALSO being matched. Default false.
+   * OR-joined server-side with the three category filters, so this widens the result set — it
+   * never means "hide the uncategorized ones".
+   */
+  uncategorized: boolean
+  setUncategorized: (val: boolean) => void
 }
 
 const SPEC = {
@@ -60,6 +67,13 @@ const SPEC = {
   // the mirror image of the investment rule applies — `true` is the departure from default and
   // is the only value that belongs in the URL.
   include_reversed: {
+    kind: 'scalar',
+    codec: 'boolean' as const,
+    activeWhen: (v: unknown) => v === true,
+  },
+  // Issue #1626: same shape as include_reversed — a positive-only opt-in whose default is off,
+  // so `true` is the only value worth putting in the URL.
+  uncategorized: {
     kind: 'scalar',
     codec: 'boolean' as const,
     activeWhen: (v: unknown) => v === true,
@@ -123,6 +137,10 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
       // explicit `false` in a hand-written URL produces the same filters object (and therefore
       // the same query cache key) as its absence.
       include_reversed: state.filters.include_reversed === true ? true : undefined,
+      // Issue #1626: normalised the same way, for the same reason — an explicit `false` in a
+      // hand-written URL must produce the identical filters object, and therefore the identical
+      // query cache key, as its absence.
+      uncategorized: state.filters.uncategorized === true ? true : undefined,
       // activity_types is meaningless when investment activity is disabled (include=false).
       // Suppress in derived state so deep-linked URLs (?include=false&activity_types=buy)
       // don't count stale types in activeFilterCount or show phantom filter pills (F2).
@@ -151,6 +169,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
       countIf(filters.merchant_id !== undefined) +
       countIf(filters.include_investment_activity === false) +
       countIf(filters.include_reversed === true) +
+      countIf(filters.uncategorized === true) +
       countIf(filters.activity_types && filters.activity_types.length > 0)
     )
   }, [filters, state.filters.pfc_primaries, state.filters.pfc_detaileds, state.filters.custom_category_ids])
@@ -221,6 +240,18 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
     [setFilter],
   )
 
+  // Issue #1626. Mirrors setIncludeReversed exactly, and for a reason worth stating: the boolean
+  // codec serialises `false` as the string "false" and only undefined/null delete a param, so
+  // setFilter('uncategorized', false) would leave `?uncategorized=false` behind — a distinct URL
+  // requesting identical rows, which splits the React Query cache and shows a stale pill.
+  const uncategorized = state.filters.uncategorized === true
+  const setUncategorized = useCallback(
+    (val: boolean) => {
+      setFilter('uncategorized', val ? true : undefined)
+    },
+    [setFilter],
+  )
+
   // Setting activity types is a no-op when investment activity is disabled
   const setActivityTypes = useCallback(
     (types: ActivityType[]) => {
@@ -255,5 +286,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
     setActivityTypes,
     includeReversed,
     setIncludeReversed,
+    uncategorized,
+    setUncategorized,
   }
 }

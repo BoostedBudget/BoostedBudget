@@ -164,3 +164,10 @@ func TestPlaidCleanupService_Integration_SideEffectClaim_TwoFlowsRacing_OnlyOneC
 	assert.NoError(t, racerErr, "once the holder releases, the side-effect claim must be immediately reclaimable — Plaid disconnect can legitimately recur")
 	assert.Equal(t, 1, racer.callCount(), "the racer's retry must now succeed and call Plaid")
 }
+
+// #1626 Phase 3, Defect 3: the periodic balance-capture dispatcher's global item enumeration.
+// Nothing in this test file's subject reaches it; the method exists so the mock still satisfies
+// repository.LinkedItemRepository.
+func (f *fakeLinkedItemRepoForRace) GetItemsForBalanceCapturePage(context.Context, *repository.BalanceCaptureSweepCursor, int) ([]domain.BalanceCaptureTarget, error) {
+	return nil, nil
+}

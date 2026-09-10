@@ -42,6 +42,8 @@ export function NetWorthHistoryChart({ history }: NetWorthHistoryChartProps) {
           type: 'line',
           data: snapshots.map((s) => s.net_worth),
           smooth: true,
+          // A MODIFIER of smooth, not a replacement — with smooth false it does nothing.
+          smoothMonotone: 'x',
           showSymbol: false,
           lineStyle: { color: NET_WORTH_COLOR, width: 2 },
           itemStyle: { color: NET_WORTH_COLOR },
@@ -51,6 +53,8 @@ export function NetWorthHistoryChart({ history }: NetWorthHistoryChartProps) {
           type: 'line',
           data: snapshots.map((s) => s.total_assets),
           smooth: true,
+          // A MODIFIER of smooth, not a replacement — with smooth false it does nothing.
+          smoothMonotone: 'x',
           showSymbol: false,
           lineStyle: { color: CASH_FLOW_COLORS.netPositive, width: 1.5 },
           itemStyle: { color: CASH_FLOW_COLORS.netPositive },
@@ -60,6 +64,8 @@ export function NetWorthHistoryChart({ history }: NetWorthHistoryChartProps) {
           type: 'line',
           data: snapshots.map((s) => s.total_liabilities),
           smooth: true,
+          // A MODIFIER of smooth, not a replacement — with smooth false it does nothing.
+          smoothMonotone: 'x',
           showSymbol: false,
           lineStyle: { color: CASH_FLOW_COLORS.netNegative, width: 1.5 },
           itemStyle: { color: CASH_FLOW_COLORS.netNegative },

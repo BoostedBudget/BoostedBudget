@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -16,17 +17,33 @@ import (
 // required for a transaction to be flagged as unusual.
 const unusualSpendSigmaThreshold = 2.0
 
+// ErrInvalidCategoryToken is returned when a `custom:<id>` category token's suffix is not a UUID.
+//
+// It exists because the suffix is CAST, not compared: GetCategoryTotalForPeriod resolves a custom
+// category's name through `cc.id = $5::uuid` (#1626 Phase 2), so an unparseable suffix reaches
+// Postgres and fails with invalid-input-syntax — which MapError classifies as a server error.
+// Before that scalar subquery the token was only ever a text comparison and a malformed one simply
+// matched nothing, so this is the guard for a regression the display fix introduced, not a
+// pre-existing hole. Mapped to 400; see huma/errors/mapper.go.
+var ErrInvalidCategoryToken = errors.New("category token suffix is not a valid UUID")
+
 // AnalyticsService provides cash flow analytics functionality
 // Issue #354: Cash Flow Analysis & Income/Expense Visualization
 // Issue #953: Spending Reports
 // Issue #1215: AI-tool-callable analytics endpoints
 type AnalyticsService interface {
 	// GetCashFlowSummary returns aggregated cash flow data for a date range
-	// Includes income, expenses, net cash flow, and period comparison
+	// Includes income, expenses, net cash flow, and period comparison.
+	// It answers for the REQUESTED range verbatim and echoes it — nothing is fabricated and
+	// nothing is clamped, so the label always describes the window the numbers cover. Compare
+	// GetCashFlowHistory, which clamps and discloses.
 	GetCashFlowSummary(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowSummaryResponse, error)
 
 	// GetCashFlowHistory returns time series cash flow data grouped by period
-	// Used for rendering cash flow bar charts
+	// Used for rendering cash flow bar charts.
+	// Because it GAP-FILLS, a requested end past today is clamped in both the query and the
+	// response's end_date; the caller's own end is reported unchanged in requested_end_date, so
+	// the two cash-flow endpoints agree about what was asked while each labels what it answered.
 	GetCashFlowHistory(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowHistoryResponse, error)
 
 	// GetSpendingByCategory returns spending totals grouped by category with percentages
@@ -73,6 +90,10 @@ type AnalyticsService interface {
 	// Accepts merchant_id (UUID) to filter by effective canonical merchant (#1348 G2b).
 	// AI-tool-callable (Issue #1215 PR2).
 	GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) (*domain.CategoryBreakdownForMerchantResponse, error)
+
+	// GetCategoryHierarchy returns the category tree (up to three levels) for one flow
+	// direction, with roll-up totals and each node's own direct spend (#1626).
+	GetCategoryHierarchy(ctx context.Context, userID string, filters domain.SpendingFilters, direction domain.CategoryDirection) (*domain.CategoryHierarchyResponse, error)
 
 	// GetIncomeSourceBreakdown returns income (inflow) totals grouped by category.
 	// AI-tool-callable (Issue #1215 PR2).
@@ -121,6 +142,30 @@ func (s *analyticsService) GetCashFlowSummary(ctx context.Context, userID string
 		return nil, fmt.Errorf("invalid filters: %w", err)
 	}
 
+	// ⚠ NO CLAMP HERE, AND THAT IS A DECISION THIS METHOD MADE TWICE (final whole-branch review,
+	// finding F2 — which reverses #1626 Phase 2's finding X7).
+	//
+	// X7 observed that for a future-ranged request this endpoint and GetCashFlowHistory echoed
+	// different ranges for the same question, and clamped THIS ONE'S ECHO to today while leaving
+	// its query on the requested range. That left the endpoint inconsistent WITH ITSELF: the label
+	// said "through today", the number covered rows past today, and for an entirely-future range
+	// responseEndDate floored the echo to StartDate so the response claimed [start, start] while
+	// the aggregate covered [start, requestedEnd]. A label and a number describing different
+	// windows is not a cosmetic improvement on two labels that differ.
+	//
+	// THE QUERY MUST NOT BE CLAMPED EITHER. History threads a clamp into its repository call
+	// because it has gap-FILLING to stop: without it the query fabricates a zero-valued bucket for
+	// every future period. This method fabricates nothing — it is one aggregate over rows that
+	// exist — and transactions.date is a zoneless, effectively institution-local calendar date, so
+	// a user ahead of UTC legitimately has rows dated later than the UTC day. Clamping the query
+	// bound would DELETE those rows from their own total: real data loss, to fix a label.
+	//
+	// So: this endpoint queries the requested range and echoes the requested range. The two
+	// endpoints still agree about the range they were ASKED for — GetCashFlowHistory reports it in
+	// requested_end_date — and each labels the window it actually measured. Asserted by comparing
+	// the echo with the filters the repository was handed, in
+	// TestGetCashFlowSummary_EchoesTheWindowItActuallyQueried.
+
 	// Get aggregated cash flow for current period
 	currentAgg, err := s.analyticsRepo.GetCashFlowAggregation(ctx, userID, filters)
 	if err != nil {
@@ -151,7 +196,8 @@ func (s *analyticsService) GetCashFlowSummary(ctx context.Context, userID string
 
 	// Build response
 	response := &domain.CashFlowSummaryResponse{
-		StartDate:    filters.StartDate,
+		StartDate: filters.StartDate,
+		// The requested end, which is the end this aggregate measured — see the block above.
 		EndDate:      filters.EndDate,
 		Income:       currentAgg.Income,
 		Expenses:     currentAgg.Expenses,
@@ -205,10 +251,26 @@ func (s *analyticsService) GetCashFlowHistory(ctx context.Context, userID string
 		return nil, fmt.Errorf("invalid filters: %w", err)
 	}
 
-	// Default to daily grouping if not specified
+	// Default to daily grouping if not specified. Deliberately BEFORE the clamp below: the
+	// grouping describes the range the user ASKED for, so clamping first would silently
+	// re-bucket a three-month request as weekly the moment most of it lies in the future.
 	if filters.Grouping == "" {
 		filters.Grouping = autoSelectGrouping(filters.StartDate, filters.EndDate)
 	}
+
+	// ONE effectiveEnd, computed here at the service boundary and threaded into the repository
+	// call, so the same value bounds the query and the gap-filling (#1626 Phase 3, Defect 1).
+	// Nothing downstream re-derives "now": a clamp buried in the fill loop would leave the
+	// query, the fill and the response disagreeing about which day the answer stops on.
+	//
+	// requestedEnd is captured BEFORE the clamp overwrites it, because the response now DISCLOSES
+	// the tail it dropped (final whole-branch review, finding F2). Without that, a caller
+	// comparing this endpoint with GetCashFlowSummary — which queries and echoes the requested
+	// range, having nothing to fabricate — sees two different end dates and no way to tell a
+	// deliberate horizon from a disagreement.
+	requestedEnd := filters.EndDate
+	effectiveEnd := clampFillEnd(filters.EndDate, time.Now())
+	filters.EndDate = effectiveEnd
 
 	// Get grouped cash flow data
 	groupedData, err := s.analyticsRepo.GetCashFlowGrouped(ctx, userID, filters)
@@ -219,11 +281,9 @@ func (s *analyticsService) GetCashFlowHistory(ctx context.Context, userID string
 	// Convert to response format
 	periods := make([]domain.CashFlowPeriodData, len(groupedData))
 	for i, data := range groupedData {
-		periodEnd := calculatePeriodEnd(data.PeriodStart, filters.Grouping)
-
 		periods[i] = domain.CashFlowPeriodData{
 			PeriodStart:      data.PeriodStart,
-			PeriodEnd:        periodEnd,
+			PeriodEnd:        clampPeriodEnd(data.PeriodStart, calculatePeriodEnd(data.PeriodStart, filters.Grouping), effectiveEnd),
 			Income:           data.Income,
 			Expenses:         data.Expenses,
 			NetCashFlow:      data.Income - data.Expenses,
@@ -232,11 +292,64 @@ func (s *analyticsService) GetCashFlowHistory(ctx context.Context, userID string
 	}
 
 	return &domain.CashFlowHistoryResponse{
-		StartDate: filters.StartDate,
-		EndDate:   filters.EndDate,
-		Grouping:  filters.Grouping,
-		Periods:   periods,
+		StartDate:        filters.StartDate,
+		EndDate:          responseEndDate(filters.StartDate, effectiveEnd, periods),
+		RequestedEndDate: requestedEnd,
+		Grouping:         filters.Grouping,
+		Periods:          periods,
 	}, nil
+}
+
+// clampFillEnd returns the last calendar day a response may FABRICATE data for: the requested
+// end, or today (UTC) when the request reaches past it.
+//
+// UTC, not browser-local and not user-local: the API parses YYYY-MM-DD to UTC midnight and
+// buckets on UTC calendar dates, and the frontend presets now resolve "today" the same way
+// (shared/dates/presets.ts). A per-user IANA timezone exists (users.timezone, default "UTC")
+// and moving every date boundary to user-local is a coherent follow-up; mixing the two is what
+// produces an off-by-a-day disagreement, so both ends resolve UTC for now.
+//
+// This clamp is safe to thread into the query bound only because nothing downstream rebuilds the
+// result from the clamped horizon alone — see fillMissingPeriods in
+// repository/analytics_repository.go, which keeps every period its query returned even when the
+// period lies beyond this end.
+func clampFillEnd(requestedEnd, now time.Time) time.Time {
+	u := now.UTC()
+	today := time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
+	if requestedEnd.After(today) {
+		return today
+	}
+	return requestedEnd
+}
+
+// clampPeriodEnd stops a bucket advertising an end date the response has no data for: a weekly
+// bucket beginning last Monday runs to Sunday, and on a Wednesday that Sunday has not happened.
+// A bucket that begins beyond effectiveEnd keeps its own calculated end — it is real data past
+// the horizon (see fillMissingPeriods), and clamping it would produce an end before its start.
+func clampPeriodEnd(periodStart, periodEnd, effectiveEnd time.Time) time.Time {
+	if periodStart.After(effectiveEnd) {
+		return periodEnd
+	}
+	if periodEnd.After(effectiveEnd) {
+		return effectiveEnd
+	}
+	return periodEnd
+}
+
+// responseEndDate reports the range the response actually answered for: the clamped end, widened
+// to cover any real period lying beyond it rather than contradicting the periods it ships, and
+// floored at the start date so start <= end survives a range that is entirely in the future.
+func responseEndDate(startDate, effectiveEnd time.Time, periods []domain.CashFlowPeriodData) time.Time {
+	end := effectiveEnd
+	if end.Before(startDate) {
+		end = startDate
+	}
+	for _, p := range periods {
+		if p.PeriodEnd.After(end) {
+			end = p.PeriodEnd
+		}
+	}
+	return end
 }
 
 // autoSelectGrouping automatically determines the best grouping based on date range
@@ -294,35 +407,47 @@ func (s *analyticsService) GetSpendingByCategory(ctx context.Context, userID str
 		return nil, fmt.Errorf("failed to get spending by category: %w", err)
 	}
 
-	// Merge by raw category token (UUID for custom, enum for PFC) to keep distinct rows.
-	// Use server-resolved display from repo when available; fall back to pfcDisplayName for PFC.
-	merged := make(map[string]*domain.SpendingByCategory)
-	var order []string
-	for _, c := range categories {
-		displayName := c.PFCPrimaryDisplay
-		if displayName == "" {
-			displayName = pfcDisplayName(c.Category)
-		}
-		if existing, ok := merged[c.Category]; ok {
-			existing.Total += c.Total
-			existing.TransactionCount += c.TransactionCount
-		} else {
-			merged[c.Category] = &domain.SpendingByCategory{
-				Category:          c.Category,
-				PFCPrimaryDisplay: displayName,
-				Total:             c.Total,
-				TransactionCount:  c.TransactionCount,
-			}
-			order = append(order, c.Category)
+	// Merge by raw category token (UUID for custom, enum for PFC) to keep distinct rows — never by
+	// display, which is not unique and can change mid-rename while the async
+	// effective_category_refresh job catches up. Routed through mergeCategoryRows, like both
+	// sibling reads, so the three cannot drift apart — this read's hand-rolled copy of the merge
+	// had already dropped the display upgrade below (#1626, branch review I4).
+	rows := make([]domain.SpendingByCategory, len(categories))
+	for i, c := range categories {
+		rows[i] = domain.SpendingByCategory{
+			Category:          c.Category,
+			PFCPrimaryDisplay: resolveCategoryDisplay(c.Category, c.PFCPrimaryDisplay),
+			Total:             c.Total,
+			TransactionCount:  c.TransactionCount,
 		}
 	}
 
+	order := mergeCategoryRows(
+		len(rows),
+		func(i int) string { return rows[i].Category },
+		func(dst, src int) {
+			rows[dst].Total += rows[src].Total
+			rows[dst].TransactionCount += rows[src].TransactionCount
+			// First REAL name wins, whichever half carried it. The SQL orders total DESC, so the
+			// survivor is simply the larger half — if that is the one whose effective_category_name
+			// had not been refreshed yet, the placeholder would otherwise be the user's answer while
+			// the real name sat in the very next row.
+			if rows[dst].PFCPrimaryDisplay == unnamedCustomCategoryLabel && rows[src].PFCPrimaryDisplay != unnamedCustomCategoryLabel {
+				rows[dst].PFCPrimaryDisplay = rows[src].PFCPrimaryDisplay
+			}
+		},
+	)
+
 	categories = make([]domain.SpendingByCategory, 0, len(order))
 	var totalSpent float64
-	for _, key := range order {
-		categories = append(categories, *merged[key])
-		totalSpent += merged[key].Total
+	for _, i := range order {
+		categories = append(categories, rows[i])
+		totalSpent += rows[i].Total
 	}
+
+	// Re-sort on the RESOLVED label (#1626). The SQL ordered by category_display, which is the raw
+	// PFC enum, so "FOOD_AND_DRINK" sorted where "Food And Drink" does not.
+	sortSpendingByCategory(categories)
 
 	for i := range categories {
 		categories[i].Percentage = calculatePercentage(categories[i].Total, totalSpent)
@@ -424,15 +549,15 @@ func (s *analyticsService) GetSpendingTrends(ctx context.Context, userID string,
 		}
 
 		// Build category list (top categories first, then Other if present).
-		// Use server-resolved display when available; fall back to pfcDisplayName for PFC rows.
+		// #1626: through resolveCategoryDisplay like every other category-shaped response. The old
+		// `stored display, else pfcDisplayName` shape was wrong in BOTH directions here: the stored
+		// display holds the RAW enum for a PFC row, and an empty one for a custom row fell through
+		// to the registry, which title-cased the `custom:<uuid>` token into a UUID.
 		var periodTotal float64
 		cats := make([]domain.CategorySpending, 0)
 		for _, tc := range topCategories {
 			if spend, ok := catSpend[tc]; ok {
-				display := categoryDisplays[tc]
-				if display == "" {
-					display = pfcDisplayName(tc)
-				}
+				display := resolveCategoryDisplay(tc, categoryDisplays[tc])
 				cats = append(cats, domain.CategorySpending{
 					Category:          tc,
 					PFCPrimaryDisplay: display,
@@ -491,6 +616,12 @@ func (s *analyticsService) GetCategoryTotalForPeriod(ctx context.Context, userID
 		return nil, fmt.Errorf("end_date cannot be before start_date")
 	}
 
+	// #1626 Phase 2 (X2): the repository casts a custom token's suffix to uuid, so a malformed one
+	// must be refused HERE — reaching Postgres with it turns a bad request into a 500.
+	if err := validateCategoryToken(category); err != nil {
+		return nil, err
+	}
+
 	row, err := s.analyticsRepo.GetCategoryTotalForPeriod(ctx, userID, category, startDate, endDate)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get category total: %w", err)
@@ -498,7 +629,7 @@ func (s *analyticsService) GetCategoryTotalForPeriod(ctx context.Context, userID
 
 	return &domain.CategoryTotalResponse{
 		Category:          category,
-		PFCPrimaryDisplay: PFCPrimaryDisplayName(category),
+		PFCPrimaryDisplay: resolveCategoryDisplay(category, row.CategoryDisplay),
 		Total:             row.Total,
 		TransactionCount:  row.TransactionCount,
 		StartDate:         startDate.Format("2006-01-02"),
@@ -559,7 +690,12 @@ func (s *analyticsService) GetRecurringSubscriptions(ctx context.Context, userID
 
 	return &domain.RecurringSubscriptionsResponse{
 		Subscriptions: items,
-		AsOfDate:      time.Now().Format("2006-01-02"),
+		// .UTC() before Format, because Format reads the value's Location: on a host behind UTC this
+		// reported yesterday's date as "as of". Every other date this API emits is a UTC calendar
+		// day (see clampFillEnd's docblock on why both ends resolve UTC for now), so this one has to
+		// be as well. The lookbackStart above needs no .UTC(): it is compared as an instant
+		// (`t.date >= $2`, no ::date cast) and is never formatted, so its Location is never read.
+		AsOfDate: time.Now().UTC().Format("2006-01-02"),
 	}, nil
 }
 
@@ -649,7 +785,7 @@ func (s *analyticsService) GetLargestTransactionsForPeriod(ctx context.Context, 
 			MerchantName:      row.MerchantName,
 			Amount:            row.Amount,
 			Category:          row.Category,
-			PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+			PFCPrimaryDisplay: resolveCategoryDisplay(row.Category, row.CategoryDisplay),
 			Date:              row.Date.Format("2006-01-02"),
 			AccountID:         row.AccountID,
 		})
@@ -677,17 +813,46 @@ func (s *analyticsService) GetCategoryBreakdownForMerchant(ctx context.Context, 
 		totalSpend += row.Total
 	}
 
-	categories := make([]domain.CategoryBreakdownItem, 0, len(rows))
-	for _, row := range rows {
-		item := domain.CategoryBreakdownItem{
+	// #1626 Phase 2, item 10. Merge by the STABLE KEY, exactly as the income and expense reads do.
+	// Phase 1 added effective_category_name to this read's GROUP BY so a custom category could be
+	// NAMED rather than showing a UUID, but did not add the merge — and that column is refreshed
+	// asynchronously after a rename, so mid-refresh one category arrives as TWO rows. See
+	// mergeCategoryRows for why merging alone is not enough.
+	items := make([]domain.CategoryBreakdownItem, len(rows))
+	for i, row := range rows {
+		items[i] = domain.CategoryBreakdownItem{
 			Category:          row.Category,
-			PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+			PFCPrimaryDisplay: resolveCategoryDisplay(row.Category, row.CategoryDisplay),
 			Total:             row.Total,
 			TransactionCount:  row.Count,
-			Percentage:        calculatePercentage(row.Total, totalSpend),
 		}
+	}
+
+	order := mergeCategoryRows(
+		len(items),
+		func(i int) string { return items[i].Category },
+		func(dst, src int) {
+			items[dst].Total += items[src].Total
+			items[dst].TransactionCount += items[src].TransactionCount
+			// First real name wins; a stale placeholder must not blank an established one.
+			if items[dst].PFCPrimaryDisplay == unnamedCustomCategoryLabel && items[src].PFCPrimaryDisplay != unnamedCustomCategoryLabel {
+				items[dst].PFCPrimaryDisplay = items[src].PFCPrimaryDisplay
+			}
+		},
+	)
+
+	categories := make([]domain.CategoryBreakdownItem, 0, len(order))
+	for _, i := range order {
+		item := items[i]
+		// From the MERGED total. Computed before merging, each half of a split category reports
+		// half its real share, and the halves together overstate the number of categories.
+		item.Percentage = calculatePercentage(item.Total, totalSpend)
 		categories = append(categories, item)
 	}
+
+	// Re-sort: a merged 120 must outrank an unmerged 100, and the rows arrive in the SQL's
+	// pre-merge order, where each half was smaller than its rival.
+	sortCategoryBreakdownItems(categories)
 
 	return &domain.CategoryBreakdownForMerchantResponse{
 		MerchantName: merchantID,
@@ -710,17 +875,41 @@ func (s *analyticsService) GetIncomeSourceBreakdown(ctx context.Context, userID 
 		totalIncome += row.Total
 	}
 
-	sources := make([]domain.IncomeSourceItem, 0, len(rows))
+	// Merge by the STABLE KEY, mirroring the expense read. The SQL groups by key AND display, and
+	// effective_category_name is refreshed asynchronously after a rename — so mid-window one custom
+	// category yields TWO rows, an old-name one and a new-name one. Emitting both would split the
+	// user's income source in half and halve each percentage.
+	merged := make(map[string]*domain.IncomeSourceItem, len(rows))
+	order := make([]string, 0, len(rows))
 	for _, row := range rows {
-		item := domain.IncomeSourceItem{
-			Category:          row.Category,
-			PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+		if existing, ok := merged[row.Category]; ok {
+			existing.Total += row.Total
+			existing.TransactionCount += row.Count
+			// First non-empty name wins; a stale empty display must not blank an established name.
+			if existing.PFCPrimaryDisplay == unnamedCustomCategoryLabel && row.CategoryDisplay != "" {
+				existing.PFCPrimaryDisplay = resolveCategoryDisplay(row.Category, row.CategoryDisplay)
+			}
+			continue
+		}
+		merged[row.Category] = &domain.IncomeSourceItem{
+			Category: row.Category,
+			// #1626: NOT PFCPrimaryDisplayName(row.Category). For a custom-categorised income
+			// source the key is `custom:<uuid>`, which that function title-cases into a UUID.
+			PFCPrimaryDisplay: resolveCategoryDisplay(row.Category, row.CategoryDisplay),
 			Total:             row.Total,
 			TransactionCount:  row.Count,
-			Percentage:        calculatePercentage(row.Total, totalIncome),
 		}
+		order = append(order, row.Category)
+	}
+
+	sources := make([]domain.IncomeSourceItem, 0, len(order))
+	for _, key := range order {
+		item := *merged[key]
+		item.Percentage = calculatePercentage(item.Total, totalIncome)
 		sources = append(sources, item)
 	}
+
+	sortIncomeSources(sources)
 
 	return &domain.IncomeSourceBreakdownResponse{
 		Sources:     sources,
@@ -745,7 +934,7 @@ func (s *analyticsService) GetTopExpense(ctx context.Context, userID string, sta
 		MerchantName:      row.MerchantName,
 		Amount:            row.Amount,
 		Category:          row.Category,
-		PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+		PFCPrimaryDisplay: resolveCategoryDisplay(row.Category, row.CategoryDisplay),
 		Date:              row.Date.Format("2006-01-02"),
 		StartDate:         startDate.Format("2006-01-02"),
 		EndDate:           endDate.Format("2006-01-02"),
@@ -773,7 +962,7 @@ func (s *analyticsService) GetUnusualSpend(ctx context.Context, userID string, s
 			MerchantName:      row.MerchantName,
 			Amount:            row.Amount,
 			Category:          row.Category,
-			PFCPrimaryDisplay: PFCPrimaryDisplayName(row.Category),
+			PFCPrimaryDisplay: resolveCategoryDisplay(row.Category, row.CategoryDisplay),
 			Date:              row.Date.Format("2006-01-02"),
 			BaselineAvg:       row.BaselineAvg,
 			SigmaAbove:        row.SigmaAbove,
@@ -801,7 +990,16 @@ func (s *analyticsService) GetNetWorthTrend(ctx context.Context, userID string, 
 		return nil, fmt.Errorf("grouping must be one of: daily, weekly, monthly")
 	}
 
-	endDate := time.Now()
+	// ⚠ .UTC() IS NOT DECORATION HERE, and it is the only one of this file's `time.Now()` sites
+	// where it changes an answer. `time.Now().UTC()` is the same INSTANT with a different Location,
+	// so it matters exactly where the Location is read — and this value's Location is read twice.
+	// (1) GetAggregatedHistory bounds on `(bs.snapshot_at AT TIME ZONE 'UTC')::date <= $3::date`
+	// (and its household twin on `<= $5::date`), so pgx encodes this as a `date` using the value's
+	// OWN Location's calendar day; on a host behind UTC, snapshots written "today" in UTC fall
+	// outside a range ending "today" and today's net worth is invisible until local midnight.
+	// (2) both bounds are echoed as `Format("2006-01-02")` below, which is Location-dependent too.
+	// Production runs UTC so this was latent, not live.
+	endDate := time.Now().UTC()
 	startDate := endDate.AddDate(-1, 0, 0)
 
 	// Household mode fans out across every member's shared accounts instead of the

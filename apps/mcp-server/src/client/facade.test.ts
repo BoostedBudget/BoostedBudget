@@ -86,7 +86,7 @@ describe('createApiClient', () => {
     )
   })
 
-  it('contains exactly 141 allowed operation methods', () => {
+  it('contains exactly 142 allowed operation methods', () => {
     const mutator = mock(() => Promise.resolve({})) as unknown as FetchMutator
     const client = createApiClient(mutator)
 
@@ -113,6 +113,15 @@ describe('createApiClient', () => {
     //                is also newly classified but excluded, so it adds no facade method.
     // +1 from #1569: getAccountBalanceHistory (read) — the reader for balance_snapshots, which
     //                was written by every sync and had no per-account reader at all.
-    expect(count).toBe(141)
+    // +1 from #1626: getCategoryHierarchy (read) — the three-level category tree per flow
+    //                direction, designed to be tool-callable in one round trip.
+    // +2 from #1628's rule-engine rework (staging): getConditionSchema (read) and previewRule
+    //                (write, non-destructive — it evaluates a candidate rule and returns matches
+    //                without persisting anything).
+    // ⚠ 142, not 140 or 141: this branch and staging each grew the facade independently (140 and
+    // 141 respectively, from a shared 139), so the merged total is the SUM of both additions. The
+    // authority is `bun run scripts/generate-facade.ts`, which prints the allowed-operation count
+    // it emitted; do not reconcile this number by picking one side's.
+    expect(count).toBe(142)
   })
 })

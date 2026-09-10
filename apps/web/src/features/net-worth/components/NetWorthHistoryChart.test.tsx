@@ -35,6 +35,21 @@ describe('NetWorthHistoryChart', () => {
     mockUseDarkMode.mockReturnValue(false)
   })
 
+  // #1626 Phase 3, 1d: smoothMonotone is a MODIFIER of smooth, not a replacement — with
+  // smooth false it does nothing, so both must be present on every series.
+  it('keeps smoothing on and constrains it to monotone-x on all three series', () => {
+    render(<NetWorthHistoryChart history={historyWithData} />)
+    const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+      series?: Array<{ smooth?: boolean; smoothMonotone?: string }>
+    }
+    const series = option.series ?? []
+    expect(series).toHaveLength(3)
+    for (const sr of series) {
+      expect(sr.smooth).toBe(true)
+      expect(sr.smoothMonotone).toBe('x')
+    }
+  })
+
   it('renders three series with correct names', () => {
     render(<NetWorthHistoryChart history={historyWithData} />)
     const chart = screen.getByTestId('echarts-chart')

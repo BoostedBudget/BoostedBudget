@@ -987,7 +987,7 @@ func TestTransactionListResponseJSON(t *testing.T) {
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
 			Transactions: []*domain.ActivityItem{domain.NewBankingActivityItem(tx)},
-			TotalCount:   1,
+			TotalCount:   ptrTo(1),
 			Limit:        50,
 			Offset:       0,
 			HasMore:      false,
@@ -1959,4 +1959,61 @@ func TestGetTransactions_IncludeInvestmentActivity_ExplicitTrue_NonDateSort400(t
 	} else {
 		t.Errorf("expected a status-bearing Huma error, got: %T %v", err, err)
 	}
+}
+
+// TestGetTransactions_UncategorizedParsing pins all four states of the uncategorized param (#1626).
+//
+// The raw query string is the ONLY place absence can be told apart from an explicit false, so each
+// state gets its own case. `false` must be a no-op rather than "exclude uncategorized" — the latter
+// would be a second feature nobody asked for, and it would silently narrow every list that happened
+// to serialise the flag.
+func TestGetTransactions_UncategorizedParsing(t *testing.T) {
+	newHandler := func() (*mockTransactionService, *TransactionHandler) {
+		mockService := &mockTransactionService{
+			listResponse: &services.TransactionListResponse{
+				Transactions: []*domain.ActivityItem{},
+				Limit:        50,
+			},
+		}
+		return mockService, NewTransactionHandler(mockService)
+	}
+
+	baseInput := func(uncategorized string) *GetTransactionsInput {
+		return &GetTransactionsInput{
+			AuthenticatedInput:    inputs.AuthenticatedInput{UserID: "user-123"},
+			CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+			Uncategorized:         uncategorized,
+		}
+	}
+
+	t.Run("true opts in", func(t *testing.T) {
+		mockService, handler := newHandler()
+		_, err := handler.GetTransactions(context.Background(), baseInput("true"))
+		require.NoError(t, err)
+		assert.True(t, mockService.capturedFilters.Uncategorized)
+	})
+
+	t.Run("absent adds no filter", func(t *testing.T) {
+		mockService, handler := newHandler()
+		_, err := handler.GetTransactions(context.Background(), baseInput(""))
+		require.NoError(t, err)
+		assert.False(t, mockService.capturedFilters.Uncategorized)
+	})
+
+	t.Run("explicit false is a no-op, not an exclusion", func(t *testing.T) {
+		mockService, handler := newHandler()
+		_, err := handler.GetTransactions(context.Background(), baseInput("false"))
+		require.NoError(t, err)
+		assert.False(t, mockService.capturedFilters.Uncategorized)
+	})
+
+	t.Run("malformed is rejected, never coerced", func(t *testing.T) {
+		_, handler := newHandler()
+		output, err := handler.GetTransactions(context.Background(), baseInput("maybe"))
+		assert.Nil(t, output)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Invalid uncategorized",
+			"coercing a bad value to false would show the client a list it did not ask for while it "+
+				"believed otherwise")
+	})
 }

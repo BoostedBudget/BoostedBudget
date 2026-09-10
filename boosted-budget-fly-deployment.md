@@ -476,6 +476,9 @@ jobs:
         # Deploy with blue-green strategy
         # Note: Migrations run automatically via docker-entrypoint.sh
         # The entrypoint handles Neon pooler URL transformation for migrations
+        # ⚠ RECOVERY: if a CONCURRENTLY index build is interrupted, see
+        #    "Interrupted CONCURRENTLY index build" below — the container will NOT start
+        #    and `migrate up` alone cannot fix it.
         flyctl deploy \
           --app boostedbudget-api \
           --image ${{ needs.build-images.outputs.backend-image }} \
@@ -1538,3 +1541,97 @@ All phases include rollback procedures to safely return to single-region deploym
 ---
 
 This approach gives you complete control over your Docker images while leveraging Fly.io's excellent global infrastructure for deployment. The single-region MVP provides a stable foundation, with clear expansion paths when justified by business growth.
+
+## Recovery: interrupted `CONCURRENTLY` index build
+
+**Symptom: the backend container fails to start after a deploy.**
+
+`CREATE UNIQUE INDEX CONCURRENTLY` cannot run inside a transaction, so an interrupted build
+leaves two things behind at once:
+
+1. the index present but `indisvalid = false`, and
+2. golang-migrate marked **dirty** at that version.
+
+`docker-entrypoint.sh` only retries `migrate up`, which refuses to run while dirty. So the
+deploy loops on a failing start and no amount of restarting fixes it.
+
+### Repair
+
+`$DATABASE_URL` is the Neon **pooled** endpoint — golang-migrate cannot use it (see "Database
+Configuration" above: poolers reject the session-level parameters migrations set). Use the
+**direct** endpoint instead, in whichever of these two contexts you're repairing from.
+
+**From a repo checkout**, using `MIGRATION_DATABASE_URL` (the direct connection string):
+
+```bash
+test -n "$MIGRATION_DATABASE_URL"  # must be the direct (non "-pooler") Neon endpoint
+migrate -path backend/migrations -database "$MIGRATION_DATABASE_URL" force 192
+migrate -path backend/migrations -database "$MIGRATION_DATABASE_URL" up
+```
+
+If you don't have `MIGRATION_DATABASE_URL` handy: `fly secrets` are write-only (`fly secrets list`
+shows names, never values), so pull the direct connection string from the **Neon console**
+(Project → Connection Details → select the branch/database → "Direct" toggle, i.e. the endpoint
+*without* `-pooler` in its hostname — see "Neon Connection String Formats" above).
+
+**From inside a Fly machine** (migrations live at `/app/migrations` in the image, and the
+`migrate` binary is already on `PATH`):
+
+```bash
+fly ssh console --app boostedbudget-api   # or boostedbudget-staging-api
+# Prefer MIGRATION_DATABASE_URL if the secret is set; otherwise derive the direct endpoint
+# from DATABASE_URL the same way docker-entrypoint.sh does (strip "-pooler" from the host):
+MIGRATION_URL="${MIGRATION_DATABASE_URL:-$(echo "$DATABASE_URL" | sed 's/\(@[^/]*\)-pooler\./\1./')}"
+migrate -path /app/migrations -database "$MIGRATION_URL" force 192
+migrate -path /app/migrations -database "$MIGRATION_URL" up
+```
+
+⚠ **Force to 192, not 193 — and derive that number, don't memorise it.** The index is built by a
+PAIR of migrations: the first (`000193`) conditionally drops an `indisvalid = false` leftover, the
+second (`000194`) does the `CREATE UNIQUE INDEX CONCURRENTLY`. The repair has to make `migrate up`
+replay **both**, so it must force to the version immediately **before the pair** — that is `192`
+today, because the pair is `000193`/`000194`. Forcing to `193` replays only `000194`, whose
+`IF NOT EXISTS` matches on the index NAME and not on its validity: the build reports success, the
+invalid index stays, and the unique constraint silently does not exist. If this pair is ever
+renumbered again, recompute the number from that principle rather than bumping it by one.
+
+### Verify, because the version number is not evidence
+
+A `schema_migrations` row saying `194` with `dirty = false` does **not** prove the index exists —
+this was observed for real on a scratch database that had been *forced* to 194 without the
+migration executing. Check the index itself:
+
+```sql
+SELECT indexrelid::regclass, indisvalid FROM pg_index
+WHERE indexrelid::regclass::text = 'uq_balance_snapshots_daily_capture';
+```
+
+Expect exactly one row with `indisvalid = t`. No rows means the index is absent: repair as above.
+A row with `indisvalid = f` means an interrupted build: repair as above.
+
+Symptom if it is missing: writes to `balance_snapshots` from the daily capture job fail with
+`SQLSTATE 42P10` (`ON CONFLICT` names an arbiter that does not exist). That is deliberate — the
+insert fails loudly rather than silently double-writing a row per account per day.
+
+## Recovery: a dev database that silently skipped renumbered migrations
+
+**This is a dev-machine hazard, not a production one** — no deployed environment ever ran a
+renumbered pre-merge migration. If a local database applied a branch's migrations under numbers
+that were later renumbered or replaced before merge (concretely: a database that ran the #1626
+branch's pre-merge `000190`/`000191` reports `schema_migrations.version = 191`, so after the merge
+`migrate up` resumes at `192` and **silently skips** staging's actual `000190`/`000191`), the
+result is a hybrid schema: the version number looks right while the schema is neither the old one
+nor the new one. Detect it by comparing the database against the migrations **on disk**, not by
+trusting the version: `SELECT version, dirty FROM schema_migrations;` tells you where golang-migrate
+thinks it is, but — as the section above already warns — the version number is not evidence, so
+also diff the suspect database's `pg_dump --schema-only` output against a scratch database migrated
+from zero (`scripts/test-migrations.sh` builds exactly such a database, `freshcheck`). Any
+difference means migrations were skipped or divergent versions were applied. ⚠ **The remedy is
+NOT `migrate force`.** `force` exists to clear the dirty flag on an *interrupted* migration at the
+version where it stopped (as in the `force 192` repair above, which rewinds bookkeeping so an
+unapplied pair replays); running `force` to a version *behind* a database that is AHEAD, then
+`migrate up`, replays migrations onto objects that already exist — their idempotency guards
+(`IF NOT EXISTS`) then mask the divergence instead of repairing it, and doing exactly that earlier
+produced 55 integration-test failures. The correct remedy for a dev database is to stop treating it
+as repairable: drop it and re-run `migrate up` from empty against the merged tree's migrations. Dev
+databases are disposable by design; a hybrid schema is not.
