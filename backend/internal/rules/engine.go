@@ -244,8 +244,16 @@ func QuarantineEnforced() bool { return enforceQuarantine }
 // quietly recategorised their ledger.
 //
 // The unenforced reason, invalid_condition_value_shape, is REPAIRED instead: see
-// domain.CoercedValue. It is the only reason reachable through the ordinary API, so switching
-// those rules off would switch off rules people actually wrote.
+// domain.CoercedValue. It is the COMMON case in the legacy corpus — #346 validated cond.Type and
+// nothing about the value, so wrong-typed values have persisted through the public API for the
+// whole life of the feature — which is why switching those rules off would switch off rules
+// people actually wrote.
+//
+// ⚠ #1625 third fix wave F2: this said it was "the ONLY reason reachable through the ordinary
+// API", and that was retracted in the second fix wave on domain.CoercedValue without being
+// retracted here. The same absent validation also admitted values coercion CANNOT repair, which
+// QuarantineReasonFor classifies as the ENFORCED uncoercible_condition_value — so at least two
+// reasons are API-reachable, and no comment on this branch should assert a sole one again.
 //
 // A quarantined rule is NOT hidden from reads: it still lists, with its reason. Filtering it out
 // of GetEnabledByUserID instead would make it vanish from the UI, which is the silent failure
