@@ -4163,7 +4163,14 @@
         },
         {
           "name": "categories[].match_logic",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "category_only",
+            "tag_only",
+            "and",
+            "or"
+          ],
+          "description": "How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400)."
         },
         {
           "name": "categories[].pfc_detailed",
@@ -4216,7 +4223,13 @@
         {
           "name": "income_sources[].type",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc_primary",
+            "tag",
+            "manual"
+          ],
+          "description": "How this income source is matched. pfc_primary matches transactions by their PFCv2 primary category (e.g. INCOME); tag matches by transaction tag; manual is a fixed, user-entered amount with no automatic matching."
         },
         {
           "name": "income_sources[].value",
@@ -4369,7 +4382,14 @@
         {
           "name": "match_logic",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "category_only",
+            "tag_only",
+            "and",
+            "or"
+          ],
+          "description": "How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array."
         },
         {
           "name": "pfc_detailed",
@@ -4667,7 +4687,13 @@
         {
           "name": "income_sources[].type",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc_primary",
+            "tag",
+            "manual"
+          ],
+          "description": "How this income source is matched. pfc_primary matches transactions by their PFCv2 primary category (e.g. INCOME); tag matches by transaction tag; manual is a fixed, user-entered amount with no automatic matching."
         },
         {
           "name": "income_sources[].value",
@@ -4838,7 +4864,14 @@
         },
         {
           "name": "match_logic",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "category_only",
+            "tag_only",
+            "and",
+            "or"
+          ],
+          "description": "How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400)."
         },
         {
           "name": "pfc_detailed",
@@ -4907,7 +4940,13 @@
         {
           "name": "match_logic",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "category_only",
+            "tag_only",
+            "and",
+            "or"
+          ]
         },
         {
           "name": "pfc_detailed",
@@ -4984,7 +5023,14 @@
         },
         {
           "name": "match_logic",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "category_only",
+            "tag_only",
+            "and",
+            "or"
+          ],
+          "description": "How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400)."
         },
         {
           "name": "tags",
@@ -5041,7 +5087,13 @@
         {
           "name": "match_logic",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "category_only",
+            "tag_only",
+            "and",
+            "or"
+          ]
         },
         {
           "name": "pfc_detailed",

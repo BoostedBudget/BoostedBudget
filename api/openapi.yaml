@@ -1332,6 +1332,11 @@ components:
         managed_by_goal_id:
           type: string
         match_logic:
+          enum:
+            - category_only
+            - tag_only
+            - and
+            - or
           type: string
         pfc_detailed:
           type: string
@@ -2013,6 +2018,12 @@ components:
         end_date:
           type: string
         match_logic:
+          description: How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array.
+          enum:
+            - category_only
+            - tag_only
+            - and
+            - or
           type: string
         pfc_detailed:
           type: string
@@ -2422,6 +2433,12 @@ components:
         custom_category_id:
           type: string
         match_logic:
+          description: How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400).
+          enum:
+            - category_only
+            - tag_only
+            - and
+            - or
           type: string
         pfc_detailed:
           type: string
@@ -4132,6 +4149,11 @@ components:
         description:
           type: string
         type:
+          description: How this income source is matched. pfc_primary matches transactions by their PFCv2 primary category (e.g. INCOME); tag matches by transaction tag; manual is a fixed, user-entered amount with no automatic matching.
+          enum:
+            - pfc_primary
+            - tag
+            - manual
           type: string
         value:
           type: string
@@ -7663,6 +7685,12 @@ components:
           format: double
           type: number
         match_logic:
+          description: How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400).
+          enum:
+            - category_only
+            - tag_only
+            - and
+            - or
           type: string
         tags:
           items:

@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { CategoryPreviewRequestMatchLogic } from './categoryPreviewRequestMatchLogic';
 
 export interface CategoryPreviewRequest {
   /** A URL to the JSON Schema for this object. */
@@ -37,7 +38,8 @@ export interface CategoryPreviewRequest {
   category_kind: string;
   custom_category_id?: string;
   end_date: string;
-  match_logic: string;
+  /** How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array. */
+  match_logic: CategoryPreviewRequestMatchLogic;
   pfc_detailed?: string;
   pfc_primary?: string;
   start_date: string;
