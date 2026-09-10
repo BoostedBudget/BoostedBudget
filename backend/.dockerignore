@@ -30,3 +30,28 @@ README.md
 
 # Test files
 *_test.go
+
+# ─── Secrets and credentials (#1625 cluster F) ─────────────────────────────────
+#
+# This directory is a build context in its own right, which the root .dockerignore does NOT cover:
+#   - backend/fly.toml declares `dockerfile = "Dockerfile"` with no context, so a manual
+#     `fly deploy` from backend/ uses THIS file, not the root one.
+#   - docker-compose.yml builds with `context: ./backend` for local dev.
+# The production image is built from the repo ROOT (deploy-production.yml), so it was already
+# covered -- these are the two narrower paths, one of which is a human running a deploy by hand.
+#
+# `.env*` is a wildcard on purpose: the next .env.<something> someone creates is covered without
+# anyone remembering to come back here. The .example templates are re-admitted because they are
+# committed, contain only placeholders, and some builds read them.
+.env*
+**/.env*
+!.env*.example
+!**/.env*.example
+
+# Local TLS / key material.
+*.pem
+**/*.pem
+*.key
+**/*.key
+*.p12
+**/*.p12

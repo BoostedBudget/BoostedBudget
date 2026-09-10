@@ -228,8 +228,10 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           'Execute one or more BoostedBudget API operations, including writes. ' +
           'Use search() first to find the right operationId, then call writeExecute() ' +
           'with a list of operation calls to chain. ' +
-          'Write operations will return a confirmation challenge on first call — ' +
-          're-invoke with the provided confirmationToken to complete the write. ' +
+          'Write operations return a confirmation challenge on the first call and execute ' +
+          'NOTHING; one token covers every write in the batch. Re-invoke with the IDENTICAL ' +
+          'calls array plus the provided confirmationToken to complete them. The token is bound ' +
+          'to the exact batch, so changing any field means you must request a fresh token. ' +
           'Prefer readExecute() for read-only calls.',
         inputSchema: {
           calls: z.array(

@@ -214,12 +214,19 @@ export function buildRecipeTools(proxy: HostProxy): RecipeTools {
 
     async run(input: RunRecipeInput): Promise<McpToolResult> {
       try {
-        const result = await proxy.invoke('runMCPRecipe', {
+        // `as Record<string, unknown>` is erased at runtime, so it asserts nothing about what
+        // actually arrives. A body-less response (the 204 -> undefined case that produced cluster
+        // B) then threw a TypeError on property access and surfaced as the generic "Failed to run
+        // recipe" -- an error that describes the wrong thing and hides the real one. Narrow it.
+        const raw = await proxy.invoke('runMCPRecipe', {
           url: `/api/v1/mcp/recipes/${encodeURIComponent(input.id)}/run`,
           method: 'POST',
-        }) as Record<string, unknown>
+        })
+        const result: Record<string, unknown> =
+          typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
 
-        const calls = result['calls'] as { operation_id: string }[] ?? []
+        const rawCalls = result['calls']
+        const calls = Array.isArray(rawCalls) ? (rawCalls as { operation_id: string }[]) : []
         if (calls.length === 0) {
           return { content: [{ type: 'text', text: 'Recipe has no calls.' }] }
         }

@@ -15,7 +15,8 @@
  * Amounts are masked with data-ph-mask for PostHog session replay PII compliance.
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
+import { effectiveCategoryToStringArray } from '@/shared/categories/getEffectiveCategory'
 import { ChevronLeft, ChevronRight, X, HelpCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -77,13 +78,28 @@ export function TriageDetailView({
 }: TriageDetailViewProps) {
   const [showHelp, setShowHelp] = useState(false)
   const [showRecategorize, setShowRecategorize] = useState(false)
-  const [pendingCategory, setPendingCategory] = useState<string[]>([])
+
+  // #1625: seed from the transaction's effective category. Opening with [] rendered a
+  // well-categorized transaction as "Uncategorized" and, because handleSaveCategory reads an
+  // empty selection as { kind: 'clear' }, pressing Apply without touching it DESTROYED the
+  // category. TransactionEditor has always seeded this way; triage never did.
+  const seedCategory = useMemo(() => effectiveCategoryToStringArray(transaction), [transaction])
+  const [pendingCategory, setPendingCategory] = useState<string[]>(seedCategory)
+
+  // Re-seed when the triage queue advances to a different transaction under an open panel.
+  // Adjusting state during render (rather than in an effect) is the React-recommended form and
+  // avoids briefly showing the previous transaction's category.
+  const [seededForTxId, setSeededForTxId] = useState(transaction.id)
+  if (seededForTxId !== transaction.id) {
+    setSeededForTxId(transaction.id)
+    setPendingCategory(seedCategory)
+  }
 
   const handleToggleHelp = useCallback(() => setShowHelp((v) => !v), [])
   const handleRecategorize = useCallback(() => {
     setShowRecategorize(true)
-    setPendingCategory([])
-  }, [])
+    setPendingCategory(seedCategory)
+  }, [seedCategory])
   const handleClose = useCallback(() => {
     if (showHelp) {
       setShowHelp(false)
@@ -113,14 +129,20 @@ export function TriageDetailView({
   const hasNext = currentIndex < total - 1
 
   const handleSaveCategory = () => {
-    const customCat = availableCategories.find((c) => c.name === pendingCategory[0])
-    const plaidMatch = !customCat ? plaidPrimaries?.find((p) => p.display === pendingCategory[0]) : null
+    // #1625: the selection can arrive in EITHER convention — a display name (the user picked
+    // from the dropdown) or a raw UUID / PFC enum (seeded from the transaction). Match both, or
+    // an untouched custom category would be sent as `pfc_primary: "<uuid>"`.
+    const selected = pendingCategory[0]
+    const customCat = availableCategories.find((c) => c.id === selected || c.name === selected)
+    const plaidMatch = !customCat
+      ? plaidPrimaries?.find((p) => p.enum === selected || p.display === selected)
+      : null
     const request =
       pendingCategory.length === 0
         ? { kind: 'clear' as const }
         : customCat
           ? { kind: 'custom' as const, custom_category_id: customCat.id }
-          : { kind: 'pfc' as const, pfc_primary: plaidMatch?.enum ?? pendingCategory[0], pfc_detailed: pendingCategory[1] }
+          : { kind: 'pfc' as const, pfc_primary: plaidMatch?.enum ?? selected, pfc_detailed: pendingCategory[1] }
     onRecategorize(request)
     setShowRecategorize(false)
   }

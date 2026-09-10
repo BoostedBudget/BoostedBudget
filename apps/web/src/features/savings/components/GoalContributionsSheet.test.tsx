@@ -65,6 +65,38 @@ const mockRejected: SavingsGoalContribution = {
   updated_at: '2026-06-05T00:00:00Z',
 }
 
+// #1625 Task 6: archived when the goal's progress_basis round-tripped and this contribution's
+// period closed. Retained and listed, but excluded from `current_amount` server-side.
+const mockArchived: SavingsGoalContribution = {
+  id: 'c-archived-1',
+  savings_goal_id: 'goal-1',
+  amount: 400,
+  source: 'manual',
+  status: 'confirmed',
+  confirmed_by_user: true,
+  managed_by_reconciliation: false,
+  occurred_on: '2026-05-01',
+  created_at: '2026-05-01T00:00:00Z',
+  updated_at: '2026-05-20T00:00:00Z',
+  archived_at: '2026-05-20T00:00:00Z',
+}
+
+// An archived row that was never confirmed before its period closed. Both Confirm and Reject
+// now 404 an archived contribution server-side (#1625), regardless of `status`.
+const mockArchivedProposed: SavingsGoalContribution = {
+  id: 'c-archived-proposed-1',
+  savings_goal_id: 'goal-1',
+  amount: 175,
+  source: 'sync',
+  status: 'proposed',
+  confirmed_by_user: false,
+  managed_by_reconciliation: true,
+  occurred_on: '2026-05-02',
+  created_at: '2026-05-02T00:00:00Z',
+  updated_at: '2026-05-20T00:00:00Z',
+  archived_at: '2026-05-20T00:00:00Z',
+}
+
 describe('GoalContributionsSheet', () => {
   const goalId = 'goal-1'
   const goalName = 'Vacation Fund'
@@ -299,6 +331,131 @@ describe('GoalContributionsSheet', () => {
       expect(screen.getByText(/\$250\.00/)).toBeInTheDocument()
       // rejected row amount is hidden
       expect(screen.queryByText(/\$300\.00/)).not.toBeInTheDocument()
+    })
+  })
+
+  // #1625 Task 6: `archived_at` is set when a goal's progress_basis round-trips; the row is
+  // retained and shown but excluded from `current_amount`, and both Confirm and Reject now
+  // 404 an archived contribution server-side.
+  describe('Archived contributions (#1625)', () => {
+    it('does not render an archived, once-confirmed row as plain "Confirmed"', () => {
+      mockUseListSavingsGoalContributions.mockReturnValue({
+        data: [mockArchived],
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve({})),
+      })
+
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      expect(screen.queryByText(/^Confirmed$/)).not.toBeInTheDocument()
+      expect(screen.getByText('Closed period')).toBeInTheDocument()
+    })
+
+    it('explains why an archived row does not count, and keeps it visible', () => {
+      mockUseListSavingsGoalContributions.mockReturnValue({
+        data: [mockArchived],
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve({})),
+      })
+
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      // Retention policy: the row stays visible, amount and all.
+      expect(screen.getByText(/\$400\.00/)).toBeInTheDocument()
+      // Explains the exclusion in plain language.
+      expect(screen.getByText(/does not count toward the current progress/i)).toBeInTheDocument()
+    })
+
+    it('does not offer Confirm/Reject on an archived row, even one still in "proposed" status', () => {
+      mockUseListSavingsGoalContributions.mockReturnValue({
+        data: [mockArchivedProposed],
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve({})),
+      })
+
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      expect(screen.queryByRole('button', { name: /confirm/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument()
+      // Delete stays reachable — destroying retained history is still a meaningful, permanent act.
+      expect(screen.getByRole('button', { name: /delete/i })).toBeInTheDocument()
+      expect(screen.getByText('Closed period')).toBeInTheDocument()
+    })
+
+    it('does not label an archived row as "Proposed" either', () => {
+      mockUseListSavingsGoalContributions.mockReturnValue({
+        data: [mockArchivedProposed],
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve({})),
+      })
+
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      expect(screen.queryByText(/^Proposed$/)).not.toBeInTheDocument()
+    })
+
+    it('marks the Delete confirmation copy as already-excluded, not merely permanent', () => {
+      mockUseListSavingsGoalContributions.mockReturnValue({
+        data: [mockArchived],
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve({})),
+      })
+
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /delete/i }))
+      const dialog = screen.getByRole('alertdialog')
+      const text = dialog.textContent ?? ''
+
+      expect(text).toMatch(/does not count toward this goal's current progress/i)
+      expect(text).toMatch(/permanent/i)
+      // Still no false restore/undo claim.
+      expect(text).not.toMatch(/restore|undelete|recover|undo/i)
     })
   })
 

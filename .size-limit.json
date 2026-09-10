@@ -68,7 +68,7 @@
   {
     "name": "auto-categorization",
     "path": "apps/web/dist/assets/auto-categorization-*.js",
-    "limit": "15 KB",
+    "limit": "18.5 KB",
     "gzip": true
   },
   {

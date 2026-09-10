@@ -12,6 +12,7 @@ package operations
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -167,6 +168,72 @@ type DeleteContributionInput struct {
 // Handler methods
 // =============================================================================
 
+// assertLedgerIsLive refuses a ledger MUTATION on a goal whose current_amount is not derived from
+// the contribution ledger.
+//
+// #1625 Task 10. LogContribution had this gate; Confirm and Reject did not, so on a goal switched
+// off the contributions basis they returned 200 while RecomputeGoalByID early-returned — the row
+// changed status, the goal did not move, and the caller was told it worked. One helper rather than
+// three copies, so the three endpoints cannot come to disagree about what the precondition is.
+//
+// ⚠ DeleteContribution deliberately does NOT call this, and the original justification for that
+// was overstated. "Permanently undeletable" is wrong: a user could switch the goal back to the
+// contributions basis and delete the row then. The accurate reason is narrower and still holds —
+// gating Delete would make deleting your own row require an unrelated, side-effecting change to
+// the goal's configuration first, to remove data the basis has no bearing on. Confirm and Reject
+// genuinely cannot take effect on a manual goal; a delete does not have that failure mode.
+//
+// ⚠ "A delete always does exactly what it says" was FALSIFIED (#1625): the repository looked the
+// contribution up by its own id alone, so a same-user DELETE through goal A's URL could destroy
+// goal B's contribution row — a hard delete of financial history the caller never named. Fixed by
+// binding goalID into DeleteContribution's WHERE, the same way Confirm/Reject were bound; see that
+// method's doc comment. The claim above is now true only because of that binding, not because
+// deletes are inherently free of this failure mode.
+//
+// `verb` completes the sentence, so each endpoint's message describes what IT could not do.
+func (h *ContributionHandler) assertLedgerIsLive(ctx context.Context, goalID, userID, verb string) error {
+	if h.goalReader == nil {
+		return nil
+	}
+	goal, err := h.goalReader.GetByIDForUser(ctx, goalID, userID)
+	if err != nil {
+		if err == domain.ErrSavingsGoalNotFound {
+			return huma.Error404NotFound("savings goal not found")
+		}
+		return humaerrors.LoggingMapError(ctx, err)
+	}
+	if goal.ProgressBasis == domain.ProgressBasisContributions {
+		return nil
+	}
+	// #1625: the original message was the bare string "basis mismatch", naming neither the
+	// offending value nor the remedy — so an agent hitting it on a brand-new goal had no way to
+	// proceed. Say what is wrong and exactly how to fix it.
+	// ⚠ #1625 final review I4: the remedy has to be TRUE for the basis the caller is actually on.
+	// "or update current_amount directly instead" is only available on the MANUAL basis:
+	// savingsGoalService.UpdateGoal refuses a caller-supplied current_amount whenever the TARGET
+	// basis is not manual, with a 400. Telling a balance / account_percentage caller to do it sent
+	// them straight into another 4xx — the "an agent hitting this had no way to proceed" failure
+	// this message was rewritten to fix, one step further along.
+	remedy := fmt.Sprintf("Set progress_basis to %q (PUT /api/v1/savings-goals/%s) first.",
+		domain.ProgressBasisContributions, goalID)
+	if goal.ProgressBasis == domain.ProgressBasisManual {
+		remedy = fmt.Sprintf(
+			"Set progress_basis to %q (PUT /api/v1/savings-goals/%s) first, or update current_amount "+
+				"directly on this goal instead.",
+			domain.ProgressBasisContributions, goalID)
+	} else {
+		remedy += " current_amount cannot be set by hand on this basis either — it is derived from " +
+			"the linked account, and PUT /api/v1/savings-goals/{id} refuses a supplied value with a 400."
+	}
+	return huma.Error422UnprocessableEntity(
+		fmt.Sprintf(
+			"this goal's progress_basis is %q, so its current_amount is not tracked through the "+
+				"contribution ledger and contributions cannot be %s it. %s",
+			goal.ProgressBasis, verb, remedy,
+		),
+		domain.ErrContributionBasisMismatch)
+}
+
 // LogContribution handles POST /api/v1/savings-goals/{goalID}/contributions.
 // Manually logs a confirmed contribution for the goal (D6 source-a / M20).
 //
@@ -182,18 +249,8 @@ func (h *ContributionHandler) LogContribution(ctx context.Context, input *LogCon
 	}
 
 	// R3-3 (C8): load goal and gate on contributions basis.
-	if h.goalReader != nil {
-		goal, err := h.goalReader.GetByIDForUser(ctx, input.GoalID, input.UserID)
-		if err != nil {
-			if err == domain.ErrSavingsGoalNotFound {
-				return nil, huma.Error404NotFound("savings goal not found")
-			}
-			return nil, humaerrors.LoggingMapError(ctx, err)
-		}
-		if goal.ProgressBasis != domain.ProgressBasisContributions {
-			return nil, huma.Error422UnprocessableEntity("basis mismatch",
-				domain.ErrContributionBasisMismatch)
-		}
+	if err := h.assertLedgerIsLive(ctx, input.GoalID, input.UserID, "logged against"); err != nil {
+		return nil, err
 	}
 
 	var contrib *domain.SavingsGoalContribution
@@ -311,13 +368,19 @@ func (h *ContributionHandler) ListDeletedGoalContributions(ctx context.Context, 
 // ConfirmContribution handles POST /api/v1/savings-goals/{goalID}/contributions/{id}/confirm.
 // Promotes a proposed contribution to confirmed status. Re-checks allocation capacity under lock.
 func (h *ContributionHandler) ConfirmContribution(ctx context.Context, input *ConfirmContributionInput) (*ConfirmContributionOutput, error) {
-	confirmed, err := h.contribRepo.ConfirmContribution(ctx, input.UserID, input.ID)
+	if err := h.assertLedgerIsLive(ctx, input.GoalID, input.UserID, "confirmed against"); err != nil {
+		return nil, err
+	}
+
+	confirmed, err := h.contribRepo.ConfirmContribution(ctx, input.UserID, input.GoalID, input.ID)
 	if err != nil {
 		switch err {
 		case domain.ErrContributionNotFound:
 			return nil, huma.Error404NotFound("contribution not found")
 		case domain.ErrContributionAlreadyConfirmed:
 			return nil, huma.Error409Conflict("contribution is already confirmed")
+		case domain.ErrContributionAlreadyRejected:
+			return nil, huma.Error409Conflict("contribution was already rejected and cannot be confirmed")
 		case domain.ErrContributionOverAllocated:
 			return nil, huma.Error422UnprocessableEntity("over-allocated", err)
 		default:
@@ -342,7 +405,11 @@ func (h *ContributionHandler) ConfirmContribution(ctx context.Context, input *Co
 // on future syncs (the partial-unique-index key is preserved as a tombstone).
 // Only proposed rows can be rejected; confirmed rows must be deleted.
 func (h *ContributionHandler) RejectContribution(ctx context.Context, input *RejectContributionInput) (*RejectContributionOutput, error) {
-	rejected, err := h.contribRepo.RejectContribution(ctx, input.UserID, input.ID)
+	if err := h.assertLedgerIsLive(ctx, input.GoalID, input.UserID, "rejected on"); err != nil {
+		return nil, err
+	}
+
+	rejected, err := h.contribRepo.RejectContribution(ctx, input.UserID, input.GoalID, input.ID)
 	if err != nil {
 		switch err {
 		case domain.ErrContributionNotFound:
@@ -378,7 +445,7 @@ func (h *ContributionHandler) DeleteContribution(ctx context.Context, input *Del
 		return nil, humaerrors.LoggingMapError(ctx, repository.ErrAuditLogRepositoryNotWired)
 	}
 
-	if err := h.contribRepo.DeleteContribution(ctx, input.UserID, input.ID, h.auditLogRepo); err != nil {
+	if err := h.contribRepo.DeleteContribution(ctx, input.UserID, input.GoalID, input.ID, h.auditLogRepo); err != nil {
 		if err == domain.ErrContributionNotFound {
 			return nil, huma.Error404NotFound("contribution not found")
 		}
@@ -409,7 +476,11 @@ func RegisterContributionRoutes(api huma.API, handler *ContributionHandler) {
 		Path:        "/api/v1/savings-goals/{goalID}/contributions",
 		Summary:     "Log a savings goal contribution",
 		Description: "Manually records a confirmed contribution for a savings goal (D6 source-a). " +
-			"Optionally links to an existing transaction. Triggers goal progress recomputation.",
+			"Optionally links to an existing transaction. Triggers goal progress recomputation. " +
+			"Requires the goal's progress_basis to be \"contributions\". " +
+			"⚠ BREAKING (#1625): the request body rejects unknown fields, and the phantom \"notes\" " +
+			"field was removed — a client that previously sent it was silently ignored and now gets " +
+			"a 422. Drop the field; contribution notes were never stored.",
 		Tags:     []string{"Savings Goals", "Contributions"},
 		Security: []map[string][]string{{"clerk": {}}},
 	}, handler.LogContribution)
@@ -421,6 +492,7 @@ func RegisterContributionRoutes(api huma.API, handler *ContributionHandler) {
 		Path:        "/api/v1/savings-goals/{goalID}/contributions",
 		Summary:     "List savings goal contributions",
 		Description: "Returns all confirmed and proposed contributions for a savings goal, newest first. " +
+			"Includes archived contributions (closed periods) which do not count toward the goal's progress. " +
 			"Returns an empty list for a goal the user has DELETED — the contributions still logged " +
 			"against it are retained and are read through " +
 			"GET /savings-goals/deleted/{goalID}/contributions instead (#1569).",

@@ -24,7 +24,12 @@ type SavingsProgressGoalRepo interface {
 	// without scanning all active goals.
 	GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error)
 	// UpdateCurrentAmount stores the recomputed current_amount + timestamps.
-	UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error
+	//
+	// basis is the progress_basis this figure was computed for, and the repository binds it into
+	// the statement's WHERE (#1625). A recompute that lost a race to a basis switch therefore
+	// lands nowhere and reports domain.ErrSavingsGoalBasisConflict, instead of overwriting the
+	// winner's value with one that is right for a basis the row no longer has.
+	UpdateCurrentAmount(ctx context.Context, goalID, basis string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error
 	// MarkCompleted sets is_completed and sticky completed_at (Codex C5).
 	MarkCompleted(ctx context.Context, goalID string) error
 	// CountCompletedByUserID counts the user's completed goals. Required because
@@ -51,7 +56,7 @@ type SavingsProgressService interface {
 	// RecomputeGoal recomputes current_amount for a single goal according to its
 	// progress_basis and updates last_calculated_at. Marks the goal completed
 	// (sticky) when current_amount >= target_amount (Codex C5). No-op for manual basis.
-	RecomputeGoal(ctx context.Context, goal *domain.SavingsGoal) error
+	RecomputeGoal(ctx context.Context, goal *domain.SavingsGoal) (float64, error)
 
 	// RecomputeGoalByID recomputes progress for a specific goal identified by
 	// (userID, goalID). Unlike RecomputeUser, it also recomputes completed goals
@@ -105,7 +110,7 @@ func NewSavingsProgressService(
 // RecomputeGoal recomputes the goal's current_amount according to its progress_basis,
 // persists last_calculated_at (and balance_as_of for balance-based bases), then
 // marks the goal completed when current_amount >= target_amount (Codex C5).
-func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain.SavingsGoal) error {
+func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain.SavingsGoal) (float64, error) {
 	basis := goal.ProgressBasis
 	if basis == "" {
 		basis = domain.ProgressBasisManual
@@ -113,7 +118,7 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 
 	// Manual basis: the user owns current_amount — nothing to recompute.
 	if basis == domain.ProgressBasisManual {
-		return nil
+		return goal.CurrentAmount, nil
 	}
 
 	now := time.Now()
@@ -124,14 +129,14 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 	case domain.ProgressBasisContributions:
 		sum, err := s.contribRepo.SumConfirmedByGoal(ctx, goal.UserID, goal.ID)
 		if err != nil {
-			return fmt.Errorf("savings_progress: sum contributions for goal %s: %w", goal.ID, err)
+			return goal.CurrentAmount, fmt.Errorf("savings_progress: sum contributions for goal %s: %w", goal.ID, err)
 		}
 		newAmount = sum
 
 	case domain.ProgressBasisBalance:
 		account, err := s.resolveBasisAccount(ctx, goal.UserID, goal)
 		if err != nil {
-			return err
+			return goal.CurrentAmount, err
 		}
 
 		// Issue #1569: a retained (non-active) account's current_balance is frozen at
@@ -155,7 +160,7 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 				slog.String("account_id", account.ID),
 				slog.String("account_status", string(account.Status)),
 			)
-			return nil
+			return goal.CurrentAmount, nil
 		}
 
 		// Codex C9: NULL/stale balance — leave prior value, do NOT zero.
@@ -164,7 +169,7 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 				slog.String("goal_id", goal.ID),
 				slog.String("account_id", account.ID),
 			)
-			return nil
+			return goal.CurrentAmount, nil
 		}
 
 		newAmount = clampNonNegative(*account.CurrentBalance)
@@ -173,11 +178,11 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 
 	case domain.ProgressBasisAccountPercentage:
 		if goal.AccountPercentage == nil {
-			return fmt.Errorf("savings_progress: goal %s has account_percentage basis but nil percentage", goal.ID)
+			return goal.CurrentAmount, fmt.Errorf("savings_progress: goal %s has account_percentage basis but nil percentage", goal.ID)
 		}
 		account, err := s.resolveBasisAccount(ctx, goal.UserID, goal)
 		if err != nil {
-			return err
+			return goal.CurrentAmount, err
 		}
 
 		// Issue #1569: see the identical check in the balance-basis branch above.
@@ -187,7 +192,7 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 				slog.String("account_id", account.ID),
 				slog.String("account_status", string(account.Status)),
 			)
-			return nil
+			return goal.CurrentAmount, nil
 		}
 
 		// Codex C9: same null/stale handling.
@@ -196,7 +201,7 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 				slog.String("goal_id", goal.ID),
 				slog.String("account_id", account.ID),
 			)
-			return nil
+			return goal.CurrentAmount, nil
 		}
 
 		newAmount = clampNonNegative(*account.CurrentBalance) * (*goal.AccountPercentage)
@@ -204,26 +209,44 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 		balanceAsOf = &balanceAt
 
 	default:
-		return fmt.Errorf("savings_progress: unknown progress_basis %q for goal %s", basis, goal.ID)
+		return goal.CurrentAmount, fmt.Errorf("savings_progress: unknown progress_basis %q for goal %s", basis, goal.ID)
 	}
 
 	// Round to cents (2dp) — deterministic to avoid floating-point drift.
 	newAmount = roundToCents(newAmount)
 
+	// ⚠ #1625: every return below reports THE AMOUNT THE ROW NOW HOLDS, not a success flag.
+	// This function writes in two steps, and the second can fail after the first committed —
+	// so "returned an error" and "changed nothing" are different states, and callers that
+	// conflated them reported a figure the database did not have.
+
 	// Persist updated current_amount and timestamps.
-	if err := s.goalRepo.UpdateCurrentAmount(ctx, goal.ID, newAmount, now, balanceAsOf); err != nil {
-		return fmt.Errorf("savings_progress: update current_amount for goal %s: %w", goal.ID, err)
+	if err := s.goalRepo.UpdateCurrentAmount(ctx, goal.ID, basis, newAmount, now, balanceAsOf); err != nil {
+		// Nothing was written: the row still holds the amount it had on entry.
+		return goal.CurrentAmount, fmt.Errorf("savings_progress: update current_amount for goal %s: %w", goal.ID, err)
 	}
 
 	// Mark completed (sticky — MarkCompleted only sets completed_at the first time, Codex C5).
 	// Never un-complete based on a subsequent computed drop.
 	if newAmount >= goal.TargetAmount {
+		// ⚠ Deliberately does NOT mirror the completion onto the in-memory goal. A previous
+		// attempt set IsCompleted/CompletedAt here, which was wrong twice over: MarkCompleted
+		// stamps its OWN time.Now() (savings_goal_repository.go), so the mirrored timestamp
+		// could never equal the row's; and the two writes here also touch last_calculated_at,
+		// balance_as_of and updated_at, which no amount of field-by-field mirroring was going
+		// to keep up with. Callers that need a consistent struct re-read the goal — see
+		// reloadAfterRecompute in savings_goal_service.go.
 		if err := s.goalRepo.MarkCompleted(ctx, goal.ID); err != nil {
-			return fmt.Errorf("savings_progress: mark completed for goal %s: %w", goal.ID, err)
+			// The amount update ALREADY COMMITTED. Returning 0 here (as this did) made
+			// CreateGoal/UpdateGoal keep the pre-recompute figure while the row held newAmount.
+			// Reachable for the balance and account_percentage bases, whose computed value comes
+			// straight off an account balance and can meet the target immediately, and for a
+			// manual→contributions switch whose seeded contribution already meets it.
+			return newAmount, fmt.Errorf("savings_progress: mark completed for goal %s: %w", goal.ID, err)
 		}
 	}
 
-	return nil
+	return newAmount, nil
 }
 
 // RecomputeGoalByID recomputes progress for a specific goal by (userID, goalID).
@@ -235,7 +258,8 @@ func (s *savingsProgressService) RecomputeGoalByID(ctx context.Context, userID, 
 	if err != nil {
 		return fmt.Errorf("savings_progress: load goal %s for recompute: %w", goalID, err)
 	}
-	return s.RecomputeGoal(ctx, goal)
+	_, err = s.RecomputeGoal(ctx, goal)
+	return err
 }
 
 // RecomputeUser recomputes all active goals for a user. Per-goal errors are logged
@@ -247,7 +271,7 @@ func (s *savingsProgressService) RecomputeUser(ctx context.Context, userID strin
 	}
 
 	for _, goal := range goals {
-		if err := s.RecomputeGoal(ctx, goal); err != nil {
+		if _, err := s.RecomputeGoal(ctx, goal); err != nil {
 			s.logger.Error("savings_progress: recompute goal failed (skipping)",
 				slog.String("goal_id", goal.ID),
 				slog.String("user_id", userID),

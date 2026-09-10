@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"net/http"
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
@@ -17,13 +20,15 @@ import (
 
 // mockCategorizationRuleService is a mock implementation of services.CategorizationRuleService
 type mockCategorizationRuleService struct {
-	rules       []*domain.CategorizationRule
-	rule        *domain.CategorizationRule
-	createErr   error
-	getErr      error
-	updateErr   error
-	deleteErr   error
-	toggleErr   error
+	rules         []*domain.CategorizationRule
+	rule          *domain.CategorizationRule
+	createErr     error
+	getErr        error
+	updateErr     error
+	deleteErr     error
+	toggleErr     error
+	previewResult *domain.RulePreviewResult
+	previewErr    error
 }
 
 func (m *mockCategorizationRuleService) GetUserRules(ctx context.Context, userID string) ([]*domain.CategorizationRule, error) {
@@ -260,10 +265,29 @@ func TestCreateRule_DuplicateName(t *testing.T) {
 	require.Error(t, err)
 }
 
+// PreviewRule satisfies the service interface for the handler tests (#1625).
+func (m *mockCategorizationRuleService) PreviewRule(
+	_ context.Context, _ string, _ *domain.CategorizationRule, _ int,
+) (*domain.RulePreviewResult, error) {
+	if m.previewErr != nil {
+		return nil, m.previewErr
+	}
+	if m.previewResult != nil {
+		return m.previewResult, nil
+	}
+	return &domain.RulePreviewResult{}, nil
+}
+
 // TestCreateRule_ValidationError tests 400 for validation errors.
+//
+// #1625: the mock now returns the SENTINEL-WRAPPED error the real service returns. It used to
+// return a bare errors.New, which passed only because the handler exact-string-matched three
+// literal messages to 400. That allowlist is gone — classification lives in the error mapper —
+// so a bare error here would (correctly) map to 500, exactly as an unwrapped service error
+// should.
 func TestCreateRule_ValidationError(t *testing.T) {
 	mockService := &mockCategorizationRuleService{
-		createErr: errors.New("name is required"),
+		createErr: fmt.Errorf("%w: name is required", domain.ErrInvalidRule),
 	}
 
 	handler := NewCategorizationRuleHandler(mockService)
@@ -457,4 +481,268 @@ func TestCategorizationRuleResponseJSON(t *testing.T) {
 	var errorResp map[string]interface{}
 	err := json.Unmarshal(resp.Body.Bytes(), &errorResp)
 	require.NoError(t, err, "Error response should be valid JSON")
+}
+
+// TestRuleValidationNeverReturns5xx is the anti-Sentry-noise proof at the HTTP boundary, and it
+// covers BOTH handlers. Codex gap analysis A1: the existing tests assert error TEXT, which would
+// still pass if the status regressed to 500 — and a 500 is exactly what these used to be, with
+// sentry.CaptureException firing on every one of them (mapper.go only reports at >= 500).
+//
+// The handler has no allowlist any more; classification lives entirely in the error mapper, so a
+// new Validate() failure that forgets to wrap a sentinel silently becomes a 500 again. This is
+// the test that catches that.
+func TestRuleValidationNeverReturns5xx(t *testing.T) {
+	invalidBodies := []struct {
+		name string
+		body domain.CreateCategorizationRuleRequest
+	}{
+		{"unknown condition type (the reported payload)", domain.CreateCategorizationRuleRequest{
+			Name:       "r",
+			Conditions: []domain.RuleCondition{{Type: "amount", Value: 1000}},
+			TargetKind: strPtrOps("clear"),
+		}},
+		{"unknown field", domain.CreateCategorizationRuleRequest{
+			Name:       "r",
+			Conditions: []domain.RuleCondition{{Field: "nope", Operator: "eq", Value: "x"}},
+			TargetKind: strPtrOps("clear"),
+		}},
+		{"operator the field does not accept", domain.CreateCategorizationRuleRequest{
+			Name:       "r",
+			Conditions: []domain.RuleCondition{{Field: domain.FieldMerchant, Operator: "gt", Value: 5}},
+			TargetKind: strPtrOps("clear"),
+		}},
+		{"value shape the evaluator can never use", domain.CreateCategorizationRuleRequest{
+			Name:       "r",
+			Conditions: []domain.RuleCondition{{Field: domain.FieldAmount, Operator: "gt", Value: "abc"}},
+			TargetKind: strPtrOps("clear"),
+		}},
+		{"type contradicting field+operator", domain.CreateCategorizationRuleRequest{
+			Name: "r",
+			Conditions: []domain.RuleCondition{
+				{Type: domain.ConditionAmountEquals, Field: domain.FieldMerchant, Operator: "contains", Value: "x"},
+			},
+			TargetKind: strPtrOps("clear"),
+		}},
+		{"missing name", domain.CreateCategorizationRuleRequest{
+			Conditions: []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "x"}},
+			TargetKind: strPtrOps("clear"),
+		}},
+		{"no conditions", domain.CreateCategorizationRuleRequest{
+			Name:       "r",
+			Conditions: []domain.RuleCondition{},
+			TargetKind: strPtrOps("clear"),
+		}},
+		{"no action at all", domain.CreateCategorizationRuleRequest{
+			Name:       "r",
+			Conditions: []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "x"}},
+		}},
+	}
+
+	// UpdateRule validates independently and, before #1625, had NO 400 mapping whatsoever — every
+	// update validation failure was a 500. Codex review: the first version of this test only
+	// exercised CreateRule while the commit message claimed both, so the handler that was
+	// strictly worse had no coverage at all.
+	for _, tt := range invalidBodies {
+		// "no action at all" cannot be produced by THIS fixture through update: the request
+		// merges into a loaded rule that already carries a target, and a nil TargetKind means
+		// "leave it alone" rather than "remove it". It IS reachable by a different route —
+		// emptying the tags of a tag-only rule — which TestUpdateRule_EmptyingTagsOnATagOnlyRule
+		// covers below. Codex review: the earlier version of this comment claimed the case was
+		// unreachable through update at all, which was wrong.
+		if tt.name == "no action at all" {
+			continue
+		}
+		t.Run("update/"+tt.name, func(t *testing.T) {
+			// UpdateRule LOADS the existing rule before validating — it has to, since it merges
+			// the request into it — so unlike the create path it cannot run against a nil
+			// repository. This stub supplies an owned rule and nothing else; validation is still
+			// the real domain code.
+			svc := services.NewCategorizationRuleService(
+				&stubRuleRepoForValidation{owner: "user-123"}, nil)
+			handler := NewCategorizationRuleHandler(svc)
+
+			conds := tt.body.Conditions
+			_, err := handler.UpdateRule(context.Background(), &UpdateRuleInput{
+				AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+				ID:                 "rule-1",
+				Body: domain.UpdateCategorizationRuleRequest{
+					Name:       &tt.body.Name,
+					Conditions: &conds,
+					TargetKind: tt.body.TargetKind,
+				},
+			})
+
+			require.Error(t, err)
+			assertClientError(t, err)
+		})
+	}
+
+	for _, tt := range invalidBodies {
+		t.Run("create/"+tt.name, func(t *testing.T) {
+			// The REAL service and domain validation — a mock would only prove the mock's shape.
+			svc := services.NewCategorizationRuleService(nil, nil)
+			handler := NewCategorizationRuleHandler(svc)
+
+			_, err := handler.CreateRule(context.Background(), &CreateRuleInput{
+				AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+				Body:               tt.body,
+			})
+
+			require.Error(t, err)
+			assertClientError(t, err)
+		})
+	}
+}
+
+// assertClientError fails when the mapped HTTP status is >= 500. A 5xx here means the error
+// reached the mapper's default branch, which also fires sentry.CaptureException — user input
+// mistakes logged as server errors.
+func assertClientError(t *testing.T, err error) {
+	t.Helper()
+	var statusErr interface{ GetStatus() int }
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("error carries no HTTP status: %v", err)
+	}
+	status := statusErr.GetStatus()
+	assert.Less(t, status, 500,
+		"validation failure mapped to %d — it must be a 4xx, or client input pollutes Sentry as a server error: %v",
+		status, err)
+	assert.GreaterOrEqual(t, status, 400, "expected a client error, got %d", status)
+}
+
+func strPtrOps(s string) *string { return &s }
+
+// stubRuleRepoForValidation returns an owned rule from GetByID so UpdateRule reaches its
+// validation step. Every other method is unreachable in these tests and fails loudly if that
+// assumption ever stops holding.
+type stubRuleRepoForValidation struct {
+	owner string
+}
+
+func (s *stubRuleRepoForValidation) GetByID(_ context.Context, id string) (*domain.CategorizationRule, error) {
+	return &domain.CategorizationRule{
+		ID:             id,
+		UserID:         s.owner,
+		Name:           "existing",
+		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "x"}},
+		ConditionLogic: "AND",
+		TargetKind:     strPtrOps("clear"),
+		TagBehavior:    "add",
+		Source:         "manual",
+	}, nil
+}
+
+func (s *stubRuleRepoForValidation) Create(context.Context, *domain.CategorizationRule) error {
+	panic("Create must not be reached: these inputs are all invalid")
+}
+func (s *stubRuleRepoForValidation) Update(context.Context, *domain.CategorizationRule) error {
+	panic("Update must not be reached: these inputs are all invalid")
+}
+func (s *stubRuleRepoForValidation) GetByUserID(context.Context, string) ([]*domain.CategorizationRule, error) {
+	return nil, nil
+}
+func (s *stubRuleRepoForValidation) GetEnabledByUserID(context.Context, string) ([]*domain.CategorizationRule, error) {
+	return nil, nil
+}
+func (s *stubRuleRepoForValidation) GetByName(context.Context, string, string) (*domain.CategorizationRule, error) {
+	return nil, nil
+}
+func (s *stubRuleRepoForValidation) Delete(context.Context, string) error { return nil }
+func (s *stubRuleRepoForValidation) CountByUserID(context.Context, string) (int, error) {
+	return 0, nil
+}
+func (s *stubRuleRepoForValidation) IncrementMatchCount(context.Context, string) error    { return nil }
+func (s *stubRuleRepoForValidation) IncrementOverrideCount(context.Context, string) error { return nil }
+func (s *stubRuleRepoForValidation) ListAllForQuarantineCensus(context.Context) ([]*domain.CategorizationRule, error) {
+	return nil, nil
+}
+
+// TestUpdateRule_EmptyingTagsOnATagOnlyRule covers the update-specific way to end up with a rule
+// that does nothing: a tag-only rule (no target_kind) whose tags are replaced with an empty
+// list. Both HasCategoryAction and HasTagAction are then false, so Validate must reject it — and
+// as a 4xx, not the 500 every update validation failure used to be.
+func TestUpdateRule_EmptyingTagsOnATagOnlyRule(t *testing.T) {
+	svc := services.NewCategorizationRuleService(
+		&stubTagOnlyRuleRepo{owner: "user-123"}, nil)
+	handler := NewCategorizationRuleHandler(svc)
+
+	emptyTags := []string{}
+	_, err := handler.UpdateRule(context.Background(), &UpdateRuleInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "rule-1",
+		Body:               domain.UpdateCategorizationRuleRequest{TargetTags: &emptyTags},
+	})
+
+	require.Error(t, err, "a rule with neither a category action nor tags must be rejected")
+	assertClientError(t, err)
+}
+
+// stubTagOnlyRuleRepo returns a rule whose ONLY action is its tags.
+type stubTagOnlyRuleRepo struct{ owner string }
+
+func (s *stubTagOnlyRuleRepo) GetByID(_ context.Context, id string) (*domain.CategorizationRule, error) {
+	return &domain.CategorizationRule{
+		ID:             id,
+		UserID:         s.owner,
+		Name:           "tag only",
+		Conditions:     []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "x"}},
+		ConditionLogic: "AND",
+		TargetTags:     []string{"coffee"},
+		TagBehavior:    "add",
+		Source:         "manual",
+	}, nil
+}
+
+func (s *stubTagOnlyRuleRepo) Create(context.Context, *domain.CategorizationRule) error {
+	panic("Create must not be reached")
+}
+func (s *stubTagOnlyRuleRepo) Update(context.Context, *domain.CategorizationRule) error {
+	panic("Update must not be reached: the merged rule is invalid")
+}
+func (s *stubTagOnlyRuleRepo) GetByUserID(context.Context, string) ([]*domain.CategorizationRule, error) {
+	return nil, nil
+}
+func (s *stubTagOnlyRuleRepo) GetEnabledByUserID(context.Context, string) ([]*domain.CategorizationRule, error) {
+	return nil, nil
+}
+func (s *stubTagOnlyRuleRepo) GetByName(context.Context, string, string) (*domain.CategorizationRule, error) {
+	return nil, nil
+}
+func (s *stubTagOnlyRuleRepo) Delete(context.Context, string) error                 { return nil }
+func (s *stubTagOnlyRuleRepo) CountByUserID(context.Context, string) (int, error)   { return 0, nil }
+func (s *stubTagOnlyRuleRepo) IncrementMatchCount(context.Context, string) error    { return nil }
+func (s *stubTagOnlyRuleRepo) IncrementOverrideCount(context.Context, string) error { return nil }
+func (s *stubTagOnlyRuleRepo) ListAllForQuarantineCensus(context.Context) ([]*domain.CategorizationRule, error) {
+	return nil, nil
+}
+
+// N2 (#1625): the literal /condition-schema route must actually be REACHABLE.
+//
+// It was registered 49 lines AFTER GET /{id} while its comment claimed the opposite, so humatest —
+// which is registration-order sensitive — dispatched /condition-schema to GetRuleByID. Production's
+// Echo router prefers the literal regardless, so this was never a production bug; it meant the
+// endpoint was untestable, and no route test called it. That is how it stayed wrong.
+//
+// Asserting on the BODY, not just the status: both handlers 401 unauthenticated, so a status-only
+// assertion passes under the very misrouting this test exists to catch.
+func TestConditionSchemaRoute_IsNotShadowedByTheIDRoute(t *testing.T) {
+	mockService := &mockCategorizationRuleService{rules: []*domain.CategorizationRule{}}
+
+	// Both handlers 401 unauthenticated, so drive it with an authenticated context and check WHICH
+	// handler answered — same technique the deleted-goals route test uses for this bug class.
+	authed := func(ctx huma.Context, next func(huma.Context)) {
+		next(huma.WithValue(ctx, inputs.UserIDKey, "user-123"))
+	}
+	_, api := humatest.New(t)
+	api.UseMiddleware(authed)
+	handler := NewCategorizationRuleHandler(mockService)
+	RegisterCategorizationRuleRoutes(api, handler)
+
+	resp := api.Get("/api/v1/auto-categorization/condition-schema")
+
+	// GetRuleByID would look up a rule whose id is the literal "condition-schema" and 404.
+	require.Equal(t, http.StatusOK, resp.Code,
+		"the literal route is shadowed by /{id} — body %s", resp.Body.String())
+	assert.Contains(t, resp.Body.String(), "signed_amount",
+		"response did not come from the schema handler")
 }
