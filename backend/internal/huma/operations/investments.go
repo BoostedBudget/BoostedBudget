@@ -467,10 +467,11 @@ Optional query parameters:
   Values: "cash" (depository/checking/savings account balances), "liabilities" (credit card + loan balances as absolute value).
   Example: include=cash,liabilities
 - group_by: bucketing dimension.
-  Values: "security_type" (default — groups by securities.type, which is Plaid's own nine-value
-  enum: cash, cryptocurrency, derivative, equity, etf, fixed income, loan, mutual fund, other —
-  NOT the "stock, bond, crypto" vocabulary this description previously claimed, which Plaid does
-  not send), "asset_class" (collapses into investments/cash/liabilities), "account".
+  Values: "security_type" (default — groups by securities.type, which carries Plaid's enum
+          verbatim: cash, cryptocurrency, derivative, equity, etf, fixed income, loan,
+          mutual fund, other; plus "unknown" when Plaid sends none, and the synthetic
+          "liabilities" bucket when include=liabilities), "asset_class" (collapses into
+          investments/cash/liabilities), "account".
 - basis: whether liabilities reduce the grand total.
   Values: "assets" (default — show asset-side allocation only), "net" (net of liabilities).
 
