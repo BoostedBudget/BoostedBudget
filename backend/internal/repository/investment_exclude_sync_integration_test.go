@@ -273,9 +273,32 @@ func TestExcludeInvestmentSync_LegacyNullRowOnTheFlaggedAccountIsStillExcluded(t
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Case 6 — REVERSIBILITY. Nothing was destroyed, so clearing the flag brings back
-//          exactly the same rows. This is the property that makes a read filter the
-//          right answer rather than an ingestion filter or a delete.
+// Case 6 — RETENTION OF ROWS ALREADY STORED. Setting the flag destroys nothing, so
+//          clearing it brings back every row that was written while it was off.
+//
+// ⚠ THIS IS NARROWER THAN IT LOOKS, AND ITS OLD COMMENT WAS FALSIFIED BY #1631 M4.
+//   It used to read: "clearing the flag brings back exactly the same rows... the
+//   property that makes a read filter the right answer rather than an ingestion
+//   filter". #1631 M4 made the flag an ingestion filter TOO -- the sync no longer
+//   persists new investment_transactions for an excluded chain -- and this test
+//   STAYED GREEN, because it seeds its rows directly with INSERT and never runs a
+//   sync. That is precisely the silently-falsified-test-comment failure mode
+//   commit 832f40fc exists to punish, so the comment is corrected here rather than
+//   the test being deleted: what it pins is still true and still worth pinning.
+//
+//   What it proves: the read filter DESTROYS NOTHING. A row present before the
+//   flag was set is retained, is still in the table, and is served again the
+//   moment the flag is cleared -- on both read surfaces.
+//   What it does NOT prove, and must not be cited for: that the flag is fully
+//   reversible. Rows the sync declined to INGEST while the flag was set do not
+//   exist to come back, and the backfill that fetches them reaches only
+//   investmentTxnLookbackYears (2 years). See
+//   docs/decisions/2026-08-24-financial-history-retained-by-default.md
+//   section "AMENDMENT (#1631): a fourth category -- never ingesting a row".
+//
+//   ⚠ Do NOT rename this test to match the narrower claim: transaction_repository.go's
+//   investmentSyncExclusionCondition cites it BY NAME, and TestEveryCitedTestNameResolves
+//   fails on a dangling citation.
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestExcludeInvestmentSync_IsReversible(t *testing.T) {
@@ -291,11 +314,14 @@ func TestExcludeInvestmentSync_IsReversible(t *testing.T) {
 
 	invIDs, bankIDs := feedIDs(ctx, t, tx, f.userID)
 	require.Contains(t, invIDs, f.invTxnID.String(),
-		"clearing the flag did not bring the investment row back. A read filter must be fully "+
-			"reversible — if it is not, something destroyed or suppressed the row")
+		"clearing the flag did not bring back a row that was ALREADY STORED when the flag was "+
+			"set. The read filter must destroy and suppress nothing — if a stored row does not "+
+			"reappear, something deleted or tombstoned it, which the retention ADR forbids. "+
+			"(This says nothing about rows the sync declined to ingest while the flag was set; "+
+			"those never existed, and the backfill for them is bounded at 2 years.)")
 	require.Contains(t, bankIDs, f.bankTxnID.String(), "the banking row was never affected")
 	require.Contains(t, directIDs(ctx, t, tx, f.userID), f.invTxnID.String(),
-		"the direct endpoint must be reversible too")
+		"the direct endpoint must retain and re-serve the stored row too")
 
 	var stillThere int
 	require.NoError(t, tx.QueryRow(ctx,

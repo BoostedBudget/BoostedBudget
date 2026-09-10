@@ -3062,11 +3062,21 @@ func accountWithNoActiveIntervalLeg(alias string) string {
 // WHY THIS EXISTS. Plaid reports a brokerage cash-management account through BOTH
 // /transactions/sync and /investments/transactions/get, so one real movement lands once in
 // `transactions` and once in `investment_transactions` and the unified feed shows it twice. The
-// flag is the user's per-chain opt-out, and it is applied HERE, at read time, because the rows
-// themselves are legitimate Plaid-reported history: deleting them, tombstoning them, or dropping
-// them at ingestion would all be destruction as a side effect of a preference
-// (docs/decisions/2026-08-24-financial-history-retained-by-default.md). Clearing the flag brings
-// exactly the same rows back — TestExcludeInvestmentSync_IsReversible pins that.
+// flag is the user's per-chain opt-out, and this predicate is why rows stored BEFORE it was set
+// stop appearing in the feed: deleting or tombstoning them would be destruction as a side effect of
+// a preference (docs/decisions/2026-08-24-financial-history-retained-by-default.md), so they are
+// retained and filtered here. TestExcludeInvestmentSync_IsReversible pins that those rows are
+// untouched and reappear when the flag is cleared.
+//
+// ⚠ CORRECTED (#1631 M4). This comment used to list "dropping them at ingestion" alongside
+// deleting and tombstoning as equally forbidden. That is no longer the tree's position: the sync
+// now DOES decline to persist new investment_transactions for an excluded chain, which is why this
+// read filter matters only for rows written before the flag was set. The ADR was amended to
+// authorise it — never ingesting a row is not destroying a retained one, and the row is a duplicate
+// of one /transactions/sync stores anyway — under three narrow scope tests set out in that
+// document's § "AMENDMENT (#1631): a fourth category — never ingesting a row". Deleting and
+// tombstoning remain forbidden, and this predicate is NOT redundant: it is the only thing that
+// keeps the already-stored duplicates out of the feed.
 //
 // ⚠ NOT EXISTS, NOT A JOIN. One user_account has MANY accounts rows — that is what a re-link chain
 // IS (000033) — so joining user_accounts through accounts would multiply every feed row by the

@@ -38,12 +38,35 @@ type UserAccount struct {
 	// through BOTH /transactions/sync and /investments/transactions/get, which otherwise shows
 	// every real movement twice.
 	//
-	// ⚠ It is a READ FILTER AND NOTHING ELSE. No investment_transactions row is deleted,
-	// tombstoned, or suppressed at ingestion, so clearing the flag makes exactly the same rows
-	// reappear. Destroying them because a user reclassified an account would be side-effect
-	// destruction (docs/decisions/2026-08-24-financial-history-retained-by-default.md), and the
-	// reversibility is the reason no backfill or cleanup script exists: turning the flag on IS the
-	// cleanup.
+	// ⚠ IT IS AN INGESTION FILTER AS WELL AS A READ FILTER, AND IT IS NOT FULLY REVERSIBLE. This
+	// comment claimed the opposite — "a READ FILTER AND NOTHING ELSE… clearing the flag makes
+	// exactly the same rows reappear" — until #1631 M4 deliberately changed the contract, with the
+	// ADR amended to authorise it. Do not restore the old claim from an old branch.
+	//
+	// What is true now:
+	//   - No existing row is ever deleted, tombstoned, or hidden from the repository. Rows stored
+	//     BEFORE the flag was set are retained and reappear in full when it is cleared.
+	//   - While the flag is set, investmentSyncService.SyncInvestmentTransactions does not PERSIST
+	//     new investment_transactions for this chain at all. Its non-excluded siblings on the same
+	//     linked item are unaffected, and the item's watermark still advances for them.
+	//   - Clearing the flag therefore asks for data we do not have, so it records a durable
+	//     backfill obligation — InvestmentBackfillRequestedAt is NOT projected onto this struct;
+	//     the marker lives on user_accounts.investment_backfill_requested_at (migration 000196) and
+	//     is written in the SAME UPDATE that clears the flag. The sync consumes it by re-fetching
+	//     the full lookback window.
+	//   - ⚠ That backfill reaches only investmentTxnLookbackYears (2 years — the limit of
+	//     /investments/transactions/get). A chain excluded for LONGER permanently loses its
+	//     earliest excluded period: never stored, and no longer served by Plaid. Nothing was
+	//     destroyed and the data is nevertheless unavailable. Never write UI copy promising the
+	//     user the excluded period comes back in full.
+	//
+	// Why this is permitted at all, given that financial history is retained by default: never
+	// ingesting a row is not destroying a retained row, and the row in question is a DUPLICATE of
+	// one /transactions/sync stores anyway — which is the entire reason the user set the flag. The
+	// argument, its three scope tests and its honest cost are written out in
+	// docs/decisions/2026-08-24-financial-history-retained-by-default.md
+	// § "AMENDMENT (#1631): a fourth category — never ingesting a row". Read the three tests before
+	// extending non-ingestion to anything else; they are narrow on purpose.
 	//
 	// It lives on the chain rather than on accounts so it survives a Plaid re-link, for the same
 	// reason every other customization above does.

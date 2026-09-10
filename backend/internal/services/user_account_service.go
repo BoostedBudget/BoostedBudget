@@ -300,10 +300,30 @@ func (s *userAccountService) UpdateCustomization(
 	}
 
 	if req.ExcludeInvestmentSync != nil {
-		// A plain assignment, with no companion state to keep in step — unlike IsHidden above,
-		// which carries a cause. The flag is a read filter over investment_transactions (#1609
-		// Item 5): nothing is deleted or suppressed at ingestion, so there is nothing to
-		// reconcile and clearing it restores exactly the rows it hid.
+		// ⚠ There IS companion state now, and this comment said there was not until #1631 M4:
+		// "nothing is deleted or suppressed at ingestion, so there is nothing to reconcile" was
+		// true of the read-filter-only design and is false of this one. The flag now suppresses
+		// INGESTION as well (see domain.UserAccount.ExcludeInvestmentSync), so clearing it asks
+		// for rows the database does not have, and the sync owes this chain a full-lookback
+		// re-fetch.
+		//
+		// The companion write is nevertheless absent from this block, on purpose. It happens in
+		// SQL, inside the single UPDATE that Step 4 below issues
+		// (userAccountRepository.Update → investment_backfill_requested_at), for two reasons that
+		// are both load-bearing:
+		//
+		//  1. ATOMICITY. Recording the obligation here — as a second repository call, or a queued
+		//     job — could succeed at the flag and fail at the obligation, and the loss would be
+		//     PERMANENT rather than retryable: the transition is true → false, so a retry of a
+		//     write that already landed is false → false, which no transition-triggered mechanism
+		//     can observe a second time. This service holds only a repository, reads outside any
+		//     transaction, and the repository writes through its pool directly, so there is no
+		//     pgx.Tx for a second write to join. One statement is atomic by definition.
+		//  2. IT NEEDS THE OLD VALUE. The obligation arises on a TRANSITION, and by this line the
+		//     struct's previous value has already been overwritten. Postgres can see it; this
+		//     function cannot.
+		//
+		// So the assignment stays plain — but not because there is nothing to reconcile.
 		existing.ExcludeInvestmentSync = *req.ExcludeInvestmentSync
 	}
 
