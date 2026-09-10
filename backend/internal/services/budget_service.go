@@ -727,10 +727,6 @@ func (s *budgetService) UpdateCategory(ctx context.Context, userID, budgetID, ca
 		return nil, domain.ErrBudgetCategoryNotFound
 	}
 
-	// Issue #1630 HIGH-severity fix: capture the PRE-update match_logic before mutating the
-	// row in place, so WouldOrphanContainedChildren below can compare old vs new below.
-	originalMatchLogic := category.MatchLogic
-
 	// Apply updates
 	if req.AllocatedAmount != nil {
 		category.AllocatedAmount = *req.AllocatedAmount
@@ -748,11 +744,16 @@ func (s *budgetService) UpdateCategory(ctx context.Context, userID, budgetID, ca
 		return nil, err
 	}
 
-	// Issue #1630 HIGH-severity fix: UpdateCategory can recreate the exact double-count
-	// AddCategory/CreateBudget's EscapedNestedChild guard exists to prevent — a caller can PATCH
-	// a conforming nested child's match_logic to one that escapes containment, as NEW data, not
-	// grandfathered. Only worth checking when match_logic actually changed (identity fields are
-	// immutable via this request, so no other field can create or break a hierarchical pair).
+	// Issue #1630 HIGH-severity fix (widened by an independent adversarial review, fixwave 4):
+	// UpdateCategory can recreate the exact double-count AddCategory/CreateBudget's
+	// EscapedNestedChild guard exists to prevent — a caller can PATCH a conforming nested child's
+	// match_logic to one that escapes containment, or PATCH a PARENT's match_logic away from
+	// clean containment while an existing nested child still relies on it — either way, as NEW
+	// data, not grandfathered. Only worth checking when match_logic actually changed (identity
+	// fields are immutable via this request, so no other field can create or break a hierarchical
+	// pair). A single domain.EscapedNestedChild(siblings, category) check, run in both directions
+	// internally, now covers both edits — see its doc comment for why the widened check subsumes
+	// the previously-separate WouldOrphanContainedChildren (removed).
 	if req.MatchLogic != nil {
 		// Siblings this row could form a hierarchical pair with — every OTHER live category in
 		// this budget, using the read-time-populated custom-parent linkage already on
@@ -765,23 +766,12 @@ func (s *budgetService) UpdateCategory(ctx context.Context, userID, budgetID, ca
 			}
 		}
 
-		// Direction 1: this row, AS UPDATED, forms an escaping pair with a sibling — whether as
-		// an escaping CHILD of a containing parent, or as a (still) containing PARENT of an
-		// existing escaping child. See domain.EscapedNestedChild.
+		// This row, AS UPDATED, forms a not-cleanly-contained pair with a sibling — whether as a
+		// non-contained CHILD of a containing parent, or as a PARENT (containing or not) of an
+		// existing sibling that is nested under it and not cleanly contained by it. See
+		// domain.EscapedNestedChild.
 		if domain.EscapedNestedChild(siblings, category) {
 			return nil, fmt.Errorf("%w: match_logic %q on this category escapes its hierarchical parent's containment envelope — a parent whose own match_logic is category_only/or only fully rolls up children whose match_logic is category_only/and; use a top-level (non-nested) category instead if this one must match tag_only or or", domain.ErrEscapedNestedChild, category.MatchLogic)
-		}
-
-		// Direction 2: this row is itself a PARENT, and the edit would strand an existing,
-		// still-conforming child that relies on THIS row remaining a containing parent to stay
-		// excluded from top-level totals. EscapedNestedChild's own "candidate as parent" branch
-		// cannot see this because it requires the CANDIDATE (new) match_logic to still be
-		// containing; here the parent is precisely the one losing that status. See
-		// domain.WouldOrphanContainedChildren for the full reasoning.
-		originalParentSnapshot := *category
-		originalParentSnapshot.MatchLogic = originalMatchLogic
-		if domain.WouldOrphanContainedChildren(siblings, &originalParentSnapshot, category.MatchLogic) {
-			return nil, fmt.Errorf("%w: match_logic %q would remove this category's containment envelope while an existing nested child still relies on it to stay excluded from top-level totals — re-parent or update that child first", domain.ErrEscapedNestedChild, category.MatchLogic)
 		}
 	}
 

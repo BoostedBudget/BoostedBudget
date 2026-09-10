@@ -746,7 +746,11 @@ func TestBudgetService_UpdateCategory_RejectsChildEscapingContainment(t *testing
 // direction of the same gap: the row being edited may itself be the PARENT. Flipping a
 // category_only parent to 'and' removes the containment envelope an existing, unchanged,
 // still-conforming child relies on to stay excluded from top-level totals — recreating the
-// same double count via the reverse edit.
+// same double count via the reverse edit. Previously caught by a separate
+// domain.WouldOrphanContainedChildren guard; fixwave 4 widened domain.EscapedNestedChild to
+// subsume that transition (see its doc comment), and removed the separate function — this test
+// still passes unchanged because it only asserts errors.Is(err, ErrEscapedNestedChild), the
+// sentinel both guards always wrapped.
 func TestBudgetService_UpdateCategory_RejectsParentOrphaningContainedChild(t *testing.T) {
 	mockBudgetRepo := new(MockBudgetRepository)
 	mockCategoryRepo := new(MockCustomCategoryRepository)
