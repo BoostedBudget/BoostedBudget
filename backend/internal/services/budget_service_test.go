@@ -107,14 +107,6 @@ func (m *MockBudgetRepository) DeleteCategory(ctx context.Context, id, budgetID 
 	return args.Error(0)
 }
 
-func (m *MockBudgetRepository) GetCategoriesMatchingTransaction(ctx context.Context, userID string, effective *domain.EffectiveCategory) ([]domain.BudgetCategory, error) {
-	args := m.Called(ctx, userID, effective)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
-}
-
 // Envelope budgeting methods (Issue #491)
 func (m *MockBudgetRepository) UpdateBudgetIncome(ctx context.Context, budgetID string, incomeAmount float64) error {
 	args := m.Called(ctx, budgetID, incomeAmount)

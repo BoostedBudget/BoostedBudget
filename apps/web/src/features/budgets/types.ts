@@ -21,6 +21,24 @@ export interface IncomeSource {
   value_display?: string; // Server-supplied humanized label for pfc_primary sources
 }
 
+/**
+ * Reason why a transaction matched a budget category (Issue #499). Relocated here from the
+ * now-deleted utils/transactionBudgetMatcher.ts (Issue #1630 task 3) — that module's matching
+ * function had zero production callers and its pfc branch did not roll up a custom-override
+ * child into its budgeted parent, so it was a third, dead, wrong copy of the match_logic rule.
+ * The type itself is still live: TransactionCard and TransactionBudgetBadge both import it.
+ */
+export type MatchReason = 'category' | 'tag' | 'both';
+
+/**
+ * Result of matching a transaction to a budget category (Issue #499). See MatchReason above
+ * for why this lives here now instead of in utils/transactionBudgetMatcher.ts.
+ */
+export interface BudgetCategoryMatch {
+  category: BudgetCategory;
+  matchReason: MatchReason;
+}
+
 export interface BudgetCategory {
   id: string;
   budget_id: string;

@@ -29,8 +29,7 @@ type BudgetRepository interface {
 	// destroyed alongside it. Issue #1569, Task 8.
 	//
 	// The categories are tombstoned in the SAME transaction with reason 'parent_deleted', because
-	// fk_budget_categories_budget_id used to remove them and reads like
-	// GetCategoriesMatchingTransaction find categories without going through their budget.
+	// fk_budget_categories_budget_id used to remove them outright.
 	//
 	// Writes a "budget.deleted" audit entry via auditLog.LogInTx inside that transaction; auditLog
 	// may be nil. Returns ErrBudgetNotFound if the budget does not exist, belongs to another user,
@@ -58,9 +57,6 @@ type BudgetRepository interface {
 	// transaction; auditLog may be nil. Returns ErrBudgetCategoryNotFound if the category does not
 	// exist, is not in budgetID, or is already tombstoned.
 	DeleteCategory(ctx context.Context, id, budgetID string, auditLog AuditLogRepository) error
-
-	// Query for spent amount sync (Issue #451)
-	GetCategoriesMatchingTransaction(ctx context.Context, userID string, effective *domain.EffectiveCategory) ([]domain.BudgetCategory, error)
 
 	// Envelope budgeting income management (Issue #491)
 	UpdateBudgetIncome(ctx context.Context, budgetID string, incomeAmount float64) error
@@ -832,125 +828,6 @@ func (r *budgetRepository) DeleteCategory(ctx context.Context, id, budgetID stri
 	}
 
 	return tx.Commit(ctx)
-}
-
-// GetCategoriesMatchingTransaction finds budget categories that match a transaction's category.
-// This is used for recalculating spent amounts when transactions change (Issue #451).
-// Note: This method currently only matches by category. Future enhancement could use match_logic
-// and tags for more flexible matching (Issue #491).
-func (r *budgetRepository) GetCategoriesMatchingTransaction(ctx context.Context, userID string, effective *domain.EffectiveCategory) ([]domain.BudgetCategory, error) {
-	if effective == nil {
-		return []domain.BudgetCategory{}, nil
-	}
-
-	var query string
-	var args []interface{}
-
-	switch effective.Kind {
-	case domain.EffectiveCategoryKindPFC:
-		if effective.PFCDetailed == nil || *effective.PFCDetailed == "" {
-			// Transaction has no detailed sub-category: only match primary-only budget categories
-			// (i.e. bc.pfc_detailed IS NULL). Detailed-specific budgets must not fire.
-			query = `
-				SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed,
-					bc.custom_category_id, bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
-					bc.tags, bc.match_logic
-				FROM budget_categories bc
-				JOIN budgets b ON bc.budget_id = b.id AND b.deleted_at IS NULL
-				WHERE b.user_id = $1 AND b.is_active = true AND bc.deleted_at IS NULL
-				  AND bc.category_kind = 'pfc' AND bc.pfc_primary = $2
-				  AND bc.pfc_detailed IS NULL
-			`
-			args = []interface{}{userID, effective.PFCPrimary}
-		} else {
-			// Transaction has a detailed sub-category: match the primary-only rollup budget
-			// (bc.pfc_detailed IS NULL) AND the exact detailed budget — but NOT siblings.
-			query = `
-				SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed,
-					bc.custom_category_id, bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
-					bc.tags, bc.match_logic
-				FROM budget_categories bc
-				JOIN budgets b ON bc.budget_id = b.id AND b.deleted_at IS NULL
-				WHERE b.user_id = $1 AND b.is_active = true AND bc.deleted_at IS NULL
-				  AND bc.category_kind = 'pfc' AND bc.pfc_primary = $2
-				  AND (bc.pfc_detailed IS NULL OR bc.pfc_detailed = $3)
-			`
-			args = []interface{}{userID, effective.PFCPrimary, effective.PFCDetailed}
-		}
-	case domain.EffectiveCategoryKindCustom:
-		// Roll a custom-category transaction up into every budget it belongs to, mirroring
-		// the full-resync rollup in buildCategoryClause (#1203):
-		//   - the exact custom budget,
-		//   - its custom PARENT budget (parent_id), and
-		//   - the PFC primary-only budget it nests under (parent_pfc_primary).
-		// All parent lookups are user-scoped.
-		query = `
-			SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed,
-				bc.custom_category_id, bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
-				bc.tags, bc.match_logic
-			FROM budget_categories bc
-			-- tombstone-exempt(custom_categories): the two custom_categories subqueries below resolve the PARENT of
-			-- the category a transaction is already filed under, so its spend rolls up to the
-			-- right budget line. The transaction is history; if its category has since been
-			-- tombstoned, its budget lines were tombstoned with it and bc.deleted_at IS NULL
-			-- already excludes them. #1569 T9.
-			JOIN budgets b ON bc.budget_id = b.id AND b.deleted_at IS NULL
-			WHERE b.user_id = $1 AND b.is_active = true AND bc.deleted_at IS NULL
-			  AND (
-			    (bc.category_kind = 'custom'
-			      AND (bc.custom_category_id::text = $2
-			           OR bc.custom_category_id = (SELECT parent_id FROM custom_categories WHERE id = $2::uuid AND user_id = $1)))
-			    OR (bc.category_kind = 'pfc' AND bc.pfc_detailed IS NULL
-			        AND bc.pfc_primary = (SELECT parent_pfc_primary FROM custom_categories WHERE id = $2::uuid AND user_id = $1))
-			  )
-		`
-		args = []interface{}{userID, effective.CustomCategoryID}
-	default:
-		return []domain.BudgetCategory{}, nil
-	}
-
-	rows, err := r.db.Query(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var categories []domain.BudgetCategory
-	for rows.Next() {
-		var bc domain.BudgetCategory
-		var tagsJSON []byte
-
-		err := rows.Scan(
-			&bc.ID,
-			&bc.BudgetID,
-			&bc.CategoryKind,
-			&bc.PFCPrimary,
-			&bc.PFCDetailed,
-			&bc.CustomCategoryID,
-			&bc.AllocatedAmount,
-			&bc.SpentAmount,
-			&bc.CreatedAt,
-			&bc.UpdatedAt,
-			&tagsJSON,
-			&bc.MatchLogic,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		// Unmarshal tags from JSON (Issue #491)
-		if err := json.Unmarshal(tagsJSON, &bc.Tags); err != nil {
-			return nil, err
-		}
-
-		categories = append(categories, bc)
-	}
-
-	if categories == nil {
-		categories = []domain.BudgetCategory{}
-	}
-
-	return categories, nil
 }
 
 // UpdateBudgetIncome updates only income_amount for a budget (the actual received sum).
