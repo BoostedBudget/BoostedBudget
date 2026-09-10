@@ -751,8 +751,12 @@ var (
 	// not its row ID, and nothing previously stopped two live rows sharing that value from
 	// coexisting — the maps would silently keep whichever row a range/map iteration visited last,
 	// leaving which row "owns" a given child's rendering undefined. Enforced at write time only,
-	// from CreateBudget's batch path and AddCategory — NOT from UpdateBudget, which never touches
-	// Categories at all. No backfill: this guard is a write-time gate, so a pre-existing colliding
+	// from CreateBudget's batch path and AddCategory — NOT from UpdateBudget (which updates the
+	// Budget row's own fields and never touches Categories at all; UpdateCategory, which DOES
+	// mutate a Category row's match_logic, is guarded separately by EscapedNestedChild /
+	// WouldOrphanContainedChildren instead, since parent-identity fields are immutable via that
+	// request and duplication cannot be introduced there). No backfill: this guard is a
+	// write-time gate, so a pre-existing colliding
 	// row (issue #1630 was reproduced against a real production budget,
 	// bf6676b1-7bbd-4f06-b765-62756ce0094e, five categories) is grandfathered — it stays readable
 	// and updatable, and only a NEW row that would collide with it is refused going forward.
@@ -771,7 +775,12 @@ var (
 	//
 	// Fixed by refusing to PERSIST the escaping shape at all (EscapedNestedChild, wired into
 	// CreateBudget's batch loop and AddCategory — the same two call sites as
-	// DuplicateParentIdentity, and NOT UpdateBudget, which never touches Categories). This is
+	// DuplicateParentIdentity). UpdateCategory ALSO mutates match_logic and can recreate this
+	// exact shape as new data (PATCHing a conforming nested child's match_logic to escape, or
+	// PATCHing a parent's match_logic away from containing while an existing contained child
+	// still relies on it — see WouldOrphanContainedChildren) — it is guarded by both
+	// EscapedNestedChild and WouldOrphanContainedChildren too. UpdateBudget (the Budget row's
+	// own fields) is the one path that genuinely never touches Categories. This is
 	// write-time only and does NOT retroactively fix the parent's roll-up query: any row that
 	// predates this guard keeps the pre-existing double-count forever, exactly as
 	// ErrDuplicateParentCategory's rows are grandfathered — it stays readable and updatable, just
@@ -887,6 +896,52 @@ func EscapedNestedChild(existing []BudgetCategory, candidate *BudgetCategory) bo
 		// candidate as parent, other as child.
 		if isContainingMatchLogic(candidate.MatchLogic) && !isContainedMatchLogic(other.MatchLogic) &&
 			hierarchyHasNestedChild(candidate, other) {
+			return true
+		}
+	}
+	return false
+}
+
+// WouldOrphanContainedChildren reports whether changing `existingParent`'s match_logic to
+// `newMatchLogic` would strand an already-persisted, hierarchically-nested child that currently
+// relies on `existingParent` remaining a containing parent to stay excluded from top-level
+// budget totals (Issue #1630 HIGH review follow-up — UpdateCategory can PATCH a PARENT row's
+// own match_logic, not just a child's).
+//
+// EscapedNestedChild (above) catches an escaping pair by looking at the CANDIDATE row's own
+// match_logic in isolation: it fires only when the candidate, AS WRITTEN, forms an unsafe
+// (containing-parent, non-contained-child) pair. That per-pair test is symmetric and correct for
+// a row being newly created or having ITS OWN match_logic changed while staying (or becoming) a
+// non-contained child. It is NOT sufficient for the reverse edit: a PARENT flipping AWAY from a
+// containing match_logic (category_only/or) to a non-containing one (and/tag_only) never
+// satisfies EscapedNestedChild's "candidate as parent" branch, because that branch requires
+// isContainingMatchLogic(candidate) to still be true. Yet an existing child underneath — whose
+// own match_logic never changed and was, and remains, isContainedMatchLogic — was relying
+// entirely on the PARENT's match_logic to keep it excluded from top-level totals
+// (isContainingMatchLogic(parent) && isContainedMatchLogic(child), the exact formula
+// IsSubAllocationWithin/budgetedParentSets use at read time). The moment the parent stops
+// qualifying, that same child is no longer excluded there, while buildCategoryClause's
+// hierarchical roll-up (transaction_repository.go) keeps summing the child's transactions into
+// the parent's own SpentAmount whenever the parent's new match_logic still triggers it
+// (category_only/and/or — every branch except tag_only calls buildCategoryClause) — recreating
+// the identical double count ErrEscapedNestedChild exists to prevent, this time triggered by
+// editing the PARENT instead of the child.
+//
+// Deliberately conservative: this refuses the transition whenever the parent stops being
+// "containing" at all (including a transition to tag_only), even though tag_only's own roll-up
+// query skips buildCategoryClause entirely and so cannot double-count via THIS mechanism. The
+// broader refusal matches the plain-language containment rule this branch established
+// (`parent.match_logic ∈ {category_only, or}` is what a nested child relies on) rather than
+// re-deriving a narrower, buildCategoryClause-branch-specific carve-out purely to be permissive.
+// Callers who need a nested child to point at a tag_only or 'and' parent should remove or
+// re-parent the child first — the same remediation ErrEscapedNestedChild already asks for.
+func WouldOrphanContainedChildren(existing []BudgetCategory, existingParent *BudgetCategory, newMatchLogic MatchLogic) bool {
+	if existingParent == nil || !isContainingMatchLogic(existingParent.MatchLogic) || isContainingMatchLogic(newMatchLogic) {
+		return false
+	}
+	for i := range existing {
+		child := &existing[i]
+		if isContainedMatchLogic(child.MatchLogic) && hierarchyHasNestedChild(existingParent, child) {
 			return true
 		}
 	}

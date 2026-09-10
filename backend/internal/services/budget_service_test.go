@@ -686,6 +686,163 @@ func TestBudgetService_UpdateCategory_Success(t *testing.T) {
 	mockBudgetRepo.AssertExpectations(t)
 }
 
+// TestBudgetService_UpdateCategory_RejectsChildEscapingContainment pins the HIGH-severity gap
+// this commit closes: a conforming nested child (category_only, contained under a category_only
+// parent) can be PATCHed to a match_logic that escapes containment — recreating
+// EscapedNestedChild's double-count as NEW data, not grandfathered. Issue #1630 gap analysis.
+func TestBudgetService_UpdateCategory_RejectsChildEscapingContainment(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+	childID := "cat-child"
+	escapingLogic := domain.MatchLogicOr
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:              "cat-parent",
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			MatchLogic:      domain.MatchLogicCategoryOnly,
+			AllocatedAmount: 300.00,
+		},
+		{
+			ID:              childID,
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			PFCDetailed:     strPtr("FOOD_AND_DRINK_FAST_FOOD"),
+			MatchLogic:      domain.MatchLogicCategoryOnly,
+			AllocatedAmount: 50.00,
+		},
+	}
+
+	req := &domain.UpdateBudgetCategoryRequest{
+		MatchLogic: &escapingLogic,
+		Tags:       &[]string{"splurge"},
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+
+	category, err := service.UpdateCategory(ctx, userID, budgetID, childID, req)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrEscapedNestedChild)
+	assert.ErrorIs(t, err, domain.ErrInvalidBudget)
+	assert.Contains(t, err.Error(), "match_logic")
+	assert.Nil(t, category)
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "UpdateCategory")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_UpdateCategory_RejectsParentOrphaningContainedChild pins the OTHER
+// direction of the same gap: the row being edited may itself be the PARENT. Flipping a
+// category_only parent to 'and' removes the containment envelope an existing, unchanged,
+// still-conforming child relies on to stay excluded from top-level totals — recreating the
+// same double count via the reverse edit.
+func TestBudgetService_UpdateCategory_RejectsParentOrphaningContainedChild(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+	parentID := "cat-parent"
+	nonContainingLogic := domain.MatchLogicAnd
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:              parentID,
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			MatchLogic:      domain.MatchLogicCategoryOnly,
+			AllocatedAmount: 300.00,
+		},
+		{
+			ID:              "cat-child",
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			PFCDetailed:     strPtr("FOOD_AND_DRINK_FAST_FOOD"),
+			MatchLogic:      domain.MatchLogicCategoryOnly,
+			AllocatedAmount: 50.00,
+		},
+	}
+
+	req := &domain.UpdateBudgetCategoryRequest{
+		MatchLogic: &nonContainingLogic,
+		Tags:       &[]string{"splurge"},
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+
+	category, err := service.UpdateCategory(ctx, userID, budgetID, parentID, req)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrEscapedNestedChild)
+	assert.ErrorIs(t, err, domain.ErrInvalidBudget)
+	assert.Contains(t, err.Error(), "match_logic")
+	assert.Nil(t, category)
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "UpdateCategory")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_UpdateCategory_AllowsUnrelatedMatchLogicChange confirms the two guards
+// above do not over-reach: editing a top-level category's match_logic with no hierarchical
+// relationship to any sibling remains legal.
+func TestBudgetService_UpdateCategory_AllowsUnrelatedMatchLogicChange(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+	categoryID := "cat-solo"
+	newLogic := domain.MatchLogicOr
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:              categoryID,
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			MatchLogic:      domain.MatchLogicCategoryOnly,
+			AllocatedAmount: 300.00,
+		},
+	}
+
+	req := &domain.UpdateBudgetCategoryRequest{
+		MatchLogic: &newLogic,
+		Tags:       &[]string{"splurge"},
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockBudgetRepo.On("UpdateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+
+	category, err := service.UpdateCategory(ctx, userID, budgetID, categoryID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, category)
+	assert.Equal(t, newLogic, category.MatchLogic)
+	mockBudgetRepo.AssertExpectations(t)
+}
+
 func TestBudgetService_DeleteCategory_Success(t *testing.T) {
 	mockBudgetRepo := new(MockBudgetRepository)
 	mockCategoryRepo := new(MockCustomCategoryRepository)

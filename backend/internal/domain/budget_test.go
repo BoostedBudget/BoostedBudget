@@ -2206,3 +2206,133 @@ func TestEscapedNestedChild(t *testing.T) {
 		})
 	}
 }
+
+// TestWouldOrphanContainedChildren pins the reverse half of Issue #1630's UpdateCategory
+// follow-up: a PARENT row's own match_logic can be PATCHed away from containing while an
+// existing, still-conforming child relies on it. EscapedNestedChild alone cannot see this
+// (its "candidate as parent" branch requires the candidate's NEW match_logic to still be
+// containing), so WouldOrphanContainedChildren covers exactly this transition.
+func TestWouldOrphanContainedChildren(t *testing.T) {
+	food := "FOOD_AND_DRINK"
+	fastFood := "FOOD_AND_DRINK_FAST_FOOD"
+
+	containedChild := BudgetCategory{
+		ID:           "child-1",
+		CategoryKind: "pfc",
+		PFCPrimary:   &food,
+		PFCDetailed:  &fastFood,
+		MatchLogic:   MatchLogicCategoryOnly,
+	}
+	escapedChild := BudgetCategory{
+		ID:           "child-2",
+		CategoryKind: "pfc",
+		PFCPrimary:   &food,
+		PFCDetailed:  &fastFood,
+		MatchLogic:   MatchLogicOr,
+	}
+	unrelatedChild := BudgetCategory{
+		ID:           "child-3",
+		CategoryKind: "pfc",
+		PFCPrimary:   strPtr1630("RENT_AND_UTILITIES"),
+		PFCDetailed:  strPtr1630("RENT_AND_UTILITIES_RENT"),
+		MatchLogic:   MatchLogicCategoryOnly,
+	}
+
+	tests := []struct {
+		name           string
+		existing       []BudgetCategory
+		existingParent *BudgetCategory
+		newMatchLogic  MatchLogic
+		want           bool
+	}{
+		{
+			name:           "nil existingParent never orphans",
+			existing:       []BudgetCategory{containedChild},
+			existingParent: nil,
+			newMatchLogic:  MatchLogicAnd,
+			want:           false,
+		},
+		{
+			name:     "flipping category_only parent to and orphans a contained child",
+			existing: []BudgetCategory{containedChild},
+			existingParent: &BudgetCategory{
+				ID:           "parent-1",
+				CategoryKind: "pfc",
+				PFCPrimary:   &food,
+				MatchLogic:   MatchLogicCategoryOnly,
+			},
+			newMatchLogic: MatchLogicAnd,
+			want:          true,
+		},
+		{
+			name:     "flipping or parent to tag_only orphans a contained child",
+			existing: []BudgetCategory{containedChild},
+			existingParent: &BudgetCategory{
+				ID:           "parent-1",
+				CategoryKind: "pfc",
+				PFCPrimary:   &food,
+				MatchLogic:   MatchLogicOr,
+			},
+			newMatchLogic: MatchLogicTagOnly,
+			want:          true,
+		},
+		{
+			name:     "staying containing (category_only to or) does not orphan",
+			existing: []BudgetCategory{containedChild},
+			existingParent: &BudgetCategory{
+				ID:           "parent-1",
+				CategoryKind: "pfc",
+				PFCPrimary:   &food,
+				MatchLogic:   MatchLogicCategoryOnly,
+			},
+			newMatchLogic: MatchLogicOr,
+			want:          false,
+		},
+		{
+			name:     "parent that was never containing cannot orphan anything",
+			existing: []BudgetCategory{containedChild},
+			existingParent: &BudgetCategory{
+				ID:           "parent-1",
+				CategoryKind: "pfc",
+				PFCPrimary:   &food,
+				MatchLogic:   MatchLogicAnd,
+			},
+			newMatchLogic: MatchLogicTagOnly,
+			want:          false,
+		},
+		{
+			name:     "child that already escaped is not this function's concern",
+			existing: []BudgetCategory{escapedChild},
+			existingParent: &BudgetCategory{
+				ID:           "parent-1",
+				CategoryKind: "pfc",
+				PFCPrimary:   &food,
+				MatchLogic:   MatchLogicCategoryOnly,
+			},
+			newMatchLogic: MatchLogicAnd,
+			want:          false,
+		},
+		{
+			name:     "unrelated sibling under a different primary is never orphaned",
+			existing: []BudgetCategory{unrelatedChild},
+			existingParent: &BudgetCategory{
+				ID:           "parent-1",
+				CategoryKind: "pfc",
+				PFCPrimary:   &food,
+				MatchLogic:   MatchLogicCategoryOnly,
+			},
+			newMatchLogic: MatchLogicAnd,
+			want:          false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := WouldOrphanContainedChildren(tt.existing, tt.existingParent, tt.newMatchLogic); got != tt.want {
+				t.Errorf("WouldOrphanContainedChildren() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func strPtr1630(s string) *string { return &s }
