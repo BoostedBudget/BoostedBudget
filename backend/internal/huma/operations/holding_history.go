@@ -76,6 +76,10 @@ func (h *HoldingHistoryHandler) GetAccountHoldingsHistory(ctx context.Context, i
 		}
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+	// #1636 rounding boundary — money_rounding.go. ⚠ Quantity and InstitutionPrice stay exact:
+	// holding_snapshots gives them DECIMAL(18,8) so a past fractional position is retained as it
+	// stood.
+	roundHoldingSnapshotHistory(history)
 	return &GetAccountHoldingsHistoryOutput{Body: history}, nil
 }
 
