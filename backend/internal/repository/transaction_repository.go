@@ -194,6 +194,24 @@ type TransactionRepository interface {
 	// Used for previewing how many transactions would match a budget category configuration.
 	GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (count int, totalAmount float64, err error)
 
+	// GetCategoryMatchBreakdown returns a REAL partition of GetMatchingTransactionStats'
+	// total for the same inputs (Issue #1630 Task B5) — three mutually exclusive buckets
+	// that always sum to it exactly:
+	//   1. category-direct  (directCount/directAmount): matched by the category clause at
+	//      this node itself.
+	//   2. nested-descendant (children): matched via a nested custom child/grandchild — a
+	//      pfc_primary's nested custom categories, or a parent custom category's custom
+	//      children (both hops, Issue #1630 Task B2).
+	//   3. tag-only-outside-category (tagOnlyCount/tagOnlyAmount): pulled into the total by
+	//      the tag clause (or/tag_only) but NOT matched by the category clause at all.
+	// tags/matchLogic mirror GetMatchingTransactionStats' own so the same match_logic-
+	// composed predicate is used for both — this is what makes the buckets a partition
+	// instead of an independent, potentially-mismatched query. category_only and and
+	// leave bucket 3 always zero (every included row satisfies the category clause). A
+	// leaf category (pfc_detailed set) or an unsupported kind has no nested-descendant
+	// concept, so every category-clause match lands in bucket 1 and children is always nil.
+	GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (children []domain.CategoryPreviewBreakdownItem, directCount int, directAmount float64, tagOnlyCount int, tagOnlyAmount float64, err error)
+
 	// Issue #499: Transaction-Budget Linking UI
 
 	// GetTransactionsForBudgetCategory returns paginated transactions matching a budget category.
@@ -2160,19 +2178,25 @@ func (r *transactionRepository) GetDistinctPlaidCategories(ctx context.Context, 
 
 // GetIncomeSumByCategory returns the sum of income (inflow/negative amount under PFCv2) transactions
 // matching the given category within the date range, using the effective category.
+// Issue #1630: reuses buildCategoryClause's "pfc" branch so a pfc_primary income source
+// rolls up custom categories nested under it, matching the spend-side roll-up (#1203)
+// rather than forking a second copy of the rule (guarded by df92d470).
 func (r *transactionRepository) GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error) {
-	query := `
+	catClause, catArgs := buildCategoryClause("pfc", &category, nil, nil, 4)
+	query := fmt.Sprintf(`
 		SELECT COALESCE(ABS(SUM(amount)), 0)
 		FROM transactions
 		WHERE user_id = $1
 		  AND deleted_at IS NULL
 		  AND amount < 0
 		  AND date BETWEEN $2 AND $3
-		  AND effective_pfc_primary = $4
-	`
+		  AND (%s)
+	`, catClause)
+
+	args := append([]interface{}{userID, startDate, endDate}, catArgs...)
 
 	var sum float64
-	if err := r.db.QueryRow(ctx, query, userID, startDate, endDate, category).Scan(&sum); err != nil {
+	if err := r.db.QueryRow(ctx, query, args...).Scan(&sum); err != nil {
 		return 0, fmt.Errorf("failed to get income sum by category: %w", err)
 	}
 	return sum, nil
@@ -2201,6 +2225,57 @@ func (r *transactionRepository) GetIncomeSumByTag(ctx context.Context, userID st
 	return sum, nil
 }
 
+// GetIncomeSumForSources returns the DEDUPLICATED sum of income (inflow/negative amount under
+// PFCv2) transactions matching ANY of the given pfc_primary categories or tags, in ONE query
+// (Issue #1630 fixwave 4 — an independent adversarial review found budget_income_service.go's
+// CalculateBudgetIncome summed GetIncomeSumByCategory/GetIncomeSumByTag independently per
+// configured source with no cross-source deduplication, so a single transaction matching two
+// configured sources — e.g. a paycheck deposit both categorized pfc_primary=INCOME and tagged
+// "salary" — was counted twice). Because every source's predicate is OR-ed together inside ONE
+// WHERE clause, a transaction satisfying more than one of them is still just one row in the
+// result set, so SUM(amount) counts it exactly once regardless of how many sources it matches —
+// this is what makes a single combined query the fix, not a smarter way to add per-source sums
+// back together. pfc_primary matching reuses buildCategoryClause's "pfc" branch (as
+// GetIncomeSumByCategory already did) so nested custom categories keep rolling up. Returns 0 with
+// no query when both slices are empty — CalculateBudgetIncome only calls this when at least one
+// non-manual source is configured, but this method itself must not fire an unconditioned "()"
+// clause.
+func (r *transactionRepository) GetIncomeSumForSources(ctx context.Context, userID string, pfcPrimaries, tags []string, startDate, endDate time.Time) (float64, error) {
+	if len(pfcPrimaries) == 0 && len(tags) == 0 {
+		return 0, nil
+	}
+
+	clauses := make([]string, 0, len(pfcPrimaries)+1)
+	args := []interface{}{userID, startDate, endDate}
+	nextArg := 4
+	for i := range pfcPrimaries {
+		catClause, catArgs := buildCategoryClause("pfc", &pfcPrimaries[i], nil, nil, nextArg)
+		clauses = append(clauses, "("+catClause+")")
+		args = append(args, catArgs...)
+		nextArg += len(catArgs)
+	}
+	if len(tags) > 0 {
+		clauses = append(clauses, fmt.Sprintf("tags ?| $%d", nextArg))
+		args = append(args, pq.Array(tags))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT COALESCE(ABS(SUM(amount)), 0)
+		FROM transactions
+		WHERE user_id = $1
+		  AND deleted_at IS NULL
+		  AND amount < 0
+		  AND date BETWEEN $2 AND $3
+		  AND (%s)
+	`, strings.Join(clauses, "\n\t\t  OR "))
+
+	var sum float64
+	if err := r.db.QueryRow(ctx, query, args...).Scan(&sum); err != nil {
+		return 0, fmt.Errorf("failed to get income sum for sources: %w", err)
+	}
+	return sum, nil
+}
+
 // =============================================================================
 // Issue #493: Budget Category Matching Service
 // =============================================================================
@@ -2222,14 +2297,39 @@ func buildCategoryClause(categoryKind string, pfcPrimary *string, pfcDetailed *s
 		if pfcPrimary == nil {
 			return "1=0", nil
 		}
-		if pfcDetailed != nil {
-			// A PFC detailed is a leaf — exact match, never rolls up.
+		if pfcDetailed != nil && *pfcDetailed != "" {
+			// A PFC detailed is a leaf — exact match, never rolls up. '' is treated as
+			// absent/primary-only here too (Issue #1630) — see domain.hasPFCDetailed.
 			return fmt.Sprintf(`(effective_pfc_primary = $%d AND effective_pfc_detailed = $%d)`, argStart, argStart+1),
 				[]interface{}{*pfcPrimary, *pfcDetailed}
 		}
 		// A PFC primary rolls up its detaileds (via effective_pfc_primary) AND any
-		// custom categories the user nested under it (parent_pfc_primary).
-		clause := fmt.Sprintf(`(effective_pfc_primary = $%d OR (category_override_kind = 'custom' AND custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1 AND parent_pfc_primary = $%d))) /* tombstone-exempt(custom_categories): HISTORY FILTER (#1569 Task 9) — a PFC-primary budget rolls up the custom categories nested under it, and the transactions filed under a deleted one are still spend that happened in that primary. Excluding them would silently shrink a closed period's total. */`, argStart, argStart)
+		// custom categories the user nested under it (parent_pfc_primary) — TWO hops:
+		// the direct child C (parent_pfc_primary = X) AND a grandchild G nested under C
+		// via parent_id (Issue #1630). Without the second branch, a three-level chain
+		// (pfc X <- custom C (parent_pfc_primary=X) <- custom G (parent_id=C)) is legal
+		// (custom_category_service.go's validateParent and the DB trigger
+		// enforce_custom_category_two_levels both reject only a parent whose OWN
+		// parent_id is set, never one whose parent_pfc_primary is set) but G's spend
+		// vanished from X's total whenever C was excluded as a sub-allocation of X.
+		// A plain 2-hop UNION, not WITH RECURSIVE: depth is capped at three by that same
+		// trigger, this clause runs per-category on every budget recalculation, and a
+		// recursive CTE buys nothing at a fixed known depth. The grandchild join mirrors
+		// customCategoryPathJoins() (analytics_category_path.go) — the same
+		// g.parent_id = c.id predicate walked the other direction — rather than a third
+		// traversal shape. user_id is scoped on BOTH sides of the join (g.user_id = $1 via
+		// the WHERE, and c.user_id = g.user_id on the join itself) so a same-named or
+		// coincidentally-linked row belonging to another user can never leak into this
+		// total; indexes: idx_custom_categories_parent_id (000079, partial on parent_id)
+		// covers the g.parent_id = c.id join, idx_custom_categories_parent_pfc (000080, on
+		// (user_id, parent_pfc_primary)) covers the c.parent_pfc_primary = X filter.
+		clause := fmt.Sprintf(`(effective_pfc_primary = $%d OR (category_override_kind = 'custom' AND custom_category_override_id IN (
+			SELECT id FROM custom_categories WHERE user_id = $1 AND parent_pfc_primary = $%d
+			UNION
+			SELECT g.id FROM custom_categories g
+			JOIN custom_categories c ON c.id = g.parent_id AND c.user_id = g.user_id
+			WHERE g.user_id = $1 AND c.parent_pfc_primary = $%d
+		))) /* tombstone-exempt(custom_categories, custom_categories g, custom_categories c): HISTORY FILTER (#1569 Task 9) — a PFC-primary budget rolls up the custom categories nested under it (both hops, including the two aliased references the Issue #1630 Task B2 grandchild join adds), and the transactions filed under a deleted one are still spend that happened in that primary. Excluding them would silently shrink a closed period's total. */`, argStart, argStart, argStart)
 		return clause, []interface{}{*pfcPrimary}
 	case "custom":
 		if customCategoryID == nil {
@@ -2405,6 +2505,143 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 		return 0, 0, fmt.Errorf("failed to get matching transaction stats: %w", err)
 	}
 	return count, sum, nil
+}
+
+// GetCategoryMatchBreakdown returns a real partition of the rolled-up total (category-
+// direct + nested-descendant + tag-only-outside-category, see the interface doc comment).
+// Issue #1630 Task B5.
+func (r *transactionRepository) GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) ([]domain.CategoryPreviewBreakdownItem, int, float64, int, float64, error) {
+	if matchLogic == "" {
+		matchLogic = domain.MatchLogicCategoryOnly
+	}
+
+	// A pfc_primary or a parent custom category can roll up nested custom children; a leaf
+	// pfc_detailed category or an unsupported kind cannot, so it never has a
+	// nested-descendant bucket.
+	isRollupEligible := (categoryKind == "pfc" && pfcPrimary != nil && (pfcDetailed == nil || *pfcDetailed == "")) ||
+		(categoryKind == "custom" && customCategoryID != nil)
+
+	// category_only against a non-rollup-eligible target has nothing to disclose: no tag
+	// clause is in play to pull in anything outside the category, and the total already
+	// equals what would be reported as "direct" — this preserves the pre-Task-B5 no-op
+	// contract for that specific combination exactly.
+	if !isRollupEligible && matchLogic == domain.MatchLogicCategoryOnly {
+		return nil, 0, 0, 0, 0, nil
+	}
+
+	catClause, catArgs := buildCategoryClause(categoryKind, pfcPrimary, pfcDetailed, customCategoryID, 4)
+	nextArg := 4 + len(catArgs)
+
+	baseArgs := []interface{}{userID, startDate, endDate}
+	var predicate string
+	var args []interface{}
+
+	// The predicate mirrors GetMatchingTransactionStats' own per-match_logic composition
+	// exactly, so this query's row set is the SAME set the total was computed over —
+	// the property that makes category-direct + nested-descendant + tag-only-outside a
+	// real partition of total_amount rather than an independently-computed number that
+	// happens to usually agree.
+	switch matchLogic {
+	case domain.MatchLogicCategoryOnly:
+		predicate = catClause
+		args = append(baseArgs, catArgs...)
+	case domain.MatchLogicTagOnly:
+		predicate = fmt.Sprintf("tags ?| $%d", nextArg)
+		args = append(baseArgs, catArgs...)
+		args = append(args, pq.Array(tags))
+	case domain.MatchLogicAnd:
+		predicate = fmt.Sprintf("(%s) AND tags ?| $%d", catClause, nextArg)
+		args = append(baseArgs, catArgs...)
+		args = append(args, pq.Array(tags))
+	case domain.MatchLogicOr:
+		predicate = fmt.Sprintf("((%s) OR tags ?| $%d)", catClause, nextArg)
+		args = append(baseArgs, catArgs...)
+		args = append(args, pq.Array(tags))
+	default:
+		return nil, 0, 0, 0, 0, fmt.Errorf("unsupported match logic: %s", matchLogic)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			CASE WHEN t.category_override_kind = 'custom' THEN t.custom_category_override_id::text ELSE NULL END AS child_id,
+			cc.name AS child_name,
+			COUNT(*) AS cnt,
+			COALESCE(ABS(SUM(t.amount)), 0) AS total,
+			COALESCE((%s), false) AS in_category
+		FROM transactions t
+		LEFT JOIN custom_categories cc ON cc.id = t.custom_category_override_id /* tombstone-exempt(custom_categories cc): HISTORY FILTER (#1569 Task 9) — this join only resolves a display NAME for a transaction that already matched via buildCategoryClause's own exempted custom-category subquery; a since-deleted child category's own transactions must keep a legible label in the breakdown, the same reason that subquery admits them into the total in the first place. */
+		WHERE t.user_id = $1 AND t.amount > 0
+		  AND t.deleted_at IS NULL
+		  AND t.date BETWEEN $2 AND $3
+		  AND (%s)
+		GROUP BY child_id, child_name, in_category
+	`, catClause, predicate)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, 0, 0, 0, fmt.Errorf("failed to get category match breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	var directCount, tagOnlyCount int
+	var directAmount, tagOnlyAmount float64
+	var children []domain.CategoryPreviewBreakdownItem
+
+	for rows.Next() {
+		var childID, childName *string
+		var cnt int
+		var total float64
+		var inCategory bool
+		if err := rows.Scan(&childID, &childName, &cnt, &total, &inCategory); err != nil {
+			return nil, 0, 0, 0, 0, fmt.Errorf("failed to scan category match breakdown row: %w", err)
+		}
+
+		// Bucket 3: the tag clause pulled this row in, but the category clause never
+		// matched it at all — not the target itself, not any nested descendant.
+		if !inCategory {
+			tagOnlyCount += cnt
+			tagOnlyAmount += total
+			continue
+		}
+
+		// No rollup concept for a leaf/unsupported target: every category-clause match is
+		// "direct" and there is never a nested-descendant bucket.
+		if !isRollupEligible {
+			directCount += cnt
+			directAmount += total
+			continue
+		}
+
+		if childID == nil {
+			directCount += cnt
+			directAmount += total
+			continue
+		}
+		// For the "custom" kind, a matched row can be the targeted parent category
+		// itself (custom_category_override_id == customCategoryID) — that is still
+		// "direct", not a nested child. The "pfc" kind never hits this: a custom
+		// category can never equal a pfc_primary value.
+		if categoryKind == "custom" && customCategoryID != nil && *childID == *customCategoryID {
+			directCount += cnt
+			directAmount += total
+			continue
+		}
+		name := ""
+		if childName != nil {
+			name = *childName
+		}
+		children = append(children, domain.CategoryPreviewBreakdownItem{
+			CategoryID:       *childID,
+			CategoryName:     name,
+			TransactionCount: cnt,
+			TotalAmount:      total,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, 0, 0, 0, fmt.Errorf("failed to iterate category match breakdown rows: %w", err)
+	}
+
+	return children, directCount, directAmount, tagOnlyCount, tagOnlyAmount, nil
 }
 
 // =============================================================================

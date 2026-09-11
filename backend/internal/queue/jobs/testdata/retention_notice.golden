@@ -29,7 +29,7 @@ tables: credit_liabilities, credit_liability_aprs, liability_statements, mortgag
 phrase: your credit card, mortgage and student loan records, including their statements and APR schedules
 
 ### item 06
-tables: budgets, budget_categories, budget_period_events, rollover_history
+tables: budgets, budget_categories, budget_period_events, rollover_history, budget_hierarchy_audits
 phrase: your budgets, their categories, their period history and every rollover
 
 ### item 07

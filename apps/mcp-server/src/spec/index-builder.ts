@@ -46,6 +46,15 @@ interface OpenAPIParameter {
 interface OpenAPISchema {
   $ref?: string
   type?: string | string[]
+  /** OpenAPI `format` keyword (e.g. `date`, `date-time`, `uuid`, `double`). */
+  format?: string
+  /**
+   * A field validated by a union of alternative schemas instead of a single `type` — Huma emits
+   * this for `domain.FlexibleDate` (issue #1630 Task 9): `anyOf: [{type: string, format: date},
+   * {type: string, format: date-time}]`. Each branch is itself an OpenAPISchema (inline here in
+   * practice, never a bare `$ref` string, but resolveSchema is applied defensively anyway).
+   */
+  anyOf?: OpenAPISchema[]
   properties?: Record<string, OpenAPISchema>
   items?: OpenAPISchema
   required?: string[]
@@ -124,6 +133,40 @@ function primaryType(type: string | string[] | undefined): string | undefined {
   return Array.isArray(type) ? type.find((t) => t !== 'null') : type
 }
 
+/**
+ * Resolve a property's effective `type`/`format`, understanding `anyOf` (issue #1630 Task 12a).
+ *
+ * A plain schema reads `type`/`format` directly. An `anyOf` schema (Huma's
+ * `domain.FlexibleDate`: `anyOf: [{type: string, format: date}, {type: string, format:
+ * date-time}]`) has NEITHER at the top level — reading only `prop.type`/`prop.format` (the old
+ * behavior) silently drops both, rendering the field with no type at all. Instead, resolve each
+ * branch and merge: every distinct type found across branches, and every distinct format,
+ * joined `|` so a client sees `type: "string"`, `format: "date|date-time"` rather than nothing.
+ */
+function resolveTypeAndFormat(
+  prop: OpenAPISchema,
+  spec: OpenAPISpec,
+): { type?: string; format?: string } {
+  if (!prop.anyOf) {
+    return { type: primaryType(prop.type), format: prop.format }
+  }
+
+  const types = new Set<string>()
+  const formats = new Set<string>()
+  for (const branch of prop.anyOf) {
+    const resolved = resolveSchema(branch, spec)
+    if (!resolved) continue
+    const t = primaryType(resolved.type)
+    if (t) types.add(t)
+    if (resolved.format) formats.add(resolved.format)
+  }
+
+  return {
+    type: types.size ? [...types].join('|') : undefined,
+    format: formats.size ? [...formats].join('|') : undefined,
+  }
+}
+
 // Nested objects / array-of-object items flatten to this many levels deep (dotted names).
 // Depth 1 = the request body's own top-level fields; depth 2 = one level of nesting
 // (`action.custom_category_id`, `conditions[].field`). Beyond that we mark the field as
@@ -197,7 +240,7 @@ function flattenBodySchema(
 
     const fieldName = prefix ? `${prefix}.${key}` : key
     const isRequired = required.includes(key)
-    const schemaType = primaryType(prop.type)
+    const { type: schemaType, format: schemaFormat } = resolveTypeAndFormat(prop, spec)
 
     if (schemaType === 'array') {
       const itemSchema = resolveSchema(prop.items, spec)
@@ -235,6 +278,7 @@ function flattenBodySchema(
     out.push({
       name: fieldName,
       ...(schemaType && { type: schemaType }),
+      ...(schemaFormat && { format: schemaFormat }),
       ...(isRequired && { required: true }),
       ...(prop.enum && { enum: prop.enum.map(String) }),
       ...(prop.description && { description: prop.description }),

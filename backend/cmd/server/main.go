@@ -568,6 +568,13 @@ func main() {
 	// Issue #1123: Declare effective category refresh worker
 	var effectiveCategoryRefreshWorker *jobs.EffectiveCategoryRefreshWorker
 
+	// Issue #1630 Task B1: Declare budget hierarchy resync worker (custom-category reparent).
+	var budgetHierarchyResyncWorker *jobs.BudgetHierarchyResyncWorker
+
+	// Issue #1630 Task B7: Declare budget hierarchy audit worker (periodic sweep over
+	// pre-existing budgets the write-time guards would refuse). No Plaid dependency.
+	var budgetHierarchyAuditWorker *jobs.BudgetHierarchyAuditWorker
+
 	// Issue #138: Declare investment read services at outer scope (initialized inside Plaid block;
 	// nil-checked in route registration since repos are available regardless of Plaid config).
 	var investmentService services.InvestmentService
@@ -798,6 +805,10 @@ func main() {
 		// Issue #1569 Task 9: the category delete is a tombstone now, and writes a
 		// custom_category.deleted audit entry inside its own transaction.
 		customCategoryService.SetAuditLogRepository(repository.NewAuditLogRepository(db))
+		// Issue #1630 Task B1: budgetRepo satisfies services.BudgetCategoryRepository
+		// structurally (GetActiveByUserID + GetCategoriesByBudgetID). Required, not optional —
+		// UpdateCategory refuses a reparent rather than proceeding unchecked when this is unset.
+		customCategoryService.SetBudgetCategoryRepository(budgetRepo)
 		// Issue #346: Categorization rules services
 		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo, customCategoryRepo)
 		// #1625: backs POST /auto-categorization/preview. Setter injection so every other
@@ -888,7 +899,13 @@ func main() {
 
 		// Issue #494: Budget Sync Service for Envelope Budgeting
 		// Recalculates budget income and category spent amounts after transaction sync
-		budgetIncomeService := services.NewBudgetIncomeService(transactionRepo, budgetLogger)
+		// #1630 fixwave 4: IncomeTransactionGetter added GetIncomeSumForSources, which is not part
+		// of the broader repository.TransactionRepository interface transactionRepo is typed as
+		// (that interface is implemented by many mocks across the codebase; widening it would
+		// force every one of them to grow the method too). The concrete *transactionRepository
+		// this variable holds already implements GetIncomeSumForSources, so this assertion always
+		// succeeds — it exists purely to narrow the static interface type at this one call site.
+		budgetIncomeService := services.NewBudgetIncomeService(transactionRepo.(services.IncomeTransactionGetter), budgetLogger)
 		budgetCategoryMatchingService := services.NewBudgetCategoryMatchingService(transactionRepo)
 		budgetSyncService := services.NewBudgetSyncService(
 			budgetRepo,
@@ -912,6 +929,10 @@ func main() {
 		boostExecutionRepo := repository.NewBoostExecutionRepository(db)
 		boostExecutionService := services.NewBoostExecutionService(boostExecutionRepo, transferSuggestionRepo, boostRepo, nil)
 		boostExecutionService.SetAnalytics(phClient)
+		// Issue #1630 review round 2: without this, a category_rollover boost's sub-allocation
+		// check has no live budget-category data to verify against and fails CLOSED (skips)
+		// every execution rather than trusting a possibly-stale triggerData snapshot.
+		boostExecutionService.SetBudgetCategoryRepo(budgetRepo)
 		appLogger.Info("Boost execution service initialized")
 
 		// Issue #972: Wire budget sync → rule engine so budget_updated events are not silently dropped.
@@ -1369,6 +1390,36 @@ func main() {
 		effectiveCategoryRefreshWorker.SetCacheInvalidation(cacheInstance.Generations(), householdRepo)
 		appLogger.Info("Effective category refresh worker created (River)")
 
+		// Issue #1630 Task B1: Create budget hierarchy resync worker — recomputes spent_amount
+		// for every active budget a custom-category reparent affects. customCategoryRepo,
+		// budgetRepo and budgetCategoryMatchingService are all constructed above this point.
+		budgetHierarchyResyncWorker = jobs.NewBudgetHierarchyResyncWorker(jobs.BudgetHierarchyResyncWorkerDeps{
+			CustomCategoryRepo: customCategoryRepo,
+			BudgetRepo:         budgetRepo,
+			SpentCalc:          budgetCategoryMatchingService,
+			Logger:             appLogger,
+		})
+		// spent_amount is summed by the cached GetBudgetVsActual analytics query (ScopeUser) —
+		// see repository/cache_completeness_repo_test.go's
+		// "BudgetRepository.UpdateCategorySpentAmount" entry. cacheInstance is never nil (see
+		// cachePurgeRetryWorker below); Generations() is nil-safe when the cache is disabled.
+		budgetHierarchyResyncWorker.SetCacheInvalidation(cacheInstance.Generations())
+		appLogger.Info("Budget hierarchy resync worker created (River)")
+
+		// Issue #1630 Task B7: Create budget hierarchy audit worker — periodic sweep over budgets
+		// domain.DuplicateParentIdentity/domain.EscapedNestedChild would refuse if created today,
+		// but which predate those write-time guards. budgetRepo and budgetCategoryMatchingService
+		// are the same dependencies Task B1's resync worker uses, constructed above this point.
+		budgetHierarchyAuditWorker = jobs.NewBudgetHierarchyAuditWorker(jobs.BudgetHierarchyAuditWorkerDeps{
+			BudgetRepo: budgetRepo,
+			SpentCalc:  budgetCategoryMatchingService,
+			Logger:     appLogger,
+		})
+		// Same reasoning as budgetHierarchyResyncWorker directly above: spent_amount corrections
+		// this audit makes are summed by the cached GetBudgetVsActual analytics query (ScopeUser).
+		budgetHierarchyAuditWorker.SetCacheInvalidation(cacheInstance.Generations())
+		appLogger.Info("Budget hierarchy audit worker created (River)")
+
 		// Create Plaid service and account linking (if configured)
 		// plaidHandler migrated to Huma (see humaPlaidHandler) - Issue #559
 		// var plaidHandler *handlers.PlaidHandler
@@ -1803,6 +1854,7 @@ func main() {
 				balanceSnapshotDispatchWorker:       balanceSnapshotDispatchWorker,
 				ruleQuarantineCensusWorker:          ruleQuarantineCensusWorker,
 				plaidOrphanRetryWorker:              plaidOrphanRetryWorker,
+				budgetHierarchyAuditWorker:          budgetHierarchyAuditWorker,
 			}, appLogger)
 
 			if len(periodicJobs) > 0 {
@@ -1933,6 +1985,14 @@ func main() {
 			if effectiveCategoryRefreshWorker != nil {
 				river.AddWorker(riverWorkers, effectiveCategoryRefreshWorker)
 				appLogger.Info("Effective category refresh worker registered with River")
+			}
+			if budgetHierarchyResyncWorker != nil {
+				river.AddWorker(riverWorkers, budgetHierarchyResyncWorker)
+				appLogger.Info("Budget hierarchy resync worker registered with River")
+			}
+			if budgetHierarchyAuditWorker != nil {
+				river.AddWorker(riverWorkers, budgetHierarchyAuditWorker)
+				appLogger.Info("Budget hierarchy audit worker registered with River")
 			}
 
 			// Plaid-specific workers (nil when Plaid not configured)
@@ -2549,7 +2609,11 @@ func main() {
 			// Issue #1584: the enumerating read over accounts the #1569 T1 pre-deletion-notice gate
 			// is holding indefinitely. Without this the endpoint registers and answers 503 — the
 			// same shape the other optional admin dependencies use.
-			WithRetentionWithheldReader(profileRepo)
+			WithRetentionWithheldReader(profileRepo).
+			// Issue #1630 Task B7: the enumerating read over budgets the hierarchy audit has
+			// flagged for a human. budgetRepo already implements
+			// operations.BudgetHierarchyAuditReader via ListBudgetHierarchyAuditFindings.
+			WithBudgetHierarchyAuditReader(budgetRepo)
 		operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
 		appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)", "plaid_configured", plaidService != nil)
 

@@ -57,10 +57,23 @@ export interface SankeyNode {
   /**
    * The node's REAL depth in the category hierarchy, 1-based. Carried explicitly because the
    * income fan is flattened — every income node's id is `in:l1:*` whatever its true depth — so
-   * deriving depth from the id would report every income navigation as level 1. Used only by the
-   * navigation analytics event, which must carry structure and never a category name or id.
+   * deriving depth from the id would report every income navigation as level 1. Consumed by the
+   * navigation analytics events (`CashFlowSankeyChart.tsx`), which must carry structure and never a
+   * category name or id.
+   *
+   * ⚠ MUST NEVER BE NAMED `depth`. ECharts' sankey series reads a node-data field literally named
+   * `depth` as the LAYOUT LAYER — "the layer of the current node… starting from 0" per its own
+   * docs — not as arbitrary payload. This app once shipped a field named `depth` here that existed
+   * purely for analytics, and because `CashFlowSankeyChart.tsx` passed the internal node objects
+   * straight through to ECharts (`data: sankeyData.nodes as any`), ECharts silently adopted it as
+   * the render layer: synthetic nodes (depth 0) pinned to the far left, income leaves (their real
+   * category depth, ≥1) scattered among the expense layers on the right. The links were always
+   * correct; only this name collision inverted the visual layout. See
+   * `.superpowers/sdd/brainstorming-writing-plans-using-super-fancy-melody/sankey-root-cause.md`.
+   * The chart component must also project this object down to `id`/`name`/`itemStyle` before
+   * handing it to ECharts, so no internal field — this one included — can leak into chart config.
    */
-  depth: number
+  categoryDepth: number
 }
 
 export interface SankeyLink {
@@ -99,7 +112,7 @@ export interface SankeyData {
  * (`action: { kind: 'none' }`) and depth 0, since it names no category.
  */
 function syntheticNode(id: string, name: string, color: string, nodeKind: SankeyNodeKind): SankeyNode {
-  return { id, name, itemStyle: { color }, nodeKind, action: { kind: 'none' }, depth: 0 }
+  return { id, name, itemStyle: { color }, nodeKind, action: { kind: 'none' }, categoryDepth: 0 }
 }
 
 const isCustom = (key: string) => key.startsWith(CUSTOM_TOKEN)
@@ -253,7 +266,7 @@ function emitExpenses(forest: Rendered[]): { nodes: SankeyNode[]; links: SankeyL
       itemStyle: { color: CATEGORY_COLORS[colorIdx++ % CATEGORY_COLORS.length] },
       nodeKind: isOverflow ? 'other' : 'expense',
       action,
-      depth: ancestry.length + 1,
+      categoryDepth: ancestry.length + 1,
     })
     links.push({ source: parentId, target: id, value: n.total })
 
@@ -273,7 +286,7 @@ function emitExpenses(forest: Rendered[]): { nodes: SankeyNode[]; links: SankeyL
         nodeKind: 'direct',
         action: { kind: 'none' },
         // A direct bucket sits alongside its parent's children, so it is one level deeper.
-        depth: nextAncestry.length + 1,
+        categoryDepth: nextAncestry.length + 1,
       })
       links.push({ source: id, target: directId, value: n.direct })
     }
@@ -455,7 +468,7 @@ function renderIncomeFan(sources: CategoryHierarchyNode[]) {
       itemStyle: { color: CASH_FLOW_COLORS.income },
       nodeKind: 'income',
       action: s.directOnly ? { kind: 'none' } : navigateAction(s.key, s.parentKey),
-      depth: s.depth,
+      categoryDepth: s.depth,
     })
     links.push({ source: id, target: 'hub', value: s.total })
   })
@@ -468,7 +481,7 @@ function renderIncomeFan(sources: CategoryHierarchyNode[]) {
       itemStyle: { color: CASH_FLOW_COLORS.income },
       nodeKind: 'other',
       action: { kind: 'none' },
-      depth: 1,
+      categoryDepth: 1,
     })
     links.push({ source: 'in:other', target: 'hub', value: overflow })
   }
@@ -501,7 +514,10 @@ export function buildSankeyData(
   links.push(...inFan.links)
 
   if (surplus < 0) {
-    nodes.push(syntheticNode('deficit', 'Drawn from Savings / Credit', CASH_FLOW_COLORS.netNegative, 'deficit'))
+    // The app has no way to know whether a shortfall was funded from savings, credit, or an
+    // overdraft — "Drawn from Savings / Credit" asserted a source we cannot observe. "Shortfall"
+    // states only what we actually know: expenses exceeded income for the period.
+    nodes.push(syntheticNode('deficit', 'Shortfall', CASH_FLOW_COLORS.netNegative, 'deficit'))
     links.push({ source: 'deficit', target: 'hub', value: -surplus })
   }
 

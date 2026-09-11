@@ -48,8 +48,13 @@ type AdminHandler struct {
 	// deliberately: what to do about a stuck account is an open product decision, so there is no
 	// write beside this read — see ListAdminRetentionWithheld.
 	retentionWithheldReader RetentionWithheldReader
-	jobQueue                queue.JobQueue
-	config                  *config.Config
+	// budgetHierarchyAuditReader backs the budget-hierarchy-audit admin listing (Issue #1630 Task
+	// B7). Read-only: match_logic on an escaping pair and identity fields on a duplicate-parent
+	// pair are never auto-repaired (see domain/budget.go's ErrEscapedNestedChild doc comment), so
+	// there is no write action for this surface to expose — only visibility.
+	budgetHierarchyAuditReader BudgetHierarchyAuditReader
+	jobQueue                   queue.JobQueue
+	config                     *config.Config
 }
 
 // NewAdminHandler creates a new AdminHandler with required dependencies.
@@ -104,6 +109,13 @@ func (h *AdminHandler) WithDeadLetterService(svc services.DeadLetterService) *Ad
 // Issue #1497.
 func (h *AdminHandler) WithPlaidOrphanedItemRepo(repo repository.PlaidOrphanedItemRepository) *AdminHandler {
 	h.plaidOrphanedItemRepo = repo
+	return h
+}
+
+// WithBudgetHierarchyAuditReader sets the budget-hierarchy-audit reader on the handler (builder
+// pattern). Issue #1630 Task B7.
+func (h *AdminHandler) WithBudgetHierarchyAuditReader(r BudgetHierarchyAuditReader) *AdminHandler {
+	h.budgetHierarchyAuditReader = r
 	return h
 }
 
@@ -607,4 +619,7 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 
 	// Issue #1584: the enumerating read over accounts the #1569 T1 notice gate is holding.
 	RegisterAdminRetentionWithheldOperations(api, handler)
+
+	// Issue #1630 Task B7: the enumerating read over budgets the hierarchy audit has flagged.
+	RegisterAdminBudgetHierarchyAuditOperations(api, handler)
 }

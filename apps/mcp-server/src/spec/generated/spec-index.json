@@ -53,6 +53,7 @@
         {
           "name": "total_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ]
@@ -82,6 +83,7 @@
         {
           "name": "account_orders[].display_order",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ],
@@ -132,6 +134,7 @@
         {
           "name": "display_order",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -249,6 +252,32 @@
       ]
     },
     {
+      "operationId": "listAdminBudgetHierarchyAudits",
+      "method": "GET",
+      "path": "/api/v1/admin/budget-hierarchy-audits",
+      "summary": "List budget-hierarchy audit findings (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Returns budgets the Issue #1630 Task B7 audit has examined. domain.DuplicateParentIdentity and domain.EscapedNestedChild are write-time guards that refuse a new budget category colliding on parent identity or escaping a nested parent's containment envelope; neither is ever run against a row that predates it. The periodic BudgetHierarchyAuditWorker examines every budget once, corrects any stale spent_amount (safe: a derived cache), and NEVER rewrites match_logic or identity fields for a flagged pair — there is no correct automatic answer for either, and guessing would silently change what the user's budget matches while destroying the evidence needed to ask them. Omitting outcome defaults to the two reported_* (actionable) outcomes; pass outcome=all for every verdict including repaired/verified. This is a read-only view: it repairs nothing and does not resolve the identity/match_logic ambiguity a reported_* row names — that requires asking the user what they meant. Requires admin role.",
+      "parameters": [
+        {
+          "name": "outcome",
+          "in": "query",
+          "description": "Filter to one outcome (repaired, verified, reported_duplicate_identity, reported_escaping_pair), or 'all' for every outcome. Omitted defaults to the two reported_* (actionable) outcomes.",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Number of findings to return",
+          "type": "integer"
+        }
+      ]
+    },
+    {
       "operationId": "checkRole",
       "method": "GET",
       "path": "/api/v1/admin/check-role",
@@ -338,11 +367,13 @@
         {
           "name": "end_date",
           "type": "string",
+          "format": "date",
           "description": "Inclusive upper bound on failed_at (YYYY-MM-DD)"
         },
         {
           "name": "expected_count",
           "type": "integer",
+          "format": "int64",
           "description": "Exact number of rows the caller expects to delete; required when the match exceeds the unconfirmed ceiling"
         },
         {
@@ -356,6 +387,7 @@
         {
           "name": "start_date",
           "type": "string",
+          "format": "date",
           "description": "Inclusive lower bound on failed_at (YYYY-MM-DD)"
         },
         {
@@ -727,6 +759,7 @@
         {
           "name": "limit_value",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "The new limit value (-1 for unlimited)"
         },
@@ -771,6 +804,7 @@
         {
           "name": "expires_at",
           "type": "string",
+          "format": "date-time",
           "required": true,
           "description": "Optional expiration date for the manual override"
         },
@@ -971,6 +1005,7 @@
         {
           "name": "average_monthly_spend",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -981,6 +1016,7 @@
         {
           "name": "month_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -991,6 +1027,7 @@
         {
           "name": "total_spend",
           "type": "number",
+          "format": "double",
           "required": true
         }
       ]
@@ -1029,16 +1066,19 @@
         {
           "name": "total_allocated",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "total_remaining",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "total_spent",
           "type": "number",
+          "format": "double",
           "required": true
         }
       ]
@@ -1102,6 +1142,7 @@
         {
           "name": "end_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -1117,11 +1158,13 @@
         {
           "name": "requested_end_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "start_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         }
       ]
@@ -1179,31 +1222,37 @@
         {
           "name": "end_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "expense_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "expenses",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "income",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "income_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "net_cash_flow",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -1213,6 +1262,7 @@
         {
           "name": "start_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         }
       ]
@@ -1312,6 +1362,7 @@
         {
           "name": "total",
           "type": "number",
+          "format": "double",
           "required": true
         }
       ]
@@ -1374,11 +1425,13 @@
         {
           "name": "total",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "transaction_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ]
@@ -1532,6 +1585,7 @@
         {
           "name": "total_income",
           "type": "number",
+          "format": "double",
           "required": true
         }
       ]
@@ -1600,6 +1654,7 @@
         {
           "name": "limit",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -1684,6 +1739,7 @@
         {
           "name": "total_spend",
           "type": "number",
+          "format": "double",
           "required": true
         }
       ]
@@ -1739,6 +1795,7 @@
         {
           "name": "month_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ]
@@ -1855,21 +1912,25 @@
         {
           "name": "expenses",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "income",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "net_savings",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "savings_rate",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -1965,6 +2026,7 @@
         {
           "name": "total_spent",
           "type": "number",
+          "format": "double",
           "required": true
         }
       ]
@@ -2043,6 +2105,7 @@
         {
           "name": "top_n",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ]
@@ -2160,6 +2223,7 @@
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -2240,6 +2304,7 @@
         {
           "name": "sigma_threshold",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -2274,6 +2339,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -2292,11 +2358,13 @@
         },
         {
           "name": "last_matched_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "match_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -2307,11 +2375,13 @@
         {
           "name": "override_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "priority",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -2369,6 +2439,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -2379,6 +2450,7 @@
         {
           "name": "version",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
         }
@@ -2484,7 +2556,8 @@
         },
         {
           "name": "priority",
-          "type": "integer"
+          "type": "integer",
+          "format": "int64"
         },
         {
           "name": "tag_behavior",
@@ -2525,6 +2598,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -2543,11 +2617,13 @@
         },
         {
           "name": "last_matched_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "match_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -2558,11 +2634,13 @@
         {
           "name": "override_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "priority",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -2620,6 +2698,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -2630,6 +2709,7 @@
         {
           "name": "version",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
         }
@@ -2749,7 +2829,8 @@
         },
         {
           "name": "limit",
-          "type": "integer"
+          "type": "integer",
+          "format": "int64"
         },
         {
           "name": "name",
@@ -2758,7 +2839,8 @@
         },
         {
           "name": "priority",
-          "type": "integer"
+          "type": "integer",
+          "format": "int64"
         },
         {
           "name": "tag_behavior",
@@ -2789,6 +2871,7 @@
         {
           "name": "match_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -2799,6 +2882,7 @@
         {
           "name": "scanned_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ]
@@ -2837,6 +2921,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -2855,11 +2940,13 @@
         },
         {
           "name": "last_matched_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "match_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -2870,11 +2957,13 @@
         {
           "name": "override_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "priority",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -2932,6 +3021,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -2942,6 +3032,7 @@
         {
           "name": "version",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
         }
@@ -3058,7 +3149,8 @@
         },
         {
           "name": "priority",
-          "type": "integer"
+          "type": "integer",
+          "format": "int64"
         },
         {
           "name": "tag_behavior",
@@ -3099,6 +3191,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -3117,11 +3210,13 @@
         },
         {
           "name": "last_matched_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "match_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -3132,11 +3227,13 @@
         {
           "name": "override_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "priority",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -3194,6 +3291,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -3204,6 +3302,7 @@
         {
           "name": "version",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
         }
@@ -3271,6 +3370,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -3289,11 +3389,13 @@
         },
         {
           "name": "last_matched_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "match_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -3304,11 +3406,13 @@
         {
           "name": "override_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "priority",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -3366,6 +3470,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -3376,6 +3481,7 @@
         {
           "name": "version",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "Optimistic-concurrency token. Incremented by user-facing updates only; background bookkeeping such as the match counter deliberately does not move it, so an ordinary sync cannot make your save look like a conflict."
         }
@@ -3421,16 +3527,19 @@
         {
           "name": "limit",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "offset",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "total",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ]
@@ -3477,6 +3586,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -3491,6 +3601,7 @@
         {
           "name": "execution_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -3500,11 +3611,13 @@
         },
         {
           "name": "last_executed_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "last_successful_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "name",
@@ -3514,6 +3627,7 @@
         {
           "name": "priority",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -3524,6 +3638,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -3595,7 +3710,8 @@
         },
         {
           "name": "priority",
-          "type": "integer"
+          "type": "integer",
+          "format": "int64"
         },
         {
           "name": "trigger_config",
@@ -3668,6 +3784,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -3682,6 +3799,7 @@
         {
           "name": "execution_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -3691,11 +3809,13 @@
         },
         {
           "name": "last_executed_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "last_successful_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "name",
@@ -3705,6 +3825,7 @@
         {
           "name": "priority",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -3715,6 +3836,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -3792,7 +3914,8 @@
         },
         {
           "name": "priority",
-          "type": "integer"
+          "type": "integer",
+          "format": "int64"
         },
         {
           "name": "trigger_config",
@@ -3931,16 +4054,19 @@
         {
           "name": "limit",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "offset",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "total",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ]
@@ -4045,6 +4171,7 @@
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4054,6 +4181,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -4067,11 +4195,13 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "expected_income",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4082,6 +4212,7 @@
         {
           "name": "income_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4112,11 +4243,13 @@
         {
           "name": "start_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -4141,7 +4274,9 @@
         {
           "name": "amount",
           "type": "number",
-          "required": true
+          "format": "double",
+          "required": true,
+          "description": "Budget amount. If expected_income is also set and > 0, expected_income wins and this field is overwritten to mirror it — set expected_income instead if you want it to be authoritative."
         },
         {
           "name": "categories",
@@ -4150,6 +4285,7 @@
         {
           "name": "categories[].allocated_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4163,7 +4299,14 @@
         },
         {
           "name": "categories[].match_logic",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "category_only",
+            "tag_only",
+            "and",
+            "or"
+          ],
+          "description": "How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400)."
         },
         {
           "name": "categories[].pfc_detailed",
@@ -4171,7 +4314,8 @@
         },
         {
           "name": "categories[].pfc_primary",
-          "type": "string"
+          "type": "string",
+          "description": "PFC primary category. When set with pfc_detailed omitted, this row is a pfc_primary category whose own spend total rolls up transactions filed under any custom category nested under it, in addition to its own direct matches."
         },
         {
           "name": "categories[].savings_goal_id",
@@ -4191,11 +4335,15 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "format": "date|date-time",
+          "description": "Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error. Accepts YYYY-MM-DD or a full RFC3339 timestamp."
         },
         {
           "name": "expected_income",
-          "type": "number"
+          "type": "number",
+          "format": "double",
+          "description": "Planned income for the period. When set and > 0, this wins over amount — amount is overwritten to mirror this value. Leave unset to have amount remain authoritative."
         },
         {
           "name": "from_budget_id",
@@ -4203,7 +4351,8 @@
         },
         {
           "name": "income_amount",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "income_sources",
@@ -4216,7 +4365,13 @@
         {
           "name": "income_sources[].type",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc_primary",
+            "tag",
+            "manual"
+          ],
+          "description": "How this income source is matched. pfc_primary matches transactions by their PFCv2 primary category (e.g. INCOME); tag matches by transaction tag; manual is a fixed, user-entered amount with no automatic matching."
         },
         {
           "name": "income_sources[].value",
@@ -4240,13 +4395,16 @@
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "format": "date|date-time",
+          "required": true,
+          "description": "Budget start date. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp."
         }
       ],
       "responseBody": [
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4256,6 +4414,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -4269,11 +4428,13 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "expected_income",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4284,6 +4445,7 @@
         {
           "name": "income_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4314,11 +4476,13 @@
         {
           "name": "start_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -4350,7 +4514,7 @@
       ],
       "manifestClass": "read",
       "excluded": false,
-      "description": "Returns the count and total amount of transactions matching the given category configuration within the date range.",
+      "description": "Returns the count and total amount of transactions matching the given category configuration within the date range. When the targeted category is a pfc_primary (a pfc category with pfc_primary set and pfc_detailed omitted) or a parent custom category, transaction_count/total_amount INCLUDE transactions filed under custom categories nested under it — direct_transaction_count/direct_amount report only what was filed directly under the targeted category itself, and children breaks the rolled-up total down by each nested custom category.",
       "requestBody": [
         {
           "name": "category_kind",
@@ -4364,12 +4528,21 @@
         {
           "name": "end_date",
           "type": "string",
-          "required": true
+          "format": "date|date-time",
+          "required": true,
+          "description": "End of the date range to preview (inclusive; the service extends it to end-of-day). Must not be before start_date. Accepts YYYY-MM-DD or a full RFC3339 timestamp."
         },
         {
           "name": "match_logic",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "category_only",
+            "tag_only",
+            "and",
+            "or"
+          ],
+          "description": "How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array."
         },
         {
           "name": "pfc_detailed",
@@ -4382,7 +4555,9 @@
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "format": "date|date-time",
+          "required": true,
+          "description": "Start of the date range to preview. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp."
         },
         {
           "name": "tags",
@@ -4391,14 +4566,47 @@
       ],
       "responseBody": [
         {
+          "name": "children",
+          "type": "array of object",
+          "description": "Breaks the rolled-up transaction_count/total_amount down by each nested custom category that actually matched. Empty/nil when the targeted category cannot roll up (a leaf category), or no nested child matched anything."
+        },
+        {
+          "name": "direct_amount",
+          "type": "number",
+          "format": "double",
+          "description": "Amount of matching transactions filed directly under the targeted category itself, excluding any nested custom category and excluding tag-only-outside-category matches. Zero-valued when there is nothing to disclose."
+        },
+        {
+          "name": "direct_transaction_count",
+          "type": "integer",
+          "format": "int64",
+          "description": "Count of matching transactions filed directly under the targeted category itself, excluding any nested custom category and excluding tag-only-outside-category matches. Zero-valued when there is nothing to disclose."
+        },
+        {
+          "name": "tag_only_amount",
+          "type": "number",
+          "format": "double",
+          "description": "Amount of matching transactions pulled into the total by the tag clause (match_logic or/tag_only) that the category clause did not match at all — not the targeted category itself, and not any nested custom category. Always zero for match_logic category_only or and, since every included row there is required to satisfy the category clause."
+        },
+        {
+          "name": "tag_only_transaction_count",
+          "type": "integer",
+          "format": "int64",
+          "description": "Count of matching transactions pulled into the total by the tag clause (match_logic or/tag_only) that the category clause did not match at all — not the targeted category itself, and not any nested custom category. Always zero for match_logic category_only or and, since every included row there is required to satisfy the category clause."
+        },
+        {
           "name": "total_amount",
           "type": "number",
-          "required": true
+          "format": "double",
+          "required": true,
+          "description": "Total matching transaction amount. direct_amount + every children[].total_amount + tag_only_amount always sum to exactly this value when any of them is populated — see those fields to break the total down."
         },
         {
           "name": "transaction_count",
           "type": "integer",
-          "required": true
+          "format": "int64",
+          "required": true,
+          "description": "Total matching transaction count. When the targeted category is a pfc_primary or parent custom category, this INCLUDES transactions filed under its nested custom categories — see direct_transaction_count, children, and tag_only_transaction_count to break the total down."
         }
       ]
     },
@@ -4417,6 +4625,7 @@
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4426,6 +4635,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -4439,11 +4649,13 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "expected_income",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4454,6 +4666,7 @@
         {
           "name": "income_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4484,11 +4697,13 @@
         {
           "name": "start_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -4522,6 +4737,7 @@
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4531,6 +4747,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -4544,11 +4761,13 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "expected_income",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4559,6 +4778,7 @@
         {
           "name": "income_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4589,11 +4809,13 @@
         {
           "name": "start_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -4626,7 +4848,9 @@
       "requestBody": [
         {
           "name": "amount",
-          "type": "number"
+          "type": "number",
+          "format": "double",
+          "description": "Budget amount. If expected_income is also set and > 0 in this same request, expected_income wins and this field is overwritten to mirror it — set expected_income instead if you want it to be authoritative."
         },
         {
           "name": "description",
@@ -4634,15 +4858,20 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "format": "date|date-time",
+          "description": "Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error. Accepts YYYY-MM-DD or a full RFC3339 timestamp."
         },
         {
           "name": "expected_income",
-          "type": "number"
+          "type": "number",
+          "format": "double",
+          "description": "Planned income for the period. When set and > 0, this wins over amount in this same request — amount is overwritten to mirror this value. Leave unset to have amount remain authoritative."
         },
         {
           "name": "income_amount",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "income_sources",
@@ -4655,7 +4884,13 @@
         {
           "name": "income_sources[].type",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc_primary",
+            "tag",
+            "manual"
+          ],
+          "description": "How this income source is matched. pfc_primary matches transactions by their PFCv2 primary category (e.g. INCOME); tag matches by transaction tag; manual is a fixed, user-entered amount with no automatic matching."
         },
         {
           "name": "income_sources[].value",
@@ -4680,13 +4915,16 @@
         },
         {
           "name": "start_date",
-          "type": "string"
+          "type": "string",
+          "format": "date|date-time",
+          "description": "Budget start date. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp."
         }
       ],
       "responseBody": [
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4696,6 +4934,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -4709,11 +4948,13 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "expected_income",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4724,6 +4965,7 @@
         {
           "name": "income_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4754,11 +4996,13 @@
         {
           "name": "start_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -4813,6 +5057,7 @@
         {
           "name": "allocated_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4826,7 +5071,14 @@
         },
         {
           "name": "match_logic",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "category_only",
+            "tag_only",
+            "and",
+            "or"
+          ],
+          "description": "How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400)."
         },
         {
           "name": "pfc_detailed",
@@ -4834,7 +5086,8 @@
         },
         {
           "name": "pfc_primary",
-          "type": "string"
+          "type": "string",
+          "description": "PFC primary category. When set with pfc_detailed omitted, this row is a pfc_primary category whose own spend total rolls up transactions filed under any custom category nested under it, in addition to its own direct matches."
         },
         {
           "name": "savings_goal_id",
@@ -4849,6 +5102,7 @@
         {
           "name": "allocated_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4869,10 +5123,15 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "custom_category_id",
+          "type": "string"
+        },
+        {
+          "name": "custom_grandparent_pfc_primary",
           "type": "string"
         },
         {
@@ -4895,7 +5154,13 @@
         {
           "name": "match_logic",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "category_only",
+            "tag_only",
+            "and",
+            "or"
+          ]
         },
         {
           "name": "pfc_detailed",
@@ -4924,6 +5189,7 @@
         {
           "name": "spent_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -4934,6 +5200,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         }
       ]
@@ -4968,11 +5235,19 @@
       "requestBody": [
         {
           "name": "allocated_amount",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "match_logic",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "category_only",
+            "tag_only",
+            "and",
+            "or"
+          ],
+          "description": "How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400)."
         },
         {
           "name": "tags",
@@ -4983,6 +5258,7 @@
         {
           "name": "allocated_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -5003,10 +5279,15 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "custom_category_id",
+          "type": "string"
+        },
+        {
+          "name": "custom_grandparent_pfc_primary",
           "type": "string"
         },
         {
@@ -5029,7 +5310,13 @@
         {
           "name": "match_logic",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "category_only",
+            "tag_only",
+            "and",
+            "or"
+          ]
         },
         {
           "name": "pfc_detailed",
@@ -5058,6 +5345,7 @@
         {
           "name": "spent_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -5068,6 +5356,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         }
       ]
@@ -5148,11 +5437,13 @@
         {
           "name": "total_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "total_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -5186,6 +5477,7 @@
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -5195,6 +5487,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -5208,11 +5501,13 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "expected_income",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -5223,6 +5518,7 @@
         {
           "name": "income_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -5253,11 +5549,13 @@
         {
           "name": "start_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -5286,6 +5584,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -5342,11 +5641,13 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "usage_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -5420,6 +5721,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -5476,11 +5778,13 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "usage_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -5588,6 +5892,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -5644,11 +5949,13 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "usage_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -5730,6 +6037,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -5786,11 +6094,13 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "usage_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -5845,21 +6155,25 @@
         {
           "name": "budget_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "child_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "rule_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "transaction_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ]
@@ -5934,6 +6248,7 @@
         {
           "name": "end_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -5949,6 +6264,7 @@
         {
           "name": "start_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         }
       ]
@@ -5992,6 +6308,7 @@
         {
           "name": "as_of_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -6006,6 +6323,7 @@
         {
           "name": "total_balance",
           "type": "number",
+          "format": "double",
           "required": true
         }
       ]
@@ -6025,6 +6343,7 @@
         {
           "name": "version",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -6073,6 +6392,7 @@
         {
           "name": "as_of_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -6083,6 +6403,7 @@
         {
           "name": "net_worth",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -6092,11 +6413,13 @@
         {
           "name": "total_assets",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "total_liabilities",
           "type": "number",
+          "format": "double",
           "required": true
         }
       ]
@@ -6152,6 +6475,7 @@
         {
           "name": "end_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -6167,6 +6491,7 @@
         {
           "name": "start_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         }
       ]
@@ -6191,6 +6516,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         }
       ]
@@ -6216,6 +6542,7 @@
         {
           "name": "layout.version",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -6443,7 +6770,8 @@
       "responseBody": [
         {
           "name": "revoked_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "user_account_id",
@@ -6477,11 +6805,13 @@
         {
           "name": "seats_active",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "seats_pending",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -6497,6 +6827,7 @@
         {
           "name": "users_included",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ]
@@ -6514,7 +6845,8 @@
       "responseBody": [
         {
           "name": "accepted_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "accepted_user_id",
@@ -6523,11 +6855,13 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "expires_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -6558,6 +6892,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         }
       ]
@@ -6576,6 +6911,7 @@
         {
           "name": "email",
           "type": "string",
+          "format": "email",
           "required": true,
           "description": "Email address to invite"
         }
@@ -6623,6 +6959,7 @@
         {
           "name": "joined_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -6685,6 +7022,7 @@
         {
           "name": "count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -6744,7 +7082,8 @@
         },
         {
           "name": "total_value",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         }
       ]
     },
@@ -6807,6 +7146,7 @@
         {
           "name": "limit",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -6869,6 +7209,7 @@
         {
           "name": "total_value",
           "type": "number",
+          "format": "double",
           "required": true
         }
       ]
@@ -6898,20 +7239,24 @@
         {
           "name": "total_cost_basis",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "total_unrealized_gain_loss",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "total_unrealized_gain_loss_pct",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "total_value",
           "type": "number",
+          "format": "double",
           "required": true
         }
       ]
@@ -6987,16 +7332,19 @@
         {
           "name": "end_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "start_date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "total_income",
           "type": "number",
+          "format": "double",
           "required": true
         }
       ]
@@ -7016,35 +7364,42 @@
         {
           "name": "day_change",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "day_change_pct",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "holdings_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "total_cost_basis",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "total_gain_loss",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "total_gain_loss_pct",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "total_value",
           "type": "number",
+          "format": "double",
           "required": true
         }
       ]
@@ -7225,6 +7580,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7258,6 +7614,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7319,6 +7676,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7352,6 +7710,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7384,6 +7743,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7417,6 +7777,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7488,6 +7849,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7521,6 +7883,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7641,11 +8004,13 @@
         {
           "name": "total_spend",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "transaction_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ]
@@ -7691,6 +8056,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7714,6 +8080,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7738,6 +8105,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7761,6 +8129,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7806,6 +8175,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7829,6 +8199,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7874,6 +8245,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7897,6 +8269,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -7958,11 +8331,13 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "email_sent_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "id",
@@ -8006,6 +8381,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -8030,6 +8406,7 @@
         {
           "name": "count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -8054,6 +8431,7 @@
         {
           "name": "count",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ]
@@ -8268,16 +8646,19 @@
         {
           "name": "limit",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "offset",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "total",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ]
@@ -8305,19 +8686,23 @@
         },
         {
           "name": "account_percentage",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "balance_as_of",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "completed_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -8328,15 +8713,18 @@
         {
           "name": "current_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "deleted_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "description",
@@ -8354,7 +8742,8 @@
         },
         {
           "name": "last_calculated_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "name",
@@ -8369,11 +8758,13 @@
         {
           "name": "target_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -8406,7 +8797,8 @@
         },
         {
           "name": "account_percentage",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "currency_code",
@@ -8414,11 +8806,13 @@
         },
         {
           "name": "current_amount",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "description",
@@ -8444,6 +8838,7 @@
         {
           "name": "target_amount",
           "type": "number",
+          "format": "double",
           "required": true,
           "description": "Target amount to save. Must be positive."
         }
@@ -8460,19 +8855,23 @@
         },
         {
           "name": "account_percentage",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "balance_as_of",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "completed_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -8483,15 +8882,18 @@
         {
           "name": "current_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "deleted_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "description",
@@ -8509,7 +8911,8 @@
         },
         {
           "name": "last_calculated_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "name",
@@ -8524,11 +8927,13 @@
         {
           "name": "target_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -8565,19 +8970,23 @@
         },
         {
           "name": "account_percentage",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "balance_as_of",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "completed_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -8588,15 +8997,18 @@
         {
           "name": "current_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "deleted_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "description",
@@ -8614,7 +9026,8 @@
         },
         {
           "name": "last_calculated_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "name",
@@ -8629,11 +9042,13 @@
         {
           "name": "target_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -8670,19 +9085,23 @@
         },
         {
           "name": "account_percentage",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "balance_as_of",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "completed_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -8693,15 +9112,18 @@
         {
           "name": "current_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "deleted_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "description",
@@ -8719,7 +9141,8 @@
         },
         {
           "name": "last_calculated_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "name",
@@ -8734,11 +9157,13 @@
         {
           "name": "target_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -8783,6 +9208,7 @@
         {
           "name": "total_confirmed",
           "type": "number",
+          "format": "double",
           "required": true,
           "description": "Sum of the confirmed contributions; proposed and rejected rows are excluded"
         }
@@ -8804,11 +9230,13 @@
         {
           "name": "completed_goal_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "goal_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -8819,16 +9247,19 @@
         {
           "name": "overall_percent_complete",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "total_saved",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "total_target",
           "type": "number",
+          "format": "double",
           "required": true
         }
       ]
@@ -8858,11 +9289,13 @@
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "archived_at",
           "type": "string",
+          "format": "date-time",
           "description": "Set when this contribution belongs to a closed contributions period. Such rows are retained and listed but do NOT count toward the goal's current_amount."
         },
         {
@@ -8873,6 +9306,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -8912,6 +9346,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         }
       ]
@@ -8941,27 +9376,32 @@
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "occurred_on",
           "type": "string",
+          "format": "date",
           "required": true
         },
         {
           "name": "transaction_id",
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         }
       ],
       "responseBody": [
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "archived_at",
           "type": "string",
+          "format": "date-time",
           "description": "Set when this contribution belongs to a closed contributions period. Such rows are retained and listed but do NOT count toward the goal's current_amount."
         },
         {
@@ -8972,6 +9412,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -9011,6 +9452,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         }
       ]
@@ -9076,11 +9518,13 @@
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "archived_at",
           "type": "string",
+          "format": "date-time",
           "description": "Set when this contribution belongs to a closed contributions period. Such rows are retained and listed but do NOT count toward the goal's current_amount."
         },
         {
@@ -9091,6 +9535,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -9130,6 +9575,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         }
       ]
@@ -9166,11 +9612,13 @@
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "archived_at",
           "type": "string",
+          "format": "date-time",
           "description": "Set when this contribution belongs to a closed contributions period. Such rows are retained and listed but do NOT count toward the goal's current_amount."
         },
         {
@@ -9181,6 +9629,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -9220,6 +9669,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         }
       ]
@@ -9256,19 +9706,23 @@
         },
         {
           "name": "account_percentage",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "balance_as_of",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "completed_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -9279,15 +9733,18 @@
         {
           "name": "current_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "deleted_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "description",
@@ -9305,7 +9762,8 @@
         },
         {
           "name": "last_calculated_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "name",
@@ -9320,11 +9778,13 @@
         {
           "name": "target_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -9365,16 +9825,19 @@
         },
         {
           "name": "account_percentage",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "current_amount",
           "type": "number",
+          "format": "double",
           "description": "Only settable when progress_basis is 'manual'. Contributions-based goals derive this from their contribution ledger (POST /savings-goals/{goalID}/contributions); balance-based goals track their account. Sending this for any non-manual basis returns 400."
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "description",
@@ -9392,6 +9855,7 @@
         {
           "name": "target_amount",
           "type": "number",
+          "format": "double",
           "description": "Target amount to save. Must be positive."
         }
       ],
@@ -9407,19 +9871,23 @@
         },
         {
           "name": "account_percentage",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "balance_as_of",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "completed_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -9430,15 +9898,18 @@
         {
           "name": "current_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "deleted_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "description",
@@ -9456,7 +9927,8 @@
         },
         {
           "name": "last_calculated_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "name",
@@ -9471,11 +9943,13 @@
         {
           "name": "target_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -9546,6 +10020,7 @@
         {
           "name": "completed_count",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "Number of completed transfers (0 when not published)"
         },
@@ -9563,12 +10038,14 @@
         {
           "name": "total_amount",
           "type": "number",
+          "format": "double",
           "required": true,
           "description": "Total moved to savings, rounded to nearest $1000 (0 when not published)"
         },
         {
           "name": "user_count",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "Number of users (0 when not published)"
         }
@@ -9589,16 +10066,19 @@
         {
           "name": "completed_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "month_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "prev_month_amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
@@ -9609,6 +10089,7 @@
         {
           "name": "total_amount",
           "type": "number",
+          "format": "double",
           "required": true
         }
       ]
@@ -9762,6 +10243,7 @@
         {
           "name": "trial_days_remaining",
           "type": "integer",
+          "format": "int64",
           "description": "Days remaining in trial (for trial users)"
         },
         {
@@ -9897,6 +10379,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -9912,11 +10395,13 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "usage_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -9956,6 +10441,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -9971,11 +10457,13 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "usage_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -10013,6 +10501,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -10028,11 +10517,13 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "usage_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -10080,6 +10571,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -10095,11 +10587,13 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "usage_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -10164,16 +10658,19 @@
         {
           "name": "limit",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "offset",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "total",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ]
@@ -10364,6 +10861,7 @@
         {
           "name": "limit",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -10373,11 +10871,13 @@
         {
           "name": "total_amount",
           "type": "number",
+          "format": "double",
           "description": "Summed amount of the whole filtered set, SIGNED like the rows (PFCv2: expenses positive, inflows negative) — not a magnitude. A Sankey node's amount is an ABS sum, so the property that holds is |node amount| == |total_amount|. First page only; absent means not computed, a present 0 means the set nets to zero."
         },
         {
           "name": "total_count",
           "type": "integer",
+          "format": "int64",
           "description": "Number of transactions in the whole filtered set. First page only; absent means not computed, a present 0 means the set is empty."
         },
         {
@@ -10436,12 +10936,14 @@
         {
           "name": "requested",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "De-duplicated count of transaction IDs in the request"
         },
         {
           "name": "updated",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "Number of owned transactions updated; unowned/unknown IDs are silently ignored"
         }
@@ -10476,6 +10978,7 @@
         {
           "name": "updated",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "Number of transactions whose review state changed"
         }
@@ -10509,21 +11012,25 @@
       "responseBody": [
         {
           "name": "avg_ingestion_to_review_seconds",
-          "type": "number"
+          "type": "number",
+          "format": "double"
         },
         {
           "name": "reviewed_by_manual_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "reviewed_by_plaid_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
           "name": "reviewed_by_rule_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -10534,6 +11041,7 @@
         {
           "name": "unreviewed_count",
           "type": "integer",
+          "format": "int64",
           "required": true
         }
       ]
@@ -10581,15 +11089,18 @@
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "authorized_date",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "category_override_date",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "category_override_kind",
@@ -10603,6 +11114,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -10616,11 +11128,13 @@
         {
           "name": "date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "deleted_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "deleted_reason",
@@ -10733,7 +11247,8 @@
         },
         {
           "name": "reviewed_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "source",
@@ -10753,6 +11268,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -10831,15 +11347,18 @@
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "authorized_date",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "category_override_date",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "category_override_kind",
@@ -10853,6 +11372,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -10866,11 +11386,13 @@
         {
           "name": "date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "deleted_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "deleted_reason",
@@ -10983,7 +11505,8 @@
         },
         {
           "name": "reviewed_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "source",
@@ -11003,6 +11526,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -11052,6 +11576,7 @@
         {
           "name": "updated",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "Number of transactions whose review state changed"
         }
@@ -11098,15 +11623,18 @@
         {
           "name": "amount",
           "type": "number",
+          "format": "double",
           "required": true
         },
         {
           "name": "authorized_date",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "category_override_date",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "category_override_kind",
@@ -11120,6 +11648,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -11133,11 +11662,13 @@
         {
           "name": "date",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "deleted_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "deleted_reason",
@@ -11250,7 +11781,8 @@
         },
         {
           "name": "reviewed_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "source",
@@ -11270,6 +11802,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -11328,18 +11861,21 @@
         {
           "name": "limit",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "Maximum results per page as requested"
         },
         {
           "name": "offset",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "Number of results skipped"
         },
         {
           "name": "total",
           "type": "integer",
+          "format": "int64",
           "required": true,
           "description": "Total number of matching suggestions across all pages"
         }
@@ -11447,6 +11983,7 @@
         {
           "name": "actual_amount",
           "type": "number",
+          "format": "double",
           "required": true,
           "description": "Actual amount transferred"
         }
@@ -11561,6 +12098,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -11577,7 +12115,8 @@
         },
         {
           "name": "display_order",
-          "type": "integer"
+          "type": "integer",
+          "format": "int64"
         },
         {
           "name": "exclude_investment_sync",
@@ -11618,6 +12157,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -11655,6 +12195,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -11671,7 +12212,8 @@
         },
         {
           "name": "display_order",
-          "type": "integer"
+          "type": "integer",
+          "format": "int64"
         },
         {
           "name": "exclude_investment_sync",
@@ -11712,6 +12254,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -11760,6 +12303,7 @@
         {
           "name": "display_order",
           "type": "integer",
+          "format": "int64",
           "required": true
         },
         {
@@ -11786,6 +12330,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -11802,7 +12347,8 @@
         },
         {
           "name": "display_order",
-          "type": "integer"
+          "type": "integer",
+          "format": "int64"
         },
         {
           "name": "exclude_investment_sync",
@@ -11843,6 +12389,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -11945,6 +12492,7 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -11965,6 +12513,7 @@
         {
           "name": "gdpr_consent_timestamp",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -12000,6 +12549,7 @@
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
@@ -12074,7 +12624,8 @@
         },
         {
           "name": "comp_ends_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "comp_tier",
@@ -12083,15 +12634,18 @@
         {
           "name": "created_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         },
         {
           "name": "deletion_requested_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "deletion_scheduled_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "effective_status",
@@ -12138,11 +12692,13 @@
         },
         {
           "name": "last_login_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "manual_tier_ends_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "manual_tier_override",
@@ -12158,11 +12714,13 @@
         },
         {
           "name": "past_due_started_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "plaid_cleanup_pending_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "primary_region",
@@ -12171,27 +12729,33 @@
         },
         {
           "name": "retention_expires_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "retention_notice_30d_sent_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "retention_notice_7d_sent_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "retention_started_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "subscription_ends_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "subscription_started_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "subscription_status",
@@ -12215,19 +12779,23 @@
         },
         {
           "name": "trial_days_remaining",
-          "type": "integer"
+          "type": "integer",
+          "format": "int64"
         },
         {
           "name": "trial_ends_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "trial_started_at",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         {
           "name": "updated_at",
           "type": "string",
+          "format": "date-time",
           "required": true
         }
       ]

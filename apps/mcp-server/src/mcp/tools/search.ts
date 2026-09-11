@@ -9,8 +9,10 @@
  */
 
 import { z } from 'zod'
+import { getCapability } from '../../manifest/capability-manifest'
 import { searchSpec, listSpecEntries } from '../../spec/search-runtime'
 import type { SpecEntry, SpecIndex } from '../../spec/search-runtime'
+import { isReadExecuteAdmitted } from './read-execute-admission'
 
 // ── Input schema ────────────────────────────────────────────────────────────
 
@@ -63,8 +65,22 @@ export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
   }
 
   const lines = allowed.map((e) => {
+    // #1630: `manifestClass` alone told an agent whether an operation is 'read', 'write', or
+    // 'destructive' — it did NOT tell them whether readExecute would actually ADMIT a 'read'
+    // call. A class-'read' POST readExecute refuses (e.g. `runMCPRecipe`) used to render
+    // identically to one it admits (e.g. `getTransactions`) — exactly what misled the #1630
+    // reporter into believing "(read)" meant "usable via readExecute". Disclose the gap only
+    // where it can exist (class 'read'); write/destructive operations are never admitted by
+    // readExecute regardless, so a note there would be true of every single line and add noise
+    // rather than information.
+    let classLabel: string = e.manifestClass
+    if (e.manifestClass === 'read') {
+      const capability = getCapability(e.operationId)
+      const admittedByReadExecute = !!capability && isReadExecuteAdmitted(capability, { method: e.method, path: e.path })
+      classLabel = admittedByReadExecute ? 'read' : 'read, NOT admitted by readExecute — use writeExecute'
+    }
     const parts = [
-      `${e.method} ${e.path} (${e.manifestClass})`,
+      `${e.method} ${e.path} (${classLabel})`,
       `  operationId: ${e.operationId}`,
       `  summary: ${e.summary}`,
     ]
@@ -89,7 +105,7 @@ export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
       // ambiguity this task exists to eliminate.
       const bodyLines = e.requestBody.map(
         (f) =>
-          `    ${f.name} (${f.type ?? 'any'}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
+          `    ${f.name} (${f.type ?? 'any'}${f.format ? `, format: ${f.format}` : ''}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
       )
       parts.push(`  body:\n${bodyLines.join('\n')}`)
     }
@@ -99,7 +115,7 @@ export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
     if (e.responseBody?.length) {
       const returnLines = e.responseBody.map(
         (f) =>
-          `    ${f.name} (${f.type ?? 'any'}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
+          `    ${f.name} (${f.type ?? 'any'}${f.format ? `, format: ${f.format}` : ''}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
       )
       parts.push(`  returns:\n${returnLines.join('\n')}`)
     }

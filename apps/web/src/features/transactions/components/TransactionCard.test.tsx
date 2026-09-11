@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router'
 import { TransactionCard } from './TransactionCard'
 import type { Transaction } from '../types'
 import type { Account } from '../../accounts/types'
-import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetMatcher'
+import type { BudgetCategoryMatch } from '../../budgets/types'
 import type { BudgetCategory } from '../../budgets/types'
 import { CATEGORY_COLORS, DEFAULT_CATEGORY_COLOR } from '@/lib/category-colors'
 

@@ -379,7 +379,7 @@ export function createHostProxy(config: HostProxyConfig) {
       } catch (err) {
         const message =
           err instanceof ApiError
-            ? redactError({ message: String(err.message), status: err.status }).message
+            ? redactError({ message: String(err.message), status: err.status, body: err.body }).message
             : redactError(err).message
         throw new HostProxyError('backend_error', message)
       } finally {
