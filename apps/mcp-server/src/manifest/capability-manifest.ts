@@ -338,6 +338,10 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // costs the agent nothing an agent could act on: the surface exists so a human operator can
   // choose a remedy that does not exist yet.
   excluded('listAdminRetentionWithheld', REASON_ADMIN),
+  // #1630 B7: the budget-hierarchy audit's operator surface. A READ, excluded under the same
+  // blanket admin policy as its neighbours — the findings it lists are for a human operator to
+  // act on, not for an MCP client to consume.
+  excluded('listAdminBudgetHierarchyAudits', REASON_ADMIN),
   excludedWrite('recordAdminPlaidOrphanedItemOperatorResolution', REASON_ADMIN),
   excluded('getSystemHealth', REASON_ADMIN),
   excluded('listAdminUsers', REASON_ADMIN),
@@ -451,7 +455,12 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // #1569 Task 16: tombstone, not a DELETE (budget_repository.go DeleteCategory).
   write('deleteBudgetCategory'),
   write('syncBudget'),
-  read('previewCategoryMatches'), // POST but non-mutating
+  // POST but non-mutating (proven: TestPreviewCategoryMatches_WritesNothing_Integration). Unlike
+  // this comment used to imply, that alone does NOT admit it into readExecute — the backend now
+  // tags it `x-mcp-safe-post: true` (category_preview.go) and it is listed in the reviewed
+  // ACKNOWLEDGED_SAFE_POST_OPERATIONS (manifest/safe-post-extension.ts), which is what
+  // read-execute-admission.ts actually consults (#1630).
+  read('previewCategoryMatches'),
 
   // ── Categories ──────────────────────────────────────────────────────────
   read('getUserCategories'),

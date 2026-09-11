@@ -12,6 +12,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -83,6 +84,9 @@ func (m *mockCustomCategoryService) GetOrCreateCategory(ctx context.Context, use
 func (m *mockCustomCategoryService) SetJobQueue(_ queue.JobQueue) {}
 
 func (m *mockCustomCategoryService) SetAuditLogRepository(_ repository.AuditLogRepository) {}
+
+// SetBudgetCategoryRepository is a no-op for the mock (Issue #1630 Task B1: satisfies updated interface).
+func (m *mockCustomCategoryService) SetBudgetCategoryRepository(_ services.BudgetCategoryRepository) {}
 
 // Helper to create a test category
 func createTestCategory(userID, name string) *domain.CustomCategory {

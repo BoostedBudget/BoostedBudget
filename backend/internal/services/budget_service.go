@@ -138,15 +138,27 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		seriesID = ancestor.SeriesID
 	}
 
-	// Create budget from request
+	// Create budget from request. #1630 Task 9: StartDate/EndDate are domain.FlexibleDate
+	// (accepts YYYY-MM-DD or RFC3339) on the request; Budget itself stays plain time.Time.
+	//
+	// ⚠ Review round 2: EndDate uses EndOfDay(), not Time() — a date-only end_date
+	// ("2026-09-30") must cover the WHOLE day it names (its custom-period budget would
+	// otherwise silently exclude every same-day transaction after midnight), while a full
+	// RFC3339 timestamp is respected exactly as given. See FlexibleDate.EndOfDay's doc
+	// comment.
+	var endDate *time.Time
+	if req.EndDate != nil {
+		t := req.EndDate.EndOfDay()
+		endDate = &t
+	}
 	budget := &domain.Budget{
 		ID:             newID,
 		UserID:         userID,
 		Name:           req.Name,
 		Description:    req.Description,
 		Period:         req.Period,
-		StartDate:      req.StartDate,
-		EndDate:        req.EndDate,
+		StartDate:      req.StartDate.Time(),
+		EndDate:        endDate,
 		Amount:         reconcileAmount,
 		ExpectedIncome: reconcileExpectedIncome,
 		CurrencyCode:   req.CurrencyCode,
@@ -230,6 +242,7 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 	// R5-2: validate every category before persisting (matches AddCategory / UpdateCategory behaviour).
 	// R5-3: build all categories in memory first so CreateWithCategories can persist them atomically.
 	var categories []*domain.BudgetCategory
+	var flatCategories []domain.BudgetCategory // Issue #1630 Task 4: parent-identity dedup check below
 	for _, catReq := range req.Categories {
 		category := &domain.BudgetCategory{
 			ID:               uuid.New().String(),
@@ -250,7 +263,35 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		if err := category.Validate(); err != nil {
 			return nil, err
 		}
+		// Issue #1630 HIGH-severity fix: populate this custom category's own hierarchical
+		// parent linkage (mirrors the LEFT JOIN custom_categories cc GetCategoriesByBudgetID
+		// does at read time) so EscapedNestedChild below can see whether THIS row is nested
+		// under another custom category or PFC primary, in either direction relative to the
+		// rest of this batch. Not persisted (CustomParentID/CustomParentPFCPrimary are db:"-").
+		if category.CategoryKind == "custom" && category.CustomCategoryID != nil {
+			cc, err := s.customCategoryRepo.GetByID(ctx, *category.CustomCategoryID)
+			if err != nil {
+				return nil, err
+			}
+			category.CustomParentID = cc.ParentID
+			category.CustomParentPFCPrimary = cc.ParentPFCPrimary
+		}
+		// Issue #1630 Task 4: a single request can name the same parent identity twice
+		// (e.g. two "FOOD_AND_DRINK" primary-only categories) — reject before persisting
+		// anything, mirroring the check AddCategory runs against already-persisted rows.
+		if domain.DuplicateParentIdentity(flatCategories, category) {
+			return nil, domain.ErrDuplicateParentCategory
+		}
+		// Issue #1630 HIGH-severity fix: reject a nested pair whose match_logic escapes
+		// containment BEFORE persisting anything — checked in both directions against every
+		// category already built in this batch, so it does not matter whether the parent or
+		// the escaping child appears first in req.Categories. See EscapedNestedChild /
+		// ErrEscapedNestedChild for the double-count this prevents.
+		if domain.EscapedNestedChild(flatCategories, category) {
+			return nil, fmt.Errorf("%w: match_logic %q on this category escapes its hierarchical parent's containment envelope — a parent whose own match_logic is category_only/or only fully rolls up children whose match_logic is category_only/and; use a top-level (non-nested) category instead if this one must match tag_only or or", domain.ErrEscapedNestedChild, category.MatchLogic)
+		}
 		categories = append(categories, category)
+		flatCategories = append(flatCategories, *category)
 	}
 
 	// R5-3: persist budget + user-provided categories atomically in a single transaction.
@@ -463,10 +504,12 @@ func (s *budgetService) UpdateBudget(ctx context.Context, userID, budgetID strin
 		budget.Period = *req.Period
 	}
 	if req.StartDate != nil {
-		budget.StartDate = *req.StartDate
+		budget.StartDate = req.StartDate.Time()
 	}
 	if req.EndDate != nil {
-		budget.EndDate = req.EndDate
+		// ⚠ Review round 2: EndOfDay(), not Time() — see createBudget's comment above.
+		t := req.EndDate.EndOfDay()
+		budget.EndDate = &t
 	}
 	// Reconcile expected_income and amount (Issue #1048): expected_income wins when set.
 	if req.ExpectedIncome != nil && *req.ExpectedIncome > 0 {
@@ -613,8 +656,61 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 		return nil, err
 	}
 
-	// Save to database
-	if err := s.budgetRepo.CreateCategory(ctx, category); err != nil {
+	// Issue #1630 HIGH-severity fix: populate this custom category's own hierarchical parent
+	// linkage (mirrors the LEFT JOIN custom_categories cc GetCategoriesByBudgetID already
+	// performed for the EXISTING rows in budget.Categories above) so EscapedNestedChild below
+	// can see whether this new row is nested under an existing parent, or is itself a parent of
+	// an existing child. Not persisted (CustomParentID/CustomParentPFCPrimary are db:"-").
+	if category.CategoryKind == "custom" && category.CustomCategoryID != nil {
+		cc, err := s.customCategoryRepo.GetByID(ctx, *category.CustomCategoryID)
+		if err != nil {
+			return nil, err
+		}
+		category.CustomParentID = cc.ParentID
+		category.CustomParentPFCPrimary = cc.ParentPFCPrimary
+
+		// Issue #1630 review fix (HIGH): also populate CustomGrandparentPFCPrimary — mirrors
+		// budget_repository.go's second "gp" join hop (gp.id = cc.parent_id) run for EXISTING
+		// rows at read time. Without this, a brand-new candidate that is a GRANDCHILD of an
+		// unbudgeted intermediate custom parent (root PFC -> custom parent C, unbudgeted ->
+		// custom grandchild G, this candidate) always reports "no grandparent", so
+		// domain.EscapedNestedChild below cannot recognize the transitive pair
+		// IsSubAllocationWithin's own doc comment describes — the exact double-count 029e15d3
+		// closed on the READ path stays open here on the WRITE path.
+		if cc.ParentID != nil {
+			gp, err := s.customCategoryRepo.GetByID(ctx, *cc.ParentID)
+			if err != nil {
+				return nil, err
+			}
+			category.CustomGrandparentPFCPrimary = gp.ParentPFCPrimary
+		}
+	}
+
+	// Issue #1630 Task 4: reject a second row sharing this budget's parent identity (same
+	// pfc_primary primary-only row, or same custom_category_id) — a cheap, fail-fast check
+	// against the snapshot already in hand. See domain.DuplicateParentIdentity for why an
+	// undetected collision is unsafe.
+	if domain.DuplicateParentIdentity(budget.Categories, category) {
+		return nil, domain.ErrDuplicateParentCategory
+	}
+	// Issue #1630 HIGH-severity fix: reject a nested pair whose match_logic escapes containment
+	// — checked in both directions (this new row as the escaping child of an existing parent, OR
+	// as a containing parent of an existing escaping child), so it does not matter whether the
+	// parent or the child was added to this budget first. See domain.EscapedNestedChild /
+	// ErrEscapedNestedChild for the double-count this prevents.
+	if domain.EscapedNestedChild(budget.Categories, category) {
+		return nil, fmt.Errorf("%w: match_logic %q on this category escapes its hierarchical parent's containment envelope — a parent whose own match_logic is category_only/or only fully rolls up children whose match_logic is category_only/and; use a top-level (non-nested) category instead if this one must match tag_only or or", domain.ErrEscapedNestedChild, category.MatchLogic)
+	}
+
+	// Issue #1630 B3: the two checks above ran against the snapshot GetByID returned at the top
+	// of this method, outside any lock — a fast, common-case rejection, not the authoritative
+	// one. AddCategoryChecked is the actual TOCTOU fix: it locks this budget's row, re-reads its
+	// LIVE categories under that lock, re-runs BOTH guards against the fresh snapshot, and only
+	// then inserts — all in one transaction — so two concurrent AddCategory calls that each pass
+	// the check above (against their own stale, pre-lock snapshot) cannot both persist a
+	// combination that violates either guard.
+	created, err := s.budgetRepo.AddCategoryChecked(ctx, budgetID, category)
+	if err != nil {
 		s.logger.Error("failed to create budget category",
 			slog.String("budget_id", budgetID),
 			slog.String("error", err.Error()),
@@ -624,11 +720,11 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 
 	s.logger.Info("budget category added",
 		slog.String("budget_id", budgetID),
-		slog.String("category_id", category.ID),
+		slog.String("category_id", created.ID),
 	)
 
-	category.PopulatePFCDisplay()
-	return category, nil
+	created.PopulatePFCDisplay()
+	return created, nil
 }
 
 // UpdateCategory updates a budget category.
@@ -679,14 +775,64 @@ func (s *budgetService) UpdateCategory(ctx context.Context, userID, budgetID, ca
 		return nil, err
 	}
 
-	// Save changes
-	if err := s.budgetRepo.UpdateCategory(ctx, category); err != nil {
+	// Issue #1630 HIGH-severity fix (widened by an independent adversarial review, fixwave 4):
+	// UpdateCategory can recreate the exact double-count AddCategory/CreateBudget's
+	// EscapedNestedChild guard exists to prevent — a caller can PATCH a conforming nested child's
+	// match_logic to one that escapes containment, or PATCH a PARENT's match_logic away from
+	// clean containment while an existing nested child still relies on it — either way, as NEW
+	// data, not grandfathered. Only worth checking when match_logic actually changed (identity
+	// fields are immutable via this request, so no other field can create or break a hierarchical
+	// pair). A single domain.EscapedNestedChild(siblings, category) check, run in both directions
+	// internally, now covers both edits — see its doc comment for why the widened check subsumes
+	// the previously-separate WouldOrphanContainedChildren (removed).
+	if req.MatchLogic != nil {
+		// Siblings this row could form a hierarchical pair with — every OTHER live category in
+		// this budget, using the read-time-populated custom-parent linkage already on
+		// budget.Categories (GetCategoriesByBudgetID's LEFT JOIN), so no extra lookup is needed
+		// here the way AddCategory needs one for its brand-new in-memory candidate.
+		siblings := make([]domain.BudgetCategory, 0, len(budget.Categories))
+		for i := range budget.Categories {
+			if budget.Categories[i].ID != categoryID {
+				siblings = append(siblings, budget.Categories[i])
+			}
+		}
+
+		// This row, AS UPDATED, forms a not-cleanly-contained pair with a sibling — whether as a
+		// non-contained CHILD of a containing parent, or as a PARENT (containing or not) of an
+		// existing sibling that is nested under it and not cleanly contained by it. See
+		// domain.EscapedNestedChild.
+		if domain.EscapedNestedChild(siblings, category) {
+			return nil, fmt.Errorf("%w: match_logic %q on this category escapes its hierarchical parent's containment envelope — a parent whose own match_logic is category_only/or only fully rolls up children whose match_logic is category_only/and; use a top-level (non-nested) category instead if this one must match tag_only or or", domain.ErrEscapedNestedChild, category.MatchLogic)
+		}
+	}
+
+	// Issue #1630 B3: the check above ran against the snapshot GetByID returned at the top of
+	// this method, outside any lock — a fast, common-case rejection, not the authoritative one.
+	// UpdateCategoryChecked is the actual TOCTOU fix: it locks this budget's row, re-reads its
+	// LIVE categories under that lock, re-applies these same field mutations to the FRESH row via
+	// mutate, re-runs EscapedNestedChild against the fresh siblings, and persists — all in one
+	// transaction — so a concurrent AddCategory/UpdateCategory racing this edit on the same
+	// budget cannot both persist a combination that violates the guard.
+	updated, err := s.budgetRepo.UpdateCategoryChecked(ctx, budgetID, categoryID, func(c *domain.BudgetCategory) error {
+		if req.AllocatedAmount != nil {
+			c.AllocatedAmount = *req.AllocatedAmount
+		}
+		if req.Tags != nil {
+			c.Tags = *req.Tags
+		}
+		if req.MatchLogic != nil {
+			c.MatchLogic = *req.MatchLogic
+		}
+		return c.Validate()
+	})
+	if err != nil {
 		s.logger.Error("failed to update budget category",
 			slog.String("category_id", categoryID),
 			slog.String("error", err.Error()),
 		)
 		return nil, err
 	}
+	category = updated
 
 	s.logger.Info("budget category updated",
 		slog.String("budget_id", budgetID),
@@ -896,4 +1042,3 @@ func enrichBudgetPFCDisplay(b *domain.Budget) {
 		b.IncomeSources[i].PopulatePFCDisplay()
 	}
 }
-

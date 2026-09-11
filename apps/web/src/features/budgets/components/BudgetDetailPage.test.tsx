@@ -459,6 +459,51 @@ describe('BudgetDetailPage', () => {
       // With no categories, all income is unallocated - shows $5,000.00
       expect(screen.getByRole('heading', { name: 'Unallocated Funds' })).toBeInTheDocument()
     })
+
+    it('excludes a sub-allocation child from totalAllocated (#1630)', () => {
+      // Parent budgeted at 2000 (top-level pfc primary); a detailed child nested under it
+      // at 500 is already inside the parent's own amount and must not be summed again.
+      // Correct unallocated = 5000 - 2000 = 3000, not the naive 5000 - 2500 = 2500.
+      mockUseBudgetDetail.mockReturnValue({
+        budget: createMockBudget({
+          income_amount: 5000,
+          categories: [
+            {
+              id: 'parent',
+              budget_id: 'budget-1',
+              category_kind: 'pfc',
+              pfc_primary: 'FOOD_AND_DRINK',
+              allocated_amount: 2000,
+              spent_amount: 0,
+              tags: [],
+              match_logic: 'category_only',
+              created_at: '2025-01-01T00:00:00Z',
+              updated_at: '2025-01-01T00:00:00Z',
+            },
+            {
+              id: 'child',
+              budget_id: 'budget-1',
+              category_kind: 'pfc',
+              pfc_primary: 'FOOD_AND_DRINK',
+              pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD',
+              allocated_amount: 500,
+              spent_amount: 0,
+              tags: [],
+              match_logic: 'category_only',
+              created_at: '2025-01-01T00:00:00Z',
+              updated_at: '2025-01-01T00:00:00Z',
+            },
+          ],
+        }),
+        loading: false,
+        error: null,
+        refetch: mockBudgetDetailRefetch,
+      })
+
+      renderWithRouter()
+
+      expect(screen.getAllByText('$3,000.00').length).toBeGreaterThan(0)
+    })
   })
 
   describe('Issue #1048: Expected Income header reads expected_income, not amount', () => {

@@ -1,8 +1,17 @@
--- Issue #1203: 2-level custom category hierarchy via self-FK.
+-- Issue #1203: custom category hierarchy via self-FK.
 -- A custom category nests under another CUSTOM primary via parent_id.
--- Mutually exclusive with parent_pfc_primary. Max 2 levels (no grandchildren).
--- Same-user ownership, no-grandchildren, and no-nesting-a-parent are enforced
--- by the trigger below (the bare self-FK only proves the parent row exists).
+-- Mutually exclusive with parent_pfc_primary. This trigger blocks a custom
+-- category from nesting under a row that is ITSELF nested via parent_id (no
+-- custom-to-custom-to-custom chain) — it does NOT cap total depth at two.
+-- A row nested via parent_pfc_primary (a PFC root) may still have a custom
+-- child nested under it via parent_id, giving a legal three-level chain
+-- (pfc root -> custom child -> custom grandchild), since this trigger only
+-- ever inspects the parent's parent_id, never its parent_pfc_primary. See
+-- analytics_category_path.go (Issue #1630 / #1626) for the reporting queries
+-- that already traverse that third level.
+-- Same-user ownership, no-custom-grandchildren, and no-nesting-a-parent are
+-- enforced by the trigger below (the bare self-FK only proves the parent row
+-- exists).
 -- NOTE: the supporting indexes are created CONCURRENTLY in migration 000079
 -- (a separate file so they are not wrapped in this migration's transaction).
 
@@ -49,7 +58,9 @@ BEGIN
     END IF;
 END $$;
 
--- Trigger backstop: same-user, 2-level limit, and a row with children cannot be nested.
+-- Trigger backstop: same-user, no custom-to-custom-to-custom chain (a parent_id
+-- parent must itself be top-level via parent_id — a parent_pfc_primary parent is
+-- untouched by this check, see header comment), and a row with children cannot be nested.
 CREATE OR REPLACE FUNCTION enforce_custom_category_two_levels()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -93,4 +104,4 @@ BEGIN
 END $$;
 
 COMMENT ON COLUMN custom_categories.parent_id IS
-    'Self-FK: nests this custom category under another CUSTOM primary. Mutually exclusive with parent_pfc_primary. 2 levels max (no grandchildren).';
+    'Self-FK: nests this custom category under another CUSTOM primary. Mutually exclusive with parent_pfc_primary. Blocks a custom-to-custom-to-custom chain (this parent cannot itself be nested via parent_id); a legal three-level chain still exists via a parent_pfc_primary root (pfc root -> custom child -> custom grandchild).';

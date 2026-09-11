@@ -9,6 +9,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/mockassert"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -92,9 +93,63 @@ func (m *MockBudgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, bud
 	return args.Get(0).(map[string][]domain.BudgetCategory), args.Error(1)
 }
 
+// BeginTx is a mock implementation (Issue #1630 B3b).
+func (m *MockBudgetRepository) BeginTx(ctx context.Context) (repository.Transaction, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(repository.Transaction), args.Error(1)
+}
+
+// GetCategoriesByBudgetIDLockedInTx is a mock implementation (Issue #1630 B3b).
+func (m *MockBudgetRepository) GetCategoriesByBudgetIDLockedInTx(ctx context.Context, tx repository.Transaction, budgetID string) ([]domain.BudgetCategory, error) {
+	args := m.Called(ctx, tx, budgetID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
+}
+
+// AddCategoryChecked is a mock implementation (Issue #1630 B3). Unlike the real repository, the
+// mock does NOT run domain.DuplicateParentIdentity / domain.EscapedNestedChild itself — tests
+// stub the return value directly, since AddCategory's own in-memory pre-check already exercises
+// those guards against the initial GetByID snapshot and the repository's dedicated tests
+// (budget_repository_test.go / the B3 concurrency integration test) exercise the locked re-check.
+// On a stubbed nil error, echoes candidate back (mirroring the real repository, which returns the
+// same row it inserted) unless the stub supplied an explicit replacement category.
+func (m *MockBudgetRepository) AddCategoryChecked(ctx context.Context, budgetID string, candidate *domain.BudgetCategory) (*domain.BudgetCategory, error) {
+	args := m.Called(ctx, budgetID, candidate)
+	if err := args.Error(1); err != nil {
+		return nil, err
+	}
+	if args.Get(0) != nil {
+		return args.Get(0).(*domain.BudgetCategory), nil
+	}
+	return candidate, nil
+}
+
 func (m *MockBudgetRepository) UpdateCategory(ctx context.Context, category *domain.BudgetCategory) error {
 	args := m.Called(ctx, category)
 	return args.Error(0)
+}
+
+// UpdateCategoryChecked is a mock implementation (Issue #1630 B3). It does NOT run
+// domain.EscapedNestedChild itself (the same rationale as AddCategoryChecked's mock above), but it
+// DOES invoke mutate against the stubbed return object before returning it — mirroring
+// production's mutate-then-persist order — so a test stubbing a baseline category and asserting on
+// the field mutations req applied (e.g. a new AllocatedAmount) sees them reflected in the result,
+// the same way it did against the old plain UpdateCategory mock's pass-through.
+func (m *MockBudgetRepository) UpdateCategoryChecked(ctx context.Context, budgetID, categoryID string, mutate func(category *domain.BudgetCategory) error) (*domain.BudgetCategory, error) {
+	args := m.Called(ctx, budgetID, categoryID, mutate)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	result := args.Get(0).(*domain.BudgetCategory)
+	if err := mutate(result); err != nil {
+		return nil, err
+	}
+	return result, args.Error(1)
 }
 
 func (m *MockBudgetRepository) UpdateCategorySpentAmount(ctx context.Context, categoryID string, spentAmount float64) error {
@@ -105,14 +160,6 @@ func (m *MockBudgetRepository) UpdateCategorySpentAmount(ctx context.Context, ca
 func (m *MockBudgetRepository) DeleteCategory(ctx context.Context, id, budgetID string, auditLog repository.AuditLogRepository) error {
 	args := m.Called(ctx, id, budgetID)
 	return args.Error(0)
-}
-
-func (m *MockBudgetRepository) GetCategoriesMatchingTransaction(ctx context.Context, userID string, effective *domain.EffectiveCategory) ([]domain.BudgetCategory, error) {
-	args := m.Called(ctx, userID, effective)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
 }
 
 // Envelope budgeting methods (Issue #491)
@@ -169,6 +216,25 @@ func (m *MockBudgetRepository) InsertGoalDetach(ctx context.Context, seriesID, b
 func (m *MockBudgetRepository) DeleteGoalDetach(ctx context.Context, seriesID, goalID string) error {
 	args := m.Called(ctx, seriesID, goalID)
 	return args.Error(0)
+}
+
+// Issue #1630 Task B7 stubs.
+func (m *MockBudgetRepository) AuditBudgetHierarchy(ctx context.Context, budget *domain.Budget, periodStart, periodEnd time.Time, spentCalc repository.BudgetHierarchySpentCalculator) (domain.BudgetHierarchyAuditVerdict, error) {
+	args := m.Called(ctx, budget, periodStart, periodEnd, spentCalc)
+	verdict, _ := args.Get(0).(domain.BudgetHierarchyAuditVerdict)
+	return verdict, args.Error(1)
+}
+
+func (m *MockBudgetRepository) BudgetIDsWithUnexaminedHierarchy(ctx context.Context, limit int) ([]string, error) {
+	args := m.Called(ctx, limit)
+	ids, _ := args.Get(0).([]string)
+	return ids, args.Error(1)
+}
+
+func (m *MockBudgetRepository) ListBudgetHierarchyAuditFindings(ctx context.Context, outcomes []string, limit int) ([]domain.BudgetHierarchyAuditVerdict, error) {
+	args := m.Called(ctx, outcomes, limit)
+	findings, _ := args.Get(0).([]domain.BudgetHierarchyAuditVerdict)
+	return findings, args.Error(1)
 }
 
 func (m *MockBudgetRepository) GetDetachedGoalIDsForSeries(ctx context.Context, seriesID string) ([]string, error) {
@@ -228,7 +294,7 @@ func createTestCreateBudgetRequest() *domain.CreateBudgetRequest {
 	return &domain.CreateBudgetRequest{
 		Name:         "Monthly Expenses",
 		Period:       domain.BudgetPeriodMonthly,
-		StartDate:    time.Now(),
+		StartDate:    domain.FlexibleDate(time.Now()),
 		Amount:       1000.00,
 		CurrencyCode: "USD",
 	}
@@ -636,9 +702,11 @@ func TestBudgetService_AddCategory_Success(t *testing.T) {
 		AllocatedAmount: 300.00,
 	}
 
-	// Setup mocks — category validation is deferred to domain so only GetByID and CreateCategory are called.
+	// Setup mocks — category validation is deferred to domain so only GetByID and
+	// AddCategoryChecked are called (Issue #1630 B3: AddCategoryChecked replaces CreateCategory
+	// as the atomic locked insert).
 	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-	mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+	mockBudgetRepo.On("AddCategoryChecked", ctx, budgetID, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil, nil)
 
 	// Execute
 	category, err := service.AddCategory(ctx, userID, budgetID, req)
@@ -679,9 +747,12 @@ func TestBudgetService_UpdateCategory_Success(t *testing.T) {
 		AllocatedAmount: &newAmount,
 	}
 
-	// Setup mocks
+	// Setup mocks. UpdateCategoryChecked replaces UpdateCategory as the atomic locked
+	// re-read-and-persist (Issue #1630 B3); the mock invokes the service's mutate closure against
+	// the fresh snapshot below, mirroring the real repository re-reading the row under lock.
 	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-	mockBudgetRepo.On("UpdateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+	freshSnapshot := existingBudget.Categories[0]
+	mockBudgetRepo.On("UpdateCategoryChecked", ctx, budgetID, categoryID, mock.Anything).Return(&freshSnapshot, nil)
 
 	// Execute
 	category, err := service.UpdateCategory(ctx, userID, budgetID, categoryID, req)
@@ -690,6 +761,168 @@ func TestBudgetService_UpdateCategory_Success(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, category)
 	assert.Equal(t, newAmount, category.AllocatedAmount)
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_UpdateCategory_RejectsChildEscapingContainment pins the HIGH-severity gap
+// this commit closes: a conforming nested child (category_only, contained under a category_only
+// parent) can be PATCHed to a match_logic that escapes containment — recreating
+// EscapedNestedChild's double-count as NEW data, not grandfathered. Issue #1630 gap analysis.
+func TestBudgetService_UpdateCategory_RejectsChildEscapingContainment(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+	childID := "cat-child"
+	escapingLogic := domain.MatchLogicOr
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:              "cat-parent",
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			MatchLogic:      domain.MatchLogicCategoryOnly,
+			AllocatedAmount: 300.00,
+		},
+		{
+			ID:              childID,
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			PFCDetailed:     strPtr("FOOD_AND_DRINK_FAST_FOOD"),
+			MatchLogic:      domain.MatchLogicCategoryOnly,
+			AllocatedAmount: 50.00,
+		},
+	}
+
+	req := &domain.UpdateBudgetCategoryRequest{
+		MatchLogic: &escapingLogic,
+		Tags:       &[]string{"splurge"},
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+
+	category, err := service.UpdateCategory(ctx, userID, budgetID, childID, req)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrEscapedNestedChild)
+	assert.ErrorIs(t, err, domain.ErrInvalidBudget)
+	assert.Contains(t, err.Error(), "match_logic")
+	assert.Nil(t, category)
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "UpdateCategoryChecked")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_UpdateCategory_RejectsParentOrphaningContainedChild pins the OTHER
+// direction of the same gap: the row being edited may itself be the PARENT. Flipping a
+// category_only parent to 'and' removes the containment envelope an existing, unchanged,
+// still-conforming child relies on to stay excluded from top-level totals — recreating the
+// same double count via the reverse edit. Previously caught by a separate
+// domain.WouldOrphanContainedChildren guard; fixwave 4 widened domain.EscapedNestedChild to
+// subsume that transition (see its doc comment), and removed the separate function — this test
+// still passes unchanged because it only asserts errors.Is(err, ErrEscapedNestedChild), the
+// sentinel both guards always wrapped.
+func TestBudgetService_UpdateCategory_RejectsParentOrphaningContainedChild(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+	parentID := "cat-parent"
+	nonContainingLogic := domain.MatchLogicAnd
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:              parentID,
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			MatchLogic:      domain.MatchLogicCategoryOnly,
+			AllocatedAmount: 300.00,
+		},
+		{
+			ID:              "cat-child",
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			PFCDetailed:     strPtr("FOOD_AND_DRINK_FAST_FOOD"),
+			MatchLogic:      domain.MatchLogicCategoryOnly,
+			AllocatedAmount: 50.00,
+		},
+	}
+
+	req := &domain.UpdateBudgetCategoryRequest{
+		MatchLogic: &nonContainingLogic,
+		Tags:       &[]string{"splurge"},
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+
+	category, err := service.UpdateCategory(ctx, userID, budgetID, parentID, req)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrEscapedNestedChild)
+	assert.ErrorIs(t, err, domain.ErrInvalidBudget)
+	assert.Contains(t, err.Error(), "match_logic")
+	assert.Nil(t, category)
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "UpdateCategoryChecked")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_UpdateCategory_AllowsUnrelatedMatchLogicChange confirms the two guards
+// above do not over-reach: editing a top-level category's match_logic with no hierarchical
+// relationship to any sibling remains legal.
+func TestBudgetService_UpdateCategory_AllowsUnrelatedMatchLogicChange(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+	categoryID := "cat-solo"
+	newLogic := domain.MatchLogicOr
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:              categoryID,
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			MatchLogic:      domain.MatchLogicCategoryOnly,
+			AllocatedAmount: 300.00,
+		},
+	}
+
+	req := &domain.UpdateBudgetCategoryRequest{
+		MatchLogic: &newLogic,
+		Tags:       &[]string{"splurge"},
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	freshSnapshot := existingBudget.Categories[0]
+	mockBudgetRepo.On("UpdateCategoryChecked", ctx, budgetID, categoryID, mock.Anything).Return(&freshSnapshot, nil)
+
+	category, err := service.UpdateCategory(ctx, userID, budgetID, categoryID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, category)
+	assert.Equal(t, newLogic, category.MatchLogic)
 	mockBudgetRepo.AssertExpectations(t)
 }
 
@@ -864,7 +1097,7 @@ func TestBudgetService_CreateBudget_ExpectedIncomeWins(t *testing.T) {
 	req := &domain.CreateBudgetRequest{
 		Name:           "Monthly Budget",
 		Period:         domain.BudgetPeriodMonthly,
-		StartDate:      time.Now(),
+		StartDate:      domain.FlexibleDate(time.Now()),
 		Amount:         1000.0,
 		CurrencyCode:   "USD",
 		ExpectedIncome: &expectedIncome,
@@ -894,7 +1127,7 @@ func TestBudgetService_CreateBudget_AmountFallback(t *testing.T) {
 	req := &domain.CreateBudgetRequest{
 		Name:         "Monthly Budget",
 		Period:       domain.BudgetPeriodMonthly,
-		StartDate:    time.Now(),
+		StartDate:    domain.FlexibleDate(time.Now()),
 		Amount:       1000.0,
 		CurrencyCode: "USD",
 		// ExpectedIncome is nil
@@ -925,7 +1158,7 @@ func TestBudgetService_CreateBudget_ExpectedIncomeOnly(t *testing.T) {
 	req := &domain.CreateBudgetRequest{
 		Name:           "Monthly Budget",
 		Period:         domain.BudgetPeriodMonthly,
-		StartDate:      time.Now(),
+		StartDate:      domain.FlexibleDate(time.Now()),
 		Amount:         3000.0, // must be positive to pass validation
 		CurrencyCode:   "USD",
 		ExpectedIncome: &expectedIncome,
@@ -957,7 +1190,7 @@ func TestBudgetService_CreateBudget_RejectsZeroAmount(t *testing.T) {
 	req := &domain.CreateBudgetRequest{
 		Name:         "Budget",
 		Period:       domain.BudgetPeriodMonthly,
-		StartDate:    time.Now(),
+		StartDate:    domain.FlexibleDate(time.Now()),
 		Amount:       0, // triggers "amount must be positive"
 		CurrencyCode: "USD",
 	}
@@ -1172,7 +1405,7 @@ func TestBudgetService_AddCategory_PopulatesPFCDisplay(t *testing.T) {
 	}
 
 	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-	mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+	mockBudgetRepo.On("AddCategoryChecked", ctx, budgetID, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil, nil)
 
 	category, err := service.AddCategory(ctx, userID, budgetID, req)
 
@@ -1218,7 +1451,7 @@ func TestBudgetService_CreateBudget_CarriesForwardSavingsCategories(t *testing.T
 			Period:       domain.BudgetPeriodMonthly,
 			Amount:       3000.00,
 			CurrencyCode: "USD",
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 		}
 
 		goalID1 := "goal-1"
@@ -1268,7 +1501,7 @@ func TestBudgetService_CreateBudget_CarriesForwardSavingsCategories(t *testing.T
 			Period:       domain.BudgetPeriodMonthly,
 			Amount:       3000.00,
 			CurrencyCode: "USD",
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 		}
 
 		goalID1 := "goal-1"
@@ -1312,7 +1545,7 @@ func TestBudgetService_CreateBudget_CarriesForwardSavingsCategories(t *testing.T
 			Period:       domain.BudgetPeriodMonthly,
 			Amount:       3000.00,
 			CurrencyCode: "USD",
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 		}
 
 		mockBudgetRepo.On("CreateWithCategories", ctx, mock.AnythingOfType("*domain.Budget"), mock.Anything).Return(nil)
@@ -1599,7 +1832,7 @@ func TestBudgetService_CarryForward_DetachPersistsAcrossSeriesPeriods(t *testing
 			Period:       domain.BudgetPeriodMonthly,
 			Amount:       3000.00,
 			CurrencyCode: "USD",
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 		}
 
 		activeGoals := []*domain.SavingsGoal{
@@ -1730,7 +1963,7 @@ func TestBudgetService_AddCategory_SavingsKind(t *testing.T) {
 		svc.SetGoalOwnershipChecker(mockChecker)
 
 		mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-		mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+		mockBudgetRepo.On("AddCategoryChecked", ctx, budgetID, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil, nil)
 
 		category, err := svc.AddCategory(ctx, userID, budgetID, req)
 
@@ -1758,7 +1991,7 @@ func TestBudgetService_AddCategory_SavingsKind(t *testing.T) {
 		svc.SetGoalOwnershipChecker(mockChecker)
 
 		mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-		// CreateCategory must NOT be called
+		// AddCategoryChecked must NOT be called
 
 		_, err := svc.AddCategory(ctx, userID, budgetID, req)
 
@@ -1784,7 +2017,7 @@ func TestBudgetService_AddCategory_SavingsKind(t *testing.T) {
 		svc.SetGoalOwnershipChecker(mockChecker)
 
 		mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-		mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+		mockBudgetRepo.On("AddCategoryChecked", ctx, budgetID, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil, nil)
 
 		category, err := svc.AddCategory(ctx, userID, budgetID, req)
 
@@ -1817,8 +2050,8 @@ func TestBudgetService_AddCategory_SavingsKind(t *testing.T) {
 		require.Error(t, err, "AddCategory with nil checker and a savings category must return an error (fail-closed)")
 		assert.Nil(t, category)
 		assert.Contains(t, err.Error(), "ownership checker not configured")
-		// CreateCategory must NOT be called — the IDOR check blocks the write.
-		mockBudgetRepo.AssertNotCalled(t, "CreateCategory")
+		// AddCategoryChecked must NOT be called — the IDOR check blocks the write.
+		mockBudgetRepo.AssertNotCalled(t, "AddCategoryChecked")
 	})
 }
 
@@ -1846,7 +2079,7 @@ func TestBudgetService_CreateBudget_ValidatesCategories(t *testing.T) {
 		req := &domain.CreateBudgetRequest{
 			Name:         "Budget With Bad Category",
 			Period:       domain.BudgetPeriodMonthly,
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 			Amount:       1500.00,
 			CurrencyCode: "USD",
 			Categories: []domain.CreateBudgetCategoryRequest{
@@ -1874,7 +2107,7 @@ func TestBudgetService_CreateBudget_ValidatesCategories(t *testing.T) {
 		req := &domain.CreateBudgetRequest{
 			Name:         "Budget With Invalid PFC",
 			Period:       domain.BudgetPeriodMonthly,
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 			Amount:       1500.00,
 			CurrencyCode: "USD",
 			Categories: []domain.CreateBudgetCategoryRequest{
@@ -1924,7 +2157,7 @@ func TestBudgetService_CreateBudget_SavingsCategory_IDOR(t *testing.T) {
 		req := &domain.CreateBudgetRequest{
 			Name:         "Budget With Savings",
 			Period:       domain.BudgetPeriodMonthly,
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 			Amount:       2000.00,
 			CurrencyCode: "USD",
 			Categories: []domain.CreateBudgetCategoryRequest{
@@ -1958,7 +2191,7 @@ func TestBudgetService_CreateBudget_SavingsCategory_IDOR(t *testing.T) {
 		req := &domain.CreateBudgetRequest{
 			Name:         "Budget With Own Savings",
 			Period:       domain.BudgetPeriodMonthly,
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 			Amount:       3000.00,
 			CurrencyCode: "USD",
 			Categories: []domain.CreateBudgetCategoryRequest{
@@ -2051,7 +2284,443 @@ func TestBudgetService_AddCategory_RejectsCrossUserCustomCategory(t *testing.T) 
 
 	assert.ErrorIs(t, err, domain.ErrCategoryNotFound)
 	assert.Nil(t, category)
-	mockBudgetRepo.AssertNotCalled(t, "CreateCategory")
+	mockBudgetRepo.AssertNotCalled(t, "AddCategoryChecked")
 	mockBudgetRepo.AssertExpectations(t)
 	mockCategoryRepo.AssertExpectations(t)
 }
+
+// TestBudgetService_AddCategory_RejectsDuplicateParentIdentity_PFC pins Issue #1630 Task 4:
+// budgetedParentSets keys a parent by its pfc_primary VALUE, so a second primary-only row for
+// the same pfc_primary would silently collide with the first in that map. AddCategory must
+// reject the second row rather than persist an ambiguous parent.
+func TestBudgetService_AddCategory_RejectsDuplicateParentIdentity_PFC(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:              "cat-existing",
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			AllocatedAmount: 300.00,
+		},
+	}
+
+	req := &domain.CreateBudgetCategoryRequest{
+		CategoryKind:    "pfc",
+		PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+		AllocatedAmount: 100.00,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+
+	category, err := service.AddCategory(ctx, userID, budgetID, req)
+
+	assert.ErrorIs(t, err, domain.ErrDuplicateParentCategory)
+	assert.Nil(t, category)
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "AddCategoryChecked")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_AddCategory_RejectsDuplicateParentIdentity_Custom mirrors the PFC case
+// above for custom categories, where custom_category_id itself is the parent identity.
+func TestBudgetService_AddCategory_RejectsDuplicateParentIdentity_Custom(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+	customID := "11111111-1111-1111-1111-111111111111"
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:               "cat-existing",
+			BudgetID:         budgetID,
+			CategoryKind:     "custom",
+			CustomCategoryID: &customID,
+			AllocatedAmount:  300.00,
+		},
+	}
+
+	req := &domain.CreateBudgetCategoryRequest{
+		CategoryKind:     "custom",
+		CustomCategoryID: &customID,
+		AllocatedAmount:  100.00,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{customID}).
+		Return(map[string]string{customID: "Groceries"}, nil)
+	mockCategoryRepo.On("GetByID", ctx, customID).
+		Return(&domain.CustomCategory{ID: customID}, nil)
+
+	category, err := service.AddCategory(ctx, userID, budgetID, req)
+
+	assert.ErrorIs(t, err, domain.ErrDuplicateParentCategory)
+	assert.Nil(t, category)
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "AddCategoryChecked")
+	mockBudgetRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_AddCategory_AllowsSecondChildUnderSamePrimary confirms the guard above
+// does not over-reach: two DETAILED children under the same budgeted primary are a normal,
+// legal multi-child budget, not a duplicate parent (Issue #1630 Task 4).
+func TestBudgetService_AddCategory_AllowsSecondChildUnderSamePrimary(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:              "cat-parent",
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			AllocatedAmount: 300.00,
+		},
+		{
+			ID:              "cat-child-1",
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			PFCDetailed:     strPtr("FOOD_AND_DRINK_FAST_FOOD"),
+			AllocatedAmount: 50.00,
+		},
+	}
+
+	req := &domain.CreateBudgetCategoryRequest{
+		CategoryKind:    "pfc",
+		PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+		PFCDetailed:     strPtr("FOOD_AND_DRINK_COFFEE"),
+		AllocatedAmount: 20.00,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockBudgetRepo.On("AddCategoryChecked", ctx, budgetID, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil, nil)
+
+	category, err := service.AddCategory(ctx, userID, budgetID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, category)
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_CreateBudget_RejectsDuplicateParentIdentityWithinBatch pins the
+// batch-create half of Issue #1630 Task 4: a single CreateBudget request naming the same
+// parent identity twice must fail atomically, before any row is persisted.
+func TestBudgetService_CreateBudget_RejectsDuplicateParentIdentityWithinBatch(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	req := createTestCreateBudgetRequest()
+	req.Categories = []domain.CreateBudgetCategoryRequest{
+		{CategoryKind: "pfc", PFCPrimary: strPtr("FOOD_AND_DRINK"), AllocatedAmount: 300.00},
+		{CategoryKind: "pfc", PFCPrimary: strPtr("FOOD_AND_DRINK"), AllocatedAmount: 100.00},
+	}
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	assert.ErrorIs(t, err, domain.ErrDuplicateParentCategory)
+	assert.Nil(t, budget)
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "CreateWithCategories")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_AddCategory_RejectsEscapedNestedChild_PFC pins Issue #1630's HIGH-severity
+// adversarial-review finding: a detailed PFC child whose match_logic escapes containment
+// (here, 'or') under an existing budgeted category_only primary must be rejected at write
+// time with a 400 naming match_logic, not silently persisted to double-count spend.
+func TestBudgetService_AddCategory_RejectsEscapedNestedChild_PFC(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:              "cat-parent",
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			MatchLogic:      domain.MatchLogicCategoryOnly,
+			AllocatedAmount: 300.00,
+		},
+	}
+
+	req := &domain.CreateBudgetCategoryRequest{
+		CategoryKind:    "pfc",
+		PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+		PFCDetailed:     strPtr("FOOD_AND_DRINK_FAST_FOOD"),
+		AllocatedAmount: 50.00,
+		MatchLogic:      domain.MatchLogicOr,
+		Tags:            []string{"splurge"},
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+
+	category, err := service.AddCategory(ctx, userID, budgetID, req)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrEscapedNestedChild)
+	assert.ErrorIs(t, err, domain.ErrInvalidBudget)
+	assert.Contains(t, err.Error(), "match_logic")
+	assert.Nil(t, category)
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "AddCategoryChecked")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_AddCategory_AllowsProperlyContainedNestedChild confirms the guard above
+// does not over-reach: a category_only parent with a category_only nested child stays
+// well-formed (Issue #1630's original contained-nesting shape must remain legal).
+func TestBudgetService_AddCategory_AllowsProperlyContainedNestedChild(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Categories = []domain.BudgetCategory{
+		{
+			ID:              "cat-parent",
+			BudgetID:        budgetID,
+			CategoryKind:    "pfc",
+			PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+			MatchLogic:      domain.MatchLogicCategoryOnly,
+			AllocatedAmount: 300.00,
+		},
+	}
+
+	req := &domain.CreateBudgetCategoryRequest{
+		CategoryKind:    "pfc",
+		PFCPrimary:      strPtr("FOOD_AND_DRINK"),
+		PFCDetailed:     strPtr("FOOD_AND_DRINK_FAST_FOOD"),
+		AllocatedAmount: 50.00,
+		MatchLogic:      domain.MatchLogicCategoryOnly,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockBudgetRepo.On("AddCategoryChecked", ctx, budgetID, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil, nil)
+
+	category, err := service.AddCategory(ctx, userID, budgetID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, category)
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_CreateBudget_RejectsEscapedNestedChildWithinBatch_CustomParentAfterChild
+// pins the ordering half of Issue #1630's HIGH-severity finding: a batch may legally name the
+// escaping CHILD before its containing PARENT in req.Categories (CreateBudget has no ordering
+// requirement today), and the guard must still catch the pair regardless of which one is
+// processed first.
+func TestBudgetService_CreateBudget_RejectsEscapedNestedChildWithinBatch_CustomParentAfterChild(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	childID := "22222222-2222-2222-2222-222222222222"
+
+	req := createTestCreateBudgetRequest()
+	req.Categories = []domain.CreateBudgetCategoryRequest{
+		// Child named FIRST: a custom category nested (via parent_pfc_primary) under
+		// FOOD_AND_DRINK, whose own match_logic is 'tag_only' — escapes containment.
+		{
+			CategoryKind:     "custom",
+			CustomCategoryID: &childID,
+			AllocatedAmount:  50.00,
+			MatchLogic:       domain.MatchLogicTagOnly,
+			Tags:             []string{"splurge"},
+		},
+		// Parent named SECOND: the budgeted category_only PFC primary the child nests under.
+		{CategoryKind: "pfc", PFCPrimary: strPtr("FOOD_AND_DRINK"), AllocatedAmount: 300.00, MatchLogic: domain.MatchLogicCategoryOnly},
+	}
+
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{childID}).
+		Return(map[string]string{childID: "Fast Food Splurges"}, nil)
+	mockCategoryRepo.On("GetByID", ctx, childID).
+		Return(&domain.CustomCategory{ID: childID, ParentPFCPrimary: strPtr("FOOD_AND_DRINK")}, nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrEscapedNestedChild)
+	assert.ErrorIs(t, err, domain.ErrInvalidBudget)
+	assert.Contains(t, err.Error(), "match_logic")
+	assert.Nil(t, budget)
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "CreateWithCategories")
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// ===========================================================================
+// Issue #1630 review round 2: a custom-period budget's end_date must cover the whole
+// calendar day it names when date-only, and be respected exactly when a full RFC3339
+// timestamp — matching FlexibleDate.EndOfDay's contract.
+// ===========================================================================
+
+// TestBudgetService_CreateBudget_CustomPeriod_DateOnlyEndCoversWholeDay is the
+// GREEN-already regression guard: a date-only end_date ("2026-09-30") must produce a
+// stored Budget.EndDate covering the ENTIRE day (through 23:59:59.999999999), not just
+// midnight — otherwise every same-day transaction after midnight is silently excluded
+// from the budget's own period.
+func TestBudgetService_CreateBudget_CustomPeriod_DateOnlyEndCoversWholeDay(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	req := &domain.CreateBudgetRequest{
+		Name:         "Custom Period Budget",
+		Period:       domain.BudgetPeriodCustom,
+		StartDate:    domain.FlexibleDate(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)),
+		EndDate:      ptrFlexibleDate(domain.FlexibleDate(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC))),
+		Amount:       1000.00,
+		CurrencyCode: "USD",
+	}
+
+	var captured *domain.Budget
+	mockBudgetRepo.On("CreateWithCategories", ctx, mock.AnythingOfType("*domain.Budget"), mock.Anything).
+		Run(func(args mock.Arguments) {
+			captured = args.Get(1).(*domain.Budget)
+		}).Return(nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+	require.NoError(t, err)
+	require.NotNil(t, budget)
+	require.NotNil(t, captured)
+	require.NotNil(t, captured.EndDate)
+
+	want := time.Date(2026, 9, 30, 23, 59, 59, 999999999, time.UTC)
+	assert.True(t, captured.EndDate.Equal(want),
+		"a date-only end_date must cover the whole day: got %v, want %v", captured.EndDate, want)
+}
+
+// TestBudgetService_CreateBudget_CustomPeriod_RFC3339EndRespectedExactly is the RED/GREEN
+// test for the review finding: a full RFC3339 end_date ("2026-09-30T15:00:00Z") must be
+// stored EXACTLY as given, not pushed to nearly a full day later.
+//
+// RED (pre-fix): the old code called req.EndDate.Time() directly and any downstream
+// end-of-day extension (category_preview_service.go) applied unconditionally elsewhere —
+// but budget_service.go itself stored the raw timestamp with NO extension at all, so a
+// DATE-ONLY end_date here was the bug (never extended, silently truncating the budget's
+// last day). This test pins the RFC3339 side of the fix: it must remain untouched.
+func TestBudgetService_CreateBudget_CustomPeriod_RFC3339EndRespectedExactly(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	req := &domain.CreateBudgetRequest{
+		Name:         "Custom Period Budget RFC3339",
+		Period:       domain.BudgetPeriodCustom,
+		StartDate:    domain.FlexibleDate(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)),
+		EndDate:      ptrFlexibleDate(domain.FlexibleDate(time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC))),
+		Amount:       1000.00,
+		CurrencyCode: "USD",
+	}
+
+	var captured *domain.Budget
+	mockBudgetRepo.On("CreateWithCategories", ctx, mock.AnythingOfType("*domain.Budget"), mock.Anything).
+		Run(func(args mock.Arguments) {
+			captured = args.Get(1).(*domain.Budget)
+		}).Return(nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+	require.NoError(t, err)
+	require.NotNil(t, budget)
+	require.NotNil(t, captured)
+	require.NotNil(t, captured.EndDate)
+
+	want := time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC)
+	assert.True(t, captured.EndDate.Equal(want),
+		"a full RFC3339 end_date must be stored EXACTLY: got %v, want %v", captured.EndDate, want)
+}
+
+// TestBudgetService_UpdateBudget_CustomPeriod_RFC3339EndRespectedExactly mirrors the
+// create-path test above for UpdateBudget's own EndDate handling.
+func TestBudgetService_UpdateBudget_CustomPeriod_RFC3339EndRespectedExactly(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Period = domain.BudgetPeriodCustom
+	existingBudget.StartDate = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	existingBudget.ExpectedIncome = 1000.00
+	existingEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	existingBudget.EndDate = &existingEnd
+
+	newEnd := ptrFlexibleDate(domain.FlexibleDate(time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC)))
+	req := &domain.UpdateBudgetRequest{
+		EndDate: newEnd,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockBudgetRepo.On("Update", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+
+	budget, err := service.UpdateBudget(ctx, userID, budgetID, req)
+	require.NoError(t, err)
+	require.NotNil(t, budget)
+	require.NotNil(t, budget.EndDate)
+
+	want := time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC)
+	assert.True(t, budget.EndDate.Equal(want),
+		"a full RFC3339 end_date must be stored EXACTLY on update: got %v, want %v", budget.EndDate, want)
+}
+
+// ptrFlexibleDate returns a pointer to a domain.FlexibleDate literal.
+func ptrFlexibleDate(d domain.FlexibleDate) *domain.FlexibleDate { return &d }

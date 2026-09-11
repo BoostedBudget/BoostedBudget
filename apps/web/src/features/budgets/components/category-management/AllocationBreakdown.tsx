@@ -9,7 +9,7 @@ import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import type { BudgetCategory } from '../../types';
 import { Alert } from '@/components/ui/alert';
-import { formatBudgetCategoryLabel } from '../../types';
+import { formatBudgetCategoryLabel, filterTopLevel, isSubAllocationOfParent, formatCurrency } from '../../types';
 import type { CustomCategoryMap } from '../../utils/groupBudgetCategoriesByPrimary';
 
 export interface AllocationBreakdownProps {
@@ -40,13 +40,38 @@ function resolveCategoryLabel(cat: BudgetCategory, customCategoryMap?: CustomCat
 }
 
 /**
- * Formats a currency amount for display
+ * One nested sub-allocation segment, drawn inside its DIRECT parent's segment. Recursive: a
+ * grandchild's own children (its great-grandchildren, etc.) nest inside IT in turn, each level
+ * sized against its own immediate parent's allocation — see buildNestedSegments in
+ * AllocationBreakdown for why this must stay direct-parent-relative rather than root-relative.
  */
-function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(amount);
+interface NestedSegment {
+  id: string;
+  name: string;
+  amount: number;
+  percent: number;
+  children: NestedSegment[];
+}
+
+/**
+ * Renders one nested sub-allocation segment and recurses into its own children, so a
+ * grandchild's segment is drawn inside its direct parent's div (not the top-level root's).
+ */
+function renderNestedSegment(segment: NestedSegment) {
+  return (
+    <div
+      key={segment.id}
+      data-testid={`segment-${segment.id}`}
+      className="h-full min-w-[1px] border-l border-black/20 flex"
+      style={{
+        width: `${segment.percent}%`,
+        backgroundColor: 'rgba(0, 0, 0, 0.25)',
+      }}
+      aria-label={`${Math.round(segment.percent)}% of parent allocation`}
+    >
+      {segment.children.map(renderNestedSegment)}
+    </div>
+  );
 }
 
 /**
@@ -72,20 +97,48 @@ export function AllocationBreakdown({
   unallocated,
   customCategoryMap,
 }: AllocationBreakdownProps) {
+  // Top-level categories only (#1203/#1630) — a sub-allocation's amount is already inside
+  // its parent's, so summing every row (including nested children) double-counts.
+  const topLevel = useMemo(() => filterTopLevel(categories), [categories]);
+
   // Calculate totals
   const { totalAllocated, percentAllocated, isOverAllocated } = useMemo(() => {
-    const total = categories.reduce((sum, cat) => sum + cat.allocated_amount, 0);
+    const total = topLevel.reduce((sum, cat) => sum + cat.allocated_amount, 0);
     const percent = totalIncome > 0 ? Math.round((total / totalIncome) * 100) : 0;
     return {
       totalAllocated: total,
       percentAllocated: percent,
       isOverAllocated: total > totalIncome,
     };
-  }, [categories, totalIncome]);
+  }, [topLevel, totalIncome]);
 
-  // Generate segments for the bar
+  // Generate segments for the bar. The OUTER bar renders one segment per top-level
+  // category, sized against totalIncome — this is the dedup'd total (#1630). Any category
+  // that is a sub-allocation of that top-level row is rendered as a NESTED inner segment,
+  // recursively, each one sized against its own DIRECT parent's allocation (not the root's) —
+  // otherwise a grandchild in a chain X → C → G would be sized against X instead of its actual
+  // direct parent C. `isSubAllocationOfParent` is called with `directOnly: true` at every level
+  // of this recursion for exactly that reason: without it, G also matches transitively against
+  // X (see custom_grandparent_pfc_primary in types.ts), which is the right relation for
+  // "what rolls up into X's total" but the wrong one for "who is G nested directly under".
   const segments = useMemo(() => {
     if (totalIncome <= 0) return [];
+
+    const nonTopLevel = categories.filter((cat) => !topLevel.includes(cat));
+
+    const buildNestedSegments = (parent: BudgetCategory): NestedSegment[] =>
+      nonTopLevel
+        .filter((child) => isSubAllocationOfParent(child, parent, { directOnly: true }))
+        .map((child) => ({
+          id: child.id,
+          name: resolveCategoryLabel(child, customCategoryMap),
+          amount: child.allocated_amount,
+          percent:
+            parent.allocated_amount > 0
+              ? Math.min((child.allocated_amount / parent.allocated_amount) * 100, 100)
+              : 0,
+          children: buildNestedSegments(child),
+        }));
 
     const result: Array<{
       id: string;
@@ -94,10 +147,11 @@ export function AllocationBreakdown({
       percent: number;
       color: string;
       isUnallocated?: boolean;
+      children: NestedSegment[];
     }> = [];
 
-    // Add category segments
-    categories.forEach((cat, index) => {
+    // Add category segments (top-level only)
+    topLevel.forEach((cat, index) => {
       const percent = (cat.allocated_amount / totalIncome) * 100;
       result.push({
         id: cat.id,
@@ -105,6 +159,7 @@ export function AllocationBreakdown({
         amount: cat.allocated_amount,
         percent: Math.min(percent, 100), // Cap at 100%
         color: getCategoryColor(index),
+        children: buildNestedSegments(cat),
       });
     });
 
@@ -118,11 +173,12 @@ export function AllocationBreakdown({
         percent,
         color: 'var(--color-border)', // adapts to dark mode
         isUnallocated: true,
+        children: [],
       });
     }
 
     return result;
-  }, [categories, totalIncome, unallocated, isOverAllocated, customCategoryMap]);
+  }, [categories, topLevel, totalIncome, unallocated, isOverAllocated, customCategoryMap]);
 
   return (
     <div className="bg-muted border border-border rounded-lg p-4 flex flex-col gap-3">
@@ -167,7 +223,7 @@ export function AllocationBreakdown({
             key={segment.id}
             data-testid={`segment-${segment.id}`}
             className={cn(
-              'h-full min-w-[2px] transition-[width] duration-300',
+              'h-full min-w-[2px] transition-[width] duration-300 flex',
               segment.isUnallocated && 'opacity-50'
             )}
             style={{
@@ -175,7 +231,14 @@ export function AllocationBreakdown({
               backgroundColor: segment.color,
             }}
             aria-label={`${Math.round(segment.percent)}% of budget`}
-          />
+          >
+            {/* Nested sub-allocation segments (#1630) — drawn inside their parent's
+                segment rather than as siblings, so the outer bar's total width stays
+                the dedup'd total while still surfacing every category. Recursive: a
+                grandchild is drawn inside its DIRECT parent's segment, sized against
+                that parent's own allocation, not the root's (see buildNestedSegments). */}
+            {segment.children.map(renderNestedSegment)}
+          </div>
         ))}
         {segments.length === 0 && totalIncome === 0 && (
           <div

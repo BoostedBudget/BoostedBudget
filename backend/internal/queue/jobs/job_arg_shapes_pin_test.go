@@ -23,6 +23,7 @@ var canonicalMirroredArgs = []queue.Job{
 	InvestmentTransactionsSyncArgs{},
 	ItemCleanupArgs{},
 	EffectiveCategoryRefreshArgs{},
+	BudgetHierarchyResyncArgs{},
 	EmailChangePropagationArgs{},
 }
 

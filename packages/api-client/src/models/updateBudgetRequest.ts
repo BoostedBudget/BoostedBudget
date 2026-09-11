@@ -35,14 +35,18 @@ import type { IncomeSource } from './incomeSource';
 export interface UpdateBudgetRequest {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  /** Budget amount. If expected_income is also set and > 0 in this same request, expected_income wins and this field is overwritten to mirror it — set expected_income instead if you want it to be authoritative. */
   amount?: number;
   description?: string;
+  /** Required only when period is 'custom'. When set, must be strictly after start_date. Optional for every other period (weekly/monthly/quarterly/yearly) — omitting it there is valid, not an error. Accepts YYYY-MM-DD or a full RFC3339 timestamp. */
   end_date?: string;
+  /** Planned income for the period. When set and > 0, this wins over amount in this same request — amount is overwritten to mirror this value. Leave unset to have amount remain authoritative. */
   expected_income?: number;
   income_amount?: number;
   income_sources?: IncomeSource[];
   is_active?: boolean;
   name?: string;
   period?: string;
+  /** Budget start date. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp. */
   start_date?: string;
 }

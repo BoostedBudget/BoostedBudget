@@ -82,7 +82,7 @@ export function CashFlowSankeyChart({
       // the navigate event 13 lines below, and for the same reason: the income fan is flattened to
       // `in:l1:*` whatever a leaf's real depth, so an id-derived level is a plausible-looking
       // number that stops being true the moment anything but an expense node can focus.
-      trackEvent(ANALYTICS_EVENTS.REPORT_SANKEY_CATEGORY_FOCUSED, { depth: node.depth })
+      trackEvent(ANALYTICS_EVENTS.REPORT_SANKEY_CATEGORY_FOCUSED, { depth: node.categoryDepth })
       onFocus(action.key)
       return
     }
@@ -95,14 +95,25 @@ export function CashFlowSankeyChart({
     // Structure only — depth and direction. ⚠ depth comes from the NODE, never from splitting its
     // id: the income fan is flattened to `in:l1:*` whatever a leaf's real depth, so reading the id
     // would report every income navigation as level 1. Same PII rule as the focus event above.
-    trackEvent(ANALYTICS_EVENTS.REPORT_SANKEY_NODE_NAVIGATED, { depth: node.depth, direction })
+    trackEvent(ANALYTICS_EVENTS.REPORT_SANKEY_NODE_NAVIGATED, { depth: node.categoryDepth, direction })
     navigate(`/transactions?${navParams(action, direction, startDate, endDate).toString()}`)
   }
 
   const handleClick = (params: unknown) => {
     const p = params as { dataType?: string; data?: unknown; dataIndex?: number }
-    const node = p.dataType === 'node' && p.data && typeof (p.data as SankeyNode).id === 'string'
-      ? (p.data as SankeyNode)
+    // ⚠ Do NOT trust the shape of `p.data` beyond its `id` — the chart option below projects our
+    // node objects down to `id`/`name`/`itemStyle` before handing them to ECharts (see the `data:`
+    // assignment in the `option` memo), specifically so that no internal field (action, nodeKind,
+    // categoryDepth — nor any field added later) can leak into ECharts' chart config the way
+    // `categoryDepth`'s predecessor once did as a layout directive. ECharts hands that same
+    // projected object back in click params, so we resolve the REAL node from `sankeyData.nodes`
+    // by id rather than casting `p.data` to `SankeyNode` — the id is the only field guaranteed to
+    // survive the projection.
+    const clickedId = p.dataType === 'node' && p.data && typeof (p.data as { id?: unknown }).id === 'string'
+      ? (p.data as { id: string }).id
+      : undefined
+    const node = clickedId !== undefined
+      ? sankeyData.nodes.find(n => n.id === clickedId)
       : !p.dataType && typeof p.dataIndex === 'number'
       ? sankeyData.nodes[p.dataIndex] // dataIndex-only: test mock path; real ECharts always sets dataType
       : undefined
@@ -125,6 +136,11 @@ export function CashFlowSankeyChart({
       },
       series: [{
         type: 'sankey',
+        // ECharts' default (`nodeAlign: 'justify'`) pins every TERMINAL node to the right edge,
+        // stretching a leaf expense parent all the way to the chart's max depth. `'left'` lets
+        // each node sit at its own natural depth instead — which is what "a leaf expense parent
+        // terminates at its own column, no synthetic children invented" means in ECharts' terms.
+        nodeAlign: 'left',
         emphasis: { focus: 'adjacency' },
         label: {
           formatter: (params: unknown) => {
@@ -133,8 +149,14 @@ export function CashFlowSankeyChart({
           },
         },
         lineStyle: { color: 'gradient', opacity: 0.5 },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        data: sankeyData.nodes as any,
+        // Project explicitly — id/name/itemStyle only. ECharts' sankey series reads several
+        // node-data field names as layout/style directives (depth, value, label, emphasis,
+        // levels, …), so handing it our internal SankeyNode objects (action, nodeKind,
+        // categoryDepth) risks any of them colliding with an ECharts directive, silently and
+        // invisibly — which is exactly how `categoryDepth`'s predecessor field, named `depth`,
+        // once became ECharts' layout LAYER and inverted this chart's rendering. See
+        // `.superpowers/sdd/brainstorming-writing-plans-using-super-fancy-melody/sankey-root-cause.md`.
+        data: sankeyData.nodes.map(n => ({ id: n.id, name: n.name, itemStyle: n.itemStyle })),
         links: sankeyData.links,
       }],
     }

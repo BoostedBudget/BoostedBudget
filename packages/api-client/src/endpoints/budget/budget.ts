@@ -82,7 +82,7 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 
 /**
- * Returns the count and total amount of transactions matching the given category configuration within the date range.
+ * Returns the count and total amount of transactions matching the given category configuration within the date range. When the targeted category is a pfc_primary (a pfc category with pfc_primary set and pfc_detailed omitted) or a parent custom category, transaction_count/total_amount INCLUDE transactions filed under custom categories nested under it — direct_transaction_count/direct_amount report only what was filed directly under the targeted category itself, and children breaks the rolled-up total down by each nested custom category.
  * @summary Preview category matches
  */
 export const previewCategoryMatches = (

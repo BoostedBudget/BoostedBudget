@@ -412,6 +412,10 @@ REAL_CONCURRENTLY_UP_FILES=(
     # #1626 Phase 3 Task G: the partial UNIQUE index scoped to the daily_capture source. Sole
     # statement in its file, CONCURRENTLY, exactly like 000182 above.
     000194_add_balance_snapshots_daily_capture_unique_index.up.sql
+    # #1630 B7: the hierarchy-audit ledger's outcome index. A real CREATE INDEX CONCURRENTLY, and
+    # the SOLE statement in its file — split out of 000195 for exactly that reason, mirroring the
+    # 000078/000079 split.
+    000196_budget_hierarchy_audits_outcome_index.up.sql
 )
 # Files whose ONLY occurrences of the keyword are prose (comments) or SQL string data. Every one of
 # these is a file the old full-line-only strip happened to get right; they stay listed because the
@@ -429,6 +433,10 @@ PROSE_ONLY_CONCURRENTLY_UP_FILES=(
     # EXPLAINING why 000194 cannot share a file with it; its own statements are a COMMENT ON COLUMN
     # and a DO block, both of which need -1's single-transaction semantics.
     000193_balance_snapshot_daily_capture_provenance.up.sql
+    # #1630 B7: the hierarchy-audit ledger. Mentions CONCURRENTLY only in comments explaining why
+    # its own index is NOT concurrent (the table is created empty in the same migration, so there
+    # is no lock to avoid) and why the outcome index was split into 000196 instead.
+    000195_budget_hierarchy_audit_ledger.up.sql
 )
 
 for file in "${REAL_CONCURRENTLY_UP_FILES[@]}"; do

@@ -81,6 +81,32 @@ func newTransferBoostRequest(fromAccountID, toAccountID string) *domain.CreateBo
 	}
 }
 
+// categoryRolloverBoostActions returns a marshalled category_rollover action JSON.
+func categoryRolloverBoostActions(sourceBudgetCategoryID string) json.RawMessage {
+	b, _ := json.Marshal(map[string]interface{}{
+		"source_budget_category_id": sourceBudgetCategoryID,
+		"rollover_type":             "full",
+	})
+	return b
+}
+
+// newCategoryRolloverBoostRequest builds a CreateBoostRequest for a category_rollover rule.
+func newCategoryRolloverBoostRequest(sourceBudgetCategoryID, budgetID string) *domain.CreateBoostRequest {
+	return &domain.CreateBoostRequest{
+		Name:      "my rollover rule",
+		BoostType: domain.BoostTypeCategoryRollover,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: domain.EventBudgetPeriodEnd,
+		},
+		Conditions: []domain.BoostCondition{
+			{Field: "budget_category.remaining_amount", Operator: domain.ConditionOperatorGt, Value: "0", CategoryID: sourceBudgetCategoryID, BudgetID: budgetID},
+		},
+		ConditionLogic: "AND",
+		Actions:        categoryRolloverBoostActions(sourceBudgetCategoryID),
+	}
+}
+
 // ============================================================================
 // Tests — CreateBoost ownership validation (GAP AE)
 // ============================================================================
@@ -569,6 +595,97 @@ func TestUpdateBoost_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	assert.True(t, errors.Is(err, domain.ErrBoostConditionForbidden),
 		"foreign category rejection must be wrapped as ErrBoostConditionForbidden")
 	assert.Contains(t, err.Error(), "category_id", "error must identify the category_id ownership failure")
+}
+
+// TestCreateBoost_CategoryRollover_RejectsSubAllocationSource verifies that CreateBoost refuses a
+// category_rollover boost whose source_budget_category_id is a sub-allocation of another
+// budgeted category in the same budget (Issue #1630 B6) — rolling it independently would
+// double-count dollars already reflected in its parent's own rollover.
+func TestCreateBoost_CategoryRollover_RejectsSubAllocationSource(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-rollover"
+	parentPFC := "FOOD_AND_DRINK"
+	childPFC := "FOOD_AND_DRINK"
+	childDetailed := "FOOD_AND_DRINK_FAST_FOOD"
+	childCategoryID := "cat-child-sub-allocation"
+	budgetID := "budget-1"
+
+	boostRepo := &mockBoostsRepository{}
+	budgetRepo := &MockBudgetRepository{}
+	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, childCategoryID, userID).
+		Return(&domain.BudgetCategory{
+			ID: childCategoryID, BudgetID: budgetID, CategoryKind: "pfc",
+			PFCPrimary: &childPFC, PFCDetailed: &childDetailed, MatchLogic: domain.MatchLogicCategoryOnly,
+		}, nil)
+	// GetCategoriesByBudgetID returns the budget's FULL category set: the budgeted PFC-primary
+	// parent (making the child's detailed row a sub-allocation) plus the child itself.
+	budgetRepo.On("GetCategoriesByBudgetID", mock.Anything, budgetID).
+		Return([]domain.BudgetCategory{
+			{ID: "cat-parent", BudgetID: budgetID, CategoryKind: "pfc", PFCPrimary: &parentPFC, MatchLogic: domain.MatchLogicCategoryOnly},
+			{ID: childCategoryID, BudgetID: budgetID, CategoryKind: "pfc", PFCPrimary: &childPFC, PFCDetailed: &childDetailed, MatchLogic: domain.MatchLogicCategoryOnly},
+		}, nil)
+
+	svc := NewBoostService(boostRepo)
+	svc.SetBudgetRepo(budgetRepo)
+
+	req := newCategoryRolloverBoostRequest(childCategoryID, budgetID)
+	_, err := svc.CreateBoost(ctx, userID, req)
+	require.Error(t, err, "CreateBoost must refuse a rollover whose source is a sub-allocation")
+	assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
+		"sub-allocation refusal must be wrapped as ErrInvalidBoost for a 400, not a 403 or 500")
+	assert.Contains(t, err.Error(), "sub-allocation")
+}
+
+// TestCreateBoost_CategoryRollover_AcceptsTopLevelSource verifies that CreateBoost accepts a
+// category_rollover boost whose source is NOT a sub-allocation (the common, legitimate case) —
+// a control proving the new guard does not over-refuse.
+func TestCreateBoost_CategoryRollover_AcceptsTopLevelSource(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-rollover-ok"
+	sourcePFC := "FOOD_AND_DRINK"
+	sourceCategoryID := "cat-top-level"
+	budgetID := "budget-2"
+
+	boostRepo := &mockBoostsRepository{}
+	boostRepo.boosts = []*domain.Boost{}
+	budgetRepo := &MockBudgetRepository{}
+	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, sourceCategoryID, userID).
+		Return(&domain.BudgetCategory{
+			ID: sourceCategoryID, BudgetID: budgetID, CategoryKind: "pfc",
+			PFCPrimary: &sourcePFC, MatchLogic: domain.MatchLogicCategoryOnly,
+		}, nil)
+	// The budget's ONLY category is the source itself — no PFC-detailed child, no parent —
+	// so it is a top-level budgeted row, not a sub-allocation.
+	budgetRepo.On("GetCategoriesByBudgetID", mock.Anything, budgetID).
+		Return([]domain.BudgetCategory{
+			{ID: sourceCategoryID, BudgetID: budgetID, CategoryKind: "pfc", PFCPrimary: &sourcePFC, MatchLogic: domain.MatchLogicCategoryOnly},
+		}, nil)
+
+	svc := NewBoostService(boostRepo)
+	svc.SetBudgetRepo(budgetRepo)
+
+	req := newCategoryRolloverBoostRequest(sourceCategoryID, budgetID)
+	boost, err := svc.CreateBoost(ctx, userID, req)
+	require.NoError(t, err, "CreateBoost must accept a rollover whose source is a top-level budgeted category")
+	assert.NotNil(t, boost)
+}
+
+// TestCreateBoost_CategoryRollover_SkipsGuardWithoutBudgetRepo verifies the guard is silently
+// skipped (not a hard failure) when the optional budget repository is unwired — mirroring every
+// other optional ownership check in validateBoostReferenceOwnership.
+func TestCreateBoost_CategoryRollover_SkipsGuardWithoutBudgetRepo(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-no-budget-repo"
+
+	boostRepo := &mockBoostsRepository{}
+	boostRepo.boosts = []*domain.Boost{}
+	svc := NewBoostService(boostRepo)
+	// Deliberately no SetBudgetRepo call.
+
+	req := newCategoryRolloverBoostRequest("cat-whatever", "budget-whatever")
+	boost, err := svc.CreateBoost(ctx, userID, req)
+	require.NoError(t, err)
+	assert.NotNil(t, boost)
 }
 
 // TestCreateBoost_InvalidConditions_WrapsErrInvalidBoost verifies that CreateBoost wraps

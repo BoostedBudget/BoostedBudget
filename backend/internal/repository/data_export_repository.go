@@ -257,6 +257,16 @@ var DataExportTables = []DataExportTable{
 		OrderBy:            "t.examined_at, t.id",
 	},
 
+	// --- Budgets --------------------------------------------------------------------------------
+	{
+		// Issue #1630 Task B7: the budget-hierarchy audit ledger, same shape as
+		// portfolio_snapshot_repairs directly above — one row per budget the audit examined,
+		// user-scoped, exportable under Article 20 exactly like every other examined-row ledger.
+		Table:              "budget_hierarchy_audits",
+		OwnershipPredicate: "t.user_id = $1",
+		OrderBy:            "t.examined_at, t.id",
+	},
+
 	// --- Liabilities ---------------------------------------------------------------------------
 	{
 		Table:              "credit_liabilities",
