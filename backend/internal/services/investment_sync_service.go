@@ -265,7 +265,7 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 	}
 
 	// Upsert securities and build plaid_security_id → internal UUID map
-	domainSecurities := mapPlaidSecuritiesToDomain(resp.Securities)
+	domainSecurities := mapPlaidSecuritiesToDomain(resp.Securities, s.logger)
 	securityMap, err := s.securityRepo.UpsertBatch(ctx, domainSecurities)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upsert securities: %w", err)
@@ -386,7 +386,8 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 			// not from the security: Plaid prices a foreign-currency security in USD while the
 			// institution reports the position in its own currency, so these are two different
 			// facts and conflating them would hide the exact mismatch this records.
-			h.CurrencyCode = plaidCurrencyCode(ph.IsoCurrencyCode.Get(), ph.UnofficialCurrencyCode.Get())
+			h.CurrencyCode = plaidCurrencyCode(ph.IsoCurrencyCode.Get(), ph.UnofficialCurrencyCode.Get(),
+				s.logger, "holding of security "+ph.SecurityId+" in account "+plaidAccountID)
 
 			if cb := ph.CostBasis.Get(); cb != nil {
 				val := *cb
@@ -664,7 +665,7 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 		// go missing because some other account on the item is excluded.
 		securityMap := make(map[string]string)
 		if len(resp.Securities) > 0 {
-			domainSecurities := mapPlaidSecuritiesToDomain(resp.Securities)
+			domainSecurities := mapPlaidSecuritiesToDomain(resp.Securities, s.logger)
 			securityMap, err = s.securityRepo.UpsertBatch(ctx, domainSecurities)
 			if err != nil {
 				return result, fmt.Errorf("failed to upsert securities on page %d: %w", result.PagesProcessed, err)
@@ -792,7 +793,7 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 // ============================================================================
 
 // mapPlaidSecuritiesToDomain converts Plaid SDK security objects to domain.Security.
-func mapPlaidSecuritiesToDomain(plaidSecs []plaid.Security) []domain.Security {
+func mapPlaidSecuritiesToDomain(plaidSecs []plaid.Security, logger *slog.Logger) []domain.Security {
 	result := make([]domain.Security, 0, len(plaidSecs))
 	for _, ps := range plaidSecs {
 		sec := domain.Security{
@@ -810,7 +811,8 @@ func mapPlaidSecuritiesToDomain(plaidSecs []plaid.Security) []domain.Security {
 		sec.ProxySecurityID = ps.ProxySecurityId.Get()
 		sec.ClosePrice = ps.ClosePrice.Get()
 		sec.ClosePriceAsOf = parsePlaidDate(ps.ClosePriceAsOf.Get())
-		sec.CurrencyCode = plaidCurrencyCode(ps.IsoCurrencyCode.Get(), ps.UnofficialCurrencyCode.Get())
+		sec.CurrencyCode = plaidCurrencyCode(ps.IsoCurrencyCode.Get(), ps.UnofficialCurrencyCode.Get(),
+			logger, "security "+ps.SecurityId)
 		sec.Name = synthesizeSecurityName(sec.Name, sec.TickerSymbol, ps.SecurityId)
 		result = append(result, sec)
 	}
@@ -857,14 +859,35 @@ func synthesizeSecurityName(name string, tickerSymbol *string, plaidSecurityID s
 // as though it were dollars. That is the precise failure this whole task exists to stop.
 //
 // Returns nil when Plaid sends neither, or sends a blank one: absent is recorded as absent.
-func plaidCurrencyCode(iso, unofficial *string) *string {
+//
+// #1631 I5: currency_code is VARCHAR(16) (migration 000197) and Postgres HARD-ERRORS (22001) on a
+// value that overflows it rather than truncating. Before this, a Plaid unofficial_currency_code
+// longer than 16 bytes turned into "failed to upsert securities on page N", aborting the whole
+// UpsertBatch page — the watermark never advanced, and that item's investment sync stayed broken
+// on every subsequent run until code changed. logger and label are for that one Warn only; label
+// identifies which row hit the limit (a Plaid security/account/transaction id) for triage.
+//
+// It drops only the FIELD, never the record — the same principle parsePlaidDate states two
+// functions down for its own optional field.
+const maxCurrencyCodeLen = 16
+
+func plaidCurrencyCode(iso, unofficial *string, logger *slog.Logger, label string) *string {
 	for _, candidate := range []*string{iso, unofficial} {
 		if candidate == nil {
 			continue
 		}
-		if trimmed := strings.TrimSpace(*candidate); trimmed != "" {
-			return &trimmed
+		trimmed := strings.TrimSpace(*candidate)
+		if trimmed == "" {
+			continue
 		}
+		if len(trimmed) > maxCurrencyCodeLen {
+			if logger != nil {
+				logger.Warn("dropping currency_code: exceeds the column's 16-byte limit",
+					"value", trimmed, "length", len(trimmed), "for", label)
+			}
+			continue
+		}
+		return &trimmed
 	}
 	return nil
 }
@@ -1005,7 +1028,8 @@ func mapPlaidInvestmentTransactions(
 		txn.Quantity = &pt.Quantity
 		txn.Price = &pt.Price
 		txn.Fees = pt.Fees.Get()
-		txn.CurrencyCode = plaidCurrencyCode(pt.IsoCurrencyCode.Get(), pt.UnofficialCurrencyCode.Get())
+		txn.CurrencyCode = plaidCurrencyCode(pt.IsoCurrencyCode.Get(), pt.UnofficialCurrencyCode.Get(),
+			logger, "investment transaction "+pt.InvestmentTransactionId)
 
 		result = append(result, txn)
 	}

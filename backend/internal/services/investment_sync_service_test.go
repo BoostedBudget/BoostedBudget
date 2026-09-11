@@ -242,7 +242,7 @@ func makePlaidSecurity(securityID, name, ticker string) plaid.Security {
 func TestMapPlaidSecuritiesToDomain_NameSynthesis(t *testing.T) {
 	t.Run("keeps the provided name when non-blank", func(t *testing.T) {
 		sec := makePlaidSecurity("plaid-sec-1", "Apple Inc.", "AAPL")
-		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
 		require.Len(t, result, 1)
 		assert.Equal(t, "Apple Inc.", result[0].Name)
 	})
@@ -250,14 +250,14 @@ func TestMapPlaidSecuritiesToDomain_NameSynthesis(t *testing.T) {
 	t.Run("falls back to the ticker symbol when name is a null Plaid string", func(t *testing.T) {
 		sec := makePlaidSecurity("plaid-sec-2", "", "VCIT")
 		sec.Name = plaidNilStr()
-		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
 		require.Len(t, result, 1)
 		assert.Equal(t, "VCIT", result[0].Name)
 	})
 
 	t.Run("falls back to the ticker symbol when name is an empty string", func(t *testing.T) {
 		sec := makePlaidSecurity("plaid-sec-3", "", "IEMG")
-		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
 		require.Len(t, result, 1)
 		assert.Equal(t, "IEMG", result[0].Name)
 	})
@@ -265,7 +265,7 @@ func TestMapPlaidSecuritiesToDomain_NameSynthesis(t *testing.T) {
 	t.Run("falls back to a synthesised label from the plaid security id when both name and ticker are blank", func(t *testing.T) {
 		sec := makePlaidSecurity("plaid-sec-4", "", "")
 		sec.TickerSymbol = plaidNilStr()
-		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
 		require.Len(t, result, 1)
 		assert.Equal(t, "Security plaid-sec-4", result[0].Name)
 	})
@@ -273,7 +273,7 @@ func TestMapPlaidSecuritiesToDomain_NameSynthesis(t *testing.T) {
 	t.Run("treats a whitespace-only name as blank", func(t *testing.T) {
 		sec := makePlaidSecurity("plaid-sec-5", "   ", "")
 		sec.TickerSymbol = plaidNilStr()
-		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
 		require.Len(t, result, 1)
 		assert.Equal(t, "Security plaid-sec-5", result[0].Name)
 	})
@@ -289,7 +289,7 @@ func TestMapPlaidSecuritiesToDomain_ConsolidationIdentifiers(t *testing.T) {
 		sec.InstitutionSecurityId = plaidNullStr("INST-AGG-1")
 		sec.ProxySecurityId = plaidNullStr("PROXY-BOND-1")
 
-		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
 
 		require.Len(t, result, 1)
 		require.NotNil(t, result[0].InstitutionSecurityID)
@@ -301,7 +301,7 @@ func TestMapPlaidSecuritiesToDomain_ConsolidationIdentifiers(t *testing.T) {
 	t.Run("leaves both nil when Plaid sends neither", func(t *testing.T) {
 		sec := makePlaidSecurity("plaid-sec-2", "Tesla Inc.", "TSLA")
 
-		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
 
 		require.Len(t, result, 1)
 		assert.Nil(t, result[0].InstitutionSecurityID)

@@ -165,7 +165,7 @@ func TestInvestmentService_GetPortfolioSummary_RefusesADayChangeAcrossCurrencies
 func TestPlaidMappers_ThreadTheCurrencyThrough(t *testing.T) {
 	t.Run("security takes the ISO code", func(t *testing.T) {
 		sec := makePlaidSecurity("plaid-sec-ccy-1", "Vanguard FTSE", "VEU")
-		out := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		out := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
 		require.Len(t, out, 1)
 		require.NotNil(t, out[0].CurrencyCode)
 		assert.Equal(t, "USD", *out[0].CurrencyCode)
@@ -180,7 +180,7 @@ func TestPlaidMappers_ThreadTheCurrencyThrough(t *testing.T) {
 		sec := makePlaidSecurity("plaid-sec-ccy-2", "Bitcoin", "BTC")
 		sec.IsoCurrencyCode = plaidNilStr()
 		sec.UnofficialCurrencyCode = plaidNullStr("BTC")
-		out := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		out := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
 		require.Len(t, out, 1)
 		require.NotNil(t, out[0].CurrencyCode)
 		assert.Equal(t, "BTC", *out[0].CurrencyCode)
@@ -190,7 +190,7 @@ func TestPlaidMappers_ThreadTheCurrencyThrough(t *testing.T) {
 		sec := makePlaidSecurity("plaid-sec-ccy-3", "Mystery", "MYST")
 		sec.IsoCurrencyCode = plaidNilStr()
 		sec.UnofficialCurrencyCode = plaidNilStr()
-		out := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		out := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
 		require.Len(t, out, 1)
 		assert.Nil(t, out[0].CurrencyCode, "absent must be recorded as absent, never defaulted")
 	})
@@ -199,7 +199,7 @@ func TestPlaidMappers_ThreadTheCurrencyThrough(t *testing.T) {
 		sec := makePlaidSecurity("plaid-sec-ccy-4", "Blank", "BLNK")
 		sec.IsoCurrencyCode = plaidNullStr("   ")
 		sec.UnofficialCurrencyCode = plaidNilStr()
-		out := mapPlaidSecuritiesToDomain([]plaid.Security{sec})
+		out := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
 		require.Len(t, out, 1)
 		assert.Nil(t, out[0].CurrencyCode)
 	})
@@ -436,4 +436,53 @@ func TestInvestmentService_GetPortfolioHistory_DeclaresTheSeriesCurrency(t *test
 			}
 		})
 	}
+}
+
+// TestPlaidCurrencyCode_DropsAValueThatOverflowsTheColumn pins #1631 I5: currency_code is
+// VARCHAR(16) (migration 000197) and Postgres HARD-ERRORS (22001) on an overlong value rather
+// than truncating it — before this fix, a Plaid unofficial_currency_code over 16 bytes turned
+// "failed to upsert securities on page N", aborting the whole page and wedging that item's
+// investment sync on every subsequent run. plaidCurrencyCode must drop only the FIELD (return
+// nil), never abort the caller, matching the principle parsePlaidDate states for its own field.
+func TestPlaidCurrencyCode_DropsAValueThatOverflowsTheColumn(t *testing.T) {
+	overlong := "THIS_CODE_IS_WAY_TOO_LONG_FOR_THE_COLUMN" // 41 bytes
+	exactly16 := "EXACTLYSIXTEENC"                         // 15 bytes — pad below to hit 16 precisely
+	exactly16 = exactly16 + "C"                            // 16 bytes exactly, must NOT be dropped
+
+	require.Len(t, exactly16, 16, "arrangement: this fixture must be exactly at the column limit")
+	require.Greater(t, len(overlong), 16, "arrangement: this fixture must exceed the column limit")
+
+	t.Run("an ISO code within the limit is kept", func(t *testing.T) {
+		got := plaidCurrencyCode(ccy("USD"), nil, nil, "test")
+		require.NotNil(t, got)
+		assert.Equal(t, "USD", *got)
+	})
+
+	t.Run("a value exactly at the 16-byte limit is kept", func(t *testing.T) {
+		got := plaidCurrencyCode(ccy(exactly16), nil, nil, "test")
+		require.NotNil(t, got)
+		assert.Equal(t, exactly16, *got)
+	})
+
+	t.Run("an overlong iso code is dropped, not returned", func(t *testing.T) {
+		got := plaidCurrencyCode(ccy(overlong), nil, nil, "test")
+		assert.Nil(t, got, "an overlong value must be dropped (nil), never returned to overflow the column")
+	})
+
+	t.Run("an overlong iso code falls through to a valid unofficial code", func(t *testing.T) {
+		got := plaidCurrencyCode(ccy(overlong), ccy("BTC"), nil, "test")
+		require.NotNil(t, got, "the overlong ISO leg must not swallow a perfectly good fallback")
+		assert.Equal(t, "BTC", *got)
+	})
+
+	t.Run("an overlong unofficial code is also dropped", func(t *testing.T) {
+		got := plaidCurrencyCode(nil, ccy(overlong), nil, "test")
+		assert.Nil(t, got)
+	})
+
+	t.Run("a nil logger does not panic", func(t *testing.T) {
+		assert.NotPanics(t, func() {
+			plaidCurrencyCode(ccy(overlong), nil, nil, "test")
+		})
+	})
 }
