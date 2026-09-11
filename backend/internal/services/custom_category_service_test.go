@@ -51,6 +51,12 @@ func (m *MockCustomCategoryRepository) Update(ctx context.Context, category *dom
 	return args.Error(0)
 }
 
+// UpdateInTx is a mock implementation (Issue #1630 B3b).
+func (m *MockCustomCategoryRepository) UpdateInTx(ctx context.Context, tx repository.Transaction, category *domain.CustomCategory) error {
+	args := m.Called(ctx, tx, category)
+	return args.Error(0)
+}
+
 func (m *MockCustomCategoryRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
 	args := m.Called(ctx, userID)
 	return args.Int(0), args.Error(1)
@@ -690,9 +696,18 @@ func (m *MockBudgetCategoryRepository) GetCategoriesByBudgetID(ctx context.Conte
 	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
 }
 
-// GetCategoriesByBudgetIDLocked is a mock implementation (Issue #1630 B3).
-func (m *MockBudgetCategoryRepository) GetCategoriesByBudgetIDLocked(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
-	args := m.Called(ctx, budgetID)
+// BeginTx is a mock implementation (Issue #1630 B3b).
+func (m *MockBudgetCategoryRepository) BeginTx(ctx context.Context) (repository.Transaction, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(repository.Transaction), args.Error(1)
+}
+
+// GetCategoriesByBudgetIDLockedInTx is a mock implementation (Issue #1630 B3b).
+func (m *MockBudgetCategoryRepository) GetCategoriesByBudgetIDLockedInTx(ctx context.Context, tx repository.Transaction, budgetID string) ([]domain.BudgetCategory, error) {
+	args := m.Called(ctx, tx, budgetID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -755,9 +770,13 @@ func TestCustomCategoryService_UpdateCategory_ReparentRefusesEscapingBudgetedPai
 
 	mockBudgetCategoryRepo.On("GetActiveByUserID", ctx, userID).
 		Return([]*domain.Budget{{ID: budgetID, UserID: userID}}, nil)
+
+	// Issue #1630 B3b: the guard and the (would-be) write now share ONE transaction.
+	tx := &fakeTx{}
+	mockBudgetCategoryRepo.On("BeginTx", ctx).Return(repository.Transaction(tx), nil)
 	// Parent's match_logic is 'and' — NOT a containing shape (isContainingMatchLogic requires
 	// category_only/or) — so nesting the child under it escapes clean containment.
-	mockBudgetCategoryRepo.On("GetCategoriesByBudgetIDLocked", ctx, budgetID).Return([]domain.BudgetCategory{
+	mockBudgetCategoryRepo.On("GetCategoriesByBudgetIDLockedInTx", ctx, repository.Transaction(tx), budgetID).Return([]domain.BudgetCategory{
 		{
 			ID: "bc-parent", BudgetID: budgetID, CategoryKind: "custom",
 			CustomCategoryID: &parentID, MatchLogic: domain.MatchLogicAnd, Tags: []string{"tag"},
@@ -774,7 +793,11 @@ func TestCustomCategoryService_UpdateCategory_ReparentRefusesEscapingBudgetedPai
 	assert.ErrorIs(t, err, domain.ErrEscapedNestedChild)
 	assert.Nil(t, category)
 	mockCategoryRepo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
+	mockCategoryRepo.AssertNotCalled(t, "UpdateInTx", mock.Anything, mock.Anything, mock.Anything)
 	mockBudgetCategoryRepo.AssertExpectations(t)
+	// The guard refused before the write — the transaction must be ROLLED BACK, never committed.
+	assert.True(t, tx.rolledBack, "expected the shared transaction to be rolled back on guard refusal")
+	assert.False(t, tx.committed, "expected the shared transaction NOT to be committed on guard refusal")
 }
 
 // TestCustomCategoryService_UpdateCategory_ReparentEnqueuesResyncJob asserts that a LEGITIMATE
@@ -805,10 +828,15 @@ func TestCustomCategoryService_UpdateCategory_ReparentEnqueuesResyncJob(t *testi
 	mockCategoryRepo.On("GetByID", ctx, parentID).Return(parent, nil)
 	mockCategoryRepo.On("HasChildren", ctx, categoryID).Return(false, nil)
 	mockCategoryRepo.On("GetChildren", ctx, categoryID).Return([]*domain.CustomCategory{}, nil)
-	mockCategoryRepo.On("Update", ctx, mock.AnythingOfType("*domain.CustomCategory")).Return(nil)
+	mockCategoryRepo.On("UpdateInTx", ctx, mock.Anything, mock.AnythingOfType("*domain.CustomCategory")).Return(nil)
 
 	// No budgets reference this category at all — nothing for the guard to refuse.
 	mockBudgetCategoryRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.Budget{}, nil)
+
+	// Issue #1630 B3b: the guard and the write now share ONE transaction — even with zero
+	// budgets to lock, reparentCategoryChecked still opens it to persist the write and commit.
+	tx := &fakeTx{}
+	mockBudgetCategoryRepo.On("BeginTx", ctx).Return(repository.Transaction(tx), nil)
 
 	mockQueue.On("Enqueue", ctx,
 		mock.MatchedBy(func(job queue.Job) bool {
@@ -832,6 +860,7 @@ func TestCustomCategoryService_UpdateCategory_ReparentEnqueuesResyncJob(t *testi
 	mockCategoryRepo.AssertExpectations(t)
 	mockBudgetCategoryRepo.AssertExpectations(t)
 	mockQueue.AssertExpectations(t)
+	assert.True(t, tx.committed, "expected the shared transaction to be committed on a legitimate reparent")
 	// effective_category_refresh must NOT be enqueued — the name didn't change.
 	mockQueue.AssertNotCalled(t, "Enqueue", ctx,
 		mock.MatchedBy(func(job queue.Job) bool {

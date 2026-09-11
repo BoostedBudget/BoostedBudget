@@ -92,16 +92,23 @@ type BudgetCategoryRepository interface {
 	// see checkReparentDoesNotEscape for why that must be overlaid with the PROPOSED parent
 	// before domain.EscapedNestedChild runs.
 	GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
-	// GetCategoriesByBudgetIDLocked is GetCategoriesByBudgetID's TOCTOU-closing counterpart
-	// (Issue #1630 B3): it locks budgetID's row (SELECT ... FOR UPDATE) inside a transaction it
-	// opens and commits internally, re-reads the budget's live categories while that lock is
-	// held, then releases it and returns the snapshot. checkReparentDoesNotEscape uses this
-	// instead of the plain read so its containment check runs against the SAME
-	// re-read-under-lock protocol AddCategoryChecked / UpdateCategoryChecked use for a single
-	// add/edit — closing the identical race for the reparent path: a reparent and a concurrent
-	// AddCategory/UpdateCategory on the same budget can no longer both observe a stale snapshot
-	// of each other's write and jointly violate domain.EscapedNestedChild.
-	GetCategoriesByBudgetIDLocked(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
+	// BeginTx starts a transaction on the budget repository's pool (Issue #1630 B3b), mirroring
+	// SavingsGoalRepository.BeginTx / savingsGoalService.applyBasisSwitch's cross-repository
+	// transaction composition. reparentCategoryChecked owns this transaction: it locks every
+	// affected budget via GetCategoriesByBudgetIDLockedInTx AND persists the reparent's
+	// custom_categories write (a DIFFERENT repository) inside it, so the guard and the write
+	// commit or roll back together — closing the window where GetCategoriesByBudgetIDLocked's
+	// self-contained transaction released its lock before that write committed separately.
+	BeginTx(ctx context.Context) (repository.Transaction, error)
+	// GetCategoriesByBudgetIDLockedInTx locks budgetID's row (SELECT ... FOR UPDATE) and re-reads
+	// its live categories INSIDE the caller's tx, without committing or rolling back — the lock is
+	// held until the caller does (Issue #1630 B3b). reparentCategoryChecked uses this, inside its
+	// own BeginTx transaction, once per affected budget, so a reparent and a concurrent
+	// AddCategory/UpdateCategory on the same budget can no longer both observe a stale snapshot of
+	// each other's write and jointly violate domain.EscapedNestedChild — AND so two concurrent
+	// reparents that would form an escaping pair with each other can no longer both pass the guard
+	// and both commit.
+	GetCategoriesByBudgetIDLockedInTx(ctx context.Context, tx repository.Transaction, budgetID string) ([]domain.BudgetCategory, error)
 }
 
 type customCategoryService struct {
@@ -299,12 +306,13 @@ func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, cate
 		!stringPtrEqual(category.ParentPFCPrimary, originalParentPFCPrimary)
 
 	if parentChanged {
-		if err := s.checkReparentDoesNotEscape(ctx, userID, category); err != nil {
+		// reparentCategoryChecked runs the containment guard AND persists this write in ONE
+		// transaction (Issue #1630 B3b) — see its doc comment for why a separate guard-then-write
+		// left a race open.
+		if err := s.reparentCategoryChecked(ctx, userID, category); err != nil {
 			return nil, err
 		}
-	}
-
-	if err := s.categoryRepo.Update(ctx, category); err != nil {
+	} else if err := s.categoryRepo.Update(ctx, category); err != nil {
 		return nil, err
 	}
 
@@ -362,22 +370,36 @@ func stringPtrEqual(a, b *string) bool {
 	return *a == *b
 }
 
-// checkReparentDoesNotEscape refuses a custom-category reparent that would place a BUDGETED row
+// reparentCategoryChecked refuses a custom-category reparent that would place a BUDGETED row
 // into an escaping (not-cleanly-contained) nested pair — the exact shape domain.EscapedNestedChild
 // already refuses on every OTHER write path (CreateBudget, AddCategory, and UpdateCategory in
-// budget_service.go). UpdateCategory here is the one remaining door: it can flip a category's
-// parent with zero query against budget_categories, so a budget's own escaping guard never sees
-// the change (Issue #1630 Task B1).
+// budget_service.go) — and, only if every affected budget clears that guard, PERSISTS the
+// reparent's custom_categories write. UpdateCategory here is the one remaining door: it can flip a
+// category's parent with zero query against budget_categories, so a budget's own escaping guard
+// never sees the change (Issue #1630 Task B1).
 //
 // Fails CLOSED: this is money-integrity enforcement, not observability. An unwired
 // budgetCategoryRepo refuses the reparent rather than silently allowing it — mirrors
 // budget_service.go:607's goalOwnershipChecker precedent for a required (if optionally-injected)
 // collaborator.
 //
-// Evaluates the PROPOSED hierarchy, not the current one: GetCategoriesByBudgetID populates a
-// budget row's CustomParentID/CustomParentPFCPrimary from the CURRENT (pre-write) custom_categories
-// row (budget_repository.go's GetCategoriesByBudgetID join). A check run before this write
-// therefore describes the OLD parentage unless the candidate's overlay is set to category's NEW
+// ⚠ Issue #1630 B3b: the guard and the write run in ONE transaction, not two. The earlier version
+// of this method (checkReparentDoesNotEscape) only ran the guard, locking each budget through
+// GetCategoriesByBudgetIDLocked — which opens and COMMITS its own transaction, releasing the lock
+// before UpdateCategory's caller persisted the reparent afterward in a SEPARATE transaction on
+// CustomCategoryRepository. That gap meant two concurrent reparents could each lock, check, and
+// release against a stale view, and both go on to commit an escaping pair — the same race B3
+// closed for AddCategory/UpdateCategory, left open here. This method closes it by opening ONE
+// transaction via budgetCategoryRepo.BeginTx, locking every affected budget through
+// GetCategoriesByBudgetIDLockedInTx (never releasing those locks until it returns), and — only if
+// every budget clears the guard — persisting the write via categoryRepo.UpdateInTx before
+// committing. A losing concurrent writer blocks on the row lock until the winner commits or rolls
+// back, then re-evaluates against the winner's now-visible state.
+//
+// Evaluates the PROPOSED hierarchy, not the current one: GetCategoriesByBudgetID(Locked)(InTx)
+// populates a budget row's CustomParentID/CustomParentPFCPrimary from the CURRENT (pre-write)
+// custom_categories row (budget_repository.go's join). A check run before this write therefore
+// describes the OLD parentage unless the candidate's overlay is set to category's NEW
 // ParentID/ParentPFCPrimary before domain.EscapedNestedChild runs — which is exactly what this
 // does for the reparented category's own budgeted row, below.
 //
@@ -394,7 +416,7 @@ func stringPtrEqual(a, b *string) bool {
 // checks both (candidate as the non-cleanly-contained CHILD of a parent, or candidate as the
 // PARENT of a not-cleanly-contained child). Two category_only categories reparenting past each
 // other never trips this; only the escaping shape is blocked.
-func (s *customCategoryService) checkReparentDoesNotEscape(ctx context.Context, userID string, category *domain.CustomCategory) error {
+func (s *customCategoryService) reparentCategoryChecked(ctx context.Context, userID string, category *domain.CustomCategory) error {
 	if s.budgetCategoryRepo == nil {
 		return fmt.Errorf("budget category repository not configured: cannot validate reparent of %s against existing budgets", category.ID)
 	}
@@ -414,10 +436,18 @@ func (s *customCategoryService) checkReparentDoesNotEscape(ctx context.Context, 
 		return err
 	}
 
+	tx, err := s.budgetCategoryRepo.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+	// Rollback after a successful commit is a no-op; its error is not actionable.
+	defer tx.Rollback(ctx) //nolint:errcheck
+
 	for _, budget := range budgets {
-		// Issue #1630 B3: locked, not plain — closes the TOCTOU window against a concurrent
-		// AddCategory/UpdateCategory on this same budget for the duration of this budget's check.
-		cats, err := s.budgetCategoryRepo.GetCategoriesByBudgetIDLocked(ctx, budget.ID)
+		// Issue #1630 B3b: locked INSIDE this shared transaction, not a self-committing helper —
+		// the lock is held until tx.Commit/Rollback below, across every remaining budget's check
+		// AND the custom_categories write, closing the reparent-vs-reparent race.
+		cats, err := s.budgetCategoryRepo.GetCategoriesByBudgetIDLockedInTx(ctx, tx, budget.ID)
 		if err != nil {
 			return err
 		}
@@ -452,7 +482,13 @@ func (s *customCategoryService) checkReparentDoesNotEscape(ctx context.Context, 
 		}
 	}
 
-	return nil
+	// Every affected budget cleared the guard while its lock was held under THIS transaction —
+	// persist the reparent before releasing any of them.
+	if err := s.categoryRepo.UpdateInTx(ctx, tx, category); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (s *customCategoryService) DeleteCategory(ctx context.Context, userID, categoryID string) error {

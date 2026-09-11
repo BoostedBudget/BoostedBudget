@@ -42,19 +42,34 @@ type BudgetRepository interface {
 	GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
 	// GetCategoriesByBudgetIDLocked locks budgetID's row (SELECT ... FOR UPDATE) inside a
 	// transaction it opens and commits internally, re-reads that budget's live categories while
-	// the lock is held, then releases it and returns the snapshot. Gives a caller composing a
-	// cross-budget hierarchy check (e.g. custom_category_service's reparent-containment guard) the
-	// same re-read-under-lock protocol AddCategoryChecked / UpdateCategoryChecked use for a single
-	// add/edit, so it serializes against a concurrent AddCategory/UpdateCategory on THIS budget for
-	// as long as this call takes (Issue #1630 B3). Returns domain.ErrBudgetNotFound if budgetID
-	// does not exist or is tombstoned.
+	// the lock is held, then releases it and returns the snapshot.
 	//
-	// ⚠ The lock is released when this call returns, not held across a subsequent unrelated write
-	// (e.g. the custom_categories parent-linkage write a reparent persists afterward) — narrower
-	// than AddCategoryChecked/UpdateCategoryChecked's single-transaction guarantee, but it closes
-	// the same window for every budget individually while the multi-budget check runs, which is
-	// what that check needs.
+	// ⚠ Issue #1630 B3 introduced this as the reparent-containment guard's lock primitive, and
+	// its doc comment said so here — but B3b (below) replaced that caller with
+	// GetCategoriesByBudgetIDLockedInTx, because THIS method's self-contained transaction cannot
+	// stay open across the custom_categories write a reparent persists afterward: releasing the
+	// lock before that write commits, in a separate transaction on a different repository, left
+	// the exact race B3 closed for AddCategory/UpdateCategory still open on the reparent path.
+	// This method is retained as a standalone locked-read for any future single-budget check that
+	// does NOT need to compose a write on another repository into the same transaction; it is not
+	// currently called by production code. Returns domain.ErrBudgetNotFound if budgetID does not
+	// exist or is tombstoned.
 	GetCategoriesByBudgetIDLocked(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
+	// BeginTx starts a transaction on this repository's pool and returns it as the narrow
+	// Transaction handle, mirroring SavingsGoalRepository.BeginTx (#1625). It exists so a SERVICE
+	// can own a transaction boundary that spans budget-row locks held via
+	// GetCategoriesByBudgetIDLockedInTx AND a write on a DIFFERENT repository — e.g.
+	// custom_category_service's reparent guard, which locks every affected budget and then
+	// persists the reparent's custom_categories write in the SAME transaction (Issue #1630 B3b).
+	BeginTx(ctx context.Context) (Transaction, error)
+	// GetCategoriesByBudgetIDLockedInTx is GetCategoriesByBudgetIDLocked's counterpart for a
+	// caller-owned transaction (Issue #1630 B3b): it locks budgetID's row (SELECT ... FOR UPDATE)
+	// and re-reads its live categories INSIDE tx, without committing or rolling back — the lock is
+	// held until the CALLER commits or rolls back tx. This is what closes the reparent path's
+	// remaining atomicity gap: a caller can lock several budgets in turn, evaluate its guard
+	// against each locked snapshot, and only then persist its write, all before releasing any
+	// lock. Returns domain.ErrBudgetNotFound if budgetID does not exist or is tombstoned.
+	GetCategoriesByBudgetIDLockedInTx(ctx context.Context, tx Transaction, budgetID string) ([]domain.BudgetCategory, error)
 	// AddCategoryChecked atomically locks budgetID's row (SELECT ... FOR UPDATE), re-reads its
 	// LIVE categories inside that lock, evaluates domain.DuplicateParentIdentity and
 	// domain.EscapedNestedChild against that fresh snapshot, and only then inserts candidate — all
@@ -627,7 +642,7 @@ func (r *budgetRepository) createCategoryQuerier(ctx context.Context, q Querier,
 // other transaction holding the same lock (AddCategoryChecked, UpdateCategoryChecked, or another
 // call composing several of these) commits or rolls back. Returns domain.ErrBudgetNotFound if
 // budgetID does not exist or is already tombstoned. Issue #1630 B3.
-func (r *budgetRepository) lockBudgetRowInTx(ctx context.Context, tx pgx.Tx, budgetID string) error {
+func (r *budgetRepository) lockBudgetRowInTx(ctx context.Context, tx Querier, budgetID string) error {
 	var locked string
 	err := tx.QueryRow(ctx, `SELECT id FROM budgets WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, budgetID).Scan(&locked)
 	if err != nil {
@@ -661,6 +676,20 @@ func (r *budgetRepository) GetCategoriesByBudgetIDLocked(ctx context.Context, bu
 		return nil, err
 	}
 	return categories, nil
+}
+
+// BeginTx implements BudgetRepository.BeginTx — see that method's doc comment.
+func (r *budgetRepository) BeginTx(ctx context.Context) (Transaction, error) {
+	return r.db.Begin(ctx)
+}
+
+// GetCategoriesByBudgetIDLockedInTx implements BudgetRepository.GetCategoriesByBudgetIDLockedInTx
+// — see that method's doc comment.
+func (r *budgetRepository) GetCategoriesByBudgetIDLockedInTx(ctx context.Context, tx Transaction, budgetID string) ([]domain.BudgetCategory, error) {
+	if err := r.lockBudgetRowInTx(ctx, tx, budgetID); err != nil {
+		return nil, err
+	}
+	return r.getCategoriesByBudgetIDQuerier(ctx, tx, budgetID)
 }
 
 // AddCategoryChecked implements BudgetRepository.AddCategoryChecked — see that method's doc

@@ -29,6 +29,15 @@ type CustomCategoryRepository interface {
 	// Update updates an existing category
 	Update(ctx context.Context, category *domain.CustomCategory) error
 
+	// UpdateInTx is Update's counterpart for a caller-owned transaction (Issue #1630 B3b): it
+	// applies the identical write query INSIDE tx instead of opening and committing its own, so a
+	// caller composing a check against a DIFFERENT repository's locked rows (e.g.
+	// customCategoryService's reparent-containment guard, which locks every affected budget via
+	// BudgetRepository.GetCategoriesByBudgetIDLockedInTx) can persist both the guard's outcome and
+	// this write atomically. The per-user hierarchy-serialization advisory lock (lockHierarchySQL)
+	// is still taken, now scoped to the caller's transaction rather than this method's own.
+	UpdateInTx(ctx context.Context, tx Transaction, category *domain.CustomCategory) error
+
 	// CountByUserID counts the total number of categories for a user
 	CountByUserID(ctx context.Context, userID string) (int, error)
 
@@ -268,16 +277,34 @@ func (r *customCategoryRepository) GetByName(ctx context.Context, userID, name s
 
 // Update updates an existing category
 func (r *customCategoryRepository) Update(ctx context.Context, category *domain.CustomCategory) error {
-	category.UpdatedAt = time.Now()
-
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Serialize hierarchy mutations per user before reparenting (Issue #1203).
-	if _, err := tx.Exec(ctx, lockHierarchySQL, category.UserID); err != nil {
+	if err := r.updateQuerier(ctx, tx, category); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// UpdateInTx implements CustomCategoryRepository.UpdateInTx — see that method's doc comment.
+func (r *customCategoryRepository) UpdateInTx(ctx context.Context, tx Transaction, category *domain.CustomCategory) error {
+	return r.updateQuerier(ctx, tx, category)
+}
+
+// updateQuerier is Update / UpdateInTx's shared body, parameterized over Querier so UpdateInTx can
+// run the identical write INSIDE a caller's transaction instead of duplicating this query
+// (Issue #1630 B3b, mirrors budget_repository.go's createCategoryQuerier pattern).
+func (r *customCategoryRepository) updateQuerier(ctx context.Context, q Querier, category *domain.CustomCategory) error {
+	category.UpdatedAt = time.Now()
+
+	// Serialize hierarchy mutations per user before reparenting (Issue #1203). Scoped to q's
+	// transaction (pg_advisory_xact_lock auto-releases at transaction end), so a caller composing
+	// this inside a wider transaction (UpdateInTx) holds it for that transaction's full duration.
+	if _, err := q.Exec(ctx, lockHierarchySQL, category.UserID); err != nil {
 		return err
 	}
 
@@ -293,7 +320,7 @@ func (r *customCategoryRepository) Update(ctx context.Context, category *domain.
 		WHERE id = $8
 	`
 
-	ct, err := tx.Exec(ctx, query,
+	ct, err := q.Exec(ctx, query,
 		category.Name,
 		category.ParentPFCPrimary,
 		category.ParentID,
@@ -311,7 +338,7 @@ func (r *customCategoryRepository) Update(ctx context.Context, category *domain.
 		return domain.ErrCategoryNotFound
 	}
 
-	return tx.Commit(ctx)
+	return nil
 }
 
 // CountByUserID counts the total number of categories for a user

@@ -274,6 +274,9 @@ func (m *mockCustomCategoryRepoForBudget) GetByName(ctx context.Context, userID,
 func (m *mockCustomCategoryRepoForBudget) Update(ctx context.Context, category *domain.CustomCategory) error {
 	return nil
 }
+func (m *mockCustomCategoryRepoForBudget) UpdateInTx(ctx context.Context, tx repository.Transaction, category *domain.CustomCategory) error {
+	return nil
+}
 func (m *mockCustomCategoryRepoForBudget) CountByUserID(ctx context.Context, userID string) (int, error) {
 	return 0, nil
 }
