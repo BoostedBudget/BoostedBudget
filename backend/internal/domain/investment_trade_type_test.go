@@ -27,36 +27,45 @@ func TestNormalizeTradeType_ProductionDistribution(t *testing.T) {
 		typ      string
 		subtype  *string
 		security string
+		// amount and quantity matter only to the two structural rows; every other row here is
+		// classified by its subtype literal and is indifferent to them (#1631 CX3).
+		amount   float64
+		quantity *float64
 		want     string
 	}{
 		// The #1631 core: this brokerage reports a dividend reinvestment as a PAIR of cash rows
 		// against the ETF, and never emits the reinvestment subtype.
-		{155, "cash", strPtr("withdrawal"), realSecurity, TradeTypeReinvest},
-		{211, "cash", strPtr("deposit"), realSecurity, TradeTypeDividend},
+		// Both legs carry the corroboration the structural rule requires: the withdrawal DEBITS
+		// cash and delivers shares, the deposit CREDITS cash and delivers none.
+		{155, "cash", strPtr("withdrawal"), realSecurity, 100, f64(2.5), TradeTypeReinvest},
+		{211, "cash", strPtr("deposit"), realSecurity, -100, f64(0), TradeTypeDividend},
 		// The same subtypes against a cash-equivalent are genuine cash movements — bill payments
 		// and paycheque deposits on a brokerage cash-management account. 275 + 124 rows.
-		{275, "cash", strPtr("withdrawal"), cashEquiv, TradeTypeCash},
-		{124, "cash", strPtr("deposit"), cashEquiv, TradeTypeCash},
-		{9, "cash", strPtr("withdrawal"), noSecurity, TradeTypeCash},
+		{275, "cash", strPtr("withdrawal"), cashEquiv, 0, nil, TradeTypeCash},
+		{124, "cash", strPtr("deposit"), cashEquiv, 0, nil, TradeTypeCash},
+		{9, "cash", strPtr("withdrawal"), noSecurity, 0, nil, TradeTypeCash},
 		// Newly bucketed by #1631.
-		{179, "transfer", strPtr("transfer"), realSecurity, TradeTypeTransfer},
-		{47, "cash", strPtr("interest"), realSecurity, TradeTypeInterest},
-		{2, "cash", strPtr("contribution"), cashEquiv, TradeTypeTransfer},
+		{179, "transfer", strPtr("transfer"), realSecurity, 0, nil, TradeTypeTransfer},
+		{47, "cash", strPtr("interest"), realSecurity, 0, nil, TradeTypeInterest},
+		{2, "cash", strPtr("contribution"), cashEquiv, 0, nil, TradeTypeTransfer},
 		// Already correct before #1631 — pinned so the new rules cannot regress them.
-		{117, "buy", strPtr("buy"), realSecurity, TradeTypeBuy},
-		{68, "cash", strPtr("dividend"), realSecurity, TradeTypeDividend},
-		{5, "sell", strPtr("sell"), realSecurity, TradeTypeSell},
-		{6, "fee", strPtr("interest"), cashEquiv, TradeTypeFee},
-		{2, "cash", strPtr("account fee"), cashEquiv, TradeTypeFee},
+		{117, "buy", strPtr("buy"), realSecurity, 0, nil, TradeTypeBuy},
+		{68, "cash", strPtr("dividend"), realSecurity, 0, nil, TradeTypeDividend},
+		{5, "sell", strPtr("sell"), realSecurity, 0, nil, TradeTypeSell},
+		{6, "fee", strPtr("interest"), cashEquiv, 0, nil, TradeTypeFee},
+		{2, "cash", strPtr("account fee"), cashEquiv, 0, nil, TradeTypeFee},
 		// A stock split is a corporate action, not a movement of value.
-		{1, "transfer", strPtr("split"), realSecurity, TradeTypeOther},
+		{1, "transfer", strPtr("split"), realSecurity, 0, nil, TradeTypeOther},
 	}
 	for _, tt := range tests {
 		name := tt.typ + "/" + derefOr(tt.subtype, "<nil>") + " @ " + tt.security
 		t.Run(name, func(t *testing.T) {
 			attached := tt.security != noSecurity
 			isCashEq := tt.security == cashEquiv
-			got := NormalizeTradeType(tt.typ, tt.subtype, attached, &isCashEq)
+			got := NormalizeTradeType(TradeTypeRow{
+				Type: tt.typ, Subtype: tt.subtype, Amount: tt.amount, Quantity: tt.quantity,
+				SecurityAttached: attached, SecurityIsCashEquivalent: &isCashEq,
+			})
 			assert.Equal(t, tt.want, got, "%d production rows depend on this", tt.rows)
 		})
 	}
@@ -68,7 +77,12 @@ func TestNormalizeTradeType_ProductionDistribution(t *testing.T) {
 // the structural condition. Only the interest rule being consulted BEFORE the structural rule stops
 // its interest being reported as a dividend.
 func TestNormalizeTradeType_RuleOrderProtectsTheBankSweep(t *testing.T) {
-	got := NormalizeTradeType("cash", strPtr("interest"), true /*attached*/, boolPtr(false) /*known not cash-equivalent*/)
+	// Shaped exactly like the structural dividend leg -- a credit delivering no shares -- so ONLY
+	// the interest rule being consulted first keeps it out of the dividend bucket.
+	got := NormalizeTradeType(TradeTypeRow{
+		Type: "cash", Subtype: strPtr("interest"), Amount: -12.34, Quantity: f64(0),
+		SecurityAttached: true, SecurityIsCashEquivalent: boolPtr(false),
+	})
 	assert.Equal(t, TradeTypeInterest, got,
 		"a documented subtype must win over the structural fallback, or a bank sweep's interest "+
 			"becomes a dividend")
@@ -80,7 +94,10 @@ func TestNormalizeTradeType_RuleOrderProtectsTheBankSweep(t *testing.T) {
 func TestNormalizeTradeType_NormalisesCasingAndWhitespace(t *testing.T) {
 	for _, raw := range []string{"Dividend", "DIVIDEND", "  dividend  ", "dIvIdEnD"} {
 		t.Run(raw, func(t *testing.T) {
-			assert.Equal(t, TradeTypeDividend, NormalizeTradeType("cash", strPtr(raw), true, boolPtr(false)))
+			assert.Equal(t, TradeTypeDividend, NormalizeTradeType(TradeTypeRow{
+				Type: "cash", Subtype: strPtr(raw),
+				SecurityAttached: true, SecurityIsCashEquivalent: boolPtr(false),
+			}))
 		})
 	}
 }
@@ -107,7 +124,11 @@ func TestNormalizeTradeType_StructuralRuleNeedsBothFacts(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, NormalizeTradeType("cash", strPtr("deposit"), tt.attached, tt.isCash))
+			// Shaped as the evidenced dividend leg so the security facts are the ONLY variable.
+			assert.Equal(t, tt.want, NormalizeTradeType(TradeTypeRow{
+				Type: "cash", Subtype: strPtr("deposit"), Amount: -100, Quantity: f64(0),
+				SecurityAttached: tt.attached, SecurityIsCashEquivalent: tt.isCash,
+			}))
 		})
 	}
 }
@@ -137,7 +158,10 @@ func TestNormalizeTradeType_EveryOutputIsAKnownBucket(t *testing.T) {
 		for _, sub := range subtypes {
 			for _, attached := range []bool{true, false} {
 				for _, isCash := range []*bool{boolPtr(true), boolPtr(false), nil} {
-					got := NormalizeTradeType(typ, sub, attached, isCash)
+					got := NormalizeTradeType(TradeTypeRow{
+						Type: typ, Subtype: sub, Amount: -100, Quantity: f64(0),
+						SecurityAttached: attached, SecurityIsCashEquivalent: isCash,
+					})
 					require.True(t, known[got],
 						"NormalizeTradeType(%q, %v, attached=%v, isCash=%v) returned unknown bucket %q",
 						typ, derefOr(sub, "<nil>"), attached, isCash, got)
@@ -308,11 +332,11 @@ func TestIncomeSubtypes_IncludesReinvested(t *testing.T) {
 // other-bucket still claims those rows, one label becomes unreachable and another double-counts.
 func TestTradeTypePartition_TransferAndOtherRoundTrip(t *testing.T) {
 	// Display side.
-	assert.Equal(t, TradeTypeTransfer, NormalizeTradeType("transfer", strPtr("transfer"), true, boolPtr(false)),
+	assert.Equal(t, TradeTypeTransfer, NormalizeTradeType(TradeTypeRow{Type: "transfer", Subtype: strPtr("transfer"), SecurityAttached: true, SecurityIsCashEquivalent: boolPtr(false)}),
 		"a portfolio transfer is a transfer, not 'other'")
-	assert.Equal(t, TradeTypeOther, NormalizeTradeType("transfer", strPtr("split"), true, boolPtr(false)),
+	assert.Equal(t, TradeTypeOther, NormalizeTradeType(TradeTypeRow{Type: "transfer", Subtype: strPtr("split"), SecurityAttached: true, SecurityIsCashEquivalent: boolPtr(false)}),
 		"a stock split is a corporate action, not a movement of value")
-	assert.Equal(t, TradeTypeOther, NormalizeTradeType("cancel", nil, true, boolPtr(false)),
+	assert.Equal(t, TradeTypeOther, NormalizeTradeType(TradeTypeRow{Type: "cancel", SecurityAttached: true, SecurityIsCashEquivalent: boolPtr(false)}),
 		"an unknown Plaid type still falls to 'other'")
 
 	// Filter side: the transfer bucket must claim transfer rows...
@@ -391,7 +415,7 @@ func TestSubtypeTrimming_GoAndSQLAgreeOnWhatPaddingIs(t *testing.T) {
 		t.Run(strconv.QuoteToASCII(pad), func(t *testing.T) {
 			raw := pad + "Dividend" + pad
 			assert.Equal(t, TradeTypeDividend,
-				NormalizeTradeType("cash", strPtr(raw), true, boolPtr(false)),
+				NormalizeTradeType(TradeTypeRow{Type: "cash", Subtype: strPtr(raw), SecurityAttached: true, SecurityIsCashEquivalent: boolPtr(false)}),
 				"Go must treat this rune as padding")
 			assert.Contains(t, sqlSubtypeTrimCutsetLiteral(), fmt.Sprintf(`\u%04x`, []rune(pad)[0]),
 				"the SQL btrim cutset must carry the same rune, or the partition desyncs")
@@ -426,4 +450,135 @@ func TestNormalizedSubtypeSQL_TrimsWithTheSharedCutset(t *testing.T) {
 	got := NormalizedSubtypeSQL("it.subtype")
 	assert.Equal(t,
 		"COALESCE(lower(btrim(it.subtype, "+sqlSubtypeTrimCutsetLiteral()+")), '')", got)
+}
+
+// f64 returns a pointer to a float64 literal for the quantity field.
+func f64(v float64) *float64 { return &v }
+
+// dividendLegRow is the production-evidenced shape of the structural dividend leg: a real
+// security, a cash CREDIT (negative under Plaid's convention), and no shares delivered.
+func dividendLegRow(sub string) TradeTypeRow {
+	return TradeTypeRow{
+		Type: "cash", Subtype: strPtr(sub), Amount: -100, Quantity: f64(0),
+		SecurityAttached: true, SecurityIsCashEquivalent: boolPtr(false),
+	}
+}
+
+// reinvestLegRow is the paired purchase leg: a cash DEBIT (positive) that delivers shares.
+func reinvestLegRow(sub string) TradeTypeRow {
+	return TradeTypeRow{
+		Type: "cash", Subtype: strPtr(sub), Amount: 100, Quantity: f64(2.5),
+		SecurityAttached: true, SecurityIsCashEquivalent: boolPtr(false),
+	}
+}
+
+// TestNormalizeTradeType_StructuralRuleRequiresTheProductionShape is the CX3 regression. The rule
+// admitted ANY cash/deposit or cash/withdrawal against an affirmatively-not-cash-equivalent
+// security, with no corroboration at all -- so a bank sweep emitting a generic deposit became a
+// Dividend. MSPBNA is the concrete case: is_cash_equivalent=false and type='equity', so the
+// security facts alone do not tell it apart from an ETF.
+//
+// The rule now also requires the two row-local facts the production evidence actually carried:
+// the amount sign agreeing with the direction, and the share count. Both are already on the row,
+// so SQL mirrors them without a join.
+func TestNormalizeTradeType_StructuralRuleRequiresTheProductionShape(t *testing.T) {
+	tests := []struct {
+		name string
+		row  TradeTypeRow
+		want string
+	}{
+		{"the evidenced dividend leg", dividendLegRow("deposit"), TradeTypeDividend},
+		{"the evidenced reinvest leg", reinvestLegRow("withdrawal"), TradeTypeReinvest},
+
+		// The MSPBNA case. A bank sweep deposit DELIVERS SHARES of the sweep vehicle: money did
+		// not arrive as income, it was moved into a holding. A deposit that buys something is not
+		// a dividend, whatever the security flags say.
+		{"MSPBNA sweep deposit delivering shares", func() TradeTypeRow {
+			r := dividendLegRow("deposit")
+			r.Quantity = f64(1500)
+			return r
+		}(), TradeTypeCash},
+
+		// Sign disagreement: a "deposit" that DEBITS cash is not money arriving.
+		{"deposit whose amount is a debit", func() TradeTypeRow {
+			r := dividendLegRow("deposit")
+			r.Amount = 100
+			return r
+		}(), TradeTypeCash},
+		{"withdrawal whose amount is a credit", func() TradeTypeRow {
+			r := reinvestLegRow("withdrawal")
+			r.Amount = -100
+			return r
+		}(), TradeTypeCash},
+
+		// A withdrawal that acquires nothing is a cash movement out, not a reinvestment.
+		{"withdrawal delivering no shares", func() TradeTypeRow {
+			r := reinvestLegRow("withdrawal")
+			r.Quantity = f64(0)
+			return r
+		}(), TradeTypeCash},
+
+		// An absent quantity is not evidence, exactly as an absent is_cash_equivalent is not.
+		{"deposit with an unknown quantity", func() TradeTypeRow {
+			r := dividendLegRow("deposit")
+			r.Quantity = nil
+			return r
+		}(), TradeTypeCash},
+		{"withdrawal with an unknown quantity", func() TradeTypeRow {
+			r := reinvestLegRow("withdrawal")
+			r.Quantity = nil
+			return r
+		}(), TradeTypeCash},
+
+		// A zero-amount row corroborates neither direction.
+		{"deposit with a zero amount", func() TradeTypeRow {
+			r := dividendLegRow("deposit")
+			r.Amount = 0
+			return r
+		}(), TradeTypeCash},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, NormalizeTradeType(tt.row))
+		})
+	}
+}
+
+// TestStructuralSQL_CarriesEveryFactTheGoRuleRequires keeps CX3 a partition change rather than a
+// display-only one: the SQL structural conditions must test the same amount sign and share count,
+// and must stay two-valued so a NULL quantity cannot drop a row out of BOTH buckets.
+func TestStructuralSQL_CarriesEveryFactTheGoRuleRequires(t *testing.T) {
+	sub := NormalizedSubtypeSQL("it.subtype")
+	div := StructuralDividendSQL(sub, "it.amount", "it.quantity", "sec")
+	rei := StructuralReinvestSQL(sub, "it.amount", "it.quantity", "sec")
+
+	assert.Contains(t, div, "'deposit'")
+	assert.Contains(t, div, "it.amount < 0", "the deposit leg must be a cash credit")
+	assert.Contains(t, div, "COALESCE(it.quantity", "a NULL quantity must not make the condition NULL")
+	assert.Contains(t, div, SecurityIsStructuralSQL("sec"))
+
+	assert.Contains(t, rei, "'withdrawal'")
+	assert.Contains(t, rei, "it.amount > 0", "the withdrawal leg must be a cash debit")
+	assert.Contains(t, rei, "COALESCE(it.quantity", "a NULL quantity must not make the condition NULL")
+	assert.Contains(t, rei, SecurityIsStructuralSQL("sec"))
+}
+
+// TestTradeTypeToSQLPredicate_StructuralBucketsShareOneDefinition proves both halves of the
+// partition moved: the dividend, reinvest and cash buckets must all render the SAME structural
+// expressions, so tightening the rule in one place cannot leave a row claimed by two buckets or
+// by none.
+func TestTradeTypeToSQLPredicate_StructuralBucketsShareOneDefinition(t *testing.T) {
+	sub := NormalizedSubtypeSQL("it.subtype")
+	div := StructuralDividendSQL(sub, "it.amount", "it.quantity", "sec")
+	rei := StructuralReinvestSQL(sub, "it.amount", "it.quantity", "sec")
+
+	dividendClause, _ := TradeTypeToSQLPredicate([]string{TradeTypeDividend}, "it", "sec")
+	assert.Contains(t, dividendClause, div)
+
+	reinvestClause, _ := TradeTypeToSQLPredicate([]string{TradeTypeReinvest}, "it", "sec")
+	assert.Contains(t, reinvestClause, rei)
+
+	cashClause, _ := TradeTypeToSQLPredicate([]string{TradeTypeCash}, "it", "sec")
+	assert.Contains(t, cashClause, div, "the cash complement must exclude exactly what dividend claims")
+	assert.Contains(t, cashClause, rei, "the cash complement must exclude exactly what reinvest claims")
 }

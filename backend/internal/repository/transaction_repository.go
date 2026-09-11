@@ -3833,11 +3833,17 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		// rather than as "false" — the SQL filter's `is_cash_equivalent IS FALSE` treats it the same
 		// way, and that agreement is what keeps display and filter a partition.
 		if invType != nil {
-			at := domain.NormalizeTradeType(
-				*invType, invSubtype,
-				invSecAttached != nil && *invSecAttached,
-				invSecIsCashEquivalent,
-			)
+			at := domain.NormalizeTradeType(domain.TradeTypeRow{
+				Type:    *invType,
+				Subtype: invSubtype,
+				// amount is it.amount on the investment leg of the UNION, and quantity is
+				// it.quantity -- the two row-local facts the structural rule corroborates on
+				// (#1631 CX3). Both must come from the investment row, never from a banking one.
+				Amount:                   amount,
+				Quantity:                 invQuantity,
+				SecurityAttached:         invSecAttached != nil && *invSecAttached,
+				SecurityIsCashEquivalent: invSecIsCashEquivalent,
+			})
 			item.ActivityType = &at
 		}
 

@@ -184,6 +184,65 @@ func normalizeSubtype(subtype *string) string {
 	return strings.ToLower(strings.Trim(*subtype, subtypeTrimCutset))
 }
 
+// TradeTypeRow carries the row-local facts NormalizeTradeType classifies on. It is a struct
+// rather than a parameter list because several of the facts are same-typed and adjacent
+// (two booleans about the security, two numbers about the movement), and a silently transposed
+// pair is exactly the kind of defect a display/filter partition cannot survive.
+//
+// Every field is available on investment_transactions without a join except the two security
+// facts, which both production callers already LEFT JOIN for. Nothing here needs a correlated
+// lookup, so TradeTypeToSQLPredicate can mirror the whole rule in a WHERE fragment.
+type TradeTypeRow struct {
+	// Type and Subtype are the raw Plaid values, unnormalised. Subtype is nil-able.
+	Type    string
+	Subtype *string
+
+	// Amount is Plaid signed cash effect for the row: POSITIVE when cash is debited (purchases,
+	// outflows) and NEGATIVE when cash is credited (sales, dividends, inflows). This is inverted
+	// relative to the Transactions product, which is why no primary bucket is keyed on it. The
+	// column is NOT NULL, so this is a value and not a pointer.
+	Amount float64
+
+	// Quantity is the share count the row moves, NULL for a cash-only row. It is a pointer
+	// because an absent quantity is not evidence of a zero one.
+	Quantity *float64
+
+	// SecurityAttached and SecurityIsCashEquivalent describe the JOINED security: whether the row
+	// references one at all, and whether Plaid flagged it a cash equivalent. They are two fields,
+	// not one nullable bool, because "no security" and "a security whose is_cash_equivalent is
+	// NULL" are different facts that must not arrive as the same nil.
+	SecurityAttached         bool
+	SecurityIsCashEquivalent *bool
+}
+
+// isStructuralDividend and isStructuralReinvest are the CORROBORATION the structural rule demands
+// beyond the security facts (#1631 CX3). Without them the rule turned ANY cash/deposit or
+// cash/withdrawal against an affirmatively-not-cash-equivalent security into income or a purchase,
+// with no pairing, sign or share-count evidence required at all -- so a bank sweep emitting a
+// generic deposit read as a Dividend. MSPBNA is the live case: is_cash_equivalent=false and
+// type='equity', so the security facts alone cannot tell a sweep vehicle from an ETF.
+//
+// The production evidence the rule was built on carried two more facts on the row itself, and the
+// rule now requires them:
+//
+//   - The amount sign agrees with the direction. A deposit that DEBITS cash is not money arriving,
+//     and a withdrawal that CREDITS it is not money spent. Under Plaid's inverted convention that
+//     is Amount < 0 for the deposit leg and Amount > 0 for the withdrawal leg.
+//   - The share count matches the leg. The dividend leg delivered NO shares (quantity 0): money
+//     arrived and bought nothing yet. The reinvest leg delivered shares (quantity > 0): that is
+//     the purchase. A sweep deposit that delivers shares of the sweep vehicle fails the first of
+//     these, which is what takes MSPBNA out of the rule.
+//
+// An absent Quantity fails both, deliberately and for the same reason an absent is_cash_equivalent
+// does: silence is not evidence, and the conservative reading is today's Cash.
+func (r TradeTypeRow) isStructuralDividend() bool {
+	return r.Amount < 0 && r.Quantity != nil && *r.Quantity == 0
+}
+
+func (r TradeTypeRow) isStructuralReinvest() bool {
+	return r.Amount > 0 && r.Quantity != nil && *r.Quantity > 0
+}
+
 // NormalizeTradeType maps raw Plaid type/subtype to a display trade type string.
 // Used for display and labelling only. For SQL filtering use TradeTypeToSQLPredicate.
 // NormalizeTradeType maps a raw Plaid (type, subtype) pair onto the display bucket the UI shows.
@@ -208,21 +267,33 @@ func normalizeSubtype(subtype *string) string {
 //
 // The structural rule exists because the brokerage in #1631 reports a dividend reinvestment as a
 // PAIR of rows — a cash/deposit credit and a cash/withdrawal debit, both against the ETF — and
-// never emits the reinvestment subtype. A cash movement against a non-cash-equivalent security is
-// therefore a security-level event: money in is income, money out bought shares.
+// never emits the reinvestment subtype.
 //
-// Keyed on the subtype LITERALS, never the amount sign. Plaid's convention is inverted relative to
-// the Transactions product ("Inflow, such as stock sales, is shown as a negative amount, and
-// outflow, such as stock purchases, is positive"), so reaching for intuitive polarity inverts the
-// whole classification — and SQL could not mirror a mixed subtype+sign rule without desyncing.
-func NormalizeTradeType(typ string, subtype *string, securityAttached bool, securityIsCashEquivalent *bool) string {
-	sub := normalizeSubtype(subtype)
+// ⚠ It is NOT enough that the security is not a cash equivalent. That alone admitted any deposit or
+// withdrawal at all, which is how a bank sweep's generic deposit became a Dividend. The rule also
+// demands the corroboration the production rows actually carried — the amount sign agreeing with
+// the direction, and the share count matching the leg — so that "money in is income, money out
+// bought shares" is something the ROW says rather than something the rule assumes. See
+// TradeTypeRow.isStructuralDividend.
+//
+// Every PRIMARY bucket is keyed on the subtype LITERALS, never the amount sign. Plaid's convention
+// is inverted relative to the Transactions product ("Inflow, such as stock sales, is shown as a
+// negative amount, and outflow, such as stock purchases, is positive"), so reaching for intuitive
+// polarity inverts the whole classification.
+//
+// ⚠ The STRUCTURAL rule is the one exception, and it reads the sign deliberately (#1631 CX3): it
+// has no subtype literal to key on, so the sign and the share count are the only corroboration
+// available. It is not a shortcut for polarity — it REQUIRES the sign to agree with the direction
+// the subtype already states, and rejects the row when it does not. SQL mirrors it exactly, because
+// both facts are columns on the same row and need no join; see StructuralDividendSQL.
+func NormalizeTradeType(row TradeTypeRow) string {
+	sub := normalizeSubtype(row.Subtype)
 	// A cash movement against a security KNOWN not to be cash-equivalent is a security-level event.
 	// An unknown flag is not evidence, so it is not structural.
-	structural := securityAttached &&
-		securityIsCashEquivalent != nil && !*securityIsCashEquivalent
+	structural := row.SecurityAttached &&
+		row.SecurityIsCashEquivalent != nil && !*row.SecurityIsCashEquivalent
 
-	switch typ {
+	switch row.Type {
 	case "buy":
 		return TradeTypeBuy
 	case "sell":
@@ -246,9 +317,9 @@ func NormalizeTradeType(typ string, subtype *string, securityAttached bool, secu
 			return TradeTypeInterest
 		case transferSubtypeSet[sub]:
 			return TradeTypeTransfer
-		case structural && sub == "deposit":
+		case structural && sub == "deposit" && row.isStructuralDividend():
 			return TradeTypeDividend
-		case structural && sub == "withdrawal":
+		case structural && sub == "withdrawal" && row.isStructuralReinvest():
 			return TradeTypeReinvest
 		}
 		return TradeTypeCash
@@ -294,6 +365,32 @@ func SecurityIsStructuralSQL(securitiesAlias string) string {
 		securitiesAlias, securitiesAlias)
 }
 
+// StructuralDividendSQL and StructuralReinvestSQL are the SQL mirror of TradeTypeRow's
+// isStructuralDividend / isStructuralReinvest, and of the subtype and security conditions that go
+// with them. They render the WHOLE structural leg minus the type = 'cash' gate, which every caller
+// applies itself.
+//
+// Exported, and shared by the filter predicate and IncomeSummary, for the same reason
+// SecurityIsStructuralSQL is: three surfaces classify these rows, and #1631 exists because two of
+// them disagreed about the same row. A second copy of this expression is how that happens again.
+//
+// Both are TWO-VALUED by construction. amount is NOT NULL in the schema, the security condition
+// uses IS FALSE, and quantity is wrapped in COALESCE with a sentinel that fails the comparison --
+// never a bare quantity = 0, which would evaluate to NULL for a NULL quantity and drop the row out
+// of the dividend bucket AND out of the cash complement that negates it.
+//
+// subExpr must be the output of NormalizedSubtypeSQL so the subtype comparison is normalised the
+// same way the Go side normalises it.
+func StructuralDividendSQL(subExpr, amountCol, quantityCol, securitiesAlias string) string {
+	return fmt.Sprintf("(%s = 'deposit' AND %s AND %s < 0 AND COALESCE(%s, -1) = 0)",
+		subExpr, SecurityIsStructuralSQL(securitiesAlias), amountCol, quantityCol)
+}
+
+func StructuralReinvestSQL(subExpr, amountCol, quantityCol, securitiesAlias string) string {
+	return fmt.Sprintf("(%s = 'withdrawal' AND %s AND %s > 0 AND COALESCE(%s, 0) > 0)",
+		subExpr, SecurityIsStructuralSQL(securitiesAlias), amountCol, quantityCol)
+}
+
 // NormalizedSubtypeSQL renders the NULL-safe, normalised subtype expression that every subtype
 // comparison must go through — the SQL mirror of normalizeSubtype. btrim is given the SHARED
 // cutset: single-argument btrim trims spaces only, which is how a tab-padded subtype came to be
@@ -328,7 +425,8 @@ func TradeTypeToSQLPredicate(activityTypes []string, tableAlias, securitiesAlias
 		panic("TradeTypeToSQLPredicate: securitiesAlias is required for the dividend/reinvest/cash " +
 			"buckets — see the #1631 note on this function")
 	}
-	structural := SecurityIsStructuralSQL(securitiesAlias)
+	structuralDividend := StructuralDividendSQL(sub, col("amount"), col("quantity"), securitiesAlias)
+	structuralReinvest := StructuralReinvestSQL(sub, col("amount"), col("quantity"), securitiesAlias)
 
 	var parts []string
 	var args []any
@@ -365,19 +463,21 @@ func TradeTypeToSQLPredicate(activityTypes []string, tableAlias, securitiesAlias
 			// Subtype-literal dividends and capital-gain distributions, plus the structural case:
 			// a cash deposit against a real security is income credited for that security.
 			parts = append(parts, fmt.Sprintf(
-				"(%s = 'cash' AND (%s IN (%s) OR (%s = 'deposit' AND %s)))",
+				"(%s = 'cash' AND (%s IN (%s) OR %s))",
 				col("type"), sub, inList(append(append([]string{}, dividendSubtypes...), capitalGainSubtypes...)),
-				sub, structural))
+				structuralDividend))
 		case TradeTypeReinvest:
 			// Subtype-literal reinvestments, plus the structural case: a cash withdrawal against a
 			// real security is cash spent acquiring it.
 			parts = append(parts, fmt.Sprintf(
-				"(%s = 'cash' AND (%s IN (%s) OR (%s = 'withdrawal' AND %s)))",
+				"(%s = 'cash' AND (%s IN (%s) OR %s))",
 				col("type"), sub, inList(reinvestSubtypes),
-				sub, structural))
+				structuralReinvest))
 		case TradeTypeCash:
-			// The exact complement: a cash row classified by none of the sets above, and not a
-			// structural deposit/withdrawal.
+			// The exact complement: a cash row classified by none of the sets above, and neither a
+			// structural dividend nor a structural reinvestment. The two structural expressions are
+			// the SAME ones the dividend and reinvest buckets render, so tightening the rule moves
+			// all three buckets at once and cannot leave a row claimed twice or not at all.
 			classified := append([]string{}, dividendSubtypes...)
 			classified = append(classified, capitalGainSubtypes...)
 			classified = append(classified, reinvestSubtypes...)
@@ -385,8 +485,8 @@ func TradeTypeToSQLPredicate(activityTypes []string, tableAlias, securitiesAlias
 			classified = append(classified, interestSubtypes...)
 			classified = append(classified, transferSubtypes...)
 			parts = append(parts, fmt.Sprintf(
-				"(%s = 'cash' AND %s NOT IN (%s) AND NOT (%s IN ('deposit', 'withdrawal') AND %s))",
-				col("type"), sub, inList(classified), sub, structural))
+				"(%s = 'cash' AND %s NOT IN (%s) AND NOT (%s OR %s))",
+				col("type"), sub, inList(classified), structuralDividend, structuralReinvest))
 		case TradeTypeOther:
 			// Neither a known type, nor a carved-out corporate action.
 			parts = append(parts, fmt.Sprintf(
