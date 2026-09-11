@@ -36,6 +36,7 @@ import type { ForkedSecurityIdentityMetrics } from './forkedSecurityIdentityMetr
 import type { JobBacklogMetrics } from './jobBacklogMetrics';
 import type { PaddleStatusMetrics } from './paddleStatusMetrics';
 import type { PlaidOrphanedItemMetrics } from './plaidOrphanedItemMetrics';
+import type { PositionReconciliationSummary } from './positionReconciliationSummary';
 import type { RejectedWebhookAttemptMetrics } from './rejectedWebhookAttemptMetrics';
 import type { ServiceHealthStatuses } from './serviceHealthStatuses';
 import type { SyncStatusMetrics } from './syncStatusMetrics';
@@ -52,6 +53,7 @@ export interface SystemHealthResponse {
   job_queues: SystemHealthResponseJobQueues;
   paddle_status: PaddleStatusMetrics;
   plaid_orphaned_items: PlaidOrphanedItemMetrics;
+  position_reconciliation: PositionReconciliationSummary;
   rejected_webhook_attempts_24h: RejectedWebhookAttemptMetrics;
   services: ServiceHealthStatuses;
   status: string;

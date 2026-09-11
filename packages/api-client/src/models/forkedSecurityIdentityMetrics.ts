@@ -30,8 +30,11 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { ForkedSecurityIdentity } from './forkedSecurityIdentity';
 
 export interface ForkedSecurityIdentityMetrics {
   available: boolean;
   group_count: number;
+  /** @nullable */
+  groups: ForkedSecurityIdentity[] | null;
 }
