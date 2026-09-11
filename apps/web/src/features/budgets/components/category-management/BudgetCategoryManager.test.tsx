@@ -215,6 +215,47 @@ describe('BudgetCategoryManager', () => {
     // which is complex and better suited for integration tests
   })
 
+  it("excludes a sub-allocation child from totalAllocatedExcludingCurrent, so editing the parent doesn't false-warn (#1630)", async () => {
+    const user = userEvent.setup({ delay: null })
+    const categories = [
+      createMockCategory({
+        id: 'parent',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+      }),
+      createMockCategory({
+        id: 'child',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD',
+        allocated_amount: 200,
+      }),
+    ]
+    // Correct: totalAllocatedExcludingCurrent excludes both the current row (parent) AND
+    // the sub-allocation child (its $200 is already inside the parent's own amount), so it
+    // is 0. 0 + 240 = 240 <= 250 income — no warning. The bug summed the child in
+    // unconditionally (200), producing a false 200 + 240 = 440 > 250 warning.
+    renderManager({ categories, totalIncome: 250 })
+
+    const editButtons = screen.getAllByRole('button', { name: /^Edit category$/i })
+    await user.click(editButtons[0])
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    const amountInput = screen.getByLabelText('Amount') as HTMLInputElement
+    await user.clear(amountInput)
+    await user.type(amountInput, '240')
+
+    // Count, not `.not.toBeInTheDocument()`: when this assertion FAILS, jest-dom formats the
+    // whole rendered DOM into the message and bun's formatter dies with `RangeError: Out of
+    // memory`, hiding the reason. Asserting a number keeps a failure readable (#1630).
+    expect(screen.queryAllByText(/exceed.*expected income/i)).toHaveLength(0)
+  })
+
   it('should show confirmation dialog when delete button clicked', async () => {
     const user = userEvent.setup({ delay: null })
     const categories = [createMockCategory({ id: 'cat-1' })]
@@ -253,6 +294,132 @@ describe('BudgetCategoryManager', () => {
     expect(text).not.toMatch(/permanently deleted/i)
     expect(text).not.toMatch(/erased|destroyed|wiped/i)
     expect(text).not.toMatch(/restore|recover|undelete/i)
+  })
+
+  /**
+   * Issue #1630 Task 4: deleting a PARENT promotes its sub-allocation children to top-level and
+   * changes the budget's total allocation by the parent's own remainder — consistent, but
+   * previously silent. The confirm copy must say so; a leaf category with no children must not
+   * mention it at all (nothing changes about the total when a leaf is deleted).
+   */
+  it('delete confirmation discloses child promotion and the total-allocation change for a parent', async () => {
+    const user = userEvent.setup({ delay: null })
+    const categories = [
+      createMockCategory({
+        id: 'parent',
+        category_kind: 'pfc',
+        pfc_primary: 'RENT_AND_UTILITIES',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+        spent_amount: 0,
+      }),
+      createMockCategory({
+        id: 'electric',
+        category_kind: 'pfc',
+        pfc_primary: 'RENT_AND_UTILITIES',
+        pfc_detailed: 'RENT_AND_UTILITIES_ELECTRIC',
+        allocated_amount: 300,
+        spent_amount: 0,
+      }),
+    ]
+
+    renderManager({ categories })
+
+    // The parent card renders first — its delete button is the first in DOM order.
+    const deleteButtons = screen.getAllByRole('button', { name: /^Delete category$/i })
+    await user.click(deleteButtons[0])
+
+    const dialog = await screen.findByRole('alertdialog')
+    const text = dialog.textContent ?? ''
+
+    expect(text).toMatch(/top level/i)
+    expect(text).toMatch(/\$200\.00/) // parent's own remainder: 500 - 300
+    expect(text).not.toMatch(/restore|recover|undelete/i)
+
+    const sentinels: PIISentinel[] = [
+      { value: '$200.00', fieldDescription: 'parent remainder in delete confirmation dialog' },
+    ]
+    expect(scanForUnmaskedPII(dialog, sentinels)).toEqual([])
+  })
+
+  /**
+   * Issue #1630 adversarial-review fix: `isSubAllocationOfParent` was widened to recognize a
+   * transitive GRANDCHILD (X -> C -> G) as attributed to X for total-exclusion purposes. But
+   * deleting X only promotes its DIRECT child C to top level — G stays nested under C, which is
+   * untouched by X's deletion. The pre-fix code used the widened (transitive) relation for BOTH
+   * the promoted-count copy and the remainder arithmetic, so it wrongly claimed 2 categories move
+   * to top level and double-subtracted G's allocation (500 - 200 - 50 = $250 instead of the
+   * correct $300 = 500 - 200, since G's $50 is already inside C's $200).
+   */
+  it('delete confirmation promotes only the direct child and does not double-subtract a transitive grandchild', async () => {
+    const user = userEvent.setup({ delay: null })
+    const categories = [
+      createMockCategory({
+        id: 'root',
+        category_kind: 'pfc',
+        pfc_primary: 'RENT_AND_UTILITIES',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+        spent_amount: 0,
+      }),
+      createMockCategory({
+        id: 'direct-child',
+        category_kind: 'custom',
+        pfc_primary: undefined,
+        pfc_detailed: undefined,
+        custom_category_id: 'c-1',
+        custom_parent_pfc_primary: 'RENT_AND_UTILITIES',
+        allocated_amount: 200,
+        spent_amount: 0,
+      }),
+      createMockCategory({
+        id: 'grandchild',
+        category_kind: 'custom',
+        pfc_primary: undefined,
+        pfc_detailed: undefined,
+        custom_category_id: 'g-1',
+        custom_parent_id: 'c-1',
+        custom_grandparent_pfc_primary: 'RENT_AND_UTILITIES',
+        allocated_amount: 50,
+        spent_amount: 0,
+      }),
+    ]
+
+    renderManager({ categories })
+
+    // The root parent card renders first — its delete button is the first in DOM order.
+    const deleteButtons = screen.getAllByRole('button', { name: /^Delete category$/i })
+    await user.click(deleteButtons[0])
+
+    const dialog = await screen.findByRole('alertdialog')
+    const text = dialog.textContent ?? ''
+
+    // Only the direct child (1) is promoted — not 2.
+    expect(text).toMatch(/\b1 child category\b/i)
+    expect(text).not.toMatch(/2 child categories/i)
+
+    // Correct remainder: 500 - 200 (direct child only), NOT the double-subtracted 500-200-50.
+    expect(text).toMatch(/\$300\.00/)
+    expect(text).not.toMatch(/\$250\.00/)
+
+    // The grandchild's fate must be described accurately: it stays nested, it does not move
+    // to top level itself.
+    expect(text).toMatch(/nested/i)
+    expect(text).not.toMatch(/restore|recover|undelete/i)
+  })
+
+  it('delete confirmation says nothing about children when deleting a leaf category', async () => {
+    const user = userEvent.setup({ delay: null })
+    const categories = [createMockCategory({ id: 'cat-1' })]
+
+    renderManager({ categories })
+    await user.click(screen.getByRole('button', { name: /^Delete category$/i }))
+
+    const dialog = await screen.findByRole('alertdialog')
+    const text = dialog.textContent ?? ''
+
+    expect(text).not.toMatch(/top level/i)
+    expect(text).not.toMatch(/child categor/i)
   })
 
   it('should call onDeleteCategory after confirmation', async () => {
@@ -306,6 +473,31 @@ describe('BudgetCategoryManager', () => {
     expect(within(breakdown).getByTestId('breakdown-total-income')).toHaveTextContent('3000')
     expect(within(breakdown).getByTestId('breakdown-unallocated')).toHaveTextContent('1500')
     expect(within(breakdown).getByTestId('breakdown-category-count')).toHaveTextContent('2')
+  })
+
+  it('excludes a sub-allocation child from unallocatedFunds (#1630)', () => {
+    // Parent 'utilities' budgeted at 500; a detailed child nested under it at 200. The
+    // child's dollars are already inside the parent's, so unallocated must be computed off
+    // the parent's amount alone (3000 - 500 = 2500), not the naive sum (3000 - 700 = 2300).
+    const categories = [
+      createMockCategory({
+        id: 'parent',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+      }),
+      createMockCategory({
+        id: 'child',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD',
+        allocated_amount: 200,
+      }),
+    ]
+    renderManager({ categories })
+    const breakdown = screen.getByTestId('allocation-breakdown')
+    expect(within(breakdown).getByTestId('breakdown-unallocated')).toHaveTextContent('2500')
   })
 
   it('should have role="list" on category list container', () => {

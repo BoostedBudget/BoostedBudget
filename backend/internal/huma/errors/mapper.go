@@ -132,6 +132,8 @@ func MapError(err error) error {
 
 	case errors.Is(err, domain.ErrBudgetAlreadyExists):
 		return huma.Error409Conflict("A budget with this name already exists")
+	case errors.Is(err, domain.ErrDuplicateParentCategory):
+		return huma.Error409Conflict("A budget category for this parent already exists")
 	case errors.Is(err, domain.ErrTagAlreadyExists):
 		return huma.Error409Conflict("A tag with this name already exists")
 	case errors.Is(err, domain.ErrCategoryAlreadyExists):
@@ -265,6 +267,14 @@ func MapError(err error) error {
 	// name, a bad progress_basis/account_percentage combination) fell through to the default
 	// case below and became a 500 + Sentry event. Mirrors ErrInvalidRule's shape.
 	case errors.Is(err, domain.ErrInvalidSavingsGoal):
+		return huma.Error400BadRequest(err.Error())
+	// Issue #1630, task 7 — budget validation, the same ticket's headline defect in a third
+	// domain. Budget.Validate() / BudgetCategory.Validate() / IncomeSource.Validate()
+	// previously returned bare errors.New with no sentinel, so every field failure (an
+	// invalid income_sources[].type, an invalid match_logic, a negative amount, an invalid
+	// category_kind) fell through to the default case below and became a 500 + Sentry event.
+	// Mirrors ErrInvalidSavingsGoal's shape.
+	case errors.Is(err, domain.ErrInvalidBudget):
 		return huma.Error400BadRequest(err.Error())
 	case errors.Is(err, domain.ErrInvalidCondition):
 		return huma.Error422UnprocessableEntity(err.Error())

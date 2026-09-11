@@ -378,7 +378,8 @@ describe('completeness', () => {
     // ⚠ 211 is the SUM of two independent increments from a shared 208, not either side's total:
     //   this branch took it to 209 and staging to 210, and the merge has all three new operations.
     //   Re-derive from `bun run src/spec/index-builder.ts`, which prints the entry count it wrote.
-    expect(ALL_OPERATION_IDS.length).toBe(211)
+    // +1 from #1630 B7: listAdminBudgetHierarchyAudits, the hierarchy audit's operator surface.
+    expect(ALL_OPERATION_IDS.length).toBe(212)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified

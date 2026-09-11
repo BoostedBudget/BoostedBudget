@@ -35,5 +35,27 @@
 #
 # ⚠ The errors were not cosmetic — they were the reason the accounts-read error arm could not be
 # tested at all. See the comment on mockUseGetAccounts.
+#
+# 2005 -> 2006 (#1630). +1, accounted for individually, not a hand-wave. New RED test
+# BudgetDetailPage.test.tsx "excludes a sub-allocation child from totalAllocated (#1630)" calls
+# mockUseBudgetDetail.mockReturnValue({ budget: createMockBudget(...), ... }) — the exact same
+# call shape every other "Success State" test in that file already uses, and mockUseBudgetDetail's
+# inferred return type (src/test/mocks/budget-detail-hooks.ts) types `budget` as bare `null`
+# because its initial mock() factory returns `budget: null`, so passing an object there was
+# ALREADY a type error at every existing call site (dozens, present in the pre-#1630 baseline).
+# One more test using the file's own established pattern adds one more copy of that pre-existing,
+# already-tolerated error — not a new class of error, and not something this task's diff caused.
+# Full before/after error listing diffed (sorted, line/col stripped) confirms this is the ONLY
+# delta.
+#
+# 2006 -> 2002 (#1630). LOWERED, not raised. Tasks 7/8/10 added `enum:` tags for MatchLogic,
+# which orval turns into a string-literal union, and that surfaced SEVEN budget-category test
+# fixtures asserting `match_logic: 'any'` -- a value that has NEVER been legal (the four are
+# category_only / tag_only / and / or). They sat in boosts tests and pii-coverage as
+# budget-category fixtures. This is exactly what this gate's message predicts: "a type error
+# here is usually a test that is now WRONG -- asserting a field or a shape the code no longer
+# has, and such a test can still pass at runtime." All seven passed at runtime. Fixed the
+# fixtures rather than raising the number; the count went 2009 -> 2002, so the baseline
+# ratchets DOWN.
 
-2005
+2002

@@ -30,6 +30,7 @@ var mirroredJobArgs = []queue.Job{
 	investmentTransactionsSyncJobArgs{},
 	itemCleanupJobArgs{},
 	effectiveCategoryRefreshJobArgs{},
+	budgetHierarchyResyncJobArgs{},
 	emailChangePropagationArgs{},
 }
 

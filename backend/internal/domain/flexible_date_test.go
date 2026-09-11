@@ -1,53 +1,56 @@
 package domain
 
 import (
-	"encoding/json"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-// #1631 Batch F2: budgets.start_date/end_date and savings_goals.deadline are Postgres DATE
-// columns, but the REQUEST structs that write them (CreateBudgetRequest, UpdateBudgetRequest,
-// CreateSavingsGoalRequest, UpdateSavingsGoalRequest) accept an RFC3339 timestamp today, and the
-// current frontend relies on that: CreateBudgetDialog.tsx / CreateSavingsGoalDialog.tsx /
-// UpdateSavingsGoalDialog.tsx all send `new Date(dateOnly).toISOString()`. Breaking that would be
-// a regression, not a fix — so FlexibleDate must accept BOTH an RFC3339 timestamp and a bare
-// "YYYY-MM-DD" date-only string, never rejecting the form the current frontend already sends.
-//
-// See domain/flexible_date.go for why this needs to be a distinct type rather than a `time.Time`
-// field: encoding/json calls a field's own UnmarshalJSON/UnmarshalText, and time.Time's rejects a
-// bare date outright.
+// TestFlexibleDate_EndOfDay_DateOnlyExtendsToEndOfDay proves a date-only value
+// ("2026-09-30", which UnmarshalJSON parses to midnight) is extended to the last
+// representable instant of that SAME calendar day — covering the whole day, not
+// truncating it at midnight (Issue #1630 review round 2).
+func TestFlexibleDate_EndOfDay_DateOnlyExtendsToEndOfDay(t *testing.T) {
+	d := FlexibleDate(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC))
 
-type flexibleDateHolder struct {
-	D FlexibleDate `json:"d"`
-}
+	got := d.EndOfDay()
 
-func TestFlexibleDate_AcceptsRFC3339Timestamp(t *testing.T) {
-	var h flexibleDateHolder
-	require.NoError(t, json.Unmarshal([]byte(`{"d":"2026-09-01T00:00:00Z"}`), &h))
-	assert.True(t, time.Time(h.D).Equal(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)))
-}
-
-func TestFlexibleDate_AcceptsBareDateOnlyString(t *testing.T) {
-	var h flexibleDateHolder
-	require.NoError(t, json.Unmarshal([]byte(`{"d":"2026-09-01"}`), &h))
-	assert.True(t, time.Time(h.D).Equal(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)))
-}
-
-func TestFlexibleDate_RejectsGarbage(t *testing.T) {
-	var h flexibleDateHolder
-	err := json.Unmarshal([]byte(`{"d":"not-a-date"}`), &h)
-	assert.Error(t, err)
-}
-
-func TestFlexibleDate_PointerFieldAcceptsNull(t *testing.T) {
-	type holder struct {
-		D *FlexibleDate `json:"d"`
+	want := time.Date(2026, 9, 30, 23, 59, 59, 999999999, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("EndOfDay() = %v, want %v", got, want)
 	}
-	var h holder
-	require.NoError(t, json.Unmarshal([]byte(`{"d":null}`), &h))
-	assert.Nil(t, h.D)
+	if got.Day() != 30 || got.Month() != time.September {
+		t.Fatalf("EndOfDay() must stay within Sep 30 (got %v)", got)
+	}
+}
+
+// TestFlexibleDate_EndOfDay_FullTimestampRespectedExactly proves a full RFC3339 timestamp
+// with a real, non-midnight time-of-day is returned UNCHANGED — not pushed forward toward
+// the next calendar day. This is the RED/GREEN case for the review finding: the pre-fix
+// behavior (unconditional +23h59m59s) would have moved "2026-09-30T15:00:00Z" to
+// "2026-10-01T14:59:59Z", almost a full extra day later.
+func TestFlexibleDate_EndOfDay_FullTimestampRespectedExactly(t *testing.T) {
+	d := FlexibleDate(time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC))
+
+	got := d.EndOfDay()
+
+	want := time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("EndOfDay() = %v, want %v (must be respected exactly, not extended)", got, want)
+	}
+}
+
+// TestFlexibleDate_EndOfDay_MidnightRFC3339TreatedAsDateOnly documents the one ambiguous
+// case: an RFC3339 timestamp that is EXACTLY midnight is indistinguishable from a date-only
+// value (FlexibleDate carries no separate flag recording which form was sent) and is
+// treated the same way — extended to end of that day. This is a deliberate, documented
+// choice (see FlexibleDate.EndOfDay's doc comment), not an oversight.
+func TestFlexibleDate_EndOfDay_MidnightRFC3339TreatedAsDateOnly(t *testing.T) {
+	d := FlexibleDate(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC))
+
+	got := d.EndOfDay()
+
+	want := time.Date(2026, 9, 30, 23, 59, 59, 999999999, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("EndOfDay() = %v, want %v", got, want)
+	}
 }

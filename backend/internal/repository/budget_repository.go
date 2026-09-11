@@ -29,8 +29,7 @@ type BudgetRepository interface {
 	// destroyed alongside it. Issue #1569, Task 8.
 	//
 	// The categories are tombstoned in the SAME transaction with reason 'parent_deleted', because
-	// fk_budget_categories_budget_id used to remove them and reads like
-	// GetCategoriesMatchingTransaction find categories without going through their budget.
+	// fk_budget_categories_budget_id used to remove them outright.
 	//
 	// Writes a "budget.deleted" audit entry via auditLog.LogInTx inside that transaction; auditLog
 	// may be nil. Returns ErrBudgetNotFound if the budget does not exist, belongs to another user,
@@ -41,6 +40,50 @@ type BudgetRepository interface {
 	// BudgetCategory operations
 	CreateCategory(ctx context.Context, category *domain.BudgetCategory) error
 	GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
+	// BeginTx starts a transaction on this repository's pool and returns it as the narrow
+	// Transaction handle, mirroring SavingsGoalRepository.BeginTx (#1625). It exists so a SERVICE
+	// can own a transaction boundary that spans budget-row locks held via
+	// GetCategoriesByBudgetIDLockedInTx AND a write on a DIFFERENT repository — e.g.
+	// custom_category_service's reparent guard, which locks every affected budget and then
+	// persists the reparent's custom_categories write in the SAME transaction (Issue #1630 B3b).
+	BeginTx(ctx context.Context) (Transaction, error)
+	// GetCategoriesByBudgetIDLockedInTx locks budgetID's row (SELECT ... FOR UPDATE) inside a
+	// caller-owned transaction (Issue #1630 B3b), and re-reads its live categories INSIDE tx,
+	// without committing or rolling back — the lock is
+	// held until the CALLER commits or rolls back tx. This is what closes the reparent path's
+	// remaining atomicity gap: a caller can lock several budgets in turn, evaluate its guard
+	// against each locked snapshot, and only then persist its write, all before releasing any
+	// lock. Returns domain.ErrBudgetNotFound if budgetID does not exist or is tombstoned.
+	GetCategoriesByBudgetIDLockedInTx(ctx context.Context, tx Transaction, budgetID string) ([]domain.BudgetCategory, error)
+	// AddCategoryChecked atomically locks budgetID's row (SELECT ... FOR UPDATE), re-resolves
+	// candidate's OWN custom-category hierarchy linkage against the live custom_categories row
+	// (Issue #1630 review fix — see resolveCandidateCustomHierarchyInTx), re-reads its LIVE
+	// categories inside that lock, evaluates domain.DuplicateParentIdentity and
+	// domain.EscapedNestedChild against that fresh snapshot, and only then inserts candidate — all
+	// in one transaction. Closes the TOCTOU window between two concurrent adds that AddCategory's
+	// old read(outside tx)-check(in memory)-write left open (Issue #1630 B3): two goroutines
+	// racing to add categories that are individually fine but jointly violate one of the two
+	// guards can no longer both succeed — and, separately, a concurrent reparent of candidate's
+	// OWN custom category committing between AddCategory's pre-lock read and this lock's
+	// acquisition can no longer leave candidate validated against stale hierarchy fields. Returns
+	// domain.ErrBudgetNotFound if budgetID does not exist or is tombstoned,
+	// domain.ErrDuplicateParentCategory / domain.ErrEscapedNestedChild if the locked snapshot
+	// trips a guard — both already map to a 4xx via huma/errors.LoggingMapError, so the losing
+	// goroutine of a genuine race sees the same refusal it would have seen sequentially, never a
+	// raw serialization failure surfacing as a 500.
+	AddCategoryChecked(ctx context.Context, budgetID string, candidate *domain.BudgetCategory) (*domain.BudgetCategory, error)
+	// UpdateCategoryChecked is AddCategoryChecked's counterpart for edits: it locks budgetID's row,
+	// re-reads its live categories, locates categoryID among them, hands mutate a pointer to apply
+	// request-specific field mutations (mutate should call category.Validate() itself if it wants
+	// field-level validation), re-runs domain.EscapedNestedChild against the mutated row and its
+	// FRESH siblings, and persists — all inside the same lock. mutate receives only the domain
+	// object, never the transaction, so business logic stays in the service layer while
+	// lock/lifecycle management stays in the repository (Issue #1630 B3 — deliberately narrower
+	// than exposing a generic transaction callback). Returns domain.ErrBudgetNotFound /
+	// domain.ErrBudgetCategoryNotFound when the budget or category is missing, whatever mutate
+	// itself returns, or domain.ErrEscapedNestedChild if the mutated row escapes containment
+	// against the locked snapshot.
+	UpdateCategoryChecked(ctx context.Context, budgetID, categoryID string, mutate func(category *domain.BudgetCategory) error) (*domain.BudgetCategory, error)
 	// GetCategoriesByBudgetIDs batch-loads categories for multiple budgets in a single query.
 	// Returns a map from budget ID to its categories. Returns an empty map (not nil) when
 	// budgetIDs is empty. Used by the period-close scanner for batched page loading (Issue #1271).
@@ -58,9 +101,6 @@ type BudgetRepository interface {
 	// transaction; auditLog may be nil. Returns ErrBudgetCategoryNotFound if the category does not
 	// exist, is not in budgetID, or is already tombstoned.
 	DeleteCategory(ctx context.Context, id, budgetID string, auditLog AuditLogRepository) error
-
-	// Query for spent amount sync (Issue #451)
-	GetCategoriesMatchingTransaction(ctx context.Context, userID string, effective *domain.EffectiveCategory) ([]domain.BudgetCategory, error)
 
 	// Envelope budgeting income management (Issue #491)
 	UpdateBudgetIncome(ctx context.Context, budgetID string, incomeAmount float64) error
@@ -96,6 +136,28 @@ type BudgetRepository interface {
 	// When r.db is already a pgx.Tx (e.g. the MCP transactional path), db.Begin() creates a
 	// savepoint so the call composes safely with an outer transaction.
 	CreateWithCategories(ctx context.Context, budget *domain.Budget, categories []*domain.BudgetCategory) error
+
+	// AuditBudgetHierarchy examines ONE budget for the two write-time-guard shapes
+	// (domain.DuplicateParentIdentity, domain.EscapedNestedChild) that predate this budget, and
+	// recomputes every live non-savings category's spent_amount against the budget's own stored
+	// period — Issue #1630 Task B7. See budget_hierarchy_audit.go's header comment for the full
+	// design (what is safe to repair, why the ledger write is atomic, why this is not one SQL
+	// statement, why it re-reads budget.Categories itself rather than trusting the caller's copy).
+	// periodStart/periodEnd must come from services.NarrowBudgetPeriodDates(budget).
+	AuditBudgetHierarchy(ctx context.Context, budget *domain.Budget, periodStart, periodEnd time.Time, spentCalc BudgetHierarchySpentCalculator) (domain.BudgetHierarchyAuditVerdict, error)
+	// BudgetIDsWithUnexaminedHierarchy enumerates LIVE budgets AuditBudgetHierarchy has never
+	// examined, most-behind-first (oldest budget first), capped at limit. Issue #1630 Task B7.
+	BudgetIDsWithUnexaminedHierarchy(ctx context.Context, limit int) ([]string, error)
+	// ListBudgetHierarchyAuditFindings returns budget_hierarchy_audits rows, most-recently-examined
+	// first across the WHOLE result set (not per-outcome), capped at ONE honest limit, optionally
+	// filtered to any of `outcomes` (empty/nil = every outcome). Backs the admin listing that is
+	// Task B7's human-facing surface — see budget_hierarchy_audit.go's header comment for "a
+	// reported finding that reaches nobody is not a fix". Issue #1630 review fix (LOW): this used
+	// to take a single outcome string, which forced the admin handler's two-outcome default case
+	// into two independently `limit`-bound queries appended together — up to 2x the documented
+	// limit, grouped by outcome rather than globally ordered by examined_at. Taking a slice lets
+	// the handler express "any of these outcomes" as ONE query with ONE ORDER BY and ONE LIMIT.
+	ListBudgetHierarchyAuditFindings(ctx context.Context, outcomes []string, limit int) ([]domain.BudgetHierarchyAuditVerdict, error)
 }
 
 // budgetRepository implements BudgetRepository using PostgreSQL.
@@ -532,6 +594,12 @@ func (r *budgetRepository) CountByUserID(ctx context.Context, userID string) (in
 
 // CreateCategory creates a new budget category.
 func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.BudgetCategory) error {
+	return r.createCategoryQuerier(ctx, r.db, category)
+}
+
+// createCategoryQuerier is CreateCategory's body, parameterized over Querier so AddCategoryChecked
+// (Issue #1630 B3) can run the identical insert inside its own locked transaction.
+func (r *budgetRepository) createCategoryQuerier(ctx context.Context, q Querier, category *domain.BudgetCategory) error {
 	if category.ID == "" {
 		category.ID = uuid.New().String()
 	}
@@ -565,7 +633,7 @@ func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`
 
-	_, err = r.db.Exec(ctx, query,
+	_, err = q.Exec(ctx, query,
 		category.ID,
 		category.BudgetID,
 		category.CategoryKind,
@@ -586,31 +654,222 @@ func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.
 	return err
 }
 
+// lockBudgetRowInTx locks budgetID's row (SELECT ... FOR UPDATE) inside tx, blocking until any
+// other transaction holding the same lock (AddCategoryChecked, UpdateCategoryChecked, or another
+// call composing several of these) commits or rolls back. Returns domain.ErrBudgetNotFound if
+// budgetID does not exist or is already tombstoned. Issue #1630 B3.
+func (r *budgetRepository) lockBudgetRowInTx(ctx context.Context, tx Querier, budgetID string) error {
+	var locked string
+	err := tx.QueryRow(ctx, `SELECT id FROM budgets WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, budgetID).Scan(&locked)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrBudgetNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+// BeginTx implements BudgetRepository.BeginTx — see that method's doc comment.
+func (r *budgetRepository) BeginTx(ctx context.Context) (Transaction, error) {
+	return r.db.Begin(ctx)
+}
+
+// GetCategoriesByBudgetIDLockedInTx implements BudgetRepository.GetCategoriesByBudgetIDLockedInTx
+// — see that method's doc comment.
+func (r *budgetRepository) GetCategoriesByBudgetIDLockedInTx(ctx context.Context, tx Transaction, budgetID string) ([]domain.BudgetCategory, error) {
+	if err := r.lockBudgetRowInTx(ctx, tx, budgetID); err != nil {
+		return nil, err
+	}
+	return r.getCategoriesByBudgetIDQuerier(ctx, tx, budgetID)
+}
+
+// resolveCandidateCustomHierarchyInTx re-resolves candidate's own custom-category parent linkage
+// (CustomParentID / CustomParentPFCPrimary / CustomGrandparentPFCPrimary) against the LIVE
+// custom_categories row, INSIDE the transaction that already holds budgetID's row lock (Issue
+// #1630 review fix, HIGH). Mirrors getCategoriesByBudgetIDQuerier's cc/gp join exactly, but for a
+// single not-yet-persisted candidate rather than a batch of already-persisted rows.
+//
+// Exists because budget_service.go's AddCategory populates these same fields via a plain
+// customCategoryRepo.GetByID call BEFORE AddCategoryChecked is ever invoked — i.e. before any
+// lock is held. A concurrent reparent (custom_category_service.go's reparentCategoryChecked) can
+// commit in the window between that read and this lock's acquisition; without re-resolving here,
+// AddCategoryChecked's guard would validate a candidate carrying stale (pre-reparent) hierarchy
+// fields against a fresh snapshot of its siblings — richer stale data, not fixed staleness. A
+// no-op for a non-custom candidate (pfc/savings kinds carry no custom-category linkage at all).
+func (r *budgetRepository) resolveCandidateCustomHierarchyInTx(ctx context.Context, tx Transaction, candidate *domain.BudgetCategory) error {
+	if candidate.CategoryKind != "custom" || candidate.CustomCategoryID == nil {
+		return nil
+	}
+	query := `
+		SELECT cc.parent_id, cc.parent_pfc_primary, gp.parent_pfc_primary AS grandparent_pfc_primary
+		-- tombstone-exempt(custom_categories cc, custom_categories gp): same invariant as
+		-- getCategoriesByBudgetIDQuerier's identical cc/gp join above — a live candidate can
+		-- never name a tombstoned custom category, and a tombstoned category's own parent
+		-- linkage is subject to the same invariant, so filtering deleted_at here would buy
+		-- nothing and could silently blank hierarchy detection if that invariant ever
+		-- slipped. #1569 T9.
+		FROM custom_categories cc
+		LEFT JOIN custom_categories gp ON gp.id = cc.parent_id
+		WHERE cc.id = $1
+	`
+	err := tx.QueryRow(ctx, query, *candidate.CustomCategoryID).Scan(
+		&candidate.CustomParentID,
+		&candidate.CustomParentPFCPrimary,
+		&candidate.CustomGrandparentPFCPrimary,
+	)
+	if err != nil {
+		return fmt.Errorf("re-resolve candidate hierarchy for custom category %s: %w", *candidate.CustomCategoryID, err)
+	}
+	return nil
+}
+
+// AddCategoryChecked implements BudgetRepository.AddCategoryChecked — see that method's doc
+// comment.
+func (r *budgetRepository) AddCategoryChecked(ctx context.Context, budgetID string, candidate *domain.BudgetCategory) (*domain.BudgetCategory, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op
+
+	if err := r.lockBudgetRowInTx(ctx, tx, budgetID); err != nil {
+		return nil, err
+	}
+
+	// Issue #1630 review fix (HIGH): re-resolve candidate's OWN custom-category hierarchy
+	// linkage HERE, under the just-acquired lock — not trust whatever budget_service.go's
+	// AddCategory populated on it before this call, outside any lock. A concurrent reparent
+	// (custom_category_service.go's reparentCategoryChecked) can commit between that pre-lock
+	// read and this lock's acquisition; without re-resolving, candidate's
+	// CustomParentID/CustomParentPFCPrimary/CustomGrandparentPFCPrimary describe the OLD
+	// parentage, and EscapedNestedChild below validates against a stale hierarchy instead of the
+	// live one this lock exists to guarantee.
+	if err := r.resolveCandidateCustomHierarchyInTx(ctx, tx, candidate); err != nil {
+		return nil, err
+	}
+
+	categories, err := r.getCategoriesByBudgetIDQuerier(ctx, tx, budgetID)
+	if err != nil {
+		return nil, err
+	}
+
+	if domain.DuplicateParentIdentity(categories, candidate) {
+		return nil, domain.ErrDuplicateParentCategory
+	}
+	if domain.EscapedNestedChild(categories, candidate) {
+		return nil, fmt.Errorf("%w: match_logic %q on this category escapes its hierarchical parent's containment envelope — a parent whose own match_logic is category_only/or only fully rolls up children whose match_logic is category_only/and; use a top-level (non-nested) category instead if this one must match tag_only or or", domain.ErrEscapedNestedChild, candidate.MatchLogic)
+	}
+
+	if err := r.createCategoryQuerier(ctx, tx, candidate); err != nil {
+		// Defense-in-depth: unique_budget_category_discriminated (migration 000083) backstops the
+		// identity half of this guard at the DB level too. The FOR UPDATE lock above should make
+		// this branch unreachable in practice, but a losing writer must still surface a 4xx, not a
+		// raw constraint-violation 500, if it is ever reached.
+		if strings.Contains(err.Error(), "unique_budget_category_discriminated") || strings.Contains(err.Error(), "duplicate key") {
+			return nil, domain.ErrDuplicateParentCategory
+		}
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return candidate, nil
+}
+
+// UpdateCategoryChecked implements BudgetRepository.UpdateCategoryChecked — see that method's doc
+// comment.
+func (r *budgetRepository) UpdateCategoryChecked(ctx context.Context, budgetID, categoryID string, mutate func(category *domain.BudgetCategory) error) (*domain.BudgetCategory, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op
+
+	if err := r.lockBudgetRowInTx(ctx, tx, budgetID); err != nil {
+		return nil, err
+	}
+
+	categories, err := r.getCategoriesByBudgetIDQuerier(ctx, tx, budgetID)
+	if err != nil {
+		return nil, err
+	}
+
+	var category *domain.BudgetCategory
+	siblings := make([]domain.BudgetCategory, 0, len(categories))
+	for i := range categories {
+		if categories[i].ID == categoryID {
+			c := categories[i]
+			category = &c
+		} else {
+			siblings = append(siblings, categories[i])
+		}
+	}
+	if category == nil {
+		return nil, domain.ErrBudgetCategoryNotFound
+	}
+
+	if err := mutate(category); err != nil {
+		return nil, err
+	}
+
+	if domain.EscapedNestedChild(siblings, category) {
+		return nil, fmt.Errorf("%w: match_logic %q on this category escapes its hierarchical parent's containment envelope — a parent whose own match_logic is category_only/or only fully rolls up children whose match_logic is category_only/and; use a top-level (non-nested) category instead if this one must match tag_only or or", domain.ErrEscapedNestedChild, category.MatchLogic)
+	}
+
+	if err := r.updateCategoryQuerier(ctx, tx, category); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return category, nil
+}
+
 // GetCategoriesByBudgetID retrieves all categories for a budget.
 func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
+	return r.getCategoriesByBudgetIDQuerier(ctx, r.db, budgetID)
+}
+
+// getCategoriesByBudgetIDQuerier is GetCategoriesByBudgetID's body, parameterized over Querier so
+// AddCategoryChecked / UpdateCategoryChecked / GetCategoriesByBudgetIDLockedInTx (Issue #1630 B3,
+// B3b) can run the identical read INSIDE an open transaction, against a budget row they hold
+// locked, rather than duplicating this query.
+func (r *budgetRepository) getCategoriesByBudgetIDQuerier(ctx context.Context, q Querier, budgetID string) ([]domain.BudgetCategory, error) {
 	// Issue #1203: join custom_categories for parent linkage (sub-allocation detection).
 	// Issue #1300: join savings_goals for display name so the API returns savings_goal_name
 	// and the frontend never shows a raw UUID as the category label.
+	// Issue #1630 Task B2: a SECOND join hop (gp) resolves cc's own parent's parent_pfc_primary
+	// — i.e. this row's GRANDPARENT PFC root, when cc itself is nested under a PFC primary via
+	// parent_id rather than being a direct child of it. Mirrors customCategoryPathJoins()
+	// (analytics_category_path.go) walked one hop further; needed so
+	// BudgetCategory.CustomGrandparentPFCPrimary can recognize a transitive sub-allocation
+	// pair the same way buildCategoryClause's widened roll-up now sums it.
 	query := `
 		SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed, bc.custom_category_id,
 			bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
 			bc.tags, bc.match_logic,
-			cc.parent_id, cc.parent_pfc_primary,
+			cc.parent_id, cc.parent_pfc_primary, gp.parent_pfc_primary AS grandparent_pfc_primary,
 			bc.savings_goal_id, bc.auto_created, bc.managed_by_goal_id,
 			sg.name AS savings_goal_name
-		-- tombstone-exempt(custom_categories cc): the cc join resolves the PARENT LINKAGE of a budget line that is
-		-- itself already tombstone-filtered (bc.deleted_at IS NULL). DeleteWithReassignment
-		-- tombstones a category's budget lines in the same transaction as the category, so a live
-		-- bc never names a tombstoned cc; adding AND cc.deleted_at IS NULL would buy nothing and
-		-- would silently blank sub-allocation detection if that invariant ever slipped. #1569 T9.
+		-- tombstone-exempt(custom_categories cc, custom_categories gp): the cc and gp joins resolve the PARENT
+		-- and GRANDPARENT LINKAGE of a budget line that is itself already tombstone-filtered
+		-- (bc.deleted_at IS NULL). DeleteWithReassignment tombstones a category's budget lines in
+		-- the same transaction as the category, so a live bc never names a tombstoned cc, and cc's
+		-- own parent (gp) is subject to the identical invariant one hop up; adding
+		-- AND cc.deleted_at IS NULL / AND gp.deleted_at IS NULL would buy nothing and would
+		-- silently blank sub-allocation detection if that invariant ever slipped. #1569 T9.
 		FROM budget_categories bc
 		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
+		LEFT JOIN custom_categories gp ON gp.id = cc.parent_id
 		LEFT JOIN savings_goals sg ON sg.id = bc.savings_goal_id AND sg.deleted_at IS NULL
 		WHERE bc.budget_id = $1 AND bc.deleted_at IS NULL
 		ORDER BY bc.created_at ASC
 	`
 
-	rows, err := r.db.Query(ctx, query, budgetID)
+	rows, err := q.Query(ctx, query, budgetID)
 	if err != nil {
 		return nil, err
 	}
@@ -636,6 +895,7 @@ func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID
 			&bc.MatchLogic,
 			&bc.CustomParentID,
 			&bc.CustomParentPFCPrimary,
+			&bc.CustomGrandparentPFCPrimary,
 			&bc.SavingsGoalID,
 			&bc.AutoCreated,
 			&bc.ManagedByGoalID,
@@ -669,17 +929,20 @@ func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetI
 	}
 
 	// Issue #1300: join savings_goals for display name (same as GetCategoriesByBudgetID).
+	// Issue #1630 Task B2: second join hop (gp) for CustomGrandparentPFCPrimary — see
+	// GetCategoriesByBudgetID's comment for the full reasoning; identical shape here.
 	query := `
 		SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed, bc.custom_category_id,
 			bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
 			bc.tags, bc.match_logic,
-			cc.parent_id, cc.parent_pfc_primary,
+			cc.parent_id, cc.parent_pfc_primary, gp.parent_pfc_primary AS grandparent_pfc_primary,
 			bc.savings_goal_id, bc.auto_created, bc.managed_by_goal_id,
 			sg.name AS savings_goal_name
-		-- tombstone-exempt(custom_categories cc): identical to GetCategoriesByBudgetID above — the cc join is parent
-		-- linkage for an already tombstone-filtered bc row. #1569 T9.
+		-- tombstone-exempt(custom_categories cc, custom_categories gp): identical to GetCategoriesByBudgetID above —
+		-- the cc and gp joins are parent/grandparent linkage for an already tombstone-filtered bc row. #1569 T9.
 		FROM budget_categories bc
 		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
+		LEFT JOIN custom_categories gp ON gp.id = cc.parent_id
 		LEFT JOIN savings_goals sg ON sg.id = bc.savings_goal_id AND sg.deleted_at IS NULL
 		WHERE bc.budget_id = ANY($1) AND bc.deleted_at IS NULL
 		ORDER BY bc.budget_id ASC, bc.created_at ASC
@@ -711,6 +974,7 @@ func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetI
 			&bc.MatchLogic,
 			&bc.CustomParentID,
 			&bc.CustomParentPFCPrimary,
+			&bc.CustomGrandparentPFCPrimary,
 			&bc.SavingsGoalID,
 			&bc.AutoCreated,
 			&bc.ManagedByGoalID,
@@ -736,6 +1000,13 @@ func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetI
 
 // UpdateCategory updates an existing budget category.
 func (r *budgetRepository) UpdateCategory(ctx context.Context, category *domain.BudgetCategory) error {
+	return r.updateCategoryQuerier(ctx, r.db, category)
+}
+
+// updateCategoryQuerier is UpdateCategory's body, parameterized over Querier so
+// UpdateCategoryChecked (Issue #1630 B3) can run the identical update inside its own locked
+// transaction.
+func (r *budgetRepository) updateCategoryQuerier(ctx context.Context, q Querier, category *domain.BudgetCategory) error {
 	category.UpdatedAt = time.Now()
 
 	// Marshal tags to JSON (Issue #491)
@@ -762,7 +1033,7 @@ func (r *budgetRepository) UpdateCategory(ctx context.Context, category *domain.
 		WHERE id = $10 AND budget_id = $11 AND deleted_at IS NULL
 	`
 
-	ct, err := r.db.Exec(ctx, query,
+	ct, err := q.Exec(ctx, query,
 		category.CategoryKind,
 		category.PFCPrimary,
 		category.PFCDetailed,
@@ -836,125 +1107,6 @@ func (r *budgetRepository) DeleteCategory(ctx context.Context, id, budgetID stri
 	}
 
 	return tx.Commit(ctx)
-}
-
-// GetCategoriesMatchingTransaction finds budget categories that match a transaction's category.
-// This is used for recalculating spent amounts when transactions change (Issue #451).
-// Note: This method currently only matches by category. Future enhancement could use match_logic
-// and tags for more flexible matching (Issue #491).
-func (r *budgetRepository) GetCategoriesMatchingTransaction(ctx context.Context, userID string, effective *domain.EffectiveCategory) ([]domain.BudgetCategory, error) {
-	if effective == nil {
-		return []domain.BudgetCategory{}, nil
-	}
-
-	var query string
-	var args []interface{}
-
-	switch effective.Kind {
-	case domain.EffectiveCategoryKindPFC:
-		if effective.PFCDetailed == nil || *effective.PFCDetailed == "" {
-			// Transaction has no detailed sub-category: only match primary-only budget categories
-			// (i.e. bc.pfc_detailed IS NULL). Detailed-specific budgets must not fire.
-			query = `
-				SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed,
-					bc.custom_category_id, bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
-					bc.tags, bc.match_logic
-				FROM budget_categories bc
-				JOIN budgets b ON bc.budget_id = b.id AND b.deleted_at IS NULL
-				WHERE b.user_id = $1 AND b.is_active = true AND bc.deleted_at IS NULL
-				  AND bc.category_kind = 'pfc' AND bc.pfc_primary = $2
-				  AND bc.pfc_detailed IS NULL
-			`
-			args = []interface{}{userID, effective.PFCPrimary}
-		} else {
-			// Transaction has a detailed sub-category: match the primary-only rollup budget
-			// (bc.pfc_detailed IS NULL) AND the exact detailed budget — but NOT siblings.
-			query = `
-				SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed,
-					bc.custom_category_id, bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
-					bc.tags, bc.match_logic
-				FROM budget_categories bc
-				JOIN budgets b ON bc.budget_id = b.id AND b.deleted_at IS NULL
-				WHERE b.user_id = $1 AND b.is_active = true AND bc.deleted_at IS NULL
-				  AND bc.category_kind = 'pfc' AND bc.pfc_primary = $2
-				  AND (bc.pfc_detailed IS NULL OR bc.pfc_detailed = $3)
-			`
-			args = []interface{}{userID, effective.PFCPrimary, effective.PFCDetailed}
-		}
-	case domain.EffectiveCategoryKindCustom:
-		// Roll a custom-category transaction up into every budget it belongs to, mirroring
-		// the full-resync rollup in buildCategoryClause (#1203):
-		//   - the exact custom budget,
-		//   - its custom PARENT budget (parent_id), and
-		//   - the PFC primary-only budget it nests under (parent_pfc_primary).
-		// All parent lookups are user-scoped.
-		query = `
-			SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed,
-				bc.custom_category_id, bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
-				bc.tags, bc.match_logic
-			FROM budget_categories bc
-			-- tombstone-exempt(custom_categories): the two custom_categories subqueries below resolve the PARENT of
-			-- the category a transaction is already filed under, so its spend rolls up to the
-			-- right budget line. The transaction is history; if its category has since been
-			-- tombstoned, its budget lines were tombstoned with it and bc.deleted_at IS NULL
-			-- already excludes them. #1569 T9.
-			JOIN budgets b ON bc.budget_id = b.id AND b.deleted_at IS NULL
-			WHERE b.user_id = $1 AND b.is_active = true AND bc.deleted_at IS NULL
-			  AND (
-			    (bc.category_kind = 'custom'
-			      AND (bc.custom_category_id::text = $2
-			           OR bc.custom_category_id = (SELECT parent_id FROM custom_categories WHERE id = $2::uuid AND user_id = $1)))
-			    OR (bc.category_kind = 'pfc' AND bc.pfc_detailed IS NULL
-			        AND bc.pfc_primary = (SELECT parent_pfc_primary FROM custom_categories WHERE id = $2::uuid AND user_id = $1))
-			  )
-		`
-		args = []interface{}{userID, effective.CustomCategoryID}
-	default:
-		return []domain.BudgetCategory{}, nil
-	}
-
-	rows, err := r.db.Query(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var categories []domain.BudgetCategory
-	for rows.Next() {
-		var bc domain.BudgetCategory
-		var tagsJSON []byte
-
-		err := rows.Scan(
-			&bc.ID,
-			&bc.BudgetID,
-			&bc.CategoryKind,
-			&bc.PFCPrimary,
-			&bc.PFCDetailed,
-			&bc.CustomCategoryID,
-			&bc.AllocatedAmount,
-			&bc.SpentAmount,
-			&bc.CreatedAt,
-			&bc.UpdatedAt,
-			&tagsJSON,
-			&bc.MatchLogic,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		// Unmarshal tags from JSON (Issue #491)
-		if err := json.Unmarshal(tagsJSON, &bc.Tags); err != nil {
-			return nil, err
-		}
-
-		categories = append(categories, bc)
-	}
-
-	if categories == nil {
-		categories = []domain.BudgetCategory{}
-	}
-
-	return categories, nil
 }
 
 // UpdateBudgetIncome updates only income_amount for a budget (the actual received sum).

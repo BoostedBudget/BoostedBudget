@@ -203,6 +203,29 @@ describe('createHostProxy', () => {
     expect(idempotencyKey!.length).toBeGreaterThan(0)
   })
 
+  // #1630: `previewCategoryMatches` is now admitted into readExecute as an acknowledged
+  // safe-POST. readExecute never passes an `idempotencyKey` opt (mcp/tools/execute.ts calls
+  // `proxy.invoke(operationId, args, { confirmationToken })` only), and
+  // `confirmationRequired: false` (from the `read()` manifest helper) means the
+  // `entry.confirmationRequired` branch above — the ONLY place that mints/consumes an
+  // idempotency key — never runs for it. So `confirmedIdempotencyKey` stays `undefined` and
+  // `effectiveIdempotencyKey` falls through to `opts.idempotencyKey`, also undefined: no
+  // `Idempotency-Key` header is ever attached to a previewCategoryMatches call. Proven here
+  // against the real host-proxy + real manifest, not asserted from reading the code alone.
+  it('#1630: an admitted safe-POST (previewCategoryMatches) never carries an Idempotency-Key header', async () => {
+    const capturedOpts: Array<{ headers?: Record<string, string> } | undefined> = []
+    const capturingMutator: FetchMutator = mock((_config, opts) => {
+      capturedOpts.push(opts as { headers?: Record<string, string> } | undefined)
+      return Promise.resolve({ transaction_count: 0, total_amount: 0 })
+    }) as unknown as FetchMutator
+
+    const proxy = createHostProxy({ mutator: capturingMutator })
+    await proxy.invoke('previewCategoryMatches', { pfc_primary: 'FOOD_AND_DRINK' })
+
+    expect(capturedOpts).toHaveLength(1)
+    expect(capturedOpts[0]?.headers?.['Idempotency-Key']).toBeUndefined()
+  })
+
   // ── Rate limiting — per-user isolation ──────────────────────────────────
 
   it('rate-limits per userId independently (no cross-user bleed)', async () => {
@@ -261,6 +284,66 @@ describe('createHostProxy', () => {
     const serialized = JSON.stringify(err)
     expect(serialized).not.toContain('99,999')
     expect(serialized).not.toContain('Balance')
+  })
+
+  // Issue #1630 Task 11: the backend's validation detail (domain.ErrInvalidBudget's
+  // field-naming 400s, and Huma's own schema 422s) was being thrown away — ApiError.body
+  // was parsed and stored but never read, so every validation failure surfaced through MCP
+  // as a bare "API error 422 (backend_error)" with no field name or reason.
+  it('surfaces the backend-named field from a 400 validation body instead of a bare status', async () => {
+    const failingMutator = mock(() =>
+      Promise.reject(
+        new ApiError(400, {
+          title: 'Bad Request',
+          status: 400,
+          detail: 'invalid budget: expected_income must be positive',
+        }),
+      ),
+    ) as unknown as FetchMutator
+    const proxy = createHostProxy({ mutator: failingMutator })
+
+    const err = await proxy.invoke(ALLOWED_READ_OP, {}).catch((e) => e)
+    expect(err).toBeInstanceOf(HostProxyError)
+    expect(err.message).toContain('expected_income')
+    expect(err.message).toContain('must be positive')
+  })
+
+  it('surfaces a Huma schema 422 field-location detail', async () => {
+    const failingMutator = mock(() =>
+      Promise.reject(
+        new ApiError(422, {
+          title: 'Unprocessable Entity',
+          status: 422,
+          detail: 'validation failed',
+          errors: [{ message: 'expected string', location: 'body.start_date' }],
+        }),
+      ),
+    ) as unknown as FetchMutator
+    const proxy = createHostProxy({ mutator: failingMutator })
+
+    const err = await proxy.invoke(ALLOWED_READ_OP, {}).catch((e) => e)
+    expect(err).toBeInstanceOf(HostProxyError)
+    expect(err.message).toContain('body.start_date')
+    expect(err.message).toContain('expected string')
+  })
+
+  it('still redacts the surfaced body detail — a value the redactor is meant to strip does not leak', async () => {
+    const failingMutator = mock(() =>
+      Promise.reject(
+        new ApiError(400, {
+          title: 'Bad Request',
+          status: 400,
+          detail: 'invalid budget: amount must be positive, got $1,234.56',
+        }),
+      ),
+    ) as unknown as FetchMutator
+    const proxy = createHostProxy({ mutator: failingMutator })
+
+    const err = await proxy.invoke(ALLOWED_READ_OP, {}).catch((e) => e)
+    expect(err).toBeInstanceOf(HostProxyError)
+    expect(err.message).toContain('amount must be positive')
+    expect(err.message).not.toContain('1,234.56')
+    expect(err.message).not.toContain('$')
   })
 })
 

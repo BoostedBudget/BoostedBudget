@@ -9,10 +9,11 @@ import (
 //
 // Why this exists (Issue #1490, worked example #1486): `internal/services` cannot import
 // `internal/queue/jobs` — jobs imports services, so that would be an import cycle. Services
-// therefore MIRRORS six args types locally (plaidSyncJobArgs, investmentHoldingsSyncJobArgs,
+// therefore MIRRORS seven args types locally (plaidSyncJobArgs, investmentHoldingsSyncJobArgs,
 // investmentTransactionsSyncJobArgs, itemCleanupJobArgs, effectiveCategoryRefreshJobArgs,
-// emailChangePropagationArgs), each re-declaring the same JSON tags and returning the same
-// Kind() string as its jobs.*Args counterpart. River pairs a producer with a worker by Kind()
+// budgetHierarchyResyncJobArgs, emailChangePropagationArgs), each re-declaring the same JSON tags
+// and returning the same Kind() string as its jobs.*Args counterpart. River pairs a producer with
+// a worker by Kind()
 // string and then deserializes river_job.args into the WORKER's args type — so if a mirror's
 // JSON tags ever drift from the real type's, nothing catches it at compile time. It surfaces in
 // production, as a worker reading a zero value for a field the producer thought it had set.
@@ -56,7 +57,7 @@ type JobArgsShape struct {
 // misses the internal/services mirrors, and misses queue.RawJobArgs entirely, because
 // RawJobArgs.Kind() returns a stored string rather than a constant.
 //
-// Only the six mirrored kinds appear here. Kinds with no services-side mirror (account_deletion,
+// Only the seven mirrored kinds appear here. Kinds with no services-side mirror (account_deletion,
 // item_cleanup_check, subscription_webhook, …) have exactly one Go type and cannot drift, so
 // there is nothing for a cross-package pin to compare.
 var MirroredJobArgsShapes = map[string]JobArgsShape{
@@ -82,6 +83,13 @@ var MirroredJobArgsShapes = map[string]JobArgsShape{
 	},
 	"effective_category_refresh": {
 		Fields: []string{"user_id", "custom_category_id"},
+	},
+	"budget_hierarchy_resync": {
+		Fields: []string{
+			"user_id", "custom_category_id",
+			"old_parent_custom_category_id", "old_parent_pfc_primary",
+		},
+		OmitEmpty: []string{"old_parent_custom_category_id", "old_parent_pfc_primary"},
 	},
 	"email_change_propagation": {
 		Fields: []string{"user_id", "clerk_user_id"},

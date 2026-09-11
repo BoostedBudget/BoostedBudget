@@ -250,6 +250,35 @@ describe('buildSankeyData — savings and deficit', () => {
     expectConservation(data)
   })
 
+  // The app cannot observe whether a shortfall was funded from savings, credit, or an overdraft,
+  // so the node must not assert one — it displays as "Shortfall", not "Drawn from Savings /
+  // Credit". The id stays 'deficit' (referenced by the test above and unchanged here); only the
+  // display name changed.
+  it('a shortfall displays as "Shortfall", not a claim about where the money came from', () => {
+    const data = buildSankeyData([node('INCOME', 'Income', 100)], [node('RENT_AND_UTILITIES', 'Rent', 300)], { kind: 'parents' })
+    const deficitNode = data.nodes.find(n => n.id === 'deficit')
+    expect(deficitNode?.name).toBe('Shortfall')
+  })
+
+  // Regression pin, not the guarantee itself: buildSankeyData derives Saved/Shortfall from ONE
+  // signed value (surplus = incomeSum - expenseSum) with mutually exclusive `< 0` / `> 0`
+  // branches, so no input can ever emit both — that is structural to the code, not something this
+  // test enforces. This pins the observable behaviour so a future refactor that broke the
+  // single-signed-value structure would be caught here.
+  it('a positive net emits Savings only, a negative net emits a deficit only, and zero emits neither', () => {
+    const positive = buildSankeyData([node('INCOME', 'Income', 500)], [node('RENT_AND_UTILITIES', 'Rent', 300)], { kind: 'parents' })
+    expect(positive.nodes.some(n => n.id === 'savings')).toBe(true)
+    expect(positive.nodes.some(n => n.id === 'deficit')).toBe(false)
+
+    const negative = buildSankeyData([node('INCOME', 'Income', 100)], [node('RENT_AND_UTILITIES', 'Rent', 300)], { kind: 'parents' })
+    expect(negative.nodes.some(n => n.id === 'deficit')).toBe(true)
+    expect(negative.nodes.some(n => n.id === 'savings')).toBe(false)
+
+    const exact = buildSankeyData([node('INCOME', 'Income', 300)], [node('RENT_AND_UTILITIES', 'Rent', 300)], { kind: 'parents' })
+    expect(exact.nodes.some(n => n.id === 'savings')).toBe(false)
+    expect(exact.nodes.some(n => n.id === 'deficit')).toBe(false)
+  })
+
   it('empty input yields an empty chart rather than a phantom hub', () => {
     const data = buildSankeyData([], [], { kind: 'parents' })
     expect(data.nodes).toHaveLength(0)
@@ -369,7 +398,17 @@ describe('buildSankeyData — the income fan is hierarchical too', () => {
 
     const bonus = data.nodes.find(n => n.name === 'Bonus')
     expect(bonus?.id.startsWith('in:l1:')).toBe(true)
-    expect(bonus?.depth).toBe(3)
+    expect(bonus?.categoryDepth).toBe(3)
+  })
+
+  // #1630: ECharts' sankey series reads a node-data field literally named `depth` as its LAYOUT
+  // LAYER, not as arbitrary payload — that collision is what put income on the wrong side of the
+  // chart. This field must therefore never be reintroduced under that name.
+  it('never emits a node-data field named `depth` — ECharts reads that name as its layout layer', () => {
+    const data = buildSankeyData(incomeTree, [node('FOOD_AND_DRINK', 'Food And Drink', 5500)], { kind: 'parents' })
+    for (const n of data.nodes) {
+      expect(Object.prototype.hasOwnProperty.call(n, 'depth')).toBe(false)
+    }
   })
 
   it('a PFC detailed income leaf navigates by pfc_detaileds, not its primary', () => {
