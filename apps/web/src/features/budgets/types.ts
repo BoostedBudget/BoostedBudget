@@ -182,8 +182,19 @@ export function filterTopLevel(categories: BudgetCategory[]): BudgetCategory[] {
  * one relation: AllocationBreakdown, BudgetCategoryCard and BudgetCategoryManager all use it.
  * AllocationBreakdown briefly had its own private copy (isNestedUnder); that was removed in the
  * #1630 simplification pass, which is exactly what this export exists to prevent.
+ *
+ * `options.directOnly` (Issue #1630 delete-dialog fix): when true, the transitive/grandchild
+ * branch below is skipped, so this reports ONLY a true one-hop parent/child relation. A caller
+ * that needs to know what is promoted to top level when `parent` itself is deleted — as opposed
+ * to what merely rolls up into `parent`'s totals — must pass `directOnly: true`: deleting `parent`
+ * promotes only its DIRECT children; a grandchild stays nested under its own (still-existing)
+ * direct parent.
  */
-export function isSubAllocationOfParent(child: BudgetCategory, parent: BudgetCategory): boolean {
+export function isSubAllocationOfParent(
+  child: BudgetCategory,
+  parent: BudgetCategory,
+  options?: { directOnly?: boolean }
+): boolean {
   if (!isContainingMatchLogic(parent.match_logic)) return false;
   if (!isContainedMatchLogic(child.match_logic)) return false;
   if (child.category_kind === 'pfc') {
@@ -200,6 +211,7 @@ export function isSubAllocationOfParent(child: BudgetCategory, parent: BudgetCat
       if (parent.category_kind === 'custom' && parent.custom_category_id === child.custom_parent_id) {
         return true;
       }
+      if (options?.directOnly) return false;
       // Transitive case (Issue #1630 Task B2): child's direct parent (custom_parent_id) is
       // itself nested under `parent` via parent_pfc_primary — child is a GRANDCHILD of `parent`
       // two hops away. Mirrors backend hierarchyHasNestedChild's CustomGrandparentPFCPrimary
