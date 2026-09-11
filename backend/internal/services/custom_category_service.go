@@ -320,41 +320,62 @@ func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, cate
 		return nil, err
 	}
 
-	// Issue #1123: enqueue async refresh of effective_category_name when the name changed.
-	// Issue #1630 Task B1: enqueue async budget resync when the parent linkage changed —
-	// reparenting flips a budgeted row's excluded/top-level status with no query against
-	// budget_categories at all, so without this the affected budget's stored spent_amount goes
-	// stale (spend visibly vanishes or doubles) until an unrelated sync happens to touch it. A
-	// reparent that ALSO renames enqueues BOTH jobs.
-	if (nameChanged || parentChanged) && s.jobQueue != nil {
-		if nameChanged {
-			if _, enqErr := s.jobQueue.Enqueue(ctx, effectiveCategoryRefreshJobArgs{
-				UserID:           userID,
-				CustomCategoryID: categoryID,
-			}); enqErr != nil {
-				// Log but don't fail — rename is already persisted
-				s.logger.Error("failed to enqueue effective category refresh job",
-					"user_id", userID,
-					"custom_category_id", categoryID,
-					"error", enqErr,
-				)
-			}
+	// Issue #1123: enqueue async refresh of effective_category_name when the name changed. This
+	// stays best-effort (log, don't fail): a stale effective_category_name is a cosmetic label
+	// lag, not a money-correctness gap, and the write it would roll back (the rename itself) has
+	// already committed.
+	if nameChanged && s.jobQueue != nil {
+		if _, enqErr := s.jobQueue.Enqueue(ctx, effectiveCategoryRefreshJobArgs{
+			UserID:           userID,
+			CustomCategoryID: categoryID,
+		}); enqErr != nil {
+			// Log but don't fail — rename is already persisted
+			s.logger.Error("failed to enqueue effective category refresh job",
+				"user_id", userID,
+				"custom_category_id", categoryID,
+				"error", enqErr,
+			)
 		}
-		if parentChanged {
-			if _, enqErr := s.jobQueue.Enqueue(ctx, budgetHierarchyResyncJobArgs{
-				UserID:                    userID,
-				CustomCategoryID:          categoryID,
-				OldParentCustomCategoryID: originalParentID,
-				OldParentPFCPrimary:       originalParentPFCPrimary,
-			}); enqErr != nil {
-				// Log but don't fail — the reparent is already persisted; the interim window
-				// with a stale total simply doesn't shrink to one job cycle this time.
-				s.logger.Error("failed to enqueue budget hierarchy resync job",
-					"user_id", userID,
-					"custom_category_id", categoryID,
-					"error", enqErr,
-				)
-			}
+	}
+
+	// Issue #1630 Task B1 (review fix, fail-closed): enqueue async budget resync when the parent
+	// linkage changed — reparenting flips a budgeted row's excluded/top-level status with no
+	// query against budget_categories at all, so without this resync the affected budget's stored
+	// spent_amount goes stale (spend visibly vanishes or doubles) until an unrelated sync happens
+	// to touch it, which may never happen.
+	//
+	// This used to be best-effort like the rename job above (log, don't fail) — a nil jobQueue
+	// skipped the enqueue entirely, and a failed enqueue was logged and swallowed. Both silently
+	// left the resync's own stale-totals gap open on the one path the resync exists to close, and
+	// the caller's 200 response gave no signal that anything was wrong. Money-integrity
+	// enforcement is not observability (mirrors reparentCategoryChecked's own fail-closed
+	// precedent, below, for its required-but-optionally-wired budgetCategoryRepo): the reparent
+	// itself has already committed by this point (via reparentCategoryChecked's own transaction),
+	// so this cannot roll that back, but it CAN and now DOES refuse to report success while the
+	// resync that would fix the resulting stale totals never got scheduled — surfacing a 5xx tells
+	// the caller (and any retry/alerting built on it) that the budget-side totals need attention,
+	// instead of looking like a clean success.
+	//
+	// A transactional outbox (enqueue the resync row in the SAME transaction as the reparent
+	// write, then a separate dispatcher moves it to the queue) would close the remaining gap this
+	// doesn't: a crash between reparentCategoryChecked's commit and this Enqueue call still drops
+	// the resync silently. That is a bigger structural change than this fix warrants on its own —
+	// no other write path in this codebase uses an outbox, and introducing the pattern for one job
+	// type is out of scope for a fail-closed review fix. Fail-closed here is deliberately the
+	// smaller, immediate fix: it cannot eliminate a mid-request crash window, but it does turn
+	// "queue full" / "queue down" / "mis-wired jobQueue" — the ordinary-operation cases the review
+	// flagged — from a silent gap into a visible failure.
+	if parentChanged {
+		if s.jobQueue == nil {
+			return nil, fmt.Errorf("job queue not configured: cannot enqueue budget hierarchy resync for reparented category %s — refusing to report success while the stale-totals gap this resync exists to close goes unscheduled", categoryID)
+		}
+		if _, enqErr := s.jobQueue.Enqueue(ctx, budgetHierarchyResyncJobArgs{
+			UserID:                    userID,
+			CustomCategoryID:          categoryID,
+			OldParentCustomCategoryID: originalParentID,
+			OldParentPFCPrimary:       originalParentPFCPrimary,
+		}); enqErr != nil {
+			return nil, fmt.Errorf("failed to enqueue budget hierarchy resync for reparented category %s: %w", categoryID, enqErr)
 		}
 	}
 
