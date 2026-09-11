@@ -122,7 +122,7 @@ type CategorizationRule struct {
 	TargetPFCPrimaryDisplay  *string `json:"target_pfc_primary_display,omitempty" db:"-"`
 	TargetPFCDetailedDisplay *string `json:"target_pfc_detailed_display,omitempty" db:"-"`
 	// Custom category display name (populated by service enrichment from custom_categories table, not stored in DB)
-	TargetCustomCategoryDisplay *string    `json:"target_custom_category_display,omitempty" db:"-"`
+	TargetCustomCategoryDisplay *string `json:"target_custom_category_display,omitempty" db:"-"`
 
 	// Quarantined reports that this rule cannot be evaluated as written. RESPONSE ONLY, computed
 	// at read time from the rule's own conditions and never persisted -- a stored copy could only
@@ -161,15 +161,15 @@ type CategorizationRule struct {
 	// QuarantineReason is a fixed vocabulary (never user content), shared with the
 	// categorization_rule_quarantine_candidates_total metric so the two cannot describe the same
 	// condition differently.
-	QuarantineReason string `json:"quarantine_reason,omitempty" db:"-" doc:"Why the rule is broken. Fixed vocabulary, never user content. Four values are in the ENFORCEMENT CLASS — the rule cannot be evaluated honestly as written, and while quarantine enforcement is on (RULE_QUARANTINE_ENFORCE, default on) the server refuses it and quarantined is true: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. With enforcement OFF those same rules RUN and quarantined is false — nothing about them was repaired. The fifth, invalid_condition_value_shape, is never enforced in either state: a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only, so the rule keeps running. Read quarantined, not this field, for whether the server is currently stopping the rule — and read enabled too, which both fields ignore entirely. The stored rule is never rewritten; edit it to make the repair permanent."`
-	TargetTags                  []string   `json:"target_tags,omitempty" db:"target_tags"`
-	TagBehavior                 string     `json:"tag_behavior" db:"tag_behavior"` // "add" or "replace"
-	Source                      string     `json:"source" db:"source"`             // "manual", "ai", or "template"
-	MatchCount                  int64      `json:"match_count" db:"match_count"`
-	OverrideCount               int64      `json:"override_count" db:"override_count"`
-	LastMatchedAt               *time.Time `json:"last_matched_at,omitempty" db:"last_matched_at"`
-	CreatedAt                   time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt                   time.Time  `json:"updated_at" db:"updated_at"`
+	QuarantineReason string     `json:"quarantine_reason,omitempty" db:"-" doc:"Why the rule is broken. Fixed vocabulary, never user content. Four values are in the ENFORCEMENT CLASS — the rule cannot be evaluated honestly as written, and while quarantine enforcement is on (RULE_QUARANTINE_ENFORCE, default on) the server refuses it and quarantined is true: no_conditions_matches_everything, invalid_condition_logic_defaults_to_and, unnormalizable_condition, uncoercible_condition_value. With enforcement OFF those same rules RUN and quarantined is false — nothing about them was repaired. The fifth, invalid_condition_value_shape, is never enforced in either state: a condition value of the wrong type whose intended reading is unambiguous, coerced at read time only, so the rule keeps running. Read quarantined, not this field, for whether the server is currently stopping the rule — and read enabled too, which both fields ignore entirely. The stored rule is never rewritten; edit it to make the repair permanent."`
+	TargetTags       []string   `json:"target_tags,omitempty" db:"target_tags"`
+	TagBehavior      string     `json:"tag_behavior" db:"tag_behavior"` // "add" or "replace"
+	Source           string     `json:"source" db:"source"`             // "manual", "ai", or "template"
+	MatchCount       int64      `json:"match_count" db:"match_count"`
+	OverrideCount    int64      `json:"override_count" db:"override_count"`
+	LastMatchedAt    *time.Time `json:"last_matched_at,omitempty" db:"last_matched_at"`
+	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
 
 	// Version is the optimistic-concurrency token for USER-facing updates (#1625 final review B2,
 	// migration 000192).
@@ -437,11 +437,18 @@ type RulePreviewResult struct {
 // ⚠ Every field except TransactionID is user financial data — merchant, raw description, amount.
 // Any UI rendering these must mask them for session replay (data-ph-mask).
 type RulePreviewMatch struct {
-	TransactionID   string    `json:"transaction_id"`
-	Date            time.Time `json:"date"`
-	Name            string    `json:"name"`
-	MerchantName    *string   `json:"merchant_name,omitempty"`
-	Amount          float64   `json:"amount"`
-	CurrentCategory string    `json:"current_category"`
-	WouldAddTags    []string  `json:"would_add_tags,omitempty"`
+	TransactionID string `json:"transaction_id"`
+	// Date is the matched transaction UTC calendar day (YYYY-MM-DD), formatted at the one place
+	// this type is built (rulePreviewService.Preview).
+	//
+	// A plain string rather than a time.Time, unlike Transaction.Date which needs the split: this
+	// is a pure read-only view type with no bind param, scan target or cursor behind it, so there
+	// is nothing for a time.Time to serve. transactions.date is a DATE column, and rendering it
+	// through a timestamp shifts it back a day west of UTC (#1631; see domain/date_display.go).
+	Date            string   `json:"date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) of the matched transaction"`
+	Name            string   `json:"name"`
+	MerchantName    *string  `json:"merchant_name,omitempty"`
+	Amount          float64  `json:"amount"`
+	CurrentCategory string   `json:"current_category"`
+	WouldAddTags    []string `json:"would_add_tags,omitempty"`
 }

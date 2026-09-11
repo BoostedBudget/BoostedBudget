@@ -1706,6 +1706,13 @@ func (r *transactionRepository) postScanTransactionState(tx *domain.Transaction,
 		tx.DeletedReason = nil
 	}
 
+	// #1631: date and authorized_date are DATE columns, and this is the ONE finalizer every
+	// full-transaction scan runs through (scanTransactions, the user_account_id splice, and the
+	// merchant-sort keyset branch all call it), which is why the populate call lives here rather
+	// than at each of them. A Transaction that skipped this step serializes an empty date rather
+	// than a wrong one.
+	tx.PopulateDateDisplay()
+
 	return nil
 }
 
@@ -2933,6 +2940,10 @@ func (r *transactionRepository) GetRecentInflowsByUserID(ctx context.Context, us
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan inflow transaction: %w", err)
 		}
+		// These rows never reach a client (savings-transfer correlation only) and this read
+		// bypasses postScanTransactionState because it projects a handful of columns rather than
+		// the full list. Populated anyway so the type invariant holds wherever the row travels.
+		tx.PopulateDateDisplay()
 		transactions = append(transactions, &tx)
 	}
 
@@ -3855,6 +3866,11 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			}
 			item.ExternalTransactionID = decrypted
 		}
+
+		// #1631: sort_date, date and authorized_date are all DATE-derived on both legs of the
+		// UNION, so render them as calendar days rather than timestamps. The time.Time fields
+		// stay populated — the cursor built below reads SortDate directly.
+		item.PopulateDateDisplay()
 
 		// Unmarshal tags JSONB (banking rows only; investment rows get NULL::jsonb → nil slice).
 		if len(tagsJSON) > 0 {
