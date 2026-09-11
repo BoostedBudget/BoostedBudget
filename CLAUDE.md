@@ -78,6 +78,15 @@ make test-scripts           # The 26 shell guard suites: 24 in scripts/__tests__
                              # `.git/hooks`, `.sample` files only; no husky, no lefthook), and none
                              # should be the sole home of a guard: a hook is bypassable with
                              # `--no-verify` and does not exist in a fresh clone.
+                             # ⚠ Do not read this as "nothing runs before a push". There IS a
+                             # CLAUDE CODE hook, `.claude/hooks/pre-push-checks.sh`, which runs
+                             # bun audit, govulncheck, `make check-bundle-size` and the MCP
+                             # artifact check and BLOCKS the push on failure. It is not a git
+                             # hook: it fires only inside a Claude Code session, so a human's
+                             # `git push` never sees it and the sentence above stays true. It is
+                             # also why a Claude session can be blocked by a gate a teammate
+                             # pushing the same commit would sail past — if a push is refused
+                             # with a bundle-size or artifact failure, that hook is why.
                              # ⚠ **CI is not a single platform any more** (#1598). `e2e-test` and
                              # `lighthouse-audit` run on ephemeral Ubuntu (`ubicloud-standard-2`);
                              # the other 38 jobs stay on the macOS pool. A shell guard that runs

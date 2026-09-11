@@ -415,7 +415,12 @@ seventh — `UpdateUserAccountRequest.ExcludeInvestmentSync`'s doc comment in
 the same round that re-derived this count.)
 
 The read-filter-only design has a defect the ADR's categories made hard to see: **we were still
-storing a row we had already concluded was a duplicate of one we also store.** The user's
+storing a row the USER HAD TOLD US was a duplicate of one we also store.** (⚠ Wording corrected:
+this sentence said "we had already concluded was a duplicate", which is the same unqualified claim
+this document's own scope test was corrected for retracting. Nothing in the system concludes it —
+the duplication is the user's assertion when they set the flag, it is never verified, and it is
+PARTIAL even when true, because the banking arm of the unified feed hard-codes NULL for
+security_id, ticker_symbol, security_name, type, subtype, quantity, price and fees.) The user's
 instruction is not "hide my duplicate", it is "this account's activity reaches me twice, stop the
 second copy". Every downstream consumer that does not know about the flag — a future analytics
 query, an export, an AI tool call — reads the duplicate and double-counts it. A read filter is one
