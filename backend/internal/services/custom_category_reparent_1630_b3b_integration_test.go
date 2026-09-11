@@ -69,13 +69,37 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
+
+// b3bAlwaysSucceedsJobQueue is a minimal queue.JobQueue stub: UpdateCategory's resync enqueue is
+// now fail-closed (Issue #1630 review fix), so the reparent under test here needs a job queue
+// wired even though this test's own point is the row-lock race, not the enqueue itself. Safe for
+// concurrent use — Enqueue does no shared-state mutation.
+type b3bAlwaysSucceedsJobQueue struct{}
+
+func (b3bAlwaysSucceedsJobQueue) Enqueue(ctx context.Context, job queue.Job, opts ...queue.EnqueueOption) (*queue.JobResult, error) {
+	return &queue.JobResult{ID: 1, Kind: job.Kind()}, nil
+}
+
+func (b3bAlwaysSucceedsJobQueue) EnqueueTx(ctx context.Context, tx pgx.Tx, job queue.Job, opts ...queue.EnqueueOption) (*queue.JobResult, error) {
+	panic("b3bAlwaysSucceedsJobQueue.EnqueueTx unused by this test")
+}
+
+func (b3bAlwaysSucceedsJobQueue) EnqueueMany(ctx context.Context, jobs []queue.Job, opts ...queue.EnqueueOption) ([]*queue.JobResult, error) {
+	panic("b3bAlwaysSucceedsJobQueue.EnqueueMany unused by this test")
+}
+
+func (b3bAlwaysSucceedsJobQueue) EnqueueManyTx(ctx context.Context, tx pgx.Tx, jobs []queue.Job, opts ...queue.EnqueueOption) ([]*queue.JobResult, error) {
+	panic("b3bAlwaysSucceedsJobQueue.EnqueueManyTx unused by this test")
+}
 
 // b3bWaitUntilBlockedBy polls pg_blocking_pids(pid) from a separate connection until some backend
 // is genuinely, currently blocked waiting specifically on blockerPID -- mirroring
@@ -185,6 +209,7 @@ func TestCustomCategoryReparent_1630_B3b_RacesConcurrentMatchLogicChange_OnlyOne
 
 	svc := NewCustomCategoryService(customCategoryRepo)
 	svc.SetBudgetCategoryRepository(budgetRepo)
+	svc.SetJobQueue(b3bAlwaysSucceedsJobQueue{})
 
 	// Step 1: hold the budget row's FOR UPDATE lock on a raw connection so BOTH racers below are
 	// forced to queue behind it in launch order (Postgres grants a released row lock to waiters

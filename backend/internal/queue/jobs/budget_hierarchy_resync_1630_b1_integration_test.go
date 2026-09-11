@@ -37,15 +37,41 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
+
+// alwaysSucceedsJobQueue is a minimal queue.JobQueue stub for this test: UpdateCategory's
+// reparent path now fails CLOSED (Issue #1630 review fix) when no job queue is wired, but this
+// test's own point is to exercise the LEGITIMATE reparent + a directly-run resync worker, not the
+// enqueue mechanics themselves — Enqueue always succeeds; the other three methods are unused by
+// that path and panic if ever called, so a future caller that needs them fails loudly rather than
+// silently no-op'ing.
+type alwaysSucceedsJobQueue struct{}
+
+func (alwaysSucceedsJobQueue) Enqueue(ctx context.Context, job queue.Job, opts ...queue.EnqueueOption) (*queue.JobResult, error) {
+	return &queue.JobResult{ID: 1, Kind: job.Kind()}, nil
+}
+
+func (alwaysSucceedsJobQueue) EnqueueTx(ctx context.Context, tx pgx.Tx, job queue.Job, opts ...queue.EnqueueOption) (*queue.JobResult, error) {
+	panic("alwaysSucceedsJobQueue.EnqueueTx unused by this test")
+}
+
+func (alwaysSucceedsJobQueue) EnqueueMany(ctx context.Context, jobs []queue.Job, opts ...queue.EnqueueOption) ([]*queue.JobResult, error) {
+	panic("alwaysSucceedsJobQueue.EnqueueMany unused by this test")
+}
+
+func (alwaysSucceedsJobQueue) EnqueueManyTx(ctx context.Context, tx pgx.Tx, jobs []queue.Job, opts ...queue.EnqueueOption) ([]*queue.JobResult, error) {
+	panic("alwaysSucceedsJobQueue.EnqueueManyTx unused by this test")
+}
 
 func TestBudgetHierarchyResync_1630_B1_CorrectsStaleTotalsAfterLegitimateReparent(t *testing.T) {
 	pool := connectJobsTestDB(t)
@@ -138,6 +164,10 @@ func TestBudgetHierarchyResync_1630_B1_CorrectsStaleTotalsAfterLegitimateReparen
 
 	customCategoryService := services.NewCustomCategoryService(customCategoryRepo)
 	customCategoryService.SetBudgetCategoryRepository(budgetRepo)
+	// Issue #1630 review fix: the resync enqueue is now fail-closed, so a legitimate reparent
+	// needs a job queue wired even though this test runs the worker directly afterward rather
+	// than relying on the enqueued job.
+	customCategoryService.SetJobQueue(alwaysSucceedsJobQueue{})
 
 	// Step 1: the LEGITIMATE reparent — both sides 'category_only', cleanly contained.
 	updated, err := customCategoryService.UpdateCategory(ctx, userID, childCatID, &domain.UpdateCustomCategoryRequest{
