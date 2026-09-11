@@ -85,6 +85,20 @@ func TestIncomeSummary_StructuralDividend_IsCounted_Integration(t *testing.T) {
 	seed("bill payment", "cash", "withdrawal", cashSecID, 400.00, nil)
 	seed("paycheque", "cash", "deposit", cashSecID, -3000.00, nil)
 
+	// ⚠ THE BANK SWEEP, RUN THROUGH INCOME AND NOT ONLY THROUGH THE FEED. The plan required this
+	// specifically, and asserting it here rather than only in the partition test is the whole
+	// point: a misclassified sweep inflates reported INCOME, which is worse than a mislabelled
+	// chip. A chip is cosmetic; a number the user reads as dividends received is not.
+	//
+	// The sweep vehicle is the case the security facts alone cannot decide. MSPBNA — the Morgan
+	// Stanley sweep behind the production cash/interest rows — is is_cash_equivalent=FALSE and
+	// type='equity', structurally indistinguishable from an ETF, so it takes the same secID here.
+	// What separates it is the share count: a sweep deposit DELIVERS SHARES of the sweep vehicle,
+	// so it fails the zero-share corroboration a dividend credit carries and must fall to Cash.
+	// Pinned as a row shape in TestInvestment_TradeTypePartition_RoundTrip_Integration
+	// (r43-sweep-dep); pinned here as ZERO DOLLARS of income.
+	seed("sweep deposit", "cash", "deposit", secID, -1500.00, qty(1500))
+
 	repo := NewInvestmentAnalyticsRepository(tx)
 	start := mustParseDate("2026-03-01")
 	end := mustParseDate("2026-03-31")
@@ -105,6 +119,12 @@ func TestIncomeSummary_StructuralDividend_IsCounted_Integration(t *testing.T) {
 			"zero and not two. Got by-type: %v", byType)
 	assert.InDelta(t, 125.00, byType["dividend"], 0.001,
 		"a structural cash/deposit against a real security is a dividend")
+
+	// The sweep is a $1,500 credit against a non-cash-equivalent security — the exact shape that
+	// would be swept into dividends by a structural rule keyed on security facts alone. If it ever
+	// is, TotalIncome reads 1625.00 and this assertion is what says so.
+	assert.InDelta(t, 125.00, summary.TotalIncome, 0.001,
+		"a bank-sweep deposit delivers SHARES and is not income; income must not include its $1,500")
 
 	// The cash-equivalent rows must contribute nothing at all.
 	assert.NotContains(t, byType, "other_income",
