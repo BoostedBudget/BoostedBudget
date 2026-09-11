@@ -767,6 +767,11 @@ func (s *systemHealthService) getRejectedWebhookAttemptMetrics(ctx context.Conte
 // unlike that gauge, though, nothing here depends on in-process state (no decryption), so there is
 // no separate cap to enforce.
 //
+// ⚠ CANDIDATES, not confirmed forks (#1631 CX7). institution_security_id is institution-scoped and
+// this grouping has no institution dimension, so a group is a REVIEW ITEM. The member listing this
+// gauge exists to serve is what lets an operator settle one. See domain.ForkedSecurityIdentity's
+// CANDIDATES note before wording this as a fork count anywhere.
+//
 // Nil-safe, matching every other optional gauge in this service: an unwired repo is "unknown",
 // never "zero".
 func (s *systemHealthService) getForkedSecurityIdentityMetrics(ctx context.Context) (domain.ForkedSecurityIdentityMetrics, error) {

@@ -160,6 +160,14 @@ func (r *securityRepository) UpsertBatch(ctx context.Context, securities []domai
 // plaid_security_id values. One definition, so a future tweak (e.g. tightening what counts as
 // "blank") cannot desync the listing from the count the way #1631 exists to avoid elsewhere.
 //
+// ⚠ This groups an INSTITUTION-SCOPED identifier with NO institution dimension (#1631 CX7).
+// `securities` has no institution column -- it is global across every user and provider -- so two
+// institutions reusing one internal id group together here and cannot be told apart from a real
+// corporate-action reissue. What this predicate establishes is "these rows share an id", which is
+// a CANDIDATE for review, not a fork. Everything downstream is worded that way deliberately; see
+// domain.ForkedSecurityIdentity's CANDIDATES note for why the dimension was not added. Do not
+// relabel this a fork count.
+//
 // ⚠ COUNT(*), not COUNT(DISTINCT plaid_security_id) — deliberately. plaid_security_id carries a
 // UNIQUE constraint (`unique_plaid_security_id`, migration 000051), so within one
 // institution_security_id group every plaid_security_id value is already distinct by

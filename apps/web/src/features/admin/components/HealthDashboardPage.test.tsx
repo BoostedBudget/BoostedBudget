@@ -947,11 +947,15 @@ describe('HealthDashboardPage', () => {
     })
   })
 
-  // #1631 M8b: forked-security-identity detection. The component does not yet render per-group
-  // member detail (`.groups`) even though the generated client has it — only the group count is
-  // asserted here, matching what the component actually renders today.
-  describe('Forked Security Identities section', () => {
-    const FORK_CARD = 'Fork Groups Detected'
+  // #1631 M8b: shared-institution-security-id detection. The component does not yet render
+  // per-group member detail (`.groups`) even though the generated client has it — only the count
+  // is asserted here, matching what the component actually renders today.
+  //
+  // ⚠ Renamed by CX7 from "Forked Security Identities" / "Fork Groups Detected": the count is a
+  // CANDIDATE count, because institution_security_id is institution-scoped and this grouping has
+  // no institution dimension.
+  describe('Shared Institution Security IDs section', () => {
+    const FORK_CARD = 'Candidate Groups'
 
     const forkCardValue = (title: string) => {
       const label = screen.getByText(title)
@@ -976,15 +980,15 @@ describe('HealthDashboardPage', () => {
       renderWithQueryClient(<HealthDashboardPage />)
 
       await waitFor(() => {
-        expect(screen.getByText(/Forked Security Identities/i)).toBeInTheDocument()
+        expect(screen.getByText(/Shared Institution Security IDs/i)).toBeInTheDocument()
       })
 
       expect(forkCardValue(FORK_CARD)).toBe('2')
     })
 
     // THE MANDATORY SIBLING: without it, the seeded test above could pass against a hardcoded
-    // constant. No forks detected must read as a verified zero.
-    it('reports a verified zero when no forks are detected', async () => {
+    // constant. No candidates must read as a verified zero.
+    it('reports a verified zero when no candidate groups are detected', async () => {
       mockUseGetSystemHealth.mockReturnValue({
         data: mockHealthData, // forked_security_identities: group_count 0, available true
         isLoading: false,
@@ -1047,6 +1051,113 @@ describe('HealthDashboardPage', () => {
       })
 
       expect(forkCardValue(FORK_CARD)).toBe('Unavailable')
+    })
+  })
+
+  // #1631 CX6/CX7: two gauges on this page were rendered as WARNINGS for counts their own
+  // documentation says are not confirmed problems. A permanently-yellow dashboard trains an
+  // operator to ignore it, which is the exact outcome those doc comments say they want to avoid.
+  describe('informational gauges are not rendered as warnings', () => {
+    const cardFor = (title: string | RegExp) => {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${String(title)}"`)
+      return card
+    }
+
+    const seed = (data: Record<string, unknown>) => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: { ...mockHealthData, ...data },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+    }
+
+    const CANDIDATE_CARD = /Candidate Groups/i
+
+    // CX6. A long-held DCA position reports its entire pre-window base as drift forever, and the
+    // metric's own doc says that population is expected to DOMINATE this count. An ordinary
+    // portfolio therefore makes the dashboard permanently yellow.
+    it('renders a nonzero drift count as informational, not a warning', async () => {
+      seed({
+        position_reconciliation: {
+          drift_count: 7,
+          suppressed_pre_window_count: 40,
+          total_positions_checked: 120,
+          available: true,
+        },
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText('Drift Positions')).toBeInTheDocument()
+      })
+
+      const card = cardFor('Drift Positions')
+      expect(card.className).not.toContain('border-l-warning')
+      expect(card.className).toContain('border-l-info')
+    })
+
+    // The sibling that stops the assertion above passing against a card that lost its accent
+    // entirely: an UNAVAILABLE gauge is still a warning, because unknown is not zero.
+    it('still warns when the reconciliation gauge is unavailable', async () => {
+      seed({
+        position_reconciliation: {
+          drift_count: 0,
+          suppressed_pre_window_count: 0,
+          total_positions_checked: 0,
+          available: false,
+        },
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText('Drift Positions')).toBeInTheDocument()
+      })
+
+      expect(cardFor('Drift Positions').className).toContain('border-l-warning')
+    })
+
+    // CX7. institution_security_id is documented INSTITUTION-SCOPED, and the grouping behind this
+    // count has no institution dimension -- so two institutions reusing the same internal id are
+    // counted as a forked identity the metric cannot actually establish. It is a review list, not
+    // a problem count, and must not be rendered as one.
+    it('renders a nonzero shared-id count as informational, not a warning', async () => {
+      seed({ forked_security_identities: { group_count: 3, available: true } })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText(CANDIDATE_CARD)).toBeInTheDocument()
+      })
+
+      const card = cardFor(CANDIDATE_CARD)
+      expect(card.className).not.toContain('border-l-warning')
+      expect(card.className).toContain('border-l-info')
+    })
+
+    it('still warns when the shared-id gauge is unavailable', async () => {
+      seed({ forked_security_identities: { group_count: 0, available: false } })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText(CANDIDATE_CARD)).toBeInTheDocument()
+      })
+
+      expect(cardFor(CANDIDATE_CARD).className).toContain('border-l-warning')
+    })
+
+    // The card copy has to carry the narrowed claim too. A neutral colour with confident wording
+    // is still an assertion the metric cannot support.
+    it('says on the page that a shared institution id is only a candidate', async () => {
+      seed({ forked_security_identities: { group_count: 3, available: true } })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText(CANDIDATE_CARD)).toBeInTheDocument()
+      })
+
+      expect(screen.getByText(/institution-scoped/i)).toBeInTheDocument()
     })
   })
 
