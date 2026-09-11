@@ -58,14 +58,16 @@ test.describe('Portfolio tab renders and investment activity is labelled correct
     await page.goto('/insights?tab=portfolio')
     await page.waitForLoadState('domcontentloaded')
 
-    // Assert the ERROR STATE IS ABSENT explicitly. A page that fails to load could otherwise
-    // satisfy a loose "tiles exist eventually" check by simply never resolving — the failure mode
-    // this branch actually had (a 500 on GetPortfolioSummary).
-    await expect(page.getByText('Unable to load portfolio data')).toHaveCount(0)
-
-    // The summary tiles render with real seeded numbers (PortfolioSummaryCard).
+    // ⚠ ORDER MATTERS HERE. Wait for the tiles FIRST, then assert the error copy is absent.
+    // Checked in the other order the absence assertion is VACUOUS: straight after
+    // domcontentloaded the summary request has not resolved, so the error copy is legitimately not
+    // in the DOM yet and toHaveCount(0) passes against a page that is about to render the failure.
+    // The tiles assertion is what actually proves GetPortfolioSummary returned 200 — it times out
+    // if the read 500s, which is the regression this spec exists for — and the absence check then
+    // rules out a partially-rendered page that shows tiles AND an error.
     await expect(page.getByText('Total Value')).toBeVisible({ timeout: 15000 })
     await expect(page.getByText('Total Gain / Loss')).toBeVisible()
+    await expect(page.getByText('Unable to load portfolio data')).toHaveCount(0)
 
     // The Holdings table shows the seeded security by ticker, with a HUMANISED Type
     // ("ETF", not the raw "etf" — securityTypeLabel in investmentSubcategory.ts).
