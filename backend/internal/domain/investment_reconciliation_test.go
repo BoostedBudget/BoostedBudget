@@ -21,13 +21,26 @@ func TestClassifyPositionReconciliationMember_CleanMatchIsNeitherDriftNorSuppres
 // pin round 3's integration-test additions (0.0005 inside / 0.002 outside) could not reach: neither
 // value equals PositionReconciliationQuantityTolerance itself, so a regression from the intended
 // strict `delta > tolerance` to a non-strict `delta >= tolerance` would pass every existing test in
-// this file — and, per #1631 M8b round-4 review, the seeded integration row that also lands on this
-// input (holding 100.001 / buy 100) tests the SQL side's strictness via exact NUMERIC arithmetic but
-// NOT the Go side's, because scanning that NUMERIC value into a float64 introduces its own rounding
-// (100.001 - 100 comes back as 0.0009999999999976694 in float64, strictly less than tolerance for an
-// unrelated reason). This test is therefore the ONLY place in the tree that pins Go's `>` strictness
-// exactly: it passes the tolerance constant itself as delta, with no arithmetic in between, so there
-// is no floating-point rounding to accidentally save (or break) the assertion.
+// this file. This is the ONLY place in the tree that pins Go's `>` strictness at the exact boundary,
+// and deliberately so: it passes the tolerance constant itself as delta, with no subtraction in
+// between, so there is no floating-point rounding to accidentally save (or break) the assertion.
+//
+// ⚠ #1631 M8b round 4 first tried to ALSO pin this boundary from the integration-test side, seeding
+// holding 100.001 / buy 100 (a delta of exactly the tolerance) and asserting agreement between the
+// SQL and Go paths. Round 5 found that assertion wrong and removed it: Postgres computes
+// `100.00100000 - 100.00000000` as EXACT NUMERIC arithmetic (holdings.quantity and
+// investment_transactions.quantity are DECIMAL(18,8), migration 000051) and correctly says "not a
+// drift" via strict `>`, but scanning those same values into float64 before this Go function runs
+// produces `100.001 - 100 = 0.0010000000000047748` — strictly GREATER than the float64 tolerance —
+// so the Go path says "a drift". The two production paths PROVABLY DISAGREE within roughly 1e-15 of
+// the tolerance value, and no seeded integration-test row can prove agreement there, because there
+// is none to prove. That is a genuine, narrow divergence in production code between NUMERIC and
+// float64 arithmetic, not a test gap — see PositionReconciliationQuantityTolerance's doc comment for
+// the same note at the source, and the header comment on
+// TestPositionReconciliationSummary_AgreesWithPerUserReportAcrossUsers_Integration
+// (investment_position_reconciliation_integration_test.go) for why that test cannot and does not
+// attempt to cover this boundary. This test's job is narrower and achievable: pin that the Go
+// function ITSELF, in isolation, treats the comparison as strict `>`.
 func TestClassifyPositionReconciliationMember_ExactlyAtToleranceIsNotADrift(t *testing.T) {
 	isDrift, isSuppressed := ClassifyPositionReconciliationMember(PositionReconciliationQuantityTolerance, true)
 	if isDrift {

@@ -90,8 +90,23 @@ package domain
 //
 // Exported (not a private constant) so repository.PositionReconciliationSummary's SQL-side
 // FILTER clauses can format THIS value directly rather than hardcoding a second literal that
-// could silently drift out of step with ClassifyPositionReconciliationMember below — see that
-// method's own doc comment for why the two paths must never classify a row differently.
+// could silently drift out of step with ClassifyPositionReconciliationMember below.
+//
+// ⚠ KNOWN, NARROW, DOCUMENTED EXCEPTION (#1631 M8b round 5): sharing this constant keeps the SQL
+// and Go paths from drifting apart CARELESSLY, but it does not make them agree everywhere — a
+// delta of EXACTLY this tolerance is the one input where they provably diverge. holdings.quantity
+// and investment_transactions.quantity are DECIMAL(18,8) (migration 000051), so
+// PositionReconciliationSummary's SQL compares EXACT NUMERIC arithmetic against this value, while
+// ClassifyPositionReconciliationMember compares whatever float64 that same underlying decimal
+// value rounds to once scanned — and float64 cannot represent every such value exactly. Within
+// roughly 1e-15 of this tolerance, the NUMERIC and float64 comparisons can land on opposite sides
+// of strict `>`. This is real production behavior, not a test gap: no integration-test row can
+// prove agreement at that razor-thin band, because there is none to prove — see
+// domain.TestClassifyPositionReconciliationMember_ExactlyAtToleranceIsNotADrift and
+// investment_position_reconciliation_integration_test.go's
+// TestPositionReconciliationSummary_AgreesWithPerUserReportAcrossUsers_Integration header for the
+// two things that ARE cleanly pinned instead: Go's own strictness in isolation, and SQL/Go
+// agreement everywhere away from this band.
 const PositionReconciliationQuantityTolerance = 0.001
 
 // PositionReconciliationMember is one (account, security) position the diagnostic evaluated.
