@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { PortfolioSummaryDayChangeUnavailableReason } from './portfolioSummaryDayChangeUnavailableReason';
 
 export interface PortfolioSummary {
   /** A URL to the JSON Schema for this object. */
@@ -39,6 +40,7 @@ export interface PortfolioSummary {
   day_change: number | null;
   /** @nullable */
   day_change_pct: number | null;
+  day_change_unavailable_reason?: PortfolioSummaryDayChangeUnavailableReason;
   holdings_count: number;
   is_mixed_currency: boolean;
   total_cost_basis: number;
