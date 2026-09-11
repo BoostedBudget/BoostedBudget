@@ -197,9 +197,16 @@ type UpdateUserAccountRequest struct {
 	DisplayOrder *int    `json:"display_order"` // nil = no change
 	IsHidden     *bool   `json:"is_hidden"`     // nil = no change
 
-	// ExcludeInvestmentSync — nil = no change. See UserAccount.ExcludeInvestmentSync: a read
-	// filter for a brokerage account Plaid reports on both product endpoints (#1609 Item 5).
-	// Fully reversible; setting it back to false restores every hidden row.
+	// ExcludeInvestmentSync — nil = no change. See UserAccount.ExcludeInvestmentSync for full
+	// semantics: while true, this is BOTH a read filter (hides rows already stored for this
+	// chain) AND an ingestion filter (no new investment_transactions are stored for it at all).
+	//
+	// #1631: this comment used to say "a read filter" and "fully reversible; setting it back to
+	// false restores every hidden row" — a SEVENTH site making the pre-#1631 claim that the ADR's
+	// AMENDMENT section (docs/decisions/2026-08-24-financial-history-retained-by-default.md)
+	// falsified, missed by the round that rewrote the other six. Both halves are now false:
+	// setting it back to false restores rows stored before it was set, but NOT rows never
+	// ingested while it was set, which the 2-year backfill can only partially recover.
 	ExcludeInvestmentSync *bool `json:"exclude_investment_sync"`
 }
 
