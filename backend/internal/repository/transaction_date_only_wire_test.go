@@ -115,6 +115,9 @@ func dateOnlyUnifiedColumns() []string {
 		"type", "subtype",
 		"quantity", "price", "fees",
 		"security_attached", "security_is_cash_equivalent",
+		// #1631 Gap A1: the investment currency. Banking rows get NULL here — the transactions
+		// table has no currency column — and that absence is the wire contract, not a default.
+		"currency_code",
 	}
 }
 
@@ -144,6 +147,7 @@ func makeDateOnlyUnifiedRow(userID, accountID string, sortDate, date time.Time, 
 		(*string)(nil), (*string)(nil),
 		(*float64)(nil), (*float64)(nil), (*float64)(nil),
 		(*bool)(nil), (*bool)(nil),
+		(*string)(nil), // currency_code — a banking row has none (#1631)
 	}
 }
 

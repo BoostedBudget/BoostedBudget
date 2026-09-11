@@ -252,4 +252,43 @@ describe('InvestmentDetailDrawer', () => {
     fireEvent.click(closeBtn)
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
+
+  // ── Currency (#1631 Gap A1) ────────────────────────────────────────────────
+  //
+  // The drawer used to render price and fees through formatCurrencyFull, which hard-codes the
+  // dollar. It was the last surface on this branch still asserting a currency the backend had not
+  // stated, and it survived the conversion only because ActivityItem had no currency_code to
+  // convert it TO. These pin all three of portfolioCurrency's states plus its malformed-code
+  // fourth, so a regression to a dollar default fails here rather than in front of a user.
+  describe('currency', () => {
+    it('renders price and fees in the currency the row states', () => {
+      renderDrawer({ ...baseActivity, currency_code: 'GBP', investment_fees: 4.99 }, true)
+      expect(screen.getByTestId('price-value').textContent).toContain('£150.00')
+      expect(screen.getByTestId('fees-value').textContent).toContain('£4.99')
+    })
+
+    it('renders as dollars when no currency is stated (the pre-000202 legacy base)', () => {
+      renderDrawer({ ...baseActivity, investment_fees: 4.99 }, true)
+      expect(screen.getByTestId('price-value').textContent).toContain('$150.00')
+      expect(screen.getByTestId('fees-value').textContent).toContain('$4.99')
+    })
+
+    it('renders a null currency as dollars, not unlabelled', () => {
+      renderDrawer({ ...baseActivity, currency_code: null }, true)
+      expect(screen.getByTestId('price-value').textContent).toContain('$150.00')
+    })
+
+    it('renders a malformed currency code unlabelled rather than guessing dollars', () => {
+      renderDrawer({ ...baseActivity, currency_code: 'DOGECOIN', investment_fees: 4.99 }, true)
+      const price = screen.getByTestId('price-value').textContent ?? ''
+      expect(price).toContain('150.00')
+      expect(price).not.toContain('$')
+      expect(screen.getByTestId('fees-value').textContent ?? '').not.toContain('$')
+    })
+
+    it('still suppresses the Fees row for a zero fee in a named currency', () => {
+      renderDrawer({ ...baseActivity, currency_code: 'GBP', investment_fees: 0 }, true)
+      expect(screen.queryByTestId('fees-value')).toBeNull()
+    })
+  })
 })
