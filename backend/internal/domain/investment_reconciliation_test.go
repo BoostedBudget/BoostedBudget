@@ -3,7 +3,7 @@ package domain
 import "testing"
 
 // TestClassifyPositionReconciliationMember_CleanMatchIsNeitherDriftNorSuppressed is the RED test
-// for the tolerance band: a delta inside positionReconciliationQuantityTolerance is float64
+// for the tolerance band: a delta inside PositionReconciliationQuantityTolerance is float64
 // summation noise, not a real disagreement, and must not appear anywhere in the report.
 func TestClassifyPositionReconciliationMember_CleanMatchIsNeitherDriftNorSuppressed(t *testing.T) {
 	isDrift, isSuppressed := ClassifyPositionReconciliationMember(0.0, true)

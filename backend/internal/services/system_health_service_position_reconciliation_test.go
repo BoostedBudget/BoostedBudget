@@ -63,9 +63,16 @@ func newPositionReconciliationHealthService(t *testing.T, repo *MockPositionReco
 	return svc
 }
 
-// TestGetSystemHealth_PositionReconciliation_SeededSummaryIsVisible is the RED test: a
-// GetPositionReconciliation caller finally exists — this gauge — where before this fix the
-// diagnostic had zero production callers at all.
+// TestGetSystemHealth_PositionReconciliation_SeededSummaryIsVisible is the RED test: this gauge
+// is the first production caller of the diagnostic's GLOBAL summary path
+// (repository.PositionReconciliationSummary), where before this fix nothing called it at all.
+// ⚠ This is NOT GetPositionReconciliation / repository.PositionReconciliation — that per-user,
+// per-row method is a DIFFERENT method on a different interface, and it still has zero
+// production callers. The two methods share the ledger CTE/predicate SQL helpers
+// (positionReconciliationLedgerCTE et al.) but NOT a classification call: the per-row method
+// calls domain.ClassifyPositionReconciliationMember in Go, while this summary's classification is
+// pushed into SQL (COUNT(*) FILTER) for performance — see buildPositionReconciliationSummaryQuery's
+// doc comment for why the two are kept from diverging without sharing that one function call.
 func TestGetSystemHealth_PositionReconciliation_SeededSummaryIsVisible(t *testing.T) {
 	repo := new(MockPositionReconciliationSummarizer)
 	seeded := &domain.PositionReconciliationSummary{

@@ -152,11 +152,20 @@ export function HealthDashboardPage() {
   // plaid_security_id values, the shape a Plaid corporate action can fork one instrument's
   // identity into. Detection only: nothing here (or on the backend) merges anything.
   //
-  // ⚠ Per-group member detail (`.groups`) is not yet in the generated API client as of this
-  // change — the backend added it in the same round as this frontend update, and generation is
-  // controller-owned. Only the count renders here; the member listing is a follow-up once the
-  // client is regenerated.
   const forkedSecurityIdentitiesAvailable = data.forked_security_identities?.available;
+
+  // #1631 M8b N1/I1. Same fail-closed shape and the same optional-chaining guard as every gauge
+  // above: a FAILED derivation and a genuine all-clear both arrive as identical zero-valued
+  // fields, and `position_reconciliation` itself can be absent entirely on an older cached
+  // response or mid-rolling-deploy. See domain.PositionReconciliationSummary (backend).
+  //
+  // ⚠ drift_count IS NOT A CONFIRMED-PROBLEM COUNT. See
+  // domain.PositionReconciliationReport's "NOT YET FULLY ACTIONABLE" doc comment (backend): a
+  // position opened before Plaid's 2-year lookback and topped up ever since (DCA, auto-invest,
+  // dividend reinvestment) still reports a drift equal to its entire pre-window base, and that
+  // shape is expected to be the DOMINANT contributor to this count today, not a rare residual.
+  // The card's helper text below carries this caveat so the number is never read as a to-do list.
+  const positionReconciliationAvailable = data.position_reconciliation?.available;
 
   return (
     <div className="p-8 max-w-[1400px] mx-auto max-md:p-4">
@@ -511,9 +520,9 @@ export function HealthDashboardPage() {
           `securities` rows with separate transaction/holding histories. Detection only: nothing
           here (or on the backend) merges anything.
 
-          ⚠ Per-group member detail (which securities forked) is not yet exposed by the generated
-          API client — see the comment above where forkedSecurityIdentitiesAvailable is derived.
-          Only the group count renders for now.
+          Per-group member detail (which securities forked, `.groups`) is in the generated API
+          client but not rendered here yet — only the group count renders. Listing which
+          securities forked is a UI follow-up, not blocked on generation.
 
           Scope discipline, matching every other gauge section on this page: this only makes the
           count VISIBLE. Whether a non-zero count should degrade `data.status` is a product
@@ -528,6 +537,61 @@ export function HealthDashboardPage() {
             status={!forkedSecurityIdentitiesAvailable ? 'warning' : (data.forked_security_identities.group_count > 0 ? 'warning' : 'success')}
           />
         </div>
+      </section>
+
+      {/* Position Reconciliation Section (#1631 M8b I1/N1) — the trade-vs-position diagnostic's
+          own admin gauge: how many active holdings' quantities disagree with what the trade
+          ledger (buys, sells, reinvestments, transfers/splits) implies. Global across every user,
+          matching the Forked Security Identities section above.
+
+          ⚠ "Drift Positions" IS NOT A CONFIRMED-PROBLEM COUNT — see
+          domain.PositionReconciliationReport's "NOT YET FULLY ACTIONABLE" doc comment (backend).
+          A position opened before Plaid's 2-year lookback and topped up ever since (DCA,
+          auto-invest, dividend reinvestment) still reports a drift equal to its entire pre-window
+          base, and that shape is expected to be the DOMINANT contributor to this count today, not
+          a rare residual. The card's own helper text repeats this so the number is never read in
+          isolation from its caveat.
+
+          "Suppressed (Pre-Window)" is the sibling count this diagnostic COULD exclude — positions
+          with no buy anywhere in the ledger, the one case Plaid's lookback edge can be proven to
+          explain. It is informational, not a second problem count.
+
+          Scope discipline, matching every other gauge section on this page: this only makes the
+          counts VISIBLE. Whether a non-zero drift count should degrade `data.status` is a product
+          decision this task never asked for, so `data.status` is untouched — and DriftCount is
+          not yet trustworthy enough to gate anything on regardless, per the caveat above. */}
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Position Reconciliation</h2>
+        <p className="mt-0 mb-4 text-sm text-muted-foreground max-w-2xl">
+          Active holdings whose quantity disagrees with what the trade ledger implies. Not yet a
+          confirmed-problem count — see below.
+        </p>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
+          <SummaryCard
+            title="Drift Positions"
+            value={positionReconciliationAvailable ? data.position_reconciliation.drift_count.toString() : 'Unavailable'}
+            icon={<AlertTriangle size={24} />}
+            status={!positionReconciliationAvailable ? 'warning' : (data.position_reconciliation.drift_count > 0 ? 'warning' : 'success')}
+          />
+          <SummaryCard
+            title="Suppressed (Pre-Window)"
+            value={positionReconciliationAvailable ? data.position_reconciliation.suppressed_pre_window_count.toString() : 'Unavailable'}
+            icon={<Clock size={24} />}
+            status={!positionReconciliationAvailable ? 'warning' : 'neutral'}
+          />
+          <SummaryCard
+            title="Total Positions Checked"
+            value={positionReconciliationAvailable ? data.position_reconciliation.total_positions_checked.toString() : 'Unavailable'}
+            icon={<Landmark size={24} />}
+            status={!positionReconciliationAvailable ? 'warning' : 'neutral'}
+          />
+        </div>
+        <p className="mt-3 mb-0 text-xs text-muted-foreground max-w-2xl">
+          Drift Positions is NOT a confirmed-problem count: a long-held position topped up by
+          ongoing contributions (DCA, auto-invest, dividend reinvestment) reports a drift equal to
+          its entire pre-2-year-lookback base, and this is expected to be the dominant contributor
+          today — investigate before treating a non-zero count as a to-do list.
+        </p>
       </section>
 
       {/* Job Queues Section */}

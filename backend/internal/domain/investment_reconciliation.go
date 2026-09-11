@@ -28,7 +28,14 @@ package domain
 // rows into the ledger net regardless of subtype, in addition to the buy/sell/reinvest partition.
 // Options assignment/exercise is a known further gap: Plaid does not expose a distinct subtype
 // set for it in this codebase today, so it is NOT covered and would still misreport as a drift if
-// it occurred against a held security.
+// it occurred against a held security. A second, UNVERIFIED gap sits in the transfer widening
+// itself: the arithmetic above assumes Plaid signs a share-OUT transfer negatively, mirroring the
+// buy/sell convention its docs state explicitly — but Plaid's docs do NOT state a sign convention
+// for type='transfer' the way they do for buy/sell. If a brokerage instead reports a transfer-out
+// with a POSITIVE quantity, this ledger double-counts it (once as the departing shares, and again
+// because the sign is wrong), overstating the position by 2x the transferred amount. No test in
+// this codebase can settle which convention Plaid actually uses for transfers; only real
+// production data can, and none has been observed with an outbound transfer yet.
 //
 // ⚠ Drifts IS NOT YET FULLY ACTIONABLE — READ THIS BEFORE TREATING A NON-EMPTY Drifts LIST AS A
 // CONFIRMED PROBLEM LIST. There are two distinct sources of expected, non-actionable drift, and
@@ -75,12 +82,17 @@ package domain
 // diagnostic sums quantity only and deliberately does not touch price, amount, or cost basis.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-// positionReconciliationQuantityTolerance bounds how far a ledger-implied position may differ
+// PositionReconciliationQuantityTolerance bounds how far a ledger-implied position may differ
 // from the Plaid snapshot before it counts as a drift, rather than float64 accumulation noise
 // from summing many fractional-share rows. Three decimal places — thousandths of a share — is
 // finer than any brokerage's minimum tradable increment for a fractional share in production data,
 // so tightening it further would only make the report noisier without catching anything real.
-const positionReconciliationQuantityTolerance = 0.001
+//
+// Exported (not a private constant) so repository.PositionReconciliationSummary's SQL-side
+// FILTER clauses can format THIS value directly rather than hardcoding a second literal that
+// could silently drift out of step with ClassifyPositionReconciliationMember below — see that
+// method's own doc comment for why the two paths must never classify a row differently.
+const PositionReconciliationQuantityTolerance = 0.001
 
 // PositionReconciliationMember is one (account, security) position the diagnostic evaluated.
 type PositionReconciliationMember struct {
@@ -102,7 +114,7 @@ type PositionReconciliationMember struct {
 type PositionReconciliationReport struct {
 	// Drifts are (account, security) pairs where the ledger contains at least one buy for the
 	// pair (the "plausibly-in-window" proxy) AND the ledger-implied quantity disagrees with the
-	// Plaid snapshot by more than positionReconciliationQuantityTolerance. ⚠ See the file-level
+	// Plaid snapshot by more than PositionReconciliationQuantityTolerance. ⚠ See the file-level
 	// comment: this proxy only catches source 1 (zero-buy pre-window positions), not source 2
 	// (a pre-window base with in-window contributions) — Drifts is expected to contain real
 	// noise from source 2 today, not just genuine problems.
@@ -142,8 +154,18 @@ type PositionReconciliationSummary struct {
 //
 // Extracted as a pure function (no DB access) so the suppression rule — the part of this
 // diagnostic most likely to need tuning — has a unit test that does not require Postgres.
+//
+// ⚠ THIS EXACT CLASSIFICATION IS ALSO EXPRESSED IN SQL, in
+// repository.PositionReconciliationSummary's FILTER clauses (#1631 M8b N2) — the /admin/health
+// gauge aggregates every user's holdings in one query rather than streaming every row into Go on
+// a 30-second poll, so it cannot call this Go function per row. The SQL mirrors this function
+// term for term (same PositionReconciliationQuantityTolerance constant, formatted directly into
+// the query rather than re-typed as a literal; same hasLedgerBuy gate) and
+// TestPositionReconciliationSummary_AgreesWithPerUserReportAcrossUsers_Integration proves the two
+// paths agree on the same seeded data. If this function's logic ever changes, that SQL and that
+// test must change with it.
 func ClassifyPositionReconciliationMember(delta float64, hasLedgerBuy bool) (isDrift, isSuppressed bool) {
-	if delta > positionReconciliationQuantityTolerance || delta < -positionReconciliationQuantityTolerance {
+	if delta > PositionReconciliationQuantityTolerance || delta < -PositionReconciliationQuantityTolerance {
 		if hasLedgerBuy {
 			return true, false
 		}
