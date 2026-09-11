@@ -113,3 +113,53 @@ func TestMaskJobErrors_Nil(t *testing.T) {
 	result := MaskJobErrors(nil)
 	assert.Nil(t, result)
 }
+
+// #1631: the structured error context added to domain.JobError carries three free-text fields
+// that can quote a connection string or a credential exactly as readily as `message` does, plus
+// a `chain` of wrapping layers built from the same strings. Sanitising only `message` would have
+// left the new fields as an unsanitised copy of what was already being scrubbed.
+func TestMaskJobErrors_RedactsTokensInStructuredContext(t *testing.T) {
+	input := `[{
+		"attempt": 1,
+		"message": "sync failed: token=abc123",
+		"timestamp": "2024-01-01T00:00:00Z",
+		"chain": ["sync failed", "dial failed with password=hunter2"],
+		"pg_error": {
+			"code": "28P01",
+			"message": "authentication failed with password=hunter2",
+			"detail": "connection used secret=shhh",
+			"hint": "retry with token=abc123",
+			"constraint_name": "unique_account_security",
+			"table_name": "holdings"
+		}
+	}]`
+
+	var got []map[string]interface{}
+	require.NoError(t, json.Unmarshal(MaskJobErrors(json.RawMessage(input)), &got))
+	require.Len(t, got, 1)
+
+	assert.NotContains(t, got[0]["message"], "abc123")
+
+	chain, ok := got[0]["chain"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, chain, 2)
+	assert.Equal(t, "sync failed", chain[0])
+	assert.NotContains(t, chain[1], "hunter2")
+
+	pg, ok := got[0]["pg_error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.NotContains(t, pg["message"], "hunter2")
+	assert.NotContains(t, pg["detail"], "shhh")
+	assert.NotContains(t, pg["hint"], "abc123")
+	// Schema identifiers are not credentials and must survive untouched — they are the whole
+	// point of the feature.
+	assert.Equal(t, "28P01", pg["code"])
+	assert.Equal(t, "unique_account_security", pg["constraint_name"])
+	assert.Equal(t, "holdings", pg["table_name"])
+}
+
+// An old-shape row has neither key; masking must leave it exactly as it was.
+func TestMaskJobErrors_OldShapeRowIsUntouched(t *testing.T) {
+	input := json.RawMessage(`[{"attempt":1,"message":"plain failure","timestamp":"2024-01-01T00:00:00Z"}]`)
+	assert.Equal(t, input, MaskJobErrors(input))
+}
