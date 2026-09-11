@@ -571,6 +571,10 @@ func main() {
 	// Issue #1630 Task B1: Declare budget hierarchy resync worker (custom-category reparent).
 	var budgetHierarchyResyncWorker *jobs.BudgetHierarchyResyncWorker
 
+	// Issue #1630 Task B7: Declare budget hierarchy audit worker (periodic sweep over
+	// pre-existing budgets the write-time guards would refuse). No Plaid dependency.
+	var budgetHierarchyAuditWorker *jobs.BudgetHierarchyAuditWorker
+
 	// Issue #138: Declare investment read services at outer scope (initialized inside Plaid block;
 	// nil-checked in route registration since repos are available regardless of Plaid config).
 	var investmentService services.InvestmentService
@@ -1398,6 +1402,20 @@ func main() {
 		budgetHierarchyResyncWorker.SetCacheInvalidation(cacheInstance.Generations())
 		appLogger.Info("Budget hierarchy resync worker created (River)")
 
+		// Issue #1630 Task B7: Create budget hierarchy audit worker — periodic sweep over budgets
+		// domain.DuplicateParentIdentity/domain.EscapedNestedChild would refuse if created today,
+		// but which predate those write-time guards. budgetRepo and budgetCategoryMatchingService
+		// are the same dependencies Task B1's resync worker uses, constructed above this point.
+		budgetHierarchyAuditWorker = jobs.NewBudgetHierarchyAuditWorker(jobs.BudgetHierarchyAuditWorkerDeps{
+			BudgetRepo: budgetRepo,
+			SpentCalc:  budgetCategoryMatchingService,
+			Logger:     appLogger,
+		})
+		// Same reasoning as budgetHierarchyResyncWorker directly above: spent_amount corrections
+		// this audit makes are summed by the cached GetBudgetVsActual analytics query (ScopeUser).
+		budgetHierarchyAuditWorker.SetCacheInvalidation(cacheInstance.Generations())
+		appLogger.Info("Budget hierarchy audit worker created (River)")
+
 		// Create Plaid service and account linking (if configured)
 		// plaidHandler migrated to Huma (see humaPlaidHandler) - Issue #559
 		// var plaidHandler *handlers.PlaidHandler
@@ -1832,6 +1850,7 @@ func main() {
 				balanceSnapshotDispatchWorker:       balanceSnapshotDispatchWorker,
 				ruleQuarantineCensusWorker:          ruleQuarantineCensusWorker,
 				plaidOrphanRetryWorker:              plaidOrphanRetryWorker,
+				budgetHierarchyAuditWorker:          budgetHierarchyAuditWorker,
 			}, appLogger)
 
 			if len(periodicJobs) > 0 {
@@ -1966,6 +1985,10 @@ func main() {
 			if budgetHierarchyResyncWorker != nil {
 				river.AddWorker(riverWorkers, budgetHierarchyResyncWorker)
 				appLogger.Info("Budget hierarchy resync worker registered with River")
+			}
+			if budgetHierarchyAuditWorker != nil {
+				river.AddWorker(riverWorkers, budgetHierarchyAuditWorker)
+				appLogger.Info("Budget hierarchy audit worker registered with River")
 			}
 
 			// Plaid-specific workers (nil when Plaid not configured)
@@ -2582,7 +2605,11 @@ func main() {
 			// Issue #1584: the enumerating read over accounts the #1569 T1 pre-deletion-notice gate
 			// is holding indefinitely. Without this the endpoint registers and answers 503 — the
 			// same shape the other optional admin dependencies use.
-			WithRetentionWithheldReader(profileRepo)
+			WithRetentionWithheldReader(profileRepo).
+			// Issue #1630 Task B7: the enumerating read over budgets the hierarchy audit has
+			// flagged for a human. budgetRepo already implements
+			// operations.BudgetHierarchyAuditReader via ListBudgetHierarchyAuditFindings.
+			WithBudgetHierarchyAuditReader(budgetRepo)
 		operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
 		appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)", "plaid_configured", plaidService != nil)
 

@@ -143,6 +143,11 @@ type BudgetRepository interface {
 	// BudgetIDsWithUnexaminedHierarchy enumerates LIVE budgets AuditBudgetHierarchy has never
 	// examined, most-behind-first (oldest budget first), capped at limit. Issue #1630 Task B7.
 	BudgetIDsWithUnexaminedHierarchy(ctx context.Context, limit int) ([]string, error)
+	// ListBudgetHierarchyAuditFindings returns budget_hierarchy_audits rows, most-recently-examined
+	// first, optionally filtered to exactly one outcome (empty = every outcome). Backs the admin
+	// listing that is Task B7's human-facing surface — see budget_hierarchy_audit.go's header
+	// comment for "a reported finding that reaches nobody is not a fix".
+	ListBudgetHierarchyAuditFindings(ctx context.Context, outcome string, limit int) ([]domain.BudgetHierarchyAuditVerdict, error)
 }
 
 // budgetRepository implements BudgetRepository using PostgreSQL.

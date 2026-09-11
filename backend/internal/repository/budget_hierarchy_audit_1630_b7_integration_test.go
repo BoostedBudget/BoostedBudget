@@ -238,3 +238,58 @@ func TestAuditBudgetHierarchy_1630B7(t *testing.T) {
 	assert.NotContains(t, unexamined, budget.ID,
 		"a budget already in the ledger must not be re-enumerated for examination")
 }
+
+// TestListBudgetHierarchyAuditFindings_1630B7 proves the admin-facing read decodes the ledger's
+// flagged_category_ids array correctly (the ::text[] cast in listBudgetHierarchyAuditFindingsSQL)
+// and that the outcome filter and the "no filter" path both return what they claim.
+func TestListBudgetHierarchyAuditFindings_1630B7(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "test|"+userID, "claim1630-b7-list-"+userID+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	budgetRepo := NewBudgetRepository(tx)
+	budget := &domain.Budget{
+		UserID:    userID,
+		Name:      "Claim 1630 B7 List Budget",
+		Period:    domain.BudgetPeriodMonthly,
+		StartDate: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
+		Amount:    500,
+	}
+	require.NoError(t, budgetRepo.Create(ctx, budget))
+
+	catID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO budget_hierarchy_audits (
+			budget_id, user_id, outcome, reason, categories_examined, categories_repaired,
+			flagged_category_ids
+		) VALUES ($1, $2, 'reported_escaping_pair', 'test seed', 2, 0, $3)
+	`, budget.ID, userID, []string{catID})
+	require.NoError(t, err, "seed a ledger row directly")
+
+	// Filtered to the exact outcome: the row comes back with its flagged id decoded correctly.
+	findings, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, domain.BudgetHierarchyAuditOutcomeReportedEscapingPair, 10)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.Equal(t, budget.ID, findings[0].BudgetID)
+	assert.Equal(t, []string{catID}, findings[0].FlaggedCategoryIDs)
+
+	// Filtered to a DIFFERENT outcome: nothing comes back.
+	none, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, domain.BudgetHierarchyAuditOutcomeVerified, 10)
+	require.NoError(t, err)
+	assert.Empty(t, none)
+
+	// Unfiltered ("" outcome): the row is still returned.
+	all, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, "", 10)
+	require.NoError(t, err)
+	assert.Len(t, all, 1)
+}

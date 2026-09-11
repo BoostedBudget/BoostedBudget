@@ -139,6 +139,7 @@ func TestUniqueOptsForKind_MapsEachKindToItsOwnProducerOptions(t *testing.T) {
 		"budget_period_close_check":         BudgetPeriodCloseCheckUniqueOpts,
 		"savings_stats":                     SavingsStatsUniqueOpts,
 		"portfolio_snapshot":                PortfolioSnapshotUniqueOpts,
+		"budget_hierarchy_audit":            BudgetHierarchyAuditUniqueOpts,
 		"dlq_cleanup_check":                 DLQCleanupUniqueOpts,
 		"idempotency_cleanup":               IdempotencyCleanupUniqueOpts,
 	}

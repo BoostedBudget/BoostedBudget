@@ -68,6 +68,8 @@ import type {
   GetAdminPaymentFailuresParams,
   GetPaymentFailuresOutputBody,
   GrantTrialResponseBody,
+  ListAdminBudgetHierarchyAuditsOutputBody,
+  ListAdminBudgetHierarchyAuditsParams,
   ListAdminDeadLetterJobsParams,
   ListAdminPaddleWebhooksParams,
   ListAdminPlaidOrphanedItemsParams,
@@ -133,6 +135,100 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
   }
   return result;
 };
+
+/**
+ * Returns budgets the Issue #1630 Task B7 audit has examined. domain.DuplicateParentIdentity and domain.EscapedNestedChild are write-time guards that refuse a new budget category colliding on parent identity or escaping a nested parent's containment envelope; neither is ever run against a row that predates it. The periodic BudgetHierarchyAuditWorker examines every budget once, corrects any stale spent_amount (safe: a derived cache), and NEVER rewrites match_logic or identity fields for a flagged pair — there is no correct automatic answer for either, and guessing would silently change what the user's budget matches while destroying the evidence needed to ask them. Omitting outcome defaults to the two reported_* (actionable) outcomes; pass outcome=all for every verdict including repaired/verified. This is a read-only view: it repairs nothing and does not resolve the identity/match_logic ambiguity a reported_* row names — that requires asking the user what they meant. Requires admin role.
+ * @summary List budget-hierarchy audit findings (admin)
+ */
+export const listAdminBudgetHierarchyAudits = (
+    params?: ListAdminBudgetHierarchyAuditsParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<ListAdminBudgetHierarchyAuditsOutputBody>(
+      {url: `/api/v1/admin/budget-hierarchy-audits`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getListAdminBudgetHierarchyAuditsQueryKey = (params?: ListAdminBudgetHierarchyAuditsParams,) => {
+    return [
+    `/api/v1/admin/budget-hierarchy-audits`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListAdminBudgetHierarchyAuditsQueryOptions = <TData = Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>, TError = ErrorType<ErrorModel>>(params?: ListAdminBudgetHierarchyAuditsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListAdminBudgetHierarchyAuditsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>> = ({ signal }) => listAdminBudgetHierarchyAudits(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListAdminBudgetHierarchyAuditsQueryResult = NonNullable<Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>>
+export type ListAdminBudgetHierarchyAuditsQueryError = ErrorType<ErrorModel>
+
+
+export function useListAdminBudgetHierarchyAudits<TData = Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>, TError = ErrorType<ErrorModel>>(
+ params: undefined |  ListAdminBudgetHierarchyAuditsParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListAdminBudgetHierarchyAudits<TData = Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>, TError = ErrorType<ErrorModel>>(
+ params?: ListAdminBudgetHierarchyAuditsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListAdminBudgetHierarchyAudits<TData = Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>, TError = ErrorType<ErrorModel>>(
+ params?: ListAdminBudgetHierarchyAuditsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List budget-hierarchy audit findings (admin)
+ */
+
+export function useListAdminBudgetHierarchyAudits<TData = Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>, TError = ErrorType<ErrorModel>>(
+ params?: ListAdminBudgetHierarchyAuditsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminBudgetHierarchyAudits>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getListAdminBudgetHierarchyAuditsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
 
 /**
  * Returns whether the authenticated user has admin role. Callable by any authenticated user, available in all environments.

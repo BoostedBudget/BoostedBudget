@@ -231,6 +231,12 @@ func (m *MockBudgetRepository) BudgetIDsWithUnexaminedHierarchy(ctx context.Cont
 	return ids, args.Error(1)
 }
 
+func (m *MockBudgetRepository) ListBudgetHierarchyAuditFindings(ctx context.Context, outcome string, limit int) ([]domain.BudgetHierarchyAuditVerdict, error) {
+	args := m.Called(ctx, outcome, limit)
+	findings, _ := args.Get(0).([]domain.BudgetHierarchyAuditVerdict)
+	return findings, args.Error(1)
+}
+
 func (m *MockBudgetRepository) GetDetachedGoalIDsForSeries(ctx context.Context, seriesID string) ([]string, error) {
 	args := m.Called(ctx, seriesID)
 	if args.Get(0) == nil {
