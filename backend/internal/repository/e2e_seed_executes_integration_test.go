@@ -103,6 +103,13 @@ func TestE2ESeedScriptSeedsEveryTable_Integration(t *testing.T) {
 		{"custom_categories", `SELECT COUNT(*) FROM custom_categories cc JOIN users u ON cc.user_id = u.id WHERE u.email = $1`, 3},
 		{"budgets", `SELECT COUNT(*) FROM budgets b JOIN users u ON b.user_id = u.id WHERE u.email = $1`, 1},
 		{"budget_categories", `SELECT COUNT(*) FROM budget_categories bc JOIN budgets b ON bc.budget_id = b.id JOIN users u ON b.user_id = u.id WHERE u.email = $1`, 3},
+		// #1631 added investment fixtures so the Portfolio tab and the investment activity feed
+		// have something to render in E2E. This test is named SeedsEveryTable, so they belong in
+		// the table — without them the seeder could stop producing them and only a Playwright
+		// failure would say so.
+		{"securities", `SELECT COUNT(*) FROM securities WHERE plaid_security_id LIKE 'e2e-sec-%'`, 2},
+		{"holdings", `SELECT COUNT(*) FROM holdings h JOIN users u ON h.user_id = u.id WHERE u.email = $1`, 1},
+		{"investment_transactions", `SELECT COUNT(*) FROM investment_transactions it JOIN users u ON it.user_id = u.id WHERE u.email = $1`, 3},
 	} {
 		var got int
 		require.NoError(t, tx.QueryRow(ctx, c.query, email).Scan(&got), c.label)
@@ -114,13 +121,25 @@ func TestE2ESeedScriptSeedsEveryTable_Integration(t *testing.T) {
 	// The seeder is re-run against an already-seeded database on every local E2E invocation, so
 	// non-idempotency is a live failure mode, not a hypothetical. Run it a second time inside the
 	// same transaction.
+	var accountsBefore int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM accounts a JOIN users u ON a.user_id = u.id WHERE u.email = $1`, email).Scan(&accountsBefore))
+
 	_, err = tx.Exec(ctx, script)
 	require.NoError(t, err, "the E2E seed script must be re-runnable against an already-seeded database")
 
-	var accounts int
+	var accountsAfter int
 	require.NoError(t, tx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM accounts a JOIN users u ON a.user_id = u.id WHERE u.email = $1`, email).Scan(&accounts))
-	require.Equal(t, 3, accounts, "re-running the seed must not duplicate accounts")
+		`SELECT COUNT(*) FROM accounts a JOIN users u ON a.user_id = u.id WHERE u.email = $1`, email).Scan(&accountsAfter))
+	// ⚠ Compare BEFORE against AFTER rather than against a literal. This assertion used to read
+	// `require.Equal(t, 3, accounts, ...)`, which conflated two different things: whether the
+	// seeder is idempotent (what it is for) and how many accounts the fixture happens to contain
+	// (what it accidentally pinned). #1631 added a fourth account — an investment one, so the
+	// Portfolio tab has something to render — and the test failed while the seeder was perfectly
+	// idempotent. Measuring the delta tests the property and survives the next fixture.
+	require.Equal(t, accountsBefore, accountsAfter,
+		"re-running the seed must not duplicate accounts: %d before the second run, %d after",
+		accountsBefore, accountsAfter)
 
 	require.NoError(t, tx.Rollback(ctx), fmt.Sprintf("roll back the seed probe on the shared %s database", "integration"))
 }
