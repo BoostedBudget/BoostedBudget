@@ -2,9 +2,13 @@ package services
 
 // #1631 M8b I1: the position-reconciliation drift gauge on /admin/health.
 //
-// Before this fix, GetPositionReconciliation had zero production callers — a diagnostic built
-// but reported to nobody. This wires a GLOBAL summary (every user's active holdings, counts only)
-// onto /admin/health, mirroring the forked-identity section.
+// Before this fix, repository.PositionReconciliationSummary had zero production callers — the
+// diagnostic's global aggregate was built but reported to nobody. This wires
+// PositionReconciliationSummary (every user's active holdings, counts only) onto /admin/health,
+// mirroring the forked-identity section. ⚠ This is NOT GetPositionReconciliation /
+// repository.PositionReconciliation, the per-user, per-row method — that one is a DIFFERENT
+// method on a DIFFERENT interface and still has zero production callers; see the individual
+// test below for the same distinction stated again where it matters most.
 //
 // ⚠ WHAT THESE TESTS DELIBERATELY DO NOT DO: assert that the response HAS a
 // position_reconciliation field. That passes against a hardcoded zero — the same vacuous-gate
