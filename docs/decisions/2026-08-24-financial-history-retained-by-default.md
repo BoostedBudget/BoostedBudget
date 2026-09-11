@@ -475,8 +475,28 @@ Three things follow, and all three are requirements rather than aspirations:
 This amendment is **scoped to a duplicate the user identified**, and the scope is the whole
 argument. It authorises non-ingestion where all three of the following hold:
 
-1. the row would be a **duplicate of history we store anyway** by another route, so declining to
-   write it loses no fact;
+1. the row would be a **duplicate of history we store anyway** by another route.
+   ⚠ **CORRECTED (#1631, after an independent review). This test as first written said
+   "so declining to write it loses no fact". That was FALSE, and the correction matters more
+   than the wording.**
+   The duplicate is **partial, not total.** The banking route stores the cash movement. It
+   cannot store the security-level detail: the unified feed's banking arm hard-codes
+   `NULL::text` for `security_id`, `ticker_symbol`, `security_name`, `type` and `subtype`, and
+   `NULL::float8` for `quantity`, `price` and `fees`
+   (`backend/internal/repository/transaction_repository.go:3540-3546`). So for a dividend, a
+   trade, a fee or a split, declining to write the investment row **does lose facts** — the
+   ones that make it an investment transaction rather than a cash movement.
+   The duplicate is also **user-asserted, not system-verified.** Nothing in the code tests
+   this condition. The toggle renders for every chained account
+   (`AccountCustomizationModal.tsx`), a deliberate product decision from #1618 taken when the
+   flag was a harmless, reversible read filter. It is no longer either. A user who sets it on
+   a genuine brokerage account — one whose investment activity is NOT double-reported —
+   permanently loses that account's security-level history beyond the 2-year backfill.
+   **What this test therefore authorises** is the user's judgement about their own account, not
+   the system's knowledge of it. That is a defensible thing to authorise, and it is the thing
+   the code actually does; the original wording claimed the system knew, which it does not.
+   Anyone narrowing the toggle's availability to accounts with evidence of double-reporting
+   would strengthen this test from an assertion into a fact, and should;
 2. the user gave a **named, per-object instruction**, in a control whose copy states the cost; and
 3. the instruction is **recoverable** — reversing it triggers a bounded backfill whose obligation is
    durable, and whose limit the user was told.
