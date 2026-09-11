@@ -407,7 +407,7 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {account.user_account_id
-                      ? "Stops this account's activity from showing up twice — once from bank sync, once from investment sync. While this is on we stop saving its investment activity, and turning it back off restores only the last 2 years."
+                      ? "Stops this account's activity from showing up twice — once from bank sync, once from investment sync. While this is on we stop saving its investment activity, and turning it back off re-fetches only the last 2 years from your bank — anything older that went unsaved during exclusion can't be recovered."
                       : 'Not available for this account yet — it has no stable account record to store the setting on.'}
                   </p>
                 </div>
