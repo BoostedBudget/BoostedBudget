@@ -53,6 +53,9 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
   // portfolio read "$52,340.50" and a mixed one read a dollar figure that is not a quantity of any
   // currency at all.
   const money = (value: number) => formatPortfolioAmount(value, summary)
+  // Whole-currency form for the change indicators, which show a delta rather than a balance.
+  // Hoisted rather than written inline at both call sites: one shared closure instead of two.
+  const moneyWhole = (value: number) => formatPortfolioAmount(value, summary, 0)
   const mixed = isCurrencyUnnameable(summary)
 
   const { variant: gainVariant, trend: gainTrend } = getVariantAndTrend(summary.total_gain_loss)
@@ -87,7 +90,7 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
                 amount={summary.total_gain_loss}
                 percent={summary.total_gain_loss_pct}
                 label="Portfolio gain/loss"
-                formatAmount={(n) => formatPortfolioAmount(n, summary, 0)}
+                formatAmount={moneyWhole}
               />
             )}
           </span>
@@ -109,7 +112,7 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
                   amount={dayChange}
                   percent={summary.day_change_pct}
                   label="Day change"
-                  formatAmount={(n) => formatPortfolioAmount(n, summary, 0)}
+                  formatAmount={moneyWhole}
                 />
               )}
             </span>
