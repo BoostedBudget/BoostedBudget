@@ -32,30 +32,46 @@ type ActivityItem struct {
 	// SortDate is the shared ordering column used by the UNION keyset.
 	// For banking: COALESCE(authorized_date, date)::date.
 	// For investment: date::date.
-	// Exposed so clients can rely on a consistent sort field.
-	SortDate time.Time `json:"sort_date"`
+	//
+	// Kept as time.Time and NOT serialized: it is the source of the V:2 keyset cursor sort value
+	// (repository folds it via time.DateOnly, and the cursor also carries it as SVT), so it has to
+	// stay a real time.Time. SortDateDisplay below is what clients see as "sort_date".
+	SortDate time.Time `json:"-"`
+	// SortDateDisplay is SortDate as a UTC calendar day (YYYY-MM-DD) — the value that actually
+	// serializes as "sort_date". See domain/date_display.go for why a DATE column may not be
+	// rendered through a timestamp (#1631).
+	SortDateDisplay string `json:"sort_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this item sorts on"`
 
 	// --- Core fields (always populated) ---
-	ID        string    `json:"id"`
-	UserID    string    `json:"user_id"`
-	AccountID string    `json:"account_id"`
-	Date      time.Time `json:"date"`
-	Amount    float64   `json:"amount"`
-	Name      string    `json:"name"`
+	ID        string `json:"id"`
+	UserID    string `json:"user_id"`
+	AccountID string `json:"account_id"`
+	// Date is the row's own DATE column, kept as time.Time for the same cursor/bind reasons as
+	// SortDate; DateDisplay is what serializes as "date" (#1631).
+	Date        time.Time `json:"-"`
+	DateDisplay string    `json:"date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) of this item"`
+	Amount      float64   `json:"amount"`
+	Name        string    `json:"name"`
 
 	// --- Banking-only fields (null for investment rows) ---
-	UserAccountID         *string        `json:"user_account_id,omitempty"`
-	LinkedItemID          *string        `json:"linked_item_id,omitempty"`
-	AuthorizedDate        *time.Time     `json:"authorized_date,omitempty"`
-	MerchantName          *string        `json:"merchant_name,omitempty"`
-	MerchantID            *string        `json:"merchant_id,omitempty"`
-	EffectiveMerchantName *string        `json:"effective_merchant_name,omitempty"`
-	DataSource            *string        `json:"data_source,omitempty"` // "plaid" | "manual" (TransactionSource)
-	ExternalTransactionID *string        `json:"external_transaction_id,omitempty"`
-	PFCPrimary            *string        `json:"pfc_primary,omitempty"`
-	PFCDetailed           *string        `json:"pfc_detailed,omitempty"`
-	PFCConfidenceLevel    *string        `json:"pfc_confidence_level,omitempty"`
-	PFCCategoryIconURL    *string        `json:"pfc_category_icon_url,omitempty"`
+	UserAccountID *string `json:"user_account_id,omitempty"`
+	LinkedItemID  *string `json:"linked_item_id,omitempty"`
+	// AuthorizedDate stays a time.Time (it is the preferred half of the banking sort key);
+	// AuthorizedDateDisplay is what serializes as "authorized_date". A *string rather than a
+	// string so NULL stays an OMITTED key: the two most prominent UI sites render
+	// formatDate(authorized_date || date), and an empty string would win that fallback and print
+	// "Invalid Date" (#1631).
+	AuthorizedDate        *time.Time `json:"-"`
+	AuthorizedDateDisplay *string    `json:"authorized_date,omitempty" format:"date" doc:"UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted for investment rows and when the provider gave none"`
+	MerchantName          *string    `json:"merchant_name,omitempty"`
+	MerchantID            *string    `json:"merchant_id,omitempty"`
+	EffectiveMerchantName *string    `json:"effective_merchant_name,omitempty"`
+	DataSource            *string    `json:"data_source,omitempty"` // "plaid" | "manual" (TransactionSource)
+	ExternalTransactionID *string    `json:"external_transaction_id,omitempty"`
+	PFCPrimary            *string    `json:"pfc_primary,omitempty"`
+	PFCDetailed           *string    `json:"pfc_detailed,omitempty"`
+	PFCConfidenceLevel    *string    `json:"pfc_confidence_level,omitempty"`
+	PFCCategoryIconURL    *string    `json:"pfc_category_icon_url,omitempty"`
 	// PFC override raw values — needed to compute PFCPrimaryOverrideDisplay/PFCDetailedOverrideDisplay.
 	PFCPrimaryOverride  *string `json:"pfc_primary_override,omitempty"`
 	PFCDetailedOverride *string `json:"pfc_detailed_override,omitempty"`
@@ -67,18 +83,18 @@ type ActivityItem struct {
 	PFCPrimaryOverrideDisplay  *string `json:"pfc_primary_override_display,omitempty"`
 	PFCDetailedOverrideDisplay *string `json:"pfc_detailed_override_display,omitempty"`
 	// Custom category display name (fetched from custom_categories; null when no override).
-	CustomCategoryOverrideDisplay *string `json:"custom_category_override_display,omitempty"`
-	PaymentChannel        *string        `json:"payment_channel,omitempty"`
-	Pending               *bool          `json:"pending,omitempty"`
-	UserNotes             *string        `json:"user_notes,omitempty"`
-	CategoryOverrideKind  *string        `json:"category_override_kind,omitempty"`
-	EffectivePFCPrimary   *string        `json:"effective_pfc_primary,omitempty"`
-	EffectivePFCDetailed  *string        `json:"effective_pfc_detailed,omitempty"`
-	EffectiveCategoryName *string        `json:"effective_category_name,omitempty"`
-	Reviewed              *bool          `json:"reviewed,omitempty"`
-	ReviewedAt            *time.Time     `json:"reviewed_at,omitempty"`
-	Tags                  []string       `json:"tags,omitempty"`
-	Account               *Account       `json:"account,omitempty"`
+	CustomCategoryOverrideDisplay *string    `json:"custom_category_override_display,omitempty"`
+	PaymentChannel                *string    `json:"payment_channel,omitempty"`
+	Pending                       *bool      `json:"pending,omitempty"`
+	UserNotes                     *string    `json:"user_notes,omitempty"`
+	CategoryOverrideKind          *string    `json:"category_override_kind,omitempty"`
+	EffectivePFCPrimary           *string    `json:"effective_pfc_primary,omitempty"`
+	EffectivePFCDetailed          *string    `json:"effective_pfc_detailed,omitempty"`
+	EffectiveCategoryName         *string    `json:"effective_category_name,omitempty"`
+	Reviewed                      *bool      `json:"reviewed,omitempty"`
+	ReviewedAt                    *time.Time `json:"reviewed_at,omitempty"`
+	Tags                          []string   `json:"tags,omitempty"`
+	Account                       *Account   `json:"account,omitempty"`
 
 	// Reversed marks a banking row the PROVIDER withdrew after it had already posted — a bank
 	// reversal or correction. Issue #1569.
@@ -95,9 +111,9 @@ type ActivityItem struct {
 
 	// --- Investment-only fields (null for banking rows) ---
 	// SecurityID is set for equity/fund transactions; null for cash transactions.
-	SecurityID         *string  `json:"security_id,omitempty"`
-	TickerSymbol       *string  `json:"ticker_symbol,omitempty"`
-	SecurityName       *string  `json:"security_name,omitempty"`
+	SecurityID   *string `json:"security_id,omitempty"`
+	TickerSymbol *string `json:"ticker_symbol,omitempty"`
+	SecurityName *string `json:"security_name,omitempty"`
 	// ActivityType is the normalized trade type: buy/sell/dividend/reinvest/fee/cash/other.
 	ActivityType       *string  `json:"activity_type,omitempty"`
 	InvestmentSubtype  *string  `json:"investment_subtype,omitempty"` // raw Plaid subtype
@@ -162,5 +178,9 @@ func NewBankingActivityItem(t *Transaction) *ActivityItem {
 	if reversed {
 		item.ReversedAt = t.DeletedAt
 	}
+	// Derived from this item own SortDate/Date/AuthorizedDate rather than copied from the
+	// Transaction display fields, so the wrapper is correct even for a Transaction that never went
+	// through the scan finalizer (#1631).
+	item.PopulateDateDisplay()
 	return item
 }
