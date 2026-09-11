@@ -313,3 +313,133 @@ func TestBudgetHierarchyResync_1630_B1_RefusesEscapingReparent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, reloaded.ParentID, "the refused reparent must not have been written")
 }
+
+// TestBudgetHierarchyResync_1630_ReviewFix_ResyncsGrandparentPFCRootReachedThroughACustomParent
+// is the RED test for the #1630 adversarial-review HIGH finding: the resync worker added the old
+// and new CUSTOM parent IDs to affectedCustomIDs but never resolved THOSE parents' own
+// ParentPFCPrimary, so a PFC-root budget row reached only through a custom grandparent (pfc root
+// X <- custom C via parent_pfc_primary <- custom G via parent_id) was silently skipped.
+//
+// Shape: a budget contains only PFC root X. Custom C is nested under X (parent_pfc_primary = X).
+// Custom G is nested under C (parent_id = C). A transaction is filed under G. Reparenting G to
+// TOP-LEVEL changes what X's roll-up includes (buildCategoryClause's grandchild UNION branch, and
+// its removal here) even though neither C nor G is itself a budgeted row — X is the only budget
+// row, and it must still be resynced.
+//
+// Run with:
+//
+//	DATABASE_URL=postgres://... CACHE_REDIS_TEST_URL=... REDIS_TEST_URL=... \
+//	  go test ./internal/queue/jobs/... -tags integration -p 1 \
+//	  -run TestBudgetHierarchyResync_1630_ReviewFix_ResyncsGrandparentPFCRootReachedThroughACustomParent -v
+func TestBudgetHierarchyResync_1630_ReviewFix_ResyncsGrandparentPFCRootReachedThroughACustomParent(t *testing.T) {
+	pool := connectJobsTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "test|"+userID, "claim1630-grandparent-"+userID+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	linkedItemID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-token')
+	`, linkedItemID, userID, "item-claim1630-grandparent-"+linkedItemID)
+	require.NoError(t, err, "seed linked item")
+
+	accountID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, 'plaid-claim1630-grandparent', 'Checking', 'depository')
+	`, accountID, linkedItemID, userID)
+	require.NoError(t, err, "seed account")
+
+	const pfcPrimary = "FOOD_AND_DRINK"
+
+	// Custom C nested under PFC root X.
+	customParentID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO custom_categories (id, user_id, name, parent_pfc_primary) VALUES ($1, $2, 'Dining', $3)
+	`, customParentID, userID, pfcPrimary)
+	require.NoError(t, err, "seed custom category C nested under PFC root X")
+
+	// Custom G nested under custom C — the grandchild whose reparent this test drives.
+	grandchildID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO custom_categories (id, user_id, name, parent_id) VALUES ($1, $2, 'Fast Food', $3)
+	`, grandchildID, userID, customParentID)
+	require.NoError(t, err, "seed custom category G nested under C")
+
+	// A monthly budget anchored TODAY, containing ONLY a PFC-root row for X — neither C nor G
+	// is itself a budgeted row.
+	budgetID := uuid.New().String()
+	today := time.Now().UTC()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO budgets (id, user_id, name, period, start_date, amount, is_active, series_id)
+		VALUES ($1, $2, 'Monthly Budget', 'monthly', $3, 1000.00, true, $1)
+	`, budgetID, userID, today.Format("2006-01-02"))
+	require.NoError(t, err, "seed budget")
+
+	pfcBCID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO budget_categories (id, budget_id, category_kind, pfc_primary, allocated_amount, spent_amount, match_logic)
+		VALUES ($1, $2, 'pfc', $3, 500.00, 12345.00, 'category_only')
+	`, pfcBCID, budgetID, pfcPrimary)
+	require.NoError(t, err, "seed PFC-root budget category with a deliberately wrong stale spent_amount")
+
+	// One real transaction this period, filed under grandchild G — reached today via X's
+	// grandchild UNION branch (buildCategoryClause).
+	txnDate := today
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transactions
+			(id, user_id, account_id, linked_item_id, source, amount, date, name, pending,
+			 category_override_kind, custom_category_override_id)
+		VALUES ($1, $2, $3, $4, 'plaid', $5, $6, 'txn', false, 'custom', $7)
+	`, uuid.New().String(), userID, accountID, linkedItemID, 50.00, txnDate, grandchildID)
+	require.NoError(t, err, "seed transaction filed under G")
+
+	enc := newJobsTestFieldEncryptor(t)
+	txnRepo := repository.NewTransactionRepository(tx, enc)
+	customCategoryRepo := repository.NewCustomCategoryRepository(tx)
+	budgetRepo := repository.NewBudgetRepository(tx)
+	spentCalc := services.NewBudgetCategoryMatchingService(txnRepo)
+
+	// Reparent G to TOP-LEVEL (clear parent_id) directly, mirroring what
+	// custom_category_service.UpdateCategory's write does — this test's own point is the
+	// worker's affected-set resolution, not the service's escaping-pair guard.
+	_, err = tx.Exec(ctx, `UPDATE custom_categories SET parent_id = NULL WHERE id = $1`, grandchildID)
+	require.NoError(t, err, "reparent G to top-level")
+
+	// Run the resync job directly, exactly as custom_category_service.UpdateCategory would have
+	// enqueued it: CustomCategoryID is the reparented category (G), and
+	// OldParentCustomCategoryID carries C's pre-reparent identity (captured before the write).
+	worker := NewBudgetHierarchyResyncWorker(BudgetHierarchyResyncWorkerDeps{
+		CustomCategoryRepo: customCategoryRepo,
+		BudgetRepo:         budgetRepo,
+		SpentCalc:          spentCalc,
+	})
+	job := &river.Job[BudgetHierarchyResyncArgs]{
+		JobRow: &rivertype.JobRow{ID: 1, Kind: "budget_hierarchy_resync", Queue: "default", Attempt: 1},
+		Args: BudgetHierarchyResyncArgs{
+			UserID:                    userID,
+			CustomCategoryID:          grandchildID,
+			OldParentCustomCategoryID: &customParentID,
+		},
+	}
+	require.NoError(t, worker.Work(ctx, job))
+
+	postResyncCats, err := budgetRepo.GetCategoriesByBudgetID(ctx, budgetID)
+	require.NoError(t, err)
+	require.Len(t, postResyncCats, 1)
+	assert.Equal(t, 0.00, postResyncCats[0].SpentAmount,
+		"X's PFC-root row must be resynced even though neither C nor G is itself a budgeted "+
+			"row: G moved out from under X's grandchild UNION branch, so X's roll-up must drop "+
+			"back to $0 rather than staying at the stale $12345 seeded above — a leftover "+
+			"$12345 (or the pre-reparent $50) proves X was never flagged as affected")
+}

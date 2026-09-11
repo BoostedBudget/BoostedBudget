@@ -49,18 +49,15 @@ func (BudgetHierarchyResyncArgs) Kind() string { return "budget_hierarchy_resync
 // custom-custom nesting at two levels (a parent may not itself have a parent_id), so there are
 // never grandchildren to walk on that axis.
 //
-// ⚠ UPDATE (029e15d3): the paragraph this replaced described the PFC-parent 3-level shape (pfc
-// root X ← custom C via parent_pfc_primary ← custom G via parent_id) as an out-of-scope
-// limitation "shared" with domain.BudgetCategory.IsSubAllocationWithin. That shared premise is
-// gone: IsSubAllocationWithin/EscapedNestedChild now recognize the transitive pair via
-// CustomGrandparentPFCPrimary, so it is CLOSED there. It is NOT closed here. This worker's own
-// Work() below builds affectedCustomIDs/affectedPFCPrimaries from the reparented category's
-// DIRECT parent identity only (cc.ParentID / cc.ParentPFCPrimary, plus the OLD parent from job
-// args) — if the reparented category's own parent is a CUSTOM category nested under a PFC root
-// two hops away (rather than the reparented category being a direct PFC-primary child), that
-// root's PFC primary is never added to affectedPFCPrimaries, so a budget row on that root is
-// never flagged as "affected" and its spent_amount is never resynced, even though its rollup
-// total did change. Known, currently open gap — not fixed by this comment update.
+// ⚠ UPDATE (#1630 review round 2): the paragraph this replaced described the PFC-parent 3-level
+// shape (pfc root X ← custom C via parent_pfc_primary ← custom G via parent_id) as a known,
+// currently-open gap in THIS worker — Work() only resolved the reparented category's own direct
+// parent identity (cc.ParentID / cc.ParentPFCPrimary, plus the OLD parent from job args), never
+// walking the grandparent hop to find X's PFC primary when the parent added to affectedCustomIDs
+// is itself a custom category nested under a PFC root. That gap is now CLOSED: Work() resolves
+// each affected custom parent's own ParentPFCPrimary via a fresh GetByID and folds it into
+// affectedPFCPrimaries, so a budget row on X is correctly resynced even though neither C nor G is
+// itself a budgeted row. See resolveParentPFCPrimary in Work() below.
 type budgetHierarchyResyncCategoryRepo interface {
 	GetByID(ctx context.Context, id string) (*domain.CustomCategory, error)
 	GetChildren(ctx context.Context, parentID string) ([]*domain.CustomCategory, error)
@@ -183,6 +180,33 @@ func (w *BudgetHierarchyResyncWorker) Work(ctx context.Context, job *river.Job[B
 	}
 	if cc.ParentPFCPrimary != nil {
 		affectedPFCPrimaries[*cc.ParentPFCPrimary] = true
+	}
+
+	// Grandparent hop: the OLD and NEW custom parents just added to affectedCustomIDs may
+	// themselves be nested under a PFC root (pfc root X <- custom C via ParentPFCPrimary <-
+	// custom G via ParentID). A reparent of G changes what X's roll-up includes, but neither C
+	// nor G is necessarily a budgeted row itself — X's PFC primary must be resolved from C (or
+	// whichever custom category is the actual parent) and added here, or a budget row on X is
+	// never flagged as affected and its spent_amount is never resynced.
+	resolveParentPFCPrimary := func(customParentID string) error {
+		parent, err := w.customCategoryRepo.GetByID(ctx, customParentID)
+		if err != nil {
+			return fmt.Errorf("load custom parent %s: %w", customParentID, err)
+		}
+		if parent.ParentPFCPrimary != nil {
+			affectedPFCPrimaries[*parent.ParentPFCPrimary] = true
+		}
+		return nil
+	}
+	if args.OldParentCustomCategoryID != nil {
+		if err := resolveParentPFCPrimary(*args.OldParentCustomCategoryID); err != nil {
+			return err
+		}
+	}
+	if cc.ParentID != nil {
+		if err := resolveParentPFCPrimary(*cc.ParentID); err != nil {
+			return err
+		}
 	}
 
 	budgets, err := w.budgetRepo.GetActiveByUserID(ctx, args.UserID)
