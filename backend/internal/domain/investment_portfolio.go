@@ -330,24 +330,25 @@ func (o AllocationOptions) IncludesLiabilities() bool {
 
 // AllocationItem represents one bucket in the portfolio allocation breakdown.
 type AllocationItem struct {
-	// SecurityType is securities.type verbatim from Plaid, or "unknown" when absent. ⚠ #1631: the
-	// values are PLAID's enum — cash, cryptocurrency, derivative, equity, etf, fixed income, loan,
-	// mutual fund, other — plus "unknown" and the synthetic "liabilities". This comment previously
-	// advertised "stock", "bond" and "crypto", none of which Plaid ever sends.
+	// SecurityType is securities.type verbatim from Plaid, or "unknown" when absent — WITH ONE
+	// EXCEPTION (#1631 H1, fix round 1). A security whose is_cash_equivalent is AFFIRMATIVELY true
+	// (a money-market fund, a sweep vehicle) is reported here as "cash" regardless of its raw Plaid
+	// type: the repository's SQL bucket KEY routes it there before this struct is ever populated, so
+	// that instrument and a security literally typed "cash" land in the SAME bucket, under the SAME
+	// label, in every group_by mode — not two same-labelled buckets the frontend donut chart cannot
+	// tell apart (which is what an earlier version of this fix produced). A NULL is_cash_equivalent
+	// (the pre-migration state of the whole securities table) is NOT affected and keeps reporting
+	// its verbatim Plaid type.
+	//
+	// ⚠ #1631: otherwise, the values are PLAID's enum — cash, cryptocurrency, derivative, equity,
+	// etf, fixed income, loan, mutual fund, other — plus "unknown" and the synthetic "liabilities".
+	// This comment previously advertised "stock", "bond" and "crypto", none of which Plaid ever
+	// sends.
 	SecurityType string  `json:"security_type"`
 	AssetClass   string  `json:"asset_class"` // "investments", "cash", "liabilities" — populated when group_by=asset_class
 	TotalValue   float64 `json:"total_value"`
 	Percentage   float64 `json:"percentage"`
 	HoldingCount int     `json:"holding_count"`
-
-	// IsCashEquivalent carries the bucket's securities.is_cash_equivalent verdict (#1631 H1) — an
-	// AFFIRMATIVE true only; a NULL flag (unset by the institution) or a bucket with no single
-	// joined security (the synthetic "cash"/"liabilities" UNION branches) both read false here,
-	// same discipline as domain.SecurityIsStructuralSQL's `IS FALSE`/`IS TRUE` (never `NOT ...`,
-	// which would make a NULL flag silently reclassify the row). It exists only to make
-	// is_cash_equivalent load-bearing for securityTypeToAssetClass; it is not part of the API
-	// response.
-	IsCashEquivalent bool `json:"-"`
 }
 
 // AllocationBreakdown is the response for GET /portfolio/allocation.
