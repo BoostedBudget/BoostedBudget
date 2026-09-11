@@ -26,7 +26,7 @@
 --
 -- The retention ADR was AMENDED to authorise this, under three narrow scope tests — see
 -- docs/decisions/2026-08-24-financial-history-retained-by-default.md
--- § "AMENDMENT (#1631): a fourth category — never ingesting a row". The argument is that never
+-- § "AMENDMENT (#1631, 2026-09-10): a fourth category — never ingesting a row". The argument is that never
 -- ingesting a row is not destroying a retained one, and the row in question is a duplicate of one
 -- /transactions/sync stores anyway. Hard-deleting and tombstoning remain forbidden, exactly as
 -- stated below.

@@ -242,7 +242,9 @@ type InvestmentTransaction struct {
 	// a full timestamp (`2026-01-02T00:00:00Z`), which renders a day early for any client west of
 	// UTC that parses it in local time — the same defect class HoldingSnapshotView's AsOfDate
 	// documents and fixes for holding_snapshots.
-	DateDisplay string `json:"date" db:"-" doc:"UTC calendar day (YYYY-MM-DD) of the transaction"`
+	// #1631: format:"date" extends the request-input convention (dead_letter_job.go,
+	// savings_goal.go) to this OUTPUT field deliberately, matching HoldingSnapshotView.AsOfDate.
+	DateDisplay string `json:"date" db:"-" format:"date" doc:"UTC calendar day (YYYY-MM-DD) of the transaction"`
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 }

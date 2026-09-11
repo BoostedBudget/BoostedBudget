@@ -65,7 +65,7 @@ type UserAccount struct {
 	// one /transactions/sync stores anyway — which is the entire reason the user set the flag. The
 	// argument, its three scope tests and its honest cost are written out in
 	// docs/decisions/2026-08-24-financial-history-retained-by-default.md
-	// § "AMENDMENT (#1631): a fourth category — never ingesting a row". Read the three tests before
+	// § "AMENDMENT (#1631, 2026-09-10): a fourth category — never ingesting a row". Read the three tests before
 	// extending non-ingestion to anything else; they are narrow on purpose.
 	//
 	// It lives on the chain rather than on accounts so it survives a Plaid re-link, for the same

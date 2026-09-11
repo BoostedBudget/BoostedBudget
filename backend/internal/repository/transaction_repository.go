@@ -3074,7 +3074,7 @@ func accountWithNoActiveIntervalLeg(alias string) string {
 // read filter matters only for rows written before the flag was set. The ADR was amended to
 // authorise it — never ingesting a row is not destroying a retained one, and the row is a duplicate
 // of one /transactions/sync stores anyway — under three narrow scope tests set out in that
-// document's § "AMENDMENT (#1631): a fourth category — never ingesting a row". Deleting and
+// document's § "AMENDMENT (#1631, 2026-09-10): a fourth category — never ingesting a row". Deleting and
 // tombstoning remain forbidden, and this predicate is NOT redundant: it is the only thing that
 // keeps the already-stored duplicates out of the feed.
 //

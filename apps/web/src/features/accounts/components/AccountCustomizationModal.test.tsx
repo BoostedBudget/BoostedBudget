@@ -926,7 +926,7 @@ describe('AccountCustomizationModal', () => {
     // only under three scope tests, and one of them is that the user is told the cost in the
     // control itself before they commit — see
     // docs/decisions/2026-08-24-financial-history-retained-by-default.md
-    // § "AMENDMENT (#1631): a fourth category — never ingesting a row". The cost is that clearing
+    // § "AMENDMENT (#1631, 2026-09-10): a fourth category — never ingesting a row". The cost is that clearing
     // the flag backfills at most 2 years (Plaid's limit on /investments/transactions/get), so an
     // account excluded for longer permanently loses its earliest excluded period.
     //
@@ -950,10 +950,15 @@ describe('AccountCustomizationModal', () => {
 
       await openAdvancedSection(user)
 
-      const toggle = screen.getByRole('switch', { name: /investment activity/i })
-      const description = toggle.closest('div.flex')?.querySelector('p')
-      expect(description).not.toBeNull()
-      const copy = description?.textContent ?? ''
+      // #1631 Gap 8: locate the warning by its OWN text, not by a Tailwind layout class
+      // ('div.flex'). A layout refactor of the wrapping divs must fail this test as MISSING COPY
+      // (getByText finds no paragraph mentioning the required warning), not as MISSING ELEMENT —
+      // the DOM shape around the toggle is incidental to this test's job of pinning the wording.
+      const description = screen.getByText(
+        (_content, element) =>
+          element?.tagName.toLowerCase() === 'p' && /stop saving/i.test(element.textContent ?? '')
+      )
+      const copy = description.textContent ?? ''
 
       expect(copy).toMatch(/2 years/)
       expect(copy).toMatch(/stop saving/i)

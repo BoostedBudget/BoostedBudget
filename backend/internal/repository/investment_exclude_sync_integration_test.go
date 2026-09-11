@@ -294,7 +294,7 @@ func TestExcludeInvestmentSync_LegacyNullRowOnTheFlaggedAccountIsStillExcluded(t
 //   exist to come back, and the backfill that fetches them reaches only
 //   investmentTxnLookbackYears (2 years). See
 //   docs/decisions/2026-08-24-financial-history-retained-by-default.md
-//   section "AMENDMENT (#1631): a fourth category -- never ingesting a row".
+//   section "AMENDMENT (#1631, 2026-09-10): a fourth category -- never ingesting a row".
 //
 //   ⚠ Do NOT rename this test to match the narrower claim: transaction_repository.go's
 //   investmentSyncExclusionCondition cites it BY NAME, and TestEveryCitedTestNameResolves

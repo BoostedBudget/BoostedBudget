@@ -111,7 +111,9 @@ type PortfolioSummary struct {
 // time.Time after construction, so there is no reason to carry the timestamp shift a DATE column
 // serialized through time.Time inflicts on any client west of UTC.
 type PortfolioHistoryPoint struct {
-	Date       string  `json:"date" doc:"UTC calendar day (YYYY-MM-DD) this snapshot was captured"`
+	// #1631: format:"date" extends the request-input convention (dead_letter_job.go,
+	// savings_goal.go) to this OUTPUT field deliberately, matching HoldingSnapshotView.AsOfDate.
+	Date       string  `json:"date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this snapshot was captured"`
 	TotalValue float64 `json:"total_value"`
 }
 
