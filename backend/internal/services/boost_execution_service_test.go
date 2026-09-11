@@ -4067,10 +4067,21 @@ func TestExecuteCategoryRollover_SkipsSubAllocationCategory(t *testing.T) {
 		},
 	}
 
-	_, err = svc.ExecuteBoost(ctx, boost, triggerData)
+	execution, err := svc.ExecuteBoost(ctx, boost, triggerData)
 	require.NoError(t, err, "ExecuteBoost must not error for a skipped sub-allocation rollover")
 	assert.Empty(t, suggestionRepo.suggestions,
 		"a rollover boost on a sub-allocation category must not create a suggestion")
+
+	// Issue #1630 B6: reporting success (ExecutionStatusCompleted, execution_count incremented,
+	// last_successful touched) while doing nothing is the bug — this must be recorded as a
+	// SKIP, exactly like "boost disabled" / "conditions not met".
+	require.NotNil(t, execution)
+	assert.Equal(t, ExecutionStatusSkipped, execution.Status,
+		"a rollover on a sub-allocation source must be recorded as SKIPPED, not completed")
+	assert.False(t, boostRepo.incrementExecCalled,
+		"a skipped rollover must not increment execution_count")
+	assert.False(t, boostRepo.updateSuccessCalled,
+		"a skipped rollover must not update last_successful")
 }
 
 // TestExecuteCategoryRollover_SkipsSubAllocationCategory_AfterRiverJSONRoundTrip proves the
@@ -4120,10 +4131,15 @@ func TestExecuteCategoryRollover_SkipsSubAllocationCategory_AfterRiverJSONRoundT
 	boostRepo := &mockBoostsRepository{}
 	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
-	_, err = svc.ExecuteBoost(ctx, boost, roundTripped)
+	execution, err := svc.ExecuteBoost(ctx, boost, roundTripped)
 	require.NoError(t, err, "ExecuteBoost must not error for a skipped sub-allocation rollover")
 	assert.Empty(t, suggestionRepo.suggestions,
 		"a rollover boost on a sub-allocation category must not create a suggestion, even after a River JSON round-trip")
+
+	require.NotNil(t, execution)
+	assert.Equal(t, ExecutionStatusSkipped, execution.Status)
+	assert.False(t, boostRepo.incrementExecCalled)
+	assert.False(t, boostRepo.updateSuccessCalled)
 }
 
 // TestExecuteCategoryRollover_StillRollsTopLevelCategory is a regression guard: a

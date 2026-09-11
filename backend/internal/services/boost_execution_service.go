@@ -182,6 +182,16 @@ func (s *boostExecutionService) ExecuteBoost(ctx context.Context, boost *domain.
 		actionErr = fmt.Errorf("unknown boost type: %s", boost.BoostType)
 	}
 
+	// Issue #1630 B6: a rollover whose source became a sub-allocation after the boost was
+	// created is neither a success (nothing happened) nor a failure (nothing was WRONG about
+	// running it) — record it as SKIPPED, exactly like "boost disabled" / "conditions not met"
+	// above: no increment of execution_count, no update to last_successful.
+	if errors.Is(actionErr, domain.ErrRolloverSourceBecameSubAllocation) {
+		s.markExecutionSkipped(execution, startTime, actionErr.Error())
+		_ = s.executionRepo.Update(ctx, execution)
+		return execution, nil
+	}
+
 	// Update execution record
 	completedAt := time.Now()
 	execution.CompletedAt = &completedAt
@@ -685,13 +695,22 @@ func (s *boostExecutionService) executeCategoryRollover(ctx context.Context, boo
 		return fmt.Errorf("rollover action not defined")
 	}
 
-	// Issue #1630 Task 3.6: a rollover boost scoped to a sub-allocation category (a child
+	// Issue #1630 Task 3.6 / B6: a rollover boost scoped to a sub-allocation category (a child
 	// whose dollars are already reflected in its budgeted parent's own remaining/spent —
 	// see BudgetCategory.IsSubAllocationWithin) must not roll independently. Doing so would
 	// roll the same dollars twice: once via the parent's own rollover (if any), and again
 	// here via the child. Nothing to do — the parent is the sole rollover source.
+	//
+	// ⚠ B6: this used to `return nil` — reporting SUCCESS while doing nothing. boost_service.go
+	// refuses this shape at creation time now, but a source that was valid when the boost was
+	// created can become a sub-allocation LATER if the hierarchy changes (a reparent, or a new
+	// parent budgeted afterward); this is the execution-time half of that fix. The sentinel lets
+	// ExecuteBoost tell this apart from an actual failure — it must not increment
+	// execution_count or touch last_successful, but it is also not an error a user needs paged
+	// about; it is recorded as a SKIP (ExecutionStatusSkipped), the same outcome "boost
+	// disabled" and "conditions not met" already use.
 	if isSubAllocationCategory(triggerData, rollover.SourceBudgetCategoryID) {
-		return nil
+		return fmt.Errorf("%w: source_budget_category_id %q", domain.ErrRolloverSourceBecameSubAllocation, rollover.SourceBudgetCategoryID)
 	}
 
 	// Calculate rollover amount from trigger data

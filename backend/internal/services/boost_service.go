@@ -119,6 +119,24 @@ func (s *boostService) validateBoostReferenceOwnership(ctx context.Context, boos
 			}
 		}
 
+	case domain.BoostTypeCategoryRollover:
+		action, err := boost.ParseRolloverAction()
+		if err != nil {
+			return err
+		}
+		if s.budgetRepo != nil && action.SourceBudgetCategoryID != "" {
+			cat, err := s.budgetRepo.GetCategoryByIDAndUser(ctx, action.SourceBudgetCategoryID, boost.UserID)
+			if err != nil {
+				if errors.Is(err, domain.ErrBudgetCategoryNotFound) {
+					return fmt.Errorf("%w: source_budget_category_id does not belong to this user", domain.ErrBoostConditionForbidden)
+				}
+				return err
+			}
+			if err := s.refuseSubAllocationRolloverSource(ctx, cat); err != nil {
+				return err
+			}
+		}
+
 	case domain.BoostTypeTransferSuggestion:
 		action, err := boost.ParseTransferAction()
 		if err != nil {
@@ -179,6 +197,35 @@ func (s *boostService) validateBoostReferenceOwnership(ctx context.Context, boos
 				return fmt.Errorf("%w: condition category_id is not in the selected budget_id", domain.ErrInvalidBoost)
 			}
 		}
+	}
+	return nil
+}
+
+// refuseSubAllocationRolloverSource refuses a category_rollover boost whose source category is a
+// sub-allocation of another budgeted category in the SAME budget (Issue #1630 B6). A
+// sub-allocation's dollars are already reflected in its budgeted PARENT's own remaining/spent
+// (domain.BudgetCategory.IsSubAllocationWithin) — rolling it independently would roll the same
+// dollars twice: once via the parent's own rollover (if any), and again via the child.
+//
+// This is the CREATION-time half of the fix. executeCategoryRollover
+// (boost_execution_service.go) already refuses this shape too, silently, at EXECUTION time,
+// against the live hierarchy as it stands each period — this teaches the user the SAME refusal
+// at creation time, when the shape can be caught up front, instead of letting the user save a
+// boost that will report success while doing nothing every period it runs. The two checks are
+// deliberately not merged: creation time cannot see execution-time triggerData, and a category
+// that was a valid top-level source when the boost was created can become a sub-allocation later
+// if the hierarchy changes — validateRolloverAction's cousin at execution time (B6's second half)
+// is what catches THAT case, at run time, when this creation-time check no longer applies.
+//
+// cat must be a category already confirmed to belong to boost.UserID (see the caller).
+func (s *boostService) refuseSubAllocationRolloverSource(ctx context.Context, cat *domain.BudgetCategory) error {
+	categories, err := s.budgetRepo.GetCategoriesByBudgetID(ctx, cat.BudgetID)
+	if err != nil {
+		return err
+	}
+	metrics := domain.BuildCategoryEventData(categories)
+	if m, ok := metrics[cat.ID]; ok && m[domain.EventDataCategoryKeyIsSubAllocation] != 0 {
+		return fmt.Errorf("%w: source_budget_category_id %q is a sub-allocation of another budgeted category in this budget -- rolling it independently would double-count dollars already reflected in its parent's own rollover; configure the rollover on the parent category instead", domain.ErrInvalidBoost, cat.ID)
 	}
 	return nil
 }
