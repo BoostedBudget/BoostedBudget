@@ -661,6 +661,22 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 		}
 		category.CustomParentID = cc.ParentID
 		category.CustomParentPFCPrimary = cc.ParentPFCPrimary
+
+		// Issue #1630 review fix (HIGH): also populate CustomGrandparentPFCPrimary — mirrors
+		// budget_repository.go's second "gp" join hop (gp.id = cc.parent_id) run for EXISTING
+		// rows at read time. Without this, a brand-new candidate that is a GRANDCHILD of an
+		// unbudgeted intermediate custom parent (root PFC -> custom parent C, unbudgeted ->
+		// custom grandchild G, this candidate) always reports "no grandparent", so
+		// domain.EscapedNestedChild below cannot recognize the transitive pair
+		// IsSubAllocationWithin's own doc comment describes — the exact double-count 029e15d3
+		// closed on the READ path stays open here on the WRITE path.
+		if cc.ParentID != nil {
+			gp, err := s.customCategoryRepo.GetByID(ctx, *cc.ParentID)
+			if err != nil {
+				return nil, err
+			}
+			category.CustomGrandparentPFCPrimary = gp.ParentPFCPrimary
+		}
 	}
 
 	// Issue #1630 Task 4: reject a second row sharing this budget's parent identity (same

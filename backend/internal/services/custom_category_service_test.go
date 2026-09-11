@@ -680,7 +680,7 @@ type MockBudgetCategoryRepository struct {
 	mock.Mock
 }
 
-func (m *MockBudgetCategoryRepository) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.Budget, error) {
+func (m *MockBudgetCategoryRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.Budget, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -768,7 +768,7 @@ func TestCustomCategoryService_UpdateCategory_ReparentRefusesEscapingBudgetedPai
 	mockCategoryRepo.On("HasChildren", ctx, categoryID).Return(false, nil)
 	mockCategoryRepo.On("GetChildren", ctx, categoryID).Return([]*domain.CustomCategory{}, nil)
 
-	mockBudgetCategoryRepo.On("GetActiveByUserID", ctx, userID).
+	mockBudgetCategoryRepo.On("GetByUserID", ctx, userID).
 		Return([]*domain.Budget{{ID: budgetID, UserID: userID}}, nil)
 
 	// Issue #1630 B3b: the guard and the (would-be) write now share ONE transaction.
@@ -831,7 +831,7 @@ func TestCustomCategoryService_UpdateCategory_ReparentEnqueuesResyncJob(t *testi
 	mockCategoryRepo.On("UpdateInTx", ctx, mock.Anything, mock.AnythingOfType("*domain.CustomCategory")).Return(nil)
 
 	// No budgets reference this category at all — nothing for the guard to refuse.
-	mockBudgetCategoryRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.Budget{}, nil)
+	mockBudgetCategoryRepo.On("GetByUserID", ctx, userID).Return([]*domain.Budget{}, nil)
 
 	// Issue #1630 B3b: the guard and the write now share ONE transaction — even with zero
 	// budgets to lock, reparentCategoryChecked still opens it to persist the write and commit.

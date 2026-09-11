@@ -55,17 +55,22 @@ type BudgetRepository interface {
 	// against each locked snapshot, and only then persist its write, all before releasing any
 	// lock. Returns domain.ErrBudgetNotFound if budgetID does not exist or is tombstoned.
 	GetCategoriesByBudgetIDLockedInTx(ctx context.Context, tx Transaction, budgetID string) ([]domain.BudgetCategory, error)
-	// AddCategoryChecked atomically locks budgetID's row (SELECT ... FOR UPDATE), re-reads its
-	// LIVE categories inside that lock, evaluates domain.DuplicateParentIdentity and
+	// AddCategoryChecked atomically locks budgetID's row (SELECT ... FOR UPDATE), re-resolves
+	// candidate's OWN custom-category hierarchy linkage against the live custom_categories row
+	// (Issue #1630 review fix — see resolveCandidateCustomHierarchyInTx), re-reads its LIVE
+	// categories inside that lock, evaluates domain.DuplicateParentIdentity and
 	// domain.EscapedNestedChild against that fresh snapshot, and only then inserts candidate — all
 	// in one transaction. Closes the TOCTOU window between two concurrent adds that AddCategory's
 	// old read(outside tx)-check(in memory)-write left open (Issue #1630 B3): two goroutines
 	// racing to add categories that are individually fine but jointly violate one of the two
-	// guards can no longer both succeed. Returns domain.ErrBudgetNotFound if budgetID does not
-	// exist or is tombstoned, domain.ErrDuplicateParentCategory / domain.ErrEscapedNestedChild if
-	// the locked snapshot trips a guard — both already map to a 4xx via
-	// huma/errors.LoggingMapError, so the losing goroutine of a genuine race sees the same refusal
-	// it would have seen sequentially, never a raw serialization failure surfacing as a 500.
+	// guards can no longer both succeed — and, separately, a concurrent reparent of candidate's
+	// OWN custom category committing between AddCategory's pre-lock read and this lock's
+	// acquisition can no longer leave candidate validated against stale hierarchy fields. Returns
+	// domain.ErrBudgetNotFound if budgetID does not exist or is tombstoned,
+	// domain.ErrDuplicateParentCategory / domain.ErrEscapedNestedChild if the locked snapshot
+	// trips a guard — both already map to a 4xx via huma/errors.LoggingMapError, so the losing
+	// goroutine of a genuine race sees the same refusal it would have seen sequentially, never a
+	// raw serialization failure surfacing as a 500.
 	AddCategoryChecked(ctx context.Context, budgetID string, candidate *domain.BudgetCategory) (*domain.BudgetCategory, error)
 	// UpdateCategoryChecked is AddCategoryChecked's counterpart for edits: it locks budgetID's row,
 	// re-reads its live categories, locates categoryID among them, hands mutate a pointer to apply
@@ -670,6 +675,46 @@ func (r *budgetRepository) GetCategoriesByBudgetIDLockedInTx(ctx context.Context
 	return r.getCategoriesByBudgetIDQuerier(ctx, tx, budgetID)
 }
 
+// resolveCandidateCustomHierarchyInTx re-resolves candidate's own custom-category parent linkage
+// (CustomParentID / CustomParentPFCPrimary / CustomGrandparentPFCPrimary) against the LIVE
+// custom_categories row, INSIDE the transaction that already holds budgetID's row lock (Issue
+// #1630 review fix, HIGH). Mirrors getCategoriesByBudgetIDQuerier's cc/gp join exactly, but for a
+// single not-yet-persisted candidate rather than a batch of already-persisted rows.
+//
+// Exists because budget_service.go's AddCategory populates these same fields via a plain
+// customCategoryRepo.GetByID call BEFORE AddCategoryChecked is ever invoked — i.e. before any
+// lock is held. A concurrent reparent (custom_category_service.go's reparentCategoryChecked) can
+// commit in the window between that read and this lock's acquisition; without re-resolving here,
+// AddCategoryChecked's guard would validate a candidate carrying stale (pre-reparent) hierarchy
+// fields against a fresh snapshot of its siblings — richer stale data, not fixed staleness. A
+// no-op for a non-custom candidate (pfc/savings kinds carry no custom-category linkage at all).
+func (r *budgetRepository) resolveCandidateCustomHierarchyInTx(ctx context.Context, tx Transaction, candidate *domain.BudgetCategory) error {
+	if candidate.CategoryKind != "custom" || candidate.CustomCategoryID == nil {
+		return nil
+	}
+	query := `
+		SELECT cc.parent_id, cc.parent_pfc_primary, gp.parent_pfc_primary AS grandparent_pfc_primary
+		-- tombstone-exempt(custom_categories cc, custom_categories gp): same invariant as
+		-- getCategoriesByBudgetIDQuerier's identical cc/gp join above — a live candidate can
+		-- never name a tombstoned custom category, and a tombstoned category's own parent
+		-- linkage is subject to the same invariant, so filtering deleted_at here would buy
+		-- nothing and could silently blank hierarchy detection if that invariant ever
+		-- slipped. #1569 T9.
+		FROM custom_categories cc
+		LEFT JOIN custom_categories gp ON gp.id = cc.parent_id
+		WHERE cc.id = $1
+	`
+	err := tx.QueryRow(ctx, query, *candidate.CustomCategoryID).Scan(
+		&candidate.CustomParentID,
+		&candidate.CustomParentPFCPrimary,
+		&candidate.CustomGrandparentPFCPrimary,
+	)
+	if err != nil {
+		return fmt.Errorf("re-resolve candidate hierarchy for custom category %s: %w", *candidate.CustomCategoryID, err)
+	}
+	return nil
+}
+
 // AddCategoryChecked implements BudgetRepository.AddCategoryChecked — see that method's doc
 // comment.
 func (r *budgetRepository) AddCategoryChecked(ctx context.Context, budgetID string, candidate *domain.BudgetCategory) (*domain.BudgetCategory, error) {
@@ -680,6 +725,18 @@ func (r *budgetRepository) AddCategoryChecked(ctx context.Context, budgetID stri
 	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op
 
 	if err := r.lockBudgetRowInTx(ctx, tx, budgetID); err != nil {
+		return nil, err
+	}
+
+	// Issue #1630 review fix (HIGH): re-resolve candidate's OWN custom-category hierarchy
+	// linkage HERE, under the just-acquired lock — not trust whatever budget_service.go's
+	// AddCategory populated on it before this call, outside any lock. A concurrent reparent
+	// (custom_category_service.go's reparentCategoryChecked) can commit between that pre-lock
+	// read and this lock's acquisition; without re-resolving, candidate's
+	// CustomParentID/CustomParentPFCPrimary/CustomGrandparentPFCPrimary describe the OLD
+	// parentage, and EscapedNestedChild below validates against a stale hierarchy instead of the
+	// live one this lock exists to guarantee.
+	if err := r.resolveCandidateCustomHierarchyInTx(ctx, tx, candidate); err != nil {
 		return nil, err
 	}
 
