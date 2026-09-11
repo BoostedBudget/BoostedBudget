@@ -117,9 +117,12 @@ make -C backend lint        # golangci-lint
 # integration tests" step also requires CACHE_REDIS_TEST_URL and REDIS_TEST_URL — leaving
 # either unset makes 30 tests t.Skip() silently (they do NOT fail), which hid a real
 # regression for two rounds. The complete local command, against this repo's standing
-# Docker containers (boostedbudget-db on 5434, boostedbudget-redis-cache on 6380,
+# Docker containers (boostedbudget-db on 5432, boostedbudget-redis-cache on 6380,
+                             # (⚠ said 5434 until #1631 verified it against a running stack:
+                             #  `docker ps` shows boostedbudget-db publishing 0.0.0.0:5432->5432.
+                             #  The redis ports, 6380 and 6379, were and remain correct.)
 # boostedbudget-redis-ratelimit on 6379):
-#   DATABASE_URL="postgres://devuser:devpass@localhost:5434/freshcheck?sslmode=disable" \
+#   DATABASE_URL="postgres://devuser:devpass@localhost:5432/freshcheck?sslmode=disable" \
 #   CACHE_REDIS_TEST_URL="redis://localhost:6380" \
 #   REDIS_TEST_URL="redis://localhost:6379" \
 #   ./scripts/summarize-go-test.sh go test -tags integration -p 1 -count=1 ./internal/...
