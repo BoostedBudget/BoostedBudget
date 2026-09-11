@@ -18,7 +18,12 @@ type CustomCategory struct {
 	ParentPFCPrimary        *string `json:"parent_pfc_primary,omitempty" db:"parent_pfc_primary" enum:"BANK_FEES,ENTERTAINMENT,FOOD_AND_DRINK,GENERAL_MERCHANDISE,GENERAL_SERVICES,GOVERNMENT_AND_NON_PROFIT,HOME_IMPROVEMENT,INCOME,LOAN_DISBURSEMENTS,LOAN_PAYMENTS,MEDICAL,OTHER,PERSONAL_CARE,RENT_AND_UTILITIES,TRANSFER_IN,TRANSFER_OUT,TRANSPORTATION,TRAVEL" doc:"The PFCv2 primary this custom category nests under. This is NOT a cosmetic label: budget roll-up counts the category's transactions under this primary, and analytics classifies them through it -- a category nested under TRANSFER_IN or TRANSFER_OUT makes its transactions TRANSFERS, so they are excluded from cash flow when include_transfers is false (Issue #1609). Leave unset for a category with no PFC parent."`
 	ParentPFCPrimaryDisplay *string `json:"parent_pfc_primary_display,omitempty" db:"-"` // populated by PopulatePFCDisplay
 	// ParentID nests this custom category under another CUSTOM primary (Issue #1203).
-	// Mutually exclusive with ParentPFCPrimary; 2 levels max (no grandchildren).
+	// Mutually exclusive with ParentPFCPrimary. The parent_id chain itself is capped at
+	// one hop (a custom-to-custom-to-custom chain is blocked by
+	// enforce_custom_category_two_levels), but a parent nested via ParentPFCPrimary may
+	// still have a custom child nested under it via ParentID, so a legal three-level chain
+	// exists overall: pfc root -> custom child (ParentPFCPrimary) -> custom grandchild
+	// (ParentID). See analytics_category_path.go (Issue #1630 / #1626).
 	ParentID   *string   `json:"parent_id,omitempty" db:"parent_id"`
 	ParentName *string   `json:"parent_name,omitempty" db:"-"` // display name of the custom parent, populated by the service
 	Icon       *string   `json:"icon,omitempty" db:"icon"`
