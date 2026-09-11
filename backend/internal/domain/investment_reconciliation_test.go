@@ -17,6 +17,27 @@ func TestClassifyPositionReconciliationMember_CleanMatchIsNeitherDriftNorSuppres
 	}
 }
 
+// TestClassifyPositionReconciliationMember_ExactlyAtToleranceIsNotADrift is the boundary-strictness
+// pin round 3's integration-test additions (0.0005 inside / 0.002 outside) could not reach: neither
+// value equals PositionReconciliationQuantityTolerance itself, so a regression from the intended
+// strict `delta > tolerance` to a non-strict `delta >= tolerance` would pass every existing test in
+// this file — and, per #1631 M8b round-4 review, the seeded integration row that also lands on this
+// input (holding 100.001 / buy 100) tests the SQL side's strictness via exact NUMERIC arithmetic but
+// NOT the Go side's, because scanning that NUMERIC value into a float64 introduces its own rounding
+// (100.001 - 100 comes back as 0.0009999999999976694 in float64, strictly less than tolerance for an
+// unrelated reason). This test is therefore the ONLY place in the tree that pins Go's `>` strictness
+// exactly: it passes the tolerance constant itself as delta, with no arithmetic in between, so there
+// is no floating-point rounding to accidentally save (or break) the assertion.
+func TestClassifyPositionReconciliationMember_ExactlyAtToleranceIsNotADrift(t *testing.T) {
+	isDrift, isSuppressed := ClassifyPositionReconciliationMember(PositionReconciliationQuantityTolerance, true)
+	if isDrift {
+		t.Fatal("a delta of EXACTLY the tolerance must not be a drift — the comparison is strict `>`, not `>=`")
+	}
+	if isSuppressed {
+		t.Fatal("a delta of exactly the tolerance is not a mismatch at all (see the isDrift check above), so it must not be suppressed either")
+	}
+}
+
 // TestClassifyPositionReconciliationMember_RealDriftWithOpeningBuyIsReported pins the "the ledger
 // saw this position open" case: a mismatch beyond tolerance, with at least one buy recorded, is
 // exactly the drift this diagnostic exists to surface.
