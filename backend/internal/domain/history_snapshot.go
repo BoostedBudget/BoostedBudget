@@ -43,7 +43,7 @@ type HoldingSnapshot struct {
 	InstitutionPrice *float64 `json:"institution_price,omitempty" db:"institution_price"`
 	// CurrencyCode is the currency the three figures above were reported in, copied from
 	// holdings.currency_code at capture time (#1631 M8a). NULL = unknown, which is the state of
-	// every row captured before migration 000197. Frozen with the rest of the row deliberately:
+	// every row captured before migration 000202. Frozen with the rest of the row deliberately:
 	// re-reading it from the live holding would let a historical value silently change units.
 	CurrencyCode *string `json:"currency_code,omitempty" db:"currency_code"`
 

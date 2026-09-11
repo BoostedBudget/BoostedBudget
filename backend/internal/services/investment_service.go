@@ -168,7 +168,7 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 		// cheaper than a fabricated one.
 		//
 		// An UNKNOWN currency on either side does not refuse — every snapshot written before
-		// migration 000197 has none, and refusing on those would blank the day change for the
+		// migration 000202 has none, and refusing on those would blank the day change for the
 		// whole existing user base.
 		// ⚠ THREE conditions, and none is implied by another (#1631 M8a fix round 2,
 		// I-1). CurrenciesConflict deliberately reads an UNKNOWN currency as no conflict, and a
@@ -231,7 +231,7 @@ func (s *investmentService) GetPortfolioHistory(ctx context.Context, userID stri
 	pts := make([]domain.PortfolioHistoryPoint, len(snaps))
 	// A series is unplottable as one unit for EITHER of two reasons, and the second is not
 	// reducible to the first: two days can disagree with each other, or one single day can itself
-	// have been a currency-blind sum. The second is only expressible because migration 000198
+	// have been a currency-blind sum. The second is only expressible because migration 000203
 	// split portfolio_snapshots.currency_code's overloaded NULL — before it, such a day looked
 	// identical to a day that simply never stated a currency.
 	codes := make([]string, 0, len(snaps))

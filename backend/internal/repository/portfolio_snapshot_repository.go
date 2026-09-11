@@ -141,7 +141,7 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 			-- the two are provably in different currencies.
 			--
 			-- Unknown does not vote. COUNT(DISTINCT ...) ignores NULLs, so a portfolio of rows
-			-- that state no currency (every row written before migration 000197) resolves to
+			-- that state no currency (every row written before migration 000202) resolves to
 			-- NULL-because-unknown rather than being forced to pick one, and a single stated
 			-- currency alongside any number of unstated ones resolves to that currency.
 			CASE
@@ -149,10 +149,10 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 				THEN MAX(UPPER(TRIM(h.currency_code)))
 				ELSE NULL
 			END,
-			-- is_mixed_currency (#1631 M8a fix round 2 / migration 000198): the half of the
+			-- is_mixed_currency (#1631 M8a fix round 2 / migration 000203): the half of the
 			-- question the NULL above cannot answer. > 1 rather than <> 1 on purpose — zero
 			-- distinct currencies means nobody stated one, which is UNKNOWN and must stay FALSE,
-			-- or every pre-000197 portfolio would be declared mixed and lose its day change.
+			-- or every pre-000202 portfolio would be declared mixed and lose its day change.
 			COUNT(DISTINCT UPPER(TRIM(h.currency_code))) > 1,
 			NOW(),
 			NOW()

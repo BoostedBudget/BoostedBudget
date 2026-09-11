@@ -172,9 +172,9 @@ func (r *securityRepository) UpsertBatch(ctx context.Context, securities []domai
 // UNIQUE constraint (`unique_plaid_security_id`, migration 000051), so within one
 // institution_security_id group every plaid_security_id value is already distinct by
 // construction; COUNT(DISTINCT ...) and COUNT(*) are identical here, and the plain form is what
-// lets a covering index on (institution_security_id) alone — see migration 000199 — satisfy this
+// lets a covering index on (institution_security_id) alone — see migration 000204 — satisfy this
 // query with an index-only scan. COUNT(DISTINCT ...) would force a HashAggregate that also has to
-// materialize plaid_security_id per group, defeating the index migration 000199 exists for.
+// materialize plaid_security_id per group, defeating the index migration 000204 exists for.
 const forkedIdentityGroupsSQL = `
 	SELECT institution_security_id
 	FROM securities

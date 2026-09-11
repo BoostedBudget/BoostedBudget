@@ -10,7 +10,7 @@ package domain
 // investment_transactions.security_id — the exact shape observed in production for
 // AGG/ISHARES.CORE.U.S.AGGREGATE and IEFA/IEMG/VCIT.
 //
-// institution_security_id (migration 000195) is "the identifier given to the security by the
+// institution_security_id (migration 000200) is "the identifier given to the security by the
 // institution" — independent of Plaid's own dedup key, so it survives a plaid_security_id fork
 // and gives detection something stable to join on. CUSIP/ISIN cannot do this job: Plaid nulls
 // both for every customer without a separately-licensed CUSIP feed (see domain.Security's own

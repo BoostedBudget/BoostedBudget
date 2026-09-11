@@ -27,6 +27,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"errors"
 	"github.com/google/uuid"
@@ -96,6 +97,15 @@ func TestHoldingReplace_RawDeleteInsertRacesOnTheUniqueConstraint_Integration(t 
 // webhook_processing uniqueness is ByArgs over args that include webhook_id, so two HOLDINGS
 // webhooks for one item are two jobs that can run at once. Every one of these replaces carries a
 // clean, single-security payload; none may fail.
+//
+// ⚠ #1639: this test used to start six goroutines and assert no error, which proved NOTHING — six
+// short transactions interleave only by luck, and the test passed just as happily with the
+// advisory lock deleted. It now parks every replace on a barrier inside ReplaceForAccount, after
+// BEGIN and before the lock (replaceForAccountTxOpenedHook), and releases them only once all six
+// have arrived. The overlap is then a fact rather than a hope: with the lock they queue and all
+// succeed; with the lock stubbed out they race their DELETEs and collide on
+// unique_account_security exactly as production did. Verified by removing the lock and watching
+// this go red.
 func TestHoldingReplace_ConcurrentReplacesOfOneAccountAllSucceed_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -103,9 +113,19 @@ func TestHoldingReplace_ConcurrentReplacesOfOneAccountAllSucceed_Integration(t *
 	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, pool, "inv-dlq-race-fix")
 	t.Cleanup(func() { cleanupInvestmentFixture(context.Background(), t, pool, userID, accountID) })
 
-	repo := NewHoldingRepository(pool)
-
 	const workers, rounds = 6, 4
+
+	// The concrete type, because the barrier hook is not part of the interface — it is a test-only
+	// field on the implementation.
+	repo, ok := NewHoldingRepository(pool).(*holdingRepository)
+	require.True(t, ok, "the barrier hook lives on the concrete holdingRepository")
+
+	// Every round of every worker meets here, so all six transactions are open and past BEGIN
+	// before any of them reaches the DELETE.
+	barrier := newCyclicBarrier(workers)
+	repo.replaceForAccountTxOpenedHook = func() { barrier.wait(t) }
+	t.Cleanup(func() { repo.replaceForAccountTxOpenedHook = nil })
+
 	errs := make(chan error, workers*rounds)
 	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {
@@ -138,6 +158,52 @@ func TestHoldingReplace_ConcurrentReplacesOfOneAccountAllSucceed_Integration(t *
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT count(*) FROM holdings WHERE account_id = $1`, accountID).Scan(&count))
 	assert.Equal(t, 1, count, "the last writer wins; the replace must not accumulate rows")
+}
+
+// cyclicBarrier releases all `parties` waiters at once, then rearms for the next round. The
+// standard library has no barrier (sync.WaitGroup is one-shot and cannot be reused per round), and
+// a barrier is the only construct that turns "these transactions might overlap" into "these
+// transactions DO overlap", which is the whole difference between a concurrency test that can fail
+// and one that cannot.
+type cyclicBarrier struct {
+	mu      sync.Mutex
+	parties int
+	waiting int
+	release chan struct{}
+}
+
+func newCyclicBarrier(parties int) *cyclicBarrier {
+	return &cyclicBarrier{parties: parties, release: make(chan struct{})}
+}
+
+// wait blocks until `parties` goroutines are waiting, then releases them all.
+//
+// It gives up after barrierTimeout instead of blocking forever: a waiter that never arrives (a
+// replace that failed before reaching the hook) would otherwise hang the whole test binary with
+// several transactions held open, which is a far worse failure than a reported timeout. Proceeding
+// on timeout can only weaken the overlap this test asserts, never fake it — so the assertions
+// downstream stay honest, and the t.Error says the barrier did not hold.
+func (b *cyclicBarrier) wait(t *testing.T) {
+	const barrierTimeout = 30 * time.Second
+
+	b.mu.Lock()
+	round := b.release
+	b.waiting++
+	if b.waiting == b.parties {
+		b.waiting = 0
+		b.release = make(chan struct{})
+		b.mu.Unlock()
+		close(round) // every waiter in this round, including this one, proceeds together
+		return
+	}
+	b.mu.Unlock()
+
+	select {
+	case <-round:
+	case <-time.After(barrierTimeout):
+		t.Errorf("cyclic barrier timed out after %s waiting for %d concurrent replaces to arrive; "+
+			"the overlap this test depends on did not happen", barrierTimeout, b.parties)
+	}
 }
 
 // cleanupInvestmentFixture removes the committed fixture. These two tests commit (a race needs

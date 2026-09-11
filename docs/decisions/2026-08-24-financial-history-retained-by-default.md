@@ -459,7 +459,7 @@ Three things follow, and all three are requirements rather than aspirations:
 
 - **The obligation to backfill must be durable.** Clearing the flag records
   `user_accounts.investment_backfill_requested_at` in the **same UPDATE statement** that clears the
-  flag (migration `000196`), so the two cannot come apart. A best-effort enqueue would not do: the
+  flag (migration `000201`), so the two cannot come apart. A best-effort enqueue would not do: the
   transition is `true → false`, and a retry after a lost enqueue is `false → false`, which no
   transition-triggered mechanism can ever observe again. The sync widens its window to the full
   lookback while the marker stands and clears it only after a run that stored everything Plaid

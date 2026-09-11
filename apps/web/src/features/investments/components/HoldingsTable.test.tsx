@@ -1136,7 +1136,7 @@ describe('HoldingsTable currency (#1631 CX1)', () => {
   })
 
   // The sibling: a position stating no currency keeps today's dollar rendering. Unknown is not a
-  // conflict, and every row written before migration 000197 is in that state.
+  // conflict, and every row written before migration 000202 is in that state.
   it('keeps the dollar rendering for a position that states no currency', () => {
     mockUseGetHoldings.mockReturnValue({
       data: { holdings: [makeHolding({ id: 'h-plain', institution_value: 2500 })], count: 1 },

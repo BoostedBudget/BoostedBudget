@@ -200,7 +200,7 @@ describe('InvestmentTransactionsTable currency (#1631 CX1)', () => {
   })
 
   // The sibling: a row that states no currency keeps today's dollar rendering, because unknown is
-  // not a conflict and every row written before migration 000197 is in that state.
+  // not a conflict and every row written before migration 000202 is in that state.
   it('keeps the dollar rendering for a row that states no currency', async () => {
     mockUseInfiniteInvestmentTransactions.mockReturnValue(
       loadedResult({ transactions: [mockTxn] }),

@@ -46,6 +46,23 @@ type HoldingRepository interface {
 
 type holdingRepository struct {
 	db DB
+
+	// replaceForAccountTxOpenedHook is a test-only synchronization seam, always nil in production
+	// (same technique and rationale as householdService.acceptInviteAfterOwnerCheckHook). It fires
+	// inside ReplaceForAccount immediately after BEGIN and BEFORE the advisory lock is taken.
+	//
+	// It exists because the regression test for that lock cannot otherwise prove anything: six
+	// goroutines hammering ReplaceForAccount overlap only by luck, so the test passed just as
+	// happily with the lock deleted (#1639). Parking every transaction at this exact point until
+	// all of them have arrived makes the overlap a fact — after release they contend for the lock
+	// and queue, and with the lock removed they race their DELETEs and collide on
+	// unique_account_security. See
+	// TestHoldingReplace_ConcurrentReplacesOfOneAccountAllSucceed_Integration.
+	//
+	// Deliberately BEFORE the lock, not after: "all six inside the critical section at once" is
+	// precisely what the lock exists to prevent, so a barrier there would deadlock against the
+	// behaviour under test.
+	replaceForAccountTxOpenedHook func()
 }
 
 // NewHoldingRepository creates a new HoldingRepository instance.
@@ -190,6 +207,14 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 		return time.Time{}, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Test-only synchronization seam (always nil in production) — see the field's doc comment.
+	// Placed after BEGIN and before the lock so a test can hold several replaces of one account
+	// open here simultaneously, which is the only way to make the race this lock prevents
+	// deterministic rather than incidental.
+	if r.replaceForAccountTxOpenedHook != nil {
+		r.replaceForAccountTxOpenedHook()
+	}
 
 	// Serialize every replace of THIS account against every other one, for the whole
 	// DELETE+INSERT critical section (the lock auto-releases at transaction end).
