@@ -84,9 +84,13 @@ type CustomCategoryService interface {
 // #1630 Task B1). Kept narrow, mirroring BudgetSyncRepository in budget_sync_service.go, so this
 // package's own CustomCategoryService interface never has to import the wider budget domain.
 type BudgetCategoryRepository interface {
-	// GetActiveByUserID returns the user's active budgets, the only ones whose totals a stale
-	// reparent can visibly affect (mirrors BudgetSyncRepository.GetActiveByUserID).
-	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.Budget, error)
+	// GetByUserID returns every non-deleted budget for the user, active AND inactive (Issue #1630
+	// review fix). An inactive budget still holds its own budget_categories rows and can be
+	// reactivated later by a plain is_active update with no hierarchy validation of its own, so
+	// the reparent guard must see it too — GetActiveByUserID's active-only universe left a
+	// reparent-then-reactivate path that could commit an escaping/double-counted pair with no
+	// guard ever inspecting it.
+	GetByUserID(ctx context.Context, userID string) ([]*domain.Budget, error)
 	// GetCategoriesByBudgetID returns a budget's LIVE categories, with CustomParentID /
 	// CustomParentPFCPrimary populated from the CURRENT (pre-write) custom_categories row —
 	// see checkReparentDoesNotEscape for why that must be overlaid with the PROPOSED parent
@@ -431,7 +435,26 @@ func (s *customCategoryService) reparentCategoryChecked(ctx context.Context, use
 		subtree[c.ID] = true
 	}
 
-	budgets, err := s.budgetCategoryRepo.GetActiveByUserID(ctx, userID)
+	// Issue #1630 review fix (HIGH): the PROPOSED grandparent PFC primary — mirrors
+	// budget_repository.go's "gp" join hop. Only relevant when category is nesting under another
+	// CUSTOM category (ParentID); a direct PFC-primary parent (ParentPFCPrimary) has no further
+	// custom grandparent to report, same as CustomGrandparentPFCPrimary's own doc comment.
+	var proposedGrandparentPFCPrimary *string
+	if category.ParentID != nil {
+		newParent, err := s.categoryRepo.GetByID(ctx, *category.ParentID)
+		if err != nil {
+			return err
+		}
+		proposedGrandparentPFCPrimary = newParent.ParentPFCPrimary
+	}
+
+	// Issue #1630 review fix (HIGH): include INACTIVE budgets too, not just active ones. An
+	// inactive budget still holds its own rows and can be reactivated later by a plain is_active
+	// update with no hierarchy validation of its own — reparenting under a budgeted-but-inactive
+	// PFC root, then reactivating, would otherwise yield exactly the escaping/double-counted pair
+	// this guard exists to prevent. GetByUserID returns every non-deleted budget regardless of
+	// is_active (mirrors budgetRepository.GetByUserID); only deleted_at IS NULL is excluded.
+	budgets, err := s.budgetCategoryRepo.GetByUserID(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -463,6 +486,12 @@ func (s *customCategoryService) reparentCategoryChecked(ctx context.Context, use
 				// above) — GetCategoriesByBudgetID's join still reflects the pre-write parent.
 				candidate.CustomParentID = category.ParentID
 				candidate.CustomParentPFCPrimary = category.ParentPFCPrimary
+				// Issue #1630 review fix (HIGH): also overlay the PROPOSED grandparent — without
+				// this, a reparent onto an unbudgeted intermediate custom parent that itself
+				// nests under a budgeted PFC root leaves CustomGrandparentPFCPrimary stale/nil,
+				// and the escaping-grandchild shape sails past the guard exactly as it did on
+				// AddCategory before that fix.
+				candidate.CustomGrandparentPFCPrimary = proposedGrandparentPFCPrimary
 			}
 			// A budgeted CHILD of the reparented category (candidate's CustomCategoryID != this
 			// category's ID, but is in `subtree`) keeps pointing at the same parent — its own
