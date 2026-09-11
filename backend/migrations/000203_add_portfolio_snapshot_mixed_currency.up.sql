@@ -1,8 +1,8 @@
 -- #1631 M8a fix round 2 (I-1): let a portfolio snapshot say it was MIXED, not merely unlabelled.
 --
--- Migration 000197 gave portfolio_snapshots a currency_code whose NULL was deliberately overloaded:
+-- Migration 000202 gave portfolio_snapshots a currency_code whose NULL was deliberately overloaded:
 -- it meant "the contributing holdings disagreed, so these totals are a currency-blind sum" AND it
--- meant "no contributing holding stated a currency" (every row written before 000197). The comment
+-- meant "no contributing holding stated a currency" (every row written before 000202). The comment
 -- on that column told readers to treat NULL as "do not assume", and the report justified the
 -- overload on the grounds that no reader needed the two apart.
 --
@@ -19,7 +19,7 @@
 -- emitted by the one surface the design gave the STRICTER treatment to. This column splits the
 -- overloaded NULL so the guard can tell the two cases apart.
 --
--- NOT NULL DEFAULT FALSE, unlike 000197's nullable columns, and the asymmetry is deliberate. This
+-- NOT NULL DEFAULT FALSE, unlike 000202's nullable columns, and the asymmetry is deliberate. This
 -- is a three-valued question collapsed onto a pair of columns:
 --
 --   currency_code   is_mixed_currency   meaning
