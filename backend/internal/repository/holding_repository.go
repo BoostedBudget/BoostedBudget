@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
@@ -118,6 +119,45 @@ func assertRowsTargetAccount(caller, accountID string, rowAccounts []string) err
 	return nil
 }
 
+// annotateAccountSecurityCollision turns a bare unique_account_security violation into an error
+// that names the collision. Any other error is returned untouched.
+//
+// The production DLQ entry this exists for (2026-09-11) burned all five attempts carrying nothing
+// but the constraint name, which cannot distinguish the two causes that produce it:
+//
+//	a duplicated payload — Plaid returned the same security twice for the account, or two
+//	plaid_security_ids collapsed onto one securities row — in which case the batch handed to this
+//	method contains the security twice and the answer is visible WITHOUT database access; or
+//
+//	a concurrent replace of the same account, in which case the batch is clean and the duplicate
+//	came from a row this transaction's DELETE could not see.
+//
+// So the message states which, along with the account, the security and the batch size. Whether
+// the batch is self-consistent is computed in memory from the batch itself: the transaction is
+// aborted by the time this runs, so no diagnostic query is possible here.
+func annotateAccountSecurityCollision(err error, accountID, securityID string, index int, holdings []domain.Holding) error {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" || pgErr.ConstraintName != "unique_account_security" {
+		return err
+	}
+
+	occurrences := 0
+	for i := range holdings {
+		if holdings[i].SecurityID == securityID {
+			occurrences++
+		}
+	}
+
+	provenance := "the batch is self-consistent, so the duplicate row was invisible to this transaction's DELETE — i.e. a concurrent replace of this account"
+	if occurrences > 1 {
+		provenance = fmt.Sprintf("the batch itself carries that security twice (%d occurrences), so the duplicate came from the payload, not from a concurrent replace", occurrences)
+	}
+
+	return fmt.Errorf(
+		"holdingRepository.ReplaceForAccount: account %s security %s collided on unique_account_security at element %d of %d holdings: %s: %w",
+		accountID, securityID, index, len(holdings), provenance, err)
+}
+
 // ReplaceForAccount atomically replaces all holdings for an account.
 // Wraps DELETE + INSERT in a single transaction.
 func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, userID string, holdings []domain.Holding) (time.Time, error) {
@@ -150,6 +190,31 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 		return time.Time{}, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Serialize every replace of THIS account against every other one, for the whole
+	// DELETE+INSERT critical section (the lock auto-releases at transaction end).
+	//
+	// Production DLQ entry 2026-09-11 (webhook_processing job 9): five identical
+	// `unique_account_security` violations. unique_account_security is UNIQUE (account_id,
+	// security_id), and under READ COMMITTED two concurrent replaces of one account do NOT
+	// serialize on their own — each transaction's DELETE cannot see the other's uncommitted
+	// rows, so the second INSERT of a given security blocks on the first's index tuple and then
+	// raises 23505 as soon as the first commits. The rows it was supposed to have removed were
+	// never visible to its DELETE.
+	//
+	// Nothing upstream closes that window, contrary to the claim in
+	// queue/jobs/investment_holdings_sync.go ("worker-vs-worker serialization already comes from
+	// River job uniqueness"): webhook_processing's uniqueness is ByArgs and its args carry
+	// webhook_id, so two HOLDINGS webhooks for one item are two distinct jobs that may run at
+	// once, and the webhook path takes no linked-item lock at all. The lock therefore belongs
+	// HERE, with the statements it protects, not in one of the several callers.
+	//
+	// hashtextextended matches pg_advisory_xact_lock(bigint) — same construction as
+	// custom_category_repository.go's lockHierarchySQL.
+	const lockAccountSQL = `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`
+	if _, err := tx.Exec(ctx, lockAccountSQL, accountID); err != nil {
+		return time.Time{}, fmt.Errorf("holdingRepository.ReplaceForAccount: failed to lock account %s: %w", accountID, err)
+	}
 
 	// Delete all existing holdings for this account
 	deleteQuery := `DELETE FROM holdings WHERE account_id = $1 AND user_id = $2`
@@ -189,7 +254,7 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 			h.CreatedAt,
 			h.UpdatedAt,
 		); err != nil {
-			return time.Time{}, err
+			return time.Time{}, annotateAccountSecurityCollision(err, accountID, h.SecurityID, i, holdings)
 		}
 	}
 

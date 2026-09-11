@@ -242,6 +242,68 @@ func (s *investmentSyncService) ProcessWebhook(ctx context.Context, webhook *dom
 	return nil
 }
 
+// mergeHoldingInto folds dup into keep, which already holds the same (account_id, security_id).
+//
+// Which figures add and which do not is the whole decision here, and it follows from what each
+// column MEANS in this codebase rather than from convenience:
+//
+//	quantity, institution_value, cost_basis — TOTALS for the position. cost_basis in particular is
+//	the total amount paid, NOT a per-share figure, so two lots of one security add up on all three.
+//	Taking one lot and discarding the other would understate the position; the institution
+//	reported both.
+//
+//	institution_price — a PER-SHARE quote. Summing it would double a share price, so the first
+//	value is kept. A genuine disagreement between two lots of the same security is a provider
+//	inconsistency worth seeing, so it is logged rather than quietly averaged.
+//
+//	currency_code — the unit of the three figures above. Summing across two DIFFERENT currencies
+//	would produce a number that means nothing, so the mismatch is logged; the amounts are still
+//	summed because dropping a lot loses more than it saves, and mixed currency is already
+//	surfaced to the user elsewhere (#1631 M8a).
+//
+// A nil on either side is absent, not zero: nil + x is x and nil + nil stays nil, so a security
+// whose cost basis Plaid does not report keeps reporting nothing instead of claiming 0.
+func mergeHoldingInto(keep *domain.Holding, dup domain.Holding, logger *slog.Logger, accountID, plaidSecurityID string) {
+	keep.Quantity += dup.Quantity
+	keep.InstitutionValue = addOptionalFloats(keep.InstitutionValue, dup.InstitutionValue)
+	keep.CostBasis = addOptionalFloats(keep.CostBasis, dup.CostBasis)
+
+	if keep.InstitutionPrice == nil {
+		keep.InstitutionPrice = dup.InstitutionPrice
+	} else if dup.InstitutionPrice != nil && *dup.InstitutionPrice != *keep.InstitutionPrice && logger != nil {
+		logger.Warn("duplicate holdings of one security disagree on institution_price; keeping the first",
+			"account_id", accountID,
+			"plaid_security_id", plaidSecurityID,
+			"kept_institution_price", *keep.InstitutionPrice,
+			"discarded_institution_price", *dup.InstitutionPrice,
+		)
+	}
+
+	if keep.CurrencyCode == nil {
+		keep.CurrencyCode = dup.CurrencyCode
+	} else if dup.CurrencyCode != nil && *dup.CurrencyCode != *keep.CurrencyCode && logger != nil {
+		logger.Warn("duplicate holdings of one security disagree on currency; summing anyway, keeping the first currency",
+			"account_id", accountID,
+			"plaid_security_id", plaidSecurityID,
+			"kept_currency_code", *keep.CurrencyCode,
+			"discarded_currency_code", *dup.CurrencyCode,
+		)
+	}
+}
+
+// addOptionalFloats sums two optional amounts treating nil as ABSENT rather than zero: nil+nil is
+// nil, so a figure the provider never reported is not invented as 0.
+func addOptionalFloats(a, b *float64) *float64 {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+	sum := *a + *b
+	return &sum
+}
+
 // SyncHoldings fetches the complete holdings snapshot from Plaid and atomically
 // replaces all holdings per account. Since Plaid returns a full snapshot (no delta),
 // we delete existing holdings and insert fresh ones inside a single DB transaction.
@@ -358,6 +420,22 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 		}
 
 		domainHoldings := make([]domain.Holding, 0, len(plaidHoldings))
+		// Production DLQ 2026-09-11 (webhook_processing job 9): holdings is
+		// UNIQUE (account_id, security_id), so a payload carrying one security twice for one
+		// account cannot be written AT ALL — every attempt fails identically until the job dead-
+		// letters, and the account's holdings stop syncing entirely. Two payloads produce that:
+		// Plaid listing the security twice for the account (separate lots at the institution), and
+		// two distinct plaid_security_ids resolving to ONE securities row (the forked-identity
+		// problem #1631's consolidation columns exist for). Both arrive here as two elements with
+		// the same internal SecurityID, so both are merged on that key — and the log names every
+		// plaid_security_id involved, so the two remain distinguishable after the fact instead of
+		// being flattened into "some duplicate".
+		//
+		// Merging is NOT the fix for a concurrent sync racing this one — that one is fixed where it
+		// lives, by the per-account advisory lock in holdingRepository.ReplaceForAccount. This
+		// merge only makes a self-inconsistent PAYLOAD writable, and says so out loud when it does.
+		indexBySecurity := make(map[string]int, len(plaidHoldings))
+		plaidIDsBySecurity := make(map[string][]string, len(plaidHoldings))
 		skippedAny := false
 		for _, ph := range plaidHoldings {
 			internalSecurityID, ok := securityMap[ph.SecurityId]
@@ -394,6 +472,23 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 				h.CostBasis = &val
 			}
 
+			plaidIDsBySecurity[internalSecurityID] = append(plaidIDsBySecurity[internalSecurityID], ph.SecurityId)
+
+			if existing, seen := indexBySecurity[internalSecurityID]; seen {
+				mergeHoldingInto(&domainHoldings[existing], h, s.logger, internalAccountID, ph.SecurityId)
+				s.logger.Warn("merged duplicate holdings for one security on one account",
+					"account_id", internalAccountID,
+					"plaid_account_id", plaidAccountID,
+					"security_id", internalSecurityID,
+					"plaid_security_id", ph.SecurityId,
+					"plaid_security_ids_for_this_security", plaidIDsBySecurity[internalSecurityID],
+					"plaid_holdings_in_payload", len(plaidHoldings),
+					"item_id", linkedItem.ID,
+				)
+				continue
+			}
+
+			indexBySecurity[internalSecurityID] = len(domainHoldings)
 			domainHoldings = append(domainHoldings, h)
 		}
 
@@ -404,6 +499,20 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 
 		capturedDay, err := s.holdingRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, domainHoldings)
 		if err != nil {
+			// Production DLQ 2026-09-11: five identical attempts dead-lettered carrying only the
+			// constraint name, with nothing in the logs about the payload behind them. The two
+			// counts are what make a repeat diagnosable without a production query — a payload
+			// count above the row count means duplicates were merged, and equal counts mean the
+			// collision came from rows already in the table.
+			s.logger.Error("holdings replace failed",
+				"item_id", linkedItem.ID,
+				"account_id", internalAccountID,
+				"plaid_account_id", plaidAccountID,
+				"plaid_holdings_in_payload", len(plaidHoldings),
+				"holdings_rows_written", len(domainHoldings),
+				"distinct_securities", len(indexBySecurity),
+				"error", err,
+			)
 			return result, fmt.Errorf("failed to replace holdings for account %s: %w", internalAccountID, err)
 		}
 		// #1569 T9.1 item C: the aggregate below must be filed under the day the ROWS were filed
