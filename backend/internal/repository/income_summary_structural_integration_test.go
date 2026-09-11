@@ -131,6 +131,66 @@ func TestIncomeSummary_StructuralDividend_IsCounted_Integration(t *testing.T) {
 		"bill payments and paycheques on a cash-management account are not investment income")
 }
 
+// TestIncomeSummary_StructuralReinvestmentPair_IsExactlyOneHundredDollars_Integration is H1 (#1631
+// requirements batch H): TestIncomeSummary_StructuralDividend_IsCounted_Integration above asserts
+// $125.00 — the reinvestment pair PLUS a separate $25 literal dividend row — which does not ISOLATE
+// the pair. $125 is also what several WRONG combinations of those three rows would produce (e.g.
+// double-counting the $100 pair as $200 minus a $75 sign error), so a combined total cannot rule
+// out the two arithmetic traps the pair itself is named for.
+//
+// This test seeds ONLY the reinvestment pair — a -$100 deposit credit and its +$100 reinvest
+// withdrawal debit, both against the same real security — and asserts TotalIncome is exactly
+// $100.00: not $0.00 (both legs counted under the pre-#1631 negation, cancelling out) and not
+// $200.00 (both legs counted with corrected signs, double-counting one economic dollar as two).
+func TestIncomeSummary_StructuralReinvestmentPair_IsExactlyOneHundredDollars_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "inv-1631-h4-isolated")
+
+	qty := func(v float64) *float64 { return &v }
+	seed := func(label, typ, subtype string, amount float64, quantity *float64) {
+		id := uuid.New()
+		_, e := tx.Exec(ctx, `
+			INSERT INTO investment_transactions
+				(id, user_id, account_id, security_id, plaid_investment_transaction_id,
+				 type, subtype, name, amount, quantity, date)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, '2026-03-15')
+		`, id, userID, accountID, secID, label+"-"+id.String(), typ, subtype, label, amount, quantity)
+		require.NoError(t, e, "seed %s", label)
+	}
+
+	// The dividend leg: money arrived (credit), no shares delivered yet.
+	seed("isolated structural dividend credit", "cash", "deposit", -100.00, qty(0))
+	// The paired purchase leg: cash debited, shares delivered — the SAME economic dollar spent on
+	// shares, and must be excluded from income as the REINVEST it is.
+	seed("isolated reinvestment purchase leg", "cash", "withdrawal", 100.00, qty(2.5))
+
+	repo := NewInvestmentAnalyticsRepository(tx)
+	start := mustParseDate("2026-03-01")
+	end := mustParseDate("2026-03-31")
+
+	summary, err := repo.IncomeSummary(ctx, userID.String(), start, end)
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+
+	byType := map[string]float64{}
+	for _, bt := range summary.ByType {
+		byType[bt.IncomeType] = bt.TotalAmount
+	}
+
+	assert.InDelta(t, 100.00, summary.TotalIncome, 0.001,
+		"the reinvestment pair, ISOLATED, must be exactly $100 of income — not $0 (both legs "+
+			"cancelling under the current negation) and not $200 (both legs counted with corrected "+
+			"signs). Got by-type: %v", byType)
+	assert.InDelta(t, 100.00, byType["dividend"], 0.001,
+		"the credit leg alone is the $100 of dividend income")
+}
+
 // TestIncomeSummary_CapitalGainDistribution_IsIncome_Integration covers the subtypes #1631 found
 // missing from every set: a capital-gain distribution is income in exactly the way a dividend is,
 // yet `long-term capital gain` matched nothing and fell through to "cash".
