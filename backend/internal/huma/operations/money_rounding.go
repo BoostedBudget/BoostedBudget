@@ -238,3 +238,24 @@ func roundSavingsProgressSummary(s *domain.SavingsProgressSummary) {
 		s.Goals[i].LinkedBalance = money.ToCentsPtr(s.Goals[i].LinkedBalance)
 	}
 }
+
+// roundActivityItems folds the unified activity feed's currency-denominated fields (#1631 Gap A2).
+//
+// ⚠ Quantity and Price are ABSENT from this function on purpose. investment_transactions.quantity
+// and .price are DECIMAL(18,8) — the same columns roundInvestmentTransactions above leaves alone —
+// and a fractional-share or crypto position needs those digits: folding 0.00123456 to 0.00
+// destroys the user's position rather than tidying a binary tail. The rounding guard asserts they
+// come back BIT-IDENTICAL, so adding them here fails rather than passes.
+//
+// ⚠ The embedded *domain.Account is also left alone. Its balance fields belong to the accounts
+// surface and its own projection rules (a terminal account presents NULL, not zero); rounding them
+// from the transactions edge would put that decision in the wrong place.
+func roundActivityItems(items []*domain.ActivityItem) {
+	for _, it := range items {
+		if it == nil {
+			continue
+		}
+		it.Amount = money.ToCents(it.Amount)
+		it.InvestmentFees = money.ToCentsPtr(it.InvestmentFees)
+	}
+}

@@ -41,6 +41,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/money"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -515,6 +516,63 @@ func moneyRoundingSurfaces() []moneyRoundingSurface {
 				"Goals[].AccountPercentage": exactAsProduced,
 			},
 		},
+		// --------------------------------------------------------------------
+		// GET /api/v1/transactions  (transactions.go) — #1631 Gap A2
+		//
+		// ⚠ NOT an investment endpoint, and that is exactly why it was the hole. The unified
+		// activity feed's item type, domain.ActivityItem, carries the investment money fields
+		// alongside the banking ones, so getTransactions emits per-unit prices and fees over the
+		// same DECIMAL(18,8) columns the investment surfaces above are classified for — while
+		// sitting in a handler nobody thought of as investment code. The guard is exhaustive over
+		// the surfaces in THIS table and nothing else, so an unlisted surface is simply outside
+		// the boundary; that is the gap this entry closes.
+		//
+		// ⚠ Account stays nil, deliberately. ActivityItem embeds *domain.Account, whose balance
+		// fields belong to the accounts surface and its own projection rules
+		// (accountBalanceProjection — a terminal account presents NULL, not zero). The walker does
+		// not allocate a nil non-float pointer, so those fields are not reachable here and are not
+		// classified here. Classifying them from this table would put the account projection's
+		// verdict in the transactions feed's entry, where nobody maintaining accounts would look.
+		// --------------------------------------------------------------------
+		{
+			name: "getTransactions",
+			invoke: func(t *testing.T, fill func(any)) any {
+				item := &domain.ActivityItem{Source: domain.FeedSourceInvestment, ID: "inv-1"}
+				resp := &services.TransactionListResponse{
+					Transactions: []*domain.ActivityItem{item},
+					Limit:        50,
+				}
+				fill(item)
+				fill(resp)
+				h := NewTransactionHandler(&mockTransactionService{listResponse: resp})
+				out, err := h.GetTransactions(context.Background(), &GetTransactionsInput{
+					AuthenticatedInput:    inputs.AuthenticatedInput{UserID: "u"},
+					CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+				})
+				require.NoError(t, err)
+				return out.Body
+			},
+			classification: map[string]moneyFieldVerdict{
+				// The whole-set total (#1626). Currency-denominated and SIGNED, summed in
+				// Postgres' NUMERIC over the filtered set, so it carries exactly the binary tail
+				// the ADR describes.
+				"TotalAmount": roundedTo2dp,
+				// The row amount, on BOTH arms of the UNION: transactions.amount and
+				// investment_transactions.amount are both currency figures.
+				"Transactions[].Amount": roundedTo2dp,
+				// investment_transactions.fees — a currency-denominated charge, not a per-unit
+				// figure. Migration 000051 types it DECIMAL(12,2); it has no sub-cent digits to
+				// destroy, and the investment-transactions surface above already rounds its twin.
+				"Transactions[].InvestmentFees": roundedTo2dp,
+				// ⚠ investment_transactions.quantity and .price are DECIMAL(18,8) (migration
+				// 000051) — the SAME columns getInvestmentTransactions holds exact above, reached
+				// through a different response type. A fractional-share or crypto quantity, and a
+				// per-unit price, need those digits: folding 0.00123456 BTC to 0.00 destroys the
+				// position rather than tidying it.
+				"Transactions[].InvestmentQuantity": exactAsProduced,
+				"Transactions[].InvestmentPrice":    exactAsProduced,
+			},
+		},
 	}
 }
 
@@ -529,10 +587,11 @@ func TestEveryMoneyFieldOnAnInvestmentResponseIsRoundedAtTheEdge(t *testing.T) {
 		"precondition: the fold must map the sentinel onto the expected value")
 
 	surfaces := moneyRoundingSurfaces()
-	require.Len(t, surfaces, 10,
-		"the nine investment/holdings-history operations plus the savings progress summary the "+
-			"ADR's roundToCents reconciliation moved up. Adding a money-bearing response means "+
-			"adding it here.")
+	require.Len(t, surfaces, 11,
+		"the nine investment/holdings-history operations, the savings progress summary the ADR's "+
+			"roundToCents reconciliation moved up, and the unified activity feed — whose "+
+			"ActivityItem carries the investment money fields into a non-investment handler "+
+			"(#1631 Gap A2). Adding a money-bearing response means adding it here.")
 
 	for _, s := range surfaces {
 		t.Run(s.name, func(t *testing.T) {
