@@ -44,27 +44,46 @@ func TestIncomeSummary_StructuralDividend_IsCounted_Integration(t *testing.T) {
 	`, cashSecID, "inc-sec-cash-"+cashSecID.String())
 	require.NoError(t, err)
 
-	seed := func(label, typ, subtype string, security uuid.UUID, amount float64) {
+	// ⚠ QUANTITY IS NOT DECORATION ON A STRUCTURAL ROW (#1631 CX3). The structural rule has no
+	// subtype literal to key on, so the amount sign and the SHARE COUNT are the only corroboration
+	// it has -- and an absent quantity is deliberately not evidence of a zero one. This seeder
+	// omitted the column, leaving it NULL, so every "structural" row below actually exercised the
+	// plain Cash branch: the test passed for the wrong reason before CX3, and went red the moment
+	// the rule started demanding the evidence it is named for.
+	//
+	// Production, measured: cash/deposit against a real security is amount NEGATIVE with
+	// quantity == 0, cash/withdrawal is amount POSITIVE with quantity > 0, and a NULL quantity
+	// does not occur in any bucket. These fixtures carry that shape.
+	//
+	// quantity stays a pointer so a row can seed a genuine NULL where that is the point.
+	qty := func(v float64) *float64 { return &v }
+	seed := func(label, typ, subtype string, security uuid.UUID, amount float64, quantity *float64) {
 		id := uuid.New()
 		_, e := tx.Exec(ctx, `
 			INSERT INTO investment_transactions
 				(id, user_id, account_id, security_id, plaid_investment_transaction_id,
-				 type, subtype, name, amount, date)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '2026-03-15')
-		`, id, userID, accountID, security, label+"-"+id.String(), typ, subtype, label, amount)
+				 type, subtype, name, amount, quantity, date)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, '2026-03-15')
+		`, id, userID, accountID, security, label+"-"+id.String(), typ, subtype, label, amount, quantity)
 		require.NoError(t, e, "seed %s", label)
 	}
 
 	// Plaid's sign convention: inflow (income) is NEGATIVE, outflow (a purchase) POSITIVE.
 	// The production reinvestment pair, against a real security.
-	seed("structural dividend credit", "cash", "deposit", secID, -100.00)
-	seed("reinvestment purchase leg", "cash", "withdrawal", secID, 100.00)
+	// The dividend leg: money arrived and bought nothing yet.
+	seed("structural dividend credit", "cash", "deposit", secID, -100.00, qty(0))
+	// The paired purchase leg: cash debited, shares delivered. Excluded from income by design --
+	// a reinvested dividend is ONE dollar of income, not two -- but it must be excluded as the
+	// REINVEST it is, not because a NULL quantity left it unclassifiable.
+	seed("reinvestment purchase leg", "cash", "withdrawal", secID, 100.00, qty(2.5))
 	// A subtype-literal dividend — already counted before #1631.
-	seed("literal dividend", "cash", "dividend", secID, -25.00)
+	seed("literal dividend", "cash", "dividend", secID, -25.00, qty(0))
 	// Bill payments on the cash-management side: same subtypes, cash-equivalent security.
 	// These are NOT income and must not be swept in by widening the universe.
-	seed("bill payment", "cash", "withdrawal", cashSecID, 400.00)
-	seed("paycheque", "cash", "deposit", cashSecID, -3000.00)
+	// Cash-equivalent security: the structural branch cannot apply here whatever the quantity, so
+	// these two keep the shape a brokerage cash-management account really reports.
+	seed("bill payment", "cash", "withdrawal", cashSecID, 400.00, nil)
+	seed("paycheque", "cash", "deposit", cashSecID, -3000.00, nil)
 
 	repo := NewInvestmentAnalyticsRepository(tx)
 	start := mustParseDate("2026-03-01")
@@ -109,8 +128,8 @@ func TestIncomeSummary_CapitalGainDistribution_IsIncome_Integration(t *testing.T
 	_, err = tx.Exec(ctx, `
 		INSERT INTO investment_transactions
 			(id, user_id, account_id, security_id, plaid_investment_transaction_id,
-			 type, subtype, name, amount, date)
-		VALUES ($1, $2, $3, $4, $5, 'cash', 'long-term capital gain', 'LTCG', -40.00, '2026-03-15')
+			 type, subtype, name, amount, quantity, date)
+		VALUES ($1, $2, $3, $4, $5, 'cash', 'long-term capital gain', 'LTCG', -40.00, 0, '2026-03-15')
 	`, id, userID, accountID, secID, "capgain-"+id.String())
 	require.NoError(t, err)
 
@@ -137,12 +156,17 @@ func TestIncomeSummary_TransferTypeDepositAgainstRealSecurity_IsNotIncome_Integr
 
 	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "inv-1631-i1")
 
+	// quantity 0 with a NEGATIVE amount is deliberate: this row satisfies EVERY fact the
+	// structural dividend rule requires EXCEPT the type gate (#1631 CX3), which is what makes it
+	// adversarial -- it isolates type = the cash literal as the only thing keeping an ACATS in-kind
+	// transfer out of reported income. Omitting quantity let a NULL do that work instead, so the
+	// test passed without ever exercising the gate it is named for.
 	id := uuid.New()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO investment_transactions
 			(id, user_id, account_id, security_id, plaid_investment_transaction_id,
-			 type, subtype, name, amount, date)
-		VALUES ($1, $2, $3, $4, $5, 'transfer', 'deposit', 'ACATS in-kind transfer', -50000.00, '2026-03-15')
+			 type, subtype, name, amount, quantity, date)
+		VALUES ($1, $2, $3, $4, $5, 'transfer', 'deposit', 'ACATS in-kind transfer', -50000.00, 0, '2026-03-15')
 	`, id, userID, accountID, secID, "acats-transfer-"+id.String())
 	require.NoError(t, err)
 

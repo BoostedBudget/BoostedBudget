@@ -424,5 +424,15 @@ func TestInvestmentAnalytics_TopMovers_UnlabelledPortfolioIsUnchanged_Integratio
 
 	assert.Nil(t, movers.RankingCurrencyCode)
 	assert.Equal(t, 0, movers.ExcludedByCurrencyCount)
-	assert.Len(t, movers.Gainers, 2, "neither holding may be dropped for want of a currency")
+
+	// ⚠ Assert the TOTAL, not the gainer count. seedCurrencyHolding passes `value` as BOTH
+	// institution_value and institution_price, so against close_price=90 the LEGA row
+	// (price 100) gains and the LEGB row (price 60) LOSES -- this seeded one of each, and the
+	// original `Len(Gainers, 2)` was simply wrong about its own fixture. What the test is for is
+	// that an unlabelled holding is not DROPPED for want of a currency, and that property is
+	// about membership, not direction.
+	assert.Len(t, movers.Gainers, 1, "the LEGA row (price 100 vs close 90) gains")
+	assert.Len(t, movers.Losers, 1, "the LEGB row (price 60 vs close 90) loses")
+	assert.Equal(t, 2, len(movers.Gainers)+len(movers.Losers),
+		"neither holding may be dropped for want of a currency")
 }
