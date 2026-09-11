@@ -1,7 +1,7 @@
 -- #1631 M8b: index institution_security_id for the forked-security-identity detection query
 -- (repository.SecurityRepository.FindForkedIdentities / CountForkedIdentityGroups).
 --
--- Migration 000195 added the column, unindexed, "stored so a future consolidation ... has
+-- Migration 000200 added the column, unindexed, "stored so a future consolidation ... has
 -- something to join on". This is that future: detection groups ALL securities by
 -- institution_security_id (GROUP BY institution_security_id HAVING COUNT(*) > 1), run from
 -- /admin/health on every request, so it should not be a sequential scan of the whole table.

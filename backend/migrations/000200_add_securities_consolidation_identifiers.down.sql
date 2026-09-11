@@ -1,4 +1,4 @@
--- #1631: Reverse 000195_add_securities_consolidation_identifiers.up.sql
+-- #1631: Reverse 000200_add_securities_consolidation_identifiers.up.sql
 DO $$
 BEGIN
     IF EXISTS (

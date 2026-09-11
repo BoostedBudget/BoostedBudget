@@ -1,4 +1,4 @@
--- #1631 (M4): Reverse 000196_add_user_accounts_investment_backfill_requested_at.up.sql
+-- #1631 (M4): Reverse 000201_add_user_accounts_investment_backfill_requested_at.up.sql
 --
 -- ⚠ Dropping this column discards any backfill obligation currently outstanding. That is a loss of
 -- an operational marker, not of financial history: no investment_transactions row is touched, and
