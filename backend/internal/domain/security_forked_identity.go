@@ -16,6 +16,21 @@ package domain
 // both for every customer without a separately-licensed CUSIP feed (see domain.Security's own
 // comment), and every security in this system's production data has both null.
 //
+// ⚠ CANDIDATES, NOT ESTABLISHED FORKS (#1631 CX7). institution_security_id is documented as "the
+// identifier given to the security by the institution" -- it is INSTITUTION-SCOPED, and nothing
+// guarantees it is unique across institutions. The grouping behind these counts has no institution
+// dimension at all: `securities` is a global table shared by every user and every provider and
+// carries no institution column, so two institutions that reuse the same internal id group
+// together and are, from here, indistinguishable from one instrument whose Plaid id was reissued.
+//
+// The dimension was considered and NOT added. It is derivable only by joining out through
+// holdings/investment_transactions to accounts to linked_items.institution_id_blind_idx, which
+// would silently empty the metric wherever that column is unpopulated -- a confident zero, which
+// is a worse failure than a false positive on a review list. So the claim is narrowed instead:
+// every name, doc comment and dashboard label says CANDIDATE, the /admin/health card renders
+// neutral rather than as a warning, and an operator settles a group by looking at its members.
+// Do not re-word any of this back into an assertion of a fork.
+//
 // This is DETECTION ONLY. Nothing here merges identities, rewrites
 // investment_transactions.security_id, or touches holding_snapshots' (account_id, security_id,
 // as_of_date) key. Actual merging needs its own ADR pass under the financial-history retention
@@ -31,7 +46,9 @@ type ForkedSecurityIdentityMember struct {
 
 // ForkedSecurityIdentity is one detected group: two or more `securities` rows sharing a
 // non-blank institution_security_id under DIFFERENT plaid_security_id values — the shape a
-// corporate-action-triggered reissue of Plaid's dedup key produces.
+// corporate-action-triggered reissue of Plaid's dedup key produces, and equally the shape two
+// institutions reusing one internal id produce. See the CANDIDATES note at the top of this file
+// before describing a group as a confirmed fork anywhere.
 type ForkedSecurityIdentity struct {
 	InstitutionSecurityID string                         `json:"institution_security_id"`
 	Members               []ForkedSecurityIdentityMember `json:"members"`
@@ -46,6 +63,10 @@ type ForkedSecurityIdentity struct {
 // repository.SecurityRepository's interface comment), and a fork in one user's brokerage data is
 // the same underlying Plaid identity-reissue affecting every user who holds that security.
 type ForkedSecurityIdentityMetrics struct {
+	// GroupCount counts CANDIDATE groups, not confirmed forks -- see the CANDIDATES note at the
+	// top of this file. The JSON name is unchanged because the /admin/health card is the only
+	// consumer and the narrowing is carried by the served docs and the dashboard copy rather than
+	// by a rename that would break the generated client for no gain.
 	GroupCount int64 `json:"group_count"`
 	// Groups is the full member listing behind GroupCount (#1631 M8b I2) — without it, an operator
 	// seeing a non-zero GroupCount has no way to find out WHICH securities forked. Fork groups are
