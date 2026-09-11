@@ -3384,6 +3384,37 @@ components:
         - item_id
         - webhook_code
       type: object
+    ForkedSecurityIdentity:
+      additionalProperties: false
+      properties:
+        institution_security_id:
+          type: string
+        members:
+          items:
+            $ref: "#/components/schemas/ForkedSecurityIdentityMember"
+          type:
+            - array
+            - "null"
+      required:
+        - institution_security_id
+        - members
+      type: object
+    ForkedSecurityIdentityMember:
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        plaid_security_id:
+          type: string
+        security_id:
+          type: string
+        ticker_symbol:
+          type: string
+      required:
+        - security_id
+        - plaid_security_id
+        - name
+      type: object
     ForkedSecurityIdentityMetrics:
       additionalProperties: false
       properties:
@@ -3392,8 +3423,15 @@ components:
         group_count:
           format: int64
           type: integer
+        groups:
+          items:
+            $ref: "#/components/schemas/ForkedSecurityIdentity"
+          type:
+            - array
+            - "null"
       required:
         - group_count
+        - groups
         - available
       type: object
     GainLossSummary:
@@ -5348,6 +5386,26 @@ components:
         - holdings_count
         - is_mixed_currency
       type: object
+    PositionReconciliationSummary:
+      additionalProperties: false
+      properties:
+        available:
+          type: boolean
+        drift_count:
+          format: int64
+          type: integer
+        suppressed_pre_window_count:
+          format: int64
+          type: integer
+        total_positions_checked:
+          format: int64
+          type: integer
+      required:
+        - drift_count
+        - suppressed_pre_window_count
+        - total_positions_checked
+        - available
+      type: object
     PreviewRuleBody:
       additionalProperties: false
       properties:
@@ -6969,6 +7027,8 @@ components:
           $ref: "#/components/schemas/PaddleStatusMetrics"
         plaid_orphaned_items:
           $ref: "#/components/schemas/PlaidOrphanedItemMetrics"
+        position_reconciliation:
+          $ref: "#/components/schemas/PositionReconciliationSummary"
         rejected_webhook_attempts_24h:
           $ref: "#/components/schemas/RejectedWebhookAttemptMetrics"
         services:
@@ -6993,6 +7053,7 @@ components:
         - deletion_residue
         - rejected_webhook_attempts_24h
         - forked_security_identities
+        - position_reconciliation
         - cache_enabled
       type: object
     TagSource:
