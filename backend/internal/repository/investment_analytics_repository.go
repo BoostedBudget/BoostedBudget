@@ -774,7 +774,17 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 	// exact failure #1631 was filed for.
 	structural := domain.SecurityIsStructuralSQL("sec")
 	normSub := domain.NormalizedSubtypeSQL("it.subtype")
-	structuralIncome := fmt.Sprintf("(%s = 'deposit' AND %s)", normSub, structural)
+	// #1631 I1: BOTH legs are gated on it.type = 'cash' — NormalizeTradeType and
+	// TradeTypeToSQLPredicate only ever apply the subtype-literal and structural income rules
+	// inside their `case "cash"` / `type = 'cash'` branches (investment_trade_type.go), and this
+	// query is the third consumer of the same classification and had silently dropped that gate
+	// from both legs. Without it, an ACATS/in-kind movement posted as type='transfer',
+	// subtype='deposit' against a real security would be labelled Transfer everywhere else but
+	// counted here as a dividend — and with the -SUM(amount) negation below, a large transfer IN
+	// reads as that much dividend income. Production's transfer rows all carry subtype='transfer'
+	// today, so this does not yet fire, but it is exactly the "two surfaces disagree" failure the
+	// shared helpers exist to prevent.
+	structuralIncome := fmt.Sprintf("(it.type = 'cash' AND %s = 'deposit' AND %s)", normSub, structural)
 
 	query := fmt.Sprintf(`
 		SELECT
@@ -808,7 +818,7 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 		  AND (a.status = 'active'%[1]s)
 		  AND it.date >= $2::date
 		  AND it.date <= $3::date
-		  AND (%[6]s IN (%[2]s) OR %[5]s)
+		  AND ((it.type = 'cash' AND %[6]s IN (%[2]s)) OR %[5]s)
 		%[3]s
 		GROUP BY income_type
 		ORDER BY total_amount DESC
