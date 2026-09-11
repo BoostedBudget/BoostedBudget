@@ -93,15 +93,6 @@ func (m *MockBudgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, bud
 	return args.Get(0).(map[string][]domain.BudgetCategory), args.Error(1)
 }
 
-// GetCategoriesByBudgetIDLocked is a mock implementation (Issue #1630 B3).
-func (m *MockBudgetRepository) GetCategoriesByBudgetIDLocked(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
-	args := m.Called(ctx, budgetID)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
-}
-
 // BeginTx is a mock implementation (Issue #1630 B3b).
 func (m *MockBudgetRepository) BeginTx(ctx context.Context) (repository.Transaction, error) {
 	args := m.Called(ctx)
