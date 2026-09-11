@@ -91,6 +91,29 @@ describe('computeBudgetMetrics — top-level-only totals', () => {
     expect(m.total_spent).toBe(20)
   })
 
+  it('excludes a transitive custom grandchild from headline totals (Issue #1630 Task B2)', () => {
+    // Same shape as the domain-level filterTopLevel test below, exercised through
+    // computeBudgetMetrics — this is the headline-total-level assertion the backend/frontend
+    // divergence was actually about: the two totals must agree on identical data.
+    const m = computeBudgetMetrics(
+      budget([
+        { ...baseCat, id: 'x', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', allocated_amount: 300, spent_amount: 150 },
+        {
+          ...baseCat,
+          id: 'g',
+          category_kind: 'custom',
+          custom_category_id: 'grandchild',
+          custom_parent_id: 'unbudgeted-parent-c',
+          custom_grandparent_pfc_primary: 'FOOD_AND_DRINK',
+          allocated_amount: 50,
+          spent_amount: 20,
+        },
+      ])
+    )
+    expect(m.total_allocated).toBe(300)
+    expect(m.total_spent).toBe(150)
+  })
+
   it('treats pfc_detailed: "" as absent — matching backend domain.hasPFCDetailed (#1630)', () => {
     // Before this fix, Go/SQL treated a present-but-empty pfc_detailed as a CHILD (so this
     // row was excluded from the backend total), while `!cat.pfc_detailed` here already
@@ -151,6 +174,47 @@ describe('filterTopLevel / isSubAllocationWithin — match_logic containment (#1
       { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD', allocated_amount: 50, spent_amount: 20, match_logic: '' as BudgetCategory['match_logic'] },
     ])
     expect(result.map((c) => c.id)).toEqual(['p'])
+  })
+
+  // Issue #1630 Task B2: pfc X <- custom C (custom_parent_pfc_primary = X, NOT itself
+  // budgeted here) <- custom G (custom_parent_id = C, budgeted). Only X and G have budget
+  // rows; C has none at all. Mirrors backend domain_test.go's "custom grandchild nested under
+  // budgeted PFC primary two hops through an unbudgeted parent" — the backend's widened
+  // roll-up rolls G's transactions into X's SpentAmount via a second join hop regardless of
+  // whether C is budgeted, so the frontend must exclude G from the top-level total too or the
+  // two headline totals disagree on identical data.
+  it('excludes a transitive custom grandchild nested under a budgeted PFC root two hops through an unbudgeted parent', () => {
+    const result = filterTopLevel([
+      { ...baseCat, id: 'x', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', allocated_amount: 300, spent_amount: 150 },
+      {
+        ...baseCat,
+        id: 'g',
+        category_kind: 'custom',
+        custom_category_id: 'grandchild',
+        custom_parent_id: 'unbudgeted-parent-c',
+        custom_grandparent_pfc_primary: 'FOOD_AND_DRINK',
+        allocated_amount: 50,
+        spent_amount: 20,
+      },
+    ])
+    expect(result.map((c) => c.id)).toEqual(['x'])
+  })
+
+  it('does NOT exclude the transitive grandchild when its grandparent PFC primary is NOT budgeted', () => {
+    const result = filterTopLevel([
+      { ...baseCat, id: 'x', category_kind: 'pfc', pfc_primary: 'RENT_AND_UTILITIES', allocated_amount: 300, spent_amount: 150 },
+      {
+        ...baseCat,
+        id: 'g',
+        category_kind: 'custom',
+        custom_category_id: 'grandchild',
+        custom_parent_id: 'unbudgeted-parent-c',
+        custom_grandparent_pfc_primary: 'FOOD_AND_DRINK',
+        allocated_amount: 50,
+        spent_amount: 20,
+      },
+    ])
+    expect(result.map((c) => c.id).sort()).toEqual(['g', 'x'])
   })
 })
 
@@ -246,5 +310,33 @@ describe('isSubAllocationOfParent — Issue #1630 Task 4', () => {
   it('false when the child escapes containment via match_logic', () => {
     const child = { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD', allocated_amount: 50, spent_amount: 20, match_logic: 'or' } as BudgetCategory
     expect(isSubAllocationOfParent(child, parent)).toBe(false)
+  })
+
+  it('true for a transitive custom grandchild whose grandparent PFC primary matches this parent (Issue #1630 Task B2)', () => {
+    const grandchild = {
+      ...baseCat,
+      id: 'g',
+      category_kind: 'custom',
+      custom_category_id: 'grandchild',
+      custom_parent_id: 'unbudgeted-parent-c',
+      custom_grandparent_pfc_primary: 'FOOD_AND_DRINK',
+      allocated_amount: 50,
+      spent_amount: 20,
+    } as BudgetCategory
+    expect(isSubAllocationOfParent(grandchild, parent)).toBe(true)
+  })
+
+  it('false for a transitive custom grandchild whose grandparent PFC primary is a DIFFERENT root', () => {
+    const grandchild = {
+      ...baseCat,
+      id: 'g',
+      category_kind: 'custom',
+      custom_category_id: 'grandchild',
+      custom_parent_id: 'unbudgeted-parent-c',
+      custom_grandparent_pfc_primary: 'RENT_AND_UTILITIES',
+      allocated_amount: 50,
+      spent_amount: 20,
+    } as BudgetCategory
+    expect(isSubAllocationOfParent(grandchild, parent)).toBe(false)
   })
 })
