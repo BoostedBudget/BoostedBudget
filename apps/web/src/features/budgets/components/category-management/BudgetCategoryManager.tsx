@@ -256,18 +256,42 @@ export function BudgetCategoryManager({
       .reduce((sum, c) => sum + c.allocated_amount, 0);
   }, [formDialog.mode, formDialog.category, categories])
 
-  // Issue #1630 Task 4: when the category pending deletion is a parent, its sub-allocation
-  // children are promoted to top-level and the budget total changes by the parent's own
-  // unallocated remainder — say so in the delete-confirm copy rather than leaving it silent.
-  const deleteDialogSubAllocationChildren = useMemo(() => {
+  // Issue #1630 Task 4 (and the follow-up adversarial-review fix): when the category pending
+  // deletion is a parent, its DIRECT sub-allocation children are promoted to top-level and the
+  // budget total changes by the parent's own unallocated remainder — say so in the delete-confirm
+  // copy rather than leaving it silent.
+  //
+  // `isSubAllocationOfParent` without `directOnly` also recognizes a transitive GRANDCHILD (a
+  // child of a child, attributed to the root via custom_grandparent_pfc_primary) as "belonging"
+  // to the root for total-exclusion purposes. But deleting the root does NOT promote a
+  // grandchild to top level — only the root's direct child is promoted; the grandchild stays
+  // exactly where it is, nested under that (still-existing) direct child. So the promoted-count
+  // copy and the remainder arithmetic must use `directOnly: true` here, or they wrongly claim the
+  // grandchild also moves to top level and double-subtract its allocation (which is already
+  // inside its direct parent's own allocated_amount, not the root's).
+  const deleteDialogDirectChildren = useMemo(() => {
     if (!deleteDialog.category) return [];
-    return categories.filter((c) => isSubAllocationOfParent(c, deleteDialog.category!));
+    return categories.filter((c) =>
+      isSubAllocationOfParent(c, deleteDialog.category!, { directOnly: true })
+    );
+  }, [categories, deleteDialog.category]);
+
+  // Transitive grandchildren of the category pending deletion — these are NOT promoted; they
+  // remain nested under their own direct parent. Tracked only so the confirm copy can describe
+  // their fate accurately instead of staying silent about them.
+  const deleteDialogNestedGrandchildren = useMemo(() => {
+    if (!deleteDialog.category) return [];
+    return categories.filter(
+      (c) =>
+        isSubAllocationOfParent(c, deleteDialog.category!) &&
+        !isSubAllocationOfParent(c, deleteDialog.category!, { directOnly: true })
+    );
   }, [categories, deleteDialog.category]);
 
   const deleteDialogRemainder = useMemo(() => {
     if (!deleteDialog.category) return 0;
-    return computeParentAllocationRemainder(deleteDialog.category, deleteDialogSubAllocationChildren);
-  }, [deleteDialog.category, deleteDialogSubAllocationChildren]);
+    return computeParentAllocationRemainder(deleteDialog.category, deleteDialogDirectChildren);
+  }, [deleteDialog.category, deleteDialogDirectChildren]);
 
   // Resolve a custom category's display name, with a placeholder during loading/error
   // so a raw UUID is never shown (#1203).
@@ -461,12 +485,22 @@ export function BudgetCategoryManager({
               <span data-ph-mask>{categoryDisplayLabel(deleteDialog.category)}</span>&rdquo;? It
               leaves this budget, but nothing is thrown away &mdash; the spending already
               recorded against it is kept.
-              {deleteDialogSubAllocationChildren.length > 0 && (
+              {deleteDialogDirectChildren.length > 0 && (
                 <>
-                  {' '}Its {deleteDialogSubAllocationChildren.length === 1 ? 'child category' : `${deleteDialogSubAllocationChildren.length} child categories`} will move up to the top level of
+                  {' '}Its {deleteDialogDirectChildren.length === 1 ? '1 child category' : `${deleteDialogDirectChildren.length} child categories`} will move up to the top level of
                   this budget, and the budget&apos;s total allocation will change by{' '}
                   <span data-ph-mask>{formatCurrency(deleteDialogRemainder)}</span> (this
                   category&apos;s own unallocated remainder).
+                  {deleteDialogNestedGrandchildren.length > 0 && (
+                    <>
+                      {' '}
+                      {deleteDialogNestedGrandchildren.length === 1
+                        ? 'A category nested beneath that child will stay nested right where it is'
+                        : `${deleteDialogNestedGrandchildren.length} categories nested beneath those children will stay nested right where they are`}
+                      {' '}&mdash; only its direct{' '}
+                      {deleteDialogDirectChildren.length === 1 ? 'child moves' : 'children move'} up.
+                    </>
+                  )}
                 </>
               )}
               {' '}This action cannot be undone.

@@ -339,4 +339,24 @@ describe('isSubAllocationOfParent — Issue #1630 Task 4', () => {
     } as BudgetCategory
     expect(isSubAllocationOfParent(grandchild, parent)).toBe(false)
   })
+
+  it('{ directOnly: true } reports false for the same transitive grandchild that is true without it (delete-dialog fix)', () => {
+    const grandchild = {
+      ...baseCat,
+      id: 'g',
+      category_kind: 'custom',
+      custom_category_id: 'grandchild',
+      custom_parent_id: 'unbudgeted-parent-c',
+      custom_grandparent_pfc_primary: 'FOOD_AND_DRINK',
+      allocated_amount: 50,
+      spent_amount: 20,
+    } as BudgetCategory
+    expect(isSubAllocationOfParent(grandchild, parent)).toBe(true)
+    expect(isSubAllocationOfParent(grandchild, parent, { directOnly: true })).toBe(false)
+  })
+
+  it('{ directOnly: true } still reports true for an actual direct child', () => {
+    const child = { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD', allocated_amount: 50, spent_amount: 20 } as BudgetCategory
+    expect(isSubAllocationOfParent(child, parent, { directOnly: true })).toBe(true)
+  })
 })

@@ -342,6 +342,72 @@ describe('BudgetCategoryManager', () => {
     expect(scanForUnmaskedPII(dialog, sentinels)).toEqual([])
   })
 
+  /**
+   * Issue #1630 adversarial-review fix: `isSubAllocationOfParent` was widened to recognize a
+   * transitive GRANDCHILD (X -> C -> G) as attributed to X for total-exclusion purposes. But
+   * deleting X only promotes its DIRECT child C to top level — G stays nested under C, which is
+   * untouched by X's deletion. The pre-fix code used the widened (transitive) relation for BOTH
+   * the promoted-count copy and the remainder arithmetic, so it wrongly claimed 2 categories move
+   * to top level and double-subtracted G's allocation (500 - 200 - 50 = $250 instead of the
+   * correct $300 = 500 - 200, since G's $50 is already inside C's $200).
+   */
+  it('delete confirmation promotes only the direct child and does not double-subtract a transitive grandchild', async () => {
+    const user = userEvent.setup({ delay: null })
+    const categories = [
+      createMockCategory({
+        id: 'root',
+        category_kind: 'pfc',
+        pfc_primary: 'RENT_AND_UTILITIES',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+        spent_amount: 0,
+      }),
+      createMockCategory({
+        id: 'direct-child',
+        category_kind: 'custom',
+        pfc_primary: undefined,
+        pfc_detailed: undefined,
+        custom_category_id: 'c-1',
+        custom_parent_pfc_primary: 'RENT_AND_UTILITIES',
+        allocated_amount: 200,
+        spent_amount: 0,
+      }),
+      createMockCategory({
+        id: 'grandchild',
+        category_kind: 'custom',
+        pfc_primary: undefined,
+        pfc_detailed: undefined,
+        custom_category_id: 'g-1',
+        custom_parent_id: 'c-1',
+        custom_grandparent_pfc_primary: 'RENT_AND_UTILITIES',
+        allocated_amount: 50,
+        spent_amount: 0,
+      }),
+    ]
+
+    renderManager({ categories })
+
+    // The root parent card renders first — its delete button is the first in DOM order.
+    const deleteButtons = screen.getAllByRole('button', { name: /^Delete category$/i })
+    await user.click(deleteButtons[0])
+
+    const dialog = await screen.findByRole('alertdialog')
+    const text = dialog.textContent ?? ''
+
+    // Only the direct child (1) is promoted — not 2.
+    expect(text).toMatch(/\b1 child category\b/i)
+    expect(text).not.toMatch(/2 child categories/i)
+
+    // Correct remainder: 500 - 200 (direct child only), NOT the double-subtracted 500-200-50.
+    expect(text).toMatch(/\$300\.00/)
+    expect(text).not.toMatch(/\$250\.00/)
+
+    // The grandchild's fate must be described accurately: it stays nested, it does not move
+    // to top level itself.
+    expect(text).toMatch(/nested/i)
+    expect(text).not.toMatch(/restore|recover|undelete/i)
+  })
+
   it('delete confirmation says nothing about children when deleting a leaf category', async () => {
     const user = userEvent.setup({ delay: null })
     const categories = [createMockCategory({ id: 'cat-1' })]
