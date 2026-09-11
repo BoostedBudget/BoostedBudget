@@ -218,6 +218,19 @@ func (m *MockBudgetRepository) DeleteGoalDetach(ctx context.Context, seriesID, g
 	return args.Error(0)
 }
 
+// Issue #1630 Task B7 stubs.
+func (m *MockBudgetRepository) AuditBudgetHierarchy(ctx context.Context, budget *domain.Budget, periodStart, periodEnd time.Time, spentCalc repository.BudgetHierarchySpentCalculator) (domain.BudgetHierarchyAuditVerdict, error) {
+	args := m.Called(ctx, budget, periodStart, periodEnd, spentCalc)
+	verdict, _ := args.Get(0).(domain.BudgetHierarchyAuditVerdict)
+	return verdict, args.Error(1)
+}
+
+func (m *MockBudgetRepository) BudgetIDsWithUnexaminedHierarchy(ctx context.Context, limit int) ([]string, error) {
+	args := m.Called(ctx, limit)
+	ids, _ := args.Get(0).([]string)
+	return ids, args.Error(1)
+}
+
 func (m *MockBudgetRepository) GetDetachedGoalIDsForSeries(ctx context.Context, seriesID string) ([]string, error) {
 	args := m.Called(ctx, seriesID)
 	if args.Get(0) == nil {
