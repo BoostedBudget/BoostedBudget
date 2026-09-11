@@ -218,3 +218,75 @@ describe('PortfolioValueChart failed read', () => {
     expect(screen.queryByTestId('echarts-chart')).toBeNull()
   })
 })
+
+// #1631 CX1: the tooltip formatted every point as dollars. The series carries a RANGE-level
+// currency verdict -- a line chart has one y-axis with one unit, so the verdict cannot be
+// per-point -- and this component threw it away.
+describe('PortfolioValueChart currency (#1631 CX1)', () => {
+  beforeEach(() => {
+    mockUseDarkMode.mockReturnValue(false)
+    MockEChartsChart.mockClear()
+  })
+
+  const tooltipText = (value: number) => {
+    const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+      tooltip?: { formatter?: (p: unknown) => string }
+    }
+    const formatter = option?.tooltip?.formatter
+    expect(formatter).toBeDefined()
+    return formatter!([{ name: '2024-01-08', value }])
+  }
+
+  const history = [
+    { date: '2024-01-01', total_value: 1000 },
+    { date: '2024-01-08', total_value: 1100 },
+  ]
+
+  it('formats tooltip values in the currency the series states', () => {
+    mockUseGetPortfolioHistory.mockReturnValue({
+      data: { history, currency_code: 'GBP', is_mixed_currency: false },
+      isLoading: false,
+      isError: false,
+      // The shared mock factory infers `data: undefined`, so every seeded payload in this file
+      // is a type error against it. Cast rather than widen the ceiling (#1631 CX1).
+    } as never)
+    render(<PortfolioValueChart dateRange={DATE_RANGE} />)
+
+    const out = tooltipText(1100)
+    expect(out).toContain('£')
+    expect(out).not.toContain('$')
+  })
+
+  // The sibling: an unlabelled series keeps today's dollar rendering, because unknown is not a
+  // conflict and that is the state of every snapshot written before migration 000197.
+  it('keeps the dollar rendering for an unlabelled series', () => {
+    mockUseGetPortfolioHistory.mockReturnValue({
+      data: { history, is_mixed_currency: false },
+      isLoading: false,
+      isError: false,
+      // The shared mock factory infers `data: undefined`, so every seeded payload in this file
+      // is a type error against it. Cast rather than widen the ceiling (#1631 CX1).
+    } as never)
+    render(<PortfolioValueChart dateRange={DATE_RANGE} />)
+
+    expect(tooltipText(1100)).toContain('$')
+  })
+
+  // A currency-blind series must not be labelled with any currency, and the reader has to be told
+  // why the symbol went away.
+  it('declares a mixed-currency series instead of labelling it', () => {
+    mockUseGetPortfolioHistory.mockReturnValue({
+      data: { history, is_mixed_currency: true },
+      isLoading: false,
+      isError: false,
+      // The shared mock factory infers `data: undefined`, so every seeded payload in this file
+      // is a type error against it. Cast rather than widen the ceiling (#1631 CX1).
+    } as never)
+    render(<PortfolioValueChart dateRange={DATE_RANGE} />)
+
+    expect(screen.getByText(/mixed currencies/i)).toBeDefined()
+    const out = tooltipText(1100)
+    expect(out).not.toContain('$')
+    expect(out).not.toContain('£')
+  })
+})

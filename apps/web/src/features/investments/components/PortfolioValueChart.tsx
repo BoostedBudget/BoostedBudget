@@ -4,9 +4,10 @@ import {
   EChartsChart,
   useDarkMode,
   getCurrencyOption,
-  formatCurrency,
   escapeHtml,
 } from '@/shared/charts'
+import { formatPortfolioAmount, isCurrencyUnnameable } from '../utils/portfolioCurrency'
+import { MixedCurrencyBadge } from './MixedCurrencyBadge'
 import { useGetPortfolioHistory } from '@boostedbudget/api-client/endpoints/investments/investments'
 import { ErrorState } from '@/components/ui/error-state'
 
@@ -24,6 +25,16 @@ export function PortfolioValueChart({ dateRange }: PortfolioValueChartProps) {
 
   const history = useMemo(() => data?.history ?? [], [data?.history])
 
+  // #1631 CX1: the series carries a RANGE-level currency verdict, and this chart used to throw it
+  // away and format every point as dollars. The verdict is range-level rather than per-point on
+  // purpose: a line chart has one y-axis with one unit, so a series whose points disagree is
+  // broken as a whole -- a per-point symbol would invite a reader to compare points that are not
+  // comparable, and there is no FX rate source here to make them so.
+  const currency = useMemo(
+    () => ({ currency_code: data?.currency_code, is_mixed_currency: data?.is_mixed_currency }),
+    [data?.currency_code, data?.is_mixed_currency],
+  )
+
   const option = useMemo((): EChartsOption => {
     const base = getCurrencyOption(isDark)
     return {
@@ -35,7 +46,7 @@ export function PortfolioValueChart({ dateRange }: PortfolioValueChartProps) {
           const arr = Array.isArray(params) ? params : []
           if (arr.length === 0) return ''
           const [p] = arr as Array<{ name: string; value: number }>
-          return `${escapeHtml(p.name)}<br>${formatCurrency(p.value)}`
+          return `${escapeHtml(p.name)}<br>${formatPortfolioAmount(p.value, currency, 0)}`
         },
       },
       series: [
@@ -47,7 +58,7 @@ export function PortfolioValueChart({ dateRange }: PortfolioValueChartProps) {
         },
       ],
     }
-  }, [isDark, history])
+  }, [isDark, history, currency])
 
   if (isLoading) {
     return (
@@ -74,6 +85,9 @@ export function PortfolioValueChart({ dateRange }: PortfolioValueChartProps) {
 
   return (
     <div className="h-[300px] sm:h-[400px] w-full">
+      {/* An unlabelled axis is honest but silent: without this the reader is left to guess why the
+          currency symbol went away on a mixed series. */}
+      {isCurrencyUnnameable(currency) && <MixedCurrencyBadge className="mb-2" />}
       <EChartsChart
         style={{ width: '100%', height: '100%' }}
         option={option}

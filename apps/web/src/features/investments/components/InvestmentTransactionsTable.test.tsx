@@ -176,3 +176,39 @@ describe('InvestmentTransactionsTable', () => {
     })
   })
 })
+
+// #1631 CX1: the amount, price and fee columns hard-coded the dollar, so a GBP-denominated row
+// rendered as dollars. Each row carries its own currency_code -- an investment account can hold
+// positions in several currencies at once, which is exactly why the per-ROW code is the one to
+// format by rather than any portfolio-level verdict.
+describe('InvestmentTransactionsTable currency (#1631 CX1)', () => {
+  beforeEach(() => {
+    mockUseInfiniteInvestmentTransactions.mockClear()
+  })
+
+  it('formats a row in the currency that row states', async () => {
+    mockUseInfiniteInvestmentTransactions.mockReturnValue(
+      loadedResult({ transactions: [{ ...mockTxn, currency_code: 'GBP' }] }),
+    )
+    // disableVirtualization forces DataTable to render real rows; jsdom has no layout.
+    render(<InvestmentTransactionsTable dateRange={defaultDateRange} disableVirtualization />)
+
+    await waitFor(() => {
+      expect(screen.getByText(/£2,500/)).toBeDefined()
+    })
+    expect(screen.queryByText(/\$2,500/)).toBeNull()
+  })
+
+  // The sibling: a row that states no currency keeps today's dollar rendering, because unknown is
+  // not a conflict and every row written before migration 000197 is in that state.
+  it('keeps the dollar rendering for a row that states no currency', async () => {
+    mockUseInfiniteInvestmentTransactions.mockReturnValue(
+      loadedResult({ transactions: [mockTxn] }),
+    )
+    render(<InvestmentTransactionsTable dateRange={defaultDateRange} disableVirtualization />)
+
+    await waitFor(() => {
+      expect(screen.getByText(/\$2,500/)).toBeDefined()
+    })
+  })
+})

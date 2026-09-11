@@ -8,7 +8,8 @@
 
 import { StatCard } from '@/components/ui/stat-card'
 import { ChangeIndicator } from '@/features/net-worth/components/ChangeIndicator'
-import { formatCurrencyFull } from '@/shared/charts/formatters'
+import { formatPortfolioAmount, isCurrencyUnnameable } from '../utils/portfolioCurrency'
+import { MixedCurrencyBadge } from './MixedCurrencyBadge'
 import type { PortfolioSummary } from '@boostedbudget/api-client/models/portfolioSummary'
 
 interface PortfolioSummaryCardProps {
@@ -47,6 +48,13 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
     )
   }
 
+  // #1631 CX1: every figure on this card is rendered in the currency the API NAMED, and
+  // unlabelled when it refused to name one. The card used to hard-code the dollar, so a GBP
+  // portfolio read "$52,340.50" and a mixed one read a dollar figure that is not a quantity of any
+  // currency at all.
+  const money = (value: number) => formatPortfolioAmount(value, summary)
+  const mixed = isCurrencyUnnameable(summary)
+
   const { variant: gainVariant, trend: gainTrend } = getVariantAndTrend(summary.total_gain_loss)
   const dayChange = summary.day_change
   const dayVariantAndTrend = dayChange != null ? getVariantAndTrend(dayChange) : null
@@ -55,7 +63,14 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
       <StatCard
         label="Total Value"
-        value={<span data-ph-mask>{formatCurrencyFull(summary.total_value)}</span>}
+        value={
+          <span className="flex flex-col gap-1">
+            <span data-ph-mask>{money(summary.total_value)}</span>
+            {/* The badge carries no figure, so it is deliberately OUTSIDE data-ph-mask: it is a
+                structural label, not PII. */}
+            {mixed && <MixedCurrencyBadge className="self-start" />}
+          </span>
+        }
       />
 
       <StatCard
@@ -64,7 +79,7 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
         value={
           <span className="flex flex-col gap-1">
             <span data-ph-mask className="text-2xl font-bold">
-              {formatCurrencyFull(summary.total_gain_loss)}
+              {money(summary.total_gain_loss)}
             </span>
             {summary.total_gain_loss_pct != null && (
               <ChangeIndicator
@@ -85,7 +100,7 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
           dayChange != null ? (
             <span className="flex flex-col gap-1">
               <span data-ph-mask className="text-2xl font-bold">
-                {formatCurrencyFull(dayChange)}
+                {money(dayChange)}
               </span>
               {summary.day_change_pct != null && dayVariantAndTrend && (
                 <ChangeIndicator
