@@ -690,6 +690,15 @@ func (m *MockBudgetCategoryRepository) GetCategoriesByBudgetID(ctx context.Conte
 	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
 }
 
+// GetCategoriesByBudgetIDLocked is a mock implementation (Issue #1630 B3).
+func (m *MockBudgetCategoryRepository) GetCategoriesByBudgetIDLocked(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
+	args := m.Called(ctx, budgetID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
+}
+
 // TestCustomCategoryService_UpdateCategory_ReparentFailsClosedWithoutBudgetCategoryRepo asserts
 // that a reparent is REFUSED — not silently allowed — when SetBudgetCategoryRepository was never
 // called. This is money-integrity enforcement (Issue #1630 Task B1), not observability: contrast
@@ -748,7 +757,7 @@ func TestCustomCategoryService_UpdateCategory_ReparentRefusesEscapingBudgetedPai
 		Return([]*domain.Budget{{ID: budgetID, UserID: userID}}, nil)
 	// Parent's match_logic is 'and' — NOT a containing shape (isContainingMatchLogic requires
 	// category_only/or) — so nesting the child under it escapes clean containment.
-	mockBudgetCategoryRepo.On("GetCategoriesByBudgetID", ctx, budgetID).Return([]domain.BudgetCategory{
+	mockBudgetCategoryRepo.On("GetCategoriesByBudgetIDLocked", ctx, budgetID).Return([]domain.BudgetCategory{
 		{
 			ID: "bc-parent", BudgetID: budgetID, CategoryKind: "custom",
 			CustomCategoryID: &parentID, MatchLogic: domain.MatchLogicAnd, Tags: []string{"tag"},
