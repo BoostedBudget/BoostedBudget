@@ -514,10 +514,39 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 			      AND UPPER(TRIM(h.currency_code)) <> UPPER(TRIM(sec.currency_code))
 			  )
 		),
+		-- #1631 CX1(c). Ranking is by NOMINAL day change, and a nominal comparison across
+		-- currencies is not a comparison at all: a JPY position outranks a USD one on the
+		-- exchange rate alone. There is no FX rate source in this system to convert with, so the
+		-- list is ranked WITHIN ONE CURRENCY rather than across all of them.
+		--
+		-- The ranking currency is the one carried by the most eligible movers, with the code as a
+		-- deterministic tiebreak so the widget does not reshuffle between identical requests.
+		ranking_currency AS (
+			SELECT UPPER(TRIM(currency_code)) AS code
+			FROM movers
+			WHERE currency_code IS NOT NULL AND TRIM(currency_code) <> ''
+			GROUP BY 1
+			ORDER BY COUNT(*) DESC, 1 ASC
+			LIMIT 1
+		),
+		-- A holding that states NO currency rides along, on the same unknown-is-not-a-conflict
+		-- rule the rest of this surface uses: it conflicts with nothing, and excluding it would
+		-- empty the widget for every row written before migration 000197. When no mover states a
+		-- currency at all, ranking_currency is empty and every row is eligible.
+		eligible AS (
+			SELECT * FROM movers m
+			WHERE m.currency_code IS NULL OR TRIM(m.currency_code) = ''
+			   OR UPPER(TRIM(m.currency_code)) = (SELECT code FROM ranking_currency)
+		),
+		excluded AS (
+			SELECT COUNT(*) AS n FROM movers m
+			WHERE m.currency_code IS NOT NULL AND TRIM(m.currency_code) <> ''
+			  AND UPPER(TRIM(m.currency_code)) IS DISTINCT FROM (SELECT code FROM ranking_currency)
+		),
 		gainers AS (
 			SELECT holding_id, account_id, ticker_symbol, security_name,
 			       day_change, day_change_pct, total_gain_loss, currency_code, 'gainer' AS mover_type
-			FROM movers
+			FROM eligible
 			WHERE day_change > 0
 			ORDER BY day_change DESC
 			LIMIT $2
@@ -525,7 +554,7 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 		losers AS (
 			SELECT holding_id, account_id, ticker_symbol, security_name,
 			       day_change, day_change_pct, total_gain_loss, currency_code, 'loser' AS mover_type
-			FROM movers
+			FROM eligible
 			WHERE day_change < 0
 			ORDER BY day_change ASC
 			LIMIT $2
@@ -539,10 +568,12 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 			       day_change, day_change_pct, total_gain_loss, currency_code, mover_type
 			FROM losers
 		)
-		SELECT holding_id, account_id, ticker_symbol, security_name,
-		       day_change, day_change_pct, total_gain_loss, currency_code, mover_type
-		FROM combined
-		ORDER BY mover_type ASC, CASE WHEN mover_type = 'gainer' THEN day_change ELSE -day_change END DESC
+		SELECT c.holding_id, c.account_id, c.ticker_symbol, c.security_name,
+		       c.day_change, c.day_change_pct, c.total_gain_loss, c.currency_code, c.mover_type,
+		       (SELECT code FROM ranking_currency) AS ranking_currency_code,
+		       (SELECT n FROM excluded)            AS excluded_by_currency_count
+		FROM combined c
+		ORDER BY c.mover_type ASC, CASE WHEN c.mover_type = 'gainer' THEN c.day_change ELSE -c.day_change END DESC
 	`
 
 	rows, err := r.db.Query(ctx, query, userID, limit)
@@ -558,15 +589,24 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 	for rows.Next() {
 		var item domain.TopMoverItem
 		var moverType string
+		// The two ranking-scope columns are constant across every row. They are carried on the
+		// rows rather than fetched separately to keep this a single round trip; the consequence
+		// is that a result with NO movers reports no ranking currency and a zero exclusion count,
+		// which is the truthful answer when nothing was ranked.
+		var rankingCurrency *string
+		var excludedByCurrency int
 		if err := rows.Scan(
 			&item.HoldingID, &item.AccountID,
 			&item.TickerSymbol, &item.SecurityName,
 			&item.DayChange, &item.DayChangePct, &item.TotalGainLoss,
 			&item.CurrencyCode,
 			&moverType,
+			&rankingCurrency, &excludedByCurrency,
 		); err != nil {
 			return nil, fmt.Errorf("TopMovers scan: %w", err)
 		}
+		result.RankingCurrencyCode = rankingCurrency
+		result.ExcludedByCurrencyCount = excludedByCurrency
 		if moverType == "gainer" {
 			result.Gainers = append(result.Gainers, item)
 		} else {

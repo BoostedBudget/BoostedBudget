@@ -354,3 +354,75 @@ func TestPortfolioSnapshot_MixedCurrencyVerdict_RoundTripsThroughEveryReader_Int
 	require.NotNil(t, reWritten.CurrencyCode)
 	assert.Equal(t, "USD", *reWritten.CurrencyCode)
 }
+
+// TestInvestmentAnalytics_TopMovers_RanksWithinOneCurrency_Integration is the #1631 CX1(c)
+// regression. TopMovers ranks by NOMINAL day change, and a nominal comparison across currencies is
+// not a comparison at all: a JPY position outranks a USD one on the exchange rate alone, so the
+// "biggest mover" was whichever currency had the smallest unit. There is no FX rate source in this
+// system to convert with, so the list is ranked WITHIN one currency and says which.
+func TestInvestmentAnalytics_TopMovers_RanksWithinOneCurrency_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, _ := seedInvestmentFixture(ctx, t, tx, "ccy-movers-scope")
+
+	close90 := 90.0
+	// Two USD movers, so USD is the currency the most movers carry.
+	seedCurrencyHolding(ctx, t, tx, userID, accountID, "USDA", 100, ccyPtr("USD"), ccyPtr("USD"), &close90)
+	seedCurrencyHolding(ctx, t, tx, userID, accountID, "USDB", 60, ccyPtr("USD"), ccyPtr("USD"), &close90)
+	// A JPY mover whose NOMINAL day change dwarfs both. Ranked cross-currency it would top the
+	// list on the exchange rate alone.
+	seedCurrencyHolding(ctx, t, tx, userID, accountID, "JPYBIG", 100000, ccyPtr("JPY"), ccyPtr("JPY"), &close90)
+	// A holding stating no currency conflicts with nothing and must still be ranked -- the whole
+	// pre-migration-000197 user base is in this state.
+	seedCurrencyHolding(ctx, t, tx, userID, accountID, "UNSTATED", 80, nil, nil, &close90)
+
+	movers, err := NewInvestmentAnalyticsRepository(tx).TopMovers(ctx, userID.String(), 10)
+	require.NoError(t, err)
+
+	tickers := map[string]bool{}
+	for _, m := range append(append([]domain.TopMoverItem{}, movers.Gainers...), movers.Losers...) {
+		require.NotNil(t, m.TickerSymbol)
+		tickers[*m.TickerSymbol] = true
+	}
+
+	require.NotNil(t, movers.RankingCurrencyCode,
+		"a list ranked within one currency must say which one")
+	assert.Equal(t, "USD", *movers.RankingCurrencyCode,
+		"the currency carried by the most movers wins, not the one with the largest nominal figures")
+	assert.False(t, tickers["JPYBIG"],
+		"a holding in another currency cannot be ranked against these by nominal day change")
+	assert.Equal(t, 1, movers.ExcludedByCurrencyCount,
+		"the exclusion must be REPORTED, or a scoped ranking reads as a whole-portfolio one")
+	assert.True(t, tickers["USDA"])
+	assert.True(t, tickers["USDB"])
+	assert.True(t, tickers["UNSTATED"],
+		"an unstated currency conflicts with nothing and must not be dropped")
+}
+
+// A portfolio in which NOTHING states a currency is the pre-migration-000197 state of the entire
+// table. It must rank exactly as it did before CX1(c), with no ranking currency to name and
+// nothing excluded.
+func TestInvestmentAnalytics_TopMovers_UnlabelledPortfolioIsUnchanged_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, _ := seedInvestmentFixture(ctx, t, tx, "ccy-movers-legacy")
+
+	close90 := 90.0
+	seedCurrencyHolding(ctx, t, tx, userID, accountID, "LEGA", 100, nil, nil, &close90)
+	seedCurrencyHolding(ctx, t, tx, userID, accountID, "LEGB", 60, nil, nil, &close90)
+
+	movers, err := NewInvestmentAnalyticsRepository(tx).TopMovers(ctx, userID.String(), 10)
+	require.NoError(t, err)
+
+	assert.Nil(t, movers.RankingCurrencyCode)
+	assert.Equal(t, 0, movers.ExcludedByCurrencyCount)
+	assert.Len(t, movers.Gainers, 2, "neither holding may be dropped for want of a currency")
+}

@@ -158,6 +158,7 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 	currencyCode, isMixedCurrency := domain.ResolveHoldingsCurrency(holdings)
 
 	var dayChange, dayChangePct *float64
+	var dayChangeUnavailableReason *string
 	if prior != nil && prior.TotalValueInvestmentOnly != nil {
 		priorGated := *prior.TotalValueInvestmentOnly
 		// #1631 M8a: and the two sides must also be in the same CURRENCY, not merely over the
@@ -169,20 +170,33 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 		// An UNKNOWN currency on either side does not refuse — every snapshot written before
 		// migration 000197 has none, and refusing on those would blank the day change for the
 		// whole existing user base.
-		// ⚠ TWO conditions, and the second is not implied by the first (#1631 M8a fix round 2,
+		// ⚠ THREE conditions, and none is implied by another (#1631 M8a fix round 2,
 		// I-1). CurrenciesConflict deliberately reads an UNKNOWN currency as no conflict, and a
 		// MIXED snapshot also presents a nil CurrencyCode — so before prior.IsMixedCurrency
 		// existed, a currency-blind prior total sailed past this guard and was subtracted from a
 		// single-currency live total, unflagged. A currency-blind sum is not a quantity of money;
 		// it cannot be an operand here whatever today's currency turns out to be, including when
 		// today is mixed too (the composition of the mix can change between the two days).
-		if !prior.IsMixedCurrency && !domain.CurrenciesConflict(prior.CurrencyCode, currencyCode) {
+		//
+		// ⚠ #1631 CX1: THREE conditions, and the third is TODAY'S mix. The comment above claimed to
+		// cover "when today is mixed too" from the moment I-1 landed, but the condition only ever
+		// tested the PRIOR snapshot -- so a currency-blind live total was subtracted from a
+		// perfectly well-labelled USD prior and shipped as a day change. CurrenciesConflict cannot
+		// catch it, because a mixed total presents a nil CurrencyCode and unknown deliberately
+		// reads as no conflict. The defect is symmetric with I-1's, one operand over.
+		if !prior.IsMixedCurrency && !isMixedCurrency &&
+			!domain.CurrenciesConflict(prior.CurrencyCode, currencyCode) {
 			dc := totalValue - priorGated
 			dayChange = &dc
 			if priorGated != 0 {
 				pct := dc / priorGated * 100
 				dayChangePct = &pct
 			}
+		} else {
+			// Say WHY. Without this a client cannot tell a refusal from missing provider data, and
+			// reports a figure this service will never produce as one that is merely late.
+			reason := domain.DayChangeUnavailableCurrencyMismatch
+			dayChangeUnavailableReason = &reason
 		}
 	}
 
@@ -196,6 +210,8 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 		HoldingsCount:    len(holdings),
 		CurrencyCode:     currencyCode,
 		IsMixedCurrency:  isMixedCurrency,
+
+		DayChangeUnavailableReason: dayChangeUnavailableReason,
 	}, nil
 }
 
