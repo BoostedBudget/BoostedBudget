@@ -131,6 +131,18 @@ type BudgetRepository interface {
 	// When r.db is already a pgx.Tx (e.g. the MCP transactional path), db.Begin() creates a
 	// savepoint so the call composes safely with an outer transaction.
 	CreateWithCategories(ctx context.Context, budget *domain.Budget, categories []*domain.BudgetCategory) error
+
+	// AuditBudgetHierarchy examines ONE budget for the two write-time-guard shapes
+	// (domain.DuplicateParentIdentity, domain.EscapedNestedChild) that predate this budget, and
+	// recomputes every live non-savings category's spent_amount against the budget's own stored
+	// period — Issue #1630 Task B7. See budget_hierarchy_audit.go's header comment for the full
+	// design (what is safe to repair, why the ledger write is atomic, why this is not one SQL
+	// statement). budget must already have Categories populated (as GetByID / GetActiveByUserID
+	// return them); periodStart/periodEnd must come from services.NarrowBudgetPeriodDates(budget).
+	AuditBudgetHierarchy(ctx context.Context, budget *domain.Budget, periodStart, periodEnd time.Time, spentCalc BudgetHierarchySpentCalculator) (domain.BudgetHierarchyAuditVerdict, error)
+	// BudgetIDsWithUnexaminedHierarchy enumerates LIVE budgets AuditBudgetHierarchy has never
+	// examined, most-behind-first (oldest budget first), capped at limit. Issue #1630 Task B7.
+	BudgetIDsWithUnexaminedHierarchy(ctx context.Context, limit int) ([]string, error)
 }
 
 // budgetRepository implements BudgetRepository using PostgreSQL.
