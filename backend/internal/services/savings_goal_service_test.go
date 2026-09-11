@@ -1900,3 +1900,81 @@ func TestUpdateGoal_NonBasisChangeStillTakesThePlainUpdate(t *testing.T) {
 	assert.Equal(t, "Bigger Boat", goal.Name)
 	mockGoalRepo.AssertExpectations(t)
 }
+
+// #1631 gap D1. SavingsGoal.DeadlineDisplay documents its value as the UTC calendar day, and this
+// is the ONE non-pgx producing site for it: req.Deadline is a domain.FlexibleDate, which accepts a
+// full RFC3339 timestamp and therefore an ARBITRARY offset chosen by the caller.
+//
+// Both halves have to move together. savings_goals.deadline is a DATE column and pgx encodes it
+// from the value's own Year/Month/Day, so normalising only the display string would make the
+// returned goal disagree with the row a later read scans back — the display promise kept and the
+// round trip broken. So the DEADLINE ITSELF is reduced to the UTC calendar day, exactly as
+// budget_service.go does for budgets.start_date/end_date via budgetCalendarDayUTC.
+func TestSavingsGoalService_CreateGoal_DeadlineIsTheUTCCalendarDay(t *testing.T) {
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	req := createTestCreateSavingsGoalRequest()
+	// Midnight on 2026-07-01 in +14:00 is 2026-06-30T10:00:00Z — the previous UTC day.
+	deadline := domain.FlexibleDate(time.Date(2026, 7, 1, 0, 0, 0, 0, time.FixedZone("+14", 14*3600)))
+	req.Deadline = &deadline
+
+	accounts := []domain.Account{createTestAccountForGoal(userID)}
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
+	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+	goal, err := service.CreateGoal(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, goal)
+	if assert.NotNil(t, goal.DeadlineDisplay) {
+		assert.Equal(t, "2026-06-30", *goal.DeadlineDisplay,
+			"deadline display must be the UTC calendar day, not the day the caller's offset names")
+	}
+	if assert.NotNil(t, goal.Deadline) {
+		assert.True(t, goal.Deadline.Equal(time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC)),
+			"the persisted deadline must be midnight UTC on the same day the display reports, or "+
+				"pgx stores a DATE the next read disagrees with; got %s", goal.Deadline)
+		assert.Equal(t, time.UTC, goal.Deadline.Location())
+	}
+}
+
+// The UPDATE half of the same gap, and the half the display-location guard cannot see: UpdateGoal
+// assigns req.Deadline straight onto goal.Deadline and then calls goal.PopulateDateDisplay(), which
+// routes through the blessed formatter — so nothing flags it — while handing that formatter a value
+// whose location the CALLER chose. Pinned by TestNoFlexibleDateReachesADateFieldUnnormalised
+// (internal/repository) as well as here.
+func TestSavingsGoalService_UpdateGoal_DeadlineIsTheUTCCalendarDay(t *testing.T) {
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	goalID := "goal-123"
+
+	existingGoal := createTestSavingsGoal(userID)
+	deadline := domain.FlexibleDate(time.Date(2026, 7, 1, 0, 0, 0, 0, time.FixedZone("+14", 14*3600)))
+	req := &domain.UpdateSavingsGoalRequest{Deadline: &deadline}
+
+	mockGoalRepo.On("GetByID", ctx, goalID).Return(existingGoal, nil)
+	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+	goal, err := service.UpdateGoal(ctx, userID, goalID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, goal)
+	if assert.NotNil(t, goal.DeadlineDisplay) {
+		assert.Equal(t, "2026-06-30", *goal.DeadlineDisplay,
+			"deadline display must be the UTC calendar day, not the day the caller's offset names")
+	}
+	if assert.NotNil(t, goal.Deadline) {
+		assert.True(t, goal.Deadline.Equal(time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC)),
+			"the persisted deadline must be midnight UTC on the day the display reports; got %s", goal.Deadline)
+	}
+}

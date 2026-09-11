@@ -951,9 +951,9 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 		TotalIncome:      totalIncome,
 		ByType:           byType,
 		StartDate:        start,
-		StartDateDisplay: start.Format(time.DateOnly),
+		StartDateDisplay: domain.FormatCalendarDayUTC(start),
 		EndDate:          end,
-		EndDateDisplay:   end.Format(time.DateOnly),
+		EndDateDisplay:   domain.FormatCalendarDayUTC(end),
 		CurrencyCode:     currencyCode,
 		IsMixedCurrency:  isMixed,
 	}, nil

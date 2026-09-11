@@ -197,10 +197,10 @@ func (s *analyticsService) GetCashFlowSummary(ctx context.Context, userID string
 	// Build response
 	response := &domain.CashFlowSummaryResponse{
 		StartDate:        filters.StartDate,
-		StartDateDisplay: filters.StartDate.Format(time.DateOnly),
+		StartDateDisplay: domain.FormatCalendarDayUTC(filters.StartDate),
 		// The requested end, which is the end this aggregate measured — see the block above.
 		EndDate:        filters.EndDate,
-		EndDateDisplay: filters.EndDate.Format(time.DateOnly),
+		EndDateDisplay: domain.FormatCalendarDayUTC(filters.EndDate),
 		Income:         currentAgg.Income,
 		Expenses:       currentAgg.Expenses,
 		NetCashFlow:    currentAgg.NetCashFlow(),
@@ -286,9 +286,9 @@ func (s *analyticsService) GetCashFlowHistory(ctx context.Context, userID string
 		periodEnd := clampPeriodEnd(data.PeriodStart, calculatePeriodEnd(data.PeriodStart, filters.Grouping), effectiveEnd)
 		periods[i] = domain.CashFlowPeriodData{
 			PeriodStart:        data.PeriodStart,
-			PeriodStartDisplay: data.PeriodStart.Format(time.DateOnly),
+			PeriodStartDisplay: domain.FormatCalendarDayUTC(data.PeriodStart),
 			PeriodEnd:          periodEnd,
-			PeriodEndDisplay:   periodEnd.Format(time.DateOnly),
+			PeriodEndDisplay:   domain.FormatCalendarDayUTC(periodEnd),
 			Income:             data.Income,
 			Expenses:           data.Expenses,
 			NetCashFlow:        data.Income - data.Expenses,
@@ -299,11 +299,11 @@ func (s *analyticsService) GetCashFlowHistory(ctx context.Context, userID string
 	respEndDate := responseEndDate(filters.StartDate, effectiveEnd, periods)
 	return &domain.CashFlowHistoryResponse{
 		StartDate:               filters.StartDate,
-		StartDateDisplay:        filters.StartDate.Format(time.DateOnly),
+		StartDateDisplay:        domain.FormatCalendarDayUTC(filters.StartDate),
 		EndDate:                 respEndDate,
-		EndDateDisplay:          respEndDate.Format(time.DateOnly),
+		EndDateDisplay:          domain.FormatCalendarDayUTC(respEndDate),
 		RequestedEndDate:        requestedEnd,
-		RequestedEndDateDisplay: requestedEnd.Format(time.DateOnly),
+		RequestedEndDateDisplay: domain.FormatCalendarDayUTC(requestedEnd),
 		Grouping:                filters.Grouping,
 		Periods:                 periods,
 	}, nil

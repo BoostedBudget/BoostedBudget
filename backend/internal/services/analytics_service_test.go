@@ -2770,3 +2770,80 @@ func TestAnalyticsService_TrailingWindowDatesAreUTCNotProcessLocal(t *testing.T)
 			"every other date this API emits is a UTC calendar day, so 'as of' must be one too")
 	})
 }
+
+// #1631 gap D1. Every date display field on these responses documents its value as the UTC
+// calendar day, and these values are COMPUTED (the request's own range, echoed; a clamp; a bucket
+// end) rather than scanned from a DATE column — so nothing upstream guarantees the location in
+// which they name a day. Today's HTTP layer happens to parse YYYY-MM-DD with time.Parse, which
+// yields UTC, but that is a convention held at the operations layer and invisible here: the
+// service is a public Go API and is the site that must make its own documented promise true.
+//
+// Midnight in a POSITIVE offset is the previous day in UTC. That is the direction the gap actually
+// bites in, and the exact shift domain.formatDateOnly refuses to perform on a caller's behalf.
+func TestAnalyticsService_DateDisplaysAreTheUTCCalendarDay(t *testing.T) {
+	ctx := context.Background()
+	plus14 := time.FixedZone("+14", 14*3600)
+
+	// 2024-03-01 and 2024-03-31 at midnight in +14:00 are 2024-02-29 and 2024-03-30 in UTC.
+	filters := domain.CashFlowFilters{
+		StartDate: time.Date(2024, 3, 1, 0, 0, 0, 0, plus14),
+		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, plus14),
+		Grouping:  "daily",
+	}
+
+	t.Run("cash flow summary echoes the requested range as UTC days", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getCashFlowAggregationFn: func(context.Context, string, domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
+				return &domain.CashFlowAggregation{Income: 1, Expenses: 1}, nil
+			},
+		}
+		result, err := NewAnalyticsService(mockRepo).GetCashFlowSummary(ctx, "user-123", filters)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.StartDateDisplay != "2024-02-29" {
+			t.Errorf("start_date = %q, want the UTC calendar day 2024-02-29", result.StartDateDisplay)
+		}
+		if result.EndDateDisplay != "2024-03-30" {
+			t.Errorf("end_date = %q, want the UTC calendar day 2024-03-30", result.EndDateDisplay)
+		}
+	})
+
+	t.Run("cash flow history echoes requested_end_date as a UTC day", func(t *testing.T) {
+		// A range entirely in the past, so the clamp does not move the end and the echo is the
+		// only thing under test.
+		past := domain.CashFlowFilters{
+			StartDate: time.Date(2020, 3, 1, 0, 0, 0, 0, plus14),
+			EndDate:   time.Date(2020, 3, 31, 0, 0, 0, 0, plus14),
+			Grouping:  "daily",
+		}
+		mockRepo := &mockAnalyticsRepository{
+			getCashFlowGroupedFn: func(context.Context, string, domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
+				return []domain.CashFlowGroupedData{{
+					// A pgx-scanned DATE bucket: already midnight UTC.
+					PeriodStart: time.Date(2020, 3, 2, 0, 0, 0, 0, time.UTC),
+					Income:      10,
+				}}, nil
+			},
+		}
+		result, err := NewAnalyticsService(mockRepo).GetCashFlowHistory(ctx, "user-123", past)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.StartDateDisplay != "2020-02-29" {
+			t.Errorf("start_date = %q, want the UTC calendar day 2020-02-29", result.StartDateDisplay)
+		}
+		if result.RequestedEndDateDisplay != "2020-03-30" {
+			t.Errorf("requested_end_date = %q, want the UTC calendar day 2020-03-30", result.RequestedEndDateDisplay)
+		}
+		if result.EndDateDisplay != "2020-03-30" {
+			t.Errorf("end_date = %q, want the UTC calendar day 2020-03-30", result.EndDateDisplay)
+		}
+		if len(result.Periods) != 1 {
+			t.Fatalf("expected 1 period, got %d", len(result.Periods))
+		}
+		if result.Periods[0].PeriodStartDisplay != "2020-03-02" {
+			t.Errorf("period_start = %q, want 2020-03-02", result.Periods[0].PeriodStartDisplay)
+		}
+	})
+}

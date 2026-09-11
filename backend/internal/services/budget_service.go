@@ -165,7 +165,7 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 	if req.EndDate != nil {
 		t := budgetCalendarDayUTC(req.EndDate.Time())
 		endDate = &t
-		d := t.Format(time.DateOnly)
+		d := domain.FormatCalendarDayUTC(t)
 		endDateDisplay = &d
 	}
 	budget := &domain.Budget{
@@ -175,7 +175,7 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		Description:      req.Description,
 		Period:           req.Period,
 		StartDate:        startDate,
-		StartDateDisplay: startDate.Format(time.DateOnly),
+		StartDateDisplay: domain.FormatCalendarDayUTC(startDate),
 		EndDate:          endDate,
 		EndDateDisplay:   endDateDisplay,
 		Amount:           reconcileAmount,
@@ -466,9 +466,14 @@ func (s *budgetService) GetActiveBudgets(ctx context.Context, userID string) ([]
 //     day AFTER end_date — generous, never truncating; they are not cut off early. For a user
 //     ahead of UTC the start day likewise arrives early rather than late. Off-by-generous is a
 //     tolerable budget boundary; off-by-cut-short is the bug this replaced.
+//
+// ⚠ #1631 gap D1: the primitive now lives in domain.CalendarDayUTC, because this was the FIRST
+// instance of a pattern the display fields turned out to need everywhere — the argument above is
+// why UTC, and domain.formatDateOnly's invariant is why a computed value must be reduced at all.
+// This name is kept as the local, documented entry point for budgets; it is not a second
+// implementation.
 func budgetCalendarDayUTC(t time.Time) time.Time {
-	u := t.UTC()
-	return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
+	return domain.CalendarDayUTC(t)
 }
 
 // GetCurrentBudget retrieves the current active budget (where today is within the period).
