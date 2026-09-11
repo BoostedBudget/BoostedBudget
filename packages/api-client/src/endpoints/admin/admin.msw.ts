@@ -56,6 +56,7 @@ import type {
   GetAdminDeadLetterJobArgs200,
   GetPaymentFailuresOutputBody,
   GrantTrialResponseBody,
+  ListAdminBudgetHierarchyAuditsOutputBody,
   ListAdminRetentionWithheldOutputBody,
   ListPlaidOrphanedItemsOutputBody,
   PaddleWebhookEvent,
@@ -66,6 +67,8 @@ import type {
   WebhookStatsResponse
 } from '../../models';
 
+
+export const getListAdminBudgetHierarchyAuditsResponseMock = (overrideResponse: Partial<Extract<ListAdminBudgetHierarchyAuditsOutputBody, object>> = {}): ListAdminBudgetHierarchyAuditsOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), findings: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({budget_id: faker.string.alpha({length: {min: 10, max: 20}}), categories_examined: faker.number.int(), categories_repaired: faker.number.int(), examined_at: faker.string.alpha({length: {min: 10, max: 20}}), flagged_category_ids: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), outcome: faker.string.alpha({length: {min: 10, max: 20}}), reason: faker.string.alpha({length: {min: 10, max: 20}}), user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), limit: faker.number.int(), outcome_filter: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), ...overrideResponse})
 
 export const getCheckRoleResponseMock = (overrideResponse: Partial<Extract<CheckRoleResponseBody, object>> = {}): CheckRoleResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), is_admin: faker.datatype.boolean(), ...overrideResponse})
 
@@ -115,6 +118,18 @@ export const getGetAdminPaddleWebhookDetailResponseMock = (overrideResponse: Par
 
 export const getReplayAdminPaddleWebhookResponseMock = (overrideResponse: Partial<Extract<WebhookReplayResponse, object>> = {}): WebhookReplayResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), JobID: faker.helpers.arrayElement([faker.number.int(), null]), Message: faker.string.alpha({length: {min: 10, max: 20}}), Success: faker.datatype.boolean(), WebhookID: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
+
+export const getListAdminBudgetHierarchyAuditsMockHandler = (overrideResponse?: ListAdminBudgetHierarchyAuditsOutputBody | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<ListAdminBudgetHierarchyAuditsOutputBody> | ListAdminBudgetHierarchyAuditsOutputBody), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/admin/budget-hierarchy-audits', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getListAdminBudgetHierarchyAuditsResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
 
 export const getCheckRoleMockHandler = (overrideResponse?: CheckRoleResponseBody | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<CheckRoleResponseBody> | CheckRoleResponseBody), options?: RequestHandlerOptions) => {
   return http.get('*/api/v1/admin/check-role', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
@@ -376,6 +391,7 @@ export const getReplayAdminPaddleWebhookMockHandler = (overrideResponse?: Webhoo
   }, options)
 }
 export const getAdminMock = () => [
+  getListAdminBudgetHierarchyAuditsMockHandler(),
   getCheckRoleMockHandler(),
   getListAdminDeadLetterJobsMockHandler(),
   getBulkDeleteAdminDeadLetterJobsMockHandler(),

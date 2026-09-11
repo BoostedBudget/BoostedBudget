@@ -326,3 +326,57 @@ func (r *budgetRepository) BudgetIDsWithUnexaminedHierarchy(ctx context.Context,
 	}
 	return out, nil
 }
+
+// ── Issue #1630 Task B7: the human-facing surface ─────────────────────────────────────────────
+//
+// "A reported finding that reaches nobody is not a fix" — the periodic worker's WARN log line
+// (BudgetHierarchyAuditWorker.Work) is the paging/log-alerting path; this method is the durable,
+// queryable one, backing the admin listing (RegisterAdminBudgetHierarchyAuditOperations,
+// internal/huma/operations/admin_budget_hierarchy_audits.go). It reads the SAME ledger table
+// AuditBudgetHierarchy writes, so there is no second source of truth to drift.
+
+// listBudgetHierarchyAuditFindingsSQL selects ledger rows, most-recently-examined first.
+// flagged_category_ids is cast to text[] because pgx's default type registry has no built-in
+// codec for scanning a uuid[] column into a Go []string — every category id here is already a
+// UUID stored as text everywhere else this codebase surfaces one (domain.BudgetCategory.ID is a
+// string), so the cast loses nothing.
+const listBudgetHierarchyAuditFindingsSQL = `
+	SELECT budget_id::text, user_id::text, outcome, reason, categories_examined, categories_repaired,
+	       flagged_category_ids::text[], examined_at
+	FROM budget_hierarchy_audits
+	WHERE ($1::varchar = '' OR outcome = $1)
+	ORDER BY examined_at DESC
+	LIMIT $2::int
+`
+
+// ListBudgetHierarchyAuditFindings returns ledger rows, most-recently-examined first, capped at
+// limit. outcome filters to exactly that outcome when non-empty; an empty outcome returns every
+// verdict this audit has ever recorded (repaired and verified included, not only the reported
+// ones) — the admin handler is what defaults the query to the actionable subset, since "what does
+// this table contain at all" is a legitimate question this method should be able to answer too.
+func (r *budgetRepository) ListBudgetHierarchyAuditFindings(ctx context.Context, outcome string, limit int) ([]domain.BudgetHierarchyAuditVerdict, error) {
+	if limit <= 0 {
+		return []domain.BudgetHierarchyAuditVerdict{}, nil
+	}
+	rows, err := r.db.Query(ctx, listBudgetHierarchyAuditFindingsSQL, outcome, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list budget hierarchy audit findings: %w", err)
+	}
+	defer rows.Close()
+
+	out := []domain.BudgetHierarchyAuditVerdict{}
+	for rows.Next() {
+		var v domain.BudgetHierarchyAuditVerdict
+		var flagged []string
+		if err := rows.Scan(&v.BudgetID, &v.UserID, &v.Outcome, &v.Reason, &v.CategoriesExamined,
+			&v.CategoriesRepaired, &flagged, &v.ExaminedAt); err != nil {
+			return nil, fmt.Errorf("list budget hierarchy audit findings: scan: %w", err)
+		}
+		v.FlaggedCategoryIDs = flagged
+		out = append(out, v)
+	}
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("list budget hierarchy audit findings: %w", rows.Err())
+	}
+	return out, nil
+}

@@ -95,6 +95,10 @@ var uniqueOptsByKind = map[string]func() *queue.UniqueOpts{
 	"budget_period_close_check": BudgetPeriodCloseCheckUniqueOpts,
 	"savings_stats":             SavingsStatsUniqueOpts,
 	"portfolio_snapshot":        PortfolioSnapshotUniqueOpts,
+	// budget_hierarchy_audit (Issue #1630 Task B7): periodic-only kind registered from
+	// cmd/server/periodic_jobs.go via BudgetHierarchyAuditInsertOpts(), same shape as its
+	// siblings above (riverInsertOptsFromUnique(queue, BudgetHierarchyAuditUniqueOpts())).
+	"budget_hierarchy_audit": BudgetHierarchyAuditUniqueOpts,
 	// #1625 Task 18 fix round 1: periodic-only kind registered from cmd/server/periodic_jobs.go
 	// via RuleQuarantineCensusInsertOpts(), same shape as its siblings above.
 	"rule_quarantine_census": RuleQuarantineCensusUniqueOpts,

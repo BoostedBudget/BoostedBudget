@@ -1528,6 +1528,9 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		{Table: "boost_executions", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "boosts", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "budgets", Column: "user_id", DeleteRule: "CASCADE"},
+		// Issue #1630 Task B7: the budget-hierarchy audit ledger carries its OWN user_id CASCADE
+		// (same shape as portfolio_snapshot_repairs below), not just a transitive budget_id one.
+		{Table: "budget_hierarchy_audits", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "categorization_rules", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "credit_liabilities", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "custom_categories", Column: "user_id", DeleteRule: "CASCADE"},
@@ -1814,6 +1817,15 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		INSERT INTO rollover_history (user_id, budget_id, source_budget_category_id, amount, rollover_type, budget_period_start, budget_period_end)
 		VALUES ($1, $2, $3, 10, 'full', NOW(), NOW() + INTERVAL '1 day')`,
 		target.ID, budgetID, budgetCategoryID)
+
+	// Issue #1630 Task B7: the budget-hierarchy audit ledger. Carries its OWN user_id CASCADE
+	// (same shape as portfolio_snapshot_repairs above) rather than being reachable only
+	// transitively via budget_id, so it needs its own seed+assertion coverage here too.
+	execNoErr(t, ctx, pool, `
+		INSERT INTO budget_hierarchy_audits
+			(budget_id, user_id, outcome, reason, categories_examined, categories_repaired)
+		VALUES ($1, $2, 'verified', 'seeded by the cascade fixture', 1, 0)`,
+		budgetID, target.ID)
 
 	// boosts -> boost_executions and categorization_rules -> rule_execution_history. Since #1569
 	// Task 14 both history tables carry their OWN user_id CASCADE (their parent FKs are now
