@@ -21,20 +21,39 @@ import { ACKNOWLEDGED_SAFE_POST_OPERATIONS } from '../../manifest/safe-post-oper
  */
 export const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
-const ACKNOWLEDGED_SAFE_POST_SET = new Set(ACKNOWLEDGED_SAFE_POST_OPERATIONS)
+/** The minimal spec-index shape isReadExecuteAdmitted needs — satisfied by ExecuteSpecEntry
+ * (mcp/tools/execute.ts) and by search's SpecEntry (spec/search-runtime.ts) without either
+ * needing to import the other's type. */
+export interface ReadExecuteAdmissionSpec {
+  method: string
+  path: string
+}
 
 /**
  * True when readExecute admits a call to this operation. All of:
  *   1. capability.class === 'read', AND
  *   2. capability.confirmationRequired === false, AND
- *   3. EITHER the method is conventionally read-only (GET/HEAD/OPTIONS), OR the operationId is
- *      in ACKNOWLEDGED_SAFE_POST_OPERATIONS — a POST reviewed and proven to write nothing
- *      (#1630; see safe-post-extension.ts). `runMCPRecipe` satisfies 1 and 2 but is a POST NOT
- *      in that list, so it stays refused — the deliberate counter-example pinned in
+ *   3. EITHER spec.method is conventionally read-only (GET/HEAD/OPTIONS), OR (capability.
+ *      operationId, spec.method, spec.path) exactly matches one entry in
+ *      ACKNOWLEDGED_SAFE_POST_OPERATIONS — a POST reviewed and proven to write nothing (#1630;
+ *      see safe-post-extension.ts). `runMCPRecipe` satisfies 1 and 2 but is a POST whose tuple is
+ *      NOT in that list, so it stays refused — the deliberate counter-example pinned in
  *      execute.test.ts.
+ *
+ * Issue #1630 Task B4: admission is anchored to the FULL (operationId, method, path) tuple, not
+ * the operationId alone. `spec` is the caller's own CURRENT reading of the generated spec index
+ * (ExecuteSpecEntry / SpecEntry), so if the backend's `x-mcp-safe-post` annotation is removed, or
+ * the operation moves to a different HTTP method or path, the tuple this function compares
+ * against no longer matches what was reviewed — the call is refused rather than staying admitted
+ * on a stale id match. The same tuple equality is what `safe-post-extension.ts`'s
+ * `findSafePostDrift` uses to fail CI in the mirror-image case (an acknowledged tuple the spec no
+ * longer produces at all).
  */
-export function isReadExecuteAdmitted(capability: CapabilityEntry, method: string): boolean {
+export function isReadExecuteAdmitted(capability: CapabilityEntry, spec: ReadExecuteAdmissionSpec): boolean {
   if (capability.class !== 'read' || capability.confirmationRequired !== false) return false
-  if (READ_ONLY_METHODS.has(method.toUpperCase())) return true
-  return ACKNOWLEDGED_SAFE_POST_SET.has(capability.operationId)
+  const method = spec.method.toUpperCase()
+  if (READ_ONLY_METHODS.has(method)) return true
+  return ACKNOWLEDGED_SAFE_POST_OPERATIONS.some(
+    (op) => op.operationId === capability.operationId && op.method.toUpperCase() === method && op.path === spec.path,
+  )
 }

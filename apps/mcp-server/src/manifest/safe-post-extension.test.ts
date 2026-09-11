@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'bun:test'
 import {
   ACKNOWLEDGED_SAFE_POST_OPERATIONS,
+  ACKNOWLEDGED_SAFE_POST_OPERATION_IDS,
   extractSafePostOperationIds,
-  findUnacknowledgedSafePostOperations,
+  extractSafePostOperations,
+  findSafePostDrift,
   readSafePostOperationIds,
+  readSafePostOperations,
 } from './safe-post-extension'
 
-describe('extractSafePostOperationIds', () => {
-  it('returns operationIds whose operation carries x-mcp-safe-post: true', () => {
+describe('extractSafePostOperations', () => {
+  it('returns the full (operationId, method, path) tuple for an operation carrying x-mcp-safe-post: true', () => {
     const spec = {
       paths: {
         '/api/v1/budgets/categories/preview': {
@@ -21,7 +24,9 @@ describe('extractSafePostOperationIds', () => {
         },
       },
     }
-    expect(extractSafePostOperationIds(spec)).toEqual(['previewCategoryMatches'])
+    expect(extractSafePostOperations(spec)).toEqual([
+      { operationId: 'previewCategoryMatches', method: 'POST', path: '/api/v1/budgets/categories/preview' },
+    ])
   })
 
   it('ignores an operation where the extension is present but false', () => {
@@ -30,7 +35,7 @@ describe('extractSafePostOperationIds', () => {
         '/x': { post: { operationId: 'postX', 'x-mcp-safe-post': false } },
       },
     }
-    expect(extractSafePostOperationIds(spec)).toEqual([])
+    expect(extractSafePostOperations(spec)).toEqual([])
   })
 
   it('ignores operations with no operationId even if the extension is set', () => {
@@ -39,10 +44,47 @@ describe('extractSafePostOperationIds', () => {
         '/x': { post: { 'x-mcp-safe-post': true } },
       },
     }
-    expect(extractSafePostOperationIds(spec)).toEqual([])
+    expect(extractSafePostOperations(spec)).toEqual([])
   })
 
-  it('returns a sorted, de-duplicated-by-construction list across multiple paths/methods', () => {
+  it('returns a sorted list across multiple paths/methods', () => {
+    const spec = {
+      paths: {
+        '/b': { post: { operationId: 'bOp', 'x-mcp-safe-post': true } },
+        '/a': { post: { operationId: 'aOp', 'x-mcp-safe-post': true } },
+      },
+    }
+    expect(extractSafePostOperations(spec)).toEqual([
+      { operationId: 'aOp', method: 'POST', path: '/a' },
+      { operationId: 'bOp', method: 'POST', path: '/b' },
+    ])
+  })
+
+  it('tolerates a spec with no paths', () => {
+    expect(extractSafePostOperations({})).toEqual([])
+  })
+
+  // Issue #1630 Task B4 RED: moving the SAME operationId to a different HTTP method must produce
+  // a DIFFERENT tuple, so an admission/drift check comparing tuples (not just ids) treats it as
+  // an unreviewed shape rather than a match.
+  it('a tag on the same operationId but a different method produces a distinct tuple', () => {
+    const spec = {
+      paths: {
+        '/api/v1/budgets/categories/preview': {
+          put: { operationId: 'previewCategoryMatches', 'x-mcp-safe-post': true },
+        },
+      },
+    }
+    const found = extractSafePostOperations(spec)
+    expect(found).toEqual([
+      { operationId: 'previewCategoryMatches', method: 'PUT', path: '/api/v1/budgets/categories/preview' },
+    ])
+    expect(found).not.toEqual(ACKNOWLEDGED_SAFE_POST_OPERATIONS)
+  })
+})
+
+describe('extractSafePostOperationIds (id-only projection)', () => {
+  it('matches extractSafePostOperations mapped to operationId', () => {
     const spec = {
       paths: {
         '/b': { post: { operationId: 'bOp', 'x-mcp-safe-post': true } },
@@ -51,48 +93,57 @@ describe('extractSafePostOperationIds', () => {
     }
     expect(extractSafePostOperationIds(spec)).toEqual(['aOp', 'bOp'])
   })
+})
 
-  it('tolerates a spec with no paths', () => {
-    expect(extractSafePostOperationIds({})).toEqual([])
+describe('findSafePostDrift', () => {
+  const op = (operationId: string, method = 'POST', path = `/${operationId}`) => ({ operationId, method, path })
+
+  it('is empty in both directions when the spec-derived tuples match the acknowledged tuples exactly', () => {
+    expect(findSafePostDrift([op('a'), op('b')], [op('a'), op('b')])).toEqual({ unacknowledged: [], stale: [] })
   })
 
-  it('surfaces a synthetic second safe-post operation the acknowledged list does not know about', () => {
-    const spec = {
-      paths: {
-        '/api/v1/budgets/categories/preview': {
-          post: { operationId: 'previewCategoryMatches', 'x-mcp-safe-post': true },
-        },
-        '/api/v1/fake/thirdsafepost': {
-          post: { operationId: 'postFakeSecondSafePostOp', 'x-mcp-safe-post': true },
-        },
-      },
-    }
-    const found = extractSafePostOperationIds(spec)
-    expect(found).toContain('postFakeSecondSafePostOp')
-    expect(findUnacknowledgedSafePostOperations(found, ACKNOWLEDGED_SAFE_POST_OPERATIONS)).toEqual([
-      'postFakeSecondSafePostOp',
-    ])
+  it('reports a spec-tagged tuple missing from the acknowledged list as unacknowledged', () => {
+    expect(findSafePostDrift([op('a'), op('b'), op('c')], [op('a'), op('b')])).toEqual({
+      unacknowledged: [op('c')],
+      stale: [],
+    })
+  })
+
+  // Issue #1630 Task B4 RED (the bidirectional half this task adds): an ACKNOWLEDGED tuple the
+  // spec no longer tags must be reported as `stale`, not silently ignored the way the old
+  // one-directional findUnacknowledgedSafePostOperations treated it. This is what makes deleting
+  // the backend's x-mcp-safe-post annotation (or moving the op to a different verb) fail CI.
+  it('reports an acknowledged tuple the spec no longer tags as stale', () => {
+    expect(findSafePostDrift([op('a')], [op('a'), op('b')])).toEqual({
+      unacknowledged: [],
+      stale: [op('b')],
+    })
+  })
+
+  it('reports an acknowledged operationId whose method changed as BOTH unacknowledged (new shape) and stale (old shape gone)', () => {
+    const acknowledged = [op('previewCategoryMatches', 'POST', '/api/v1/budgets/categories/preview')]
+    const specTagged = [op('previewCategoryMatches', 'PUT', '/api/v1/budgets/categories/preview')]
+    expect(findSafePostDrift(specTagged, acknowledged)).toEqual({
+      unacknowledged: specTagged,
+      stale: acknowledged,
+    })
+  })
+
+  it('handles both directions simultaneously', () => {
+    const result = findSafePostDrift([op('a'), op('c')], [op('a'), op('b')])
+    expect(result.unacknowledged).toEqual([op('c')])
+    expect(result.stale).toEqual([op('b')])
   })
 })
 
-describe('findUnacknowledgedSafePostOperations', () => {
-  it('is empty when the spec-derived list matches the acknowledged list exactly', () => {
-    expect(findUnacknowledgedSafePostOperations(['a', 'b'], ['a', 'b'])).toEqual([])
-  })
-
-  it('reports a spec-tagged operation missing from the acknowledged list', () => {
-    expect(findUnacknowledgedSafePostOperations(['a', 'b', 'c'], ['a', 'b'])).toEqual(['c'])
-  })
-
-  it('does NOT report an acknowledged operation the spec no longer tags (that is a separate — good — drift)', () => {
-    expect(findUnacknowledgedSafePostOperations(['a'], ['a', 'b'])).toEqual([])
-  })
-})
-
-describe('readSafePostOperationIds (real api/openapi.yaml)', () => {
-  it('finds exactly the one acknowledged operation, and nothing unacknowledged', () => {
-    const found = readSafePostOperationIds()
+describe('real api/openapi.yaml', () => {
+  it('readSafePostOperations finds exactly the acknowledged tuples, with no drift in either direction', () => {
+    const found = readSafePostOperations()
     expect(found).toEqual(ACKNOWLEDGED_SAFE_POST_OPERATIONS)
-    expect(findUnacknowledgedSafePostOperations(found, ACKNOWLEDGED_SAFE_POST_OPERATIONS)).toEqual([])
+    expect(findSafePostDrift(found, ACKNOWLEDGED_SAFE_POST_OPERATIONS)).toEqual({ unacknowledged: [], stale: [] })
+  })
+
+  it('readSafePostOperationIds matches ACKNOWLEDGED_SAFE_POST_OPERATION_IDS', () => {
+    expect(readSafePostOperationIds()).toEqual(ACKNOWLEDGED_SAFE_POST_OPERATION_IDS)
   })
 })

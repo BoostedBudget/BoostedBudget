@@ -20,8 +20,8 @@ import {
 } from '../src/manifest/lazy-init-extension'
 import {
   ACKNOWLEDGED_SAFE_POST_OPERATIONS,
-  extractSafePostOperationIds,
-  findUnacknowledgedSafePostOperations,
+  extractSafePostOperations,
+  findSafePostDrift,
 } from '../src/manifest/safe-post-extension'
 import { HTTP_METHODS } from '../src/spec/index-builder'
 
@@ -78,23 +78,42 @@ if (unacknowledged.length > 0) {
   process.exit(1)
 }
 
-const safePostTagged = extractSafePostOperationIds(spec)
-const unacknowledgedSafePosts = findUnacknowledgedSafePostOperations(safePostTagged, ACKNOWLEDGED_SAFE_POST_OPERATIONS)
+const safePostTagged = extractSafePostOperations(spec)
+const safePostDrift = findSafePostDrift(safePostTagged, ACKNOWLEDGED_SAFE_POST_OPERATIONS)
 
-if (unacknowledgedSafePosts.length > 0) {
+if (safePostDrift.unacknowledged.length > 0) {
   console.error('❌ Manifest completeness check FAILED — unacknowledged safe-POST operation(s):')
-  for (const id of unacknowledgedSafePosts) {
-    console.error(`   ${id}`)
+  for (const op of safePostDrift.unacknowledged) {
+    console.error(`   ${op.method} ${op.path} → ${op.operationId}`)
   }
   console.error('')
   console.error('This operation is tagged x-mcp-safe-post: true in api/openapi.yaml (it admits a')
-  console.error('non-read-verb call into readExecute) but is not in ACKNOWLEDGED_SAFE_POST_OPERATIONS')
-  console.error('(apps/mcp-server/src/manifest/safe-post-extension.ts). Review it — including proving')
-  console.error('by integration test that it writes nothing — then add it to that list AND to')
-  console.error("execute.test.ts's pinned expectation.")
+  console.error('non-read-verb call into readExecute) but its (operationId, method, path) tuple is not')
+  console.error('in ACKNOWLEDGED_SAFE_POST_OPERATIONS (apps/mcp-server/src/manifest/safe-post-operations.ts).')
+  console.error('Review it — including proving by integration test that it writes nothing — then add it')
+  console.error("to that list AND to execute.test.ts's pinned expectation.")
+  process.exit(1)
+}
+
+// Issue #1630 Task B4: the MIRROR direction. An acknowledged tuple the spec no longer produces
+// means the backend's x-mcp-safe-post tag was deleted, or the operation moved to a different
+// method/path -- either way, readExecute's admission gate would otherwise keep admitting a call
+// on a shape nobody currently reviews as safe, with nothing to ever flag it. This is what the
+// old, one-directional check (findUnacknowledgedSafePostOperations, id-only) could not catch.
+if (safePostDrift.stale.length > 0) {
+  console.error('❌ Manifest completeness check FAILED — acknowledged safe-POST no longer matches the spec:')
+  for (const op of safePostDrift.stale) {
+    console.error(`   ${op.method} ${op.path} → ${op.operationId}`)
+  }
+  console.error('')
+  console.error('This (operationId, method, path) tuple is listed in ACKNOWLEDGED_SAFE_POST_OPERATIONS')
+  console.error('(apps/mcp-server/src/manifest/safe-post-operations.ts) but api/openapi.yaml no longer')
+  console.error('tags it x-mcp-safe-post: true at that exact method+path -- the tag was removed, or the')
+  console.error('operation moved to a different verb or path. Update or remove the acknowledged entry')
+  console.error("(and execute.test.ts's pinned expectation) to match reality.")
   process.exit(1)
 }
 
 console.log(`✅ Manifest completeness check passed — all OpenAPI operations are classified`)
 console.log(`✅ Lazy-init scan passed — ${lazyInitTagged.length} tagged operation(s), all acknowledged`)
-console.log(`✅ Safe-POST scan passed — ${safePostTagged.length} tagged operation(s), all acknowledged`)
+console.log(`✅ Safe-POST scan passed — ${safePostTagged.length} tagged operation(s), all acknowledged, no drift`)

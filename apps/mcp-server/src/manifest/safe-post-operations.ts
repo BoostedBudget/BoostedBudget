@@ -20,5 +20,30 @@
  * annotated `x-mcp-safe-post` in the backend and must NEVER be added to this list: it composes
  * and returns ordered API calls for the CALLER to execute, which is a different thing from
  * proving its OWN handler writes nothing. See execute.test.ts's pinned refusal test.
+ *
+ * ── Issue #1630 Task B4: acknowledgement is a TUPLE, not a bare operationId ──────────────────
+ * Admission used to be keyed on operationId alone: deleting the backend's `x-mcp-safe-post`
+ * annotation, or moving `previewCategoryMatches` to PUT/PATCH/DELETE or a different path, would
+ * leave it admitted forever, because nothing compared the CURRENT spec shape to what was
+ * actually reviewed — only the id survived. `AcknowledgedSafePostOperation` carries method and
+ * path alongside the id so the admission gate (`isReadExecuteAdmitted`) and the CI drift check
+ * (`findSafePostDrift`, `safe-post-extension.ts`) can require an EXACT match against the current
+ * OpenAPI spec, not merely "an operation with this id exists somewhere". A verb or path change
+ * makes the tuple stop matching, which refuses the call and fails the CI gate — it does not
+ * silently keep admitting a shape nobody reviewed.
  */
-export const ACKNOWLEDGED_SAFE_POST_OPERATIONS = ['previewCategoryMatches']
+export interface AcknowledgedSafePostOperation {
+  operationId: string
+  method: string
+  path: string
+}
+
+export const ACKNOWLEDGED_SAFE_POST_OPERATIONS: AcknowledgedSafePostOperation[] = [
+  { operationId: 'previewCategoryMatches', method: 'POST', path: '/api/v1/budgets/categories/preview' },
+]
+
+/** Bare operationIds, derived from the tuple list above — for callers that only need names
+ * (test titles, `it.each`, audit-log filtering) and have no reason to import the fuller shape. */
+export const ACKNOWLEDGED_SAFE_POST_OPERATION_IDS: string[] = ACKNOWLEDGED_SAFE_POST_OPERATIONS.map(
+  (op) => op.operationId,
+)
