@@ -230,3 +230,30 @@ html[data-resizing] * {
   border-right-color: theme(colors.border);
   border-bottom-color: theme(colors.border);
 }
+
+/* #1631: global prefers-reduced-motion coverage for `animate-spin` /
+   `animate-pulse` — 61 spin + 51 pulse instances exist across the app and only a
+   handful opted in individually via `motion-reduce:animate-none`. This is
+   unlayered on purpose: Tailwind v4 emits `.animate-spin`/`.animate-pulse` inside
+   `@layer utilities`, and per the CSS Cascade Layers spec an unlayered rule beats
+   any layered rule regardless of selector order or specificity — no
+   `!important` needed, and no risk of ordering it "before" Tailwind's utilities.
+   Only `animation-duration` is touched, never the `animation` shorthand, so
+   this can't fight the few call sites that already opt out explicitly via
+   `motion-reduce:animate-none` (which sets `animation-name: none` — with no
+   animation-name playing, a slower duration has nothing to act on).
+   Do NOT change this to `animation: none` / freeze the spinner: a frozen
+   spinner reads as a hung page, which removes the one signal it exists to
+   give. Slowing it keeps "something is happening" legible without the rapid
+   motion. `animate-pulse` has no such "is this frozen" risk — it's a subtle
+   opacity fade on a static skeleton shape, so slowing it is a plain calm-down
+   with no signal to preserve. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-spin {
+    animation-duration: 3s;
+  }
+
+  .animate-pulse {
+    animation-duration: 4s;
+  }
+}
