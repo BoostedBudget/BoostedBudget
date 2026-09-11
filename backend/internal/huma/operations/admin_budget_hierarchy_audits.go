@@ -18,7 +18,7 @@ import (
 // Read-only, deliberately: see AdminHandler.budgetHierarchyAuditReader's doc comment for why there
 // is no corresponding write action.
 type BudgetHierarchyAuditReader interface {
-	ListBudgetHierarchyAuditFindings(ctx context.Context, outcome string, limit int) ([]domain.BudgetHierarchyAuditVerdict, error)
+	ListBudgetHierarchyAuditFindings(ctx context.Context, outcomes []string, limit int) ([]domain.BudgetHierarchyAuditVerdict, error)
 }
 
 // budgetHierarchyAuditActionableOutcomes is what this endpoint returns when the caller does not
@@ -99,17 +99,14 @@ func (h *AdminHandler) ListAdminBudgetHierarchyAudits(ctx context.Context, input
 	}
 
 	var outcomeFilter []string
-	var queryOutcome string
 	switch input.Outcome {
 	case "":
 		outcomeFilter = budgetHierarchyAuditActionableOutcomes
 	case "all":
 		outcomeFilter = nil
-		queryOutcome = ""
 	case domain.BudgetHierarchyAuditOutcomeRepaired, domain.BudgetHierarchyAuditOutcomeVerified,
 		domain.BudgetHierarchyAuditOutcomeReportedDuplicateIdentity, domain.BudgetHierarchyAuditOutcomeReportedEscapingPair:
 		outcomeFilter = []string{input.Outcome}
-		queryOutcome = input.Outcome
 	default:
 		return nil, huma.Error422UnprocessableEntity(fmt.Sprintf(
 			"outcome %q is not a recognized verdict; use repaired, verified, reported_duplicate_identity, "+
@@ -121,26 +118,17 @@ func (h *AdminHandler) ListAdminBudgetHierarchyAudits(ctx context.Context, input
 	out.Body.OutcomeFilter = outcomeFilter
 	out.Body.Findings = []AdminBudgetHierarchyAuditFinding{}
 
-	// The two-outcome default (input.Outcome == "") has no single-query SQL filter — the
-	// repository method filters on exactly ONE outcome or none at all — so it is expressed here as
-	// two reads. Each is independently bounded by input.Limit; a caller who wants the whole
-	// actionable backlog in one page should query one outcome at a time.
-	if len(outcomeFilter) == 0 {
-		verdicts, err := h.budgetHierarchyAuditReader.ListBudgetHierarchyAuditFindings(ctx, queryOutcome, input.Limit)
-		if err != nil {
-			return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to list budget hierarchy audit findings: %w", err))
-		}
-		out.Body.Findings = renderBudgetHierarchyAuditFindings(verdicts)
-		return out, nil
+	// Issue #1630 review fix (LOW): this used to run ONE query per outcome in outcomeFilter and
+	// append the results, so the two-outcome default (input.Outcome == "") could return up to 2x
+	// input.Limit rows, grouped by outcome rather than globally ordered by examined_at.
+	// ListBudgetHierarchyAuditFindings now takes the whole filter as one slice, so this is a
+	// single query with one global ORDER BY and one honest LIMIT, for every case (empty filter,
+	// one outcome, or several).
+	verdicts, err := h.budgetHierarchyAuditReader.ListBudgetHierarchyAuditFindings(ctx, outcomeFilter, input.Limit)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to list budget hierarchy audit findings: %w", err))
 	}
-
-	for _, outcome := range outcomeFilter {
-		verdicts, err := h.budgetHierarchyAuditReader.ListBudgetHierarchyAuditFindings(ctx, outcome, input.Limit)
-		if err != nil {
-			return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to list budget hierarchy audit findings: %w", err))
-		}
-		out.Body.Findings = append(out.Body.Findings, renderBudgetHierarchyAuditFindings(verdicts)...)
-	}
+	out.Body.Findings = renderBudgetHierarchyAuditFindings(verdicts)
 	return out, nil
 }
 
