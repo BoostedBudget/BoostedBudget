@@ -36,6 +36,7 @@ import type { NetWorthResponseByCategory } from './netWorthResponseByCategory';
 export interface NetWorthResponse {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  /** UTC calendar day (YYYY-MM-DD) this net worth figure is as of */
   as_of_date: string;
   by_category: NetWorthResponseByCategory;
   net_worth: number;

@@ -35,6 +35,7 @@ import type { CashFlowPeriodComparison } from './cashFlowPeriodComparison';
 export interface CashFlowSummaryResponse {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  /** UTC calendar day (YYYY-MM-DD) the aggregate window ends on */
   end_date: string;
   expense_count: number;
   expenses: number;
@@ -42,5 +43,6 @@ export interface CashFlowSummaryResponse {
   income_count: number;
   net_cash_flow: number;
   period_comparison?: CashFlowPeriodComparison;
+  /** UTC calendar day (YYYY-MM-DD) the aggregate window starts on */
   start_date: string;
 }

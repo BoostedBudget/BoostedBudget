@@ -3609,3 +3609,94 @@ describe('PII coverage — #1569 T9.4: RuleAutomationHistoryPanel (runs of delet
     expect(scanForUnmaskedPII(panel as HTMLElement, sentinels)).toEqual([])
   })
 })
+
+// ── Round 22 (#1631): the structured DLQ error context ────────────────────────────────────────
+//
+// Postgres's DETAIL line embeds the OFFENDING ROW VALUES. For the motivating holdings-sync
+// 23505 those are UUIDs and harmless, but the identical mechanism on a unique-email constraint
+// prints `Key (email)=(someone@example.com) already exists.` — and #1631 puts that on an admin
+// page session replay records. The same is true of `hint`, of `pg.message` (a 22P02 quotes the
+// value it could not parse), of every layer of the error chain, and of the flattened raw
+// message that was already there.
+//
+// SQLSTATE, constraint, table, schema, column, severity and routine are schema identifiers, not
+// row data, and the sibling test below pins them as legible — so a blanket mask over the whole
+// error block would fail rather than pass the first test by brute force.
+describe('PII coverage — Round 22: DeadLetterDetailModal structured Postgres error context', () => {
+  const pgDetailJob = {
+    id: 1631,
+    original_job_id: 900202,
+    kind: 'sync_investments',
+    queue: 'default',
+    max_attempts: 5,
+    created_at: '2026-04-01T10:00:00Z',
+    failed_at: '2026-04-01T11:00:00Z',
+    user_id: SENTINEL_DLQ_SUBJECT,
+    notified: false,
+    args: {},
+    errors: [
+      {
+        attempt: 5,
+        message: `webhook processing failed: could not upsert ${SENTINEL_EMAIL}: ERROR: duplicate key (SQLSTATE 23505)`,
+        timestamp: '2026-04-01T11:00:00Z',
+        chain: [
+          'webhook processing failed',
+          `could not upsert ${SENTINEL_EMAIL}`,
+        ],
+        pg_error: {
+          code: '23505',
+          severity: 'ERROR',
+          message: `duplicate key value violates unique constraint "users_email_key" for ${SENTINEL_EMAIL}`,
+          // The field the whole feature exists to surface, and the one that leaks.
+          detail: `Key (email)=(${SENTINEL_EMAIL}) already exists.`,
+          hint: `merge the row for ${SENTINEL_EMAIL} first`,
+          constraint_name: 'users_email_key',
+          table_name: 'users',
+          schema_name: 'public',
+          column_name: 'email',
+          routine: '_bt_check_unique',
+        },
+      },
+    ],
+  }
+
+  beforeEach(() => {
+    cleanup()
+    mockUseGetAdminDeadLetterJobDetail.mockReturnValue({
+      data: pgDetailJob,
+      isLoading: false,
+      error: null,
+    } as never)
+    mockUseGetAdminDeadLetterJobArgs.mockReturnValue({
+      data: {},
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    } as never)
+    mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: () => {}, isPending: false } as never)
+    mockUseAddAdminDeadLetterJobNotes.mockReturnValue({ mutate: () => {}, isPending: false } as never)
+    mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: () => {}, isPending: false } as never)
+  })
+
+  test('scanForUnmaskedPII returns [] — detail, hint, pg message, chain layers and raw message are all masked', async () => {
+    render(<DeadLetterDetailModal jobId={1631} onClose={() => {}} />, { wrapper: createWrapper() })
+    const sentinels = [
+      { value: SENTINEL_EMAIL, fieldDescription: 'email quoted by the Postgres DETAIL/HINT/message and the error chain' },
+      { value: SENTINEL_DLQ_SUBJECT, fieldDescription: 'dlq subject user id' },
+    ]
+    await waitForSentinels(sentinels)
+    // The scanner checks ATTRIBUTES regardless of masking, so this also pins the rule that no
+    // SQL string may reach an aria-label/title/alt/placeholder.
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  test('the schema identifiers stay legible — SQLSTATE, constraint, table', async () => {
+    render(<DeadLetterDetailModal jobId={1631} onClose={() => {}} />, { wrapper: createWrapper() })
+    await waitFor(() => expect(screen.getByTestId('job-error-sqlstate')).toBeInTheDocument(), {
+      timeout: 3000,
+    })
+    expect(screen.getByTestId('job-error-sqlstate').closest('[data-ph-mask]')).toBeNull()
+    expect(screen.getByTestId('job-error-constraint').textContent).toBe('users_email_key')
+    expect(screen.getByTestId('job-error-constraint').closest('[data-ph-mask]')).toBeNull()
+  })
+})

@@ -379,7 +379,22 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
               {/* Exclude investment activity toggle — Issue #1609 Item 5 / #1618b. Some accounts
                   sync through both banking sync and investment sync, so their activity can appear
                   twice in the feed (once from each source). This is the user-facing control for
-                  that: it maps straight onto exclude_investment_sync. */}
+                  that: it maps straight onto exclude_investment_sync.
+
+                  ⚠ #1631 M4 — the copy below MUST keep its second sentence. The flag is no longer
+                  a read filter: while it is on, the backend stops STORING this account's
+                  investment transactions, and turning it back off backfills only 2 years (Plaid's
+                  limit on /investments/transactions/get). An account excluded for longer
+                  permanently loses its earliest excluded period. This toggle is the only place the
+                  user is told that before they commit, which is a condition of the retention ADR's
+                  #1631 amendment permitting non-ingestion at all — so a shorter, friendlier
+                  de-duplication-only promise here is a defect, not a copy improvement.
+
+                  That is CHECKABLE, not just asserted: AccountCustomizationModal.test.tsx's
+                  "warns that exclusion stops saving activity and that the backfill reaches only 2
+                  years" fails if the /2 years/ or /stop saving/ wording is dropped. It matches on
+                  those two facts rather than the whole sentence, so the copy can still be reworded
+                  — it just cannot lose the warning. */}
               <div className="flex items-center justify-between rounded-lg border p-3">
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-2 text-sm font-medium">
@@ -392,7 +407,7 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {account.user_account_id
-                      ? "Stops this account's activity from showing up twice — once from bank sync, once from investment sync."
+                      ? "Stops this account's activity from showing up twice — once from bank sync, once from investment sync. While this is on we stop saving its investment activity, and turning it back off re-fetches only the last 2 years from your bank — anything older that went unsaved during exclusion can't be recovered."
                       : 'Not available for this account yet — it has no stable account record to store the setting on.'}
                   </p>
                 </div>

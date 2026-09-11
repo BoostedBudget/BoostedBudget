@@ -566,14 +566,24 @@ describe('issue #1610a: spec-index.json byte budget', () => {
   it('stays under a generous ceiling — regression guard against depth-2 response schemas, not a precision pin', () => {
     const raw = readFileSync(COMMITTED_INDEX_PATH, 'utf-8')
     const bytes = Buffer.byteLength(raw, 'utf-8')
-    // ~380 KB: headroom above the ~363 KB measured at depth 1 + allowed-only, comfortably below
-    // the ~467-487 KB a depth-2 (with-or-without-descriptions) response schema would produce.
-    // Raised from 350 KB in this round (#1630 Task 12a): every request AND response body field
-    // that carries an OpenAPI `format` (dates, uuids, doubles, int64s, etc.) now emits a `format`
-    // key — this is a real, permanent, and desired size increase (the whole point of the fix:
-    // date fields must announce themselves), not a leak. This guard exists to catch a depth-2
-    // explosion, not to pin the index to the byte, so the headroom is restored rather than the
-    // entry cut.
-    expect(bytes).toBeLessThan(380_000)
+    // ~395 KB: headroom above today's measured size, and still far below the ~467-487 KB a
+    // depth-2 (with-or-without-descriptions) response schema would produce. This guard exists to
+    // catch that depth-2 explosion, not to pin the index to the byte, so headroom is restored
+    // rather than the entry cut.
+    //
+    // The arithmetic, because two feature branches landed on top of each other here:
+    //   345,461  before either  (#1630 and #1631 both branched from this)
+    //   375,602  after merging both        -> +30.1 KB, all depth-1 field growth
+    // #1630 raised the ceiling 350 -> 380 KB for its share; #1631 raised it 350 -> 365 KB for its
+    // own. Neither number accounts for BOTH, and 375,602 against 380,000 leaves 1.2% — which is
+    // the saturated state that makes the NEXT feature look like the culprit for a budget that had
+    // one field of room left. 395 KB is the same measured-plus-headroom treatment both raises
+    // intended, applied once to the combined total.
+    //
+    // ⚠ If you are here because it tripped again, MEASURE BEFORE RAISING. Growth of a few KB from
+    // new response fields is what this budget absorbs; a jump toward ~467 KB is the regression it
+    // exists to catch. Those need opposite responses and only the byte count tells you which you
+    // have.
+    expect(bytes).toBeLessThan(395_000)
   })
 })

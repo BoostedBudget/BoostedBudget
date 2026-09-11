@@ -18,8 +18,8 @@ type DeadLetterJob struct {
 	MaxAttempts   int             `json:"max_attempts"`
 	CreatedAt     time.Time       `json:"created_at"`
 	FailedAt      time.Time       `json:"failed_at"`
-	UserID        *string         `json:"user_id,omitempty"`   // User who owns the failed job
-	Notified      bool            `json:"notified"`            // Whether user has been notified
+	UserID        *string         `json:"user_id,omitempty"` // User who owns the failed job
+	Notified      bool            `json:"notified"`          // Whether user has been notified
 	RetriedAt     *time.Time      `json:"retried_at,omitempty"`
 	RetryJobID    *int64          `json:"retry_job_id,omitempty"`
 	Notes         *string         `json:"notes,omitempty"` // Admin notes
@@ -30,6 +30,46 @@ type JobError struct {
 	Attempt   int       `json:"attempt"`
 	Message   string    `json:"message"`
 	Timestamp time.Time `json:"timestamp"`
+
+	// Everything below was added by #1631 and is OPTIONAL in both directions.
+	//
+	// `dead_letter_jobs.errors` is an existing JSON column with production rows already in it,
+	// written in the old {attempt, message, timestamp} shape. Those rows decode with these
+	// fields simply absent, and `omitempty` keeps a row written for a non-Postgres failure
+	// byte-identical to what the old code produced. `message` above is never rewritten or
+	// dropped — it stays the flattened one-line form every existing consumer reads.
+
+	// Chain is the wrapped error chain, outermost boundary first, with each layer's own
+	// contribution only (the wrapped error's text is trimmed off the tail). It exists because
+	// the flattened `message` concatenates every layer into one line, hiding WHICH boundary
+	// failed. Absent when the error had no wrapping to record.
+	Chain []string `json:"chain,omitempty"`
+
+	// PgError is everything Postgres actually sent, when a *pgconn.PgError is anywhere in the
+	// chain. Found with errors.As, never by string-matching the message.
+	PgError *PgErrorContext `json:"pg_error,omitempty"`
+}
+
+// PgErrorContext is the structured payload of a *pgconn.PgError.
+//
+// ⚠ PII: Detail, Hint and Message can all embed ROW VALUES. For a 23505 the Detail reads
+// `Key (account_id, security_id)=(<uuid>, <uuid>) already exists.` — harmless — but the same
+// mechanism on a unique-email constraint prints `Key (email)=(someone@example.com) already
+// exists.` Anything rendering these three fields must carry `data-ph-mask`, and they must NEVER
+// be interpolated into an `aria-label`/`title`/`alt`/`placeholder`, which session replay records
+// verbatim and cannot mask. Code, ConstraintName, TableName, SchemaName, ColumnName, Severity and
+// Routine are schema/identifier metadata, not row data, and stay legible.
+type PgErrorContext struct {
+	Code           string `json:"code,omitempty"` // SQLSTATE, e.g. "23505"
+	Severity       string `json:"severity,omitempty"`
+	Message        string `json:"message,omitempty"`
+	Detail         string `json:"detail,omitempty"`
+	Hint           string `json:"hint,omitempty"`
+	ConstraintName string `json:"constraint_name,omitempty"`
+	TableName      string `json:"table_name,omitempty"`
+	SchemaName     string `json:"schema_name,omitempty"`
+	ColumnName     string `json:"column_name,omitempty"`
+	Routine        string `json:"routine,omitempty"`
 }
 
 // DeadLetterJobFilters contains filter parameters for listing dead letter jobs.

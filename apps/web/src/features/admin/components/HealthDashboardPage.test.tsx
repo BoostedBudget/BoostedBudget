@@ -107,6 +107,23 @@ const mockHealthData = {
     most_recent_at: null,
     available: true,
   },
+  // #1631 M8b: forked-security-identity groups (a Plaid corporate action reissuing
+  // plaid_security_id). `available: true` with a zero count is a VERIFIED "no forks detected",
+  // not an unknown — the failed-read and absent-section cases are exercised separately below.
+  forked_security_identities: {
+    group_count: 0,
+    groups: [],
+    available: true,
+  },
+  // #1631 M8b N1: the position-reconciliation drift gauge. `available: true` with all-zero
+  // counts is a VERIFIED "nothing to check yet" reading, not an unknown — the failed-read and
+  // absent-section cases are exercised separately below.
+  position_reconciliation: {
+    drift_count: 0,
+    suppressed_pre_window_count: 0,
+    total_positions_checked: 0,
+    available: true,
+  },
 }
 
 const renderWithQueryClient = (component: React.ReactElement) => {
@@ -927,6 +944,360 @@ describe('HealthDashboardPage', () => {
       // The Paddle Status section's own card keeps its own, unrelated number.
       const failedWebhooksCard = screen.getByText('Failed Webhooks (24h)').closest('[data-slot="card"]')
       expect(failedWebhooksCard?.querySelector('[data-slot="stat-value"]')?.textContent).toBe('2')
+    })
+  })
+
+  // #1631 M8b: shared-institution-security-id detection. The component does not yet render
+  // per-group member detail (`.groups`) even though the generated client has it — only the count
+  // is asserted here, matching what the component actually renders today.
+  //
+  // ⚠ Renamed by CX7 from "Forked Security Identities" / "Fork Groups Detected": the count is a
+  // CANDIDATE count, because institution_security_id is institution-scoped and this grouping has
+  // no institution dimension.
+  describe('Shared Institution Security IDs section', () => {
+    const FORK_CARD = 'Candidate Groups'
+
+    const forkCardValue = (title: string) => {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${title}"`)
+      return card.querySelector('[data-slot="stat-value"]')?.textContent ?? ''
+    }
+
+    // THE RED TEST: a seeded fork group reaches an operator, where before this task nothing
+    // anywhere counted them.
+    it('surfaces a seeded fork-group count', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          forked_security_identities: { group_count: 2, available: true },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Shared Institution Security IDs/i)).toBeInTheDocument()
+      })
+
+      expect(forkCardValue(FORK_CARD)).toBe('2')
+    })
+
+    // THE MANDATORY SIBLING: without it, the seeded test above could pass against a hardcoded
+    // constant. No candidates must read as a verified zero.
+    it('reports a verified zero when no candidate groups are detected', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: mockHealthData, // forked_security_identities: group_count 0, available true
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(FORK_CARD)).toBeInTheDocument()
+      })
+
+      expect(forkCardValue(FORK_CARD)).toBe('0')
+    })
+
+    // ⚠ Unknown is not zero — a failed query must never render as a confident "0 forks".
+    it('renders "Unavailable", not a green zero, when the query failed', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          forked_security_identities: { group_count: 0, available: false },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(FORK_CARD)).toBeInTheDocument()
+      })
+
+      expect(forkCardValue(FORK_CARD)).toBe('Unavailable')
+      const card = screen.getByText(FORK_CARD).closest('[data-slot="card"]')
+      expect(card?.className ?? '').not.toMatch(/success/i)
+    })
+
+    // A rolling deploy or an older cached response can omit `forked_security_identities` entirely;
+    // an unguarded read must not throw and blank the whole dashboard.
+    it('degrades to "Unavailable" (not a crash) when `forked_security_identities` is entirely absent', async () => {
+      const withoutForks: Record<string, unknown> = { ...mockHealthData }
+      delete withoutForks.forked_security_identities
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: withoutForks,
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/System Health/i)).toBeInTheDocument()
+      })
+      await waitFor(() => {
+        expect(screen.getByText(FORK_CARD)).toBeInTheDocument()
+      })
+
+      expect(forkCardValue(FORK_CARD)).toBe('Unavailable')
+    })
+  })
+
+  // #1631 CX6/CX7: two gauges on this page were rendered as WARNINGS for counts their own
+  // documentation says are not confirmed problems. A permanently-yellow dashboard trains an
+  // operator to ignore it, which is the exact outcome those doc comments say they want to avoid.
+  describe('informational gauges are not rendered as warnings', () => {
+    const cardFor = (title: string | RegExp) => {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${String(title)}"`)
+      return card
+    }
+
+    const seed = (data: Record<string, unknown>) => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: { ...mockHealthData, ...data },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+    }
+
+    const CANDIDATE_CARD = /Candidate Groups/i
+
+    // CX6. A long-held DCA position reports its entire pre-window base as drift forever, and the
+    // metric's own doc says that population is expected to DOMINATE this count. An ordinary
+    // portfolio therefore makes the dashboard permanently yellow.
+    it('renders a nonzero drift count as informational, not a warning', async () => {
+      seed({
+        position_reconciliation: {
+          drift_count: 7,
+          suppressed_pre_window_count: 40,
+          total_positions_checked: 120,
+          available: true,
+        },
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText('Drift Positions')).toBeInTheDocument()
+      })
+
+      const card = cardFor('Drift Positions')
+      expect(card.className).not.toContain('border-l-warning')
+      expect(card.className).toContain('border-l-info')
+    })
+
+    // The sibling that stops the assertion above passing against a card that lost its accent
+    // entirely: an UNAVAILABLE gauge is still a warning, because unknown is not zero.
+    it('still warns when the reconciliation gauge is unavailable', async () => {
+      seed({
+        position_reconciliation: {
+          drift_count: 0,
+          suppressed_pre_window_count: 0,
+          total_positions_checked: 0,
+          available: false,
+        },
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText('Drift Positions')).toBeInTheDocument()
+      })
+
+      expect(cardFor('Drift Positions').className).toContain('border-l-warning')
+    })
+
+    // CX7. institution_security_id is documented INSTITUTION-SCOPED, and the grouping behind this
+    // count has no institution dimension -- so two institutions reusing the same internal id are
+    // counted as a forked identity the metric cannot actually establish. It is a review list, not
+    // a problem count, and must not be rendered as one.
+    it('renders a nonzero shared-id count as informational, not a warning', async () => {
+      seed({ forked_security_identities: { group_count: 3, available: true } })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText(CANDIDATE_CARD)).toBeInTheDocument()
+      })
+
+      const card = cardFor(CANDIDATE_CARD)
+      expect(card.className).not.toContain('border-l-warning')
+      expect(card.className).toContain('border-l-info')
+    })
+
+    it('still warns when the shared-id gauge is unavailable', async () => {
+      seed({ forked_security_identities: { group_count: 0, available: false } })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText(CANDIDATE_CARD)).toBeInTheDocument()
+      })
+
+      expect(cardFor(CANDIDATE_CARD).className).toContain('border-l-warning')
+    })
+
+    // The card copy has to carry the narrowed claim too. A neutral colour with confident wording
+    // is still an assertion the metric cannot support.
+    it('says on the page that a shared institution id is only a candidate', async () => {
+      seed({ forked_security_identities: { group_count: 3, available: true } })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText(CANDIDATE_CARD)).toBeInTheDocument()
+      })
+
+      expect(screen.getByText(/institution-scoped/i)).toBeInTheDocument()
+    })
+  })
+
+  // #1631 M8b N1: the position-reconciliation drift gauge. Before this fix, `position_reconciliation`
+  // was served by the API and present in the generated client but rendered nowhere — an operator
+  // opening /admin/health saw the fork gauge and nothing about the trade-vs-position diagnostic.
+  describe('Position Reconciliation section', () => {
+    const DRIFT_CARD = 'Drift Positions'
+    const SUPPRESSED_CARD = 'Suppressed (Pre-Window)'
+    const CHECKED_CARD = 'Total Positions Checked'
+
+    const reconCardValue = (title: string) => {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${title}"`)
+      return card.querySelector('[data-slot="stat-value"]')?.textContent ?? ''
+    }
+
+    // THE RED TEST: a seeded drift count reaches an operator, where before this fix
+    // position_reconciliation was served and generated but rendered nowhere.
+    it('surfaces seeded drift, suppressed, and total-checked counts', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          position_reconciliation: {
+            drift_count: 3,
+            suppressed_pre_window_count: 40,
+            total_positions_checked: 120,
+            available: true,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Position Reconciliation/i)).toBeInTheDocument()
+      })
+
+      expect(reconCardValue(DRIFT_CARD)).toBe('3')
+      expect(reconCardValue(SUPPRESSED_CARD)).toBe('40')
+      expect(reconCardValue(CHECKED_CARD)).toBe('120')
+    })
+
+    // THE MANDATORY SIBLING: without it, the seeded test above could pass against hardcoded
+    // constants. Nothing checked yet (or nothing drifting) must read as a verified zero.
+    it('reports verified zeros when there is nothing to check', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: mockHealthData, // position_reconciliation: all zero counts, available true
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(DRIFT_CARD)).toBeInTheDocument()
+      })
+
+      expect(reconCardValue(DRIFT_CARD)).toBe('0')
+      expect(reconCardValue(SUPPRESSED_CARD)).toBe('0')
+      expect(reconCardValue(CHECKED_CARD)).toBe('0')
+    })
+
+    // ⚠ Unknown is not zero — a failed query must never render as a confident "0 drifts".
+    it('renders "Unavailable", not a green zero, when the query failed', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          position_reconciliation: {
+            drift_count: 0,
+            suppressed_pre_window_count: 0,
+            total_positions_checked: 0,
+            available: false,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(DRIFT_CARD)).toBeInTheDocument()
+      })
+
+      expect(reconCardValue(DRIFT_CARD)).toBe('Unavailable')
+      expect(reconCardValue(SUPPRESSED_CARD)).toBe('Unavailable')
+      expect(reconCardValue(CHECKED_CARD)).toBe('Unavailable')
+      const card = screen.getByText(DRIFT_CARD).closest('[data-slot="card"]')
+      expect(card?.className ?? '').not.toMatch(/success/i)
+    })
+
+    // A rolling deploy or an older cached response can omit `position_reconciliation` entirely;
+    // an unguarded read must not throw and blank the whole dashboard.
+    it('degrades to "Unavailable" (not a crash) when `position_reconciliation` is entirely absent', async () => {
+      const withoutRecon: Record<string, unknown> = { ...mockHealthData }
+      delete withoutRecon.position_reconciliation
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: withoutRecon,
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/System Health/i)).toBeInTheDocument()
+      })
+      await waitFor(() => {
+        expect(screen.getByText(DRIFT_CARD)).toBeInTheDocument()
+      })
+
+      expect(reconCardValue(DRIFT_CARD)).toBe('Unavailable')
+    })
+
+    // Pins the C2 caveat: the helper text under the cards must say plainly that Drift Positions
+    // is not a confirmed-problem count, so the number is never read in isolation.
+    it('carries the "not a confirmed-problem count" caveat in its helper text', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: mockHealthData,
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(DRIFT_CARD)).toBeInTheDocument()
+      })
+
+      expect(screen.getByText(/NOT a confirmed-problem count/i)).toBeInTheDocument()
     })
   })
 

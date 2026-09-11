@@ -56,8 +56,14 @@ func (f *CashFlowFilters) Validate() error {
 // measure. Compare CashFlowHistoryResponse, which DOES clamp, discloses it in
 // requested_end_date, and has a fabrication problem to solve that this endpoint does not have.
 type CashFlowSummaryResponse struct {
-	StartDate        time.Time                 `json:"start_date"`
-	EndDate          time.Time                 `json:"end_date"`
+	// StartDate/EndDate stay time.Time — NOT serialized — because they are the SQL bind params the
+	// service threads into GetCashFlowAggregation; StartDateDisplay/EndDateDisplay are what
+	// actually reach clients (#1631, same defect HoldingSnapshotView.AsOfDate and
+	// InvestmentTransaction.DateDisplay already fix for this endpoint's siblings).
+	StartDate        time.Time                 `json:"-"`
+	StartDateDisplay string                    `json:"start_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) the aggregate window starts on"`
+	EndDate          time.Time                 `json:"-"`
+	EndDateDisplay   string                    `json:"end_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) the aggregate window ends on"`
 	Income           float64                   `json:"income"`
 	Expenses         float64                   `json:"expenses"`
 	NetCashFlow      float64                   `json:"net_cash_flow"`
@@ -96,23 +102,40 @@ type CashFlowPeriodComparison struct {
 // (institution-local dates run ahead of UTC) widens it rather than being contradicted — see
 // responseEndDate. So end_date > requested_end_date is impossible, but end_date > today is not.
 type CashFlowHistoryResponse struct {
-	StartDate time.Time `json:"start_date"`
-	EndDate   time.Time `json:"end_date"`
+	// StartDate/EndDate stay time.Time — NOT serialized — for the same reason as
+	// CashFlowSummaryResponse above; StartDateDisplay/EndDateDisplay are what reach clients
+	// (#1631).
+	StartDate        time.Time `json:"-"`
+	StartDateDisplay string    `json:"start_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this history response starts on"`
+	EndDate          time.Time `json:"-"`
+	EndDateDisplay   string    `json:"end_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this history response ends on"`
 	// RequestedEndDate is the caller's own end date, echoed unchanged. Equal to EndDate for every
 	// request that does not reach past today, which is nearly all of them.
-	RequestedEndDate time.Time            `json:"requested_end_date"`
-	Grouping         string               `json:"grouping"` // "daily", "weekly", "monthly"
-	Periods          []CashFlowPeriodData `json:"periods"`
+	//
+	// Same treatment as the two above. ⚠ This field was MISSED by the mechanical inventory of
+	// this defect class, and the reason generalises: that inventory matched struct fields against
+	// the DATE columns named in the migrations, and this one echoes the caller's request rather
+	// than reading a column, so it had no column name to match. A date-shaped value does not need
+	// a DATE column behind it to be serialized wrong. Search by SHAPE, not only by column.
+	RequestedEndDate        time.Time            `json:"-"`
+	RequestedEndDateDisplay string               `json:"requested_end_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) the caller asked this history response to end on"`
+	Grouping                string               `json:"grouping"` // "daily", "weekly", "monthly"
+	Periods                 []CashFlowPeriodData `json:"periods"`
 }
 
 // CashFlowPeriodData represents a single period in the cash flow history timeline
 type CashFlowPeriodData struct {
-	PeriodStart      time.Time `json:"period_start"`
-	PeriodEnd        time.Time `json:"period_end"`
-	Income           float64   `json:"income"`
-	Expenses         float64   `json:"expenses"`
-	NetCashFlow      float64   `json:"net_cash_flow"`
-	TransactionCount int       `json:"transaction_count"`
+	// PeriodStart/PeriodEnd stay time.Time — NOT serialized — for the same reason as
+	// CashFlowSummaryResponse above; PeriodStartDisplay/PeriodEndDisplay are what reach clients
+	// (#1631).
+	PeriodStart        time.Time `json:"-"`
+	PeriodStartDisplay string    `json:"period_start" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this period starts on"`
+	PeriodEnd          time.Time `json:"-"`
+	PeriodEndDisplay   string    `json:"period_end" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this period ends on"`
+	Income             float64   `json:"income"`
+	Expenses           float64   `json:"expenses"`
+	NetCashFlow        float64   `json:"net_cash_flow"`
+	TransactionCount   int       `json:"transaction_count"`
 }
 
 // CashFlowAggregation represents raw aggregated cash flow data from the database
@@ -168,8 +191,8 @@ type SpendingByCategory struct {
 
 // SpendingByCategoryResponse is the response for GET /analytics/spending-by-category
 type SpendingByCategoryResponse struct {
-	StartDate  string               `json:"start_date"`
-	EndDate    string               `json:"end_date"`
+	StartDate  string               `json:"start_date" format:"date"`
+	EndDate    string               `json:"end_date" format:"date"`
 	TotalSpent float64              `json:"total_spent"`
 	Categories []SpendingByCategory `json:"categories"`
 }
@@ -185,8 +208,8 @@ type SpendingByMerchant struct {
 
 // SpendingByMerchantResponse is the response for GET /analytics/spending-by-merchant
 type SpendingByMerchantResponse struct {
-	StartDate string               `json:"start_date"`
-	EndDate   string               `json:"end_date"`
+	StartDate string               `json:"start_date" format:"date"`
+	EndDate   string               `json:"end_date" format:"date"`
 	TopN      int                  `json:"top_n"`
 	Merchants []SpendingByMerchant `json:"merchants"`
 }
@@ -200,16 +223,16 @@ type CategorySpending struct {
 
 // SpendingTrendPeriod represents one month's spending breakdown in a trends response
 type SpendingTrendPeriod struct {
-	PeriodStart string             `json:"period_start"`
-	PeriodEnd   string             `json:"period_end"`
+	PeriodStart string             `json:"period_start" format:"date"`
+	PeriodEnd   string             `json:"period_end" format:"date"`
 	Categories  []CategorySpending `json:"categories"`
 	Total       float64            `json:"total"`
 }
 
 // SpendingTrendsResponse is the response for GET /analytics/spending-trends
 type SpendingTrendsResponse struct {
-	StartDate     string                `json:"start_date"`
-	EndDate       string                `json:"end_date"`
+	StartDate     string                `json:"start_date" format:"date"`
+	EndDate       string                `json:"end_date" format:"date"`
 	Periods       []SpendingTrendPeriod `json:"periods"`
 	TopCategories []string              `json:"top_categories"` // Top 5 categories by total spend
 }
@@ -239,8 +262,8 @@ type CategoryTotalResponse struct {
 	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
 	Total             float64 `json:"total"`
 	TransactionCount  int     `json:"transaction_count"`
-	StartDate         string  `json:"start_date"`
-	EndDate           string  `json:"end_date"`
+	StartDate         string  `json:"start_date" format:"date"`
+	EndDate           string  `json:"end_date" format:"date"`
 }
 
 // TopExpenseRow is a raw database row for GetTopExpense
@@ -263,9 +286,9 @@ type TopExpenseResponse struct {
 	Amount            float64 `json:"amount"`
 	Category          string  `json:"category"`
 	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
-	Date              string  `json:"date"`
-	StartDate         string  `json:"start_date"`
-	EndDate           string  `json:"end_date"`
+	Date              string  `json:"date" format:"date"`
+	StartDate         string  `json:"start_date" format:"date"`
+	EndDate           string  `json:"end_date" format:"date"`
 }
 
 // ─── Issue #1215 analytics helpers ──────────────────────────────────────────
@@ -281,8 +304,8 @@ type AverageMonthlySpendResponse struct {
 	AverageMonthlySpend float64 `json:"average_monthly_spend"`
 	TotalSpend          float64 `json:"total_spend"`
 	MonthCount          int     `json:"month_count"`
-	StartDate           string  `json:"start_date"`
-	EndDate             string  `json:"end_date"`
+	StartDate           string  `json:"start_date" format:"date"`
+	EndDate             string  `json:"end_date" format:"date"`
 }
 
 // RecurringSubscriptionRow is the raw DB row for GetRecurringSubscriptions.
@@ -302,15 +325,15 @@ type RecurringSubscriptionItem struct {
 	Amount           float64 `json:"amount"`
 	OccurrenceCount  int     `json:"occurrence_count"`
 	AvgGapDays       float64 `json:"avg_gap_days"`
-	LastChargeDate   string  `json:"last_charge_date"`
-	NextExpectedDate string  `json:"next_expected_date"`
+	LastChargeDate   string  `json:"last_charge_date" format:"date"`
+	NextExpectedDate string  `json:"next_expected_date" format:"date"`
 }
 
 // RecurringSubscriptionsResponse is the response for GET /analytics/recurring-subscriptions.
 // AI-tool-callable: heuristic detection of recurring charges (monthly cadence). Issue #1215.
 type RecurringSubscriptionsResponse struct {
 	Subscriptions []RecurringSubscriptionItem `json:"subscriptions"`
-	AsOfDate      string                      `json:"as_of_date"`
+	AsOfDate      string                      `json:"as_of_date" format:"date"`
 }
 
 // ─── Issue #1215 PR2 analytics helpers ──────────────────────────────────────
@@ -327,8 +350,8 @@ type SavingsRateResponse struct {
 	Income      float64  `json:"income"`
 	Expenses    float64  `json:"expenses"`
 	NetSavings  float64  `json:"net_savings"`
-	StartDate   string   `json:"start_date"`
-	EndDate     string   `json:"end_date"`
+	StartDate   string   `json:"start_date" format:"date"`
+	EndDate     string   `json:"end_date" format:"date"`
 }
 
 // MonthOverMonthBucketRow is a raw DB row for GetMonthOverMonthSpending.
@@ -372,7 +395,7 @@ type LargestTransactionItem struct {
 	Amount            float64 `json:"amount"`
 	Category          string  `json:"category"`
 	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
-	Date              string  `json:"date"`
+	Date              string  `json:"date" format:"date"`
 	AccountID         string  `json:"account_id"`
 }
 
@@ -380,8 +403,8 @@ type LargestTransactionItem struct {
 type LargestTransactionsResponse struct {
 	Transactions []LargestTransactionItem `json:"transactions"`
 	Limit        int                      `json:"limit"`
-	StartDate    string                   `json:"start_date"`
-	EndDate      string                   `json:"end_date"`
+	StartDate    string                   `json:"start_date" format:"date"`
+	EndDate      string                   `json:"end_date" format:"date"`
 }
 
 // CategoryBreakdownForMerchantRow is a raw DB row for GetCategoryBreakdownForMerchant.
@@ -407,8 +430,8 @@ type CategoryBreakdownForMerchantResponse struct {
 	MerchantName string                  `json:"merchant_name"`
 	Categories   []CategoryBreakdownItem `json:"categories"`
 	TotalSpend   float64                 `json:"total_spend"`
-	StartDate    string                  `json:"start_date"`
-	EndDate      string                  `json:"end_date"`
+	StartDate    string                  `json:"start_date" format:"date"`
+	EndDate      string                  `json:"end_date" format:"date"`
 }
 
 // IncomeSourceRow is a raw DB row for GetIncomeSourceBreakdown.
@@ -440,8 +463,8 @@ type IncomeSourceItem struct {
 type IncomeSourceBreakdownResponse struct {
 	Sources     []IncomeSourceItem `json:"sources"`
 	TotalIncome float64            `json:"total_income"`
-	StartDate   string             `json:"start_date"`
-	EndDate     string             `json:"end_date"`
+	StartDate   string             `json:"start_date" format:"date"`
+	EndDate     string             `json:"end_date" format:"date"`
 }
 
 // ─── Issue #1215 PR3 analytics helpers ──────────────────────────────────────
@@ -466,7 +489,7 @@ type UnusualSpendItem struct {
 	Amount            float64 `json:"amount"`
 	Category          string  `json:"category"`
 	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
-	Date              string  `json:"date"`
+	Date              string  `json:"date" format:"date"`
 	BaselineAvg       float64 `json:"baseline_avg"`
 	SigmaAbove        float64 `json:"sigma_above"`
 }
@@ -474,14 +497,14 @@ type UnusualSpendItem struct {
 // UnusualSpendResponse is the response for GET /analytics/unusual-spend (AI-tool-callable).
 type UnusualSpendResponse struct {
 	Items          []UnusualSpendItem `json:"items"`
-	StartDate      string             `json:"start_date"`
-	EndDate        string             `json:"end_date"`
+	StartDate      string             `json:"start_date" format:"date"`
+	EndDate        string             `json:"end_date" format:"date"`
 	SigmaThreshold float64            `json:"sigma_threshold"`
 }
 
 // NetWorthBucket represents one time period in the net worth trend.
 type NetWorthBucket struct {
-	Date      string   `json:"date"` // first day of bucket period (YYYY-MM-DD)
+	Date      string   `json:"date" format:"date"` // first day of bucket period (YYYY-MM-DD)
 	NetWorth  float64  `json:"net_worth"`
 	ChangeAbs *float64 `json:"change_abs"` // nil for first bucket
 	ChangePct *float64 `json:"change_pct"` // nil for first bucket; nil if prev=0
@@ -491,8 +514,8 @@ type NetWorthBucket struct {
 type NetWorthTrendResponse struct {
 	Buckets   []NetWorthBucket `json:"buckets"`
 	Grouping  string           `json:"grouping"`
-	StartDate string           `json:"start_date"`
-	EndDate   string           `json:"end_date"`
+	StartDate string           `json:"start_date" format:"date"`
+	EndDate   string           `json:"end_date" format:"date"`
 }
 
 // BudgetVsActualRow is the raw DB row for GetBudgetVsActual.
@@ -593,6 +616,6 @@ type CategoryHierarchyResponse struct {
 	Levels    []CategoryHierarchyNode `json:"levels"`
 	Total     float64                 `json:"total"`
 	Direction string                  `json:"direction"`
-	StartDate string                  `json:"start_date"`
-	EndDate   string                  `json:"end_date"`
+	StartDate string                  `json:"start_date" format:"date"`
+	EndDate   string                  `json:"end_date" format:"date"`
 }

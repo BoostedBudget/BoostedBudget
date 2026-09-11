@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -79,6 +80,44 @@ type UserAccountRepository interface {
 	// DECISION of whether a hide may be lifted lives in UserAccountService (only a 'system' cause
 	// is lifted automatically). This method carries it out once that decision is made.
 	ClearHidden(ctx context.Context, id, userID string) error
+
+	// PendingInvestmentBackfills returns, for the given chain ids OWNED BY userID, those carrying an
+	// outstanding investment-transaction backfill obligation, mapped to the instant it was recorded
+	// (user_accounts.investment_backfill_requested_at, migration 000201). Chains that owe nothing —
+	// and chains userID does not own — are absent from the map rather than present with a zero time.
+	//
+	// The obligation is created by Update below, in the same statement that clears
+	// exclude_investment_sync — see that method and the migration header for why it lives on the
+	// row rather than in the job queue. The sole consumer is
+	// investmentSyncService.SyncInvestmentTransactions, which widens its Plaid start date to the
+	// full lookback when this returns anything.
+	//
+	// ⚠ Scoped by (ids, userID) IN SQL. An earlier version of this method took no userID and
+	// delegated tenancy to the caller — a background sync that had resolved the ids from a linked
+	// item it owned. That is exactly the reasoning tenant_scoped_writes_integration_test.go rejects
+	// ("tenant scoping must be enforced by the repository, not by caller discipline"), and #1566
+	// retrofitted AND user_id = $n onto four sibling user_accounts writers for the same reason. The
+	// appeal to GetByLinkedItemIDIncludingRetained was not equivalent either: that method is a READ.
+	// The concrete hole is one mis-assigned accounts.user_account_id — the sync checks the owner of
+	// each ACCOUNT but never of the chain it points at, so a stray row would let one user's sync
+	// read (and, through the sibling method below, discharge) another user's obligation.
+	PendingInvestmentBackfills(ctx context.Context, userAccountIDs []string, userID string) (map[string]time.Time, error)
+
+	// ClearInvestmentBackfillRequests discharges the obligation on the given chains — but only those
+	// owned by userID, and only where the recorded marker is no newer than notAfter.
+	//
+	// ⚠ The notAfter bound is the load-bearing part, not defensive padding. The caller passes the
+	// newest marker it OBSERVED when it chose its start date. If the owner re-excluded and
+	// re-included the chain while the sync was in flight, the new marker covers a window this run
+	// did not fetch, and clearing it would silently discard a backfill nobody will ever redo.
+	//
+	// ⚠ userID is not belt-and-braces on top of the ids: this is a WRITE that silently and
+	// irrecoverably discards an obligation, and a discarded obligation is invisible to every read
+	// (nothing reports "a backfill that should have happened did not"). Discharging a stranger's
+	// obligation is therefore the worst failure this mechanism can have, and the predicate that
+	// prevents it belongs in the statement. See PendingInvestmentBackfills above and
+	// TestTenantScopedWrites_UserAccountRepository_ClearInvestmentBackfillRequests.
+	ClearInvestmentBackfillRequests(ctx context.Context, userAccountIDs []string, userID string, notAfter time.Time) error
 }
 
 // userAccountRepository implements UserAccountRepository using PostgreSQL
@@ -497,12 +536,34 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 // hidden_source travels WITH is_hidden (#1609): the pair is one fact, and the caller
 // (UserAccountService.UpdateCustomization) is responsible for keeping them consistent — a hide the
 // user sets is 'user', and clearing the hide clears the cause.
+//
+// ⚠ investment_backfill_requested_at travels with exclude_investment_sync in the SAME STATEMENT,
+// and unlike hidden_source it is decided HERE rather than by the caller (#1631, migration 000201).
+// That is deliberate on both counts:
+//
+//   - It must be atomic with the flag write. As of #1631 the investment sync stops persisting
+//     investment_transactions for an excluded chain, so clearing the flag creates an obligation to
+//     re-fetch. If that obligation were recorded by a second write — a queued job, a follow-up
+//     UPDATE — a crash in between loses it FOREVER: the flag transition is true -> false, and a
+//     retry of a write that already landed is false -> false, which no transition-triggered
+//     mechanism can observe a second time. One statement is atomic by definition.
+//   - The CASE reads the PRE-UPDATE value of exclude_investment_sync, which the service layer does
+//     not reliably have (it mutates the struct it loaded before handing it here). So the SQL is the
+//     only place that can see the transition, which is also why this is not an "or" with the
+//     caller: a service-side transition check would be a second, weaker copy of this one.
+//
+// An UPDATE that does not clear the flag leaves the column exactly as it was, so an obligation
+// recorded earlier and not yet discharged is never dropped by an unrelated customization change.
 func (r *userAccountRepository) Update(ctx context.Context, userAccount *domain.UserAccount) error {
 	query := `
 		UPDATE user_accounts
 		SET nickname = $1, custom_color = $2, custom_icon = $3,
 		    custom_emoji = $4, display_order = $5, is_hidden = $6, hidden_source = $7,
 		    exclude_investment_sync = $8,
+		    investment_backfill_requested_at = CASE
+		        WHEN exclude_investment_sync AND NOT $8 THEN $9
+		        ELSE investment_backfill_requested_at
+		    END,
 		    updated_at = $9
 		WHERE id = $10 AND user_id = $11
 	`
@@ -611,6 +672,87 @@ func (r *userAccountRepository) ClearHidden(ctx context.Context, id, userID stri
 	}
 	if result.RowsAffected() == 0 {
 		return ErrUserAccountNotFound
+	}
+	return nil
+}
+
+// PendingInvestmentBackfills implements UserAccountRepository. See the interface for the contract,
+// and migration 000201 for why the obligation lives on the row.
+func (r *userAccountRepository) PendingInvestmentBackfills(ctx context.Context, userAccountIDs []string, userID string) (map[string]time.Time, error) {
+	if len(userAccountIDs) == 0 {
+		return map[string]time.Time{}, nil
+	}
+
+	// id = ANY($1::uuid[]) rather than a JOIN or an IN-list built by string concatenation: one
+	// round trip, one prepared statement shape regardless of how many chains an item carries, and
+	// no possibility of an injected fragment.
+	//
+	// AND user_id = $2 makes the tenant boundary a property of the statement rather than of the
+	// caller — see the interface doc for why the caller's own ownership check is not enough.
+	query := `
+		SELECT id, investment_backfill_requested_at
+		FROM user_accounts
+		WHERE id = ANY($1::uuid[])
+		  AND user_id = $2
+		  AND investment_backfill_requested_at IS NOT NULL
+	`
+
+	rows, err := r.db.Query(ctx, query, userAccountIDs, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	pending := make(map[string]time.Time)
+	for rows.Next() {
+		var id string
+		var requestedAt time.Time
+		if err := rows.Scan(&id, &requestedAt); err != nil {
+			return nil, err
+		}
+		pending[id] = requestedAt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return pending, nil
+}
+
+// ClearInvestmentBackfillRequests implements UserAccountRepository. See the interface for why
+// notAfter is load-bearing rather than defensive.
+func (r *userAccountRepository) ClearInvestmentBackfillRequests(ctx context.Context, userAccountIDs []string, userID string, notAfter time.Time) error {
+	if len(userAccountIDs) == 0 {
+		return nil
+	}
+
+	// No updated_at bump and no RowsAffected check turned into an error. This column is an internal
+	// sync marker, not a customization the user can see, and a short count is the ordinary outcome
+	// when the owner re-excluded the chain mid-run — the case notAfter exists to protect. Treating
+	// that as ErrUserAccountNotFound would turn correct behaviour into a sync error.
+	//
+	// ⚠ AND user_id = $2 is a real predicate, not a redundant one, and it is the reason a short count
+	// cannot be used as an error signal here: a foreign id and a legitimately-superseded marker are
+	// indistinguishable in the row count. The statement refuses the foreign row; the count reports
+	// nothing about which case occurred. #1631: a short count IS still worth an observable trace —
+	// today it is silently indistinguishable from a caller passing an id it does not own, which is
+	// exactly the shape of a cross-tenant write attempt. A WARN log (not an error, so the method's
+	// error semantics are unchanged) names both counts so that case is at least visible in logs.
+	query := `
+		UPDATE user_accounts
+		SET investment_backfill_requested_at = NULL
+		WHERE id = ANY($1::uuid[])
+		  AND user_id = $2
+		  AND investment_backfill_requested_at IS NOT NULL
+		  AND investment_backfill_requested_at <= $3
+	`
+	tag, err := r.db.Exec(ctx, query, userAccountIDs, userID, notAfter)
+	if err != nil {
+		return err
+	}
+	if requested := len(userAccountIDs); int(tag.RowsAffected()) < requested {
+		slog.WarnContext(ctx, "ClearInvestmentBackfillRequests: rows affected fewer than requested — "+
+			"either a legitimately-superseded marker or a caller-supplied id this user does not own",
+			"requested_count", requested, "affected_count", tag.RowsAffected(), "user_id", userID)
 	}
 	return nil
 }

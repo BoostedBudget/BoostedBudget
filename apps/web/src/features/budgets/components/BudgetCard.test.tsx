@@ -1,4 +1,4 @@
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router'
 import { BudgetCard } from './BudgetCard'
@@ -165,6 +165,40 @@ describe('BudgetCard', () => {
       renderWithRouter(<BudgetCard budget={mockBudget} />)
 
       expect(screen.queryByText('Income')).not.toBeInTheDocument()
+    })
+  })
+
+  // #1631 Batch F2: budgets.start_date/end_date are Postgres DATE columns serialized on the wire
+  // as "2026-09-01T00:00:00Z" (see backend/internal/domain/budget.go's StartDateDisplay). This
+  // component used to parse that with a bare `new Date(dateString)`, which JS interprets as a UTC
+  // INSTANT — then format it in the LOCAL timezone. For any negative UTC offset (west of UTC,
+  // e.g. America/New_York) that renders one calendar day EARLY: a budget starting "2026-09-01"
+  // showed "Aug 31". Fixed by routing through the shared, component-wise-parsing
+  // `formatDate` (shared/transactions/dates.ts) instead of a private copy.
+  describe('date rendering under a negative UTC offset', () => {
+    const originalTZ = globalThis.process.env.TZ
+
+    beforeEach(() => {
+      globalThis.process.env.TZ = 'America/New_York'
+    })
+
+    afterEach(() => {
+      globalThis.process.env.TZ = originalTZ
+    })
+
+    it('renders start_date/end_date as the actual calendar day, not the day before', () => {
+      const dateOnlyBudget: Budget = {
+        ...mockBudget,
+        start_date: '2026-09-01',
+        end_date: '2026-09-30',
+      }
+
+      const { container } = renderWithRouter(<BudgetCard budget={dateOnlyBudget} />)
+
+      expect(container.textContent).not.toContain('Aug 31')
+      expect(container.textContent).not.toContain('Sep 29')
+      expect(container.textContent).toContain('Sep 1')
+      expect(container.textContent).toContain('Sep 30')
     })
   })
 })

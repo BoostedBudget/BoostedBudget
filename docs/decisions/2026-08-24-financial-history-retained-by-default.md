@@ -390,6 +390,134 @@ say the same qualified thing; widening § 8.4 alone would just move the over-cla
 
 ---
 
+## AMENDMENT (#1631, 2026-09-10): a fourth category — never ingesting a row
+
+**Non-ingestion is not destruction, and the three categories above do not cover it.** Every one of
+them concerns *removing* a row that exists: explicit destruction destroys a row the user named,
+side-effect destruction destroys one they did not, and automatic destruction destroys one nobody
+named at all. A row that was never written is a fourth thing, and this amendment adds it as a
+category rather than smuggling it into one of the three.
+
+### What prompted it
+
+`user_accounts.exclude_investment_sync` (migration `000187`, #1609 Item 5) exists for one shape of
+problem: Plaid reports a brokerage cash-management account through **both** `/transactions/sync`
+**and** `/investments/transactions/get`, so one real movement lands once in `transactions` and once
+in `investment_transactions`, and the unified feed shows the user their money twice. The flag is the
+owner's per-chain opt-out.
+
+It was originally, and deliberately, a **read filter and nothing else** — the argument being that
+the rows are legitimate provider-reported history, so suppressing them at ingestion would be
+destruction as a side effect of a preference. That argument was written down in **seven** places in
+the tree, and #1631 falsifies all seven on purpose. (The first fix round rewrote six and missed a
+seventh — `UpdateUserAccountRequest.ExcludeInvestmentSync`'s doc comment in
+`backend/internal/domain/user_account.go`, the mutation DTO the PATCH handler binds — corrected in
+the same round that re-derived this count.)
+
+The read-filter-only design has a defect the ADR's categories made hard to see: **we were still
+storing a row the USER HAD TOLD US was a duplicate of one we also store.** (⚠ Wording corrected:
+this sentence said "we had already concluded was a duplicate", which is the same unqualified claim
+this document's own scope test was corrected for retracting. Nothing in the system concludes it —
+the duplication is the user's assertion when they set the flag, it is never verified, and it is
+PARTIAL even when true, because the banking arm of the unified feed hard-codes NULL for
+security_id, ticker_symbol, security_name, type, subtype, quantity, price and fees.) The user's
+instruction is not "hide my duplicate", it is "this account's activity reaches me twice, stop the
+second copy". Every downstream consumer that does not know about the flag — a future analytics
+query, an export, an AI tool call — reads the duplicate and double-counts it. A read filter is one
+`NOT EXISTS` away from being forgotten by the next reader; not writing the row is not.
+
+### Why this is not side-effect destruction
+
+Side-effect destruction is forbidden because it removes history *the user did not ask to lose* as a
+consequence of something else they asked for: disconnecting a bank, cancelling a plan, letting a
+trial lapse. The tell, per Category 2, is that *"the confirm dialog does not mention the data that
+is about to disappear, because whoever wrote the dialog did not know it would."*
+
+Neither half of that applies here:
+
+1. **Nothing that exists is removed.** No `investment_transactions` row is deleted, tombstoned, or
+   made unreachable. Rows stored before the flag was set stay stored, stay queryable by the
+   repository, and reappear in full the moment the flag is cleared. The only rows affected are ones
+   that never existed.
+2. **The control IS the dialog.** The user is not asking for something else and losing this as a
+   consequence; setting this toggle is the request, in the account's own customization modal, and
+   the modal now says what the setting costs (see below). This is Category 1's *shape* — a named
+   instruction the user gave — applied to a write rather than a delete.
+
+The corollaries hold too. "The provider is not the user" is untouched: Plaid is not deciding
+anything here; the owner is. And "'I want to stop' is not 'I want it gone'" is precisely what this
+amendment respects — the user asked us to stop *ingesting*, and nothing they already have is gone.
+
+### The cost, stated honestly
+
+This is not free, and the honest name for what it costs is **availability, not retention**.
+
+`exclude_investment_sync` is **no longer fully reversible.** Clearing it triggers a backfill bounded
+by `investmentTxnLookbackYears` (2 years — `backend/internal/services/investment_sync_service.go`),
+because that is how far `/investments/transactions/get` will serve. An account excluded for longer
+than the backfill window **permanently loses its earliest excluded period**: we never stored those
+rows, and Plaid will no longer sell them to us. Nobody deleted anything, and the data is
+nevertheless not available. Pretending that distinction makes the loss painless would be dishonest;
+the distinction is about which rule governs, not about whether the user is worse off.
+
+Three things follow, and all three are requirements rather than aspirations:
+
+- **The obligation to backfill must be durable.** Clearing the flag records
+  `user_accounts.investment_backfill_requested_at` in the **same UPDATE statement** that clears the
+  flag (migration `000201`), so the two cannot come apart. A best-effort enqueue would not do: the
+  transition is `true → false`, and a retry after a lost enqueue is `false → false`, which no
+  transition-triggered mechanism can ever observe again. The sync widens its window to the full
+  lookback while the marker stands and clears it only after a run that stored everything Plaid
+  returned. See the migration header for the full reasoning.
+- **The UI must say so before the user commits.** `AccountCustomizationModal.tsx` states the
+  two-year bound in the toggle's own description. A promise of reversibility that the code no longer
+  keeps is worse than the loss it conceals.
+- **No confirm copy anywhere may promise a restore.** The ADR's existing rule stands unchanged and
+  now has a second reason to exist.
+
+### Where this does NOT extend
+
+This amendment is **scoped to a duplicate the user identified**, and the scope is the whole
+argument. It authorises non-ingestion where all three of the following hold:
+
+1. the row would be a **duplicate of history we store anyway** by another route.
+   ⚠ **CORRECTED (#1631, after an independent review). This test as first written said
+   "so declining to write it loses no fact". That was FALSE, and the correction matters more
+   than the wording.**
+   The duplicate is **partial, not total.** The banking route stores the cash movement. It
+   cannot store the security-level detail: the unified feed's banking arm hard-codes
+   `NULL::text` for `security_id`, `ticker_symbol`, `security_name`, `type` and `subtype`, and
+   `NULL::float8` for `quantity`, `price` and `fees`
+   (`backend/internal/repository/transaction_repository.go:3540-3546`). So for a dividend, a
+   trade, a fee or a split, declining to write the investment row **does lose facts** — the
+   ones that make it an investment transaction rather than a cash movement.
+   The duplicate is also **user-asserted, not system-verified.** Nothing in the code tests
+   this condition. The toggle renders for every chained account
+   (`AccountCustomizationModal.tsx`), a deliberate product decision from #1618 taken when the
+   flag was a harmless, reversible read filter. It is no longer either. A user who sets it on
+   a genuine brokerage account — one whose investment activity is NOT double-reported —
+   permanently loses that account's security-level history beyond the 2-year backfill.
+   **What this test therefore authorises** is the user's judgement about their own account, not
+   the system's knowledge of it. That is a defensible thing to authorise, and it is the thing
+   the code actually does; the original wording claimed the system knew, which it does not.
+   Anyone narrowing the toggle's availability to accounts with evidence of double-reporting
+   would strengthen this test from an assertion into a fact, and should;
+2. the user gave a **named, per-object instruction**, in a control whose copy states the cost; and
+3. the instruction is **recoverable** — reversing it triggers a bounded backfill whose obligation is
+   durable, and whose limit the user was told.
+
+It authorises nothing else. In particular it is **not** a licence to skip ingestion for a hidden
+account, a disconnected item, an unsupported product, a downgraded tier, or a row that merely looks
+unwanted. Those are all Category 2 in ingestion's clothing: no duplicate, no instruction, no
+backfill. If a proposed non-ingestion cannot satisfy all three tests above, it is forbidden, and the
+correct design is the read filter this amendment replaced.
+
+**If this argument ever stops surviving being written down, the fallback is read-filter-only.** That
+was the original design, it is still correct for every case outside the three tests, and reverting
+to it costs nothing but the duplicate.
+
+---
+
 ## The Decisions
 
 ### 1. Disconnect and purge are two verbs, not one

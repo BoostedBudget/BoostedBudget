@@ -45,6 +45,9 @@ const mockSummary: PortfolioSummary = {
   day_change: 230.15,
   day_change_pct: 0.44,
   holdings_count: 12,
+  // #1631 M8a: a single-currency portfolio, stated rather than assumed.
+  currency_code: 'USD',
+  is_mixed_currency: false,
 }
 
 const mockHistory: GetPortfolioHistoryOutputBody = {
@@ -52,6 +55,10 @@ const mockHistory: GetPortfolioHistoryOutputBody = {
     { date: '2025-01-01', total_value: 50000 },
     { date: '2025-06-01', total_value: 52340 },
   ],
+  // #1631 M8a I-2: a series states its currency, because a line chart has ONE y-axis with
+  // one unit — a series whose points disagree is unplottable as a whole, not per-point.
+  currency_code: 'USD',
+  is_mixed_currency: false,
 }
 
 describe('PortfolioPage', () => {

@@ -123,12 +123,21 @@ func buildErrorHistory(job *rivertype.JobRow, currentErr error) []domain.JobErro
 		})
 	}
 
-	// Add current error
-	errors = append(errors, domain.JobError{
+	// Add current error, enriched with the structure the error value actually carries (#1631).
+	//
+	// Only this attempt can be enriched: River hands historical attempts back as plain strings
+	// (rivertype.AttemptError.Error), so the error VALUES for earlier attempts are gone by the
+	// time this runs and there is nothing to run errors.As against. That is acceptable because
+	// the final attempt is the one an operator triages, and the gap is why the fields are
+	// optional rather than required.
+	current := domain.JobError{
 		Attempt:   job.Attempt,
 		Message:   currentErr.Error(),
 		Timestamp: time.Now(),
-	})
+	}
+	current.Chain = errorChain(currentErr)
+	current.PgError = pgErrorContext(currentErr)
+	errors = append(errors, current)
 
 	return errors
 }

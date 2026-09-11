@@ -33,6 +33,23 @@ func (m *MockSecurityRepository) UpsertBatch(ctx context.Context, securities []d
 	return args.Get(0).(map[string]string), args.Error(1)
 }
 
+// FindForkedIdentities and CountForkedIdentityGroups (#1631 M8b) are unused by the sync path this
+// mock backs — the sync service never calls them — so they are stubbed to satisfy
+// repository.SecurityRepository rather than exercised here. See
+// system_health_service_forked_identity_test.go for their real coverage.
+func (m *MockSecurityRepository) FindForkedIdentities(ctx context.Context) ([]domain.ForkedSecurityIdentity, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.ForkedSecurityIdentity), args.Error(1)
+}
+
+func (m *MockSecurityRepository) CountForkedIdentityGroups(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 type MockHoldingRepository struct {
 	mock.Mock
 }
@@ -215,6 +232,83 @@ func makePlaidSecurity(securityID, name, ticker string) plaid.Security {
 	}
 }
 
+// TestMapPlaidSecuritiesToDomain_NameSynthesis covers #1631's root-cause fix: Plaid sending a
+// null/blank security name used to leave domain.Security.Name as "", and nothing on the sync path
+// ever called Security.Validate() to catch it — the NOT NULL column constraint is satisfied by an
+// empty string.
+// Synthesising a name (rather than skipping the row) was the chosen fix because UpsertBatch's ON
+// CONFLICT never repairs security_id afterwards, so dropping the row would strand any investment
+// transaction that already references it.
+func TestMapPlaidSecuritiesToDomain_NameSynthesis(t *testing.T) {
+	t.Run("keeps the provided name when non-blank", func(t *testing.T) {
+		sec := makePlaidSecurity("plaid-sec-1", "Apple Inc.", "AAPL")
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
+		require.Len(t, result, 1)
+		assert.Equal(t, "Apple Inc.", result[0].Name)
+	})
+
+	t.Run("falls back to the ticker symbol when name is a null Plaid string", func(t *testing.T) {
+		sec := makePlaidSecurity("plaid-sec-2", "", "VCIT")
+		sec.Name = plaidNilStr()
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
+		require.Len(t, result, 1)
+		assert.Equal(t, "VCIT", result[0].Name)
+	})
+
+	t.Run("falls back to the ticker symbol when name is an empty string", func(t *testing.T) {
+		sec := makePlaidSecurity("plaid-sec-3", "", "IEMG")
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
+		require.Len(t, result, 1)
+		assert.Equal(t, "IEMG", result[0].Name)
+	})
+
+	t.Run("falls back to a synthesised label from the plaid security id when both name and ticker are blank", func(t *testing.T) {
+		sec := makePlaidSecurity("plaid-sec-4", "", "")
+		sec.TickerSymbol = plaidNilStr()
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
+		require.Len(t, result, 1)
+		assert.Equal(t, "Security plaid-sec-4", result[0].Name)
+	})
+
+	t.Run("treats a whitespace-only name as blank", func(t *testing.T) {
+		sec := makePlaidSecurity("plaid-sec-5", "   ", "")
+		sec.TickerSymbol = plaidNilStr()
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
+		require.Len(t, result, 1)
+		assert.Equal(t, "Security plaid-sec-5", result[0].Name)
+	})
+}
+
+// TestMapPlaidSecuritiesToDomain_ConsolidationIdentifiers covers #1631: Plaid gives us two
+// identifiers beyond plaid_security_id for consolidating a security's forked identities —
+// institution_security_id and proxy_security_id. Before this, mapPlaidSecuritiesToDomain dropped
+// both on the floor even though the Plaid SDK response carries them.
+func TestMapPlaidSecuritiesToDomain_ConsolidationIdentifiers(t *testing.T) {
+	t.Run("threads institution_security_id and proxy_security_id through when present", func(t *testing.T) {
+		sec := makePlaidSecurity("plaid-sec-1", "iShares Core U.S. Aggregate Bond ETF", "AGG")
+		sec.InstitutionSecurityId = plaidNullStr("INST-AGG-1")
+		sec.ProxySecurityId = plaidNullStr("PROXY-BOND-1")
+
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
+
+		require.Len(t, result, 1)
+		require.NotNil(t, result[0].InstitutionSecurityID)
+		assert.Equal(t, "INST-AGG-1", *result[0].InstitutionSecurityID)
+		require.NotNil(t, result[0].ProxySecurityID)
+		assert.Equal(t, "PROXY-BOND-1", *result[0].ProxySecurityID)
+	})
+
+	t.Run("leaves both nil when Plaid sends neither", func(t *testing.T) {
+		sec := makePlaidSecurity("plaid-sec-2", "Tesla Inc.", "TSLA")
+
+		result := mapPlaidSecuritiesToDomain([]plaid.Security{sec}, nil)
+
+		require.Len(t, result, 1)
+		assert.Nil(t, result[0].InstitutionSecurityID)
+		assert.Nil(t, result[0].ProxySecurityID)
+	})
+}
+
 // makePlaidHolding creates a minimal plaid.Holding for testing.
 func makePlaidHolding(plaidAccountID, plaidSecurityID string, qty, price, value, costBasis float64) plaid.Holding {
 	return plaid.Holding{
@@ -283,21 +377,35 @@ type investmentSyncDeps struct {
 	holdingRepo    *MockHoldingRepository
 	invTxnRepo     *MockInvestmentTransactionRepository
 	snapshotRepo   *MockPortfolioSnapshotRepository
-	plaidSvc       *MockPlaidService
+	// userAccountRepo carries the #1631 investment backfill obligation. Tests that are not about
+	// the backfill register expectNoBackfillOwed (investment_sync_exclusion_test.go).
+	userAccountRepo *MockUserAccountRepository
+	plaidSvc        *MockPlaidService
 }
 
 func setupInvestmentSyncService(t *testing.T) (InvestmentSyncService, investmentSyncDeps) {
 	t.Helper()
 	deps := investmentSyncDeps{
-		webhookRepo:    new(MockWebhookRepository),
-		linkedItemRepo: new(MockLinkedItemRepository),
-		accountRepo:    new(MockAccountRepository),
-		securityRepo:   new(MockSecurityRepository),
-		holdingRepo:    new(MockHoldingRepository),
-		invTxnRepo:     new(MockInvestmentTransactionRepository),
-		snapshotRepo:   new(MockPortfolioSnapshotRepository),
-		plaidSvc:       new(MockPlaidService),
+		webhookRepo:     new(MockWebhookRepository),
+		linkedItemRepo:  new(MockLinkedItemRepository),
+		accountRepo:     new(MockAccountRepository),
+		securityRepo:    new(MockSecurityRepository),
+		holdingRepo:     new(MockHoldingRepository),
+		invTxnRepo:      new(MockInvestmentTransactionRepository),
+		snapshotRepo:    new(MockPortfolioSnapshotRepository),
+		userAccountRepo: new(MockUserAccountRepository),
+		plaidSvc:        new(MockPlaidService),
 	}
+	// Default permissive "nothing owed" answer: the overwhelming majority of these tests predate
+	// the backfill obligation and are not about it.
+	//
+	// ⚠ A test that IS about the obligation must NOT add a second expectation on top of this one.
+	// testify matches expectations in REGISTRATION order, so this mock.Anything default wins and
+	// the specific one is never consulted — which silently turns a backfill test into an
+	// incremental-sync test. Use newSyncServiceWithUserAccountRepo (investment_sync_exclusion_test.go)
+	// to swap in a fresh mock instead.
+	deps.userAccountRepo.On("PendingInvestmentBackfills", mock.Anything, mock.Anything, mock.Anything).
+		Return(map[string]time.Time{}, nil).Maybe()
 	// Default permissive expectation for snapshot upsert.
 	// Tests that need to verify snapshot behavior set up specific expectations instead.
 	deps.snapshotRepo.On("Upsert", mock.Anything, mock.Anything, mock.Anything).
@@ -310,6 +418,7 @@ func setupInvestmentSyncService(t *testing.T) (InvestmentSyncService, investment
 		deps.holdingRepo,
 		deps.invTxnRepo,
 		deps.snapshotRepo,
+		deps.userAccountRepo,
 		deps.plaidSvc,
 		nil, // logger
 	)
@@ -618,6 +727,7 @@ func TestInvestmentSyncService_SyncHoldings_SnapshotUpsertedOnSuccess(t *testing
 		baseDeps.holdingRepo,
 		baseDeps.invTxnRepo,
 		snapshotRepo,
+		baseDeps.userAccountRepo,
 		baseDeps.plaidSvc,
 		nil,
 	)
@@ -671,6 +781,7 @@ func TestInvestmentSyncService_SyncHoldings_SnapshotSkippedOnPartialError(t *tes
 		baseDeps.holdingRepo,
 		baseDeps.invTxnRepo,
 		snapshotRepo,
+		baseDeps.userAccountRepo,
 		baseDeps.plaidSvc,
 		nil,
 	)

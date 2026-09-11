@@ -38,6 +38,7 @@ export interface UpdateSavingsGoalRequest {
   account_percentage?: number;
   /** Only settable when progress_basis is 'manual'. Contributions-based goals derive this from their contribution ledger (POST /savings-goals/{goalID}/contributions); balance-based goals track their account. Sending this for any non-manual basis returns 400. */
   current_amount?: number;
+  /** Goal deadline. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp. */
   deadline?: string;
   description?: string;
   /**

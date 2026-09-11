@@ -30,12 +30,17 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { HoldingViewDayChangeUnavailableReason } from './holdingViewDayChangeUnavailableReason';
 
 export interface HoldingView {
   account_id: string;
   cost_basis?: number;
+  currency_code?: string;
   day_change?: number;
+  day_change_as_of?: string;
+  day_change_is_stale?: boolean;
   day_change_pct?: number;
+  day_change_unavailable_reason?: HoldingViewDayChangeUnavailableReason;
   gain_loss?: number;
   gain_loss_pct?: number;
   id: string;

@@ -33,6 +33,7 @@
 
 export interface TopMoverItem {
   account_id: string;
+  currency_code?: string;
   day_change?: number;
   day_change_pct?: number;
   holding_id: string;

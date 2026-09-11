@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
@@ -48,11 +49,16 @@ func TestHoldingRepository_ReplaceForAccount_DeletesOldInsertNew(t *testing.T) {
 	holding := makeTestHolding(userID, accountID, uuid.New().String())
 
 	mock.ExpectBegin()
+	// #1631-adjacent production fix (2026-09-11 DLQ): the replace serializes on the account for
+	// the whole DELETE+INSERT critical section. See ReplaceForAccount's comment.
+	mock.ExpectExec(regexp.QuoteMeta(`pg_advisory_xact_lock`)).
+		WithArgs(accountID).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM holdings`)).
 		WithArgs(accountID, userID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 2))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holdings`)).
-		WithArgs(anyArgs(11)...).
+		WithArgs(anyArgs(12)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	// #1569 T6 fix round 1: the capture reads its UTC day from the SERVER (see serverUTCDate —
 	// the aggregate and its rows must be filed under the same day across UTC midnight), then runs
@@ -91,6 +97,11 @@ func TestHoldingRepository_ReplaceForAccount_EmptyHoldings(t *testing.T) {
 	accountID := uuid.New().String()
 
 	mock.ExpectBegin()
+	// #1631-adjacent production fix (2026-09-11 DLQ): the replace serializes on the account for
+	// the whole DELETE+INSERT critical section. See ReplaceForAccount's comment.
+	mock.ExpectExec(regexp.QuoteMeta(`pg_advisory_xact_lock`)).
+		WithArgs(accountID).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM holdings`)).
 		WithArgs(accountID, userID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 3))
@@ -132,11 +143,16 @@ func TestHoldingRepository_ReplaceForAccount_RollbackOnInsertError(t *testing.T)
 	holding := makeTestHolding(userID, accountID, uuid.New().String())
 
 	mock.ExpectBegin()
+	// #1631-adjacent production fix (2026-09-11 DLQ): the replace serializes on the account for
+	// the whole DELETE+INSERT critical section. See ReplaceForAccount's comment.
+	mock.ExpectExec(regexp.QuoteMeta(`pg_advisory_xact_lock`)).
+		WithArgs(accountID).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM holdings`)).
 		WithArgs(accountID, userID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holdings`)).
-		WithArgs(anyArgs(11)...).
+		WithArgs(anyArgs(12)...).
 		WillReturnError(errors.New("db constraint error"))
 	mock.ExpectRollback()
 
@@ -165,11 +181,11 @@ func TestHoldingRepository_GetByUserID(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "user_account_id", "security_id",
 		"quantity", "cost_basis", "institution_value", "institution_price",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, accountID, &userAccountID, secID,
 		10.0, &costBasis, &instValue, &instPrice,
-		now, now,
+		(*string)(nil), now, now,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`JOIN accounts a ON a.id = holdings.account_id`)).
@@ -202,11 +218,11 @@ func TestHoldingRepository_GetByAccountID(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "security_id",
 		"quantity", "cost_basis", "institution_value", "institution_price",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, accountID, secID,
 		5.0, &costBasis, &instValue, &instPrice,
-		now, now,
+		(*string)(nil), now, now,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -243,11 +259,11 @@ func TestHoldingRepository_GetByUserID_ActiveAccountsOnly(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "user_account_id", "security_id",
 		"quantity", "cost_basis", "institution_value", "institution_price",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, accountID, &userAccountID, secID,
 		10.0, &costBasis, &instValue, &instPrice,
-		now, now,
+		(*string)(nil), now, now,
 	)
 
 	// The query must JOIN accounts and filter status='active'
@@ -277,7 +293,7 @@ func TestHoldingRepository_GetByUserID_ReplacedAccountExcluded(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "user_account_id", "security_id",
 		"quantity", "cost_basis", "institution_value", "institution_price",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`JOIN accounts a ON a.id = holdings.account_id`)).
@@ -310,11 +326,11 @@ func TestHoldingRepository_GetByUserAccountID(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "account_id", "user_account_id", "security_id",
 		"quantity", "cost_basis", "institution_value", "institution_price",
-		"created_at", "updated_at",
+		"currency_code", "created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), userID, accountID, &userAccountID, secID,
 		10.0, &costBasis, &instValue, &instPrice,
-		now, now,
+		(*string)(nil), now, now,
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`user_account_id = $1`)).
@@ -356,11 +372,11 @@ func TestHoldingRepository_GetByAccountID_ChainExpand(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "user_id", "account_id", "security_id",
 			"quantity", "cost_basis", "institution_value", "institution_price",
-			"created_at", "updated_at",
+			"currency_code", "created_at", "updated_at",
 		}).AddRow(
 			uuid.New().String(), userID, replacedAccountID, setID,
 			8.0, &costBasis, &instValue, &instPrice,
-			now, now,
+			(*string)(nil), now, now,
 		))
 
 	holdings, err := repo.GetByAccountID(ctx, activeAccountID)
@@ -472,4 +488,106 @@ func TestHoldingRepository_ReplaceForAccount_RejectsEmptyAccountID(t *testing.T)
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
+}
+
+// TestHoldingRepository_ReplaceForAccount_SerializesOnTheAccount is the regression test for the
+// production DLQ entry of 2026-09-11 (webhook_processing job 9, five identical
+// `duplicate key value violates unique constraint "unique_account_security"` failures).
+//
+// The replace is DELETE-then-INSERT inside one transaction, and `unique_account_security` is
+// UNIQUE (account_id, security_id). Under READ COMMITTED two concurrent replaces of the SAME
+// account do not serialize on their own: each DELETE is invisible to the other, so the second
+// transaction's INSERT waits on the first's uncommitted index tuple and then raises 23505 the
+// moment the first commits. Nothing upstream prevents the overlap — the webhook path takes no
+// linked-item lock (see investment_holdings_sync.go's own comment) and River's
+// webhook_processing uniqueness is ByArgs, which includes webhook_id, so two HOLDINGS webhooks
+// for one item are two distinct jobs.
+//
+// A transaction-scoped advisory lock keyed on the account makes the critical section serial, so
+// the loser waits and then replaces cleanly instead of failing. Same mechanism as
+// custom_category_repository.go's lockHierarchySQL.
+func TestHoldingRepository_ReplaceForAccount_SerializesOnTheAccount(t *testing.T) {
+	mock, repo := setupHoldingMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+	holding := makeTestHolding(userID, accountID, uuid.New().String())
+
+	mock.ExpectBegin()
+	// The lock must be taken BEFORE the DELETE: taking it after would leave exactly the window
+	// this test exists to close.
+	mock.ExpectExec(regexp.QuoteMeta(`pg_advisory_xact_lock`)).
+		WithArgs(accountID).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM holdings`)).
+		WithArgs(accountID, userID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holdings`)).
+		WithArgs(anyArgs(12)...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT (now() AT TIME ZONE 'UTC')::date`)).
+		WillReturnRows(pgxmock.NewRows([]string{"date"}).AddRow(time.Now().UTC().Truncate(24 * time.Hour)))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE holding_snapshots`)).
+		WithArgs(accountID, userID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holding_snapshots`)).
+		WithArgs(accountID, userID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holding_observations`)).
+		WithArgs(userID, accountID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	_, err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{holding})
+
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestHoldingRepository_ReplaceForAccount_UniqueViolationNamesTheCollision covers the second half
+// of the same production defect: five attempts dead-lettered carrying nothing but the constraint
+// name, which cannot distinguish a duplicated payload from a concurrent sync. The wrapped error
+// must name the colliding security, the batch size, and — the fact that discriminates the two
+// causes without production DB access — whether the batch ITSELF carried that security twice.
+func TestHoldingRepository_ReplaceForAccount_UniqueViolationNamesTheCollision(t *testing.T) {
+	mock, repo := setupHoldingMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+	securityID := uuid.New().String()
+	first := makeTestHolding(userID, accountID, securityID)
+	second := makeTestHolding(userID, accountID, securityID)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`pg_advisory_xact_lock`)).
+		WithArgs(accountID).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM holdings`)).
+		WithArgs(accountID, userID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holdings`)).
+		WithArgs(anyArgs(12)...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holdings`)).
+		WithArgs(anyArgs(12)...).
+		WillReturnError(&pgconn.PgError{
+			Code:           "23505",
+			ConstraintName: "unique_account_security",
+			Message:        `duplicate key value violates unique constraint "unique_account_security"`,
+		})
+	mock.ExpectRollback()
+
+	_, err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{first, second})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), securityID, "the error must name the colliding security_id")
+	assert.Contains(t, err.Error(), accountID, "the error must name the account")
+	assert.Contains(t, err.Error(), "2 holdings", "the error must state how many holdings were in the batch")
+	assert.Contains(t, err.Error(), "batch itself carries that security twice",
+		"the error must say whether the duplicate was in the payload (cause a/b) or came from a concurrent replace (cause d)")
+	assert.NoError(t, mock.ExpectationsWereMet())
 }

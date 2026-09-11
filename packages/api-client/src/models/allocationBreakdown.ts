@@ -37,5 +37,7 @@ export interface AllocationBreakdown {
   readonly $schema?: string;
   /** @nullable */
   buckets: AllocationItem[] | null;
+  currency_code?: string;
+  is_mixed_currency: boolean;
   total_value: number;
 }

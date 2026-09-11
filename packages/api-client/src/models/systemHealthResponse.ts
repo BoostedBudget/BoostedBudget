@@ -32,9 +32,11 @@
  */
 import type { DeadLetterMetrics } from './deadLetterMetrics';
 import type { DeletionResidueMetrics } from './deletionResidueMetrics';
+import type { ForkedSecurityIdentityMetrics } from './forkedSecurityIdentityMetrics';
 import type { JobBacklogMetrics } from './jobBacklogMetrics';
 import type { PaddleStatusMetrics } from './paddleStatusMetrics';
 import type { PlaidOrphanedItemMetrics } from './plaidOrphanedItemMetrics';
+import type { PositionReconciliationSummary } from './positionReconciliationSummary';
 import type { RejectedWebhookAttemptMetrics } from './rejectedWebhookAttemptMetrics';
 import type { ServiceHealthStatuses } from './serviceHealthStatuses';
 import type { SyncStatusMetrics } from './syncStatusMetrics';
@@ -46,10 +48,12 @@ export interface SystemHealthResponse {
   cache_enabled: boolean;
   dead_letter_queue: DeadLetterMetrics;
   deletion_residue: DeletionResidueMetrics;
+  forked_security_identities: ForkedSecurityIdentityMetrics;
   job_backlog: JobBacklogMetrics;
   job_queues: SystemHealthResponseJobQueues;
   paddle_status: PaddleStatusMetrics;
   plaid_orphaned_items: PlaidOrphanedItemMetrics;
+  position_reconciliation: PositionReconciliationSummary;
   rejected_webhook_attempts_24h: RejectedWebhookAttemptMetrics;
   services: ServiceHealthStatuses;
   status: string;

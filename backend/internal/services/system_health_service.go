@@ -83,6 +83,37 @@ type systemHealthService struct {
 	// an unwired cacheStatus reports "disabled" — see CacheStatusReader's doc comment for why that
 	// is not ambiguous the way the other optional collaborators' Available flags are.
 	cacheStatus CacheStatusReader
+	// forkedIdentityRepo backs SystemHealthResponse.ForkedSecurityIdentities (#1631 M8b). Optional/
+	// nil-safe: an unwired repo reports "unavailable", never a confident zero — same convention as
+	// plaidOrphanRepo and invalidWebhookAttemptRepo above.
+	forkedIdentityRepo ForkedSecurityIdentityLister
+	// positionReconciliationRepo backs SystemHealthResponse.PositionReconciliation (#1631 M8b I1).
+	// Optional/nil-safe: an unwired repo reports "unavailable", never a confident zero — same
+	// convention as every other optional collaborator in this service.
+	positionReconciliationRepo PositionReconciliationSummarizer
+}
+
+// ForkedSecurityIdentityLister is the ONE verb the health derivation needs from
+// repository.SecurityRepository, narrowed the same way PlaidOrphanedItemLister and
+// InvalidWebhookAttemptStatsReader narrow their repositories above: a read-only health surface
+// gains no ability to touch `securities` just because it needs a count.
+//
+// ⚠ FindForkedIdentities, NOT CountForkedIdentityGroups (#1631 M8b I2 fix). The count-only method
+// still exists on repository.SecurityRepository, but a bare "group_count: 2" told an operator a
+// fork existed while giving them nothing to act on — no way to find out WHICH two securities.
+// This is the same "list, not just count" call getPlaidOrphanedItemMetrics already makes for
+// plaid_orphaned_items, and for the same reason: fork groups are expected to be a handful of rows
+// at most (they only form from a corporate-action reissue of plaid_security_id), so a full read
+// is cheap and the detail is the point.
+type ForkedSecurityIdentityLister interface {
+	FindForkedIdentities(ctx context.Context) ([]domain.ForkedSecurityIdentity, error)
+}
+
+// PositionReconciliationSummarizer is the ONE verb the health derivation needs from
+// repository.InvestmentAnalyticsRepository, narrowed the same way every other repository
+// dependency in this service is narrowed to a read-only surface.
+type PositionReconciliationSummarizer interface {
+	PositionReconciliationSummary(ctx context.Context) (*domain.PositionReconciliationSummary, error)
 }
 
 // CacheStatusReader is the ONE verb the health derivation needs from cache.Cache — matches the
@@ -149,17 +180,21 @@ func NewSystemHealthService(
 	invalidWebhookAttemptRepo InvalidWebhookAttemptStatsReader,
 	healthChecks SharedHealthChecks,
 	cacheStatus CacheStatusReader,
+	forkedIdentityRepo ForkedSecurityIdentityLister,
+	positionReconciliationRepo PositionReconciliationSummarizer,
 ) SystemHealthService {
 	return &systemHealthService{
-		healthRepo:                healthRepo,
-		deadLetterRepo:            deadLetterRepo,
-		pool:                      pool,
-		plaidEnv:                  plaidEnv,
-		jobHealthRepo:             jobHealthRepo,
-		plaidOrphanRepo:           plaidOrphanRepo,
-		invalidWebhookAttemptRepo: invalidWebhookAttemptRepo,
-		healthChecks:              healthChecks,
-		cacheStatus:               cacheStatus,
+		healthRepo:                 healthRepo,
+		deadLetterRepo:             deadLetterRepo,
+		pool:                       pool,
+		plaidEnv:                   plaidEnv,
+		jobHealthRepo:              jobHealthRepo,
+		plaidOrphanRepo:            plaidOrphanRepo,
+		invalidWebhookAttemptRepo:  invalidWebhookAttemptRepo,
+		healthChecks:               healthChecks,
+		cacheStatus:                cacheStatus,
+		forkedIdentityRepo:         forkedIdentityRepo,
+		positionReconciliationRepo: positionReconciliationRepo,
 	}
 }
 
@@ -272,6 +307,38 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 		response.RejectedWebhookAttempts24h = domain.RejectedWebhookAttemptMetrics{}
 	} else {
 		response.RejectedWebhookAttempts24h = rejectedWebhookMetrics
+	}
+
+	// Forked security identities (#1631 M8b) — a Plaid corporate action can reissue
+	// plaid_security_id, silently forking one real instrument's identity into multiple `securities`
+	// rows with separate transaction/holding histories. Same "unknown is not zero" convention as
+	// every gauge above, and deliberately NOT fed into calculateOverallStatus: whether a non-zero
+	// count should degrade overall health is a product decision this task never asked for, only
+	// making it VISIBLE is in scope.
+	forkedIdentityMetrics, err := s.getForkedSecurityIdentityMetrics(ctx)
+	if err != nil {
+		slog.Error("could not list forked security identities for /admin/health; reported as unavailable rather than as zero",
+			"error", err)
+		response.ForkedSecurityIdentities = domain.ForkedSecurityIdentityMetrics{}
+	} else {
+		response.ForkedSecurityIdentities = forkedIdentityMetrics
+	}
+
+	// Position reconciliation (#1631 M8b I1) — the trade-vs-position diagnostic's own admin gauge.
+	// ⚠ Read domain.PositionReconciliationSummary's doc comment (and
+	// domain.PositionReconciliationReport's "NOT YET FULLY ACTIONABLE" section) before treating a
+	// non-zero DriftCount as a confirmed problem count — it is expected to contain real noise from
+	// ordinary long-held, regularly-contributed-to positions today. Same "unknown is not zero"
+	// convention as every gauge above, and deliberately NOT fed into calculateOverallStatus for the
+	// same reason: whether this should degrade overall health is a product decision this task never
+	// asked for, and DriftCount is not yet trustworthy enough to gate anything on regardless.
+	positionReconciliationMetrics, err := s.getPositionReconciliationSummary(ctx)
+	if err != nil {
+		slog.Error("could not compute the position-reconciliation summary for /admin/health; reported as unavailable rather than as zero",
+			"error", err)
+		response.PositionReconciliation = domain.PositionReconciliationSummary{}
+	} else {
+		response.PositionReconciliation = positionReconciliationMetrics
 	}
 
 	// Cache status (Issue #1531 Task 11e) — deliberately NOT fed into calculateOverallStatus below,
@@ -687,6 +754,61 @@ func (s *systemHealthService) getRejectedWebhookAttemptMetrics(ctx context.Conte
 		MostRecentAt: mostRecentAt,
 		Available:    true,
 	}, nil
+}
+
+// getForkedSecurityIdentityMetrics derives the /admin/health forked-identity section (#1631 M8b).
+//
+// ⚠ A FULL READ (FindForkedIdentities), NOT JUST THE COUNT (#1631 M8b I2 fix). The earlier version
+// of this gauge called CountForkedIdentityGroups, which told an operator a fork existed but never
+// which securities forked — a "group_count: 2" with nothing to look up in Plaid's dashboard or
+// this codebase's own tables. Fork groups are expected to be a handful of rows at most (they only
+// form from a corporate-action reissue of plaid_security_id, not from ordinary sync volume), so a
+// full read is cheap here in the same way it is for getPlaidOrphanedItemMetrics's bounded read —
+// unlike that gauge, though, nothing here depends on in-process state (no decryption), so there is
+// no separate cap to enforce.
+//
+// ⚠ CANDIDATES, not confirmed forks (#1631 CX7). institution_security_id is institution-scoped and
+// this grouping has no institution dimension, so a group is a REVIEW ITEM. The member listing this
+// gauge exists to serve is what lets an operator settle one. See domain.ForkedSecurityIdentity's
+// CANDIDATES note before wording this as a fork count anywhere.
+//
+// Nil-safe, matching every other optional gauge in this service: an unwired repo is "unknown",
+// never "zero".
+func (s *systemHealthService) getForkedSecurityIdentityMetrics(ctx context.Context) (domain.ForkedSecurityIdentityMetrics, error) {
+	if s.forkedIdentityRepo == nil {
+		return domain.ForkedSecurityIdentityMetrics{}, nil
+	}
+
+	groups, err := s.forkedIdentityRepo.FindForkedIdentities(ctx)
+	if err != nil {
+		return domain.ForkedSecurityIdentityMetrics{}, fmt.Errorf("find forked security identities: %w", err)
+	}
+	return domain.ForkedSecurityIdentityMetrics{
+		GroupCount: int64(len(groups)),
+		Groups:     groups,
+		// The query succeeded — this is a VERIFIED reading, possibly a real (and welcome) zero.
+		Available: true,
+	}, nil
+}
+
+// getPositionReconciliationSummary derives the /admin/health position-reconciliation gauge (#1631
+// M8b I1). A single SQL aggregate over ALL users' active holdings, matching
+// getForkedSecurityIdentityMetrics's "not user-scoped" shape for an admin gauge — see
+// repository.InvestmentAnalyticsRepository.PositionReconciliationSummary and
+// domain.PositionReconciliationSummary for what DriftCount does and does not prove.
+//
+// Nil-safe, matching every other optional gauge in this service: an unwired repo is "unknown",
+// never "zero".
+func (s *systemHealthService) getPositionReconciliationSummary(ctx context.Context) (domain.PositionReconciliationSummary, error) {
+	if s.positionReconciliationRepo == nil {
+		return domain.PositionReconciliationSummary{}, nil
+	}
+
+	summary, err := s.positionReconciliationRepo.PositionReconciliationSummary(ctx)
+	if err != nil {
+		return domain.PositionReconciliationSummary{}, fmt.Errorf("compute position reconciliation summary: %w", err)
+	}
+	return *summary, nil
 }
 
 // calculateOverallStatus determines the overall system health status

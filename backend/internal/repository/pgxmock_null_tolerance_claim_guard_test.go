@@ -443,4 +443,17 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 // backend/internal. Re-derived for the final whole-branch review with the same walk the test
 // performs (skipping testdata/vendor/node_modules directories and any file carrying
 // `//go:build integration`).
-const pgxmockSweepFileCount = 67
+//
+// 67 -> 68 (#1631 gap 1): added transaction_date_only_wire_test.go, which asserts that the banking
+// read paths populate the date-only display fields. It makes NO null-tolerance claim of any kind —
+// its only nil assertion is that a NULL authorized_date leaves AuthorizedDateDisplay nil, which is
+// a claim about the Go mapping of a scanned nil, not about the driver tolerating NULL — so it is
+// clean under TestNoUndisclosedPgxmockNullToleranceClaim above. No file was removed.
+//
+// 68 -> 69 (#1631 Gap A1): added transaction_unified_currency_test.go, which asserts that the
+// unified feed's investment arm carries investment_transactions.currency_code and that the banking
+// arm fabricates none. Its nil assertion is that a banking row's ActivityItem.CurrencyCode stays
+// nil — a claim about the Go mapping of a column the banking arm selects as NULL, not about the
+// driver tolerating a NULL the query never asked for — so it is clean under
+// TestNoUndisclosedPgxmockNullToleranceClaim above. No file was removed.
+const pgxmockSweepFileCount = 69

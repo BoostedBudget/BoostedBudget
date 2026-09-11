@@ -32,6 +32,7 @@
  */
 
 export interface NetWorthHistorySnapshot {
+  /** UTC calendar day (YYYY-MM-DD) of this snapshot */
   date: string;
   net_worth: number;
   total_assets: number;

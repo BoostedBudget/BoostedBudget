@@ -34,6 +34,7 @@
 export interface RulePreviewMatch {
   amount: number;
   current_category: string;
+  /** UTC calendar day (YYYY-MM-DD) of the matched transaction */
   date: string;
   merchant_name?: string;
   name: string;

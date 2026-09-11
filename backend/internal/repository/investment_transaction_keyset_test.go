@@ -21,7 +21,15 @@ import (
 //	it.type, it.subtype, it.name,
 //	it.quantity, it.amount, it.price, it.fees, it.date,
 //	it.created_at,
-//	sec.ticker_symbol, sec.name AS security_name
+//	sec.ticker_symbol, sec.name AS security_name,
+//	(sec.id IS NOT NULL) AS security_attached,
+//	sec.is_cash_equivalent AS security_is_cash_equivalent
+//
+// The last two were added by #1631 so this endpoint returns the SAME normalized activity_type the
+// unified feed does. ⚠ pgxmock hands back whatever the test author invents, so a column list that
+// drifts from the SELECT fails as an argument-count error rather than as a wrong result — which is
+// precisely why the partition itself is pinned by an integration test against real Postgres
+// (TestInvestment_TradeTypePartition_RoundTrip_Integration), not here.
 func makeInvKeysetRow(userID, accountID string, txnDate time.Time) []interface{} {
 	return makeInvKeysetRowWithSecurity(userID, accountID, txnDate, nil, nil)
 }
@@ -33,6 +41,7 @@ func makeInvKeysetRowWithSecurity(userID, accountID string, txnDate time.Time, t
 	qty := 5.0
 	price := 200.00
 	subtype := "buy"
+	notCashEquivalent := false
 	return []interface{}{
 		uuid.New().String(),               // id
 		userID,                            // user_id
@@ -48,9 +57,12 @@ func makeInvKeysetRowWithSecurity(userID, accountID string, txnDate time.Time, t
 		&price,                            // price (nullable)
 		(*float64)(nil),                   // fees (nullable)
 		txnDate,                           // date
+		(*string)(nil),                    // currency_code (nullable, #1631 M8a)
 		txnDate,                           // created_at
 		ticker,                            // ticker_symbol (nullable, from LEFT JOIN securities)
 		securityName,                      // security_name (nullable, from LEFT JOIN securities)
+		true,                              // security_attached (#1631)
+		&notCashEquivalent,                // security_is_cash_equivalent (#1631; nullable)
 	}
 }
 
@@ -61,9 +73,48 @@ func invKeysetColumns() []string {
 		"plaid_investment_transaction_id",
 		"type", "subtype", "name",
 		"quantity", "amount", "price", "fees", "date",
+		"currency_code",
 		"created_at",
 		"ticker_symbol", "security_name",
+		"security_attached", "security_is_cash_equivalent",
 	}
+}
+
+// TestInvestmentTransactionRepository_GetByUserIDKeyset_DateDisplayIsDateOnly pins #1631:
+// investment_transactions.date is a DATE column, and DateDisplay (what actually serializes as
+// "date" in the API response — Date itself carries json:"-") must be the plain calendar-day
+// string the row's date scanned to, not a timestamp. Asserting Equal against the exact
+// "YYYY-MM-DD" string rather than Contains, so a regression back to RFC3339
+// ("2024-06-10T00:00:00Z") actually fails this test instead of passing on a substring match.
+func TestInvestmentTransactionRepository_GetByUserIDKeyset_DateDisplayIsDateOnly(t *testing.T) {
+	mock, repo := setupInvTxnMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+	txnDate := time.Date(2024, 6, 10, 0, 0, 0, 0, time.UTC)
+
+	rows := pgxmock.NewRows(invKeysetColumns()).
+		AddRow(makeInvKeysetRow(userID, accountID, txnDate)...)
+
+	mock.ExpectQuery(`chain_a\.status = 'active'`).
+		WithArgs(anyArgs(2)...).
+		WillReturnRows(rows)
+
+	txns, _, err := repo.GetByUserIDKeyset(
+		ctx,
+		userID,
+		domain.InvestmentTransactionFilters{},
+		nil,
+		10,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, txns, 1)
+	assert.Equal(t, "2024-06-10", txns[0].DateDisplay)
+	assert.NotEqual(t, "2024-06-10T00:00:00Z", txns[0].DateDisplay)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // TestInvestmentTransactionRepository_GetByUserIDKeyset_FirstPage verifies that

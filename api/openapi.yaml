@@ -194,8 +194,10 @@ components:
         account_id:
           type: string
         first_date:
+          format: date
           type: string
         last_date:
+          format: date
           type: string
         points:
           items:
@@ -217,6 +219,7 @@ components:
           format: double
           type: number
         date:
+          format: date
           type: string
       required:
         - date
@@ -328,9 +331,13 @@ components:
           format: double
           type: number
         authorized_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted for investment rows and when the provider gave none
+          format: date
           type: string
         category_override_kind:
+          type: string
+        currency_code:
+          description: Currency of amount, investment_price and investment_fees on an investment row (ISO-4217, or a Plaid unofficial code for crypto). Omitted for banking rows and for investment rows ingested before the currency was recorded — absence means 'not stated', never 'USD'.
           type: string
         custom_category_override_display:
           type: string
@@ -339,7 +346,8 @@ components:
         data_source:
           type: string
         date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) of this item
+          format: date
           type: string
         effective_category_name:
           type: string
@@ -411,7 +419,8 @@ components:
         security_name:
           type: string
         sort_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this item sorts on
+          format: date
           type: string
         source:
           type: string
@@ -925,12 +934,17 @@ components:
           type:
             - array
             - "null"
+        currency_code:
+          type: string
+        is_mixed_currency:
+          type: boolean
         total_value:
           format: double
           type: number
       required:
         - buckets
         - total_value
+        - is_mixed_currency
       type: object
     AllocationItem:
       additionalProperties: false
@@ -969,11 +983,13 @@ components:
           format: double
           type: number
         end_date:
+          format: date
           type: string
         month_count:
           format: int64
           type: integer
         start_date:
+          format: date
           type: string
         total_spend:
           format: double
@@ -996,7 +1012,8 @@ components:
           readOnly: true
           type: string
         end_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this history response ends on
+          format: date
           type: string
         granularity:
           type: string
@@ -1007,7 +1024,8 @@ components:
             - array
             - "null"
         start_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this history response starts on
+          format: date
           type: string
       required:
         - start_date
@@ -1027,7 +1045,8 @@ components:
             type: number
           type: object
         date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) of this snapshot
+          format: date
           type: string
       required:
         - date
@@ -1044,7 +1063,8 @@ components:
           readOnly: true
           type: string
         as_of_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this balance summary is as of
+          format: date
           type: string
         by_type:
           additionalProperties:
@@ -1293,7 +1313,8 @@ components:
         description:
           type: string
         end_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this budget period ends on; omitted for open-ended budgets
+          format: date
           type: string
         expected_income:
           format: double
@@ -1318,7 +1339,8 @@ components:
         series_id:
           type: string
         start_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this budget period starts on
+          format: date
           type: string
         updated_at:
           format: date-time
@@ -1675,7 +1697,8 @@ components:
           readOnly: true
           type: string
         end_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this history response ends on
+          format: date
           type: string
         grouping:
           type: string
@@ -1686,10 +1709,12 @@ components:
             - array
             - "null"
         requested_end_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) the caller asked this history response to end on
+          format: date
           type: string
         start_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this history response starts on
+          format: date
           type: string
       required:
         - start_date
@@ -1752,10 +1777,12 @@ components:
           format: double
           type: number
         period_end:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this period ends on
+          format: date
           type: string
         period_start:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this period starts on
+          format: date
           type: string
         transaction_count:
           format: int64
@@ -1779,7 +1806,8 @@ components:
           readOnly: true
           type: string
         end_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) the aggregate window ends on
+          format: date
           type: string
         expense_count:
           format: int64
@@ -1799,7 +1827,8 @@ components:
         period_comparison:
           $ref: "#/components/schemas/CashFlowPeriodComparison"
         start_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) the aggregate window starts on
+          format: date
           type: string
       required:
         - start_date
@@ -1923,10 +1952,12 @@ components:
             - array
             - "null"
         end_date:
+          format: date
           type: string
         merchant_name:
           type: string
         start_date:
+          format: date
           type: string
         total_spend:
           format: double
@@ -2007,6 +2038,7 @@ components:
         direction:
           type: string
         end_date:
+          format: date
           type: string
         levels:
           items:
@@ -2015,6 +2047,7 @@ components:
             - array
             - "null"
         start_date:
+          format: date
           type: string
         total:
           format: double
@@ -2174,10 +2207,12 @@ components:
         category:
           type: string
         end_date:
+          format: date
           type: string
         pfc_primary_display:
           type: string
         start_date:
+          format: date
           type: string
         total:
           format: double
@@ -2824,8 +2859,12 @@ components:
           format: double
           type: number
         deadline:
-          format: date-time
-          type: string
+          anyOf:
+            - format: date
+              type: string
+            - format: date-time
+              type: string
+          description: Goal deadline. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp.
         description:
           type: string
         name:
@@ -3509,6 +3548,56 @@ components:
         - item_id
         - webhook_code
       type: object
+    ForkedSecurityIdentity:
+      additionalProperties: false
+      properties:
+        institution_security_id:
+          type: string
+        members:
+          items:
+            $ref: "#/components/schemas/ForkedSecurityIdentityMember"
+          type:
+            - array
+            - "null"
+      required:
+        - institution_security_id
+        - members
+      type: object
+    ForkedSecurityIdentityMember:
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        plaid_security_id:
+          type: string
+        security_id:
+          type: string
+        ticker_symbol:
+          type: string
+      required:
+        - security_id
+        - plaid_security_id
+        - name
+      type: object
+    ForkedSecurityIdentityMetrics:
+      additionalProperties: false
+      properties:
+        available:
+          type: boolean
+        group_count:
+          format: int64
+          type: integer
+        groups:
+          items:
+            $ref: "#/components/schemas/ForkedSecurityIdentity"
+          type:
+            - array
+            - "null"
+      required:
+        - group_count
+        - groups
+        - available
+      type: object
     GainLossSummary:
       additionalProperties: false
       properties:
@@ -3525,6 +3614,10 @@ components:
           type:
             - array
             - "null"
+        currency_code:
+          type: string
+        is_mixed_currency:
+          type: boolean
         realized_gain_loss_supported:
           type: boolean
         total_cost_basis:
@@ -3545,6 +3638,7 @@ components:
         - total_value
         - realized_gain_loss_supported
         - by_account
+        - is_mixed_currency
       type: object
     GetAccountsOutputBody:
       additionalProperties: false
@@ -3800,14 +3894,19 @@ components:
           format: uri
           readOnly: true
           type: string
+        currency_code:
+          type: string
         history:
           items:
             $ref: "#/components/schemas/PortfolioHistoryPoint"
           type:
             - array
             - "null"
+        is_mixed_currency:
+          type: boolean
       required:
         - history
+        - is_mixed_currency
       type: object
     GetTransactionsOutputBody:
       additionalProperties: false
@@ -3892,6 +3991,7 @@ components:
           type: string
         as_of_date:
           description: UTC calendar day (YYYY-MM-DD) the positions describe; omitted when no history is retained for this account
+          format: date
           type: string
         available_dates:
           description: Every UTC day (YYYY-MM-DD) with retained positions, newest first
@@ -3900,6 +4000,10 @@ components:
           type:
             - array
             - "null"
+        currency_code:
+          type: string
+        is_mixed_currency:
+          type: boolean
         positions:
           items:
             $ref: "#/components/schemas/HoldingSnapshotView"
@@ -3913,16 +4017,20 @@ components:
         - account_id
         - available_dates
         - positions
+        - is_mixed_currency
       type: object
     HoldingSnapshotView:
       additionalProperties: false
       properties:
         as_of_date:
           description: UTC calendar day (YYYY-MM-DD) these figures were true
+          format: date
           type: string
         cost_basis:
           format: double
           type: number
+        currency_code:
+          type: string
         gain_loss:
           format: double
           type: number
@@ -3959,12 +4067,23 @@ components:
         cost_basis:
           format: double
           type: number
+        currency_code:
+          type: string
         day_change:
           format: double
           type: number
+        day_change_as_of:
+          format: date
+          type: string
+        day_change_is_stale:
+          type: boolean
         day_change_pct:
           format: double
           type: number
+        day_change_unavailable_reason:
+          enum:
+            - currency_mismatch
+          type: string
         gain_loss:
           format: double
           type: number
@@ -4256,6 +4375,7 @@ components:
           readOnly: true
           type: string
         end_date:
+          format: date
           type: string
         sources:
           items:
@@ -4264,6 +4384,7 @@ components:
             - array
             - "null"
         start_date:
+          format: date
           type: string
         total_income:
           format: double
@@ -4313,11 +4434,17 @@ components:
           type:
             - array
             - "null"
-        end_date:
-          format: date-time
+        currency_code:
           type: string
+        end_date:
+          description: UTC calendar day (YYYY-MM-DD) this income summary's window ends on
+          format: date
+          type: string
+        is_mixed_currency:
+          type: boolean
         start_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this income summary's window starts on
+          format: date
           type: string
         total_income:
           format: double
@@ -4327,11 +4454,14 @@ components:
         - by_type
         - start_date
         - end_date
+        - is_mixed_currency
       type: object
     InvestmentTransaction:
       additionalProperties: false
       properties:
         account_id:
+          type: string
+        activity_type:
           type: string
         amount:
           format: double
@@ -4339,8 +4469,11 @@ components:
         created_at:
           format: date-time
           type: string
+        currency_code:
+          type: string
         date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) of the transaction
+          format: date
           type: string
         fees:
           format: double
@@ -4415,6 +4548,7 @@ components:
         category:
           type: string
         date:
+          format: date
           type: string
         merchant_name:
           type: string
@@ -4442,11 +4576,13 @@ components:
           readOnly: true
           type: string
         end_date:
+          format: date
           type: string
         limit:
           format: int64
           type: integer
         start_date:
+          format: date
           type: string
         transactions:
           items:
@@ -4904,6 +5040,7 @@ components:
             - number
             - "null"
         date:
+          format: date
           type: string
         net_worth:
           format: double
@@ -4946,7 +5083,8 @@ components:
           readOnly: true
           type: string
         end_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this history response ends on
+          format: date
           type: string
         granularity:
           type: string
@@ -4957,7 +5095,8 @@ components:
             - array
             - "null"
         start_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this history response starts on
+          format: date
           type: string
       required:
         - start_date
@@ -4969,7 +5108,8 @@ components:
       additionalProperties: false
       properties:
         date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) of this snapshot
+          format: date
           type: string
         net_worth:
           format: double
@@ -5022,7 +5162,8 @@ components:
           readOnly: true
           type: string
         as_of_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this net worth figure is as of
+          format: date
           type: string
         by_category:
           additionalProperties:
@@ -5063,10 +5204,12 @@ components:
             - array
             - "null"
         end_date:
+          format: date
           type: string
         grouping:
           type: string
         start_date:
+          format: date
           type: string
       required:
         - buckets
@@ -5403,7 +5546,8 @@ components:
       additionalProperties: false
       properties:
         date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this snapshot was captured
+          format: date
           type: string
         total_value:
           format: double
@@ -5422,6 +5566,8 @@ components:
           format: uri
           readOnly: true
           type: string
+        currency_code:
+          type: string
         day_change:
           format: double
           type:
@@ -5432,9 +5578,15 @@ components:
           type:
             - number
             - "null"
+        day_change_unavailable_reason:
+          enum:
+            - currency_mismatch
+          type: string
         holdings_count:
           format: int64
           type: integer
+        is_mixed_currency:
+          type: boolean
         total_cost_basis:
           format: double
           type: number
@@ -5454,6 +5606,27 @@ components:
         - day_change
         - day_change_pct
         - holdings_count
+        - is_mixed_currency
+      type: object
+    PositionReconciliationSummary:
+      additionalProperties: false
+      properties:
+        available:
+          type: boolean
+        drift_count:
+          format: int64
+          type: integer
+        suppressed_pre_window_count:
+          format: int64
+          type: integer
+        total_positions_checked:
+          format: int64
+          type: integer
+      required:
+        - drift_count
+        - suppressed_pre_window_count
+        - total_positions_checked
+        - available
       type: object
     PreviewRuleBody:
       additionalProperties: false
@@ -5841,10 +6014,12 @@ components:
           format: double
           type: number
         last_charge_date:
+          format: date
           type: string
         merchant_name:
           type: string
         next_expected_date:
+          format: date
           type: string
         occurrence_count:
           format: int64
@@ -5868,6 +6043,7 @@ components:
           readOnly: true
           type: string
         as_of_date:
+          format: date
           type: string
         subscriptions:
           items:
@@ -6309,7 +6485,8 @@ components:
         current_category:
           type: string
         date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) of the matched transaction
+          format: date
           type: string
         merchant_name:
           type: string
@@ -6405,7 +6582,8 @@ components:
           format: double
           type: number
         deadline:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this goal's deadline; omitted when no deadline is set
+          format: date
           type: string
         deleted_at:
           format: date-time
@@ -6473,6 +6651,7 @@ components:
         managed_by_reconciliation:
           type: boolean
         occurred_on:
+          format: date
           type: string
         savings_goal_id:
           type: string
@@ -6520,7 +6699,8 @@ components:
           format: double
           type: number
         deadline:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this goal's deadline; omitted when no deadline is set
+          format: date
           type: string
         freshness:
           enum:
@@ -6640,6 +6820,7 @@ components:
           readOnly: true
           type: string
         end_date:
+          format: date
           type: string
         expenses:
           format: double
@@ -6656,6 +6837,7 @@ components:
             - number
             - "null"
         start_date:
+          format: date
           type: string
       required:
         - savings_rate
@@ -6815,8 +6997,10 @@ components:
             - array
             - "null"
         end_date:
+          format: date
           type: string
         start_date:
+          format: date
           type: string
         total_spent:
           format: double
@@ -6860,6 +7044,7 @@ components:
           readOnly: true
           type: string
         end_date:
+          format: date
           type: string
         merchants:
           items:
@@ -6868,6 +7053,7 @@ components:
             - array
             - "null"
         start_date:
+          format: date
           type: string
         top_n:
           format: int64
@@ -6888,8 +7074,10 @@ components:
             - array
             - "null"
         period_end:
+          format: date
           type: string
         period_start:
+          format: date
           type: string
         total:
           format: double
@@ -6911,6 +7099,7 @@ components:
           readOnly: true
           type: string
         end_date:
+          format: date
           type: string
         periods:
           items:
@@ -6919,6 +7108,7 @@ components:
             - array
             - "null"
         start_date:
+          format: date
           type: string
         top_categories:
           items:
@@ -7064,6 +7254,8 @@ components:
           $ref: "#/components/schemas/DeadLetterMetrics"
         deletion_residue:
           $ref: "#/components/schemas/DeletionResidueMetrics"
+        forked_security_identities:
+          $ref: "#/components/schemas/ForkedSecurityIdentityMetrics"
         job_backlog:
           $ref: "#/components/schemas/JobBacklogMetrics"
         job_queues:
@@ -7074,6 +7266,8 @@ components:
           $ref: "#/components/schemas/PaddleStatusMetrics"
         plaid_orphaned_items:
           $ref: "#/components/schemas/PlaidOrphanedItemMetrics"
+        position_reconciliation:
+          $ref: "#/components/schemas/PositionReconciliationSummary"
         rejected_webhook_attempts_24h:
           $ref: "#/components/schemas/RejectedWebhookAttemptMetrics"
         services:
@@ -7097,6 +7291,8 @@ components:
         - plaid_orphaned_items
         - deletion_residue
         - rejected_webhook_attempts_24h
+        - forked_security_identities
+        - position_reconciliation
         - cache_enabled
       type: object
     TagSource:
@@ -7174,14 +7370,17 @@ components:
         category:
           type: string
         date:
+          format: date
           type: string
         end_date:
+          format: date
           type: string
         merchant_name:
           type: string
         pfc_primary_display:
           type: string
         start_date:
+          format: date
           type: string
         transaction_id:
           type: string
@@ -7199,6 +7398,8 @@ components:
       additionalProperties: false
       properties:
         account_id:
+          type: string
+        currency_code:
           type: string
         day_change:
           format: double
@@ -7229,6 +7430,9 @@ components:
           format: uri
           readOnly: true
           type: string
+        excluded_by_currency_count:
+          format: int64
+          type: integer
         gainers:
           items:
             $ref: "#/components/schemas/TopMoverItem"
@@ -7241,9 +7445,16 @@ components:
           type:
             - array
             - "null"
+        ranking_currency_code:
+          type: string
+        unknown_currency_count:
+          format: int64
+          type: integer
       required:
         - gainers
         - losers
+        - excluded_by_currency_count
+        - unknown_currency_count
       type: object
     TopUnreviewedCategory:
       additionalProperties: false
@@ -7278,7 +7489,8 @@ components:
           format: double
           type: number
         authorized_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted when the provider gave none
+          format: date
           type: string
         category_override_date:
           format: date-time
@@ -7295,7 +7507,8 @@ components:
         custom_category_override_id:
           type: string
         date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) the transaction posted
+          format: date
           type: string
         deleted_at:
           format: date-time
@@ -7647,6 +7860,7 @@ components:
         category:
           type: string
         date:
+          format: date
           type: string
         merchant_name:
           type: string
@@ -7678,6 +7892,7 @@ components:
           readOnly: true
           type: string
         end_date:
+          format: date
           type: string
         items:
           items:
@@ -7689,6 +7904,7 @@ components:
           format: double
           type: number
         start_date:
+          format: date
           type: string
       required:
         - items
@@ -8048,8 +8264,12 @@ components:
           format: double
           type: number
         deadline:
-          format: date-time
-          type: string
+          anyOf:
+            - format: date
+              type: string
+            - format: date-time
+              type: string
+          description: Goal deadline. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp.
         description:
           type: string
         name:
@@ -13296,7 +13516,7 @@ paths:
         - Investments
   /api/v1/investments/investment-transactions:
     get:
-      description: Returns investment transactions for the authenticated user using keyset (cursor) pagination. Supports filtering by account, security, activity type (buy/sell/dividend/reinvest/fee/cash/other), and date range.
+      description: Returns investment transactions for the authenticated user using keyset (cursor) pagination. Supports filtering by account, security, activity type (buy/sell/dividend/reinvest/interest/fee/transfer/cash/other), and date range.
       operationId: getInvestmentTransactions
       parameters:
         - description: Opaque cursor from previous page's next_cursor; omit for first page
@@ -13331,12 +13551,12 @@ paths:
           schema:
             description: Filter by security ID
             type: string
-        - description: "Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other)"
+        - description: "Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,interest,fee,transfer,cash,other)"
           explode: false
           in: query
           name: activity_types
           schema:
-            description: "Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other)"
+            description: "Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,interest,fee,transfer,cash,other)"
             type: string
         - description: Filter transactions on or after this date (YYYY-MM-DD)
           explode: false
@@ -13380,7 +13600,11 @@ paths:
           Values: "cash" (depository/checking/savings account balances), "liabilities" (credit card + loan balances as absolute value).
           Example: include=cash,liabilities
         - group_by: bucketing dimension.
-          Values: "security_type" (default — groups by securities.type: stock, etf, bond, crypto, cash, other, unknown), "asset_class" (collapses into investments/cash/liabilities), "account".
+          Values: "security_type" (default — groups by securities.type, which carries Plaid's enum
+                  verbatim: cash, cryptocurrency, derivative, equity, etf, fixed income, loan,
+                  mutual fund, other; plus "unknown" when Plaid sends none, and the synthetic
+                  "liabilities" bucket when include=liabilities), "asset_class" (collapses into
+                  investments/cash/liabilities), "account".
         - basis: whether liabilities reduce the grand total.
           Values: "assets" (default — show asset-side allocation only), "net" (net of liabilities).
 
@@ -15478,12 +15702,12 @@ paths:
           schema:
             description: Merge investment transactions into feed (true/false, default true). When omitted with a non-date sort, silently degrades to false. Explicit true with non-date sort returns 400. Requires sort_by=date for explicit merge.
             type: string
-        - description: "Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true."
+        - description: "Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,interest,fee,transfer,cash,other). Only used when include_investment_activity=true."
           explode: false
           in: query
           name: activity_types
           schema:
-            description: "Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true."
+            description: "Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,interest,fee,transfer,cash,other). Only used when include_investment_activity=true."
             type: string
         - description: "Must be omitted or 'personal' — this endpoint does not support household scope (Issue #1369 decision #5)"
           explode: false
