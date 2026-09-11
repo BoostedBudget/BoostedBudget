@@ -937,19 +937,28 @@ func buildPositionReconciliationDetailQuery(tradePredicate string, userIdx int) 
 // so /admin/health's 30-second poll gets back ONE row instead of streaming every (account,
 // security) pair in the system into Go just to throw all but three integers away.
 //
-// ⚠ THE CLASSIFICATION MUST NOT DIVERGE FROM domain.ClassifyPositionReconciliationMember, and
-// it does not, by construction rather than by care: %[2]g below is
-// domain.PositionReconciliationQuantityTolerance formatted directly into the query text — the
-// SAME Go constant the per-row Go classifier compares against, not a second hand-typed literal
+// ⚠ THIS SHARES domain.PositionReconciliationQuantityTolerance WITH
+// domain.ClassifyPositionReconciliationMember, RATHER THAN RE-TYPING THE NUMBER: %[2]g below is
+// that exact Go constant formatted directly into the query text, not a second hand-typed literal
 // that could drift out of sync with it. The two comparisons this renders (delta beyond
 // tolerance, split on has_buy) are the same two branches that function's `if` and inner `if`
-// express. TestPositionReconciliationSummary_AgreesWithPerUserReportAcrossUsers_Integration
-// proves empirically that the SQL and Go paths agree on the same seeded data, including at the
-// exact tolerance boundary (its User E) — though that row alone only pins the SQL side's `>`
-// strictness there (exact NUMERIC arithmetic; see its own comment for why), and Go's strictness
-// at that same boundary is pinned separately by
-// domain.TestClassifyPositionReconciliationMember_ExactlyAtToleranceIsNotADrift, which needs no
-// database and passes the tolerance constant directly as delta.
+// express, and TestPositionReconciliationSummary_AgreesWithPerUserReportAcrossUsers_Integration
+// proves empirically that the SQL and Go paths agree on the same seeded data across many rows.
+//
+// ⚠ THAT AGREEMENT HAS ONE KNOWN, NARROW, DOCUMENTED EXCEPTION: a delta of EXACTLY the tolerance.
+// holdings.quantity and investment_transactions.quantity are DECIMAL(18,8) (migration 000051),
+// so this SQL path compares EXACT NUMERIC arithmetic against %[2]g; the Go path instead scans
+// those same columns into float64 before subtracting, and float64 cannot represent every such
+// value exactly. A holding/ledger pair whose true decimal difference is precisely the tolerance
+// can therefore round to slightly ABOVE it in float64 while remaining exactly AT it in NUMERIC —
+// the SQL path then says "not a drift" (correctly, by strict `>`) while the Go path says "a
+// drift" (also by strict `>`, just against a different, rounded number). This is a genuine
+// production divergence within roughly 1e-15 of the tolerance value, not a bug in either
+// comparison and not something an agreement test can paper over — see
+// domain.PositionReconciliationQuantityTolerance's doc comment for the same note at the source,
+// and domain.TestClassifyPositionReconciliationMember_ExactlyAtToleranceIsNotADrift (which needs
+// no database) for the one thing that IS cleanly pinned: the Go function's own strictness in
+// isolation, against the constant directly, with no float64 rounding involved.
 //
 // No securities JOIN on holdings here (unlike the detail query): the aggregate needs no
 // ticker/name/plaid_security_id, so that join — and the four columns it would add to every row
