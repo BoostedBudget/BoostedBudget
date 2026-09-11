@@ -113,15 +113,27 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 	// (see the standing decision on IncomeSummary below). Do not "fix" this by touching
 	// SyncHoldings/GetByLinkedItemID — that path is already correct (active-only, by design);
 	// the defect was always the missing predicate in this READ.
+	// #1631 H1 fix round 1 (ruling): the bucket KEY itself routes a cash-equivalent security to
+	// "cash" — is_cash_equivalent is no longer a second GROUP BY dimension. A prior version of this
+	// fix grouped by (type, is_cash_equivalent), which kept a cash-equivalent "mutual fund" in its
+	// own bucket labelled "mutual fund" — same label as an ordinary mutual fund bucket, since
+	// group_by=security_type is the DEFAULT mode and the frontend labels each slice by
+	// security_type alone. Two buckets sharing one label with no way to tell them apart is worse
+	// than the bug this fix closes. Routing the KEY to "cash" means one bucket, one label, in both
+	// group_by modes — no merge-after-scan, and no ambiguity about which of two AssetClass verdicts
+	// a merged bucket should report.
+	//
+	// IS TRUE, never a bare `sec.is_cash_equivalent` or `NOT ... IS FALSE`: the flag is a nullable
+	// Plaid NullableBool, and a NULL (the pre-migration state of the whole securities table) must
+	// keep its type-derived bucket, not be swept into "cash" from silence. `IS TRUE` is two-valued —
+	// false for both NULL and an explicit false — so it cannot reclassify the existing user base on
+	// deploy day. Same discipline as domain.SecurityIsStructuralSQL's `IS FALSE` for the opposite
+	// question.
+	cashEquivalentRoutedSecurityType := `CASE WHEN sec.is_cash_equivalent IS TRUE THEN 'cash' ELSE COALESCE(sec.type, 'unknown') END`
+
 	query := `
 		SELECT
-			COALESCE(sec.type, 'unknown')          AS security_type,
-			-- #1631 H1: carried through so securityTypeToAssetClass can bucket a cash-equivalent
-			-- security (a money-market fund, a sweep vehicle) as "cash" regardless of its raw
-			-- security_type. GROUP BY includes it so a cash-equivalent row and a non-cash-equivalent
-			-- row of the SAME raw type never collapse into one bucket that could only report one
-			-- verdict for both.
-			sec.is_cash_equivalent                 AS is_cash_equivalent,
+			` + cashEquivalentRoutedSecurityType + ` AS security_type,
 			COUNT(*)                               AS holding_count,
 			COALESCE(SUM(h.institution_value), 0)  AS total_value,
 			` + distinctCurrencyCodesSQL("h.currency_code") + `  AS currency_codes
@@ -131,7 +143,7 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 		LEFT JOIN securities sec ON sec.id = h.security_id
 		WHERE h.user_id = $1
 		  AND a.type = 'investment'
-		GROUP BY COALESCE(sec.type, 'unknown'), sec.is_cash_equivalent`
+		GROUP BY ` + cashEquivalentRoutedSecurityType
 
 	// Optional cash branch: aggregate depository account current_balance as "cash".
 	// GREATEST(balance, 0) per-row floors overdrawn accounts to zero — a negative
@@ -141,10 +153,6 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 		UNION ALL
 		SELECT
 			'cash'                                         AS security_type,
-			-- Synthetic bucket, no joined security — FALSE, never NULL, so it cannot be confused
-			-- with an unset flag and cannot itself trigger the is_cash_equivalent override (the
-			-- "cash" security_type already routes here via securityTypeToAssetClass regardless).
-			FALSE                                          AS is_cash_equivalent,
 			COUNT(*)                                       AS holding_count,
 			COALESCE(SUM(GREATEST(a.current_balance, 0)), 0) AS total_value,
 			-- The cash branch sums ACCOUNT balances, so its currency is accounts.currency_code.
@@ -169,7 +177,6 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 		UNION ALL
 		SELECT
 			'liabilities'                          AS security_type,
-			FALSE                                   AS is_cash_equivalent,
 			COUNT(*)                               AS holding_count,
 			COALESCE(SUM(ABS(a.current_balance)), 0) AS total_value,
 			` + distinctCurrencyCodesSQL("a.currency_code") + ` AS currency_codes
@@ -182,7 +189,7 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 
 	// Wrap in a CTE so we can ORDER BY total_value across the full union.
 	query = `WITH combined AS (` + query + `)
-		SELECT security_type, is_cash_equivalent, holding_count, total_value, currency_codes
+		SELECT security_type, holding_count, total_value, currency_codes
 		FROM combined
 		ORDER BY total_value DESC`
 
@@ -198,17 +205,9 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 	for rows.Next() {
 		var item domain.AllocationItem
 		var rowCurrencies []string
-		// isCashEquivalent is a pointer: NULL (never set by the institution, or absent for the
-		// synthetic cash/liabilities branches) must NOT read as true. Scanned into a bool below
-		// with the same affirmative-only discipline as domain.SecurityIsStructuralSQL's `IS FALSE`
-		// / `IS TRUE` — nil or false both collapse to false, never to "not true means false" logic
-		// that would treat a NULL the same as an explicit false coincidentally-correctly here but
-		// invite the same bug elsewhere.
-		var isCashEquivalent *bool
-		if err := rows.Scan(&item.SecurityType, &isCashEquivalent, &item.HoldingCount, &item.TotalValue, &rowCurrencies); err != nil {
+		if err := rows.Scan(&item.SecurityType, &item.HoldingCount, &item.TotalValue, &rowCurrencies); err != nil {
 			return nil, fmt.Errorf("AllocationBreakdown scan: %w", err)
 		}
-		item.IsCashEquivalent = isCashEquivalent != nil && *isCashEquivalent
 		currencyCodes = append(currencyCodes, rowCurrencies...)
 		grandTotal += item.TotalValue
 		buckets = append(buckets, item)
@@ -230,7 +229,7 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 	} else {
 		// Populate AssetClass field for the default security_type grouping.
 		for i := range buckets {
-			buckets[i].AssetClass = securityTypeToAssetClass(buckets[i].SecurityType, buckets[i].IsCashEquivalent)
+			buckets[i].AssetClass = securityTypeToAssetClass(buckets[i].SecurityType)
 		}
 	}
 
@@ -412,36 +411,35 @@ func applyNetBasis(buckets []domain.AllocationItem) ([]domain.AllocationItem, fl
 	return assetBuckets, netTotal
 }
 
-// securityTypeToAssetClass maps a raw security_type string, plus the joined security's
-// is_cash_equivalent verdict, to a high-level asset class label.
-// "liabilities" and "cash" (from UNION branches) are already the right class.
-// Everything else → "investments", UNLESS isCashEquivalent is affirmatively true (#1631 H1): a
-// money-market fund typed "mutual fund" with is_cash_equivalent=true is economically cash, and a
-// user reading "investments" for it would be misled by the raw Plaid type alone. ⚠ #1631: the
-// secType values reaching this function are PLAID's security-type enum — cash, cryptocurrency,
-// derivative, equity, etf, fixed income, loan, mutual fund, other — plus the synthetic "unknown"
-// (COALESCEd for a NULL securities.type) and "liabilities". This line previously advertised
-// "stock", "bond" and "crypto", none of which Plaid ever sends; the default arm is what makes that
-// misdescription harmless rather than a bug, but a reader adding a case for "stock" would have
-// added dead code.
+// securityTypeToAssetClass maps a raw security_type string to a high-level asset class label.
+// "liabilities" and "cash" are already the right class. Everything else → "investments".
 //
-// ⚠ Note "cash" is BOTH a Plaid security type and this file's own synthetic label for the
-// depository UNION branch, so the first case arm catches two different things that happen to
-// deserve the same class.
+// ⚠ #1631 H1 (fix round 1 / ruling): a cash-equivalent security (money-market fund, sweep vehicle)
+// is now routed to the "cash" security_type by the SQL KEY itself
+// (cashEquivalentRoutedSecurityType in AllocationBreakdown), not by a second argument here. This
+// function does NOT need to know about is_cash_equivalent — by the time a bucket reaches it,
+// "cash" already means "cash or cash-equivalent", uniformly in both group_by=security_type and
+// group_by=asset_class modes. An earlier version of this fix threaded is_cash_equivalent through
+// as a second parameter and merged buckets only AFTER this function ran; that left two buckets
+// labelled identically ("mutual fund") in the default group_by=security_type mode, which the
+// frontend donut chart cannot tell apart. Do not reintroduce that shape.
 //
-// ⚠ isCashEquivalent must already be the AFFIRMATIVE-true-only bool computed in AllocationBreakdown
-// (nil/false → false) — never a bare `*bool` dereference, which would panic on nil and, if
-// defaulted to true instead, would reclassify every security the institution never set the flag
-// on. See domain.AllocationItem.IsCashEquivalent and domain.SecurityIsStructuralSQL for the same
-// discipline applied elsewhere on this branch.
-func securityTypeToAssetClass(secType string, isCashEquivalent bool) string {
+// ⚠ #1631: the secType values reaching this function are PLAID's security-type enum — cash,
+// cryptocurrency, derivative, equity, etf, fixed income, loan, mutual fund, other — plus the
+// synthetic "unknown" (COALESCEd for a NULL securities.type) and "liabilities". This line
+// previously advertised "stock", "bond" and "crypto", none of which Plaid ever sends; the default
+// arm is what makes that misdescription harmless rather than a bug, but a reader adding a case for
+// "stock" would have added dead code.
+//
+// ⚠ Note "cash" is BOTH a Plaid security type, this file's own synthetic label for the depository
+// UNION branch, AND (as of H1) the routing target for any cash-equivalent security regardless of
+// its raw type — three different things that happen to deserve the same class, all caught by the
+// same case arm.
+func securityTypeToAssetClass(secType string) string {
 	switch secType {
 	case "cash", "liabilities":
 		return secType
 	default:
-		if isCashEquivalent {
-			return "cash"
-		}
 		return "investments"
 	}
 }
@@ -453,7 +451,7 @@ func collapseToAssetClasses(buckets []domain.AllocationItem) []domain.Allocation
 	totals := make(map[string]*domain.AllocationItem)
 	var grandTotal float64
 	for _, b := range buckets {
-		cls := securityTypeToAssetClass(b.SecurityType, b.IsCashEquivalent)
+		cls := securityTypeToAssetClass(b.SecurityType)
 		if totals[cls] == nil {
 			totals[cls] = &domain.AllocationItem{AssetClass: cls, SecurityType: cls}
 		}
